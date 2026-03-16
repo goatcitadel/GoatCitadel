@@ -261,20 +261,20 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     version: 33,
     name: "prompt_pack_test_mode_and_tool_tier",
     up: (db) => {
-      addColumnIfMissing(db, "prompt_pack_tests", "mode", "TEXT");
-      addColumnIfMissing(db, "prompt_pack_tests", "tool_tier", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_tests", "mode", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_tests", "tool_tier", "TEXT");
     },
   },
   {
     version: 34,
     name: "prompt_pack_run_execution_profile",
     up: (db) => {
-      addColumnIfMissing(db, "prompt_pack_runs", "mode", "TEXT");
-      addColumnIfMissing(db, "prompt_pack_runs", "tool_tier", "TEXT");
-      addColumnIfMissing(db, "prompt_pack_runs", "tool_autonomy", "TEXT");
-      addColumnIfMissing(db, "prompt_pack_runs", "web_mode", "TEXT");
-      addColumnIfMissing(db, "prompt_pack_runs", "memory_mode", "TEXT");
-      addColumnIfMissing(db, "prompt_pack_runs", "thinking_level", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "mode", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "tool_tier", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "tool_autonomy", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "web_mode", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "memory_mode", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "thinking_level", "TEXT");
     },
   },
   {
