@@ -19,6 +19,10 @@ const EXPLICIT_WEB_PHRASES = [
   "web search",
   "use internet",
   "search web",
+  "browser.search",
+  "browser.navigate",
+  "http.get",
+  "http.post",
 ];
 
 export { EXPLICIT_WEB_PHRASES };

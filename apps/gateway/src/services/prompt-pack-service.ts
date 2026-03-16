@@ -107,6 +107,13 @@ interface PromptPackExecutionProfile {
   thinkingLevel: ChatThinkingLevel;
 }
 
+interface PromptPackToolDirectives {
+  namedTools: string[];
+  prefersFileTools: boolean;
+  prefersWebTools: boolean;
+  prefersMemoryTools: boolean;
+}
+
 /**
  * Encapsulates all prompt-pack (Prompt Lab) operations previously inlined
  * in GatewayService.
@@ -187,6 +194,7 @@ export class PromptPackService {
         `Missing placeholder values for ${test.code}: ${resolvedPrompt.missingPlaceholders.join(", ")}.`,
       );
     }
+    const promptInput = buildPromptPackPromptInput(resolvedPrompt.prompt, executionProfile);
     const runId = randomUUID();
     const sessionId = input?.sessionId ?? this.deps.createChatSession({
       title: `[${test.code}] ${test.title}`.slice(0, 200),
@@ -215,14 +223,14 @@ export class PromptPackService {
 
     try {
       const response = await this.deps.agentSendChatMessage(sessionId, {
-        content: resolvedPrompt.prompt,
+        content: promptInput.prompt,
         providerId,
         model,
         mode: executionProfile.mode,
         webMode: executionProfile.webMode,
         memoryMode: executionProfile.memoryMode,
         thinkingLevel: executionProfile.thinkingLevel,
-        prefsOverride: buildPromptPackSessionPrefsOverride(executionProfile),
+        prefsOverride: buildPromptPackSessionPrefsOverride(executionProfile, resolvedPrompt.prompt),
       });
       const responseText = finalizePromptPackResponseText({
         prompt: resolvedPrompt.prompt,
@@ -1761,7 +1769,7 @@ function buildPromptPackConstraintsBlock(toolRuns: ChatTurnTraceRecord["toolRuns
   return lines.join("\n");
 }
 
-function finalizePromptPackResponseText(input: {
+export function finalizePromptPackResponseText(input: {
   prompt: string;
   responseText: string;
   trace?: ChatTurnTraceRecord;
@@ -1772,13 +1780,11 @@ function finalizePromptPackResponseText(input: {
     toolRuns: input.trace?.toolRuns,
   });
   const constraintsBlock = buildPromptPackConstraintsBlock(input.trace?.toolRuns);
-  if (!constraintsBlock) {
-    return withRoles.trim();
+  const normalized = withRoles.trim();
+  if (normalized.length > 0 || !constraintsBlock) {
+    return normalized;
   }
-  if (/\bconstraints\b/i.test(withRoles)) {
-    return withRoles.trim();
-  }
-  return [withRoles.trim(), constraintsBlock].filter(Boolean).join("\n\n").trim();
+  return constraintsBlock.trim();
 }
 
 export function normalizePromptTestCode(value: string): string {
@@ -2049,16 +2055,111 @@ export function getResolvedPromptPackExecutionProfile(
 
 export function buildPromptPackSessionPrefsOverride(
   profile: PromptPackExecutionProfile,
+  prompt = "",
 ): ChatSessionPrefsPatch {
+  const directives = detectPromptPackToolDirectives(prompt);
+  const webMode = (
+    profile.toolTier === "explicit-tools"
+    && (directives.namedTools.length > 0 || directives.prefersFileTools || directives.prefersWebTools || directives.prefersMemoryTools)
+    && !directives.prefersWebTools
+  ) ? "off" : profile.webMode;
+  const memoryMode = (
+    profile.toolTier === "explicit-tools"
+    && (directives.namedTools.length > 0 || directives.prefersFileTools || directives.prefersWebTools || directives.prefersMemoryTools)
+    && !directives.prefersMemoryTools
+  ) ? "off" : profile.memoryMode;
+
   return {
     mode: profile.mode,
     planningMode: "off",
     toolAutonomy: profile.toolAutonomy,
-    webMode: profile.webMode,
-    memoryMode: profile.memoryMode,
+    webMode,
+    memoryMode,
     thinkingLevel: profile.thinkingLevel,
     orchestrationEnabled: profile.mode !== "chat" && profile.toolTier !== "no-tools",
     orchestrationParallelism: "sequential",
+  };
+}
+
+function buildPromptPackPromptInput(
+  prompt: string,
+  profile: PromptPackExecutionProfile,
+): {
+  prompt: string;
+  directives: PromptPackToolDirectives;
+} {
+  const directives = detectPromptPackToolDirectives(prompt);
+  if (
+    profile.toolTier !== "explicit-tools"
+    || (directives.namedTools.length === 0 && !directives.prefersFileTools && !directives.prefersWebTools)
+  ) {
+    return {
+      prompt,
+      directives,
+    };
+  }
+
+  const requiredFamilies: string[] = [];
+  if (directives.prefersFileTools) {
+    requiredFamilies.push("file/code tools");
+  }
+  if (directives.prefersWebTools) {
+    requiredFamilies.push("web lookup tools");
+  }
+
+  const harnessLines = [
+    "## Prompt Lab Tooling Contract",
+    "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+  ];
+  if (directives.namedTools.length > 0) {
+    harnessLines.push(`- Required named tools: ${directives.namedTools.map((toolName) => `\`${toolName}\``).join(", ")}`);
+  }
+  if (requiredFamilies.length > 0) {
+    harnessLines.push(`- Required tool families: ${requiredFamilies.join(", ")}`);
+  }
+  harnessLines.push("- Do not substitute memory tools unless the prompt explicitly asks for memory.");
+  harnessLines.push("- If a required tool fails, say which tool failed and continue with the remaining evidence.");
+  if (directives.prefersFileTools) {
+    harnessLines.push("- Do not claim a local file was read unless a file/code tool actually executed.");
+  }
+
+  return {
+    prompt: `${harnessLines.join("\n")}\n\n## User Task\n${prompt}`.trim(),
+    directives,
+  };
+}
+
+function detectPromptPackToolDirectives(prompt: string): PromptPackToolDirectives {
+  const lower = prompt.toLowerCase();
+  const toolNames = [
+    "browser.search",
+    "browser.navigate",
+    "browser.extract",
+    "browser.screenshot",
+    "http.get",
+    "http.post",
+    "fs.read",
+    "file.read_range",
+    "file.find",
+    "code.search",
+    "code.search_files",
+    "memory.read",
+    "memory.search",
+    "memory.write",
+    "memory.upsert",
+    "citations.build",
+  ];
+  const namedTools = toolNames.filter((toolName) => lower.includes(toolName));
+  const prefersFileTools = /\b(use|using|with)\s+(file|filesystem|code)\s+tools\b/.test(lower)
+    || /\bread\b[\s\S]{0,80}\busing file tools\b/.test(lower);
+  const prefersWebTools = namedTools.some((toolName) => toolName.startsWith("browser.") || toolName.startsWith("http."));
+  const prefersMemoryTools = namedTools.some((toolName) => toolName.startsWith("memory."));
+
+  return {
+    namedTools,
+    prefersFileTools,
+    prefersWebTools,
+    prefersMemoryTools,
   };
 }
 
@@ -2140,6 +2241,7 @@ export function evaluatePromptPackRuleScores(input: {
   const trace = input.run.trace;
   const toolRuns = trace?.toolRuns ?? [];
   const executedTools = toolRuns.filter((item) => item.status === "executed");
+  const attemptedTools = toolRuns.filter((item) => item.status !== "started");
   const failedTools = toolRuns.filter((item) => item.status === "failed");
   const blockedTools = toolRuns.filter((item) => item.status === "blocked");
   const signals: string[] = [];
@@ -2211,11 +2313,15 @@ export function evaluatePromptPackRuleScores(input: {
       signals.push("no_tools_tier_respected");
     }
   } else if (input.profile.toolTier === "explicit-tools") {
-    if (executedTools.length < 1) {
+    if (attemptedTools.length < 1) {
       routingScore = 0;
       robustnessScore = 0;
       usabilityScore = Math.min(usabilityScore, 1) as 0 | 1 | 2;
       signals.push("missing_required_tool_usage");
+    } else if (executedTools.length < 1) {
+      routingScore = Math.min(routingScore, 1) as 0 | 1 | 2;
+      robustnessScore = Math.min(robustnessScore, 1) as 0 | 1 | 2;
+      signals.push("required_tool_usage_attempted");
     } else {
       signals.push("required_tool_usage_present");
     }
@@ -2417,7 +2523,8 @@ function buildToolTierRubricGuidance(toolTier: PromptPackToolTier): string {
       return [
         "Tool-tier rubric (explicit-tools):",
         "- The run is expected to use the appropriate tools.",
-        "- Missing tool use, or only failed/blocked tool attempts, should reduce routing and robustness scores.",
+        "- Missing tool use should reduce routing and robustness scores.",
+        "- Failed or blocked attempts still count as tool usage, but execution problems should still reduce robustness.",
       ].join("\n");
     default:
       return [

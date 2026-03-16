@@ -115,6 +115,8 @@ export async function executeTool(
       return memoryWrite(request.args, storage, true);
     case "memory.search":
       return memorySearch(request.args, storage);
+    case "citations.build":
+      return citationsBuild(request.args);
     case "docs.ingest":
       return docsIngest(request.args, config, storage);
     case "embeddings.index":
@@ -792,6 +794,39 @@ async function memorySearch(args: Record<string, unknown>, storage: Storage) {
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
   return { namespace: namespace ?? "all", query, items };
+}
+
+function citationsBuild(args: Record<string, unknown>) {
+  const rawSources = Array.isArray(args.sources) ? args.sources : [];
+  const results = rawSources
+    .map((entry, index) => {
+      const source = record(entry);
+      const url = asString(source.url);
+      if (!url) {
+        return undefined;
+      }
+      return {
+        citationId: asString(source.citationId) ?? `citation-${index + 1}`,
+        title: asString(source.title),
+        url,
+        snippet: asString(source.snippet) ?? asString(source.description),
+        sourceType: asString(source.sourceType) ?? "web",
+      };
+    })
+    .filter((item): item is {
+      citationId: string;
+      title?: string;
+      url: string;
+      snippet?: string;
+      sourceType: string;
+    } => Boolean(item));
+
+  return {
+    count: results.length,
+    results,
+    citations: results,
+    builtAt: new Date().toISOString(),
+  };
 }
 
 async function docsIngest(args: Record<string, unknown>, config: ToolPolicyConfig, storage: Storage) {

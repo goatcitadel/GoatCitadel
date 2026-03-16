@@ -5,6 +5,7 @@ import type {
   PromptPackTestRecord,
 } from "@goatcitadel/contracts";
 import {
+  finalizePromptPackResponseText,
   buildPromptPackSessionPrefsOverride,
   buildPromptPackCapabilitySeries,
   buildPromptPackRunFailureRateSeries,
@@ -113,6 +114,72 @@ describe("prompt-pack helpers", () => {
     expect(evaluation.scores.routingScore).toBe(0);
     expect(evaluation.scores.robustnessScore).toBe(0);
     expect(evaluation.signals).toContain("missing_required_tool_usage");
+  });
+
+  it("treats blocked explicit-tool attempts as attempted usage", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-explicit-attempted",
+      packId: "pack-1",
+      code: "TEST-03B",
+      title: "Explicit Tools Attempted",
+      prompt: "Use browser.navigate to open the URL and report exactly what failed.",
+      orderIndex: 0,
+      mode: "chat",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        runId: "run-explicit-attempted",
+        packId: "pack-1",
+        testId: test.testId,
+        sessionId: "sess-1",
+        status: "completed",
+        mode: "chat",
+        toolTier: "explicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "standard",
+        responseText: "browser.navigate failed with fetch failed.",
+        trace: {
+          turnId: "turn-1",
+          sessionId: "sess-1",
+          userMessageId: "user-1",
+          branchKind: "append",
+          status: "completed",
+          mode: "chat",
+          webMode: "auto",
+          memoryMode: "auto",
+          thinkingLevel: "standard",
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+          toolRuns: [
+            {
+              toolRunId: "tool-1",
+              turnId: "turn-1",
+              sessionId: "sess-1",
+              toolName: "browser.navigate",
+              status: "blocked",
+              error: "execution error: fetch failed",
+              startedAt: "2026-03-14T00:00:00.000Z",
+              finishedAt: "2026-03-14T00:00:01.000Z",
+            },
+          ],
+          citations: [],
+          routing: {},
+        },
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.scores.routingScore).toBe(1);
+    expect(evaluation.signals).toContain("required_tool_usage_attempted");
+    expect(evaluation.signals).not.toContain("missing_required_tool_usage");
   });
 
   it("penalizes self-reported partial outputs even when tools executed", () => {
@@ -253,6 +320,53 @@ describe("prompt-pack helpers", () => {
       orchestrationParallelism: "sequential",
       toolAutonomy: "safe_auto",
     });
+
+    expect(buildPromptPackSessionPrefsOverride(codeProfile, "Read fixtures/prompt-pack-workspace/package.json using file tools.")).toMatchObject({
+      webMode: "off",
+      memoryMode: "off",
+    });
+
+    expect(buildPromptPackSessionPrefsOverride(codeProfile, "Read package.json using file tools, then use browser.search to check the latest versions.")).toMatchObject({
+      webMode: "auto",
+      memoryMode: "off",
+    });
+  });
+
+  it("does not append generic constraints boilerplate to non-empty prompt-pack answers", () => {
+    const response = finalizePromptPackResponseText({
+      prompt: "Use browser.navigate and summarize the page.",
+      responseText: "Here is the grounded summary.",
+      trace: {
+        turnId: "turn-1",
+        sessionId: "sess-1",
+        userMessageId: "user-1",
+        branchKind: "append",
+        status: "completed",
+        mode: "chat",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "standard",
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+        toolRuns: [
+          {
+            toolRunId: "tool-1",
+            turnId: "turn-1",
+            sessionId: "sess-1",
+            toolName: "browser.navigate",
+            status: "blocked",
+            error: "execution error: fetch failed",
+            startedAt: "2026-03-14T00:00:00.000Z",
+            finishedAt: "2026-03-14T00:00:01.000Z",
+          },
+        ],
+        citations: [],
+        routing: {},
+      },
+    });
+
+    expect(response).toBe("Here is the grounded summary.");
+    expect(response).not.toContain("## Constraints");
   });
 
   it("uses kimi-compatible temperature for prompt-pack model judging", () => {

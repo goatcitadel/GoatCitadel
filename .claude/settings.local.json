@@ -48,7 +48,9 @@
       "Bash(cd F:/code/personal-ai && gh run list --workflow=publish-contracts.yml --limit=2)",
       "Bash(cd F:/code/personal-ai && gh run watch 22937319827 --exit-status 2>&1 | tail -15)",
       "Bash(npx tsx:*)",
-      "Bash(cd F:/code/personal-ai && npx tsc --noEmit -p packages/storage/tsconfig.json 2>&1 | tail -5)"
+      "Bash(cd F:/code/personal-ai && npx tsc --noEmit -p packages/storage/tsconfig.json 2>&1 | tail -5)",
+      "Bash(cd:*)",
+      "Bash(find:*)"
     ]
   },
   "hooks": {

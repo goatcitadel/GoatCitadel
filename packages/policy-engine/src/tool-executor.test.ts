@@ -224,6 +224,36 @@ describe("executeTool", () => {
     expect(String((result.items as Array<Record<string, unknown>>)[0]?.snippet ?? "")).toContain("dark mode");
   });
 
+  it("builds citation bundles without failing when sources are provided", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const request: ToolInvokeRequest = {
+      toolName: "citations.build",
+      args: {
+        sources: [
+          {
+            title: "Express release notes",
+            url: "https://expressjs.com/",
+            description: "Latest stable release notes",
+            sourceType: "web",
+          },
+        ],
+      },
+      agentId: "agent",
+      sessionId: "sess-citations",
+    };
+
+    const result = await executeTool(request, policyConfig, storageStub);
+    expect(result).toMatchObject({
+      count: 1,
+    });
+    expect(Array.isArray(result.results)).toBe(true);
+    expect((result.results as Array<Record<string, unknown>>)[0]).toMatchObject({
+      title: "Express release notes",
+      url: "https://expressjs.com/",
+      sourceType: "web",
+    });
+  });
+
   it("starts background shell commands without blocking", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const request: ToolInvokeRequest = {
