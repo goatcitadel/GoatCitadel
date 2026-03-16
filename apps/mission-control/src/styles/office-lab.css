@@ -495,6 +495,30 @@
     linear-gradient(180deg, #18152f, #0b0f1a);
 }
 
+.theme-signal-noir .pixel-office-canvas-shell {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.theme-signal-noir .pixel-office-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+}
+
+.theme-signal-noir .pixel-office-loading {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 24px;
+  color: var(--snr-text-muted);
+  font-size: 14px;
+  text-align: center;
+}
+
 .theme-signal-noir .pixel-office-viewport {
   position: absolute;
   inset: 0;
@@ -691,6 +715,29 @@
   max-width: 320px;
   color: var(--snr-text-muted);
   text-align: right;
+}
+
+.theme-signal-noir .pixel-office-deck-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.theme-signal-noir .pixel-office-deck-chip {
+  padding: 8px 12px;
+  border: 1px solid rgba(92, 198, 223, 0.18);
+  border-radius: 999px;
+  background: rgba(7, 12, 20, 0.82);
+  color: var(--snr-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.theme-signal-noir .pixel-office-deck-chip.is-selected {
+  border-color: rgba(92, 198, 223, 0.4);
+  color: var(--snr-text-primary);
+  background: rgba(12, 24, 37, 0.92);
 }
 
 .theme-signal-noir .pixel-office-sidebar,
