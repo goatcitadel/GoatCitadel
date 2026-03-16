@@ -495,6 +495,21 @@
     linear-gradient(180deg, #18152f, #0b0f1a);
 }
 
+.theme-signal-noir .pixel-office-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.theme-signal-noir .pixel-office-world {
+  position: absolute;
+  inset: 0;
+  transform-origin: center center;
+  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
 .theme-signal-noir .pixel-office-corridor {
   position: absolute;
   z-index: 0;
@@ -630,6 +645,11 @@
   animation: pixel-office-screen-flicker 1.2s steps(2) infinite;
 }
 
+.theme-signal-noir .pixel-office-furniture.pixel-office-screen.is-live {
+  filter: brightness(1.24) saturate(1.08) drop-shadow(0 0 8px rgba(114, 214, 255, 0.38));
+  animation: pixel-office-screen-flicker 0.95s steps(2) infinite;
+}
+
 .theme-signal-noir .pixel-office-furniture.flip-x {
   transform: scaleX(-1);
 }
@@ -734,6 +754,11 @@
   cursor: pointer;
 }
 
+.theme-signal-noir .pixel-office-agent.is-dragging {
+  z-index: 7;
+  pointer-events: none;
+}
+
 .theme-signal-noir .pixel-office-agent-bubble {
   position: relative;
   display: inline-grid;
@@ -822,6 +847,18 @@
   transform: translateY(-2px);
 }
 
+.theme-signal-noir .pixel-office-agent.is-subagent {
+  opacity: 0.82;
+}
+
+.theme-signal-noir .pixel-office-agent.is-subagent .pixel-office-agent-sprite {
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.28)) saturate(0.88);
+}
+
+.theme-signal-noir .pixel-office-agent.is-dragging .pixel-office-agent-sprite {
+  filter: drop-shadow(0 10px 16px rgba(0, 0, 0, 0.44));
+}
+
 .theme-signal-noir .pixel-office-agent-name {
   display: none;
   font-size: 10px;
@@ -848,6 +885,57 @@
 
 .theme-signal-noir .pixel-office-agent-warning .pixel-office-agent-bubble {
   box-shadow: 0 0 0 1px rgba(255, 194, 102, 0.16), 0 4px 10px rgba(0, 0, 0, 0.24);
+}
+
+.theme-signal-noir .pixel-office-seat-marker {
+  position: absolute;
+  z-index: 3;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  margin-top: -8px;
+  border: 1px solid rgba(92, 198, 223, 0.34);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle, rgba(84, 221, 255, 0.34), rgba(84, 221, 255, 0.06) 65%, transparent 66%),
+    rgba(7, 11, 18, 0.72);
+  box-shadow: 0 0 0 1px rgba(6, 10, 15, 0.64);
+  cursor: pointer;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.theme-signal-noir .pixel-office-seat-marker.is-occupied {
+  border-color: rgba(255, 194, 102, 0.28);
+}
+
+.theme-signal-noir .pixel-office-seat-marker.is-assigned {
+  border-color: rgba(110, 245, 165, 0.56);
+  background:
+    radial-gradient(circle, rgba(110, 245, 165, 0.4), rgba(110, 245, 165, 0.08) 65%, transparent 66%),
+    rgba(7, 11, 18, 0.8);
+}
+
+.theme-signal-noir .pixel-office-seat-marker.is-target,
+.theme-signal-noir .pixel-office-seat-marker:hover {
+  transform: scale(1.15);
+  border-color: rgba(84, 221, 255, 0.7);
+}
+
+.theme-signal-noir .pixel-office-command-marker {
+  position: absolute;
+  z-index: 2;
+  width: 20px;
+  height: 20px;
+  margin-left: -10px;
+  margin-top: -10px;
+  border: 2px solid rgba(84, 221, 255, 0.8);
+  border-radius: 999px;
+  box-shadow: 0 0 18px rgba(84, 221, 255, 0.22);
+  animation: pixel-office-command-ping 1.1s ease-out forwards;
+  pointer-events: none;
 }
 
 @keyframes pixel-office-agent-idle {
@@ -918,6 +1006,21 @@
   }
 }
 
+@keyframes pixel-office-command-ping {
+  0% {
+    opacity: 1;
+    transform: scale(0.6);
+  }
+  70% {
+    opacity: 0.9;
+    transform: scale(1.25);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
 @media (max-width: 1360px) {
   .theme-signal-noir .office-lab-layout {
     grid-template-columns: 1fr;
@@ -958,6 +1061,13 @@
     width: 40px;
     margin-left: -20px;
     margin-top: -26px;
+  }
+
+  .theme-signal-noir .pixel-office-seat-marker {
+    width: 14px;
+    height: 14px;
+    margin-left: -7px;
+    margin-top: -7px;
   }
 
   .theme-signal-noir .pixel-office-agent-bubble {

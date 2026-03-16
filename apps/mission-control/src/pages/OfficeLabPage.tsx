@@ -247,6 +247,7 @@ export function OfficeLabPage() {
                 zones={zones}
                 selectedAgentId={selectedAgent?.agentId ?? null}
                 selectedZoneId={selectedAgent?.zoneId ?? selectedZone?.zoneId ?? null}
+                recentEvents={events.slice(0, 20)}
                 onSelectAgent={(agentId, zoneId) => {
                   setSelectedZoneId(zoneId);
                   setSelectedAgentId(agentId);
