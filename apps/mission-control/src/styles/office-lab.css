@@ -510,6 +510,13 @@
   will-change: transform;
 }
 
+.theme-signal-noir .pixel-office-drag-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+}
+
 .theme-signal-noir .pixel-office-corridor {
   position: absolute;
   z-index: 0;
@@ -757,6 +764,11 @@
 .theme-signal-noir .pixel-office-agent.is-dragging {
   z-index: 7;
   pointer-events: none;
+}
+
+.theme-signal-noir .pixel-office-agent.is-drag-proxy {
+  margin-left: -23px;
+  margin-top: -30px;
 }
 
 .theme-signal-noir .pixel-office-agent-bubble {

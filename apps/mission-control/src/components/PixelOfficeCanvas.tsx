@@ -96,6 +96,13 @@ type RoomBounds = {
   door: Point;
 };
 
+type WalkableRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
 type StageAgent = CanvasAgent & {
   sprite: string;
   seatId: string;
@@ -428,6 +435,50 @@ const ROOM_BOUNDS: RoomBounds[] = BUILDING_ROOMS.map((room) => ({
 }));
 
 const ROOM_MAP = new Map(BUILDING_ROOMS.map((room) => [room.zoneId, room]));
+const WALKABLE_RECTS: WalkableRect[] = [
+  ...ROOM_BOUNDS.map((room) => ({ left: room.left, top: room.top, width: room.width, height: room.height })),
+  ...HALLWAYS.map((hallway) => ({
+    left: parsePercent(hallway.left),
+    top: parsePercent(hallway.top),
+    width: parsePercent(hallway.width),
+    height: parsePercent(hallway.height),
+  })),
+];
+
+function pointInRect(point: Point, rect: WalkableRect): boolean {
+  return (
+    point.left >= rect.left &&
+    point.left <= rect.left + rect.width &&
+    point.top >= rect.top &&
+    point.top <= rect.top + rect.height
+  );
+}
+
+function clampPointToRect(point: Point, rect: WalkableRect): Point {
+  return {
+    left: clamp(point.left, rect.left, rect.left + rect.width),
+    top: clamp(point.top, rect.top, rect.top + rect.height),
+  };
+}
+
+function projectPointToWalkable(point: Point): Point {
+  const containingRect = WALKABLE_RECTS.find((rect) => pointInRect(point, rect));
+  if (containingRect) {
+    return point;
+  }
+
+  let nearestPoint = point;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const rect of WALKABLE_RECTS) {
+    const candidate = clampPointToRect(point, rect);
+    const distance = distanceBetween(point, candidate);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestPoint = candidate;
+    }
+  }
+  return nearestPoint;
+}
 
 function resolveRoomForPoint(point: Point): RoomBounds | null {
   return (
@@ -973,12 +1024,13 @@ export function PixelOfficeCanvas({
               ),
             );
           } else {
+            const walkablePoint = projectPointToWalkable(current.point);
             setAnimatedAgents((agents) =>
               agents.map((agent) =>
                 agent.agentId === draggedAgent.agentId
                   ? {
                       ...agent,
-                      route: buildRouteBetweenPoints(agent, current.point!),
+                      route: buildRouteBetweenPoints(agent, walkablePoint),
                       intent: "command",
                       pauseUntil: 0,
                       commandExpiresAt: 0,
@@ -986,7 +1038,7 @@ export function PixelOfficeCanvas({
                   : agent,
               ),
             );
-            setCommandMarker(current.point);
+            setCommandMarker(walkablePoint);
           }
         }
 
@@ -1045,10 +1097,10 @@ export function PixelOfficeCanvas({
       return;
     }
 
-    const point: Point = {
+    const point = projectPointToWalkable({
       left: clamp(((clientX - bounds.left) / bounds.width) * 100, 0, 100),
       top: clamp(((clientY - bounds.top) / bounds.height) * 100, 0, 100),
-    };
+    });
 
     setAnimatedAgents((agents) =>
       agents.map((agent) =>
@@ -1066,9 +1118,7 @@ export function PixelOfficeCanvas({
     setCommandMarker(point);
   };
 
-  const cameraTarget = dragState?.active
-    ? dragState.point
-    : animatedAgents.find((agent) => agent.agentId === selectedAgentId) ?? null;
+  const cameraTarget = animatedAgents.find((agent) => agent.agentId === selectedAgentId) ?? null;
 
   const cameraTransform = useMemo(() => {
     if (!cameraTarget) {
@@ -1085,6 +1135,25 @@ export function PixelOfficeCanvas({
       : selectedAgent?.zoneId;
     return focusZoneId ? seats.filter((seat) => seat.zoneId === focusZoneId) : [];
   }, [dragState, seats, selectedAgent?.zoneId, stageAgents]);
+
+  const draggedAgent = useMemo(
+    () => (dragState?.active ? animatedAgents.find((agent) => agent.agentId === dragState.agentId) ?? null : null),
+    [animatedAgents, dragState],
+  );
+
+  const dragGhostStyle = useMemo(() => {
+    if (!dragState?.active) {
+      return null;
+    }
+    const bounds = buildingRef.current?.getBoundingClientRect();
+    if (!bounds) {
+      return null;
+    }
+    return {
+      left: `${dragState.clientX - bounds.left}px`,
+      top: `${dragState.clientY - bounds.top}px`,
+    };
+  }, [dragState]);
 
   return (
     <div className="pixel-office">
@@ -1295,27 +1364,6 @@ export function PixelOfficeCanvas({
                   </button>
                 ))}
 
-              {dragState?.active && dragState.point ? (
-                <div
-                  className="pixel-office-agent is-selected is-dragging is-walking"
-                  style={{ left: `${dragState.point.left}%`, top: `${dragState.point.top}%` }}
-                  aria-hidden="true"
-                >
-                  {animatedAgents
-                    .filter((agent) => agent.agentId === dragState.agentId)
-                    .map((agent) => (
-                      <div key={agent.agentId}>
-                        <span className="pixel-office-agent-bubble pixel-office-agent-bubble-waiting">go</span>
-                        <span
-                          className={`pixel-office-agent-sprite pixel-office-agent-sprite-${agent.direction}`}
-                          style={{ backgroundImage: `url(${agent.sprite})` }}
-                        />
-                        <span className="pixel-office-agent-name">{agent.name}</span>
-                      </div>
-                    ))}
-                </div>
-              ) : null}
-
               {commandMarker ? (
                 <div
                   className="pixel-office-command-marker"
@@ -1324,6 +1372,18 @@ export function PixelOfficeCanvas({
                 />
               ) : null}
             </div>
+            {draggedAgent && dragGhostStyle ? (
+              <div className="pixel-office-drag-layer" aria-hidden="true">
+                <div className="pixel-office-agent is-selected is-dragging is-walking is-drag-proxy" style={dragGhostStyle}>
+                  <span className="pixel-office-agent-bubble pixel-office-agent-bubble-waiting">go</span>
+                  <span
+                    className={`pixel-office-agent-sprite pixel-office-agent-sprite-${draggedAgent.direction}`}
+                    style={{ backgroundImage: `url(${draggedAgent.sprite})` }}
+                  />
+                  <span className="pixel-office-agent-name">{draggedAgent.name}</span>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
 
