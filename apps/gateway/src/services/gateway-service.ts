@@ -70,6 +70,9 @@ import type {
   ApprovalReplayEvent,
   ApprovalRequest,
   ApprovalResolveInput,
+  AssemblyRunDetailResponse,
+  AssemblyRunRecord,
+  CreateAssemblyRunInput,
   CalendarCreateEventInput,
   CalendarListQuery,
   ChannelSendInput,
@@ -251,6 +254,7 @@ import type {
   GmailSendInput,
   ToolInvokeRequest,
   ToolInvokeResult,
+  ModelReputation,
   VoiceStatus,
   VoiceRuntimeInstallRequest,
   VoiceRuntimeStatus,
@@ -283,6 +287,7 @@ import { BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
+import { AssemblyService } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { scoutCapabilityUpgradeSuggestions } from "./chat-capability-scout.js";
 import {
@@ -1010,6 +1015,7 @@ export class GatewayService {
   private readonly skillsService: SkillsService;
   private readonly orchestrationEngine: OrchestrationEngine;
   private readonly llmService: LlmService;
+  private readonly assemblyService: AssemblyService;
   private readonly memoryContextService: MemoryContextService;
   private readonly meshService: MeshService;
   private readonly npuSidecar: NpuSidecarService;
@@ -1084,6 +1090,12 @@ export class GatewayService {
     this.llmService = new LlmService(config.llm, process.env, {
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
       secretStore,
+    });
+    this.assemblyService = new AssemblyService({
+      storage: this.storage,
+      rootDir: config.rootDir,
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
     });
     this.memoryContextService = new MemoryContextService(
       this.storage,
@@ -10464,6 +10476,22 @@ export class GatewayService {
     return this.llmService.listModels(providerId);
   }
 
+  public async createAssemblyRun(input: CreateAssemblyRunInput): Promise<AssemblyRunRecord> {
+    return this.assemblyService.createRun(input);
+  }
+
+  public listAssemblyRuns(limit = 50): AssemblyRunRecord[] {
+    return this.assemblyService.listRuns(limit);
+  }
+
+  public getAssemblyRunDetail(runId: string): AssemblyRunDetailResponse {
+    return this.assemblyService.getRunDetail(runId);
+  }
+
+  public listAssemblyReputations(limit = 50): ModelReputation[] {
+    return this.assemblyService.listReputations(limit);
+  }
+
   public async previewLlmModels(input: {
     providerId: string;
     baseUrl: string;
@@ -11731,6 +11759,7 @@ export class GatewayService {
       this.backgroundTasks.clear();
       await Promise.allSettled(tasks);
     }
+    await this.assemblyService.close();
     await this.npuSidecar.close();
     this.storage.close();
   }

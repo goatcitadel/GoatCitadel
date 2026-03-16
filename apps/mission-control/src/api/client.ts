@@ -12,6 +12,8 @@ import type {
   AuthSettingsUpdateInput,
   ApprovalReplayEvent,
   ApprovalRequest,
+  AssemblyRunDetailResponse,
+  AssemblyRunRecord,
   ChangeRiskEvaluationResponse,
   ChannelSendInput,
   ChatAttachmentRecord,
@@ -147,6 +149,8 @@ import type {
   DevDiagnosticsEvent,
   DevDiagnosticsLevel,
   DevDiagnosticsListResponse,
+  CreateAssemblyRunInput,
+  ModelReputation,
 } from "@goatcitadel/contracts";
 import {
   createCorrelationId,
@@ -3560,6 +3564,25 @@ export async function fetchLlmConfig(): Promise<RuntimeSettingsResponse["llm"]> 
 export async function fetchLlmModels(providerId?: string): Promise<{ items: Array<{ id: string; ownedBy?: string; created?: number }> }> {
   const query = providerId ? `?providerId=${encodeURIComponent(providerId)}` : "";
   return request(`/api/v1/llm/models${query}`);
+}
+
+export async function fetchAssemblyRuns(limit = 50): Promise<{ items: AssemblyRunRecord[] }> {
+  return request(`/api/v1/assembly/runs?limit=${limit}`);
+}
+
+export async function createAssemblyRun(input: CreateAssemblyRunInput): Promise<AssemblyRunRecord> {
+  return request("/api/v1/assembly/runs", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchAssemblyRunDetail(runId: string): Promise<AssemblyRunDetailResponse> {
+  return request(`/api/v1/assembly/runs/${encodeURIComponent(runId)}`);
+}
+
+export async function fetchAssemblyReputations(limit = 50): Promise<{ items: ModelReputation[] }> {
+  return request(`/api/v1/assembly/reputation?limit=${limit}`);
 }
 
 export async function previewLlmModels(input: {

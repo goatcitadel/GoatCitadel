@@ -12,6 +12,7 @@ export type TabId =
   | "cron"
   | "sessions"
   | "chat"
+  | "assembly"
   | "promptLab"
   | "improvement"
   | "skills"

@@ -57,6 +57,7 @@ const ActivityPage = lazyPage(() => import("./pages/ActivityPage"), "ActivityPag
 const CronPage = lazyPage(() => import("./pages/CronPage"), "CronPage");
 const SessionsPage = lazyPage(() => import("./pages/SessionsPage"), "SessionsPage");
 const ChatPage = lazyPage(() => import("./pages/ChatPage"), "ChatPage");
+const AssemblyPage = lazyPage(() => import("./pages/AssemblyPage"), "AssemblyPage");
 const PromptLabPage = lazyPage(() => import("./pages/PromptLabPage"), "PromptLabPage");
 const ImprovementPage = lazyPage(() => import("./pages/ImprovementPage"), "ImprovementPage");
 const SkillsPage = lazyPage(() => import("./pages/SkillsPage"), "SkillsPage");
@@ -96,6 +97,7 @@ type Tab =
   | "cron"
   | "sessions"
   | "chat"
+  | "assembly"
   | "promptLab"
   | "improvement"
   | "skills"
@@ -124,6 +126,7 @@ const allTabs: Tab[] = [
   "cron",
   "sessions",
   "chat",
+  "assembly",
   "promptLab",
   "improvement",
   "skills",
@@ -674,6 +677,9 @@ export function App() {
     }
     if (tab === "chat") {
       return <ChatPage workspaceId={activeWorkspaceId} />;
+    }
+    if (tab === "assembly") {
+      return <AssemblyPage workspaceId={activeWorkspaceId} />;
     }
     if (tab === "promptLab") {
       return <PromptLabPage workspaceId={activeWorkspaceId} />;

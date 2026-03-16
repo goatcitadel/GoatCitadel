@@ -53,6 +53,7 @@ import { PromptPackScoreRepository } from "./prompt-pack-score-repo.js";
 import { WorkspaceRepository } from "./workspace-repo.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import { GatewaySqlRepository } from "./gateway-sql-repo.js";
+import { AssemblyRepository } from "./assembly-repo.js";
 
 export interface StorageOptions extends SqliteOptions {
   transcriptsDir: string;
@@ -120,6 +121,7 @@ export class Storage {
   public readonly workspaces: WorkspaceRepository;
   public readonly durableRuns: DurableRunRepository;
   public readonly gatewaySql: GatewaySqlRepository;
+  public readonly assembly: AssemblyRepository;
 
   public constructor(options: StorageOptions) {
     this.db = createDatabase({
@@ -178,6 +180,7 @@ export class Storage {
     this.workspaces = new WorkspaceRepository(this.db);
     this.durableRuns = new DurableRunRepository(this.db);
     this.gatewaySql = new GatewaySqlRepository(this.db);
+    this.assembly = new AssemblyRepository(this.db);
   }
 
   public close(): void {
@@ -400,3 +403,4 @@ export * from "./workspace-repo.js";
 export * from "./durable-run-repo.js";
 export * from "./safe-json.js";
 export * from "./gateway-sql-repo.js";
+export * from "./assembly-repo.js";

@@ -26,6 +26,7 @@ export * from "./chat.js";
 export * from "./admin.js";
 export * from "./voice.js";
 export * from "./media.js";
+export * from "./assembly.js";
 export * from "./mcp.js";
 export * from "./channels.js";
 export * from "./research.js";

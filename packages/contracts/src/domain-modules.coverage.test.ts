@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 const moduleLoaders = {
+  assembly: () => import("./assembly.js"),
   admin: () => import("./admin.js"),
   approvals: () => import("./approvals.js"),
   auth: () => import("./auth.js"),

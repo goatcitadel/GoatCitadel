@@ -14,6 +14,7 @@ import { approvalsRoutes } from "./routes/approvals.js";
 import { costsRoutes } from "./routes/costs.js";
 import { skillsRoutes } from "./routes/skills.js";
 import { orchestrationRoutes } from "./routes/orchestration.js";
+import { assemblyRoutes } from "./routes/assembly.js";
 import { tasksRoutes } from "./routes/tasks.js";
 import { eventsRoutes } from "./routes/events.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
@@ -199,6 +200,7 @@ export async function buildApp() {
   await app.register(costsRoutes);
   await app.register(skillsRoutes);
   await app.register(orchestrationRoutes);
+  await app.register(assemblyRoutes);
   await app.register(tasksRoutes);
   await app.register(eventsRoutes);
   await app.register(dashboardRoutes);
