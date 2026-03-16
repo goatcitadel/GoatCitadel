@@ -4,6 +4,7 @@ export type ToolProfile =
   | "coding"
   | "ops"
   | "research"
+  | "chat-agent"
   | "danger";
 
 export interface ToolPolicyConfig {

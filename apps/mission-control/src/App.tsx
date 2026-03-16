@@ -269,7 +269,7 @@ const SidebarStatusFooter = memo(function SidebarStatusFooter({
               className={uiMode === "simple" ? "active" : ""}
               onClick={() => setUiMode("simple")}
             >
-              Simple
+              Beginner
             </button>
             <button
               type="button"
@@ -589,8 +589,8 @@ export function App() {
       })),
       {
         id: "mode:simple",
-        label: "Switch to Simple experience",
-        keywords: ["simple", "guided", "experience"],
+        label: "Switch to Beginner experience",
+        keywords: ["beginner", "simple", "guided", "experience"],
         run: () => setUiMode("simple"),
       },
       {

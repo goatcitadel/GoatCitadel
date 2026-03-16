@@ -209,6 +209,7 @@ describe("App gateway access gate", () => {
         checklist: [],
         settings: {
           environment: "coverage",
+          deploymentProfile: "local_dev",
           defaultToolProfile: "standard",
           budgetMode: "balanced",
           workspaceDir: "workspace",
@@ -366,6 +367,7 @@ describe("App gateway access gate", () => {
         checklist: [],
         settings: {
           environment: "coverage",
+          deploymentProfile: "local_dev",
           defaultToolProfile: "standard",
           budgetMode: "balanced",
           workspaceDir: "workspace",

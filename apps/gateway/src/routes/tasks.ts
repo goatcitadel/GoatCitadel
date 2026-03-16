@@ -1,5 +1,6 @@
-import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { sendRouteError } from "./_error-handler.js";
 
 const statusSchema = z.enum([
   "planning",
@@ -115,7 +116,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(fastify.gateway.getTask(taskId));
     } catch (error) {
-      return sendTaskError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -130,7 +131,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       const task = fastify.gateway.updateTask(taskId, parsed.data);
       return reply.send(task);
     } catch (error) {
-      return sendTaskError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -182,7 +183,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send({ items: fastify.gateway.listTaskActivities(taskId) });
     } catch (error) {
-      return sendTaskError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -196,7 +197,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.code(201).send(fastify.gateway.appendTaskActivity(taskId, parsed.data));
     } catch (error) {
-      return sendTaskError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -205,7 +206,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send({ items: fastify.gateway.listTaskDeliverables(taskId) });
     } catch (error) {
-      return sendTaskError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -219,7 +220,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.code(201).send(fastify.gateway.appendTaskDeliverable(taskId, parsed.data));
     } catch (error) {
-      return sendTaskError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -228,7 +229,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send({ items: fastify.gateway.listTaskSubagents(taskId) });
     } catch (error) {
-      return sendTaskError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -242,7 +243,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.code(201).send(fastify.gateway.registerTaskSubagent(taskId, parsed.data));
     } catch (error) {
-      return sendTaskError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -256,24 +257,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(fastify.gateway.updateTaskSubagent(agentSessionId, parsed.data));
     } catch (error) {
-      return sendTaskError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 };
-
-function sendTaskError(reply: FastifyReply, error: unknown) {
-  const message = (error as Error).message;
-  if (message.includes("not found")) {
-    return reply.code(404).send({ error: message });
-  }
-  if (message.includes("Cannot mark task done")) {
-    return reply.code(409).send({ error: message });
-  }
-  requestLogTaskError(error);
-  return reply.code(400).send({ error: "Invalid task request" });
-}
-
-function requestLogTaskError(error: unknown): void {
-  // Keep full stack in server logs but avoid leaking internals to API clients.
-  console.error("[tasks] route error", error);
-}

@@ -1,6 +1,7 @@
 import type { IntegrationFormSchema } from "./ui-forms.js";
 
 export type AuthMode = "none" | "token" | "basic";
+export type DeploymentProfile = "local_dev" | "trusted_local" | "remote_hardened";
 
 export type GatewayAuthCredentialSource = "none" | "env" | "inline" | "runtime";
 

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
+import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 
 interface ChatAttachmentRow {
   attachment_id: string;
@@ -76,7 +77,7 @@ export class ChatAttachmentRepository {
   public get(attachmentId: string): ChatAttachmentRecord {
     const row = this.getStmt.get(attachmentId) as ChatAttachmentRow | undefined;
     if (!row) {
-      throw new Error(`Attachment ${attachmentId} not found`);
+      throw new NotFoundError({ entity: "Attachment", id: attachmentId });
     }
     return mapRow(row);
   }
@@ -155,10 +156,10 @@ function inferAnalysisStatus(
 function sanitizeWorkspaceId(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error("workspaceId is required");
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "workspaceId" });
   }
   if (!/^[a-zA-Z0-9._-]{1,80}$/.test(trimmed)) {
-    throw new Error("workspaceId contains unsupported characters");
+    throw new ValidationError({ message: "workspaceId contains unsupported characters" });
   }
   return trimmed;
 }

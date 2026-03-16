@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { NotFoundError } from "@goatcitadel/contracts";
 
 export interface ChatInlineApprovalRecord {
   approvalId: string;
@@ -90,7 +91,7 @@ export class ChatInlineApprovalRepository {
   private requireRow(approvalId: string): ChatInlineApprovalRow {
     const row = this.getStmt.get(approvalId) as unknown as ChatInlineApprovalRow | undefined;
     if (!row) {
-      throw new Error(`chat inline approval row missing for approval ${approvalId}`);
+      throw new NotFoundError({ entity: "chat inline approval", id: approvalId });
     }
     return row;
   }

@@ -572,7 +572,7 @@ export function ToolsPage() {
         </label>
         {uiMode === "simple" && !showTechnicalDetails ? (
           <p className="tools-helper">
-            Simple mode is active. You can still grant access safely with the wizard below.
+            Beginner mode is active. You can still grant access safely with the wizard below.
           </p>
         ) : null}
       </Panel>

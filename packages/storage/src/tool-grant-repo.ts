@@ -5,6 +5,7 @@ import type {
   ToolGrantRecord,
   ToolGrantScope,
 } from "@goatcitadel/contracts";
+import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface ToolGrantRow {
@@ -85,7 +86,7 @@ export class ToolGrantRepository {
   public get(grantId: string): ToolGrantRecord {
     const row = this.getStmt.get(grantId) as ToolGrantRow | undefined;
     if (!row) {
-      throw new Error(`Tool grant ${grantId} not found`);
+      throw new NotFoundError({ entity: "Tool grant", id: grantId });
     }
     return mapRow(row);
   }
@@ -137,7 +138,7 @@ function normalizeScopeRef(scope: ToolGrantScope, scopeRef?: string): string {
   }
   const value = scopeRef?.trim();
   if (!value) {
-    throw new Error(`scopeRef is required for ${scope} grants`);
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "scopeRef", message: `scopeRef is required for ${scope} grants` });
   }
   return value;
 }

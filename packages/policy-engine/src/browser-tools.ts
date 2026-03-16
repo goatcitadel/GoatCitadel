@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
+import { clampInt } from "@goatcitadel/contracts";
 import { assertHostAllowed } from "./sandbox/network-guard.js";
 import { assertWritePathInJail } from "./sandbox/path-jail.js";
 
@@ -66,7 +67,7 @@ type BrowserSessionState = {
 };
 
 let playwrightChromiumInstallPromise: Promise<void> | null = null;
-const browserSessionStates = new Map<string, BrowserSessionState>();
+const browserSessionStates = new Map<string, { state: BrowserSessionState; lastAccess: number }>();
 const MAX_BROWSER_SESSION_STATES = 128;
 
 export function isBrowserToolName(name: string): name is BrowserToolName {
@@ -135,7 +136,7 @@ async function executeBrowserSearch(
 ): Promise<Record<string, unknown>> {
   const query = asNonEmptyString(args.query, "query");
   const requestedEngine = normalizeSearchEngine(asString(args.engine)) ?? "auto";
-  const limit = clampInteger(args.limit ?? args.maxResults, 5, 1, 25);
+  const limit = clampInt(args.limit ?? args.maxResults, 5, 1, 25);
   const attemptedEngines: string[] = [];
   const failures: string[] = [];
 
@@ -260,7 +261,7 @@ async function executeBrowserNavigate(
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
   const url = asNonEmptyString(args.url, "url");
-  const maxChars = clampInteger(args.maxChars, 6000, 200, 20000);
+  const maxChars = clampInt(args.maxChars, 6000, 200, 20000);
   try {
     return await withBrowserPage(url, args, config, executionContext, async (page, responseStatus) => {
       const title = await page.title();
@@ -305,8 +306,8 @@ async function executeBrowserExtract(
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
   const url = asNonEmptyString(args.url, "url");
-  const selector = asString(args.selector) ?? "body";
-  const maxChars = clampInteger(args.maxChars, 12000, 200, 50000);
+  const selector = asNonEmptyString(args.selector, "selector");
+  const maxChars = clampInt(args.maxChars, 12000, 200, 50000);
   try {
     return await withBrowserPage(url, args, config, executionContext, async (page, responseStatus) => {
       const title = await page.title();
@@ -320,15 +321,12 @@ async function executeBrowserExtract(
       }
       const weather = domWeather ?? visualWeather?.weather;
       const extracted = await extractText(page, selector, maxChars);
-      const text = weather && selector === "body"
-        ? `${weather.summary}\n\n${extracted}`.slice(0, maxChars)
-        : extracted;
       return {
         action: "extract",
         title,
         selector,
         status: responseStatus,
-        text,
+        text: extracted,
         weather,
         extractionMode: domWeather ? "dom" : visualWeather ? "visual" : "text",
         visualTextSnippet,
@@ -390,7 +388,7 @@ async function executeBrowserInteract(
 
   const steps = rawSteps.map(parseStep);
   const finalSelector = asString(args.finalSelector) ?? "body";
-  const maxChars = clampInteger(args.maxChars, 6000, 200, 30000);
+  const maxChars = clampInt(args.maxChars, 6000, 200, 30000);
   const outputPath = asString(args.outputPath) ?? asString(args.path);
   if (outputPath) {
     assertWritePathInJail(outputPath, config.sandbox.writeJailRoots);
@@ -398,7 +396,7 @@ async function executeBrowserInteract(
 
   return withBrowserPage(url, args, config, executionContext, async (page, responseStatus, finalUrl) => {
     for (const step of steps) {
-      const timeout = clampInteger(step.timeoutMs, 12000, 500, 60000);
+      const timeout = clampInt(step.timeoutMs, 12000, 500, 60000);
       if (step.action === "click") {
         const selector = ensureSelector(step.selector, "click");
         await page.locator(selector).first().click({ timeout });
@@ -425,7 +423,7 @@ async function executeBrowserInteract(
         continue;
       }
       if (step.action === "wait") {
-        await page.waitForTimeout(clampInteger(step.timeoutMs, 1000, 100, 30000));
+        await page.waitForTimeout(clampInt(step.timeoutMs, 1000, 100, 30000));
         continue;
       }
     }
@@ -715,28 +713,28 @@ function requireBrowserSessionId(
 function getBrowserSessionState(sessionId: string): BrowserSessionState {
   const existing = browserSessionStates.get(sessionId);
   if (existing) {
-    existing.updatedAt = Date.now();
-    return existing;
+    existing.lastAccess = Date.now();
+    return existing.state;
   }
   const created = createEmptyBrowserSessionState();
-  browserSessionStates.set(sessionId, created);
+  browserSessionStates.set(sessionId, { state: created, lastAccess: Date.now() });
   evictOldestBrowserSessionStates();
   return created;
 }
 
 function storeBrowserSessionState(sessionId: string, state: BrowserSessionState): void {
   state.updatedAt = Date.now();
-  browserSessionStates.set(sessionId, state);
+  browserSessionStates.set(sessionId, { state, lastAccess: Date.now() });
   evictOldestBrowserSessionStates();
 }
 
 function evictOldestBrowserSessionStates(): void {
   while (browserSessionStates.size > MAX_BROWSER_SESSION_STATES) {
     let oldestKey: string | undefined;
-    let oldestUpdatedAt = Number.POSITIVE_INFINITY;
-    for (const [sessionId, state] of browserSessionStates.entries()) {
-      if (state.updatedAt < oldestUpdatedAt) {
-        oldestUpdatedAt = state.updatedAt;
+    let oldestLastAccess = Number.POSITIVE_INFINITY;
+    for (const [sessionId, entry] of browserSessionStates.entries()) {
+      if (entry.lastAccess < oldestLastAccess) {
+        oldestLastAccess = entry.lastAccess;
         oldestKey = sessionId;
       }
     }
@@ -1122,7 +1120,7 @@ async function withBrowserPage(
 
   const playwright = await loadPlaywright();
   const headless = asBoolean(args.headless, true);
-  const timeout = clampInteger(args.timeoutMs, 20000, 2000, 120000);
+  const timeout = clampInt(args.timeoutMs, 20000, 2000, 120000);
   const waitUntil = parseWaitUntil(args.waitUntil);
   const browserSessionId = resolveBrowserSessionId(args, executionContext);
   const previousSessionState = browserSessionId
@@ -1639,13 +1637,6 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
-function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, Math.floor(parsed)));
-}
 
 function assertAllowedHttpUrl(url: string): void {
   let parsed: URL;

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatConversationSummaryRecord } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface ChatConversationSummaryRow {
@@ -71,7 +72,7 @@ export class ChatConversationSummaryRepository {
   public get(summaryId: string): ChatConversationSummaryRecord {
     const row = this.getStmt.get(summaryId) as ChatConversationSummaryRow | undefined;
     if (!row) {
-      throw new Error(`Chat conversation summary ${summaryId} not found`);
+      throw new NotFoundError({ entity: "Chat conversation summary", id: summaryId });
     }
     return mapRow(row);
   }
@@ -103,7 +104,7 @@ export class ChatConversationSummaryRepository {
       && row.end_turn_id === input.endTurnId
     );
     if (!match) {
-      throw new Error("Failed to read chat conversation summary after upsert");
+      throw new NotFoundError("Failed to read chat conversation summary after upsert");
     }
     return mapRow(match);
   }

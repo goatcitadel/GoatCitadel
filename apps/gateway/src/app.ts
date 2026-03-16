@@ -45,6 +45,7 @@ import { improvementRoutes } from "./routes/improvement.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
 import { durableRoutes } from "./routes/durable.js";
 import { isLoopbackDevOrigin, isTailnetDevOrigin, resolveTailnetShortHostAllowlist } from "./cors-origin-guard.js";
+import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
 import { isSuspiciousEncodedPath } from "./path-guard.js";
 import { enterDevDiagnosticsContext } from "./dev-diagnostics/service.js";
 
@@ -77,6 +78,12 @@ export async function buildApp() {
       }
       cb(new Error("Origin not allowed by CORS policy"), false);
     },
+  });
+
+  app.addHook("onSend", async (_request, reply) => {
+    reply.header("X-Content-Type-Options", "nosniff");
+    reply.header("X-Frame-Options", "DENY");
+    reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
   });
 
   app.addHook("onRequest", async (request, reply) => {
@@ -178,6 +185,7 @@ export async function buildApp() {
   }
 
   await app.register(gatewayPlugin);
+  assertDeploymentProfileStartupSafety(app.gatewayConfig, allowedOrigins);
   await app.register(authPlugin);
   await app.register(idempotencyHeaderPlugin);
 

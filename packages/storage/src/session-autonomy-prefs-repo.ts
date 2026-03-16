@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatProactiveMode, ChatReflectionMode, ChatRetrievalMode } from "@goatcitadel/contracts";
+import { clampInt, NotFoundError } from "@goatcitadel/contracts";
 
 interface SessionAutonomyPrefsRow {
   session_id: string;
@@ -117,7 +118,7 @@ export class SessionAutonomyPrefsRepository {
     });
     const created = this.get(sessionId);
     if (!created) {
-      throw new Error(`session autonomy prefs row missing for session ${sessionId}`);
+      throw new NotFoundError({ entity: "session autonomy prefs", id: sessionId });
     }
     return created;
   }
@@ -131,9 +132,9 @@ export class SessionAutonomyPrefsRepository {
     const next: SessionAutonomyPrefsRecord = {
       ...current,
       proactiveMode: input.proactiveMode ?? current.proactiveMode,
-      maxActionsPerHour: clampInteger(input.maxActionsPerHour, 1, 200, current.maxActionsPerHour),
-      maxActionsPerTurn: clampInteger(input.maxActionsPerTurn, 1, 25, current.maxActionsPerTurn),
-      cooldownSeconds: clampInteger(input.cooldownSeconds, 0, 3600, current.cooldownSeconds),
+      maxActionsPerHour: clampInt(input.maxActionsPerHour, current.maxActionsPerHour, 1, 200),
+      maxActionsPerTurn: clampInt(input.maxActionsPerTurn, current.maxActionsPerTurn, 1, 25),
+      cooldownSeconds: clampInt(input.cooldownSeconds, current.cooldownSeconds, 0, 3600),
       retrievalMode: input.retrievalMode ?? current.retrievalMode,
       reflectionMode: input.reflectionMode ?? current.reflectionMode,
       updatedAt: now,
@@ -190,9 +191,9 @@ function mapRow(row: SessionAutonomyPrefsRow): SessionAutonomyPrefsRecord {
   return {
     sessionId: row.session_id,
     proactiveMode: row.proactive_mode,
-    maxActionsPerHour: clampInteger(row.max_actions_per_hour, 1, 200, DEFAULT_SESSION_AUTONOMY_PREFS.maxActionsPerHour),
-    maxActionsPerTurn: clampInteger(row.max_actions_per_turn, 1, 25, DEFAULT_SESSION_AUTONOMY_PREFS.maxActionsPerTurn),
-    cooldownSeconds: clampInteger(row.cooldown_seconds, 0, 3600, DEFAULT_SESSION_AUTONOMY_PREFS.cooldownSeconds),
+    maxActionsPerHour: clampInt(row.max_actions_per_hour, DEFAULT_SESSION_AUTONOMY_PREFS.maxActionsPerHour, 1, 200),
+    maxActionsPerTurn: clampInt(row.max_actions_per_turn, DEFAULT_SESSION_AUTONOMY_PREFS.maxActionsPerTurn, 1, 25),
+    cooldownSeconds: clampInt(row.cooldown_seconds, DEFAULT_SESSION_AUTONOMY_PREFS.cooldownSeconds, 0, 3600),
     retrievalMode: row.retrieval_mode,
     reflectionMode: row.reflection_mode,
     lastProactiveAt: row.last_proactive_at ?? undefined,
@@ -200,18 +201,4 @@ function mapRow(row: SessionAutonomyPrefsRow): SessionAutonomyPrefsRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-function clampInteger(value: number | undefined, min: number, max: number, fallback: number): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-  const normalized = Math.floor(value as number);
-  if (normalized < min) {
-    return min;
-  }
-  if (normalized > max) {
-    return max;
-  }
-  return normalized;
 }

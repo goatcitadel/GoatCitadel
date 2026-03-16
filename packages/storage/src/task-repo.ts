@@ -6,6 +6,7 @@ import type {
   TaskStatus,
   TaskUpdateInput,
 } from "@goatcitadel/contracts";
+import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 
 interface TaskRow {
   task_id: string;
@@ -145,7 +146,7 @@ export class TaskRepository {
   public get(taskId: string): TaskRecord {
     const row = this.getStmt.get(taskId) as TaskRow | undefined;
     if (!row) {
-      throw new Error(`Task ${taskId} not found`);
+      throw new NotFoundError({ entity: "Task", id: taskId });
     }
     return mapTaskRow(row);
   }
@@ -299,10 +300,10 @@ function parseCompositeCursor(cursor?: string): CompositeCursor | undefined {
 function sanitizeWorkspaceId(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error("workspaceId is required");
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "workspaceId" });
   }
   if (!/^[a-zA-Z0-9._-]{1,80}$/.test(trimmed)) {
-    throw new Error("workspaceId contains unsupported characters");
+    throw new ValidationError({ message: "workspaceId contains unsupported characters" });
   }
   return trimmed;
 }

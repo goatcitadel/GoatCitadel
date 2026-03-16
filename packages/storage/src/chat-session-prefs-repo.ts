@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { NotFoundError } from "@goatcitadel/contracts";
 import type {
   ChatCodeAutoApplyPosture,
   ChatMode,
@@ -180,7 +181,7 @@ export class ChatSessionPrefsRepository {
   private requireRow(sessionId: string): ChatSessionPrefsRow {
     const row = this.getStmt.get(sessionId) as unknown as ChatSessionPrefsRow | undefined;
     if (!row) {
-      throw new Error(`chat session prefs row missing for session ${sessionId}`);
+      throw new NotFoundError({ entity: "chat session prefs", id: sessionId });
     }
     return row;
   }

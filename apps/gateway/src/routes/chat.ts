@@ -1,5 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
+import { isGoatError } from "@goatcitadel/contracts";
+import { sendRouteError } from "./_error-handler.js";
 
 const projectViewSchema = z.object({
   workspaceId: z.string().min(1).optional(),
@@ -344,6 +347,12 @@ const promptPackRunBodySchema = z.object({
   sessionId: z.string().optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
+  mode: z.enum(["chat", "cowork", "code"]).optional(),
+  toolTier: z.enum(["no-tools", "implicit-tools", "explicit-tools"]).optional(),
+  toolAutonomy: z.enum(["manual", "safe_auto"]).optional(),
+  webMode: z.enum(["off", "auto", "quick", "deep"]).optional(),
+  memoryMode: z.enum(["off", "on", "auto"]).optional(),
+  thinkingLevel: z.enum(["minimal", "standard", "extended"]).optional(),
   placeholderValues: z.record(z.string(), z.string()).optional(),
 });
 
@@ -445,6 +454,12 @@ async function streamSseReply(
   raw.write(": connected\n\n");
 
   const send = (payload: unknown) => {
+    const eventId = typeof payload === "object" && payload && "eventId" in payload && typeof (payload as { eventId?: unknown }).eventId === "string"
+      ? (payload as { eventId: string }).eventId
+      : undefined;
+    if (eventId) {
+      raw.write(`id: ${eventId}\n`);
+    }
     raw.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
 
@@ -457,6 +472,8 @@ async function streamSseReply(
     send({
       type: "error",
       sessionId,
+      eventId: randomUUID(),
+      sequence: 0,
       error: getPublicChatSseErrorMessage(error),
     });
   } finally {
@@ -473,6 +490,9 @@ function getPublicChatSseErrorMessage(error: unknown): string {
   if (isChatTurnWriteConflictError(error) && error instanceof Error) {
     return error.message;
   }
+  if (isGoatError(error)) {
+    return error.message;
+  }
   return "Chat stream failed before completion. Check gateway diagnostics and retry.";
 }
 
@@ -480,11 +500,19 @@ function sendChatWriteError(reply: FastifyReply, error: unknown) {
   if (isChatTurnWriteConflictError(error) && error instanceof Error) {
     return reply.code(409).send({ error: error.message });
   }
+  if (isGoatError(error)) {
+    return sendRouteError(reply, error, reply.log);
+  }
+  // Sanitize untyped errors — never leak internal details to the client
   reply.log.error({ err: error }, "chat write failed");
   return reply.code(400).send({ error: "Chat write failed. Check gateway diagnostics and retry." });
 }
 
 export const chatRoutes: FastifyPluginAsync = async (fastify) => {
+  const streamResumeQuerySchema = z.object({
+    sinceEventId: z.string().min(1).optional(),
+  });
+
   fastify.get("/api/v1/chat/projects", async (request, reply) => {
     const parsed = projectViewSchema.safeParse(request.query);
     if (!parsed.success) {
@@ -829,6 +857,25 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
 
     return streamSseReply(reply, params.data.sessionId, () =>
       fastify.gateway.agentSendChatMessageStream(params.data.sessionId, body.data));
+  });
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/turns/:turnId/stream", async (request, reply) => {
+    const params = turnParamsSchema.safeParse(request.params);
+    const query = streamResumeQuerySchema.safeParse(request.query ?? {});
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    const headerEventId = typeof request.headers["last-event-id"] === "string"
+      ? request.headers["last-event-id"]
+      : undefined;
+    const sinceEventId = query.data.sinceEventId ?? headerEventId;
+    return streamSseReply(reply, params.data.sessionId, () =>
+      fastify.gateway.resumeAgentChatTurnStream(params.data.sessionId, params.data.turnId, sinceEventId));
   });
 
   fastify.post("/api/v1/chat/sessions/:sessionId/turns/:turnId/select", async (request, reply) => {

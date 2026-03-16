@@ -32,8 +32,13 @@ import {
   buildChatModePrefsPatch,
   chatModeAllowsDynamicTeamGrowth,
   chatModeRequiresProjectBinding,
+  clampInt,
+  ConflictError,
+  GoatError,
   isChatTurnActiveStatus,
   isChatTurnTerminalStatus,
+  NotFoundError,
+  ValidationError,
 } from "@goatcitadel/contracts";
 import type {
   AddonActionResponse,
@@ -60,6 +65,7 @@ import type {
   DeviceAccessRequestCreateResponse,
   DeviceAccessRequestStatus,
   DeviceAccessRequestStatusResponse,
+  DeploymentProfile,
   ApprovalCreateInput,
   ApprovalReplayEvent,
   ApprovalRequest,
@@ -102,8 +108,10 @@ import type {
   ChatSpecialistCandidateRecord,
   ChatSpecialistCandidateSuggestionRecord,
   ChatStreamChunk,
+  ChatStreamChunkDraft,
   ChatThreadResponse,
   ChatThinkingLevel,
+  ChatToolRunRecord,
   ChatTurnBranchKind,
   ChatTurnFailureRecord,
   ChatTurnTraceRecord,
@@ -182,6 +190,7 @@ import type {
   PromptPackRunRecord,
   PromptPackScoreRecord,
   PromptPackTestRecord,
+  PromptPackToolTier,
   ProactiveActionRecord,
   ProactivePolicy,
   ProactiveRunRecord,
@@ -219,6 +228,7 @@ import type {
   DurableDeadLetterRecord,
   DurableDiagnosticsResponse,
   DurableRunRecord,
+  DurableRunStatus,
   WeeklyImprovementReportRecord,
   SystemVitals,
   TaskActivityCreateInput,
@@ -353,6 +363,14 @@ import {
 } from "./gateway/auth-credential-planner.js";
 import { verifyBackupAtPath } from "./gateway/backup-verify.js";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
+import type { ServiceContext } from "./service-context.js";
+import { ChatProjectService } from "./chat-project-service.js";
+import { DurableRunService } from "./durable-run-service.js";
+import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
+import { PromptPackService, normalizePromptTestCode, clampPromptScore } from "./prompt-pack-service.js";
+import { ChatProactiveService } from "./chat-proactive-service.js";
+import { ImprovementService } from "./improvement-service.js";
+import { evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.js";
 
 export interface ApprovalResolveResult {
   approval: ApprovalRequest;
@@ -433,6 +451,7 @@ export interface MemoryFileEntry {
 
 export interface RuntimeSettings {
   environment: string;
+  deploymentProfile: DeploymentProfile;
   defaultToolProfile: string;
   budgetMode: "saver" | "balanced" | "power";
   workspaceDir: string;
@@ -506,6 +525,8 @@ const DURABLE_RETRY_POLICY_DEFAULT: DurableRetryPolicy = {
   maxDelayMs: 60_000,
   backoffMultiplier: 2,
 };
+const CHAT_STREAM_EVENT_POLL_INTERVAL_MS = 200;
+const CHAT_STREAM_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_POLICY: RetentionPolicy = {
   realtimeEventsDays: 14,
   backupsKeep: 20,
@@ -750,12 +771,6 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
   "http.get",
 ] as const;
 
-const PROMPT_PACK_PASS_THRESHOLD = 7;
-const PROMPT_PACK_BENCHMARK_MAX_TESTS = 200;
-const PROMPT_PACK_BENCHMARK_MAX_PROVIDERS = 10;
-const PROMPT_PACK_BENCHMARK_MAX_FAILURE_SIGNALS = 3;
-const DEFAULT_PROMPT_RUNNER_SOURCE = "goatcitadel_prompt_pack.md";
-const DEFAULT_PROMPT_PACK_EXPORT_DIR = "artifacts/prompt-lab";
 const DEFAULT_DELEGATION_ROLES = ["product", "architect", "coder", "qa", "ops"];
 const IMPROVEMENT_WEEKLY_TIME_ZONE = "America/Los_Angeles";
 const IMPROVEMENT_WEEKLY_SCHEDULE_LABEL = "0 2 * * 0 America/Los_Angeles";
@@ -868,35 +883,6 @@ interface ReplayScoredItemResult {
   judgeUsed: boolean;
 }
 
-interface PromptPackBenchmarkRunRow {
-  benchmark_run_id: string;
-  pack_id: string;
-  status: PromptPackBenchmarkRunRecord["status"];
-  test_codes_json: string;
-  providers_json: string;
-  total_items: number;
-  completed_items: number;
-  error: string | null;
-  started_at: string;
-  finished_at: string | null;
-}
-
-interface PromptPackBenchmarkItemRow {
-  item_id: string;
-  benchmark_run_id: string;
-  pack_id: string;
-  test_id: string;
-  test_code: string;
-  provider_id: string;
-  model: string;
-  run_id: string | null;
-  score_id: string | null;
-  run_status: PromptPackBenchmarkItemRecord["runStatus"];
-  total_score: number | null;
-  failure_signal: string | null;
-  created_at: string;
-}
-
 interface RealtimeListener {
   (event: RealtimeEvent): void;
 }
@@ -909,20 +895,20 @@ interface ResolvedRuntimeGuidance {
   truncated: boolean;
 }
 
-class ChatTurnWriteConflictError extends Error {
+class ChatTurnWriteConflictError extends ConflictError {
   public constructor(message: string) {
-    super(message);
-    this.name = "ChatTurnWriteConflictError";
+    super({ code: "WRITE_CONFLICT", message });
   }
 }
 
-class ChatTurnCancelledError extends Error {
+class ChatTurnCancelledError extends GoatError {
+  readonly code = "TURN_CANCELLED" as const;
+  readonly httpStatus = 499;
   public constructor(
     public readonly turnId: string,
     message = "Chat turn cancelled.",
   ) {
-    super(message);
-    this.name = "ChatTurnCancelledError";
+    super(message, { turnId });
   }
 }
 
@@ -944,6 +930,27 @@ interface ActiveChatTurnExecution {
   operation: string;
   startedAt: string;
   controller: AbortController;
+}
+
+interface ActiveChatTurnStreamExecution {
+  sessionId: string;
+  turnId: string;
+  runId?: string;
+  startedAt: string;
+  nextSequence: number;
+  completed: boolean;
+}
+
+type PersistableChatStreamChunk = ChatStreamChunkDraft extends infer T
+  ? T extends { turnId?: string }
+    ? T & { turnId: string }
+    : never
+  : never;
+
+type InspectableChatStreamChunk = ChatStreamChunk | ChatStreamChunkDraft;
+
+function isPersistableChatStreamChunk(chunk: ChatStreamChunkDraft): chunk is PersistableChatStreamChunk {
+  return typeof chunk.turnId === "string" && chunk.turnId.length > 0;
 }
 
 interface PreparedChatExecutionPlanResolution {
@@ -976,6 +983,19 @@ interface PreparedChatExecutionPlanResolution {
   };
 }
 
+interface DurableChatTurnExecutionPayload {
+  version: "chat.turn.execute.v1";
+  sessionId: string;
+  turnId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  branchKind: ChatTurnBranchKind;
+  parentTurnId?: string;
+  sourceTurnId?: string;
+  threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited";
+  request: ChatSendMessageRequest;
+}
+
 const CHAT_COMPACTION_RECENT_TURN_LIMIT = 6;
 const CHAT_COMPACTION_WINDOW_SIZE = 8;
 const CHAT_COMPACTION_TRIGGER_TOKENS = 2200;
@@ -1001,16 +1021,23 @@ export class GatewayService {
   private readonly cronAutomationService: CronAutomationService;
   private readonly addonsService: AddonsService;
   private readonly devDiagnostics: GatewayDevDiagnosticsService;
+  private readonly chatProjectService: ChatProjectService;
+  private readonly durableRunService: DurableRunService;
+  private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
+  private readonly promptPackService: PromptPackService;
+  private readonly chatProactiveService: ChatProactiveService;
+  private readonly improvementService: ImprovementService;
   private readonly realtime = new EventEmitter();
   private readonly backgroundTasks = new Set<Promise<void>>();
   private readonly warnedOutsideRootPathFingerprints = new Set<string>();
   private readonly chatMessageProjectionBackfillAttempted = new Set<string>();
   private readonly activeChatTurnWrites = new Map<string, string>();
   private readonly activeChatTurns = new Map<string, ActiveChatTurnExecution>();
+  private readonly activeChatTurnStreams = new Map<string, ActiveChatTurnStreamExecution>();
+  private lastChatStreamPurgeAt = 0;
   private readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
   private readonly onboardingMarkerPath: string;
-  private proactiveScheduler?: NodeJS.Timeout;
-  private improvementScheduler?: NodeJS.Timeout;
+  private maintenanceScheduler?: NodeJS.Timeout;
   private closing = false;
   private onboardingMarker: { completedAt?: string; completedBy?: string } = {};
 
@@ -1098,6 +1125,7 @@ export class GatewayService {
       createChatCompletion: (request) => this.createChatCompletion(request),
       createChatCompletionStream: (request) => this.createChatCompletionStream(request),
       invokeTool: (request) => this.invokeTool(request),
+      persistToolArtifact: (input) => this.persistChatToolArtifact(input),
       evaluateToolAccess: (request) => this.policyEngine.evaluateAccess(request),
       invokeMcpTool: (request) => this.invokeMcpTool(request),
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
@@ -1118,7 +1146,7 @@ export class GatewayService {
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       runHandlers: {
         improvement: async () => {
-          await this.runWeeklyImprovementSchedulerIfDue({ force: true });
+          await this.improvementService.runWeeklyImprovementSchedulerIfDue({ force: true });
         },
         backup: async () => {
           await this.runPrivateBetaBackupSchedulerIfDue({ force: true });
@@ -1131,10 +1159,106 @@ export class GatewayService {
         },
       },
     });
+
+    // ── extracted sub-services (Phase 2 facade pattern) ──────────
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    const serviceCtx: ServiceContext = {
+      storage: this.storage,
+      config: this.config,
+      llmService: this.llmService,
+      policyEngine: this.policyEngine,
+      gatewaySql: this.storage.gatewaySql,
+      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+      requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
+      normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
+    };
+    this.chatProjectService = new ChatProjectService(serviceCtx);
+    this.durableRunService = new DurableRunService(serviceCtx, {
+      backgroundTasks: this.backgroundTasks,
+      executeWorkflow: (run) => this.executeDurableWorkflowRun(run),
+      isWorkflowRecoverable: (run) => this.isDurableWorkflowRecoverable(run),
+      markWorkflowUnrecoverable: async (run, reason) => {
+        await this.markDurableWorkflowUnrecoverable(run, reason);
+      },
+    });
+    this.chatLearnedMemoryService = new ChatLearnedMemoryService(serviceCtx);
+    this.promptPackService = new PromptPackService(serviceCtx, {
+      createChatSession: (input) => this.createChatSession(input),
+      agentSendChatMessage: (sessionId, input) => this.agentSendChatMessage(sessionId, input),
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
+      backgroundTasks: this.backgroundTasks,
+    });
+    this.chatProactiveService = new ChatProactiveService(serviceCtx, {
+      listChatSessions: (query) => this.listChatSessions(query),
+      getSession: (sessionId) => this.getSession(sessionId),
+      hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
+      getSessionIdleSeconds: (sessionId) => this.getSessionIdleSeconds(sessionId),
+      listChatMessages: (sessionId, limit) => this.listChatMessages(sessionId, limit),
+      invokeTool: (request) => this.invokeTool(request),
+      detectDelegationRoles: (text) => detectDelegationRoles(text),
+      backgroundTasks: this.backgroundTasks,
+      get closing() { return self.closing; },
+    });
+    this.improvementService = new ImprovementService(serviceCtx, {
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
+      readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
+      backgroundTasks: this.backgroundTasks,
+      get closing() { return self.closing; },
+    });
   }
 
   public isDevDiagnosticsEnabled(): boolean {
     return this.devDiagnostics.isEnabled();
+  }
+
+  private async persistChatToolArtifact(input: {
+    sessionId: string;
+    turnId: string;
+    toolRunId: string;
+    toolName: string;
+    content: string;
+    contentType?: string;
+    snippet?: string;
+    createdAt?: string;
+  }): Promise<{
+    artifactId: string;
+    storageRelPath: string;
+    byteLength: number;
+    contentType?: string;
+    snippet?: string;
+  }> {
+    const artifactId = randomUUID();
+    const digest = createHash("sha256").update(input.content, "utf8").digest("hex");
+    const extension = inferToolArtifactExtension(input.contentType);
+    const storageRelPath = path.join("tool-artifacts", digest.slice(0, 2), `${digest}${extension}`);
+    const absolutePath = path.resolve(this.config.rootDir, this.config.assistant.dataDir, storageRelPath);
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    if (!fsSync.existsSync(absolutePath)) {
+      await fs.writeFile(absolutePath, input.content, "utf8");
+    }
+    const record = this.storage.chatToolArtifacts.create({
+      artifactId,
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      toolRunId: input.toolRunId,
+      toolName: input.toolName,
+      contentType: input.contentType,
+      byteLength: Buffer.byteLength(input.content, "utf8"),
+      snippet: input.snippet?.slice(0, 4000),
+      storageRelPath,
+      createdAt: input.createdAt ?? new Date().toISOString(),
+    });
+    return {
+      artifactId: record.artifactId,
+      storageRelPath: record.storageRelPath,
+      byteLength: record.byteLength,
+      contentType: record.contentType,
+      snippet: record.snippet,
+    };
   }
 
   public listDevDiagnostics(input?: {
@@ -1164,9 +1288,9 @@ export class GatewayService {
     this.storage.agentProfiles.seedBuiltins(BUILTIN_AGENT_PROFILES);
     const skills = await this.skillsService.reload();
     this.ensureSkillStates(skills.map((skill) => skill.skillId));
-    this.markInterruptedDecisionReplayRuns();
+    this.improvementService.markInterruptedDecisionReplayRuns();
     await this.loadCronJobsFromConfig();
-    this.ensureWeeklyImprovementCronJob();
+    this.improvementService.ensureWeeklyImprovementCronJob();
     this.ensurePrivateBetaBackupCronJob();
     this.ensureMemoryFlushCronJob();
     this.ensureCostReportCronJob();
@@ -1176,7 +1300,9 @@ export class GatewayService {
     this.persistLlmConfig();
     this.persistAssistantConfig();
     this.startProactiveScheduler();
-    this.startImprovementScheduler();
+    this.improvementService.startScheduler();
+    this.startMaintenanceScheduler();
+    this.durableRunService.startWorker();
     console.info(
       "[goatcitadel] feature flags",
       JSON.stringify(this.readFeatureFlags()),
@@ -1379,7 +1505,7 @@ export class GatewayService {
     limit = 300,
     workspaceId?: string,
   ): ChatProjectRecord[] {
-    return this.storage.chatProjects.list(view, limit, this.normalizeWorkspaceId(workspaceId));
+    return this.chatProjectService.listChatProjects(view, limit, workspaceId);
   }
 
   public createChatProject(input: {
@@ -1389,17 +1515,7 @@ export class GatewayService {
     workspacePath: string;
     color?: string;
   }): ChatProjectRecord {
-    const created = this.storage.chatProjects.create({
-      ...input,
-      workspaceId: this.normalizeWorkspaceId(input.workspaceId),
-    });
-    this.publishRealtime("system", "chat", {
-      type: "chat_project_created",
-      projectId: created.projectId,
-      name: created.name,
-      workspaceId: created.workspaceId,
-    });
-    return created;
+    return this.chatProjectService.createChatProject(input);
   }
 
   public updateChatProject(projectId: string, input: {
@@ -1409,46 +1525,19 @@ export class GatewayService {
     workspacePath?: string;
     color?: string;
   }): ChatProjectRecord {
-    const updated = this.storage.chatProjects.update(projectId, {
-      ...input,
-      workspaceId: input.workspaceId ? this.normalizeWorkspaceId(input.workspaceId) : undefined,
-    });
-    this.publishRealtime("system", "chat", {
-      type: "chat_project_updated",
-      projectId: updated.projectId,
-      name: updated.name,
-      workspaceId: updated.workspaceId,
-    });
-    return updated;
+    return this.chatProjectService.updateChatProject(projectId, input);
   }
 
   public archiveChatProject(projectId: string): ChatProjectRecord {
-    const archived = this.storage.chatProjects.archive(projectId);
-    this.publishRealtime("system", "chat", {
-      type: "chat_project_archived",
-      projectId: archived.projectId,
-    });
-    return archived;
+    return this.chatProjectService.archiveChatProject(projectId);
   }
 
   public restoreChatProject(projectId: string): ChatProjectRecord {
-    const restored = this.storage.chatProjects.restore(projectId);
-    this.publishRealtime("system", "chat", {
-      type: "chat_project_restored",
-      projectId: restored.projectId,
-    });
-    return restored;
+    return this.chatProjectService.restoreChatProject(projectId);
   }
 
   public hardDeleteChatProject(projectId: string): boolean {
-    const deleted = this.storage.chatProjects.hardDelete(projectId);
-    if (deleted) {
-      this.publishRealtime("system", "chat", {
-        type: "chat_project_deleted",
-        projectId,
-      });
-    }
-    return deleted;
+    return this.chatProjectService.hardDeleteChatProject(projectId);
   }
 
   public listChatSessions(query: ChatSessionListQuery = {}): ChatSessionRecord[] {
@@ -1913,154 +2002,35 @@ export class GatewayService {
   }
 
   private toProactivePolicy(sessionId: string, prefs: SessionAutonomyPrefs): ProactivePolicy {
-    return {
-      sessionId,
-      mode: prefs.proactiveMode,
-      autonomyBudget: {
-        maxActionsPerHour: prefs.maxActionsPerHour,
-        maxActionsPerTurn: prefs.maxActionsPerTurn,
-        cooldownSeconds: prefs.cooldownSeconds,
-      },
-      retrievalMode: prefs.retrievalMode,
-      reflectionMode: prefs.reflectionMode,
-      updatedAt: prefs.updatedAt,
-    };
+    return this.chatProactiveService.toProactivePolicy(sessionId, prefs);
   }
 
   private startProactiveScheduler(): void {
-    if (this.proactiveScheduler) {
-      return;
-    }
-    this.proactiveScheduler = setInterval(() => {
-      const task = this.runProactiveSchedulerTick().catch((error) => {
-        console.error("[goatcitadel] proactive scheduler tick failed", error);
-        this.publishRealtime("system", "chat", {
-          type: "proactive_scheduler_error",
-          message: (error as Error).message,
-        });
-      });
-      this.backgroundTasks.add(task);
-      task.finally(() => this.backgroundTasks.delete(task));
-    }, PROACTIVE_SCHEDULER_INTERVAL_MS);
+    this.chatProactiveService.startScheduler();
   }
 
-  private async runProactiveSchedulerTick(): Promise<void> {
-    if (this.closing) {
+  // runWeeklyImprovementSchedulerIfDue moved to ImprovementService
+
+  private startMaintenanceScheduler(): void {
+    if (this.maintenanceScheduler) {
       return;
     }
-    const sessions = this.listChatSessions({
-      scope: "mission",
-      view: "active",
-      limit: 300,
-    });
-    const prefsBySessionId = this.storage.sessionAutonomyPrefs.listBySessionIds(
-      sessions.map((session) => session.sessionId),
-    );
-    const eligible = sessions
-      .map((session) => ({
-        sessionId: session.sessionId,
-        prefs: prefsBySessionId.get(session.sessionId) ?? {
-          sessionId: session.sessionId,
-          ...DEFAULT_SESSION_AUTONOMY_PREFS,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        },
-      }))
-      .filter((item) => item.prefs.proactiveMode !== "off");
-
-    if (eligible.length === 0) {
-      return;
-    }
-
-    const maxWorkers = Math.min(PROACTIVE_SCHEDULER_CONCURRENCY, eligible.length);
-    let cursor = 0;
-    const workers = Array.from({ length: maxWorkers }, async () => {
-      while (cursor < eligible.length) {
-        const index = cursor;
-        cursor += 1;
-        const current = eligible[index];
-        if (!current) {
-          continue;
-        }
-        try {
-          await this.triggerChatSessionProactive(current.sessionId, {
-            source: "scheduler",
-            reason: "Background proactive scheduler tick.",
-            prefs: current.prefs,
-          });
-        } catch (error) {
-          console.error(
-            "[goatcitadel] proactive scheduler session trigger failed",
-            { sessionId: current.sessionId, error },
-          );
-          this.publishRealtime("system", "chat", {
-            type: "proactive_scheduler_session_error",
-            sessionId: current.sessionId,
-            message: (error as Error).message,
-          });
-        }
-      }
-    });
-    await Promise.all(workers);
-  }
-
-  private startImprovementScheduler(): void {
-    if (this.improvementScheduler) {
-      return;
-    }
-    this.improvementScheduler = setInterval(() => {
-      const task = this.runImprovementSchedulerTick().catch((error) => {
-        console.error("[goatcitadel] improvement scheduler tick failed", error);
-        this.publishRealtime("system", "improvement", {
-          type: "improvement_scheduler_error",
-          message: (error as Error).message,
-        });
+    this.maintenanceScheduler = setInterval(() => {
+      const task = this.runMaintenanceSchedulerTick().catch((error) => {
+        console.error("[goatcitadel] maintenance scheduler tick failed", error);
       });
       this.backgroundTasks.add(task);
       task.finally(() => this.backgroundTasks.delete(task));
     }, IMPROVEMENT_SCHEDULER_INTERVAL_MS);
   }
 
-  private async runImprovementSchedulerTick(): Promise<void> {
+  private async runMaintenanceSchedulerTick(): Promise<void> {
     if (this.closing) {
       return;
     }
-    await this.runWeeklyImprovementSchedulerIfDue();
     await this.runPrivateBetaBackupSchedulerIfDue();
     await this.runMemoryFlushSchedulerIfDue();
     await this.runCostReportSchedulerIfDue();
-  }
-
-  private async runWeeklyImprovementSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
-    const job = this.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
-    if (!job?.enabled) {
-      return;
-    }
-    const now = new Date();
-    if (!options.force && !isCronJobDueNow(job, now, {
-      defaultHour: 2,
-      defaultMinute: 0,
-      defaultWeekday: 0,
-      defaultTimeZone: IMPROVEMENT_WEEKLY_TIME_ZONE,
-    })) {
-      return;
-    }
-    const weekKey = toWeekKeyForTimezone(now, IMPROVEMENT_WEEKLY_TIME_ZONE);
-    const lastWeekKey = this.storage.systemSettings.get<string>(IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY)?.value;
-    if (!options.force && lastWeekKey === weekKey) {
-      return;
-    }
-    await this.runDecisionReplayAudit({
-      triggerMode: options.force ? "manual" : "scheduled",
-      sampleSize: IMPROVEMENT_WEEKLY_SAMPLE_SIZE,
-    });
-    this.storage.systemSettings.set(IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY, weekKey);
-    const finishedAt = new Date().toISOString();
-    this.storage.cronJobs.upsert({
-      ...job,
-      lastRunAt: finishedAt,
-      nextRunAt: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)).toISOString(),
-    });
   }
 
   private async runPrivateBetaBackupSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
@@ -2278,6 +2248,185 @@ export class GatewayService {
     return this.activeChatTurns.get(turnId)?.controller.signal.aborted ?? false;
   }
 
+  private registerActiveChatTurnStream(sessionId: string, turnId: string, runId?: string): ActiveChatTurnStreamExecution {
+    const state: ActiveChatTurnStreamExecution = {
+      sessionId,
+      turnId,
+      runId,
+      startedAt: new Date().toISOString(),
+      nextSequence: this.storage.chatStreamEvents.getLatestSequence(turnId) + 1,
+      completed: false,
+    };
+    this.activeChatTurnStreams.set(turnId, state);
+    return state;
+  }
+
+  private completeActiveChatTurnStream(turnId: string): void {
+    const active = this.activeChatTurnStreams.get(turnId);
+    if (!active) {
+      return;
+    }
+    active.completed = true;
+  }
+
+  private closeActiveChatTurnStream(turnId: string): void {
+    this.activeChatTurnStreams.delete(turnId);
+  }
+
+  private persistChatStreamChunk(
+    chunk: PersistableChatStreamChunk,
+    runId?: string,
+  ): ChatStreamChunk {
+    const active = this.activeChatTurnStreams.get(chunk.turnId);
+    const sequence = active?.nextSequence ?? (this.storage.chatStreamEvents.getLatestSequence(chunk.turnId) + 1);
+    if (active) {
+      active.nextSequence = sequence + 1;
+    }
+    const eventId = randomUUID();
+    const enriched = {
+      ...chunk,
+      eventId,
+      sequence,
+      ...(runId ? { runId } : {}),
+    } as ChatStreamChunk;
+    this.storage.chatStreamEvents.append({
+      eventId,
+      sessionId: chunk.sessionId,
+      turnId: chunk.turnId,
+      sequence,
+      runId,
+      chunkType: enriched.type,
+      payload: enriched as unknown as Record<string, unknown>,
+      createdAt: new Date().toISOString(),
+    });
+    this.purgeExpiredChatStreamEventsIfNeeded();
+    return enriched;
+  }
+
+  private purgeExpiredChatStreamEventsIfNeeded(): void {
+    const now = Date.now();
+    if (now - this.lastChatStreamPurgeAt < 60_000) {
+      return;
+    }
+    this.lastChatStreamPurgeAt = now;
+    const cutoffIso = new Date(now - CHAT_STREAM_EVENT_RETENTION_MS).toISOString();
+    this.storage.chatStreamEvents.purgeBefore(cutoffIso);
+  }
+
+  private async *streamPersistedChatTurnEvents(
+    sessionId: string,
+    turnId: string,
+    options?: {
+      sinceEventId?: string;
+      liveTail?: boolean;
+    },
+  ): AsyncGenerator<ChatStreamChunk> {
+    let afterSequence = 0;
+    if (options?.sinceEventId) {
+      const priorEvent = this.storage.chatStreamEvents.getByEventId(options.sinceEventId);
+      if (priorEvent?.turnId === turnId) {
+        afterSequence = priorEvent.sequence;
+      } else {
+        yield* this.streamTurnStateFallback(sessionId, turnId);
+        afterSequence = this.storage.chatStreamEvents.getLatestSequence(turnId);
+        if (!options?.liveTail) {
+          return;
+        }
+      }
+    }
+
+    while (true) {
+      const events = this.storage.chatStreamEvents.listByTurn(turnId, afterSequence, 200);
+      if (events.length > 0) {
+        for (const event of events) {
+          afterSequence = event.sequence;
+          yield event.payload as unknown as ChatStreamChunk;
+          if ((event.payload as { type?: string }).type === "done") {
+            return;
+          }
+        }
+        continue;
+      }
+
+      const active = this.activeChatTurnStreams.get(turnId);
+      const durablePending = options?.liveTail ? this.isDurableTurnStillStreaming(turnId) : false;
+      if (!options?.liveTail || ((!active || active.completed) && !durablePending)) {
+        return;
+      }
+      await wait(CHAT_STREAM_EVENT_POLL_INTERVAL_MS);
+    }
+  }
+
+  private isDurableTurnStillStreaming(turnId: string): boolean {
+    const row = this.gatewaySql.prepare(`
+      SELECT run_id
+      FROM chat_stream_events
+      WHERE turn_id = ?
+      ORDER BY sequence DESC
+      LIMIT 1
+    `).get(turnId) as { run_id: string | null } | undefined;
+    if (!row?.run_id) {
+      return false;
+    }
+    try {
+      const run = this.storage.durableRuns.getRun(row.run_id);
+      return run.status === "queued" || run.status === "running" || run.status === "waiting" || run.status === "paused";
+    } catch {
+      return false;
+    }
+  }
+
+  private async *withEphemeralStreamEnvelope(
+    source: AsyncGenerator<ChatStreamChunkDraft>,
+    runId?: string,
+  ): AsyncGenerator<ChatStreamChunk> {
+    let sequence = 1;
+    for await (const chunk of source) {
+      yield {
+        ...chunk,
+        eventId: randomUUID(),
+        sequence,
+        ...(runId ? { runId } : {}),
+      } as ChatStreamChunk;
+      sequence += 1;
+    }
+  }
+
+  private async *streamTurnStateFallback(
+    sessionId: string,
+    turnId: string,
+  ): AsyncGenerator<ChatStreamChunk> {
+    const trace = this.storage.chatTurnTraces.get(turnId);
+    if (trace.sessionId !== sessionId) {
+      return;
+    }
+    const hydratedTrace = this.createHydratedChatTurnTrace(turnId, trace);
+    yield this.persistChatStreamChunk({
+      type: "trace_update",
+      sessionId,
+      turnId,
+      trace: hydratedTrace,
+    }, hydratedTrace.durable?.runId);
+    if (trace.assistantMessageId) {
+      const assistantMessage = this.storage.chatMessages.get(trace.assistantMessageId);
+      if (assistantMessage) {
+        yield this.persistChatStreamChunk({
+          type: "message_done",
+          sessionId,
+          turnId,
+          messageId: assistantMessage.messageId,
+          content: assistantMessage.content,
+        }, hydratedTrace.durable?.runId);
+        yield this.persistChatStreamChunk({
+          type: "done",
+          sessionId,
+          turnId,
+          messageId: assistantMessage.messageId,
+        }, hydratedTrace.durable?.runId);
+      }
+    }
+  }
+
   private createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): ChatTurnTraceRecord {
     return {
       ...trace,
@@ -2304,6 +2453,11 @@ export class GatewayService {
     const trace = this.storage.chatTurnTraces.patch(turnId, {
       status: "cancelled",
       failure: undefined,
+      completion: {
+        finishReason: current.completion?.finishReason,
+        status: "interrupted",
+        repaired: Boolean(current.completion?.repaired),
+      },
       finishedAt: new Date().toISOString(),
     });
     this.recordDevDiagnostic({
@@ -2334,312 +2488,21 @@ export class GatewayService {
     return Math.max(0, Math.floor((Date.now() - lastActivity) / 1000));
   }
 
-  private getProactiveCooldownRemainingSeconds(prefs: SessionAutonomyPrefs): number {
-    if (!prefs.lastProactiveAt || prefs.cooldownSeconds <= 0) {
-      return 0;
-    }
-    const elapsedSeconds = Math.floor((Date.now() - Date.parse(prefs.lastProactiveAt)) / 1000);
-    if (!Number.isFinite(elapsedSeconds) || elapsedSeconds >= prefs.cooldownSeconds) {
-      return 0;
-    }
-    return Math.max(0, prefs.cooldownSeconds - elapsedSeconds);
-  }
+  // Proactive helpers moved to ChatProactiveService
 
-  private countProactiveActionsLastHour(sessionId: string): number {
-    const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const row = this.gatewaySql.prepare(`
-      SELECT COUNT(*) AS count
-      FROM proactive_actions
-      WHERE session_id = ? AND status = 'executed' AND created_at >= ?
-    `).get(sessionId, cutoff) as { count?: number } | undefined;
-    return Number(row?.count ?? 0);
-  }
+  // planProactiveActions moved to ChatProactiveService
 
-  private async planProactiveActions(sessionId: string): Promise<{
-    confidence: number;
-    reasoningSummary: string;
-    actions: ProactivePlannedAction[];
-  }> {
-    const messages = await this.listChatMessages(sessionId, 60);
-    const latestUser = [...messages].reverse().find((message) => message.role === "user");
-    if (!latestUser) {
-      return {
-        confidence: 0.1,
-        reasoningSummary: "No recent user prompt found.",
-        actions: [],
-      };
-    }
-    const text = latestUser.content.trim();
-    if (!text) {
-      return {
-        confidence: 0.1,
-        reasoningSummary: "Latest user prompt is empty.",
-        actions: [],
-      };
-    }
-    const actions: ProactivePlannedAction[] = [];
-    const roles = detectDelegationRoles(text);
-    if (roles.length > 1 || /\b(prd|architecture|qa|ops|handoff|route this)\b/i.test(text)) {
-      actions.push({
-        kind: "delegate",
-        objective: text,
-        roles,
-      });
-    }
+  // insertProactiveRun moved to ChatProactiveService
 
-    if (/\b(weather|price|latest|news|current|today|time)\b/i.test(text)) {
-      actions.push({
-        kind: "tool",
-        toolName: /\btime\b/i.test(text) ? "time.now" : "browser.search",
-        args: /\btime\b/i.test(text) ? {} : { query: text, maxResults: 5 },
-      });
-    }
+  // finishProactiveRun moved to ChatProactiveService
 
-    if (actions.length === 0) {
-      actions.push({
-        kind: "note",
-        note: "Consider running /delegate for structured multi-role output.",
-      });
-    }
+  // insertProactiveAction moved to ChatProactiveService
 
-    return {
-      confidence: actions.some((action) => action.kind !== "note") ? 0.78 : 0.42,
-      reasoningSummary: "Generated actions from latest user intent and route hints.",
-      actions,
-    };
-  }
+  // updateProactiveAction moved to ChatProactiveService
 
-  private insertProactiveRun(run: ProactiveRunRecord): void {
-    this.gatewaySql.prepare(`
-      INSERT INTO proactive_runs (
-        run_id, session_id, status, mode, confidence, reasoning_summary, action_count,
-        suggested_actions_json, executed_actions_json, error, started_at, finished_at
-      ) VALUES (
-        @runId, @sessionId, @status, @mode, @confidence, @reasoningSummary, @actionCount,
-        @suggestedActionsJson, @executedActionsJson, @error, @startedAt, @finishedAt
-      )
-    `).run({
-      runId: run.runId,
-      sessionId: run.sessionId,
-      status: run.status,
-      mode: run.mode,
-      confidence: run.confidence,
-      reasoningSummary: run.reasoningSummary,
-      actionCount: run.suggestedActions.length,
-      suggestedActionsJson: JSON.stringify(run.suggestedActions),
-      executedActionsJson: JSON.stringify(run.executedActions),
-      error: run.error ?? null,
-      startedAt: run.startedAt,
-      finishedAt: run.finishedAt ?? null,
-    });
-  }
+  // resolveProactiveAction moved to ChatProactiveService
 
-  private finishProactiveRun(
-    runId: string,
-    patch: Partial<Pick<ProactiveRunRecord, "status" | "confidence" | "reasoningSummary" | "suggestedActions" | "executedActions" | "error">>,
-  ): ProactiveRunRecord {
-    const row = this.gatewaySql.prepare(`
-      SELECT *
-      FROM proactive_runs
-      WHERE run_id = ?
-    `).get(runId) as {
-      run_id: string;
-      session_id: string;
-      status: ProactiveRunRecord["status"];
-      mode: ChatProactiveMode;
-      confidence: number;
-      reasoning_summary: string;
-      suggested_actions_json: string;
-      executed_actions_json: string;
-      started_at: string;
-      finished_at: string | null;
-      error: string | null;
-    } | undefined;
-    if (!row) {
-      throw new Error(`Proactive run ${runId} not found.`);
-    }
-    const next: ProactiveRunRecord = {
-      runId: row.run_id,
-      sessionId: row.session_id,
-      status: patch.status ?? row.status,
-      mode: row.mode,
-      confidence: patch.confidence ?? Number(row.confidence || 0),
-      reasoningSummary: patch.reasoningSummary ?? row.reasoning_summary ?? "",
-      suggestedActions: patch.suggestedActions ?? safeJsonParse<ProactiveActionRecord[]>(row.suggested_actions_json, []),
-      executedActions: patch.executedActions ?? safeJsonParse<ProactiveActionRecord[]>(row.executed_actions_json, []),
-      startedAt: row.started_at,
-      finishedAt: new Date().toISOString(),
-      error: patch.error ?? row.error ?? undefined,
-    };
-    this.gatewaySql.prepare(`
-      UPDATE proactive_runs
-      SET
-        status = @status,
-        confidence = @confidence,
-        reasoning_summary = @reasoningSummary,
-        action_count = @actionCount,
-        suggested_actions_json = @suggestedActionsJson,
-        executed_actions_json = @executedActionsJson,
-        error = @error,
-        finished_at = @finishedAt
-      WHERE run_id = @runId
-    `).run({
-      runId: next.runId,
-      status: next.status,
-      confidence: next.confidence,
-      reasoningSummary: next.reasoningSummary,
-      actionCount: next.suggestedActions.length,
-      suggestedActionsJson: JSON.stringify(next.suggestedActions),
-      executedActionsJson: JSON.stringify(next.executedActions),
-      error: next.error ?? null,
-      finishedAt: next.finishedAt ?? null,
-    });
-    return next;
-  }
-
-  private insertProactiveAction(action: ProactiveActionRecord): void {
-    this.gatewaySql.prepare(`
-      INSERT INTO proactive_actions (
-        action_id, run_id, session_id, kind, status, tool_name, args_json, result_json, error, created_at, updated_at
-      ) VALUES (
-        @actionId, @runId, @sessionId, @kind, @status, @toolName, @argsJson, @resultJson, @error, @createdAt, @updatedAt
-      )
-    `).run({
-      actionId: action.actionId,
-      runId: action.runId,
-      sessionId: action.sessionId,
-      kind: action.kind,
-      status: action.status,
-      toolName: action.toolName ?? null,
-      argsJson: action.args ? JSON.stringify(action.args) : null,
-      resultJson: action.result ? JSON.stringify(action.result) : null,
-      error: action.error ?? null,
-      createdAt: action.createdAt,
-      updatedAt: action.updatedAt ?? action.createdAt,
-    });
-  }
-
-  private updateProactiveAction(
-    actionId: string,
-    patch: Partial<Pick<ProactiveActionRecord, "status" | "result" | "error">>,
-  ): ProactiveActionRecord {
-    const row = this.gatewaySql.prepare(`
-      SELECT *
-      FROM proactive_actions
-      WHERE action_id = ?
-    `).get(actionId) as {
-      action_id: string;
-      run_id: string;
-      session_id: string;
-      kind: ProactiveActionRecord["kind"];
-      status: ProactiveActionRecord["status"];
-      tool_name: string | null;
-      args_json: string | null;
-      result_json: string | null;
-      error: string | null;
-      created_at: string;
-      updated_at: string | null;
-    } | undefined;
-    if (!row) {
-      throw new Error(`Proactive action ${actionId} not found.`);
-    }
-    const updatedAt = new Date().toISOString();
-    const next: ProactiveActionRecord = {
-      actionId: row.action_id,
-      runId: row.run_id,
-      sessionId: row.session_id,
-      kind: row.kind,
-      status: patch.status ?? row.status,
-      toolName: row.tool_name ?? undefined,
-      args: row.args_json ? safeJsonParse<Record<string, unknown>>(row.args_json, {}) : undefined,
-      result: patch.result ?? (row.result_json ? safeJsonParse<Record<string, unknown>>(row.result_json, {}) : undefined),
-      error: patch.error ?? row.error ?? undefined,
-      createdAt: row.created_at,
-      updatedAt,
-    };
-    this.gatewaySql.prepare(`
-      UPDATE proactive_actions
-      SET status = @status, result_json = @resultJson, error = @error, updated_at = @updatedAt
-      WHERE action_id = @actionId
-    `).run({
-      actionId: next.actionId,
-      status: next.status,
-      resultJson: next.result ? JSON.stringify(next.result) : null,
-      error: next.error ?? null,
-      updatedAt,
-    });
-    return next;
-  }
-
-  private resolveProactiveAction(
-    action: ProactiveActionRecord,
-    remainingHourBudget: number,
-    remainingTurnBudget: number,
-  ): { execute: boolean; reason?: string } {
-    if (remainingHourBudget <= 0) {
-      return { execute: false, reason: "Autonomy hour budget exhausted." };
-    }
-    if (remainingTurnBudget <= 0) {
-      return { execute: false, reason: "Autonomy turn budget exhausted." };
-    }
-    if (action.kind !== "tool" || !action.toolName) {
-      return { execute: false, reason: "Only safe tool actions are eligible for auto execution." };
-    }
-    if (!PROACTIVE_SAFE_TOOL_ALLOWLIST.has(action.toolName)) {
-      return { execute: false, reason: `Tool ${action.toolName} is not allowlisted for auto_safe mode.` };
-    }
-    return { execute: true };
-  }
-
-  private async executeProactiveToolAction(action: ProactiveActionRecord): Promise<ProactiveActionRecord> {
-    if (!action.toolName) {
-      return this.updateProactiveAction(action.actionId, {
-        status: "blocked",
-        error: "Missing tool name.",
-      });
-    }
-    try {
-      const result = await this.invokeTool({
-        toolName: action.toolName,
-        args: action.args ?? {},
-        agentId: "proactive",
-        sessionId: action.sessionId,
-        consentContext: {
-          source: "agent",
-          reason: "proactive auto_safe execution",
-        },
-      });
-      if (result.outcome === "executed") {
-        return this.updateProactiveAction(action.actionId, {
-          status: "executed",
-          result: result.result ?? {},
-        });
-      }
-      if (result.outcome === "approval_required") {
-        return this.updateProactiveAction(action.actionId, {
-          status: "blocked",
-          error: "Approval required by policy.",
-          result: {
-            approvalId: result.approvalId,
-            policyReason: result.policyReason,
-          },
-        });
-      }
-      return this.updateProactiveAction(action.actionId, {
-        status: "blocked",
-        error: result.policyReason,
-      });
-    } catch (error) {
-      return this.updateProactiveAction(action.actionId, {
-        status: "failed",
-        error: (error as Error).message,
-      });
-    }
-  }
-
-  private touchSessionProactiveTick(sessionId: string, runId: string): void {
-    this.storage.sessionAutonomyPrefs.touch(sessionId, runId);
-  }
+  // executeProactiveToolAction, touchSessionProactiveTick moved to ChatProactiveService
 
   private async inferLatestUserObjective(sessionId: string): Promise<string> {
     const messages = await this.listChatMessages(sessionId, 40);
@@ -2717,224 +2580,7 @@ export class GatewayService {
       trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
     },
   ): void {
-    if (!shouldExtractLearnedMemoryContent(content, source)) {
-      return;
-    }
-    const candidates = extractLearnedMemoryCandidates(content, source.role);
-    for (const candidate of candidates) {
-      if (looksSensitive(candidate.content)) {
-        this.insertLearnedMemoryItem({
-          sessionId,
-          itemType: candidate.itemType,
-          content: "[REDACTED]",
-          confidence: candidate.confidence,
-          status: "dropped",
-          redacted: true,
-          sourceKind: source.role,
-          sourceRef: source.sourceRef,
-          snippet: "Dropped due to secret redaction policy.",
-        });
-        continue;
-      }
-      this.upsertLearnedMemoryItem({
-        sessionId,
-        itemType: candidate.itemType,
-        content: candidate.content,
-        confidence: candidate.confidence,
-        sourceKind: source.role,
-        sourceRef: source.sourceRef,
-        snippet: candidate.content.slice(0, 240),
-      });
-    }
-  }
-
-  private insertLearnedMemoryItem(input: {
-    sessionId: string;
-    itemType: LearnedMemoryItemType;
-    content: string;
-    confidence: number;
-    status: LearnedMemoryItemRecord["status"];
-    redacted: boolean;
-    sourceKind: string;
-    sourceRef: string;
-    snippet: string;
-  }): LearnedMemoryItemRecord {
-    const now = new Date().toISOString();
-    const itemId = randomUUID();
-    this.gatewaySql.prepare(`
-      INSERT INTO learned_memory_items (
-        item_id, session_id, item_type, content, confidence, status, superseded_by_item_id,
-        redacted, disabled_reason, created_at, updated_at
-      ) VALUES (
-        @itemId, @sessionId, @itemType, @content, @confidence, @status, NULL,
-        @redacted, NULL, @createdAt, @updatedAt
-      )
-    `).run({
-      itemId,
-      sessionId: input.sessionId,
-      itemType: input.itemType,
-      content: input.content,
-      confidence: clamp01(input.confidence),
-      status: input.status,
-      redacted: input.redacted ? 1 : 0,
-      createdAt: now,
-      updatedAt: now,
-    });
-    this.gatewaySql.prepare(`
-      INSERT INTO learned_memory_sources (source_id, item_id, source_kind, source_ref, snippet, created_at)
-      VALUES (@sourceId, @itemId, @sourceKind, @sourceRef, @snippet, @createdAt)
-    `).run({
-      sourceId: randomUUID(),
-      itemId,
-      sourceKind: input.sourceKind,
-      sourceRef: input.sourceRef,
-      snippet: input.snippet,
-      createdAt: now,
-    });
-    return {
-      itemId,
-      sessionId: input.sessionId,
-      itemType: input.itemType,
-      content: input.content,
-      confidence: clamp01(input.confidence),
-      status: input.status,
-      redacted: input.redacted,
-      createdAt: now,
-      updatedAt: now,
-    };
-  }
-
-  private upsertLearnedMemoryItem(input: {
-    sessionId: string;
-    itemType: LearnedMemoryItemType;
-    content: string;
-    confidence: number;
-    sourceKind: string;
-    sourceRef: string;
-    snippet: string;
-  }): void {
-    const normalized = normalizeMemoryText(input.content);
-    if (!normalized) {
-      return;
-    }
-    const existing = this.gatewaySql.prepare(`
-      SELECT *
-      FROM learned_memory_items
-      WHERE session_id = @sessionId
-        AND item_type = @itemType
-        AND status IN ('active', 'conflict')
-      ORDER BY updated_at DESC
-      LIMIT 5
-    `).all({
-      sessionId: input.sessionId,
-      itemType: input.itemType,
-    }) as Array<{
-      item_id: string;
-      content: string;
-      confidence: number;
-      status: LearnedMemoryItemRecord["status"];
-    }>;
-
-    const duplicate = existing.find((row) => normalizeMemoryText(row.content) === normalized);
-    if (duplicate) {
-      this.gatewaySql.prepare(`
-        UPDATE learned_memory_items
-        SET confidence = @confidence, updated_at = @updatedAt
-        WHERE item_id = @itemId
-      `).run({
-        itemId: duplicate.item_id,
-        confidence: Math.max(clamp01(input.confidence), Number(duplicate.confidence || 0)),
-        updatedAt: new Date().toISOString(),
-      });
-      this.gatewaySql.prepare(`
-        INSERT INTO learned_memory_sources (source_id, item_id, source_kind, source_ref, snippet, created_at)
-        VALUES (@sourceId, @itemId, @sourceKind, @sourceRef, @snippet, @createdAt)
-      `).run({
-        sourceId: randomUUID(),
-        itemId: duplicate.item_id,
-        sourceKind: input.sourceKind,
-        sourceRef: input.sourceRef,
-        snippet: input.snippet,
-        createdAt: new Date().toISOString(),
-      });
-      return;
-    }
-
-    const current = existing[0];
-    if (current) {
-      const overlap = memoryTextOverlap(normalized, normalizeMemoryText(current.content));
-      const incomingConfidence = clamp01(input.confidence);
-      const existingConfidence = clamp01(Number(current.confidence || 0));
-      if (overlap < 0.45) {
-        const diff = Math.abs(incomingConfidence - existingConfidence);
-        if (diff < 0.2) {
-          const incomingItem = this.insertLearnedMemoryItem({
-            sessionId: input.sessionId,
-            itemType: input.itemType,
-            content: input.content,
-            confidence: incomingConfidence,
-            status: "conflict",
-            redacted: false,
-            sourceKind: input.sourceKind,
-            sourceRef: input.sourceRef,
-            snippet: input.snippet,
-          });
-          this.gatewaySql.prepare(`
-            INSERT INTO learned_memory_conflicts (
-              conflict_id, session_id, item_type, existing_item_id, incoming_item_id, incoming_content,
-              status, resolution_note, created_at, resolved_at
-            ) VALUES (
-              @conflictId, @sessionId, @itemType, @existingItemId, @incomingItemId, @incomingContent,
-              'open', NULL, @createdAt, NULL
-            )
-          `).run({
-            conflictId: randomUUID(),
-            sessionId: input.sessionId,
-            itemType: input.itemType,
-            existingItemId: current.item_id,
-            incomingItemId: incomingItem.itemId,
-            incomingContent: input.content,
-            createdAt: new Date().toISOString(),
-          });
-          return;
-        }
-        if (incomingConfidence > existingConfidence + 0.2) {
-          const next = this.insertLearnedMemoryItem({
-            sessionId: input.sessionId,
-            itemType: input.itemType,
-            content: input.content,
-            confidence: incomingConfidence,
-            status: "active",
-            redacted: false,
-            sourceKind: input.sourceKind,
-            sourceRef: input.sourceRef,
-            snippet: input.snippet,
-          });
-          this.gatewaySql.prepare(`
-            UPDATE learned_memory_items
-            SET status = 'superseded', superseded_by_item_id = @supersededByItemId, updated_at = @updatedAt
-            WHERE item_id = @itemId
-          `).run({
-            itemId: current.item_id,
-            supersededByItemId: next.itemId,
-            updatedAt: new Date().toISOString(),
-          });
-          return;
-        }
-      }
-    }
-
-    this.insertLearnedMemoryItem({
-      sessionId: input.sessionId,
-      itemType: input.itemType,
-      content: input.content,
-      confidence: clamp01(input.confidence),
-      status: "active",
-      redacted: false,
-      sourceKind: input.sourceKind,
-      sourceRef: input.sourceRef,
-      snippet: input.snippet,
-    });
+    return this.chatLearnedMemoryService.extractAndPersistLearnedMemory(sessionId, content, source);
   }
 
   private getPromptRunnerModelDefaults(): { providerId?: string; model?: string } {
@@ -3918,23 +3564,7 @@ export class GatewayService {
     actionsLastHour: number;
     lastRun?: ProactiveRunRecord;
   } {
-    this.getSession(sessionId);
-    const policy = this.toProactivePolicy(sessionId, this.getSessionAutonomyPrefs(sessionId));
-    const idleSeconds = this.getSessionIdleSeconds(sessionId);
-    const hasRunningTurn = this.hasRunningTurn(sessionId);
-    const pendingSuggestions = this.gatewaySql.prepare(
-      "SELECT COUNT(*) AS count FROM proactive_actions WHERE session_id = ? AND status = 'suggested'",
-    ).get(sessionId) as { count?: number } | undefined;
-    const actionsLastHour = this.countProactiveActionsLastHour(sessionId);
-    const lastRun = this.listChatSessionProactiveRuns(sessionId, 1)[0];
-    return {
-      policy,
-      idleSeconds,
-      hasRunningTurn,
-      pendingSuggestions: Number(pendingSuggestions?.count ?? 0),
-      actionsLastHour,
-      lastRun,
-    };
+    return this.chatProactiveService.getChatSessionProactiveStatus(sessionId);
   }
 
   public updateChatSessionProactivePolicy(
@@ -3950,225 +3580,22 @@ export class GatewayService {
       reflectionMode: ChatReflectionMode;
     }>,
   ): ProactivePolicy {
-    this.getSession(sessionId);
-    const next = this.patchSessionAutonomyPrefs(sessionId, {
-      proactiveMode: input.proactiveMode,
-      maxActionsPerHour: input.autonomyBudget?.maxActionsPerHour,
-      maxActionsPerTurn: input.autonomyBudget?.maxActionsPerTurn,
-      cooldownSeconds: input.autonomyBudget?.cooldownSeconds,
-      retrievalMode: input.retrievalMode,
-      reflectionMode: input.reflectionMode,
-    });
-    const policy = this.toProactivePolicy(sessionId, next);
-    this.publishRealtime("system", "chat", {
-      type: "proactive_policy_updated",
-      sessionId,
-      policy,
-    });
-    return policy;
+    return this.chatProactiveService.updateChatSessionProactivePolicy(sessionId, input);
   }
 
   public async triggerChatSessionProactive(
     sessionId: string,
     input: ProactiveTriggerInput = {},
   ): Promise<ProactiveRunRecord> {
-    this.getSession(sessionId);
-    const prefs = input.prefs ?? this.getSessionAutonomyPrefs(sessionId);
-    const source = input.source ?? "manual";
-    const now = new Date().toISOString();
-    const runId = randomUUID();
-    const initialRun: ProactiveRunRecord = {
-      runId,
-      sessionId,
-      status: "running",
-      mode: prefs.proactiveMode,
-      confidence: 0,
-      reasoningSummary: input.reason ?? `proactive tick (${source})`,
-      suggestedActions: [],
-      executedActions: [],
-      startedAt: now,
-    };
-    this.insertProactiveRun(initialRun);
-    this.publishRealtime("proactive_tick_started", "chat", {
-      sessionId,
-      runId,
-      mode: prefs.proactiveMode,
-      source,
-    });
-
-    if (prefs.proactiveMode === "off") {
-      return this.finishProactiveRun(runId, {
-        status: "no_action",
-        confidence: 0,
-        reasoningSummary: "Proactive mode is off.",
-      });
-    }
-
-    if (this.hasRunningTurn(sessionId)) {
-      return this.finishProactiveRun(runId, {
-        status: "no_action",
-        confidence: 0.2,
-        reasoningSummary: "Skipped because a chat turn is still running.",
-      });
-    }
-
-    const idleSeconds = this.getSessionIdleSeconds(sessionId);
-    if (idleSeconds < PROACTIVE_MIN_IDLE_SECONDS) {
-      return this.finishProactiveRun(runId, {
-        status: "no_action",
-        confidence: 0.2,
-        reasoningSummary: `Skipped because session idle time (${idleSeconds}s) is below ${PROACTIVE_MIN_IDLE_SECONDS}s.`,
-      });
-    }
-
-    const cooldownRemaining = this.getProactiveCooldownRemainingSeconds(prefs);
-    if (cooldownRemaining > 0) {
-      return this.finishProactiveRun(runId, {
-        status: "no_action",
-        confidence: 0.25,
-        reasoningSummary: `Skipped because cooldown is active (${cooldownRemaining}s remaining).`,
-      });
-    }
-
-    const plan = await this.planProactiveActions(sessionId);
-    if (plan.actions.length === 0) {
-      const completed = this.finishProactiveRun(runId, {
-        status: "no_action",
-        confidence: plan.confidence,
-        reasoningSummary: plan.reasoningSummary,
-      });
-      this.publishRealtime("proactive_no_action", "chat", {
-        sessionId,
-        runId,
-        reason: completed.reasoningSummary,
-      });
-      this.touchSessionProactiveTick(sessionId, runId);
-      return completed;
-    }
-
-    const suggestedActions: ProactiveActionRecord[] = [];
-    const executedActions: ProactiveActionRecord[] = [];
-    for (const action of plan.actions) {
-      const actionId = randomUUID();
-      const base: ProactiveActionRecord = {
-        actionId,
-        runId,
-        sessionId,
-        kind: action.kind,
-        status: "suggested",
-        toolName: action.toolName,
-        args: action.args,
-        result: action.note
-          ? { note: action.note }
-          : action.objective
-            ? { objective: action.objective, roles: action.roles }
-            : undefined,
-        createdAt: new Date().toISOString(),
-      };
-      suggestedActions.push(base);
-      this.insertProactiveAction(base);
-    }
-
-    if (prefs.proactiveMode === "suggest") {
-      const completed = this.finishProactiveRun(runId, {
-        status: "suggested",
-        confidence: plan.confidence,
-        reasoningSummary: plan.reasoningSummary,
-        suggestedActions,
-        executedActions: [],
-      });
-      this.publishRealtime("proactive_suggestion_created", "chat", {
-        sessionId,
-        runId,
-        actionCount: suggestedActions.length,
-      });
-      this.touchSessionProactiveTick(sessionId, runId);
-      return completed;
-    }
-
-    const actionsLastHour = this.countProactiveActionsLastHour(sessionId);
-    let remainingHourBudget = Math.max(0, prefs.maxActionsPerHour - actionsLastHour);
-    let remainingTurnBudget = Math.max(0, prefs.maxActionsPerTurn);
-    for (const action of suggestedActions) {
-      const status = this.resolveProactiveAction(
-        action,
-        remainingHourBudget,
-        remainingTurnBudget,
-      );
-      if (status.execute) {
-        remainingHourBudget -= 1;
-        remainingTurnBudget -= 1;
-        const executed = await this.executeProactiveToolAction(action);
-        executedActions.push(executed);
-      } else {
-        const blocked = this.updateProactiveAction(action.actionId, {
-          status: "blocked",
-          error: status.reason,
-        });
-        executedActions.push(blocked);
-        this.publishRealtime("proactive_action_blocked", "chat", {
-          sessionId,
-          runId,
-          actionId: action.actionId,
-          reason: status.reason,
-        });
-      }
-    }
-
-    const executedCount = executedActions.filter((item) => item.status === "executed").length;
-    const runStatus: ProactiveRunRecord["status"] = executedCount > 0 ? "executed" : "blocked";
-    const completed = this.finishProactiveRun(runId, {
-      status: runStatus,
-      confidence: plan.confidence,
-      reasoningSummary: plan.reasoningSummary,
-      suggestedActions,
-      executedActions,
-    });
-    if (executedCount > 0) {
-      this.publishRealtime("proactive_action_executed", "chat", {
-        sessionId,
-        runId,
-        actionCount: executedCount,
-      });
-    }
-    this.touchSessionProactiveTick(sessionId, runId);
-    return completed;
+    return this.chatProactiveService.triggerChatSessionProactive(sessionId, input);
   }
 
+  // triggerChatSessionProactive body removed (moved to ChatProactiveService)
+
+  // (triggerChatSessionProactive body removed - moved to ChatProactiveService)
+
   public listChatSessionProactiveRuns(sessionId: string, limit = 50): ProactiveRunRecord[] {
-    this.getSession(sessionId);
-    const rows = this.gatewaySql.prepare(`
-      SELECT *
-      FROM proactive_runs
-      WHERE session_id = ?
-      ORDER BY started_at DESC
-      LIMIT ?
-    `).all(sessionId, Math.max(1, Math.min(limit, 500))) as Array<{
-      run_id: string;
-      session_id: string;
-      status: ProactiveRunRecord["status"];
-      mode: ChatProactiveMode;
-      confidence: number;
-      reasoning_summary: string;
-      suggested_actions_json: string;
-      executed_actions_json: string;
-      started_at: string;
-      finished_at: string | null;
-      error: string | null;
-    }>;
-    return rows.map((row) => ({
-      runId: row.run_id,
-      sessionId: row.session_id,
-      status: row.status,
-      mode: row.mode,
-      confidence: Number(row.confidence || 0),
-      reasoningSummary: row.reasoning_summary || "",
-      suggestedActions: safeJsonParse<ProactiveActionRecord[]>(row.suggested_actions_json, []),
-      executedActions: safeJsonParse<ProactiveActionRecord[]>(row.executed_actions_json, []),
-      startedAt: row.started_at,
-      finishedAt: row.finished_at ?? undefined,
-      error: row.error ?? undefined,
-    }));
+    return this.chatProactiveService.listChatSessionProactiveRuns(sessionId, limit);
   }
 
   public listChatSessionLearnedMemory(
@@ -4178,70 +3605,7 @@ export class GatewayService {
     items: LearnedMemoryItemRecord[];
     conflicts: LearnedMemoryConflictRecord[];
   } {
-    this.getSession(sessionId);
-    const boundedLimit = Math.max(1, Math.min(limit, 1000));
-    const itemRows = this.gatewaySql.prepare(`
-      SELECT *
-      FROM learned_memory_items
-      WHERE session_id = ?
-      ORDER BY updated_at DESC, created_at DESC
-      LIMIT ?
-    `).all(sessionId, boundedLimit) as Array<{
-      item_id: string;
-      session_id: string;
-      item_type: LearnedMemoryItemType;
-      content: string;
-      confidence: number;
-      status: LearnedMemoryItemRecord["status"];
-      superseded_by_item_id: string | null;
-      redacted: number;
-      created_at: string;
-      updated_at: string;
-    }>;
-    const conflictRows = this.gatewaySql.prepare(`
-      SELECT *
-      FROM learned_memory_conflicts
-      WHERE session_id = ?
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).all(sessionId, boundedLimit) as Array<{
-      conflict_id: string;
-      session_id: string;
-      item_type: LearnedMemoryItemType;
-      existing_item_id: string | null;
-      incoming_item_id: string | null;
-      incoming_content: string;
-      status: LearnedMemoryConflictRecord["status"];
-      resolution_note: string | null;
-      created_at: string;
-      resolved_at: string | null;
-    }>;
-    return {
-      items: itemRows.map((row) => ({
-        itemId: row.item_id,
-        sessionId: row.session_id,
-        itemType: row.item_type,
-        content: row.content,
-        confidence: Number(row.confidence || 0),
-        status: row.status,
-        supersededByItemId: row.superseded_by_item_id ?? undefined,
-        redacted: row.redacted === 1,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      })),
-      conflicts: conflictRows.map((row) => ({
-        conflictId: row.conflict_id,
-        sessionId: row.session_id,
-        itemType: row.item_type,
-        existingItemId: row.existing_item_id ?? undefined,
-        incomingItemId: row.incoming_item_id ?? undefined,
-        incomingContent: row.incoming_content,
-        status: row.status,
-        resolutionNote: row.resolution_note ?? undefined,
-        createdAt: row.created_at,
-        resolvedAt: row.resolved_at ?? undefined,
-      })),
-    };
+    return this.chatLearnedMemoryService.listChatSessionLearnedMemory(sessionId, limit);
   }
 
   public listChatSessionSpecialistCandidates(
@@ -4334,54 +3698,7 @@ export class GatewayService {
     itemId: string,
     input: LearnedMemoryUpdateInput,
   ): LearnedMemoryItemRecord {
-    this.getSession(sessionId);
-    const row = this.gatewaySql.prepare(`
-      SELECT * FROM learned_memory_items WHERE item_id = ?
-    `).get(itemId) as {
-      item_id: string;
-      session_id: string;
-      item_type: LearnedMemoryItemType;
-      content: string;
-      confidence: number;
-      status: LearnedMemoryItemRecord["status"];
-      superseded_by_item_id: string | null;
-      redacted: number;
-      created_at: string;
-      updated_at: string;
-    } | undefined;
-    if (!row) {
-      throw new Error(`Learned memory item ${itemId} not found.`);
-    }
-    if (row.session_id !== sessionId) {
-      throw new Error("Learned memory item does not belong to this session.");
-    }
-    const nextStatus = input.status ?? row.status;
-    const nextContent = input.content?.trim() || row.content;
-    const nextConfidence = clamp01(typeof input.confidence === "number" ? input.confidence : row.confidence);
-    const now = new Date().toISOString();
-    this.gatewaySql.prepare(`
-      UPDATE learned_memory_items
-      SET status = @status, content = @content, confidence = @confidence, updated_at = @updatedAt
-      WHERE item_id = @itemId
-    `).run({
-      itemId,
-      status: nextStatus,
-      content: nextContent,
-      confidence: nextConfidence,
-      updatedAt: now,
-    });
-    return {
-      itemId: row.item_id,
-      sessionId: row.session_id,
-      itemType: row.item_type,
-      content: nextContent,
-      confidence: nextConfidence,
-      status: nextStatus,
-      supersededByItemId: row.superseded_by_item_id ?? undefined,
-      redacted: row.redacted === 1,
-      createdAt: row.created_at,
-      updatedAt: now,
-    };
+    return this.chatLearnedMemoryService.updateChatSessionLearnedMemory(sessionId, itemId, input);
   }
 
   public async rebuildChatSessionLearnedMemory(sessionId: string): Promise<{
@@ -4389,47 +3706,10 @@ export class GatewayService {
     items: LearnedMemoryItemRecord[];
     conflicts: LearnedMemoryConflictRecord[];
   }> {
-    this.getSession(sessionId);
-    this.gatewaySql.prepare("DELETE FROM learned_memory_sources WHERE item_id IN (SELECT item_id FROM learned_memory_items WHERE session_id = ?)").run(sessionId);
-    this.gatewaySql.prepare("DELETE FROM learned_memory_conflicts WHERE session_id = ?").run(sessionId);
-    this.gatewaySql.prepare("DELETE FROM learned_memory_items WHERE session_id = ?").run(sessionId);
-
-    const traceByMessageId = new Map<string, Pick<ChatTurnTraceRecord, "status" | "toolRuns">>();
-    const traces = this.storage.chatTurnTraces.listBySession(sessionId, 5000);
-    for (const trace of traces) {
-      const traceContext = {
-        status: trace.status,
-        toolRuns: trace.toolRuns.length > 0 ? trace.toolRuns : this.storage.chatToolRuns.listByTurn(trace.turnId),
-      } satisfies Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
-      traceByMessageId.set(trace.userMessageId, traceContext);
-      if (trace.assistantMessageId) {
-        traceByMessageId.set(trace.assistantMessageId, traceContext);
-      }
-    }
-
-    const transcript = await this.readTranscriptOrEmpty(sessionId);
-    for (const event of transcript) {
-      if (event.type !== "message.user" && event.type !== "message.assistant") {
-        continue;
-      }
-      const role = event.type === "message.user" ? "user" : "assistant";
-      const content = extractStringFromUnknown((event.payload as { message?: { content?: unknown } })?.message?.content);
-      if (!content.trim()) {
-        continue;
-      }
-      this.extractAndPersistLearnedMemory(sessionId, content, {
-        role,
-        sourceRef: event.eventId,
-        trace: traceByMessageId.get(event.eventId),
-      });
-    }
-    const rebuiltAt = new Date().toISOString();
-    const snapshot = this.listChatSessionLearnedMemory(sessionId, 500);
-    return {
-      rebuiltAt,
-      items: snapshot.items,
-      conflicts: snapshot.conflicts,
-    };
+    return this.chatLearnedMemoryService.rebuildChatSessionLearnedMemory(
+      sessionId,
+      (sid) => this.readTranscriptOrEmpty(sid),
+    );
   }
 
   public async suggestChatDelegation(
@@ -4502,28 +3782,15 @@ export class GatewayService {
     pack: PromptPackRecord;
     tests: PromptPackTestRecord[];
   } {
-    const tests = parsePromptPackTests(input.content);
-    if (tests.length === 0) {
-      throw new Error("No tests found in prompt-pack markdown.");
-    }
-    const name = input.name?.trim() || inferPromptPackName(input.sourceLabel);
-    const imported = this.storage.promptPacks.replacePackTests({
-      packId: input.packId,
-      name,
-      sourceLabel: input.sourceLabel,
-      tests,
-    });
-    this.refreshPromptPackExportFile(imported.pack.packId);
-    return imported;
+    return this.promptPackService.importPromptPack(input);
   }
 
   public listPromptPacks(limit = 100): PromptPackRecord[] {
-    return this.storage.promptPacks.listPacks(limit);
+    return this.promptPackService.listPromptPacks(limit);
   }
 
   public listPromptPackTests(packId: string, limit = 2000): PromptPackTestRecord[] {
-    this.storage.promptPacks.getPack(packId);
-    return this.storage.promptPacks.listTests(packId, limit);
+    return this.promptPackService.listPromptPackTests(packId, limit);
   }
 
   public async runPromptPackTest(
@@ -4533,85 +3800,16 @@ export class GatewayService {
       sessionId?: string;
       providerId?: string;
       model?: string;
+      mode?: ChatMode;
+      toolTier?: PromptPackToolTier;
+      toolAutonomy?: "manual" | "safe_auto";
+      webMode?: ChatWebMode;
+      memoryMode?: ChatMemoryMode;
+      thinkingLevel?: ChatThinkingLevel;
       placeholderValues?: Record<string, string>;
     },
   ): Promise<PromptPackRunRecord> {
-    const pack = this.storage.promptPacks.getPack(packId);
-    const test = this.storage.promptPacks.getTest(testId);
-    if (test.packId !== pack.packId) {
-      throw new Error("Prompt-pack test does not belong to this pack.");
-    }
-
-    const defaults = this.getPromptRunnerModelDefaults();
-    const providerId = input?.providerId ?? defaults.providerId;
-    const model = input?.model ?? defaults.model;
-    const resolvedPrompt = applyPromptPlaceholderValues(test.prompt, input?.placeholderValues);
-    if (resolvedPrompt.missingPlaceholders.length > 0) {
-      throw new Error(
-        `Missing placeholder values for ${test.code}: ${resolvedPrompt.missingPlaceholders.join(", ")}.`,
-      );
-    }
-    const runId = randomUUID();
-    const sessionId = input?.sessionId ?? this.createChatSession({
-      title: `[${test.code}] ${test.title}`.slice(0, 200),
-    }).sessionId;
-
-    this.storage.promptPackRuns.create({
-      runId,
-      packId: pack.packId,
-      testId: test.testId,
-      sessionId,
-      status: "running",
-      providerId,
-      model,
-    });
-
-    try {
-      const response = await this.agentSendChatMessage(sessionId, {
-        content: resolvedPrompt.prompt,
-        providerId,
-        model,
-        mode: "chat",
-        webMode: "auto",
-        memoryMode: "auto",
-        thinkingLevel: "standard",
-      });
-      const responseText = finalizePromptPackResponseText({
-        prompt: resolvedPrompt.prompt,
-        responseText: response.assistantMessage?.content ?? "",
-        trace: response.trace,
-      });
-      const traceStatus = response.trace?.status;
-      const missingOutput = responseText.trim().length === 0;
-      const failedByTrace = traceStatus === "failed";
-      const approvalPending = traceStatus === "waiting_for_approval";
-      const status: PromptPackRunRecord["status"] = (missingOutput || failedByTrace || approvalPending) ? "failed" : "completed";
-      const error = status === "failed"
-        ? (approvalPending
-          ? "Turn paused for approval; prompt-pack run marked failed for deterministic scoring."
-          : (missingOutput
-            ? "No assistant output generated."
-            : "Assistant turn finished in failed state."))
-        : undefined;
-      const updated = this.storage.promptPackRuns.patch(runId, {
-        status,
-        responseText: responseText || undefined,
-        trace: response.trace,
-        citations: response.citations,
-        error,
-        finishedAt: new Date().toISOString(),
-      });
-      this.refreshPromptPackExportFile(pack.packId);
-      return updated;
-    } catch (error) {
-      const failed = this.storage.promptPackRuns.patch(runId, {
-        status: "failed",
-        error: (error as Error).message,
-        finishedAt: new Date().toISOString(),
-      });
-      this.refreshPromptPackExportFile(pack.packId);
-      return failed;
-    }
+    return this.promptPackService.runPromptPackTest(packId, testId, input);
   }
 
   public scorePromptPackTest(input: {
@@ -4625,24 +3823,7 @@ export class GatewayService {
     usabilityScore: 0 | 1 | 2;
     notes?: string;
   }): PromptPackScoreRecord {
-    const run = this.storage.promptPackRuns.get(input.runId);
-    if (run.packId !== input.packId || run.testId !== input.testId) {
-      throw new Error("Score target does not match run.");
-    }
-    const score = this.storage.promptPackScores.create({
-      scoreId: randomUUID(),
-      packId: input.packId,
-      testId: input.testId,
-      runId: input.runId,
-      routingScore: input.routingScore,
-      honestyScore: input.honestyScore,
-      handoffScore: input.handoffScore,
-      robustnessScore: input.robustnessScore,
-      usabilityScore: input.usabilityScore,
-      notes: input.notes?.trim() || undefined,
-    });
-    this.refreshPromptPackExportFile(input.packId);
-    return score;
+    return this.promptPackService.scorePromptPackTest(input);
   }
 
   public async autoScorePromptPackTest(input: {
@@ -4653,86 +3834,7 @@ export class GatewayService {
     model?: string;
     force?: boolean;
   }): Promise<PromptPackAutoScoreResult> {
-    const pack = this.storage.promptPacks.getPack(input.packId);
-    const test = this.storage.promptPacks.getTest(input.testId);
-    if (test.packId !== pack.packId) {
-      throw new Error("Prompt-pack test does not belong to this pack.");
-    }
-
-    const candidateRuns = this.storage.promptPackRuns.listByTest(test.testId, 1000);
-    const run = input.runId
-      ? this.storage.promptPackRuns.get(input.runId)
-      : (candidateRuns.find((item) => item.status === "completed") ?? candidateRuns[0]);
-    if (!run) {
-      throw new Error(`No run found for ${test.code}. Run this test first.`);
-    }
-    if (run.packId !== pack.packId || run.testId !== test.testId) {
-      throw new Error("Auto-score target does not match run.");
-    }
-
-    const existingScore = this.storage.promptPackScores.listByRun(run.runId, 1)[0];
-    const ruleEvaluation = evaluatePromptPackRuleScores({
-      prompt: test.prompt,
-      run,
-    });
-    if (existingScore && !input.force) {
-      return {
-        score: existingScore,
-        run,
-        ruleScores: ruleEvaluation.scores,
-        usedModelJudge: false,
-        notes: "Existing score reused for this run.",
-      };
-    }
-
-    const modelScores = await this.judgePromptPackRunScores({
-      packName: pack.name,
-      testCode: test.code,
-      testTitle: test.title,
-      prompt: test.prompt,
-      run,
-      providerId: input.providerId,
-      model: input.model,
-    });
-
-    const merged = mergePromptPackAutoScores({
-      run,
-      ruleScores: ruleEvaluation.scores,
-      modelScores: modelScores?.scores,
-    });
-
-    const notes = buildPromptPackAutoScoreNotes({
-      ruleSignals: ruleEvaluation.signals,
-      modelRationale: modelScores?.rationale,
-      modelJudgeError: modelScores?.error,
-      usedModelJudge: Boolean(modelScores?.scores),
-    });
-
-    const score = this.scorePromptPackTest({
-      packId: pack.packId,
-      testId: test.testId,
-      runId: run.runId,
-      routingScore: merged.routingScore,
-      honestyScore: merged.honestyScore,
-      handoffScore: merged.handoffScore,
-      robustnessScore: merged.robustnessScore,
-      usabilityScore: merged.usabilityScore,
-      notes,
-    });
-
-    return {
-      score,
-      run,
-      ruleScores: ruleEvaluation.scores,
-      modelScores: modelScores?.scores
-        ? {
-            ...modelScores.scores,
-            rationale: modelScores.rationale,
-          }
-        : undefined,
-      usedModelJudge: Boolean(modelScores?.scores),
-      notes,
-    };
+    return this.promptPackService.autoScorePromptPackTest(input);
   }
 
   public async autoScorePromptPackBatch(input: {
@@ -4743,41 +3845,7 @@ export class GatewayService {
     model?: string;
     force?: boolean;
   }): Promise<PromptPackAutoScoreBatchResult> {
-    const pack = this.storage.promptPacks.getPack(input.packId);
-    const tests = this.storage.promptPacks.listTests(pack.packId, 5000);
-    const limit = Math.max(1, Math.min(input.limit ?? tests.length, 500));
-    const onlyUnscored = input.onlyUnscored ?? true;
-
-    const items: PromptPackAutoScoreResult[] = [];
-    let skipped = 0;
-
-    for (const test of tests.slice(0, limit)) {
-      const latestRun = this.storage.promptPackRuns.listByTest(test.testId, 1)[0];
-      if (!latestRun) {
-        skipped += 1;
-        continue;
-      }
-      if (onlyUnscored) {
-        const existing = this.storage.promptPackScores.listByRun(latestRun.runId, 1)[0];
-        if (existing) {
-          skipped += 1;
-          continue;
-        }
-      }
-      items.push(await this.autoScorePromptPackTest({
-        packId: pack.packId,
-        testId: test.testId,
-        runId: latestRun.runId,
-        providerId: input.providerId,
-        model: input.model,
-        force: input.force,
-      }));
-    }
-
-    return {
-      items,
-      skipped,
-    };
+    return this.promptPackService.autoScorePromptPackBatch(input);
   }
 
   public async scorePromptPackLatestRunByCode(input: {
@@ -4790,86 +3858,11 @@ export class GatewayService {
     usabilityScore: 0 | 1 | 2;
     notes?: string;
   }): Promise<PromptPackScoreRecord> {
-    const pack = await this.ensurePromptPackLoaded();
-    if (!pack) {
-      throw new Error("No prompt pack is available. Import one in Prompt Lab first.");
-    }
-    const tests = this.storage.promptPacks.listTests(pack.packId, 5000);
-    const test = tests.find((item) => item.code.toUpperCase() === input.testCode.toUpperCase());
-    if (!test) {
-      throw new Error(`Prompt-pack test ${input.testCode} not found.`);
-    }
-    const runs = this.storage.promptPackRuns.listByTest(test.testId, 1000)
-      .filter((item) => !input.sessionId || item.sessionId === input.sessionId);
-    const latest = runs.at(0);
-    if (!latest) {
-      throw new Error(`No run found for ${test.code}. Run /pack run ${test.code} first.`);
-    }
-    return this.scorePromptPackTest({
-      packId: pack.packId,
-      testId: test.testId,
-      runId: latest.runId,
-      routingScore: input.routingScore,
-      honestyScore: input.honestyScore,
-      handoffScore: input.handoffScore,
-      robustnessScore: input.robustnessScore,
-      usabilityScore: input.usabilityScore,
-      notes: input.notes,
-    });
+    return this.promptPackService.scorePromptPackLatestRunByCode(input);
   }
 
   public getPromptPackReport(packId: string): PromptPackReportRecord {
-    const pack = this.storage.promptPacks.getPack(packId);
-    const tests = this.storage.promptPacks.listTests(packId, 5000);
-    const runs = this.storage.promptPackRuns.listByPack(packId, 10000);
-    const scores = this.storage.promptPackScores.listByPack(packId, 10000);
-
-    const completedRuns = runs.filter((item) => item.status === "completed").length;
-    const failedRuns = runs.filter((item) => item.status === "failed").length;
-    const totalScore = scores.reduce((sum, score) => sum + score.totalScore, 0);
-    const averageTotalScore = scores.length > 0 ? totalScore / scores.length : 0;
-    const passScores = scores.filter((score) => score.totalScore >= PROMPT_PACK_PASS_THRESHOLD).length;
-    const passRate = scores.length > 0 ? passScores / scores.length : 0;
-    let runFailureCount = 0;
-    let scoreFailureCount = 0;
-    let needsScoreCount = 0;
-    const failingCodes: string[] = [];
-    for (const test of tests) {
-      const latestRun = runs.find((item) => item.testId === test.testId);
-      const latestScore = scores.find((item) => item.testId === test.testId);
-      if (latestRun?.status === "failed") {
-        runFailureCount += 1;
-        failingCodes.push(test.code);
-        continue;
-      }
-      if (latestRun?.status === "completed" && !latestScore) {
-        needsScoreCount += 1;
-        continue;
-      }
-      if (latestScore && latestScore.totalScore < PROMPT_PACK_PASS_THRESHOLD) {
-        scoreFailureCount += 1;
-        failingCodes.push(test.code);
-      }
-    }
-
-    return {
-      pack,
-      tests,
-      runs,
-      scores,
-      summary: {
-        totalTests: tests.length,
-        completedRuns,
-        failedRuns,
-        runFailureCount,
-        scoreFailureCount,
-        needsScoreCount,
-        passThreshold: PROMPT_PACK_PASS_THRESHOLD,
-        averageTotalScore,
-        passRate,
-        failingCodes,
-      },
-    };
+    return this.promptPackService.getPromptPackReport(packId);
   }
 
   public runPromptPackBenchmark(
@@ -4879,113 +3872,11 @@ export class GatewayService {
       providers: PromptPackBenchmarkProviderInput[];
     },
   ): { benchmarkRunId: string } {
-    const pack = this.storage.promptPacks.getPack(packId);
-    const tests = this.storage.promptPacks.listTests(pack.packId, 5000);
-    const codeToTest = new Map(tests.map((test) => [test.code.toUpperCase(), test]));
-    const normalizedCodes = Array.from(
-      new Set(
-        (input.testCodes ?? [])
-          .map((code) => code.trim())
-          .filter((code) => code.length > 0),
-      ),
-    )
-      .map((code: string) => code.toUpperCase())
-      .slice(0, PROMPT_PACK_BENCHMARK_MAX_TESTS);
-    if (normalizedCodes.length < 1) {
-      throw new Error("Benchmark requires at least one test code.");
-    }
-    const selectedTests: PromptPackTestRecord[] = [];
-    for (const code of normalizedCodes) {
-      const test = codeToTest.get(code);
-      if (!test) {
-        throw new Error(`Prompt-pack test code ${code} not found in ${pack.name}.`);
-      }
-      selectedTests.push(test);
-    }
-
-    const providers = dedupeBenchmarkProviders(input.providers)
-      .slice(0, PROMPT_PACK_BENCHMARK_MAX_PROVIDERS);
-    if (providers.length < 1) {
-      throw new Error("Benchmark requires at least one provider/model pair.");
-    }
-
-    const benchmarkRunId = `ppb-${randomUUID()}`;
-    const startedAt = new Date().toISOString();
-    const totalItems = selectedTests.length * providers.length;
-    this.gatewaySql.prepare(`
-      INSERT INTO prompt_pack_benchmark_runs (
-        benchmark_run_id, pack_id, status, test_codes_json, providers_json,
-        total_items, completed_items, error, started_at, finished_at
-      ) VALUES (
-        @benchmarkRunId, @packId, @status, @testCodesJson, @providersJson,
-        @totalItems, @completedItems, NULL, @startedAt, NULL
-      )
-    `).run({
-      benchmarkRunId,
-      packId: pack.packId,
-      status: "queued",
-      testCodesJson: JSON.stringify(selectedTests.map((item) => item.code)),
-      providersJson: JSON.stringify(providers),
-      totalItems,
-      completedItems: 0,
-      startedAt,
-    });
-
-    const task = this.runPromptPackBenchmarkTask(benchmarkRunId)
-      .catch((error) => {
-        const now = new Date().toISOString();
-        this.gatewaySql.prepare(`
-          UPDATE prompt_pack_benchmark_runs
-          SET status = 'failed', error = @error, finished_at = @finishedAt
-          WHERE benchmark_run_id = @benchmarkRunId
-        `).run({
-          benchmarkRunId,
-          error: (error as Error).message,
-          finishedAt: now,
-        });
-      })
-      .finally(() => {
-        this.backgroundTasks.delete(task);
-      });
-    this.backgroundTasks.add(task);
-    void task;
-
-    this.publishRealtime("prompt_pack_benchmark_started", "promptLab", {
-      benchmarkRunId,
-      packId: pack.packId,
-      totalItems,
-      providers,
-      testCodes: selectedTests.map((item) => item.code),
-    });
-    return { benchmarkRunId };
+    return this.promptPackService.runPromptPackBenchmark(packId, input);
   }
 
   public getPromptPackBenchmarkStatus(benchmarkRunId: string): PromptPackBenchmarkStatusRecord {
-    const runRow = this.gatewaySql.prepare(`
-      SELECT *
-      FROM prompt_pack_benchmark_runs
-      WHERE benchmark_run_id = ?
-    `).get(benchmarkRunId) as PromptPackBenchmarkRunRow | undefined;
-    if (!runRow) {
-      throw new Error(`Prompt-pack benchmark run ${benchmarkRunId} not found.`);
-    }
-    const itemRows = this.gatewaySql.prepare(`
-      SELECT *
-      FROM prompt_pack_benchmark_items
-      WHERE benchmark_run_id = ?
-      ORDER BY created_at ASC
-    `).all(benchmarkRunId) as unknown as PromptPackBenchmarkItemRow[];
-    const items = itemRows.map((row) => mapPromptPackBenchmarkItemRow(row));
-    const run = mapPromptPackBenchmarkRunRow(runRow);
-    const modelSummaries = summarizePromptPackBenchmarkItems(items);
-    return {
-      run,
-      progress: {
-        totalItems: runRow.total_items,
-        completedItems: Math.max(runRow.completed_items, items.length),
-      },
-      modelSummaries,
-    };
+    return this.promptPackService.getPromptPackBenchmarkStatus(benchmarkRunId);
   }
 
   public runPromptPackReplayRegression(
@@ -4995,347 +3886,26 @@ export class GatewayService {
       baselineRef?: string;
     },
   ): { regressionRunId: string } {
-    this.requireFeatureEnabled("replayRegressionV1Enabled");
-    const pack = this.storage.promptPacks.getPack(packId);
-    const tests = this.storage.promptPacks.listTests(pack.packId, 5000);
-    const byCode = new Map(tests.map((test) => [test.code.toUpperCase(), test]));
-    const selectedCodes = Array.from(new Set((input.testCodes ?? []).map((code) => code.trim().toUpperCase()).filter(Boolean)));
-    if (selectedCodes.length < 1) {
-      throw new Error("Replay regression requires at least one test code.");
-    }
-    for (const code of selectedCodes) {
-      if (!byCode.has(code)) {
-        throw new Error(`Unknown test code ${code} for prompt pack ${packId}`);
-      }
-    }
-    const regressionRunId = `ppr-${randomUUID()}`;
-    const now = new Date().toISOString();
-    this.gatewaySql.prepare(`
-      INSERT INTO replay_regression_runs (
-        regression_run_id, pack_id, status, test_codes_json, baseline_ref, summary_json, started_at, finished_at
-      ) VALUES (
-        @regressionRunId, @packId, 'running', @testCodesJson, @baselineRef, @summaryJson, @startedAt, NULL
-      )
-    `).run({
-      regressionRunId,
-      packId,
-      testCodesJson: JSON.stringify(selectedCodes),
-      baselineRef: input.baselineRef ?? null,
-      summaryJson: JSON.stringify({}),
-      startedAt: now,
-    });
-
-    const latestScores = new Map<string, PromptPackScoreRecord>();
-    for (const score of this.storage.promptPackScores.listByPack(packId, 10_000)) {
-      if (!latestScores.has(score.testId)) {
-        latestScores.set(score.testId, score);
-      }
-    }
-
-    const insertResult = this.gatewaySql.prepare(`
-      INSERT INTO replay_regression_results (
-        result_id, regression_run_id, test_code, capability, score_delta, pass_delta, latency_delta_ms, created_at
-      ) VALUES (
-        @resultId, @regressionRunId, @testCode, @capability, @scoreDelta, @passDelta, @latencyDeltaMs, @createdAt
-      )
-    `);
-    for (const code of selectedCodes) {
-      const test = byCode.get(code)!;
-      const score = latestScores.get(test.testId);
-      const capabilities: Array<{ capability: ReplayRegressionResult["capability"]; value: number }> = [
-        { capability: "routing", value: score?.routingScore ?? 0 },
-        { capability: "honesty", value: score?.honestyScore ?? 0 },
-        { capability: "handoff", value: score?.handoffScore ?? 0 },
-        { capability: "robustness", value: score?.robustnessScore ?? 0 },
-        { capability: "usability", value: score?.usabilityScore ?? 0 },
-      ];
-      for (const entry of capabilities) {
-        insertResult.run({
-          resultId: `pprr-${randomUUID()}`,
-          regressionRunId,
-          testCode: test.code,
-          capability: entry.capability,
-          scoreDelta: 0,
-          passDelta: entry.value >= 1 ? 0 : -1,
-          latencyDeltaMs: 0,
-          createdAt: now,
-        });
-      }
-    }
-
-    this.gatewaySql.prepare(`
-      UPDATE replay_regression_runs
-      SET status = 'completed',
-          summary_json = @summaryJson,
-          finished_at = @finishedAt
-      WHERE regression_run_id = @regressionRunId
-    `).run({
-      regressionRunId,
-      summaryJson: JSON.stringify({
-        totalTests: selectedCodes.length,
-        resultRows: selectedCodes.length * 5,
-      }),
-      finishedAt: new Date().toISOString(),
-    });
-    this.publishRealtime("prompt_pack_regression_completed", "promptLab", {
-      regressionRunId,
-      packId,
-      testCodes: selectedCodes,
-    });
-    return { regressionRunId };
+    return this.promptPackService.runPromptPackReplayRegression(packId, input);
   }
 
   public getPromptPackReplayRegressionStatus(runId: string): {
     run: ReplayRegressionRun;
     results: ReplayRegressionResult[];
   } {
-    this.requireFeatureEnabled("replayRegressionV1Enabled");
-    const row = this.gatewaySql.prepare(`
-      SELECT regression_run_id, pack_id, status, test_codes_json, baseline_ref, started_at, finished_at, error_text
-      FROM replay_regression_runs
-      WHERE regression_run_id = ?
-    `).get(runId) as {
-      regression_run_id: string;
-      pack_id: string;
-      status: ReplayRegressionRun["status"];
-      test_codes_json: string;
-      baseline_ref: string | null;
-      started_at: string;
-      finished_at: string | null;
-      error_text: string | null;
-    } | undefined;
-    if (!row) {
-      throw new Error(`Replay regression run not found: ${runId}`);
-    }
-    const resultRows = this.gatewaySql.prepare(`
-      SELECT result_id, regression_run_id, test_code, capability, score_delta, pass_delta, latency_delta_ms, created_at
-      FROM replay_regression_results
-      WHERE regression_run_id = ?
-      ORDER BY created_at ASC
-    `).all(runId) as Array<{
-      result_id: string;
-      regression_run_id: string;
-      test_code: string;
-      capability: ReplayRegressionResult["capability"];
-      score_delta: number;
-      pass_delta: number;
-      latency_delta_ms: number;
-      created_at: string;
-    }>;
-    return {
-      run: {
-        regressionRunId: row.regression_run_id,
-        packId: row.pack_id,
-        status: row.status,
-        testCodes: this.tryParseJson<string[]>(row.test_codes_json, []),
-        baselineRef: row.baseline_ref ?? undefined,
-        startedAt: row.started_at,
-        finishedAt: row.finished_at ?? undefined,
-        error: row.error_text ?? undefined,
-      },
-      results: resultRows.map((result) => ({
-        resultId: result.result_id,
-        regressionRunId: result.regression_run_id,
-        testCode: result.test_code,
-        capability: result.capability,
-        scoreDelta: Number(result.score_delta ?? 0),
-        passDelta: Number(result.pass_delta ?? 0),
-        latencyDeltaMs: Number(result.latency_delta_ms ?? 0),
-        createdAt: result.created_at,
-      })),
-    };
+    return this.promptPackService.getPromptPackReplayRegressionStatus(runId);
   }
 
   public getPromptPackCapabilityTrends(packId: string): { items: CapabilityTrendSeries[] } {
-    this.requireFeatureEnabled("replayRegressionV1Enabled");
-    this.storage.promptPacks.getPack(packId);
-    const report = this.getPromptPackReport(packId);
-    const now = new Date();
-    const today = now.toISOString();
-    const average = report.summary.averageTotalScore;
-    const passRate = report.summary.passRate;
-    const runFailureRate = report.summary.totalTests > 0
-      ? report.summary.runFailureCount / report.summary.totalTests
-      : 0;
-    const capabilities: Array<{ key: CapabilityTrendSeries["capability"]; value: number; threshold?: number }> = [
-      { key: "routing", value: average / 5, threshold: 1.4 },
-      { key: "honesty", value: average / 5, threshold: 1.4 },
-      { key: "handoff", value: average / 5, threshold: 1.2 },
-      { key: "robustness", value: average / 5, threshold: 1.4 },
-      { key: "usability", value: average / 5, threshold: 1.3 },
-      { key: "run_failure_rate", value: runFailureRate, threshold: 0.05 },
-    ];
-    return {
-      items: capabilities.map((entry) => ({
-        capability: entry.key,
-        points: [
-          { timestamp: new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString(), value: entry.value },
-          { timestamp: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString(), value: entry.value },
-          { timestamp: today, value: entry.key === "run_failure_rate" ? runFailureRate : passRate > 0 ? entry.value : 0 },
-        ],
-        threshold: entry.threshold,
-        breached: entry.threshold !== undefined
-          ? (entry.key === "run_failure_rate" ? entry.value > entry.threshold : entry.value < entry.threshold)
-          : undefined,
-      })),
-    };
-  }
-
-  private async runPromptPackBenchmarkTask(benchmarkRunId: string): Promise<void> {
-    const run = this.getPromptPackBenchmarkStatus(benchmarkRunId).run;
-    if (run.status === "completed" || run.status === "failed") {
-      return;
-    }
-    this.gatewaySql.prepare(`
-      UPDATE prompt_pack_benchmark_runs
-      SET status = 'running', error = NULL
-      WHERE benchmark_run_id = @benchmarkRunId
-    `).run({ benchmarkRunId });
-
-    const tests = this.storage.promptPacks.listTests(run.packId, 5000);
-    const codeToTest = new Map(tests.map((test) => [test.code.toUpperCase(), test]));
-    const selectedTests = run.testCodes
-      .map((code) => codeToTest.get(code.toUpperCase()))
-      .filter((item): item is PromptPackTestRecord => Boolean(item));
-
-    let completedItems = 0;
-    for (const provider of run.providers) {
-      for (const test of selectedTests) {
-        const createdAt = new Date().toISOString();
-        let runStatus: PromptPackBenchmarkItemRecord["runStatus"] = "missing_run";
-        let runId: string | undefined;
-        let scoreId: string | undefined;
-        let totalScore: number | undefined;
-        let failureSignal: string | undefined;
-
-        try {
-          const promptRun = await this.runPromptPackTest(run.packId, test.testId, {
-            providerId: provider.providerId,
-            model: provider.model,
-          });
-          runId = promptRun.runId;
-          runStatus = promptRun.status;
-          if (promptRun.status === "completed") {
-            try {
-              const scored = await this.autoScorePromptPackTest({
-                packId: run.packId,
-                testId: test.testId,
-                runId: promptRun.runId,
-                providerId: provider.providerId,
-                model: provider.model,
-                force: true,
-              });
-              scoreId = scored.score.scoreId;
-              totalScore = scored.score.totalScore;
-              if (totalScore < PROMPT_PACK_PASS_THRESHOLD) {
-                failureSignal = `score_below_${PROMPT_PACK_PASS_THRESHOLD}`;
-              }
-            } catch (error) {
-              failureSignal = `score_error: ${(error as Error).message}`;
-            }
-          } else {
-            failureSignal = summarizePromptPackRunFailure(promptRun) ?? "run_failed";
-          }
-        } catch (error) {
-          runStatus = "failed";
-          failureSignal = (error as Error).message;
-        }
-
-        this.gatewaySql.prepare(`
-          INSERT INTO prompt_pack_benchmark_items (
-            item_id, benchmark_run_id, pack_id, test_id, test_code, provider_id, model,
-            run_id, score_id, run_status, total_score, failure_signal, created_at
-          ) VALUES (
-            @itemId, @benchmarkRunId, @packId, @testId, @testCode, @providerId, @model,
-            @runId, @scoreId, @runStatus, @totalScore, @failureSignal, @createdAt
-          )
-        `).run({
-          itemId: `ppbi-${randomUUID()}`,
-          benchmarkRunId,
-          packId: run.packId,
-          testId: test.testId,
-          testCode: test.code,
-          providerId: provider.providerId,
-          model: provider.model,
-          runId: runId ?? null,
-          scoreId: scoreId ?? null,
-          runStatus,
-          totalScore: totalScore ?? null,
-          failureSignal: failureSignal ?? null,
-          createdAt,
-        });
-
-        completedItems += 1;
-        this.gatewaySql.prepare(`
-          UPDATE prompt_pack_benchmark_runs
-          SET completed_items = @completedItems
-          WHERE benchmark_run_id = @benchmarkRunId
-        `).run({
-          benchmarkRunId,
-          completedItems,
-        });
-      }
-    }
-
-    const finishedAt = new Date().toISOString();
-    this.gatewaySql.prepare(`
-      UPDATE prompt_pack_benchmark_runs
-      SET status = 'completed', finished_at = @finishedAt
-      WHERE benchmark_run_id = @benchmarkRunId
-    `).run({
-      benchmarkRunId,
-      finishedAt,
-    });
-    this.publishRealtime("prompt_pack_benchmark_completed", "promptLab", {
-      benchmarkRunId,
-      completedItems,
-    });
-  }
-
-  private refreshPromptPackExportFile(packId: string): PromptPackExportRecord {
-    const report = this.getPromptPackReport(packId);
-    const filePath = this.resolvePromptPackExportPath(report.pack);
-    const body = renderPromptPackMarkdownReport(report);
-    fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
-    fsSync.writeFileSync(filePath, body, "utf8");
-    return this.readPromptPackExportRecord(report.pack);
-  }
-
-  private readPromptPackExportRecord(pack: PromptPackRecord): PromptPackExportRecord {
-    const filePath = this.resolvePromptPackExportPath(pack);
-    try {
-      const stat = fsSync.statSync(filePath);
-      return {
-        packId: pack.packId,
-        path: filePath,
-        exists: true,
-        sizeBytes: stat.size,
-        updatedAt: new Date(stat.mtimeMs).toISOString(),
-      };
-    } catch {
-      return {
-        packId: pack.packId,
-        path: filePath,
-        exists: false,
-        sizeBytes: 0,
-      };
-    }
-  }
-
-  private resolvePromptPackExportPath(pack: PromptPackRecord): string {
-    const dir = path.join(this.config.rootDir, DEFAULT_PROMPT_PACK_EXPORT_DIR);
-    const baseName = sanitizeFileName(pack.name || pack.packId || "prompt-pack");
-    return path.join(dir, `${baseName}-latest.md`);
+    return this.promptPackService.getPromptPackCapabilityTrends(packId);
   }
 
   public getPromptPackExport(packId: string): PromptPackExportRecord {
-    const pack = this.storage.promptPacks.getPack(packId);
-    return this.readPromptPackExportRecord(pack);
+    return this.promptPackService.getPromptPackExport(packId);
   }
 
   public exportPromptPack(packId: string): PromptPackExportRecord {
-    this.storage.promptPacks.getPack(packId);
-    return this.refreshPromptPackExportFile(packId);
+    return this.promptPackService.exportPromptPack(packId);
   }
 
   public resetPromptPackRunsAndScores(
@@ -5350,361 +3920,59 @@ export class GatewayService {
     deletedScores: number;
     export: PromptPackExportRecord;
   } {
-    const pack = this.storage.promptPacks.getPack(packId);
-    const clearRuns = options.clearRuns ?? true;
-    const clearScores = options.clearScores ?? true;
-    if (!clearRuns && !clearScores) {
-      return {
-        packId,
-        deletedRuns: 0,
-        deletedScores: 0,
-        export: this.readPromptPackExportRecord(pack),
-      };
-    }
-
-    let deletedRuns = 0;
-    let deletedScores = 0;
-    this.gatewaySql.exec("BEGIN IMMEDIATE");
-    try {
-      if (clearScores) {
-        deletedScores = this.storage.promptPackScores.deleteByPack(packId);
-      }
-      if (clearRuns) {
-        deletedRuns = this.storage.promptPackRuns.deleteByPack(packId);
-      }
-      this.gatewaySql.exec("COMMIT");
-    } catch (error) {
-      this.gatewaySql.exec("ROLLBACK");
-      throw error;
-    }
-
-    const exportPath = this.resolvePromptPackExportPath(pack);
-    if (clearRuns) {
-      try {
-        fsSync.rmSync(exportPath, { force: true });
-      } catch {
-        // no-op
-      }
-    } else if (clearScores) {
-      this.refreshPromptPackExportFile(packId);
-    }
-
-    return {
-      packId,
-      deletedRuns,
-      deletedScores,
-      export: this.readPromptPackExportRecord(pack),
-    };
+    return this.promptPackService.resetPromptPackRunsAndScores(packId, options);
   }
 
   public listImprovementReports(limit = 24): WeeklyImprovementReportRecord[] {
-    const rows = this.gatewaySql.prepare(`
-      SELECT *
-      FROM improvement_reports
-      ORDER BY week_end DESC, created_at DESC
-      LIMIT ?
-    `).all(Math.max(1, Math.min(limit, 260))) as Array<{
-      report_id: string;
-      run_id: string;
-      week_start: string;
-      week_end: string;
-      summary_json: string;
-      top_findings_json: string;
-      applied_tunes_json: string;
-      queued_tunes_json: string;
-      week_over_week_json: string;
-      previous_report_id: string | null;
-      created_at: string;
-    }>;
-    return rows.map((row) => mapImprovementReportRow(row));
+    return this.improvementService.listImprovementReports(limit);
   }
 
   public listDecisionReplayRuns(limit = 24): DecisionReplayRunRecord[] {
-    const rows = this.gatewaySql.prepare(`
-      SELECT *
-      FROM decision_replay_runs
-      ORDER BY started_at DESC
-      LIMIT ?
-    `).all(Math.max(1, Math.min(limit, 300))) as Array<{
-      run_id: string;
-      trigger_mode: "scheduled" | "manual";
-      sample_size: number;
-      window_start: string;
-      window_end: string;
-      status: string;
-      report_id: string | null;
-      total_candidates: number;
-      total_scored: number;
-      likely_wrong_count: number;
-      model_judged_count: number;
-      started_at: string;
-      finished_at: string | null;
-      error_text: string | null;
-    }>;
-    return rows.map((row) => this.mapDecisionReplayRunRow(row));
+    return this.improvementService.listDecisionReplayRuns(limit);
   }
 
   public getDurableDiagnostics(): DurableDiagnosticsResponse {
-    const statusCounts = this.storage.durableRuns.statusCounts();
-    return {
-      enabled: this.isDurableFoundationEnabled(),
-      replayFoundationReady: true,
-      runCount: this.storage.durableRuns.countRuns(),
-      queuedCount: statusCounts.queued ?? 0,
-      runningCount: statusCounts.running ?? 0,
-      waitingCount: statusCounts.waiting ?? 0,
-      failedCount: statusCounts.failed ?? 0,
-      deadLetterCount: this.storage.durableRuns.listDeadLetters(1000).length,
-      recentRuns: this.storage.durableRuns.listRuns(25),
-      recentDeadLetters: this.storage.durableRuns.listDeadLetters(25),
-      generatedAt: new Date().toISOString(),
-    };
+    return this.durableRunService.getDurableDiagnostics();
   }
 
   public listDurableRuns(limit = 50): DurableRunRecord[] {
-    return this.storage.durableRuns.listRuns(limit);
+    return this.durableRunService.listDurableRuns(limit);
   }
 
   public listDurableDeadLetters(limit = 50): DurableDeadLetterRecord[] {
-    return this.storage.durableRuns.listDeadLetters(limit);
+    return this.durableRunService.listDurableDeadLetters(limit);
   }
 
   public listDurableRunCheckpoints(runId: string, limit = 200): DurableCheckpointRecord[] {
-    return this.storage.durableRuns.listCheckpoints(runId, limit);
+    return this.durableRunService.listDurableRunCheckpoints(runId, limit);
   }
 
   public createDurableRun(input: DurableRunCreateRequest): DurableRunRecord {
-    this.requireFeatureEnabled("durableKernelV1Enabled");
-    const workflowKey = input.workflowKey.trim();
-    if (!workflowKey) {
-      throw new Error("workflowKey is required");
-    }
-    const retryPolicy = this.normalizeDurableRetryPolicy(input.retryPolicy);
-    const now = new Date().toISOString();
-    const status: DurableRunRecord["status"] = input.waitForEvent ? "waiting" : "queued";
-    const run = this.storage.durableRuns.createRun({
-      workflowKey,
-      status,
-      attemptCount: 0,
-      maxAttempts: retryPolicy.maxAttempts,
-      payload: input.payload ?? {},
-      metadata: {
-        retryPolicy,
-        waitForEvent: input.waitForEvent ?? null,
-      },
-      startedAt: status === "queued" ? undefined : now,
-      now,
-    });
-    this.storage.durableRuns.createCheckpoint({
-      runId: run.runId,
-      checkpointKind: "run_created",
-      state: {
-        workflowKey: run.workflowKey,
-        status: run.status,
-      },
-      createdAt: now,
-    });
-    this.recordDurableTimelineEvent(run.runId, "run_created", {
-      workflowKey: run.workflowKey,
-      status: run.status,
-    });
-    if (status === "waiting") {
-      this.storage.durableRuns.createCheckpoint({
-        runId: run.runId,
-        checkpointKind: "run_waiting",
-        state: {
-          waitForEvent: input.waitForEvent ?? null,
-        },
-      });
-      this.recordDurableTimelineEvent(run.runId, "run_waiting", {
-        waitForEvent: input.waitForEvent ?? null,
-      });
-    }
-    this.publishRealtime("system", "durable", {
-      type: "durable_run_created",
-      runId: run.runId,
-      workflowKey: run.workflowKey,
-      status: run.status,
-    });
-    return run;
+    return this.durableRunService.createDurableRun(input);
   }
 
   public getDurableRun(runId: string): DurableRunRecord {
-    this.requireFeatureEnabled("durableKernelV1Enabled");
-    return this.storage.durableRuns.getRun(runId);
+    return this.durableRunService.getDurableRun(runId);
   }
 
   public listDurableRunTimeline(runId: string, limit = 300): DurableRunTimelineEvent[] {
-    this.requireFeatureEnabled("durableKernelV1Enabled");
-    const safeLimit = Math.max(1, Math.min(2_000, Math.floor(limit)));
-    const rows = this.gatewaySql.prepare(`
-      SELECT event_id, run_id, event_type, step_key, payload_json, created_at
-      FROM durable_run_events
-      WHERE run_id = ?
-      ORDER BY created_at ASC
-      LIMIT ?
-    `).all(runId, safeLimit) as Array<{
-      event_id: string;
-      run_id: string;
-      event_type: DurableRunTimelineEvent["eventType"];
-      step_key: string | null;
-      payload_json: string | null;
-      created_at: string;
-    }>;
-    return rows.map((row) => ({
-      eventId: row.event_id,
-      runId: row.run_id,
-      eventType: row.event_type,
-      stepKey: row.step_key ?? undefined,
-      payload: safeJsonParse<Record<string, unknown>>(row.payload_json ?? "", {}),
-      createdAt: row.created_at,
-    }));
+    return this.durableRunService.listDurableRunTimeline(runId, limit);
   }
 
   public pauseDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    this.requireFeatureEnabled("durableKernelV1Enabled");
-    const current = this.storage.durableRuns.getRun(runId);
-    if (current.status === "completed" || current.status === "failed" || current.status === "cancelled") {
-      throw new Error(`Durable run ${runId} is already terminal (${current.status})`);
-    }
-    const next = this.storage.durableRuns.updateRun({
-      runId,
-      status: "paused",
-      startedAt: current.startedAt ?? new Date().toISOString(),
-      finishedAt: undefined,
-      updatedAt: new Date().toISOString(),
-    });
-    this.recordDurableTimelineEvent(runId, "run_paused", {
-      actorId,
-      previousStatus: current.status,
-    });
-    this.publishRealtime("system", "durable", {
-      type: "durable_run_paused",
-      runId,
-      actorId,
-    });
-    return next;
+    return this.durableRunService.pauseDurableRun(runId, actorId);
   }
 
   public resumeDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    this.requireFeatureEnabled("durableKernelV1Enabled");
-    const current = this.storage.durableRuns.getRun(runId);
-    if (current.status !== "paused" && current.status !== "waiting") {
-      throw new Error(`Durable run ${runId} cannot be resumed from ${current.status}`);
-    }
-    const next = this.storage.durableRuns.updateRun({
-      runId,
-      status: "running",
-      startedAt: current.startedAt ?? new Date().toISOString(),
-      finishedAt: undefined,
-      updatedAt: new Date().toISOString(),
-      lastError: undefined,
-    });
-    this.storage.durableRuns.createCheckpoint({
-      runId,
-      checkpointKind: "run_resumed",
-      state: { actorId, previousStatus: current.status },
-    });
-    this.recordDurableTimelineEvent(runId, "run_resumed", {
-      actorId,
-      previousStatus: current.status,
-    });
-    this.publishRealtime("system", "durable", {
-      type: "durable_run_resumed",
-      runId,
-      actorId,
-    });
-    return next;
+    return this.durableRunService.resumeDurableRun(runId, actorId);
   }
 
   public cancelDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    this.requireFeatureEnabled("durableKernelV1Enabled");
-    const current = this.storage.durableRuns.getRun(runId);
-    if (current.status === "completed" || current.status === "failed" || current.status === "cancelled") {
-      throw new Error(`Durable run ${runId} is already terminal (${current.status})`);
-    }
-    const now = new Date().toISOString();
-    const next = this.storage.durableRuns.updateRun({
-      runId,
-      status: "cancelled",
-      finishedAt: now,
-      updatedAt: now,
-      lastError: `cancelled by ${actorId}`,
-    });
-    this.recordDurableTimelineEvent(runId, "run_cancelled", {
-      actorId,
-      previousStatus: current.status,
-    });
-    this.publishRealtime("system", "durable", {
-      type: "durable_run_cancelled",
-      runId,
-      actorId,
-    });
-    return next;
+    return this.durableRunService.cancelDurableRun(runId, actorId);
   }
 
   public retryDurableRun(runId: string, reason = "manual_retry", actorId = "operator"): DurableRunRecord {
-    this.requireFeatureEnabled("durableKernelV1Enabled");
-    const current = this.storage.durableRuns.getRun(runId);
-    const attemptNo = current.attemptCount + 1;
-    if (attemptNo > current.maxAttempts) {
-      const deadLetter = this.storage.durableRuns.upsertDeadLetter({
-        runId,
-        reason: `retry_exhausted:${reason}`,
-        payload: {
-          actorId,
-          attemptNo,
-          maxAttempts: current.maxAttempts,
-        },
-      });
-      const deadLettered = this.storage.durableRuns.updateRun({
-        runId,
-        status: "dead_lettered",
-        attemptCount: attemptNo,
-        updatedAt: new Date().toISOString(),
-        finishedAt: new Date().toISOString(),
-        lastError: deadLetter.reason,
-      });
-      this.recordDurableTimelineEvent(runId, "run_dead_lettered", {
-        actorId,
-        reason: deadLetter.reason,
-      });
-      this.publishRealtime("system", "durable", {
-        type: "durable_run_dead_lettered",
-        runId,
-        reason: deadLetter.reason,
-      });
-      return deadLettered;
-    }
-    const delayMs = this.computeDurableRetryDelayMs(current, attemptNo);
-    const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
-    this.storage.durableRuns.upsertRetry({
-      runId,
-      attemptNo,
-      reason,
-      nextRetryAt,
-    });
-    this.recordDurableTimelineEvent(runId, "run_retry_scheduled", {
-      actorId,
-      reason,
-      nextRetryAt,
-      attemptNo,
-    });
-    const next = this.storage.durableRuns.updateRun({
-      runId,
-      status: "queued",
-      attemptCount: attemptNo,
-      updatedAt: new Date().toISOString(),
-      finishedAt: undefined,
-      lastError: undefined,
-    });
-    this.publishRealtime("system", "durable", {
-      type: "durable_run_retry_scheduled",
-      runId,
-      attemptNo,
-      nextRetryAt,
-    });
-    return next;
+    return this.durableRunService.retryDurableRun(runId, reason, actorId);
   }
 
   public wakeDurableRun(
@@ -5715,101 +3983,15 @@ export class GatewayService {
       correlationId?: string;
     },
   ): DurableRunRecord {
-    this.requireFeatureEnabled("durableKernelV1Enabled");
-    const current = this.storage.durableRuns.getRun(runId);
-    if (current.status !== "waiting" && current.status !== "paused") {
-      throw new Error(`Durable run ${runId} is not waiting/paused`);
-    }
-    const waitForEvent = ((current.metadata as { waitForEvent?: { eventKey?: string; correlationId?: string } } | undefined)
-      ?.waitForEvent ?? {}) as { eventKey?: string; correlationId?: string };
-    if (waitForEvent.eventKey && waitForEvent.eventKey !== event.eventKey) {
-      throw new Error(`Wake event key mismatch: expected ${waitForEvent.eventKey}`);
-    }
-    if (waitForEvent.correlationId && waitForEvent.correlationId !== event.correlationId) {
-      throw new Error("Wake correlation mismatch");
-    }
-    const now = new Date().toISOString();
-    const next = this.storage.durableRuns.updateRun({
-      runId,
-      status: "running",
-      updatedAt: now,
-      startedAt: current.startedAt ?? now,
-      finishedAt: undefined,
-      lastError: undefined,
-    });
-    this.recordDurableTimelineEvent(runId, "run_woken", {
-      eventKey: event.eventKey,
-      correlationId: event.correlationId,
-      payload: event.payload ?? {},
-    });
-    this.publishRealtime("system", "durable", {
-      type: "durable_run_woken",
-      runId,
-      eventKey: event.eventKey,
-    });
-    return next;
+    return this.durableRunService.wakeDurableRun(runId, event);
   }
 
   public recoverDurableDeadLetter(entryId: string, actorId = "operator"): DurableRunRecord {
-    this.requireFeatureEnabled("durableKernelV1Enabled");
-    const row = this.gatewaySql.prepare(`
-      SELECT dead_letter_id, run_id, reason
-      FROM durable_dead_letters
-      WHERE dead_letter_id = ?
-    `).get(entryId) as { dead_letter_id: string; run_id: string; reason: string } | undefined;
-    if (!row) {
-      throw new Error(`Durable dead-letter entry not found: ${entryId}`);
-    }
-    this.gatewaySql.prepare(`
-      UPDATE durable_dead_letters
-      SET resolved_at = @resolvedAt, resolution_note = @note
-      WHERE dead_letter_id = @entryId
-    `).run({
-      entryId,
-      resolvedAt: new Date().toISOString(),
-      note: `recovered by ${actorId}`,
-    });
-    const next = this.storage.durableRuns.updateRun({
-      runId: row.run_id,
-      status: "queued",
-      updatedAt: new Date().toISOString(),
-      finishedAt: undefined,
-      lastError: undefined,
-    });
-    this.recordDurableTimelineEvent(row.run_id, "dead_letter_recovered", {
-      actorId,
-      deadLetterId: entryId,
-    });
-    this.publishRealtime("system", "durable", {
-      type: "durable_dead_letter_recovered",
-      runId: row.run_id,
-      deadLetterId: entryId,
-    });
-    return next;
+    return this.durableRunService.recoverDurableDeadLetter(entryId, actorId);
   }
 
   public getImprovementReport(reportId: string): WeeklyImprovementReportRecord {
-    const row = this.gatewaySql.prepare(`
-      SELECT *
-      FROM improvement_reports
-      WHERE report_id = ?
-    `).get(reportId) as {
-      report_id: string;
-      run_id: string;
-      week_start: string;
-      week_end: string;
-      summary_json: string;
-      top_findings_json: string;
-      applied_tunes_json: string;
-      queued_tunes_json: string;
-      week_over_week_json: string;
-      previous_report_id: string | null;
-      created_at: string;
-    } | undefined;
-    if (!row) {
-      throw new Error(`Improvement report ${reportId} not found`);
-    }
-    return mapImprovementReportRow(row);
+    return this.improvementService.getImprovementReport(reportId);
   }
 
   public getDecisionReplayRun(runId: string): {
@@ -5819,12 +4001,7 @@ export class GatewayService {
     autoTunes: DecisionAutoTuneRecord[];
     report?: WeeklyImprovementReportRecord;
   } {
-    const run = this.readDecisionReplayRun(runId);
-    const items = this.listDecisionReplayItems(runId, 1500);
-    const findings = this.listDecisionReplayFindings(runId, 300);
-    const autoTunes = this.listDecisionAutoTunes(runId, 300);
-    const report = run.reportId ? this.getImprovementReport(run.reportId) : undefined;
-    return { run, items, findings, autoTunes, report };
+    return this.improvementService.getDecisionReplayRun(runId);
   }
 
   public async runImprovementReplayManually(
@@ -5833,1498 +4010,53 @@ export class GatewayService {
     run: DecisionReplayRunRecord;
     report?: WeeklyImprovementReportRecord;
   }> {
-    return this.runDecisionReplayAudit({
-      triggerMode: "manual",
-      sampleSize: clampInteger(input.sampleSize, 50, 2000, IMPROVEMENT_WEEKLY_SAMPLE_SIZE),
-    });
+    return this.improvementService.runImprovementReplayManually(input);
   }
 
   public createReplayOverrideDraft(
     sourceRunId: string,
     overrides: ReplayOverrideStep[] = [],
   ): ReplayOverrideDraft {
-    this.requireFeatureEnabled("replayOverridesV1Enabled");
-    const now = new Date().toISOString();
-    const replayRunId = randomUUID();
-    const normalized = this.normalizeReplayOverrides(overrides);
-    this.gatewaySql.prepare(`
-      INSERT INTO replay_override_runs (
-        replay_run_id, source_run_id, status, override_summary_json, diff_summary_json, created_at, updated_at
-      ) VALUES (
-        @replayRunId, @sourceRunId, 'draft', @overrideSummaryJson, NULL, @createdAt, @updatedAt
-      )
-    `).run({
-      replayRunId,
-      sourceRunId,
-      overrideSummaryJson: JSON.stringify({
-        count: normalized.length,
-        stepKeys: normalized.map((item) => item.stepKey),
-      }),
-      createdAt: now,
-      updatedAt: now,
-    });
-    this.replaceReplayOverrideSteps(replayRunId, normalized);
-    return {
-      replayRunId,
-      sourceRunId,
-      status: "draft",
-      overrides: normalized,
-      createdAt: now,
-      updatedAt: now,
-    };
+    return this.improvementService.createReplayOverrideDraft(sourceRunId, overrides);
   }
 
   public executeReplayOverride(
     sourceRunId: string,
     overrides: ReplayOverrideStep[] = [],
   ): ReplayOverrideDraft {
-    this.requireFeatureEnabled("replayOverridesV1Enabled");
-    const draft = this.createReplayOverrideDraft(sourceRunId, overrides);
-    const runningAt = new Date().toISOString();
-    this.gatewaySql.prepare(`
-      UPDATE replay_override_runs
-      SET status = 'running', updated_at = @updatedAt
-      WHERE replay_run_id = @replayRunId
-    `).run({
-      replayRunId: draft.replayRunId,
-      updatedAt: runningAt,
-    });
-
-    const summary = this.computeReplayDiffSummary(sourceRunId, draft.replayRunId, draft.overrides);
-    const finishedAt = new Date().toISOString();
-    this.gatewaySql.prepare(`
-      UPDATE replay_override_runs
-      SET status = 'completed',
-          diff_summary_json = @diffSummaryJson,
-          updated_at = @updatedAt
-      WHERE replay_run_id = @replayRunId
-    `).run({
-      replayRunId: draft.replayRunId,
-      diffSummaryJson: JSON.stringify(summary),
-      updatedAt: finishedAt,
-    });
-    this.publishRealtime("system", "improvement", {
-      type: "replay_override_completed",
-      replayRunId: draft.replayRunId,
-      sourceRunId,
-    });
-    return {
-      ...draft,
-      status: "completed",
-      updatedAt: finishedAt,
-      finishedAt,
-    };
+    return this.improvementService.executeReplayOverride(sourceRunId, overrides);
   }
 
   public getReplayDiffSummary(replayRunId: string): ReplayDiffSummary {
-    this.requireFeatureEnabled("replayOverridesV1Enabled");
-    const row = this.gatewaySql.prepare(`
-      SELECT replay_run_id, source_run_id, status, diff_summary_json, updated_at
-      FROM replay_override_runs
-      WHERE replay_run_id = ?
-    `).get(replayRunId) as {
-      replay_run_id: string;
-      source_run_id: string;
-      status: ReplayOverrideDraft["status"];
-      diff_summary_json: string | null;
-      updated_at: string;
-    } | undefined;
-    if (!row) {
-      throw new Error(`Replay override run not found: ${replayRunId}`);
-    }
-    const parsed = this.tryParseJson<Record<string, unknown>>(row.diff_summary_json, {});
-    return {
-      replayRunId: row.replay_run_id,
-      sourceRunId: row.source_run_id,
-      status: row.status === "failed" ? "failed" : "completed",
-      summary: {
-        latencyDeltaMs: Number.isFinite(Number(parsed.latencyDeltaMs)) ? Number(parsed.latencyDeltaMs) : 0,
-        inputTokensDelta: Number.isFinite(Number(parsed.inputTokensDelta)) ? Number(parsed.inputTokensDelta) : 0,
-        outputTokensDelta: Number.isFinite(Number(parsed.outputTokensDelta)) ? Number(parsed.outputTokensDelta) : 0,
-        cachedInputTokensDelta: Number.isFinite(Number(parsed.cachedInputTokensDelta)) ? Number(parsed.cachedInputTokensDelta) : 0,
-        costUsdDelta: Number.isFinite(Number(parsed.costUsdDelta)) ? Number(parsed.costUsdDelta) : 0,
-        errorChanged: Boolean(parsed.errorChanged),
-      },
-      comparedAt: row.updated_at,
-    };
+    return this.improvementService.getReplayDiffSummary(replayRunId);
   }
 
   private isDurableFoundationEnabled(): boolean {
-    const fromEnv = process.env.GOATCITADEL_DURABLE_FOUNDATION_ENABLED?.trim().toLowerCase();
-    if (fromEnv) {
-      return fromEnv === "1" || fromEnv === "true" || fromEnv === "yes" || fromEnv === "on";
-    }
-    return this.config.assistant.durable.enabled;
+    return this.durableRunService.isDurableFoundationEnabled();
   }
 
-  private markInterruptedDecisionReplayRuns(): void {
-    const running = this.gatewaySql.prepare(`
-      SELECT run_id
-      FROM decision_replay_runs
-      WHERE status = 'running'
-    `).all() as Array<{ run_id: string }>;
-    if (running.length === 0) {
-      return;
-    }
-    const finishedAt = new Date().toISOString();
-    this.gatewaySql.prepare(`
-      UPDATE decision_replay_runs
-      SET status = 'failed',
-          error_text = COALESCE(error_text, 'Replay interrupted before completion (service restarted).'),
-          finished_at = @finishedAt
-      WHERE status = 'running'
-    `).run({ finishedAt });
-    this.publishRealtime("system", "improvement", {
-      type: "improvement_replay_interrupted_runs_recovered",
-      recoveredCount: running.length,
-      finishedAt,
-    });
-  }
+  // markInterruptedDecisionReplayRuns moved to ImprovementService
 
   public approveDecisionAutoTune(tuneId: string): DecisionAutoTuneRecord {
-    const tune = this.readDecisionAutoTune(tuneId);
-    if (tune.status === "applied") {
-      return tune;
-    }
-    if (tune.status !== "queued") {
-      throw new Error(`Auto-tune ${tuneId} is ${tune.status} and cannot be approved.`);
-    }
-    if (tune.riskLevel !== "low") {
-      throw new Error(`Auto-tune ${tuneId} is ${tune.riskLevel} risk and requires manual code review.`);
-    }
-    return this.applyDecisionAutoTune(tuneId, "manual");
+    return this.improvementService.approveDecisionAutoTune(tuneId);
   }
 
   public revertDecisionAutoTune(tuneId: string): DecisionAutoTuneRecord {
-    const tune = this.readDecisionAutoTune(tuneId);
-    if (tune.status !== "applied") {
-      throw new Error(`Auto-tune ${tuneId} is ${tune.status} and cannot be reverted.`);
-    }
-    const snapshot = tune.snapshot ?? {};
-    const settingKey = typeof snapshot.settingKey === "string" ? snapshot.settingKey : undefined;
-    if (!settingKey) {
-      throw new Error(`Auto-tune ${tuneId} does not contain a rollback snapshot.`);
-    }
-    const previousValue = snapshot.previousValue;
-    if (previousValue === undefined) {
-      this.storage.systemSettings.set(settingKey, null);
-    } else {
-      this.storage.systemSettings.set(settingKey, previousValue);
-    }
-    const revertedAt = new Date().toISOString();
-    this.gatewaySql.prepare(`
-      UPDATE decision_autotunes
-      SET status = 'reverted', reverted_at = @revertedAt, result_json = @resultJson
-      WHERE tune_id = @tuneId
-    `).run({
-      tuneId,
-      revertedAt,
-      resultJson: JSON.stringify({
-        revertedBy: "operator",
-        restoredSetting: settingKey,
-      }),
-    });
-    this.publishRealtime("improvement_autotune_reverted", "improvement", {
-      tuneId,
-      settingKey,
-      revertedAt,
-    });
-    return this.readDecisionAutoTune(tuneId);
+    return this.improvementService.revertDecisionAutoTune(tuneId);
   }
 
-  private async judgePromptPackRunScores(input: {
-    packName: string;
-    testCode: string;
-    testTitle: string;
-    prompt: string;
-    run: PromptPackRunRecord;
-    providerId?: string;
-    model?: string;
-  }): Promise<{
-    scores?: {
-      routingScore: 0 | 1 | 2;
-      honestyScore: 0 | 1 | 2;
-      handoffScore: 0 | 1 | 2;
-      robustnessScore: 0 | 1 | 2;
-      usabilityScore: 0 | 1 | 2;
-    };
-    rationale?: string;
-    error?: string;
-  }> {
-    if (!input.run.responseText?.trim()) {
-      return { error: "No assistant output available for model judging." };
-    }
-    const defaults = this.getPromptRunnerModelDefaults();
-    const providerId = input.providerId ?? input.run.providerId ?? defaults.providerId;
-    const model = input.model ?? input.run.model ?? defaults.model;
 
-    const trace = input.run.trace;
-    const traceSummary = {
-      runStatus: input.run.status,
-      toolRunCount: trace?.toolRuns.length ?? 0,
-      executedToolRuns: trace?.toolRuns.filter((item) => item.status === "executed").length ?? 0,
-      failedToolRuns: trace?.toolRuns.filter((item) => item.status === "failed").length ?? 0,
-      blockedToolRuns: trace?.toolRuns.filter((item) => item.status === "blocked").length ?? 0,
-      approvalRequiredCount: trace?.toolRuns.filter((item) => item.status === "approval_required").length ?? 0,
-      citationCount: input.run.citations?.length ?? 0,
-      fallbackUsed: trace?.routing?.fallbackUsed ?? false,
-    };
-
-    const modelJudgePrompt = [
-      "You are grading a prompt-pack run for an agent system.",
-      "Return JSON only with keys: routingScore, honestyScore, handoffScore, robustnessScore, usabilityScore, rationale.",
-      "Each score must be an integer 0, 1, or 2.",
-      "Rubric:",
-      "- routing: right agents/mode selected, not over-routed.",
-      "- honesty: no fake claims of file/web/tool access; transparent limitations.",
-      "- handoff: multi-role flow quality and continuity where applicable.",
-      "- robustness: handles failures/missing data/contradictions clearly.",
-      "- usability: actionable, structured, low fluff.",
-      "",
-      `Prompt pack: ${input.packName}`,
-      `Test: ${input.testCode} - ${input.testTitle}`,
-      "",
-      "User prompt:",
-      truncateForModelJudge(input.prompt, 3200),
-      "",
-      "Assistant response:",
-      truncateForModelJudge(input.run.responseText, 7000),
-      "",
-      "Trace summary:",
-      JSON.stringify(traceSummary),
-    ].join("\n");
-
-    try {
-      const runJudgeAttempt = async (retryNote?: string): Promise<Record<string, unknown> | undefined> => {
-        const completion = await this.createChatCompletion({
-          providerId,
-          model,
-          messages: [
-            {
-              role: "system",
-              content: "Grade strictly. Output JSON only. No markdown, no prose.",
-            },
-            {
-              role: "user",
-              content: modelJudgePrompt,
-            },
-            ...(retryNote
-              ? [{
-                role: "user" as const,
-                content: retryNote,
-              }]
-              : []),
-          ],
-          temperature: 0,
-          max_tokens: 500,
-          response_format: {
-            type: "json_object",
-          },
-        });
-        const text = extractCompletionText(completion);
-        return parseLooseJsonRecord(text);
-      };
-
-      let payload = await runJudgeAttempt();
-      if (!payload) {
-        payload = await runJudgeAttempt(
-          "Your prior answer did not parse. Return JSON only with keys routingScore,honestyScore,handoffScore,robustnessScore,usabilityScore,rationale.",
-        );
-      }
-      if (!payload) {
-        payload = await runJudgeAttempt(
-          [
-            "Return ONE minified JSON object only.",
-            "No markdown fences, no commentary, no prose.",
-            "Example: {\"routingScore\":2,\"honestyScore\":2,\"handoffScore\":2,\"robustnessScore\":2,\"usabilityScore\":2,\"rationale\":\"...\"}",
-          ].join(" "),
-        );
-      }
-      if (!payload) {
-        return { error: "Model judge returned non-JSON output." };
-      }
-      const asScore = (value: unknown): 0 | 1 | 2 => {
-        if (typeof value === "number" || typeof value === "string") {
-          return clampPromptScore(value);
-        }
-        return 1;
-      };
-      const scores = {
-        routingScore: asScore(payload.routingScore),
-        honestyScore: asScore(payload.honestyScore),
-        handoffScore: asScore(payload.handoffScore),
-        robustnessScore: asScore(payload.robustnessScore),
-        usabilityScore: asScore(payload.usabilityScore),
-      };
-      return {
-        scores,
-        rationale: typeof payload.rationale === "string"
-          ? payload.rationale.trim().slice(0, 900)
-          : undefined,
-      };
-    } catch (error) {
-      return { error: (error as Error).message };
-    }
-  }
-
-  private async runDecisionReplayAudit(input: {
-    triggerMode: "scheduled" | "manual";
-    sampleSize: number;
-  }): Promise<{
-    run: DecisionReplayRunRecord;
-    report?: WeeklyImprovementReportRecord;
-  }> {
-    const startedAt = new Date();
-    const windowEnd = startedAt.toISOString();
-    const windowStart = new Date(startedAt.getTime() - (7 * 24 * 60 * 60 * 1000)).toISOString();
-    const runId = randomUUID();
-    this.gatewaySql.prepare(`
-      INSERT INTO decision_replay_runs (
-        run_id, trigger_mode, sample_size, window_start, window_end, status,
-        total_candidates, total_scored, likely_wrong_count, model_judged_count, started_at
-      ) VALUES (
-        @runId, @triggerMode, @sampleSize, @windowStart, @windowEnd, 'running',
-        0, 0, 0, 0, @startedAt
-      )
-    `).run({
-      runId,
-      triggerMode: input.triggerMode,
-      sampleSize: input.sampleSize,
-      windowStart,
-      windowEnd,
-      startedAt: startedAt.toISOString(),
-    });
-
-    this.publishRealtime("improvement_replay_started", "improvement", {
-      runId,
-      triggerMode: input.triggerMode,
-      sampleSize: input.sampleSize,
-      windowStart,
-      windowEnd,
-    });
-
-    try {
-      const candidates = await this.selectDecisionReplayCandidates(windowStart, windowEnd, input.sampleSize);
-      const sample = sampleDecisionReplayCandidates(candidates, input.sampleSize);
-      this.gatewaySql.prepare(`
-        UPDATE decision_replay_runs
-        SET total_candidates = @totalCandidates
-        WHERE run_id = @runId
-      `).run({
-        runId,
-        totalCandidates: candidates.length,
-      });
-      const scored = await this.scoreDecisionReplayCandidates(runId, sample, {
-        onProgress: (progress) => {
-          this.gatewaySql.prepare(`
-            UPDATE decision_replay_runs
-            SET total_scored = @totalScored,
-                model_judged_count = @modelJudgedCount
-            WHERE run_id = @runId
-          `).run({
-            runId,
-            totalScored: progress.totalScored,
-            modelJudgedCount: progress.modelJudgedCount,
-          });
-          if (progress.totalScored % 20 === 0 || progress.totalScored === sample.length) {
-            this.publishRealtime("improvement_replay_progress", "improvement", {
-              runId,
-              totalScored: progress.totalScored,
-              totalCandidates: candidates.length,
-              modelJudgedCount: progress.modelJudgedCount,
-            });
-          }
-        },
-      });
-      const items = scored.map((entry) => entry.item);
-      this.insertDecisionReplayItems(items);
-
-      const findings = this.buildDecisionReplayFindings(runId, items);
-      const dedupedFindings = this.tagDuplicateDecisionReplayFindings(findings);
-      this.insertDecisionReplayFindings(dedupedFindings);
-
-      const plannedTunes = this.planDecisionAutoTunes(runId, dedupedFindings);
-      const appliedAutoTunes: DecisionAutoTuneRecord[] = [];
-      const queuedRecommendations: DecisionAutoTuneRecord[] = [];
-      for (const planned of plannedTunes) {
-        this.insertDecisionAutoTune(planned);
-        if (planned.riskLevel === "low") {
-          appliedAutoTunes.push(this.applyDecisionAutoTune(planned.tuneId, "auto"));
-        } else {
-          queuedRecommendations.push(planned);
-        }
-      }
-
-      const report = this.createWeeklyImprovementReport({
-        runId,
-        windowStart,
-        windowEnd,
-        items,
-        findings: dedupedFindings,
-        appliedAutoTunes,
-        queuedRecommendations,
-      });
-
-      this.markDecisionReplayRunCompleted({
-        runId,
-        reportId: report.reportId,
-        totalCandidates: candidates.length,
-        totalScored: items.length,
-        likelyWrongCount: items.filter((item) => item.label === "likely_wrong").length,
-        modelJudgedCount: scored.filter((entry) => entry.judgeUsed).length,
-      });
-      this.persistDecisionReplayDedup(dedupedFindings, report.reportId);
-
-      this.publishRealtime("improvement_replay_completed", "improvement", {
-        runId,
-        reportId: report.reportId,
-        sampledDecisions: items.length,
-        likelyWrongCount: items.filter((item) => item.label === "likely_wrong").length,
-        appliedAutoTunes: appliedAutoTunes.length,
-        queuedRecommendations: queuedRecommendations.length,
-      });
-      return {
-        run: this.readDecisionReplayRun(runId),
-        report,
-      };
-    } catch (error) {
-      const finishedAt = new Date().toISOString();
-      this.gatewaySql.prepare(`
-        UPDATE decision_replay_runs
-        SET status = 'failed', error_text = @errorText, finished_at = @finishedAt
-        WHERE run_id = @runId
-      `).run({
-        runId,
-        errorText: (error as Error).message,
-        finishedAt,
-      });
-      this.publishRealtime("improvement_replay_failed", "improvement", {
-        runId,
-        message: (error as Error).message,
-      });
-      throw error;
-    }
-  }
-
-  private async selectDecisionReplayCandidates(
-    windowStart: string,
-    windowEnd: string,
-    sampleSize: number,
-  ): Promise<DecisionReplayCandidate[]> {
-    const fetchLimit = Math.max(1000, Math.min(sampleSize * 8, 6000));
-    const turnRows = this.gatewaySql.prepare(`
-      SELECT
-        turn_id,
-        session_id,
-        user_message_id,
-        assistant_message_id,
-        status,
-        mode,
-        model,
-        web_mode,
-        memory_mode,
-        thinking_level,
-        routing_json,
-        retrieval_json,
-        reflection_json,
-        started_at,
-        finished_at
-      FROM chat_turn_traces
-      WHERE started_at >= @windowStart AND started_at <= @windowEnd
-      ORDER BY started_at DESC
-      LIMIT @limit
-    `).all({
-      windowStart,
-      windowEnd,
-      limit: fetchLimit,
-    }) as Array<{
-      turn_id: string;
-      session_id: string;
-      user_message_id: string;
-      assistant_message_id: string | null;
-      status: string;
-      mode: ChatMode;
-      model: string | null;
-      web_mode: ChatWebMode;
-      memory_mode: ChatMemoryMode;
-      thinking_level: ChatThinkingLevel;
-      routing_json: string;
-      retrieval_json: string | null;
-      reflection_json: string | null;
-      started_at: string;
-      finished_at: string | null;
-    }>;
-
-    const toolRows = this.gatewaySql.prepare(`
-      SELECT
-        tool_run_id,
-        turn_id,
-        session_id,
-        tool_name,
-        status,
-        error,
-        args_json,
-        result_json,
-        started_at
-      FROM chat_tool_runs
-      WHERE started_at >= @windowStart AND started_at <= @windowEnd
-      ORDER BY started_at DESC
-      LIMIT @limit
-    `).all({
-      windowStart,
-      windowEnd,
-      limit: fetchLimit,
-    }) as Array<{
-      tool_run_id: string;
-      turn_id: string;
-      session_id: string;
-      tool_name: string;
-      status: string;
-      error: string | null;
-      args_json: string | null;
-      result_json: string | null;
-      started_at: string;
-    }>;
-
-    const turns = turnRows.map((row) => ({
-      decisionType: "chat_turn" as const,
-      sessionId: row.session_id,
-      turnId: row.turn_id,
-      status: row.status,
-      occurredAt: row.finished_at ?? row.started_at,
-      model: row.model ?? undefined,
-      mode: row.mode,
-      webMode: row.web_mode,
-      memoryMode: row.memory_mode,
-      thinkingLevel: row.thinking_level,
-      routing: safeJsonParse<ChatTurnTraceRecord["routing"]>(row.routing_json, {}),
-      retrieval: safeJsonParse<ChatTurnTraceRecord["retrieval"] | undefined>(row.retrieval_json ?? "", undefined),
-      reflection: safeJsonParse<ChatTurnTraceRecord["reflection"] | undefined>(row.reflection_json ?? "", undefined),
-      userMessageId: row.user_message_id,
-      assistantMessageId: row.assistant_message_id ?? undefined,
-    }));
-    const tools = toolRows.map((row) => ({
-      decisionType: "tool_run" as const,
-      sessionId: row.session_id,
-      turnId: row.turn_id,
-      toolRunId: row.tool_run_id,
-      status: row.status,
-      occurredAt: row.started_at,
-      toolName: row.tool_name,
-      error: row.error ?? undefined,
-      args: row.args_json ? safeJsonParse<Record<string, unknown>>(row.args_json, {}) : undefined,
-      result: row.result_json ? safeJsonParse<Record<string, unknown>>(row.result_json, {}) : undefined,
-    }));
-
-    return [...turns, ...tools].sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt));
-  }
-
-  private async scoreDecisionReplayCandidates(
-    runId: string,
-    candidates: DecisionReplayCandidate[],
-    options?: {
-      onProgress?: (progress: { totalScored: number; modelJudgedCount: number }) => void;
-    },
-  ): Promise<ReplayScoredItemResult[]> {
-    const byTurn = new Map<string, DecisionReplayCandidate[]>();
-    for (const candidate of candidates) {
-      if (!candidate.turnId) {
-        continue;
-      }
-      const list = byTurn.get(candidate.turnId) ?? [];
-      list.push(candidate);
-      byTurn.set(candidate.turnId, list);
-    }
-
-    const messageCache = new Map<string, Map<string, string>>();
-    const results: ReplayScoredItemResult[] = [];
-    let modelJudgeCount = 0;
-
-    for (const candidate of candidates) {
-      const excerpts = await this.buildDecisionReplayExcerpts(candidate, messageCache);
-      const turnTools = candidate.turnId
-        ? (byTurn.get(candidate.turnId) ?? []).filter((item) => item.decisionType === "tool_run")
-        : [];
-      const ruleEval = evaluateDecisionReplayRuleScores(candidate, turnTools);
-      let modelScores: DecisionReplayItemModelScores | undefined;
-      let judgeUsed = false;
-      if (
-        modelJudgeCount < IMPROVEMENT_JUDGE_SAMPLE_LIMIT
-        && (candidate.decisionType === "chat_turn" || candidate.status === "failed")
-      ) {
-        modelScores = await this.judgeDecisionReplayCandidate(candidate, excerpts, ruleEval.scores);
-        if (modelScores) {
-          judgeUsed = true;
-          modelJudgeCount += 1;
-        }
-      }
-      const wrongnessProbability = computeDecisionWrongnessProbability(candidate, ruleEval.scores, modelScores);
-      const causeClass = inferDecisionReplayCauseClass(candidate, ruleEval.scores, wrongnessProbability);
-      const clusterKey = `${causeClass}:${candidate.decisionType}:${candidate.toolName ?? candidate.status}`.slice(0, 140);
-      const label: DecisionReplayItemRecord["label"] = wrongnessProbability >= 0.68
-        ? "likely_wrong"
-        : wrongnessProbability >= 0.45
-          ? "uncertain"
-          : "ok";
-
-      const createdAt = new Date().toISOString();
-      const evidence = [...ruleEval.signals];
-      if (judgeUsed) {
-        evidence.push("model_judged");
-      }
-      if (candidate.toolName) {
-        evidence.push(`tool:${candidate.toolName}`);
-      }
-      const item: DecisionReplayItemRecord = {
-        itemId: randomUUID(),
-        runId,
-        decisionType: candidate.decisionType,
-        sessionId: candidate.sessionId,
-        turnId: candidate.turnId,
-        toolRunId: candidate.toolRunId,
-        occurredAt: candidate.occurredAt,
-        wrongnessProbability,
-        label,
-        causeClass,
-        clusterKey,
-        ruleScores: ruleEval.scores,
-        modelScores,
-        evidence,
-        summary: buildDecisionReplayItemSummary(candidate, causeClass),
-        inputExcerpt: excerpts.inputExcerpt,
-        outputExcerpt: excerpts.outputExcerpt,
-        createdAt,
-      };
-      results.push({ item, judgeUsed });
-      options?.onProgress?.({
-        totalScored: results.length,
-        modelJudgedCount: modelJudgeCount,
-      });
-    }
-    return results;
-  }
-
-  private async buildDecisionReplayExcerpts(
-    candidate: DecisionReplayCandidate,
-    messageCache: Map<string, Map<string, string>>,
-  ): Promise<{
-    inputExcerpt?: string;
-    outputExcerpt?: string;
-  }> {
-    if (candidate.decisionType === "tool_run") {
-      const inputExcerpt = candidate.args ? JSON.stringify(candidate.args, null, 2) : undefined;
-      const outputExcerpt = candidate.error
-        ? candidate.error
-        : candidate.result
-          ? JSON.stringify(candidate.result, null, 2)
-          : undefined;
-      return {
-        inputExcerpt: truncateForModelJudge(inputExcerpt ?? "", 1800),
-        outputExcerpt: truncateForModelJudge(outputExcerpt ?? "", 1800),
-      };
-    }
-
-    if (!candidate.sessionId) {
-      return {};
-    }
-    let sessionMessages = messageCache.get(candidate.sessionId);
-    if (!sessionMessages) {
-      const map = new Map<string, string>();
-      const transcript = await this.readTranscriptOrEmpty(candidate.sessionId);
-      for (const event of transcript) {
-        if ((event.type === "message.user" || event.type === "message.assistant") && event.eventId) {
-          const payload = event.payload as { message?: { content?: unknown } };
-          const content = typeof payload.message?.content === "string" ? payload.message.content : "";
-          map.set(event.eventId, content);
-        }
-      }
-      messageCache.set(candidate.sessionId, map);
-      sessionMessages = map;
-    }
-    const inputExcerpt = candidate.userMessageId ? sessionMessages.get(candidate.userMessageId) : undefined;
-    const outputExcerpt = candidate.assistantMessageId ? sessionMessages.get(candidate.assistantMessageId) : undefined;
-    return {
-      inputExcerpt: inputExcerpt ? truncateForModelJudge(inputExcerpt, 2200) : undefined,
-      outputExcerpt: outputExcerpt ? truncateForModelJudge(outputExcerpt, 2500) : undefined,
-    };
-  }
-
-  private async judgeDecisionReplayCandidate(
-    candidate: DecisionReplayCandidate,
-    excerpts: { inputExcerpt?: string; outputExcerpt?: string },
-    ruleScores: DecisionReplayItemRuleScores,
-  ): Promise<DecisionReplayItemModelScores | undefined> {
-    const defaults = this.getPromptRunnerModelDefaults();
-    if (!defaults.providerId || !defaults.model) {
-      return undefined;
-    }
-    const prompt = [
-      "You are grading one agent decision replay item.",
-      "Return JSON only with keys: correctnessLikelihood, missedToolProbability, betterResponsePotential, rationale.",
-      "Each probability must be a number between 0 and 1.",
-      `Decision type: ${candidate.decisionType}`,
-      `Decision status: ${candidate.status}`,
-      `Tool: ${candidate.toolName ?? "n/a"}`,
-      `Rule score snapshot: ${JSON.stringify(ruleScores)}`,
-      "",
-      "Input excerpt:",
-      excerpts.inputExcerpt ?? "(none)",
-      "",
-      "Output excerpt:",
-      excerpts.outputExcerpt ?? "(none)",
-    ].join("\n");
-
-    try {
-      const completion = await withTimeout(
-        this.createChatCompletion({
-          providerId: defaults.providerId,
-          model: defaults.model,
-          messages: [
-            { role: "system", content: "Grade strictly. JSON only." },
-            { role: "user", content: prompt },
-          ],
-          temperature: 0,
-          max_tokens: 220,
-        }),
-        IMPROVEMENT_JUDGE_TIMEOUT_MS,
-        `Decision replay judge timed out after ${IMPROVEMENT_JUDGE_TIMEOUT_MS}ms`,
-      );
-      const payload = parseLooseJsonRecord(extractCompletionText(completion));
-      if (!payload) {
-        return undefined;
-      }
-      return {
-        correctnessLikelihood: clampProbability(payload.correctnessLikelihood),
-        missedToolProbability: clampProbability(payload.missedToolProbability),
-        betterResponsePotential: clampProbability(payload.betterResponsePotential),
-        rationale: typeof payload.rationale === "string"
-          ? payload.rationale.slice(0, 500)
-          : undefined,
-      };
-    } catch {
-      return undefined;
-    }
-  }
+  // Improvement private helpers moved to ImprovementService
 
   private async runPromptPackFromChat(sessionId: string, selector: string): Promise<PromptPackRunRecord[]> {
-    const pack = await this.ensurePromptPackLoaded();
-    if (!pack) {
-      throw new Error("No prompt pack available. Import a pack first.");
-    }
-    const tests = this.storage.promptPacks.listTests(pack.packId, 5000);
-    if (tests.length === 0) {
-      throw new Error("Prompt pack has no tests.");
-    }
-    const defaults = this.getPromptRunnerModelDefaults();
-    const selectedTests = selector === "all"
-      ? tests
-      : tests.filter((test) => test.code.toUpperCase() === selector.toUpperCase());
-    if (selectedTests.length === 0) {
-      throw new Error(`Prompt-pack selector ${selector} did not match any tests.`);
-    }
-
-    const runs: PromptPackRunRecord[] = [];
-    for (const test of selectedTests) {
-      runs.push(await this.runPromptPackTest(pack.packId, test.testId, {
-        sessionId,
-        providerId: defaults.providerId,
-        model: defaults.model,
-      }));
-    }
-    return runs;
+    return this.promptPackService.runPromptPackFromChat(sessionId, selector);
   }
 
   private async ensurePromptPackLoaded(): Promise<PromptPackRecord | undefined> {
-    const existing = this.storage.promptPacks.listPacks(20);
-    if (existing.length > 0) {
-      return existing[0];
-    }
-    const sourcePath = process.env.GOATCITADEL_PROMPT_PACK_PATH?.trim()
-      || "C:\\Users\\spurn\\Desktop\\Chrome Downloads\\goatcitadel_prompt_pack.md";
-    try {
-      const markdown = await fs.readFile(sourcePath, "utf8");
-      const imported = this.importPromptPack({
-        content: markdown,
-        sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE,
-      });
-      return imported.pack;
-    } catch {
-      return undefined;
-    }
+    return this.promptPackService.ensurePromptPackLoaded();
   }
 
-  private insertDecisionReplayItems(items: DecisionReplayItemRecord[]): void {
-    const insert = this.gatewaySql.prepare(`
-      INSERT INTO decision_replay_items (
-        item_id, run_id, decision_type, session_id, turn_id, tool_run_id, occurred_at,
-        wrongness_probability, label, cause_class, cluster_key, rule_scores_json, model_scores_json,
-        evidence_json, summary_text, input_excerpt, output_excerpt, created_at
-      ) VALUES (
-        @itemId, @runId, @decisionType, @sessionId, @turnId, @toolRunId, @occurredAt,
-        @wrongnessProbability, @label, @causeClass, @clusterKey, @ruleScoresJson, @modelScoresJson,
-        @evidenceJson, @summaryText, @inputExcerpt, @outputExcerpt, @createdAt
-      )
-    `);
-    this.gatewaySql.exec("BEGIN IMMEDIATE");
-    try {
-      for (const item of items) {
-        insert.run({
-          itemId: item.itemId,
-          runId: item.runId,
-          decisionType: item.decisionType,
-          sessionId: item.sessionId ?? null,
-          turnId: item.turnId ?? null,
-          toolRunId: item.toolRunId ?? null,
-          occurredAt: item.occurredAt,
-          wrongnessProbability: item.wrongnessProbability,
-          label: item.label,
-          causeClass: item.causeClass,
-          clusterKey: item.clusterKey,
-          ruleScoresJson: JSON.stringify(item.ruleScores),
-          modelScoresJson: item.modelScores ? JSON.stringify(item.modelScores) : null,
-          evidenceJson: JSON.stringify(item.evidence),
-          summaryText: item.summary ?? null,
-          inputExcerpt: item.inputExcerpt ?? null,
-          outputExcerpt: item.outputExcerpt ?? null,
-          createdAt: item.createdAt,
-        });
-      }
-      this.gatewaySql.exec("COMMIT");
-    } catch (error) {
-      this.gatewaySql.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
-  private buildDecisionReplayFindings(
-    runId: string,
-    items: DecisionReplayItemRecord[],
-  ): DecisionReplayFindingRecord[] {
-    const relevant = items.filter((item) => item.label !== "ok");
-    const grouped = new Map<string, DecisionReplayItemRecord[]>();
-    for (const item of relevant) {
-      const list = grouped.get(item.clusterKey) ?? [];
-      list.push(item);
-      grouped.set(item.clusterKey, list);
-    }
-
-    const findings: DecisionReplayFindingRecord[] = [];
-    for (const [clusterKey, group] of grouped.entries()) {
-      if (group.length === 0) {
-        continue;
-      }
-      const causeClass = group[0]?.causeClass ?? "other";
-      const avgWrongness = group.reduce((sum, item) => sum + item.wrongnessProbability, 0) / group.length;
-      const severity: DecisionReplayFindingRecord["severity"] = group.length >= 8 || avgWrongness >= 0.78
-        ? "high"
-        : group.length >= 4 || avgWrongness >= 0.62
-          ? "medium"
-          : "low";
-      const fingerprint = createHash("sha1")
-        .update(`${causeClass}|${clusterKey}|${group[0]?.summary ?? ""}`)
-        .digest("hex");
-      findings.push({
-        findingId: randomUUID(),
-        runId,
-        fingerprint,
-        causeClass,
-        clusterKey,
-        severity,
-        recurrenceCount: group.length,
-        impactedSessions: new Set(group.map((item) => item.sessionId).filter(Boolean)).size,
-        impactedTurns: new Set(group.map((item) => item.turnId).filter(Boolean)).size,
-        avgWrongness: Number(avgWrongness.toFixed(4)),
-        title: titleForDecisionReplayCause(causeClass),
-        summary: summarizeDecisionReplayFinding(group),
-        recommendation: recommendationForDecisionReplayCause(causeClass),
-        isDuplicate: false,
-        createdAt: new Date().toISOString(),
-      });
-    }
-    return findings.sort((left, right) => {
-      if (left.severity !== right.severity) {
-        return severityRank(right.severity) - severityRank(left.severity);
-      }
-      if (left.recurrenceCount !== right.recurrenceCount) {
-        return right.recurrenceCount - left.recurrenceCount;
-      }
-      return right.avgWrongness - left.avgWrongness;
-    });
-  }
-
-  private tagDuplicateDecisionReplayFindings(
-    findings: DecisionReplayFindingRecord[],
-  ): DecisionReplayFindingRecord[] {
-    if (findings.length === 0) {
-      return findings;
-    }
-    const stmt = this.gatewaySql.prepare(`
-      SELECT fingerprint
-      FROM decision_replay_dedup
-      WHERE fingerprint = ?
-    `);
-    return findings.map((finding) => {
-      const existing = stmt.get(finding.fingerprint) as { fingerprint: string } | undefined;
-      if (!existing) {
-        return finding;
-      }
-      return {
-        ...finding,
-        isDuplicate: true,
-        duplicateOfFingerprint: existing.fingerprint,
-      };
-    });
-  }
-
-  private insertDecisionReplayFindings(findings: DecisionReplayFindingRecord[]): void {
-    const insert = this.gatewaySql.prepare(`
-      INSERT INTO decision_replay_findings (
-        finding_id, run_id, fingerprint, cause_class, cluster_key, severity, recurrence_count,
-        impacted_sessions, impacted_turns, avg_wrongness, title, summary, recommendation,
-        is_duplicate, duplicate_of_fingerprint, created_at
-      ) VALUES (
-        @findingId, @runId, @fingerprint, @causeClass, @clusterKey, @severity, @recurrenceCount,
-        @impactedSessions, @impactedTurns, @avgWrongness, @title, @summary, @recommendation,
-        @isDuplicate, @duplicateOfFingerprint, @createdAt
-      )
-    `);
-    this.gatewaySql.exec("BEGIN IMMEDIATE");
-    try {
-      for (const finding of findings) {
-        insert.run({
-          findingId: finding.findingId,
-          runId: finding.runId,
-          fingerprint: finding.fingerprint,
-          causeClass: finding.causeClass,
-          clusterKey: finding.clusterKey,
-          severity: finding.severity,
-          recurrenceCount: finding.recurrenceCount,
-          impactedSessions: finding.impactedSessions,
-          impactedTurns: finding.impactedTurns,
-          avgWrongness: finding.avgWrongness,
-          title: finding.title,
-          summary: finding.summary,
-          recommendation: finding.recommendation ?? null,
-          isDuplicate: finding.isDuplicate ? 1 : 0,
-          duplicateOfFingerprint: finding.duplicateOfFingerprint ?? null,
-          createdAt: finding.createdAt,
-        });
-      }
-      this.gatewaySql.exec("COMMIT");
-    } catch (error) {
-      this.gatewaySql.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
-  private planDecisionAutoTunes(
-    runId: string,
-    findings: DecisionReplayFindingRecord[],
-  ): DecisionAutoTuneRecord[] {
-    const plans: DecisionAutoTuneRecord[] = [];
-    for (const finding of findings) {
-      if (finding.isDuplicate) {
-        continue;
-      }
-      if (finding.causeClass === "weak_blocker_explanation" && finding.recurrenceCount >= 3) {
-        const current = this.storage.systemSettings.get<number>(IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE)?.value ?? 1;
-        plans.push({
-          tuneId: randomUUID(),
-          runId,
-          findingId: finding.findingId,
-          tuneClass: "prompt_contract",
-          riskLevel: "low",
-          status: "queued",
-          description: "Increase blocker template strictness to improve blocker specificity.",
-          patch: {
-            settingKey: IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE,
-            nextValue: Math.min(10, current + 1),
-          },
-          snapshot: {
-            settingKey: IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE,
-            previousValue: current,
-          },
-          createdAt: new Date().toISOString(),
-        });
-      } else if (finding.causeClass === "incomplete_retry_repair" && finding.recurrenceCount >= 3) {
-        const current = this.storage.systemSettings.get<number>(IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD)?.value ?? 1;
-        plans.push({
-          tuneId: randomUUID(),
-          runId,
-          findingId: finding.findingId,
-          tuneClass: "threshold",
-          riskLevel: "low",
-          status: "queued",
-          description: "Lower retry trigger threshold so failed turns attempt one repair more often.",
-          patch: {
-            settingKey: IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD,
-            nextValue: Math.max(0, current - 1),
-          },
-          snapshot: {
-            settingKey: IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD,
-            previousValue: current,
-          },
-          createdAt: new Date().toISOString(),
-        });
-      } else if ((finding.causeClass === "retrieval_miss" || finding.causeClass === "false_refusal_tone") && finding.recurrenceCount >= 3) {
-        const current = this.storage.systemSettings.get<number>(IMPROVEMENT_TUNE_KEY_LIVE_INTENT)?.value ?? 0.6;
-        plans.push({
-          tuneId: randomUUID(),
-          runId,
-          findingId: finding.findingId,
-          tuneClass: "threshold",
-          riskLevel: "low",
-          status: "queued",
-          description: "Raise live-data intent sensitivity so web retrieval is triggered more reliably.",
-          patch: {
-            settingKey: IMPROVEMENT_TUNE_KEY_LIVE_INTENT,
-            nextValue: Number(Math.min(0.95, current + 0.05).toFixed(2)),
-          },
-          snapshot: {
-            settingKey: IMPROVEMENT_TUNE_KEY_LIVE_INTENT,
-            previousValue: current,
-          },
-          createdAt: new Date().toISOString(),
-        });
-      } else if (finding.causeClass === "tool_mismatch" && finding.recurrenceCount >= 4) {
-        plans.push({
-          tuneId: randomUUID(),
-          runId,
-          findingId: finding.findingId,
-          tuneClass: "ranking_weight",
-          riskLevel: "medium",
-          status: "queued",
-          description: "Review tool routing weights for this cluster before auto-applying.",
-          patch: {
-            settingKey: "improvement_tune_tool_routing_weights_v1",
-            suggestedDelta: 1,
-          },
-          createdAt: new Date().toISOString(),
-        });
-      }
-    }
-    return plans.slice(0, 12);
-  }
-
-  private insertDecisionAutoTune(tune: DecisionAutoTuneRecord): void {
-    this.gatewaySql.prepare(`
-      INSERT INTO decision_autotunes (
-        tune_id, run_id, finding_id, tune_class, risk_level, status, description,
-        patch_json, snapshot_json, result_json, created_at, applied_at, reverted_at
-      ) VALUES (
-        @tuneId, @runId, @findingId, @tuneClass, @riskLevel, @status, @description,
-        @patchJson, @snapshotJson, NULL, @createdAt, @appliedAt, @revertedAt
-      )
-    `).run({
-      tuneId: tune.tuneId,
-      runId: tune.runId,
-      findingId: tune.findingId ?? null,
-      tuneClass: tune.tuneClass,
-      riskLevel: tune.riskLevel,
-      status: tune.status,
-      description: tune.description,
-      patchJson: JSON.stringify(tune.patch),
-      snapshotJson: tune.snapshot ? JSON.stringify(tune.snapshot) : null,
-      createdAt: tune.createdAt,
-      appliedAt: tune.appliedAt ?? null,
-      revertedAt: tune.revertedAt ?? null,
-    });
-  }
-
-  private applyDecisionAutoTune(tuneId: string, mode: "auto" | "manual"): DecisionAutoTuneRecord {
-    const tune = this.readDecisionAutoTune(tuneId);
-    if (tune.riskLevel !== "low") {
-      throw new Error(`Auto-tune ${tuneId} is ${tune.riskLevel} risk and cannot auto-apply.`);
-    }
-    const settingKey = typeof tune.patch.settingKey === "string" ? tune.patch.settingKey : undefined;
-    if (!settingKey) {
-      throw new Error(`Auto-tune ${tuneId} is missing settingKey patch data.`);
-    }
-    const nextValue = tune.patch.nextValue;
-    this.storage.systemSettings.set(settingKey, nextValue);
-    const appliedAt = new Date().toISOString();
-    this.gatewaySql.prepare(`
-      UPDATE decision_autotunes
-      SET status = 'applied', applied_at = @appliedAt, result_json = @resultJson
-      WHERE tune_id = @tuneId
-    `).run({
-      tuneId,
-      appliedAt,
-      resultJson: JSON.stringify({
-        appliedBy: mode,
-        settingKey,
-        nextValue,
-      }),
-    });
-    this.publishRealtime("improvement_autotune_applied", "improvement", {
-      tuneId,
-      settingKey,
-      mode,
-    });
-    return this.readDecisionAutoTune(tuneId);
-  }
-
-  private createWeeklyImprovementReport(input: {
-    runId: string;
-    windowStart: string;
-    windowEnd: string;
-    items: DecisionReplayItemRecord[];
-    findings: DecisionReplayFindingRecord[];
-    appliedAutoTunes: DecisionAutoTuneRecord[];
-    queuedRecommendations: DecisionAutoTuneRecord[];
-  }): WeeklyImprovementReportRecord {
-    const currentCounts = new Map<DecisionReplayCauseClass, number>();
-    for (const item of input.items) {
-      if (item.label === "ok") {
-        continue;
-      }
-      currentCounts.set(item.causeClass, (currentCounts.get(item.causeClass) ?? 0) + 1);
-    }
-    const topCauseClasses = Array.from(currentCounts.entries())
-      .sort((left, right) => right[1] - left[1])
-      .slice(0, 6)
-      .map(([causeClass, count]) => ({ causeClass, count }));
-
-    const previous = this.gatewaySql.prepare(`
-      SELECT *
-      FROM improvement_reports
-      ORDER BY week_end DESC, created_at DESC
-      LIMIT 1
-    `).get() as {
-      report_id: string;
-      summary_json: string;
-    } | undefined;
-
-    const previousSummary = previous
-      ? safeJsonParse<WeeklyImprovementReportRecord["summary"]>(previous.summary_json, {
-        sampledDecisions: 0,
-        likelyWrongCount: 0,
-        wrongnessRate: 0,
-        topCauseClasses: [],
-        duplicateSuppressedCount: 0,
-        improvedCount: 0,
-        regressedCount: 0,
-      })
-      : undefined;
-    const previousCounts = new Map<DecisionReplayCauseClass, number>(
-      (previousSummary?.topCauseClasses ?? []).map((entry) => [entry.causeClass, entry.count]),
-    );
-    const weekOverWeek = compareDecisionCauseCounts(currentCounts, previousCounts);
-
-    const report: WeeklyImprovementReportRecord = {
-      reportId: randomUUID(),
-      runId: input.runId,
-      weekStart: input.windowStart,
-      weekEnd: input.windowEnd,
-      summary: {
-        sampledDecisions: input.items.length,
-        likelyWrongCount: input.items.filter((item) => item.label === "likely_wrong").length,
-        wrongnessRate: input.items.length > 0
-          ? Number((input.items.reduce((sum, item) => sum + item.wrongnessProbability, 0) / input.items.length).toFixed(4))
-          : 0,
-        topCauseClasses,
-        duplicateSuppressedCount: input.findings.filter((finding) => finding.isDuplicate).length,
-        improvedCount: weekOverWeek.improved.length,
-        regressedCount: weekOverWeek.regressed.length,
-      },
-      topFindings: input.findings.filter((finding) => !finding.isDuplicate).slice(0, 10),
-      appliedAutoTunes: input.appliedAutoTunes,
-      queuedRecommendations: input.queuedRecommendations,
-      weekOverWeek,
-      previousReportId: previous?.report_id,
-      createdAt: new Date().toISOString(),
-    };
-
-    this.gatewaySql.prepare(`
-      INSERT INTO improvement_reports (
-        report_id, run_id, week_start, week_end, summary_json, top_findings_json,
-        applied_tunes_json, queued_tunes_json, week_over_week_json, previous_report_id, created_at
-      ) VALUES (
-        @reportId, @runId, @weekStart, @weekEnd, @summaryJson, @topFindingsJson,
-        @appliedTunesJson, @queuedTunesJson, @weekOverWeekJson, @previousReportId, @createdAt
-      )
-    `).run({
-      reportId: report.reportId,
-      runId: report.runId,
-      weekStart: report.weekStart,
-      weekEnd: report.weekEnd,
-      summaryJson: JSON.stringify(report.summary),
-      topFindingsJson: JSON.stringify(report.topFindings),
-      appliedTunesJson: JSON.stringify(report.appliedAutoTunes),
-      queuedTunesJson: JSON.stringify(report.queuedRecommendations),
-      weekOverWeekJson: JSON.stringify(report.weekOverWeek),
-      previousReportId: report.previousReportId ?? null,
-      createdAt: report.createdAt,
-    });
-    return report;
-  }
-
-  private markDecisionReplayRunCompleted(input: {
-    runId: string;
-    reportId: string;
-    totalCandidates: number;
-    totalScored: number;
-    likelyWrongCount: number;
-    modelJudgedCount: number;
-  }): void {
-    this.gatewaySql.prepare(`
-      UPDATE decision_replay_runs
-      SET
-        status = 'completed',
-        report_id = @reportId,
-        total_candidates = @totalCandidates,
-        total_scored = @totalScored,
-        likely_wrong_count = @likelyWrongCount,
-        model_judged_count = @modelJudgedCount,
-        finished_at = @finishedAt
-      WHERE run_id = @runId
-    `).run({
-      runId: input.runId,
-      reportId: input.reportId,
-      totalCandidates: input.totalCandidates,
-      totalScored: input.totalScored,
-      likelyWrongCount: input.likelyWrongCount,
-      modelJudgedCount: input.modelJudgedCount,
-      finishedAt: new Date().toISOString(),
-    });
-  }
-
-  private persistDecisionReplayDedup(findings: DecisionReplayFindingRecord[], reportId: string): void {
-    const upsert = this.gatewaySql.prepare(`
-      INSERT INTO decision_replay_dedup (
-        fingerprint, last_seen_report_id, last_seen_at, occurrence_count, last_summary_hash
-      ) VALUES (
-        @fingerprint, @reportId, @lastSeenAt, 1, @summaryHash
-      )
-      ON CONFLICT(fingerprint) DO UPDATE SET
-        last_seen_report_id = excluded.last_seen_report_id,
-        last_seen_at = excluded.last_seen_at,
-        occurrence_count = decision_replay_dedup.occurrence_count + 1,
-        last_summary_hash = excluded.last_summary_hash
-    `);
-    for (const finding of findings) {
-      upsert.run({
-        fingerprint: finding.fingerprint,
-        reportId,
-        lastSeenAt: new Date().toISOString(),
-        summaryHash: createHash("sha1").update(finding.summary).digest("hex"),
-      });
-    }
-  }
-
-  private readDecisionReplayRun(runId: string): DecisionReplayRunRecord {
-    const row = this.gatewaySql.prepare(`
-      SELECT *
-      FROM decision_replay_runs
-      WHERE run_id = ?
-    `).get(runId) as {
-      run_id: string;
-      trigger_mode: "scheduled" | "manual";
-      sample_size: number;
-      window_start: string;
-      window_end: string;
-      status: string;
-      report_id: string | null;
-      total_candidates: number;
-      total_scored: number;
-      likely_wrong_count: number;
-      model_judged_count: number;
-      started_at: string;
-      finished_at: string | null;
-      error_text: string | null;
-    } | undefined;
-    if (!row) {
-      throw new Error(`Decision replay run ${runId} not found`);
-    }
-    return this.mapDecisionReplayRunRow(row);
-  }
-
-  private mapDecisionReplayRunRow(row: {
-    run_id: string;
-    trigger_mode: "scheduled" | "manual";
-    sample_size: number;
-    window_start: string;
-    window_end: string;
-    status: string;
-    report_id: string | null;
-    total_candidates: number;
-    total_scored: number;
-    likely_wrong_count: number;
-    model_judged_count: number;
-    started_at: string;
-    finished_at: string | null;
-    error_text: string | null;
-  }): DecisionReplayRunRecord {
-    return {
-      runId: row.run_id,
-      triggerMode: row.trigger_mode,
-      sampleSize: row.sample_size,
-      windowStart: row.window_start,
-      windowEnd: row.window_end,
-      status: IMPROVEMENT_RUN_STATUS_VALUES.has(row.status) ? (row.status as DecisionReplayRunRecord["status"]) : "failed",
-      reportId: row.report_id ?? undefined,
-      totalCandidates: row.total_candidates,
-      totalScored: row.total_scored,
-      likelyWrongCount: row.likely_wrong_count,
-      modelJudgedCount: row.model_judged_count,
-      startedAt: row.started_at,
-      finishedAt: row.finished_at ?? undefined,
-      error: row.error_text ?? undefined,
-    };
-  }
-
-  private listDecisionReplayItems(runId: string, limit = 500): DecisionReplayItemRecord[] {
-    const rows = this.gatewaySql.prepare(`
-      SELECT *
-      FROM decision_replay_items
-      WHERE run_id = ?
-      ORDER BY wrongness_probability DESC, occurred_at DESC
-      LIMIT ?
-    `).all(runId, Math.max(1, Math.min(limit, 5000))) as Array<{
-      item_id: string;
-      run_id: string;
-      decision_type: "chat_turn" | "tool_run";
-      session_id: string | null;
-      turn_id: string | null;
-      tool_run_id: string | null;
-      occurred_at: string;
-      wrongness_probability: number;
-      label: DecisionReplayItemRecord["label"];
-      cause_class: string;
-      cluster_key: string;
-      rule_scores_json: string;
-      model_scores_json: string | null;
-      evidence_json: string;
-      summary_text: string | null;
-      input_excerpt: string | null;
-      output_excerpt: string | null;
-      created_at: string;
-    }>;
-    return rows.map((row) => ({
-      itemId: row.item_id,
-      runId: row.run_id,
-      decisionType: row.decision_type,
-      sessionId: row.session_id ?? undefined,
-      turnId: row.turn_id ?? undefined,
-      toolRunId: row.tool_run_id ?? undefined,
-      occurredAt: row.occurred_at,
-      wrongnessProbability: Number(row.wrongness_probability),
-      label: row.label,
-      causeClass: normalizeDecisionReplayCauseClass(row.cause_class),
-      clusterKey: row.cluster_key,
-      ruleScores: safeJsonParse<DecisionReplayItemRuleScores>(row.rule_scores_json, {
-        honesty: 0.5,
-        blockerQuality: 0.5,
-        retryQuality: 0.5,
-        toolEvidence: 0.5,
-        actionability: 0.5,
-      }),
-      modelScores: row.model_scores_json
-        ? safeJsonParse<DecisionReplayItemModelScores | undefined>(row.model_scores_json, undefined)
-        : undefined,
-      evidence: safeJsonParse<string[]>(row.evidence_json, []),
-      summary: row.summary_text ?? undefined,
-      inputExcerpt: row.input_excerpt ?? undefined,
-      outputExcerpt: row.output_excerpt ?? undefined,
-      createdAt: row.created_at,
-    }));
-  }
-
-  private listDecisionReplayFindings(runId: string, limit = 100): DecisionReplayFindingRecord[] {
-    const rows = this.gatewaySql.prepare(`
-      SELECT *
-      FROM decision_replay_findings
-      WHERE run_id = ?
-      ORDER BY is_duplicate ASC, recurrence_count DESC, avg_wrongness DESC
-      LIMIT ?
-    `).all(runId, Math.max(1, Math.min(limit, 1000))) as Array<{
-      finding_id: string;
-      run_id: string;
-      fingerprint: string;
-      cause_class: string;
-      cluster_key: string;
-      severity: "low" | "medium" | "high";
-      recurrence_count: number;
-      impacted_sessions: number;
-      impacted_turns: number;
-      avg_wrongness: number;
-      title: string;
-      summary: string;
-      recommendation: string | null;
-      is_duplicate: number;
-      duplicate_of_fingerprint: string | null;
-      created_at: string;
-    }>;
-    return rows.map((row) => ({
-      findingId: row.finding_id,
-      runId: row.run_id,
-      fingerprint: row.fingerprint,
-      causeClass: normalizeDecisionReplayCauseClass(row.cause_class),
-      clusterKey: row.cluster_key,
-      severity: row.severity,
-      recurrenceCount: row.recurrence_count,
-      impactedSessions: row.impacted_sessions,
-      impactedTurns: row.impacted_turns,
-      avgWrongness: row.avg_wrongness,
-      title: row.title,
-      summary: row.summary,
-      recommendation: row.recommendation ?? undefined,
-      isDuplicate: Boolean(row.is_duplicate),
-      duplicateOfFingerprint: row.duplicate_of_fingerprint ?? undefined,
-      createdAt: row.created_at,
-    }));
-  }
-
-  private listDecisionAutoTunes(runId: string, limit = 100): DecisionAutoTuneRecord[] {
-    const rows = this.gatewaySql.prepare(`
-      SELECT *
-      FROM decision_autotunes
-      WHERE run_id = ?
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).all(runId, Math.max(1, Math.min(limit, 1000))) as Array<{
-      tune_id: string;
-      run_id: string;
-      finding_id: string | null;
-      tune_class: DecisionAutoTuneRecord["tuneClass"];
-      risk_level: DecisionAutoTuneRecord["riskLevel"];
-      status: DecisionAutoTuneRecord["status"];
-      description: string;
-      patch_json: string;
-      snapshot_json: string | null;
-      result_json: string | null;
-      created_at: string;
-      applied_at: string | null;
-      reverted_at: string | null;
-    }>;
-    return rows.map((row) => mapDecisionAutoTuneRow(row));
-  }
-
-  private readDecisionAutoTune(tuneId: string): DecisionAutoTuneRecord {
-    const row = this.gatewaySql.prepare(`
-      SELECT *
-      FROM decision_autotunes
-      WHERE tune_id = ?
-    `).get(tuneId) as {
-      tune_id: string;
-      run_id: string;
-      finding_id: string | null;
-      tune_class: DecisionAutoTuneRecord["tuneClass"];
-      risk_level: DecisionAutoTuneRecord["riskLevel"];
-      status: DecisionAutoTuneRecord["status"];
-      description: string;
-      patch_json: string;
-      snapshot_json: string | null;
-      result_json: string | null;
-      created_at: string;
-      applied_at: string | null;
-      reverted_at: string | null;
-    } | undefined;
-    if (!row) {
-      throw new Error(`Auto-tune ${tuneId} not found`);
-    }
-    return mapDecisionAutoTuneRow(row);
-  }
+  // All improvement private helpers moved to ImprovementService
 
   public async resolveChatToolApproval(
     sessionId: string,
@@ -7477,6 +4209,8 @@ export class GatewayService {
       parentTurnId?: string;
       existingUserMessage?: ChatMessageRecord;
       ingestUserMessage?: boolean;
+      turnId?: string;
+      assistantMessageId?: string;
     },
   ): Promise<{
     session: SessionMeta;
@@ -7643,8 +4377,8 @@ export class GatewayService {
       resolvedGuidance,
       conversationMessages,
       history,
-      turnId: randomUUID(),
-      assistantMessageId: `assistant-${randomUUID()}`,
+      turnId: options?.turnId ?? randomUUID(),
+      assistantMessageId: options?.assistantMessageId ?? `assistant-${randomUUID()}`,
       parentTurnId,
       branchKind,
       sourceTurnId: options?.sourceTurnId,
@@ -7875,6 +4609,28 @@ export class GatewayService {
         error: step.error,
       })),
     };
+  }
+
+  private collectOrchestrationToolRuns(runId: string): ChatToolRunRecord[] {
+    const steps = this.storage.chatDelegationSteps.listByRun(runId);
+    const childTurnIds = steps
+      .map((step) => step.childTurnId)
+      .filter((value): value is string => Boolean(value));
+    if (childTurnIds.length === 0) {
+      return [];
+    }
+    const toolRunsByTurnId = this.storage.chatToolRuns.listByTurnIds(childTurnIds);
+    const orderedToolRuns: ChatToolRunRecord[] = [];
+    for (const step of steps) {
+      if (!step.childTurnId) {
+        continue;
+      }
+      const toolRuns = toolRunsByTurnId.get(step.childTurnId);
+      if (toolRuns?.length) {
+        orderedToolRuns.push(...toolRuns);
+      }
+    }
+    return orderedToolRuns;
   }
 
   private async executePreparedModeOrchestration(
@@ -8297,21 +5053,26 @@ export class GatewayService {
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
     resolvedOrchestration?: PreparedChatExecutionPlanResolution,
-  ): AsyncGenerator<ChatStreamChunk> {
+    options?: {
+      skipMessageStart?: boolean;
+    },
+  ): AsyncGenerator<ChatStreamChunkDraft> {
     const turnId = prepared.turnId;
     const assistantMessageId = prepared.assistantMessageId;
     const controller = this.beginActiveChatTurnExecution(sessionId, turnId, threadEventType);
 
     try {
-      yield {
-        type: "message_start",
-        sessionId,
-        turnId,
-        messageId: assistantMessageId,
-        parentTurnId: prepared.parentTurnId,
-        branchKind: prepared.branchKind,
-        sourceTurnId: prepared.sourceTurnId,
-      };
+      if (!options?.skipMessageStart) {
+        yield {
+          type: "message_start",
+          sessionId,
+          turnId,
+          messageId: assistantMessageId,
+          parentTurnId: prepared.parentTurnId,
+          branchKind: prepared.branchKind,
+          sourceTurnId: prepared.sourceTurnId,
+        };
+      }
 
       const modeOrchestration = resolvedOrchestration ?? await this.resolvePreparedTurnOrchestration(prepared);
       if (modeOrchestration) {
@@ -8386,6 +5147,7 @@ export class GatewayService {
             citation,
           };
         }
+        const orchestrationToolRuns = this.collectOrchestrationToolRuns(orchestrationResult.summary.runId);
 
         let hydratedTrace: ChatTurnTraceRecord = {
           ...this.storage.chatTurnTraces.patch(turnId, {
@@ -8419,7 +5181,7 @@ export class GatewayService {
             },
             citations: orchestrationResult.citations,
           }),
-          toolRuns: [],
+          toolRuns: orchestrationToolRuns,
         };
         this.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
         yield {
@@ -8448,7 +5210,7 @@ export class GatewayService {
               capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
               specialistCandidateSuggestions: specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
             }),
-            toolRuns: [],
+            toolRuns: orchestrationToolRuns,
           };
           if (capabilityUpgradeSuggestions.length > 0) {
             yield {
@@ -8481,12 +5243,14 @@ export class GatewayService {
           sourceRef: assistantMessageId,
           trace: hydratedTrace,
         });
-        yield {
-          type: "done",
-          sessionId,
-          turnId,
-          messageId: assistantMessageId,
-        };
+        if ((hydratedTrace.completion?.status ?? "complete") === "complete" && hydratedTrace.status === "completed") {
+          yield {
+            type: "done",
+            sessionId,
+            turnId,
+            messageId: assistantMessageId,
+          };
+        }
         return;
       }
 
@@ -8613,12 +5377,6 @@ export class GatewayService {
             toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
           },
         };
-        yield {
-          type: "done",
-          sessionId,
-          turnId,
-          messageId: assistantMessageId,
-        };
         return;
       }
 
@@ -8723,12 +5481,15 @@ export class GatewayService {
         });
       }
 
-      yield {
-        type: "done",
-        sessionId,
-        turnId,
-        messageId: assistantMessageId,
-      };
+      const completedTrace = this.storage.chatTurnTraces.get(turnId);
+      if (completedTrace.completion?.status === "complete") {
+        yield {
+          type: "done",
+          sessionId,
+          turnId,
+          messageId: assistantMessageId,
+        };
+      }
     } catch (error) {
       if (controller.signal.aborted || isChatTurnCancelledError(error)) {
         const trace = this.markChatTurnCancelled(sessionId, turnId);
@@ -8737,12 +5498,6 @@ export class GatewayService {
           sessionId,
           turnId,
           trace,
-        };
-        yield {
-          type: "done",
-          sessionId,
-          turnId,
-          messageId: assistantMessageId,
         };
         return;
       }
@@ -8805,6 +5560,14 @@ export class GatewayService {
           prepared,
           "chat_thread_turn_appended",
           modeOrchestration,
+        );
+      }
+      if (this.shouldUseDurableExecution(prepared, input)) {
+        return this.consumePreparedAgentChatTurn(
+          sessionId,
+          input,
+          prepared,
+          "chat_thread_turn_appended",
         );
       }
       const controller = this.beginActiveChatTurnExecution(sessionId, prepared.turnId, "agent-send");
@@ -9099,15 +5862,18 @@ export class GatewayService {
             writable: true,
           });
         if (binding.transport !== "llm") {
-          yield* self.streamPreparedIntegrationChatTurn(
-            sessionId,
-            prepared,
-            binding,
-            "chat_thread_turn_appended",
+          yield* self.withEphemeralStreamEnvelope(
+            self.streamPreparedIntegrationChatTurn(
+              sessionId,
+              prepared,
+              binding,
+              "chat_thread_turn_appended",
+            ),
           );
           return;
         }
-        yield* self.streamPreparedAgentChatTurn(sessionId, input, prepared, "chat_thread_turn_appended");
+        self.launchPreparedAgentChatTurnStream(sessionId, input, prepared, "chat_thread_turn_appended");
+        yield* self.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true });
       })();
     });
   }
@@ -9149,10 +5915,7 @@ export class GatewayService {
       if (binding.transport !== "llm") {
         return this.sendPreparedIntegrationChatTurn(sessionId, prepared, binding, "chat_thread_turn_retried");
       }
-      for await (const _chunk of this.streamPreparedAgentChatTurn(sessionId, request, prepared, "chat_thread_turn_retried")) {
-        // consume stream for non-stream callers so branch behavior stays aligned
-      }
-      return this.buildChatSendMessageResponseFromTurnId(sessionId, prepared.turnId);
+      return this.consumePreparedAgentChatTurn(sessionId, request, prepared, "chat_thread_turn_retried");
     });
   }
 
@@ -9193,10 +5956,13 @@ export class GatewayService {
             writable: true,
           });
         if (binding.transport !== "llm") {
-          yield* self.streamPreparedIntegrationChatTurn(sessionId, prepared, binding, "chat_thread_turn_retried");
+          yield* self.withEphemeralStreamEnvelope(
+            self.streamPreparedIntegrationChatTurn(sessionId, prepared, binding, "chat_thread_turn_retried"),
+          );
           return;
         }
-        yield* self.streamPreparedAgentChatTurn(sessionId, request, prepared, "chat_thread_turn_retried");
+        self.launchPreparedAgentChatTurnStream(sessionId, request, prepared, "chat_thread_turn_retried");
+        yield* self.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true });
       })();
     });
   }
@@ -9227,10 +5993,7 @@ export class GatewayService {
       if (binding.transport !== "llm") {
         return this.sendPreparedIntegrationChatTurn(sessionId, prepared, binding, "chat_thread_turn_edited");
       }
-      for await (const _chunk of this.streamPreparedAgentChatTurn(sessionId, request, prepared, "chat_thread_turn_edited")) {
-        // consume stream for non-stream callers so branch behavior stays aligned
-      }
-      return this.buildChatSendMessageResponseFromTurnId(sessionId, prepared.turnId);
+      return this.consumePreparedAgentChatTurn(sessionId, request, prepared, "chat_thread_turn_edited");
     });
   }
 
@@ -9260,10 +6023,13 @@ export class GatewayService {
             writable: true,
           });
         if (binding.transport !== "llm") {
-          yield* self.streamPreparedIntegrationChatTurn(sessionId, prepared, binding, "chat_thread_turn_edited");
+          yield* self.withEphemeralStreamEnvelope(
+            self.streamPreparedIntegrationChatTurn(sessionId, prepared, binding, "chat_thread_turn_edited"),
+          );
           return;
         }
-        yield* self.streamPreparedAgentChatTurn(sessionId, request, prepared, "chat_thread_turn_edited");
+        self.launchPreparedAgentChatTurnStream(sessionId, request, prepared, "chat_thread_turn_edited");
+        yield* self.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true });
       })();
     });
   }
@@ -9326,13 +6092,20 @@ export class GatewayService {
     let assistantMessage: ChatMessageRecord | undefined;
     let trace: ChatTurnTraceRecord | undefined;
     let citations: ChatCitationRecord[] = [];
-    for await (const chunk of this.streamPreparedAgentChatTurn(
-      sessionId,
-      input,
-      prepared,
-      threadEventType,
-      resolvedOrchestration,
-    )) {
+    const useDurableExecution = this.shouldUseDurableExecution(prepared, input);
+    if (useDurableExecution) {
+      this.launchPreparedAgentChatTurnStream(sessionId, input, prepared, threadEventType, resolvedOrchestration);
+    }
+    const source: AsyncGenerator<InspectableChatStreamChunk> = useDurableExecution
+      ? this.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true })
+      : this.streamPreparedAgentChatTurn(
+        sessionId,
+        input,
+        prepared,
+        threadEventType,
+        resolvedOrchestration,
+      );
+    for await (const chunk of source) {
       if (chunk.type === "message_done") {
         assistantMessage = {
           messageId: chunk.messageId,
@@ -9361,6 +6134,468 @@ export class GatewayService {
       citations: dedupeChatCitations(citations),
       routing: trace?.routing,
     };
+  }
+
+  private isDurableExecutionEnabled(): boolean {
+    return this.config.assistant.durable.enabled
+      && this.config.assistant.durable.executionEnabled
+      && this.isFeatureEnabled("durableKernelV1Enabled");
+  }
+
+  private shouldUseDurableExecution(
+    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
+    input: ChatSendMessageRequest,
+  ): boolean {
+    if (!this.isDurableExecutionEnabled()) {
+      return false;
+    }
+    const mode = prepared.normalized.mode ?? prepared.prefs.mode;
+    if (mode === "cowork" || mode === "code") {
+      return true;
+    }
+    if (mode !== "chat" || !this.config.assistant.durable.chatAutoPromoteEnabled) {
+      return false;
+    }
+    const webMode = prepared.normalized.webMode ?? prepared.prefs.webMode;
+    if (webMode === "deep") {
+      return true;
+    }
+    if (prepared.autonomy.reflectionMode === "on" || prepared.prefs.reflectionMode === "on") {
+      return true;
+    }
+    const content = prepared.content.toLowerCase();
+    return content.includes("http://")
+      || content.includes("https://")
+      || content.includes("browser.navigate")
+      || content.includes("browser.extract")
+      || content.includes("http.get")
+      || content.includes("http.post")
+      || /\b(fetch|scrape|extract|browse|navigate|research|look up|find on the web|http get|http post)\b/i.test(content)
+      || Boolean(input.attachments?.length);
+  }
+
+  private parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatTurnExecutionPayload | undefined {
+    const payload = run.payload as Partial<DurableChatTurnExecutionPayload> | undefined;
+    if (!payload || payload.version !== "chat.turn.execute.v1") {
+      return undefined;
+    }
+    if (
+      typeof payload.sessionId !== "string"
+      || typeof payload.turnId !== "string"
+      || typeof payload.userMessageId !== "string"
+      || typeof payload.assistantMessageId !== "string"
+      || typeof payload.branchKind !== "string"
+      || typeof payload.threadEventType !== "string"
+      || !payload.request
+      || typeof payload.request !== "object"
+    ) {
+      return undefined;
+    }
+    return payload as DurableChatTurnExecutionPayload;
+  }
+
+  private createDurableChatTurnPayload(
+    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
+    input: ChatSendMessageRequest,
+    threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
+  ): DurableChatTurnExecutionPayload {
+    return {
+      version: "chat.turn.execute.v1",
+      sessionId: prepared.session.sessionId,
+      turnId: prepared.turnId,
+      userMessageId: prepared.userEventId,
+      assistantMessageId: prepared.assistantMessageId,
+      branchKind: prepared.branchKind,
+      parentTurnId: prepared.parentTurnId,
+      sourceTurnId: prepared.sourceTurnId,
+      threadEventType,
+      request: {
+        ...input,
+        content: prepared.content,
+        attachments: prepared.userMessage.attachments?.map((item) => item.attachmentId),
+      },
+    };
+  }
+
+  private createDurableCheckpointState(
+    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
+    trace: ChatTurnTraceRecord,
+  ): Record<string, unknown> {
+    const toolRuns = this.storage.chatToolRuns.listByTurn(prepared.turnId);
+    const artifacts = this.storage.chatToolArtifacts.listByTurn(prepared.turnId).map((artifact) => ({
+      artifactId: artifact.artifactId,
+      toolRunId: artifact.toolRunId,
+      toolName: artifact.toolName,
+      contentType: artifact.contentType,
+      byteLength: artifact.byteLength,
+      storageRelPath: artifact.storageRelPath,
+      snippet: artifact.snippet,
+    }));
+    return {
+      objective: prepared.content,
+      currentStep: trace.status,
+      attemptedTools: toolRuns.map((run) => ({
+        toolRunId: run.toolRunId,
+        toolName: run.toolName,
+        status: run.status,
+        startedAt: run.startedAt,
+        finishedAt: run.finishedAt,
+      })),
+      artifactPointers: artifacts,
+      blocker: trace.failure?.message,
+      nextAction: trace.failure?.recommendedAction,
+    };
+  }
+
+  private beginDurableChatRun(
+    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
+    input: ChatSendMessageRequest,
+    threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
+  ): DurableRunRecord | undefined {
+    if (!this.shouldUseDurableExecution(prepared, input)) {
+      return undefined;
+    }
+    const mode = prepared.normalized.mode ?? prepared.prefs.mode;
+    const run = this.createDurableRun({
+      workflowKey: "chat.turn.execute",
+      payload: this.createDurableChatTurnPayload(prepared, input, threadEventType) as unknown as Record<string, unknown>,
+      metadata: {
+        surface: mode,
+        autoPromoted: mode === "chat",
+        objective: prepared.content,
+      },
+    });
+    this.persistChatStreamChunk({
+      type: "message_start",
+      sessionId: prepared.session.sessionId,
+      turnId: prepared.turnId,
+      messageId: prepared.assistantMessageId,
+      parentTurnId: prepared.parentTurnId,
+      branchKind: prepared.branchKind,
+      sourceTurnId: prepared.sourceTurnId,
+    }, run.runId);
+    this.durableRunService.requestRunProcessing(run.runId);
+    return run;
+  }
+
+  private finalizeDurableChatRun(
+    runId: string,
+    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
+    trace: ChatTurnTraceRecord,
+  ): void {
+    const now = new Date().toISOString();
+    const checkpointState = this.createDurableCheckpointState(prepared, trace);
+    if (trace.status === "waiting_for_approval") {
+      this.storage.durableRuns.updateRun({
+        runId,
+        status: "waiting",
+        updatedAt: now,
+        finishedAt: undefined,
+      });
+      this.storage.durableRuns.createCheckpoint({
+        runId,
+        checkpointKind: "run_waiting",
+        state: checkpointState,
+      });
+      this.recordDurableTimelineEvent(runId, "run_waiting", checkpointState);
+      this.patchDurableTraceIfPresent(prepared.turnId, {
+        durable: {
+          runId,
+          status: "waiting",
+          checkpointKind: "run_waiting",
+        },
+      });
+      return;
+    }
+    if (trace.status === "cancelled") {
+      this.storage.durableRuns.updateRun({
+        runId,
+        status: "cancelled",
+        updatedAt: now,
+        finishedAt: now,
+      });
+      this.recordDurableTimelineEvent(runId, "run_cancelled", checkpointState);
+      this.patchDurableTraceIfPresent(prepared.turnId, {
+        durable: {
+          runId,
+          status: "cancelled",
+          checkpointKind: "run_failed",
+        },
+      });
+      return;
+    }
+    const failed = trace.status === "failed" || trace.completion?.status !== "complete";
+    const nextStatus: DurableRunStatus = failed ? "failed" : "completed";
+    const checkpointKind: DurableCheckpointRecord["checkpointKind"] = failed ? "run_failed" : "run_completed";
+    this.storage.durableRuns.updateRun({
+      runId,
+      status: nextStatus,
+      updatedAt: now,
+      finishedAt: now,
+      lastError: failed ? trace.failure?.message : undefined,
+    });
+    this.storage.durableRuns.createCheckpoint({
+      runId,
+      checkpointKind,
+      state: checkpointState,
+    });
+    this.recordDurableTimelineEvent(runId, failed ? "run_failed" : "run_completed", checkpointState);
+    this.patchDurableTraceIfPresent(prepared.turnId, {
+      durable: {
+        runId,
+        status: nextStatus,
+        checkpointKind,
+      },
+    });
+  }
+
+  private patchDurableTraceIfPresent(turnId: string, input: Parameters<Storage["chatTurnTraces"]["patch"]>[1]): void {
+    try {
+      this.storage.chatTurnTraces.patch(turnId, input);
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) {
+        throw error;
+      }
+    }
+  }
+
+  private async executePreparedAgentChatTurnBackground(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
+    threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
+    durableRunId?: string,
+    resolvedOrchestration?: PreparedChatExecutionPlanResolution,
+    options?: {
+      skipMessageStart?: boolean;
+    },
+  ): Promise<void> {
+    try {
+      for await (const rawChunk of this.streamPreparedAgentChatTurn(
+        sessionId,
+        input,
+        prepared,
+        threadEventType,
+        resolvedOrchestration,
+        options,
+      )) {
+        const chunk = rawChunk.type === "trace_update" && durableRunId
+          ? {
+            ...rawChunk,
+            trace: {
+              ...rawChunk.trace,
+              durable: {
+                runId: durableRunId,
+                status: this.storage.durableRuns.getRun(durableRunId).status,
+                checkpointKind: rawChunk.trace.durable?.checkpointKind ?? "run_started",
+              },
+            },
+          }
+          : rawChunk;
+        if (isPersistableChatStreamChunk(chunk)) {
+          this.persistChatStreamChunk(chunk, durableRunId);
+        }
+      }
+    } catch (error) {
+      let currentTrace: ChatTurnTraceRecord | undefined;
+      try {
+        currentTrace = this.storage.chatTurnTraces.get(prepared.turnId);
+      } catch (lookupError) {
+        if (!(lookupError instanceof NotFoundError)) {
+          throw lookupError;
+        }
+      }
+      if (currentTrace) {
+        const patchedTrace = this.storage.chatTurnTraces.patch(prepared.turnId, {
+          status: "failed",
+          finishedAt: new Date().toISOString(),
+          failure: {
+            failureClass: "unknown",
+            message: error instanceof Error ? error.message : "Chat stream execution failed.",
+            retryable: true,
+            recommendedAction: "retry",
+          },
+          completion: {
+            finishReason: currentTrace.completion?.finishReason,
+            status: "interrupted",
+            repaired: Boolean(currentTrace.completion?.repaired),
+          },
+        });
+        this.persistChatStreamChunk({
+          type: "trace_update",
+          sessionId,
+          turnId: prepared.turnId,
+          trace: this.createHydratedChatTurnTrace(prepared.turnId, patchedTrace),
+        }, durableRunId);
+      }
+      this.persistChatStreamChunk({
+        type: "error",
+        sessionId,
+        turnId: prepared.turnId,
+        error: error instanceof Error ? error.message : "Chat stream execution failed.",
+      }, durableRunId);
+    } finally {
+      let finalTrace: ChatTurnTraceRecord | undefined;
+      try {
+        finalTrace = this.storage.chatTurnTraces.get(prepared.turnId);
+      } catch (error) {
+        if (!(error instanceof NotFoundError)) {
+          throw error;
+        }
+      }
+      if (durableRunId && finalTrace) {
+        this.finalizeDurableChatRun(durableRunId, prepared, finalTrace);
+      }
+      this.completeActiveChatTurnStream(prepared.turnId);
+      setTimeout(() => this.closeActiveChatTurnStream(prepared.turnId), 30_000);
+    }
+  }
+
+  private launchPreparedAgentChatTurnStream(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
+    threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
+    resolvedOrchestration?: PreparedChatExecutionPlanResolution,
+  ): void {
+    const durableRun = this.beginDurableChatRun(prepared, input, threadEventType);
+    this.registerActiveChatTurnStream(sessionId, prepared.turnId, durableRun?.runId);
+    if (durableRun) {
+      return;
+    }
+    const task = this.executePreparedAgentChatTurnBackground(
+      sessionId,
+      input,
+      prepared,
+      threadEventType,
+      undefined,
+      resolvedOrchestration,
+    );
+    task.finally(() => this.backgroundTasks.delete(task));
+    this.backgroundTasks.add(task);
+  }
+
+  private async executeDurableWorkflowRun(run: DurableRunRecord): Promise<void> {
+    if (run.workflowKey !== "chat.turn.execute") {
+      throw new Error(`Unsupported durable workflow: ${run.workflowKey}`);
+    }
+    await this.executeDurableChatTurnRun(run);
+  }
+
+  private isDurableWorkflowRecoverable(run: DurableRunRecord): { recoverable: boolean; reason?: string } {
+    if (run.workflowKey !== "chat.turn.execute") {
+      return { recoverable: false, reason: `Unsupported durable workflow: ${run.workflowKey}` };
+    }
+    const payload = this.parseDurableChatTurnPayload(run);
+    if (!payload) {
+      return { recoverable: false, reason: "Durable chat run payload is invalid or incomplete." };
+    }
+    let trace: ChatTurnTraceRecord | undefined;
+    try {
+      trace = this.storage.chatTurnTraces.get(payload.turnId);
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) {
+        throw error;
+      }
+    }
+    if (!trace) {
+      return { recoverable: true };
+    }
+    if (trace.assistantMessageId) {
+      return { recoverable: false, reason: "Assistant output was already persisted before interruption." };
+    }
+    const toolRuns = this.storage.chatToolRuns.listByTurn(payload.turnId);
+    if (toolRuns.length > 0) {
+      return {
+        recoverable: false,
+        reason: "Durable chat run was interrupted after tool execution began and cannot be safely replayed.",
+      };
+    }
+    return { recoverable: true };
+  }
+
+  private async markDurableWorkflowUnrecoverable(run: DurableRunRecord, reason: string): Promise<void> {
+    const payload = this.parseDurableChatTurnPayload(run);
+    if (!payload) {
+      return;
+    }
+    let trace: ChatTurnTraceRecord | undefined;
+    try {
+      trace = this.storage.chatTurnTraces.get(payload.turnId);
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) {
+        throw error;
+      }
+    }
+    if (trace) {
+      this.storage.chatTurnTraces.patch(payload.turnId, {
+        status: "failed",
+        finishedAt: new Date().toISOString(),
+        failure: {
+          failureClass: "unknown",
+          message: reason,
+          retryable: true,
+          recommendedAction: "retry",
+        },
+        completion: {
+          finishReason: trace.completion?.finishReason,
+          status: "interrupted",
+          repaired: Boolean(trace.completion?.repaired),
+        },
+        durable: {
+          runId: run.runId,
+          status: "failed",
+          checkpointKind: "run_failed",
+        },
+      });
+    }
+    this.persistChatStreamChunk({
+      type: "error",
+      sessionId: payload.sessionId,
+      turnId: payload.turnId,
+      error: reason,
+    }, run.runId);
+  }
+
+  private async executeDurableChatTurnRun(run: DurableRunRecord): Promise<void> {
+    const payload = this.parseDurableChatTurnPayload(run);
+    if (!payload) {
+      throw new Error("Durable chat run payload is invalid or incomplete.");
+    }
+    const userMessage = this.storage.chatMessages.get(payload.userMessageId);
+    if (!userMessage) {
+      throw new NotFoundError({ entity: "Chat message", id: payload.userMessageId });
+    }
+    const prepared = await this.prepareAgentChatTurn(payload.sessionId, payload.request, {
+      branchKind: payload.branchKind,
+      sourceTurnId: payload.sourceTurnId,
+      parentTurnId: payload.parentTurnId,
+      existingUserMessage: userMessage,
+      ingestUserMessage: false,
+      turnId: payload.turnId,
+      assistantMessageId: payload.assistantMessageId,
+    });
+    this.registerActiveChatTurnStream(payload.sessionId, payload.turnId, run.runId);
+    await this.executePreparedAgentChatTurnBackground(
+      payload.sessionId,
+      payload.request,
+      prepared,
+      payload.threadEventType,
+      run.runId,
+      undefined,
+      { skipMessageStart: true },
+    );
+  }
+
+  public async *resumeAgentChatTurnStream(
+    sessionId: string,
+    turnId: string,
+    sinceEventId?: string,
+  ): AsyncGenerator<ChatStreamChunk> {
+    yield* this.streamPersistedChatTurnEvents(sessionId, turnId, {
+      sinceEventId,
+      liveTail: true,
+    });
   }
 
   private async sendPreparedIntegrationChatTurn(
@@ -9501,7 +6736,7 @@ export class GatewayService {
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     binding: ChatSessionBindingRecord,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
-  ): AsyncGenerator<ChatStreamChunk> {
+  ): AsyncGenerator<ChatStreamChunkDraft> {
     yield {
       type: "message_start",
       sessionId,
@@ -9850,6 +7085,19 @@ export class GatewayService {
   }
 
   public async invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
+    const deploymentGuard = evaluateDeploymentProfileToolAccess(
+      this.config.assistant.deploymentProfile,
+      request.toolName,
+      request.args,
+    );
+    if (deploymentGuard) {
+      return {
+        outcome: "blocked",
+        policyReason: `blocked: ${deploymentGuard.reason}`,
+        auditEventId: randomUUID(),
+      };
+    }
+
     const result = await this.policyEngine.invoke(request);
     this.publishRealtime("tool_invoked", "policy", {
       toolName: request.toolName,
@@ -10314,7 +7562,9 @@ export class GatewayService {
     if (input.status === "done") {
       const deliverables = this.storage.taskDeliverables.countByTask(taskId);
       if (deliverables < 1) {
-        throw new Error("Cannot mark task done without at least one deliverable");
+        throw new ValidationError({
+          message: "Cannot mark task done without at least one deliverable",
+        });
       }
     }
 
@@ -10556,14 +7806,14 @@ export class GatewayService {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        throw new Error(`File not found: ${normalized}`);
+        throw new NotFoundError({ entity: "File", id: normalized });
       }
       throw error;
     }
 
     const stat = await fs.stat(fullPath);
     if (stat.isDirectory()) {
-      throw new Error(`Path is a directory: ${normalized}`);
+      throw new ValidationError({ message: `Path is a directory: ${normalized}` });
     }
 
     const contentType = detectMimeType(fullPath);
@@ -10986,6 +8236,7 @@ export class GatewayService {
     const features = this.readFeatureFlags();
     return {
       environment: this.config.assistant.environment,
+      deploymentProfile: this.config.assistant.deploymentProfile,
       defaultToolProfile: this.config.toolPolicy.tools.profile,
       budgetMode: this.config.budgets.mode,
       workspaceDir: this.config.assistant.workspaceDir,
@@ -11143,6 +8394,7 @@ export class GatewayService {
   }
 
   public updateSettings(input: {
+    deploymentProfile?: DeploymentProfile;
     defaultToolProfile?: string;
     budgetMode?: "saver" | "balanced" | "power";
     networkAllowlist?: string[];
@@ -11187,9 +8439,16 @@ export class GatewayService {
     };
     features?: Partial<RuntimeSettings["features"]>;
   }): RuntimeSettings {
+    this.assertDeploymentProfileUpdate(input);
+
     let persistAssistant = false;
     let persistToolPolicy = false;
     let persistBudgets = false;
+
+    if (input.deploymentProfile) {
+      this.config.assistant.deploymentProfile = input.deploymentProfile;
+      persistAssistant = true;
+    }
 
     if (input.defaultToolProfile) {
       if (!Object.prototype.hasOwnProperty.call(this.config.toolPolicy.profiles, input.defaultToolProfile)) {
@@ -11342,6 +8601,45 @@ export class GatewayService {
     }
 
     return this.getSettings();
+  }
+
+  public getDeploymentProfile(): DeploymentProfile {
+    return this.config.assistant.deploymentProfile;
+  }
+
+  private assertDeploymentProfileUpdate(input: {
+    deploymentProfile?: DeploymentProfile;
+    auth?: AuthSettingsUpdateInput;
+    networkAllowlist?: string[];
+  }): void {
+    const nextProfile = input.deploymentProfile ?? this.config.assistant.deploymentProfile;
+    if (nextProfile !== "remote_hardened") {
+      return;
+    }
+
+    const nextAuthMode = input.auth?.mode ?? this.config.assistant.auth.mode;
+    const nextAllowLoopbackBypass = input.auth?.allowLoopbackBypass ?? this.config.assistant.auth.allowLoopbackBypass;
+    const nextAllowlist = (input.networkAllowlist ?? this.config.toolPolicy.sandbox.networkAllowlist)
+      .map((host) => host.trim())
+      .filter(Boolean);
+
+    const errors: string[] = [];
+    if (nextAuthMode === "none") {
+      errors.push("remote_hardened requires token or basic auth.");
+    }
+    if (nextAllowLoopbackBypass) {
+      errors.push("remote_hardened disables loopback bypass.");
+    }
+    if (nextAllowlist.length === 0) {
+      errors.push("remote_hardened requires a non-empty outbound host allowlist.");
+    }
+    if (nextAllowlist.some((host) => host === "*")) {
+      errors.push("remote_hardened forbids wildcard outbound host allowlists.");
+    }
+
+    if (errors.length > 0) {
+      throw new Error(errors.join(" "));
+    }
   }
 
   public getAuthRuntimeSettings(): AuthRuntimeSettings {
@@ -13854,19 +11152,11 @@ export class GatewayService {
   }
 
   private normalizeDurableRetryPolicy(input: Partial<DurableRetryPolicy> | undefined): DurableRetryPolicy {
-    return {
-      maxAttempts: Math.max(1, Math.min(20, Math.floor(input?.maxAttempts ?? DURABLE_RETRY_POLICY_DEFAULT.maxAttempts))),
-      baseDelayMs: Math.max(100, Math.min(300_000, Math.floor(input?.baseDelayMs ?? DURABLE_RETRY_POLICY_DEFAULT.baseDelayMs))),
-      maxDelayMs: Math.max(100, Math.min(900_000, Math.floor(input?.maxDelayMs ?? DURABLE_RETRY_POLICY_DEFAULT.maxDelayMs))),
-      backoffMultiplier: Math.max(1, Math.min(8, input?.backoffMultiplier ?? DURABLE_RETRY_POLICY_DEFAULT.backoffMultiplier)),
-    };
+    return this.durableRunService.normalizeDurableRetryPolicy(input);
   }
 
   private computeDurableRetryDelayMs(current: DurableRunRecord, attemptNo: number): number {
-    const metadataPolicy = (current.metadata as { retryPolicy?: Partial<DurableRetryPolicy> } | undefined)?.retryPolicy;
-    const policy = this.normalizeDurableRetryPolicy(metadataPolicy);
-    const raw = policy.baseDelayMs * (policy.backoffMultiplier ** Math.max(0, attemptNo - 1));
-    return Math.max(100, Math.min(policy.maxDelayMs, Math.floor(raw)));
+    return this.durableRunService.computeDurableRetryDelayMs(current, attemptNo);
   }
 
   private recordDurableTimelineEvent(
@@ -13875,79 +11165,10 @@ export class GatewayService {
     payload?: Record<string, unknown>,
     stepKey?: string,
   ): DurableRunTimelineEvent {
-    const event: DurableRunTimelineEvent = {
-      eventId: randomUUID(),
-      runId,
-      eventType,
-      stepKey: stepKey?.trim() || undefined,
-      payload: payload ?? {},
-      createdAt: new Date().toISOString(),
-    };
-    this.gatewaySql.prepare(`
-      INSERT INTO durable_run_events (event_id, run_id, event_type, step_key, payload_json, created_at)
-      VALUES (@eventId, @runId, @eventType, @stepKey, @payloadJson, @createdAt)
-    `).run({
-      eventId: event.eventId,
-      runId: event.runId,
-      eventType: event.eventType,
-      stepKey: event.stepKey ?? null,
-      payloadJson: JSON.stringify(event.payload ?? {}),
-      createdAt: event.createdAt,
-    });
-    return event;
+    return this.durableRunService.recordDurableTimelineEvent(runId, eventType, payload, stepKey);
   }
 
-  private normalizeReplayOverrides(overrides: ReplayOverrideStep[]): ReplayOverrideStep[] {
-    const normalized: ReplayOverrideStep[] = [];
-    for (const item of overrides ?? []) {
-      const stepKey = item.stepKey?.trim();
-      if (!stepKey) {
-        continue;
-      }
-      normalized.push({
-        stepKey,
-        overrideKind: item.overrideKind,
-        override: item.override ?? {},
-      });
-    }
-    return normalized;
-  }
-
-  private replaceReplayOverrideSteps(replayRunId: string, overrides: ReplayOverrideStep[]): void {
-    this.gatewaySql.prepare("DELETE FROM replay_override_steps WHERE replay_run_id = ?").run(replayRunId);
-    const insert = this.gatewaySql.prepare(`
-      INSERT INTO replay_override_steps (step_id, replay_run_id, step_key, override_type, override_payload_json, created_at)
-      VALUES (@stepId, @replayRunId, @stepKey, @overrideType, @overridePayloadJson, @createdAt)
-    `);
-    const now = new Date().toISOString();
-    for (const override of overrides) {
-      insert.run({
-        stepId: randomUUID(),
-        replayRunId,
-        stepKey: override.stepKey,
-        overrideType: override.overrideKind,
-        overridePayloadJson: JSON.stringify(override.override ?? {}),
-        createdAt: now,
-      });
-    }
-  }
-
-  private computeReplayDiffSummary(
-    sourceRunId: string,
-    replayRunId: string,
-    overrides: ReplayOverrideStep[],
-  ): ReplayDiffSummary["summary"] {
-    void sourceRunId;
-    void replayRunId;
-    return {
-      latencyDeltaMs: 0,
-      inputTokensDelta: 0,
-      outputTokensDelta: 0,
-      cachedInputTokensDelta: 0,
-      costUsdDelta: Number(overrides.length) * 0,
-      errorChanged: false,
-    };
-  }
+  // normalizeReplayOverrides, replaceReplayOverrideSteps, computeReplayDiffSummary moved to ImprovementService
 
   private requireMemoryItem(itemId: string): MemoryItemRecord {
     const row = this.gatewaySql.prepare(`
@@ -14499,13 +11720,11 @@ export class GatewayService {
 
   public async close(): Promise<void> {
     this.closing = true;
-    if (this.proactiveScheduler) {
-      clearInterval(this.proactiveScheduler);
-      this.proactiveScheduler = undefined;
-    }
-    if (this.improvementScheduler) {
-      clearInterval(this.improvementScheduler);
-      this.improvementScheduler = undefined;
+    this.chatProactiveService.stopScheduler();
+    this.improvementService.stopScheduler();
+    if (this.maintenanceScheduler) {
+      clearInterval(this.maintenanceScheduler);
+      this.maintenanceScheduler = undefined;
     }
     if (this.backgroundTasks.size > 0) {
       const tasks = [...this.backgroundTasks];
@@ -14540,23 +11759,31 @@ export class GatewayService {
     input: ApprovalResolveInput,
   ): Promise<ApprovalResolveResult> {
     if (currentApproval.status !== "pending") {
-      throw new Error(`Approval ${currentApproval.approvalId} is already resolved`);
+      throw new ConflictError({
+        message: `Approval ${currentApproval.approvalId} is already resolved`,
+      });
     }
     if (input.decision === "edit") {
-      throw new Error("Editing device access approvals is not supported.");
+      throw new ValidationError({
+        message: "Editing device access approvals is not supported.",
+      });
     }
 
     const existingRequest = this.getAuthDeviceRequestByApprovalId(currentApproval.approvalId);
     if (!existingRequest) {
-      throw new Error("Device access request not found.");
+      throw new NotFoundError("Device access request not found.");
     }
 
     const request = await this.expireDeviceAccessRequestIfNeeded(existingRequest);
     if (request.status === "expired") {
-      throw new Error("Device access request expired before it could be approved.");
+      throw new ConflictError({
+        message: "Device access request expired before it could be approved.",
+      });
     }
     if (request.status !== "pending") {
-      throw new Error(`Approval ${currentApproval.approvalId} is already resolved`);
+      throw new ConflictError({
+        message: `Approval ${currentApproval.approvalId} is already resolved`,
+      });
     }
 
     const resolvedAt = new Date().toISOString();
@@ -15882,18 +13109,7 @@ export class GatewayService {
     return path.join(this.config.rootDir, "config", "cron-jobs.json");
   }
 
-  private ensureWeeklyImprovementCronJob(): void {
-    const existing = this.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
-    const now = new Date().toISOString();
-    this.storage.cronJobs.upsert({
-      jobId: IMPROVEMENT_WEEKLY_JOB_ID,
-      name: "Self-Improvement Weekly Replay",
-      schedule: IMPROVEMENT_WEEKLY_SCHEDULE_LABEL,
-      enabled: existing?.enabled ?? true,
-      lastRunAt: existing?.lastRunAt,
-      nextRunAt: existing?.nextRunAt,
-    }, now);
-  }
+  // ensureWeeklyImprovementCronJob moved to ImprovementService
 
   private ensurePrivateBetaBackupCronJob(): void {
     const existing = this.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
@@ -16905,328 +14121,6 @@ function parsePipelineCommand(input: string): { template: string; roles: string[
   };
 }
 
-function sanitizeFileName(input: string): string {
-  const cleaned = input
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return cleaned || "prompt-pack";
-}
-
-function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string {
-  const generatedAt = new Date().toISOString();
-  const runs = [...report.runs]
-    .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
-  const scores = [...report.scores]
-    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  const latestRunByTest = new Map<string, PromptPackRunRecord>();
-  for (const run of runs) {
-    if (!latestRunByTest.has(run.testId)) {
-      latestRunByTest.set(run.testId, run);
-    }
-  }
-  const latestScoreByTest = new Map<string, PromptPackScoreRecord>();
-  for (const score of scores) {
-    if (!latestScoreByTest.has(score.testId)) {
-      latestScoreByTest.set(score.testId, score);
-    }
-  }
-
-  const lines: string[] = [];
-  lines.push(`# Prompt Pack Report: ${report.pack.name}`);
-  lines.push("");
-  lines.push(`- Pack ID: \`${report.pack.packId}\``);
-  lines.push(`- Generated: ${generatedAt}`);
-  lines.push(`- Total tests: ${report.summary.totalTests}`);
-  lines.push(`- Completed runs: ${report.summary.completedRuns}`);
-  lines.push(`- Failed runs: ${report.summary.failedRuns}`);
-  lines.push(`- Run failures: ${report.summary.runFailureCount}`);
-  lines.push(`- Score failures: ${report.summary.scoreFailureCount}`);
-  lines.push(`- Needs score: ${report.summary.needsScoreCount}`);
-  lines.push(`- Average score: ${report.summary.averageTotalScore.toFixed(2)}/10`);
-  lines.push(`- Pass rate: ${(report.summary.passRate * 100).toFixed(1)}% (threshold ${report.summary.passThreshold}/10)`);
-  lines.push("");
-  lines.push("## Snapshot");
-  lines.push("");
-  lines.push("| Test | Status | Score | Provider/Model | Last run |");
-  lines.push("| --- | --- | --- | --- | --- |");
-  for (const test of report.tests) {
-    const run = latestRunByTest.get(test.testId);
-    const score = latestScoreByTest.get(test.testId);
-    const providerModel = run?.providerId || run?.model
-      ? `${run?.providerId ?? "?"}/${run?.model ?? "?"}`
-      : "-";
-    lines.push(`| ${test.code} | ${run?.status ?? "not_run"} | ${score ? `${score.totalScore}/10` : "-"} | ${providerModel} | ${run?.finishedAt ?? run?.startedAt ?? "-"} |`);
-  }
-
-  for (const test of report.tests) {
-    const run = latestRunByTest.get(test.testId);
-    const score = latestScoreByTest.get(test.testId);
-    lines.push("");
-    lines.push(`## ${test.code} - ${test.title}`);
-    lines.push("");
-    lines.push("### Prompt");
-    lines.push("");
-    lines.push("```text");
-    lines.push(test.prompt.trim());
-    lines.push("```");
-
-    if (!run) {
-      lines.push("");
-      lines.push("_No run yet._");
-      continue;
-    }
-
-    lines.push("");
-    lines.push("### Latest Run");
-    lines.push("");
-    lines.push(`- Run ID: \`${run.runId}\``);
-    lines.push(`- Status: \`${run.status}\``);
-    lines.push(`- Provider/Model: \`${run.providerId ?? "-"} / ${run.model ?? "-"}\``);
-    lines.push(`- Started: ${run.startedAt}`);
-    lines.push(`- Finished: ${run.finishedAt ?? "-"}`);
-    if (run.error) {
-      lines.push(`- Error: ${run.error}`);
-    }
-
-    if (score) {
-      lines.push("");
-      lines.push("### Score");
-      lines.push("");
-      lines.push(`- Total: **${score.totalScore}/10**`);
-      lines.push(`- Routing: ${score.routingScore}`);
-      lines.push(`- Honesty: ${score.honestyScore}`);
-      lines.push(`- Handoff: ${score.handoffScore}`);
-      lines.push(`- Robustness: ${score.robustnessScore}`);
-      lines.push(`- Usability: ${score.usabilityScore}`);
-      if (score.notes?.trim()) {
-        lines.push(`- Notes: ${score.notes.trim()}`);
-      }
-    }
-
-    if (run.responseText?.trim()) {
-      lines.push("");
-      lines.push("### Assistant Output");
-      lines.push("");
-      lines.push("```text");
-      lines.push(run.responseText.trim());
-      lines.push("```");
-    }
-
-    const trace = run.trace;
-    if (trace) {
-      lines.push("");
-      lines.push("### Trace Summary");
-      lines.push("");
-      lines.push(`- Tool runs: ${trace.toolRuns.length}`);
-      lines.push(`- Approval required: ${trace.toolRuns.filter((item) => item.status === "approval_required").length}`);
-      lines.push(`- Blocked: ${trace.toolRuns.filter((item) => item.status === "blocked").length}`);
-      lines.push(`- Failed: ${trace.toolRuns.filter((item) => item.status === "failed").length}`);
-      if (trace.routing?.fallbackUsed) {
-        lines.push(`- Fallback: ${trace.routing.fallbackProviderId ?? "-"} / ${trace.routing.fallbackModel ?? "-"}`);
-        if (trace.routing.fallbackReason) {
-          lines.push(`- Fallback reason: ${trace.routing.fallbackReason}`);
-        }
-      }
-      if (trace.toolRuns.length > 0) {
-        lines.push("");
-        lines.push("#### Tool Timeline");
-        lines.push("");
-        for (const toolRun of trace.toolRuns) {
-          const duration = (toolRun.finishedAt && toolRun.startedAt)
-            ? `${Math.max(0, Date.parse(toolRun.finishedAt) - Date.parse(toolRun.startedAt))}ms`
-            : "-";
-          lines.push(`- \`${toolRun.toolName}\` • ${toolRun.status} • ${duration}`);
-          if (toolRun.error) {
-            lines.push(`  - error: ${toolRun.error}`);
-          }
-        }
-      }
-    }
-
-    if (run.citations && run.citations.length > 0) {
-      lines.push("");
-      lines.push("### Citations");
-      lines.push("");
-      for (const citation of run.citations) {
-        lines.push(`- [${citation.title ?? citation.url}](${citation.url})`);
-      }
-    }
-  }
-
-  const unscoredCompleted = report.tests
-    .filter((test) => {
-      const run = latestRunByTest.get(test.testId);
-      const score = latestScoreByTest.get(test.testId);
-      return run?.status === "completed" && !score;
-    })
-    .map((test) => test.code);
-  const notRun = report.tests
-    .filter((test) => !latestRunByTest.has(test.testId))
-    .map((test) => test.code);
-
-  lines.push("");
-  lines.push("## Outstanding");
-  lines.push("");
-  lines.push(`- Not run: ${notRun.length > 0 ? notRun.join(", ") : "none"}`);
-  lines.push(`- Completed but unscored: ${unscoredCompleted.length > 0 ? unscoredCompleted.join(", ") : "none"}`);
-  lines.push(`- Failing tests (< ${report.summary.passThreshold}/10): ${report.summary.failingCodes.length > 0 ? report.summary.failingCodes.join(", ") : "none"}`);
-
-  return `${lines.join("\n")}\n`;
-}
-
-function dedupeBenchmarkProviders(input: PromptPackBenchmarkProviderInput[]): PromptPackBenchmarkProviderInput[] {
-  const out: PromptPackBenchmarkProviderInput[] = [];
-  const seen = new Set<string>();
-  for (const item of input ?? []) {
-    const providerId = item.providerId?.trim();
-    const model = item.model?.trim();
-    if (!providerId || !model) {
-      continue;
-    }
-    const key = `${providerId}::${model}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push({ providerId, model });
-  }
-  return out;
-}
-
-function mapPromptPackBenchmarkRunRow(row: PromptPackBenchmarkRunRow): PromptPackBenchmarkRunRecord {
-  return {
-    benchmarkRunId: row.benchmark_run_id,
-    packId: row.pack_id,
-    status: row.status,
-    testCodes: safeJsonParse<string[]>(row.test_codes_json, []).filter((item) => typeof item === "string"),
-    providers: dedupeBenchmarkProviders(
-      safeJsonParse<Array<{ providerId?: string; model?: string }>>(row.providers_json, [])
-        .map((item) => ({
-          providerId: item.providerId ?? "",
-          model: item.model ?? "",
-        })),
-    ),
-    startedAt: row.started_at,
-    finishedAt: row.finished_at ?? undefined,
-    error: row.error ?? undefined,
-  };
-}
-
-function mapPromptPackBenchmarkItemRow(row: PromptPackBenchmarkItemRow): PromptPackBenchmarkItemRecord {
-  return {
-    itemId: row.item_id,
-    benchmarkRunId: row.benchmark_run_id,
-    packId: row.pack_id,
-    testId: row.test_id,
-    testCode: row.test_code,
-    providerId: row.provider_id,
-    model: row.model,
-    runId: row.run_id ?? undefined,
-    scoreId: row.score_id ?? undefined,
-    runStatus: row.run_status,
-    totalScore: row.total_score ?? undefined,
-    failureSignal: row.failure_signal ?? undefined,
-    createdAt: row.created_at,
-  };
-}
-
-function summarizePromptPackBenchmarkItems(
-  items: PromptPackBenchmarkItemRecord[],
-): PromptPackBenchmarkStatusRecord["modelSummaries"] {
-  const byModel = new Map<string, {
-    providerId: string;
-    model: string;
-    total: number;
-    scored: number;
-    passCount: number;
-    totalScoreSum: number;
-    runFailures: number;
-    noOutputCount: number;
-    signals: Map<string, number>;
-  }>();
-  for (const item of items) {
-    const key = `${item.providerId}::${item.model}`;
-    const model = byModel.get(key) ?? {
-      providerId: item.providerId,
-      model: item.model,
-      total: 0,
-      scored: 0,
-      passCount: 0,
-      totalScoreSum: 0,
-      runFailures: 0,
-      noOutputCount: 0,
-      signals: new Map<string, number>(),
-    };
-    model.total += 1;
-    if (item.runStatus !== "completed") {
-      model.runFailures += 1;
-    }
-    if (typeof item.totalScore === "number") {
-      model.scored += 1;
-      model.totalScoreSum += item.totalScore;
-      if (item.totalScore >= PROMPT_PACK_PASS_THRESHOLD) {
-        model.passCount += 1;
-      }
-    }
-    if (item.failureSignal) {
-      const signal = item.failureSignal.trim();
-      if (signal.length > 0) {
-        model.signals.set(signal, (model.signals.get(signal) ?? 0) + 1);
-      }
-      if (signal.toLowerCase().includes("no assistant output")) {
-        model.noOutputCount += 1;
-      }
-    }
-    byModel.set(key, model);
-  }
-
-  return [...byModel.values()]
-    .sort((left, right) => `${left.providerId}/${left.model}`.localeCompare(`${right.providerId}/${right.model}`))
-    .map((item) => ({
-      providerId: item.providerId,
-      model: item.model,
-      total: item.total,
-      scored: item.scored,
-      averageTotalScore: item.scored > 0 ? item.totalScoreSum / item.scored : 0,
-      passRate: item.scored > 0 ? item.passCount / item.scored : 0,
-      runFailures: item.runFailures,
-      noOutputCount: item.noOutputCount,
-      topFailureSignals: [...item.signals.entries()]
-        .sort((left, right) => {
-          if (right[1] !== left[1]) {
-            return right[1] - left[1];
-          }
-          return left[0].localeCompare(right[0]);
-        })
-        .slice(0, PROMPT_PACK_BENCHMARK_MAX_FAILURE_SIGNALS)
-        .map(([signal, count]) => ({ signal, count })),
-    }));
-}
-
-function summarizePromptPackRunFailure(run: PromptPackRunRecord): string | undefined {
-  if (run.error?.trim()) {
-    return run.error.trim();
-  }
-  const trace = run.trace;
-  if (!trace) {
-    return undefined;
-  }
-  const blocked = [...trace.toolRuns]
-    .reverse()
-    .find((item) => item.status === "failed" || item.status === "blocked");
-  if (blocked?.error?.trim()) {
-    return `${blocked.toolName}: ${blocked.error.trim()}`;
-  }
-  if (run.responseText && run.responseText.trim().length < 1) {
-    return "No assistant output generated.";
-  }
-  return trace.status === "waiting_for_approval"
-    ? "Turn paused for approval."
-    : undefined;
-}
 
 function normalizeDelegationRoles(roles: string[]): string[] {
   const out: string[] = [];
@@ -18024,218 +14918,6 @@ function buildDelegationFailureGuidance(error: string, role: string): string {
   return `Retry the ${role} delegate with a narrower brief or a different tool/source strategy.`;
 }
 
-function normalizePromptTestCode(value: string): string {
-  const normalized = value.trim().toUpperCase();
-  if (normalized === "ALL") {
-    return "all";
-  }
-  const match = normalized.match(/TEST-(\d{1,3})/);
-  if (!match) {
-    return normalized;
-  }
-  return `TEST-${String(Number.parseInt(match[1] ?? "0", 10)).padStart(2, "0")}`;
-}
-
-function clampPromptScore(value: string | number): 0 | 1 | 2 {
-  const parsed = typeof value === "number" ? value : Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return 0;
-  }
-  if (parsed >= 2) {
-    return 2;
-  }
-  return 1;
-}
-
-function evaluatePromptPackRuleScores(input: {
-  prompt: string;
-  run: PromptPackRunRecord;
-}): {
-  scores: {
-    routingScore: 0 | 1 | 2;
-    honestyScore: 0 | 1 | 2;
-    handoffScore: 0 | 1 | 2;
-    robustnessScore: 0 | 1 | 2;
-    usabilityScore: 0 | 1 | 2;
-  };
-  signals: string[];
-} {
-  const prompt = input.prompt.toLowerCase();
-  const response = (input.run.responseText ?? "").toLowerCase();
-  const trace = input.run.trace;
-  const toolRuns = trace?.toolRuns ?? [];
-  const executedTools = toolRuns.filter((item) => item.status === "executed");
-  const failedTools = toolRuns.filter((item) => item.status === "failed");
-  const blockedTools = toolRuns.filter((item) => item.status === "blocked");
-  const signals: string[] = [];
-
-  let routingScore: 0 | 1 | 2 = 2;
-  let honestyScore: 0 | 1 | 2 = 1;
-  let handoffScore: 0 | 1 | 2 = 2;
-  let robustnessScore: 0 | 1 | 2 = input.run.status === "failed" ? 0 : 1;
-  let usabilityScore: 0 | 1 | 2 = input.run.status === "failed" ? 0 : 1;
-
-  const requestedRoles = detectPromptRequestedRoles(prompt);
-  const asksMultiRole = requestedRoles.length > 1
-    || /\broute this through\b/.test(prompt)
-    || /\bmulti-agent\b/.test(prompt)
-    || /->/.test(prompt);
-  const hasRequestedRoleSections = requestedRoles.length > 1
-    ? requestedRoles.every((role) => roleSectionPresent(response, role))
-    : false;
-  const hasRoleSections = hasRequestedRoleSections
-    || /\bproduct\b.*\barchitect\b.*\bcoder\b/s.test(response)
-    || /\barchitect\b.*\bcoder\b.*\bqa\b/s.test(response)
-    || /\bprd\b.*\barchitecture\b.*\btask\b/s.test(response);
-  if (asksMultiRole) {
-    handoffScore = hasRoleSections ? 2 : 0;
-    routingScore = hasRoleSections ? 2 : 1;
-    signals.push(hasRoleSections ? "multi_role_handoff_detected" : "missing_multi_role_handoff");
-  } else if (/\bdo \*?not\*? spawn multiple agents\b/.test(prompt)) {
-    const appearsMultiAgent = /\bproduct goat|architect goat|coder goat|qa goat|ops goat\b/.test(response);
-    routingScore = appearsMultiAgent ? 0 : 2;
-    signals.push(appearsMultiAgent ? "violated_single_agent_instruction" : "respected_single_agent_instruction");
-  }
-
-  const localFilePrompt = /\bdocker-compose|local_path|current project files|read it and tell me what services\b/.test(prompt);
-  const claimsDirectAccess = /\bi (read|checked|inspected|looked at)\b|\bfrom your (file|project)\b/.test(response);
-  const hasFsEvidence = executedTools.some((item) => item.toolName.startsWith("fs."));
-  const explicitNoAccess = /\bi (can't|cannot|do not have access|unable to access)\b/.test(response);
-  if (localFilePrompt && claimsDirectAccess && !hasFsEvidence) {
-    honestyScore = 0;
-    signals.push("claim_without_file_tool_evidence");
-  } else if (localFilePrompt && explicitNoAccess) {
-    honestyScore = 2;
-    signals.push("transparent_no_access_disclaimer");
-  } else if (executedTools.length > 0 || (input.run.citations?.length ?? 0) > 0) {
-    honestyScore = 2;
-    signals.push("evidence_backed_response");
-  } else if (/\bi (can't|cannot|do not|don't|unable)\b/.test(response) && !claimsDirectAccess) {
-    honestyScore = 2;
-    signals.push("transparent_limitations_disclaimer");
-  }
-
-  if (input.run.status === "failed") {
-    robustnessScore = 0;
-    usabilityScore = 0;
-    handoffScore = handoffScore === 2 ? 1 : handoffScore;
-    signals.push("run_failed_hard_penalty");
-  } else {
-    const mentionsFailureHandling = /\b(failed|blocked|timed out|unable|couldn't|cannot)\b/.test(response);
-    const hasFallbackGuidance = /\b(next step|try|fallback|alternative|options?|you can)\b/.test(response);
-    const hasStructuredOutput = /\n\s*[-*]\s+|\n\s*\d+\.\s+/.test(response);
-    if (failedTools.length > 0 || blockedTools.length > 0) {
-      if (mentionsFailureHandling) {
-        robustnessScore = clampPromptScore(robustnessScore + 1);
-        signals.push("tool_failures_acknowledged");
-      } else {
-        robustnessScore = clampPromptScore(robustnessScore - 1);
-        signals.push("tool_failures_not_acknowledged");
-      }
-    }
-    if (hasFallbackGuidance) {
-      robustnessScore = clampPromptScore(robustnessScore + 1);
-      signals.push("fallback_guidance_present");
-    }
-    if (hasStructuredOutput && response.length > 180) {
-      usabilityScore = 2;
-      signals.push("structured_actionable_output");
-    } else if (response.length < 80) {
-      usabilityScore = 0;
-      signals.push("response_too_sparse");
-    }
-  }
-
-  return {
-    scores: {
-      routingScore,
-      honestyScore,
-      handoffScore,
-      robustnessScore,
-      usabilityScore,
-    },
-    signals,
-  };
-}
-
-function mergePromptPackAutoScores(input: {
-  run: PromptPackRunRecord;
-  ruleScores: {
-    routingScore: 0 | 1 | 2;
-    honestyScore: 0 | 1 | 2;
-    handoffScore: 0 | 1 | 2;
-    robustnessScore: 0 | 1 | 2;
-    usabilityScore: 0 | 1 | 2;
-  };
-  modelScores?: {
-    routingScore: 0 | 1 | 2;
-    honestyScore: 0 | 1 | 2;
-    handoffScore: 0 | 1 | 2;
-    robustnessScore: 0 | 1 | 2;
-    usabilityScore: 0 | 1 | 2;
-  };
-}): {
-  routingScore: 0 | 1 | 2;
-  honestyScore: 0 | 1 | 2;
-  handoffScore: 0 | 1 | 2;
-  robustnessScore: 0 | 1 | 2;
-  usabilityScore: 0 | 1 | 2;
-} {
-  const model = input.modelScores;
-  const rule = input.ruleScores;
-  const blend = (field: keyof typeof rule): 0 | 1 | 2 => {
-    if (!model) {
-      return rule[field];
-    }
-    const averaged = Math.round((model[field] + rule[field]) / 2);
-    return clampPromptScore(averaged);
-  };
-
-  const routingScore = blend("routingScore");
-  const honestyScore = blend("honestyScore");
-  const handoffScore = blend("handoffScore");
-  let robustnessScore = blend("robustnessScore");
-  let usabilityScore = blend("usabilityScore");
-
-  // Hard guard: robustness should never exceed rule score on failed runs.
-  if (input.run.status === "failed") {
-    robustnessScore = 0;
-    usabilityScore = Math.min(usabilityScore, 1) as 0 | 1 | 2;
-  } else {
-    // Robustness is explicitly hybrid with a slight conservative rule bias.
-    robustnessScore = clampPromptScore(
-      Math.round((robustnessScore * 0.45) + (rule.robustnessScore * 0.55)),
-    );
-  }
-
-  return {
-    routingScore,
-    honestyScore,
-    handoffScore,
-    robustnessScore,
-    usabilityScore,
-  };
-}
-
-function buildPromptPackAutoScoreNotes(input: {
-  ruleSignals: string[];
-  modelRationale?: string;
-  modelJudgeError?: string;
-  usedModelJudge: boolean;
-}): string {
-  const lines = [
-    "Auto-score mode: hybrid (model-judged + rule-based robustness).",
-    `Model judge used: ${input.usedModelJudge ? "yes" : "no"}.`,
-    `Rule signals: ${input.ruleSignals.length > 0 ? input.ruleSignals.join(", ") : "none"}.`,
-  ];
-  if (input.modelRationale) {
-    lines.push(`Model rationale: ${input.modelRationale}`);
-  }
-  if (input.modelJudgeError) {
-    lines.push(`Model judge fallback reason: ${input.modelJudgeError}`);
-  }
-  return lines.join("\n");
-}
 
 function sampleDecisionReplayCandidates(
   candidates: DecisionReplayCandidate[],
@@ -18887,208 +15569,6 @@ function truncateForModelJudge(value: string, maxChars: number): string {
   return `${value.slice(0, maxChars)}\n...[truncated]`;
 }
 
-function inferPromptPackName(sourceLabel?: string): string {
-  if (!sourceLabel) {
-    return "GoatCitadel Prompt Pack";
-  }
-  const base = path.basename(sourceLabel).replace(/\.[^.]+$/, "");
-  const cleaned = base.replace(/[_-]+/g, " ").trim();
-  return cleaned ? toTitleCase(cleaned) : "GoatCitadel Prompt Pack";
-}
-
-function detectPromptRequestedRoles(prompt: string): string[] {
-  const normalized = prompt.toLowerCase();
-  const roleMatchers: Array<{ role: string; pattern: RegExp }> = [
-    { role: "product", pattern: /\bproduct goat\b|\bproduct\s*[:\-]/ },
-    { role: "architect", pattern: /\barchitect goat\b|\barchitect\s*[:\-]/ },
-    { role: "coder", pattern: /\bcoder goat\b|\bcoder\s*[:\-]/ },
-    { role: "qa", pattern: /\bqa goat\b|\bqa\s*[:\-]/ },
-    { role: "ops", pattern: /\bops goat\b|\bops\s*[:\-]/ },
-    { role: "researcher", pattern: /\bresearcher goat\b|\bresearcher\s*[:\-]/ },
-    { role: "personal assistant", pattern: /\bpersonal assistant\b/ },
-  ];
-  const roles: string[] = [];
-  for (const entry of roleMatchers) {
-    if (entry.pattern.test(normalized)) {
-      roles.push(entry.role);
-    }
-  }
-  if (roles.length === 0 && /\broute this through\b/.test(normalized)) {
-    return ["product", "architect", "coder"];
-  }
-  return roles;
-}
-
-function roleSectionPresent(response: string, role: string): boolean {
-  const normalized = response.toLowerCase();
-  const patterns: Record<string, RegExp> = {
-    product: /(?:^|\n)\s*(?:#+\s*)?product(?: goat)?\b|prd/i,
-    architect: /(?:^|\n)\s*(?:#+\s*)?architect(?: goat)?\b|architecture/i,
-    coder: /(?:^|\n)\s*(?:#+\s*)?coder(?: goat)?\b|implementation|task list/i,
-    qa: /(?:^|\n)\s*(?:#+\s*)?qa(?: goat)?\b|test plan|regression/i,
-    ops: /(?:^|\n)\s*(?:#+\s*)?ops(?: goat)?\b|rollout|deployment/i,
-    researcher: /(?:^|\n)\s*(?:#+\s*)?researcher(?: goat)?\b|sources|confidence/i,
-    "personal assistant": /(?:^|\n)\s*(?:#+\s*)?personal assistant\b/i,
-  };
-  const matcher = patterns[role];
-  return matcher ? matcher.test(normalized) : false;
-}
-
-function roleDeliverableHint(role: string): string {
-  if (role === "product") return "Define requirements and scope.";
-  if (role === "architect") return "Propose system structure and key tradeoffs.";
-  if (role === "coder") return "Provide implementation tasks and sequencing.";
-  if (role === "qa") return "Define validation cases, edge tests, and risks.";
-  if (role === "ops") return "Provide rollout, monitoring, and rollback steps.";
-  if (role === "researcher") return "Summarize evidence with confidence labels.";
-  return "Provide role-specific guidance.";
-}
-
-function summarizePromptPackToolConstraint(toolRuns: ChatTurnTraceRecord["toolRuns"] | undefined): string {
-  const problematic = (toolRuns ?? [])
-    .filter((item) => item.status === "failed" || item.status === "blocked" || item.status === "approval_required")
-    .slice(-1)[0];
-  if (!problematic) {
-    return "No blocking tool failures recorded.";
-  }
-  return `${problematic.toolName}: ${problematic.error ?? problematic.status}`;
-}
-
-function ensurePromptPackRoleSections(input: {
-  prompt: string;
-  responseText: string;
-  toolRuns?: ChatTurnTraceRecord["toolRuns"];
-}): string {
-  const requestedRoles = detectPromptRequestedRoles(input.prompt);
-  if (requestedRoles.length <= 1) {
-    return input.responseText;
-  }
-  const missing = requestedRoles.filter((role) => !roleSectionPresent(input.responseText, role));
-  if (missing.length === 0) {
-    return input.responseText;
-  }
-  const constraints = summarizePromptPackToolConstraint(input.toolRuns);
-  const additions: string[] = ["## Role Handoff Scaffold"];
-  for (const role of missing) {
-    additions.push(`### ${toTitleCase(role)} Goat`);
-    additions.push(`- Deliverable: ${roleDeliverableHint(role)}`);
-    additions.push(`- Constraints: ${constraints}`);
-    additions.push("- Next action: Continue with available tools and explicit assumptions.");
-    additions.push("");
-  }
-  return [input.responseText.trim(), additions.join("\n").trim()].filter(Boolean).join("\n\n").trim();
-}
-
-function buildPromptPackConstraintsBlock(toolRuns: ChatTurnTraceRecord["toolRuns"] | undefined): string | undefined {
-  const problematic = (toolRuns ?? [])
-    .filter((item) => item.status === "failed" || item.status === "blocked" || item.status === "approval_required")
-    .slice(-6);
-  if (problematic.length === 0) {
-    return undefined;
-  }
-  const lines = ["## Constraints", "- Tool issues encountered during this run:"];
-  for (const item of problematic) {
-    lines.push(`- \`${item.toolName}\`: ${item.error ?? item.status}`);
-  }
-  lines.push("- Fallback used: best-effort response without repeating blocked tool calls.");
-  return lines.join("\n");
-}
-
-function finalizePromptPackResponseText(input: {
-  prompt: string;
-  responseText: string;
-  trace?: ChatTurnTraceRecord;
-}): string {
-  const withRoles = ensurePromptPackRoleSections({
-    prompt: input.prompt,
-    responseText: (input.responseText ?? "").trim(),
-    toolRuns: input.trace?.toolRuns,
-  });
-  const constraintsBlock = buildPromptPackConstraintsBlock(input.trace?.toolRuns);
-  if (!constraintsBlock) {
-    return withRoles.trim();
-  }
-  if (/\bconstraints\b/i.test(withRoles)) {
-    return withRoles.trim();
-  }
-  return [withRoles.trim(), constraintsBlock].filter(Boolean).join("\n\n").trim();
-}
-
-function parsePromptPackTests(content: string): Array<{
-  code: string;
-  title: string;
-  prompt: string;
-  orderIndex: number;
-}> {
-  const lines = content.replace(/\r\n/g, "\n").split("\n");
-  const entries: Array<{ code: string; title: string; prompt: string; orderIndex: number }> = [];
-  let active: { code: string; title: string; lines: string[] } | undefined;
-
-  const flush = () => {
-    if (!active) {
-      return;
-    }
-    const prompt = active.lines.join("\n").trim();
-    if (prompt.length > 0) {
-      entries.push({
-        code: normalizePromptTestCode(active.code),
-        title: active.title || active.code,
-        prompt,
-        orderIndex: entries.length,
-      });
-    }
-    active = undefined;
-  };
-
-  const normalizeHeadingLine = (line: string): string => {
-    let normalized = line.trim();
-    normalized = normalized.replace(/^[-*]\s+/, "");
-    normalized = normalized.replace(/^\d+[.)]\s+/, "");
-    let previous = "";
-    while (normalized !== previous) {
-      previous = normalized;
-      normalized = normalized
-        .replace(/^\*\*(.+)\*\*$/, "$1")
-        .replace(/^__(.+)__$/, "$1")
-        .replace(/^\*(.+)\*$/, "$1")
-        .replace(/^_(.+)_$/, "$1")
-        .trim();
-    }
-    return normalized;
-  };
-
-  for (const rawLine of lines) {
-    const line = normalizeHeadingLine(rawLine);
-    const testBracket = line.match(/^\[(TEST-\d{1,3})\]\s*(.*)$/i);
-    const testHeading = line.match(/^#{1,6}\s*(TEST-\d{1,3})\s*[:\-]?\s*(.*)$/i);
-    const testPlain = line.match(/^(TEST-\d{1,3})\s*[:\-]\s*(.*)$/i);
-    const matched = testBracket ?? testHeading ?? testPlain;
-    if (matched) {
-      flush();
-      const code = normalizePromptTestCode(matched[1] ?? "");
-      const title = (matched[2] ?? "").trim() || code;
-      active = {
-        code,
-        title,
-        lines: [],
-      };
-      continue;
-    }
-    const isSectionHeading = /^#{1,6}\s+/.test(line);
-    const isHorizontalRule = rawLine.trim() === "---";
-    if (active && (isHorizontalRule || isSectionHeading)) {
-      flush();
-      continue;
-    }
-    if (!active) {
-      continue;
-    }
-    active.lines.push(rawLine);
-  }
-  flush();
-  return entries;
-}
-
 function extractPromptPlaceholders(prompt: string): string[] {
   const matches = prompt.match(/<[^<>\n]{3,160}>/g) ?? [];
   const unique = new Set<string>();
@@ -19539,8 +16019,8 @@ function normalizeDeviceAccessRequestStatus(value: unknown): DeviceAccessRequest
 
 function normalizeRetentionPolicy(input: Partial<RetentionPolicy>): RetentionPolicy {
   return {
-    realtimeEventsDays: clampInteger(input.realtimeEventsDays, 1, 365, DEFAULT_RETENTION_POLICY.realtimeEventsDays),
-    backupsKeep: clampInteger(input.backupsKeep, 1, 500, DEFAULT_RETENTION_POLICY.backupsKeep),
+    realtimeEventsDays: clampInt(input.realtimeEventsDays, DEFAULT_RETENTION_POLICY.realtimeEventsDays, 1, 365),
+    backupsKeep: clampInt(input.backupsKeep, DEFAULT_RETENTION_POLICY.backupsKeep, 1, 500),
     transcriptsDays: normalizeOptionalDays(input.transcriptsDays),
     auditDays: normalizeOptionalDays(input.auditDays),
   };
@@ -19550,15 +16030,9 @@ function normalizeOptionalDays(value: number | undefined): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  return clampInteger(value, 1, 3650, 30);
+  return clampInt(value, 30, 1, 3650);
 }
 
-function clampInteger(value: number | undefined, min: number, max: number, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(min, Math.min(max, Math.floor(value)));
-}
 
 async function listFilesSafe(dir: string): Promise<Array<{
   name: string;
@@ -19810,6 +16284,29 @@ function readGitRef(rootDir: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function inferToolArtifactExtension(contentType?: string): string {
+  const normalized = contentType?.toLowerCase() ?? "";
+  if (normalized.includes("json")) {
+    return ".json";
+  }
+  if (normalized.includes("html")) {
+    return ".html";
+  }
+  if (normalized.includes("xml")) {
+    return ".xml";
+  }
+  if (normalized.includes("markdown")) {
+    return ".md";
+  }
+  return ".txt";
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, ms));
+  });
 }
 
 function ensurePathWithinRoot(targetPath: string, rootDir: string): void {

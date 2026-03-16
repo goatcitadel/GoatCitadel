@@ -445,6 +445,16 @@ describe("browser tools coverage sweep", () => {
     expect(String(extracted.text)).toContain("News coverage summary");
   });
 
+  it("rejects browser.extract requests that omit selector", async () => {
+    const config = createConfig(tempRoot);
+
+    await expect(executeBrowserTool(
+      "browser.extract",
+      { url: "https://example.com/news", maxChars: 400 },
+      config,
+    )).rejects.toThrow(/selector/i);
+  });
+
   it("auto-installs Playwright Chromium when the executable is missing and retries launch", async () => {
     const config = createConfig(tempRoot);
     mocked.launch.mockReset();

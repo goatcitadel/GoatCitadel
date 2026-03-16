@@ -1,4 +1,5 @@
 import type { PendingApprovalAction } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 import type { DatabaseSync } from "node:sqlite";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -60,7 +61,7 @@ export class PendingApprovalActionRepository {
   public get(approvalId: string): PendingApprovalAction {
     const row = this.getStmt.get(approvalId) as PendingActionRow | undefined;
     if (!row) {
-      throw new Error(`No pending action found for approval ${approvalId}`);
+      throw new NotFoundError({ entity: "pending approval action", id: approvalId });
     }
     return mapPendingRow(row);
   }
@@ -90,7 +91,7 @@ export class PendingApprovalActionRepository {
       if (existing) {
         return existing;
       }
-      throw new Error(`No pending action found for approval ${approvalId}`);
+      throw new NotFoundError({ entity: "pending approval action", id: approvalId });
     }
 
     return this.get(approvalId);

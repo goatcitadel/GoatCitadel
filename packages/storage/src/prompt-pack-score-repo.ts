@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { PromptPackScoreRecord } from "@goatcitadel/contracts";
+import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 
 interface PromptPackScoreRow {
   score_id: string;
@@ -61,7 +62,7 @@ export class PromptPackScoreRepository {
   public get(scoreId: string): PromptPackScoreRecord {
     const row = this.getStmt.get(scoreId) as PromptPackScoreRow | undefined;
     if (!row) {
-      throw new Error(`Prompt pack score ${scoreId} not found`);
+      throw new NotFoundError({ entity: "Prompt pack score", id: scoreId });
     }
     return mapRow(row);
   }
@@ -149,6 +150,6 @@ function clampScore(value: number): 0 | 1 | 2 {
 
 function assertValidScore(value: number, field: string): void {
   if (!Number.isInteger(value) || value < 0 || value > 2) {
-    throw new Error(`${field} must be an integer between 0 and 2`);
+    throw new ValidationError({ code: "FIELD_INVALID", field, message: `${field} must be an integer between 0 and 2` });
   }
 }

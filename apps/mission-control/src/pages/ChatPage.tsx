@@ -62,6 +62,7 @@ import {
   installSkillImport,
   parseChatCommand,
   rebuildChatLearnedMemory,
+  resumeChatTurnStream,
   retryChatTurn,
   pinChatSession,
   restoreChatSession,
@@ -142,6 +143,8 @@ interface ActiveChatStreamState {
   streamToken: string;
   controller: AbortController;
   turnId?: string;
+  lastEventId?: string;
+  runId?: string;
 }
 
 interface CommandSuggestionItem {
@@ -1617,8 +1620,15 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
           ) {
             return;
           }
+          liveStream.lastEventId = chunk.eventId;
+          if (chunk.runId) {
+            liveStream.runId = chunk.runId;
+          }
           if (chunk.type === "message_start") {
             liveStream.turnId = chunk.turnId;
+          }
+          if (chunk.type === "trace_update" && chunk.trace.durable?.runId) {
+            liveStream.runId = chunk.trace.durable.runId;
           }
           if (chunk.type === "message_done") {
             finalizedStreamMessageRef.current = {
@@ -1677,39 +1687,71 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
             prefsRef.current,
           ));
         };
-        if (item.action === "retry" && item.targetTurnId) {
-          await streamRetryChatTurn(session.sessionId, item.targetTurnId, {
-            providerId: currentPrefs?.providerId,
-            model: currentPrefs?.model,
-            mode: currentPrefs?.mode,
-            webMode: currentPrefs?.webMode,
-            memoryMode: currentPrefs?.memoryMode,
-            thinkingLevel: currentPrefs?.thinkingLevel,
-          }, onChunk, { signal: controller.signal });
-        } else if (item.action === "edit" && item.targetTurnId) {
-          await streamEditChatTurn(session.sessionId, item.targetTurnId, {
-            content: trimmedContent,
-            attachments: attachmentIds,
-            useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
-            mode: currentPrefs?.mode ?? "chat",
-            providerId: currentPrefs?.providerId,
-            model: currentPrefs?.model,
-            webMode: currentPrefs?.webMode ?? "auto",
-            memoryMode: currentPrefs?.memoryMode ?? "auto",
-            thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
-          }, onChunk, { signal: controller.signal });
-        } else {
-          await streamAgentChatMessage(session.sessionId, {
-            content: trimmedContent,
-            attachments: attachmentIds,
-            useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
-            mode: currentPrefs?.mode ?? "chat",
-            providerId: currentPrefs?.providerId,
-            model: currentPrefs?.model,
-            webMode: currentPrefs?.webMode ?? "auto",
-            memoryMode: currentPrefs?.memoryMode ?? "auto",
-            thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
-          }, onChunk, { signal: controller.signal });
+        let resumeAttempts = 0;
+        for (;;) {
+          try {
+            if (resumeAttempts > 0) {
+              const liveStream = activeStreamRef.current;
+              if (!liveStream?.turnId) {
+                throw new Error("Streaming request failed before the turn could be resumed.");
+              }
+              setError(null);
+              pushLocalNotice(`Stream interrupted. Reconnecting to turn ${liveStream.turnId.slice(-6)}.`, "warning");
+              await resumeChatTurnStream(session.sessionId, liveStream.turnId, onChunk, {
+                signal: controller.signal,
+                sinceEventId: liveStream.lastEventId,
+              });
+            } else if (item.action === "retry" && item.targetTurnId) {
+              await streamRetryChatTurn(session.sessionId, item.targetTurnId, {
+                providerId: currentPrefs?.providerId,
+                model: currentPrefs?.model,
+                mode: currentPrefs?.mode,
+                webMode: currentPrefs?.webMode,
+                memoryMode: currentPrefs?.memoryMode,
+                thinkingLevel: currentPrefs?.thinkingLevel,
+              }, onChunk, { signal: controller.signal });
+            } else if (item.action === "edit" && item.targetTurnId) {
+              await streamEditChatTurn(session.sessionId, item.targetTurnId, {
+                content: trimmedContent,
+                attachments: attachmentIds,
+                useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
+                mode: currentPrefs?.mode ?? "chat",
+                providerId: currentPrefs?.providerId,
+                model: currentPrefs?.model,
+                webMode: currentPrefs?.webMode ?? "auto",
+                memoryMode: currentPrefs?.memoryMode ?? "auto",
+                thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
+              }, onChunk, { signal: controller.signal });
+            } else {
+              await streamAgentChatMessage(session.sessionId, {
+                content: trimmedContent,
+                attachments: attachmentIds,
+                useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
+                mode: currentPrefs?.mode ?? "chat",
+                providerId: currentPrefs?.providerId,
+                model: currentPrefs?.model,
+                webMode: currentPrefs?.webMode ?? "auto",
+                memoryMode: currentPrefs?.memoryMode ?? "auto",
+                thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
+              }, onChunk, { signal: controller.signal });
+            }
+            break;
+          } catch (streamError) {
+            if (isAbortError(streamError)) {
+              throw streamError;
+            }
+            const liveStream = activeStreamRef.current;
+            const canResume = Boolean(
+              liveStream
+              && liveStream.streamToken === streamToken
+              && liveStream.sessionId === session.sessionId
+              && liveStream.turnId,
+            );
+            if (!canResume || resumeAttempts >= 2) {
+              throw streamError;
+            }
+            resumeAttempts += 1;
+          }
         }
         scheduleStreamMessageReconciliation(session.sessionId);
       } else {

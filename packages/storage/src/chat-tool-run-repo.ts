@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 
 interface ChatToolRunRow {
   tool_run_id: string;
@@ -86,7 +87,7 @@ export class ChatToolRunRepository {
   public get(toolRunId: string): ChatToolRunRecord {
     const row = this.getStmt.get(toolRunId) as ChatToolRunRow | undefined;
     if (!row) {
-      throw new Error(`Chat tool run ${toolRunId} not found`);
+      throw new NotFoundError({ entity: "Chat tool run", id: toolRunId });
     }
     return mapRow(row);
   }

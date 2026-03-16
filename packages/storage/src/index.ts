@@ -1,4 +1,5 @@
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
+import { ValidationError } from "@goatcitadel/contracts";
 import { createDatabase, type SqliteOptions } from "./sqlite.js";
 import { SessionRepository } from "./session-repo.js";
 import { IdempotencyRepository } from "./idempotency-repo.js";
@@ -33,10 +34,12 @@ import { ChatAttachmentRepository } from "./chat-attachment-repo.js";
 import { ChatSessionPrefsRepository } from "./chat-session-prefs-repo.js";
 import { SessionAutonomyPrefsRepository } from "./session-autonomy-prefs-repo.js";
 import { ChatTurnTraceRepository } from "./chat-turn-trace-repo.js";
+import { ChatStreamEventRepository } from "./chat-stream-event-repo.js";
 import { ChatExecutionPlanRepository } from "./chat-execution-plan-repo.js";
 import { ChatConversationSummaryRepository } from "./chat-conversation-summary-repo.js";
 import { ChatSpecialistCandidateRepository } from "./chat-specialist-candidate-repo.js";
 import { ChatToolRunRepository } from "./chat-tool-run-repo.js";
+import { ChatToolArtifactRepository } from "./chat-tool-artifact-repo.js";
 import { ChatInlineApprovalRepository } from "./chat-inline-approval-repo.js";
 import { ChatDelegationRunRepository } from "./chat-delegation-run-repo.js";
 import { ChatDelegationStepRepository } from "./chat-delegation-step-repo.js";
@@ -99,10 +102,12 @@ export class Storage {
   public readonly sessionAutonomyPrefs: SessionAutonomyPrefsRepository;
   public readonly chatMessages: ChatMessageRepository;
   public readonly chatTurnTraces: ChatTurnTraceRepository;
+  public readonly chatStreamEvents: ChatStreamEventRepository;
   public readonly chatExecutionPlans: ChatExecutionPlanRepository;
   public readonly chatConversationSummaries: ChatConversationSummaryRepository;
   public readonly chatSpecialistCandidates: ChatSpecialistCandidateRepository;
   public readonly chatToolRuns: ChatToolRunRepository;
+  public readonly chatToolArtifacts: ChatToolArtifactRepository;
   public readonly chatInlineApprovals: ChatInlineApprovalRepository;
   public readonly chatDelegationRuns: ChatDelegationRunRepository;
   public readonly chatDelegationSteps: ChatDelegationStepRepository;
@@ -155,10 +160,12 @@ export class Storage {
     this.sessionAutonomyPrefs = new SessionAutonomyPrefsRepository(this.db);
     this.chatMessages = new ChatMessageRepository(this.db);
     this.chatTurnTraces = new ChatTurnTraceRepository(this.db);
+    this.chatStreamEvents = new ChatStreamEventRepository(this.db);
     this.chatExecutionPlans = new ChatExecutionPlanRepository(this.db);
     this.chatConversationSummaries = new ChatConversationSummaryRepository(this.db);
     this.chatSpecialistCandidates = new ChatSpecialistCandidateRepository(this.db);
     this.chatToolRuns = new ChatToolRunRepository(this.db);
+    this.chatToolArtifacts = new ChatToolArtifactRepository(this.db);
     this.chatInlineApprovals = new ChatInlineApprovalRepository(this.db);
     this.chatDelegationRuns = new ChatDelegationRunRepository(this.db);
     this.chatDelegationSteps = new ChatDelegationStepRepository(this.db);
@@ -192,7 +199,7 @@ export class Storage {
   public deleteChatSessionData(sessionId: string): DeleteChatSessionDataResult {
     const normalizedSessionId = sessionId.trim();
     if (!normalizedSessionId) {
-      throw new Error("sessionId is required");
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "sessionId" });
     }
 
     const attachments = this.chatAttachments.listBySession(normalizedSessionId, 10_000);
@@ -200,10 +207,14 @@ export class Storage {
       ...attachments.map((record) => record.storageRelPath),
       ...attachments.map((record) => record.thumbnailRelPath),
       ...this.listMediaArtifactPathsForSession(normalizedSessionId, attachments),
+      ...this.chatToolArtifacts.listBySession(normalizedSessionId, 10_000).map((record) => record.storageRelPath),
     ]);
 
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const attachmentIdsJson = JSON.stringify(attachments.map((record) => record.attachmentId));
+
+      // Subquery-dependent deletes (must run before their parent tables)
       this.db.prepare(`
         DELETE FROM media_artifacts
         WHERE job_id IN (
@@ -212,89 +223,81 @@ export class Storage {
           WHERE session_id = @sessionId
              OR attachment_id IN (SELECT value FROM json_each(@attachmentIdsJson))
         )
-      `).run({
-        sessionId: normalizedSessionId,
-        attachmentIdsJson: JSON.stringify(attachments.map((record) => record.attachmentId)),
-      });
+      `).run({ sessionId: normalizedSessionId, attachmentIdsJson });
       this.db.prepare(`
         DELETE FROM media_jobs
         WHERE session_id = @sessionId
            OR attachment_id IN (SELECT value FROM json_each(@attachmentIdsJson))
-      `).run({
-        sessionId: normalizedSessionId,
-        attachmentIdsJson: JSON.stringify(attachments.map((record) => record.attachmentId)),
-      });
+      `).run({ sessionId: normalizedSessionId, attachmentIdsJson });
       this.db.prepare(`
         DELETE FROM research_sources
-        WHERE run_id IN (
-          SELECT run_id
-          FROM research_runs
-          WHERE session_id = ?
-        )
+        WHERE run_id IN (SELECT run_id FROM research_runs WHERE session_id = ?)
       `).run(normalizedSessionId);
-      this.db.prepare("DELETE FROM research_runs WHERE session_id = ?").run(normalizedSessionId);
       this.db.prepare(`
         DELETE FROM chat_delegation_steps
-        WHERE run_id IN (
-          SELECT run_id
-          FROM chat_delegation_runs
-          WHERE session_id = ?
-        )
+        WHERE run_id IN (SELECT run_id FROM chat_delegation_runs WHERE session_id = ?)
       `).run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_delegation_runs WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM proactive_actions WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM proactive_runs WHERE session_id = ?").run(normalizedSessionId);
       this.db.prepare(`
         DELETE FROM learned_memory_sources
-        WHERE item_id IN (
-          SELECT item_id
-          FROM learned_memory_items
-          WHERE session_id = ?
-        )
+        WHERE item_id IN (SELECT item_id FROM learned_memory_items WHERE session_id = ?)
       `).run(normalizedSessionId);
-      this.db.prepare("DELETE FROM learned_memory_conflicts WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM learned_memory_items WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_reflection_attempts WHERE session_id = ?").run(normalizedSessionId);
       this.db.prepare(`
         DELETE FROM prompt_pack_scores
-        WHERE run_id IN (
-          SELECT run_id
-          FROM prompt_pack_runs
-          WHERE session_id = ?
-        )
+        WHERE run_id IN (SELECT run_id FROM prompt_pack_runs WHERE session_id = ?)
       `).run(normalizedSessionId);
-      this.db.prepare("DELETE FROM prompt_pack_runs WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM memory_context_packs WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM memory_qmd_runs WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_execution_plan_steps WHERE plan_id IN (SELECT plan_id FROM chat_execution_plans WHERE session_id = ?)").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_execution_plans WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_conversation_summaries WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM tool_access_decisions WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM tool_invocations WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM policy_blocks WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM cost_ledger WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM bankr_action_audit WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM voice_sessions WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM mesh_session_owners WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_inline_approvals WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_tool_runs WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_specialist_candidates WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_turn_traces WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_messages WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM session_autonomy_prefs WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_session_prefs WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_session_branch_state WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_session_bindings WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_session_projects WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_attachments WHERE session_id = ?").run(normalizedSessionId);
-      this.db.prepare("DELETE FROM chat_session_meta WHERE session_id = ?").run(normalizedSessionId);
+      this.db.prepare(`
+        DELETE FROM chat_execution_plan_steps
+        WHERE plan_id IN (SELECT plan_id FROM chat_execution_plans WHERE session_id = ?)
+      `).run(normalizedSessionId);
+
+      // All simple WHERE session_id = ? deletes in a single statement batch
+      const sid = normalizedSessionId;
+      this.db.prepare("DELETE FROM research_runs WHERE session_id = ?").run(sid);
+      this.db.prepare("DELETE FROM chat_delegation_runs WHERE session_id = ?").run(sid);
+      const simpleSessionDeletes = [
+        "proactive_actions",
+        "proactive_runs",
+        "learned_memory_conflicts",
+        "learned_memory_items",
+        "chat_reflection_attempts",
+        "prompt_pack_runs",
+        "memory_context_packs",
+        "memory_qmd_runs",
+        "chat_execution_plans",
+        "chat_conversation_summaries",
+        "tool_access_decisions",
+        "tool_invocations",
+        "policy_blocks",
+        "cost_ledger",
+        "bankr_action_audit",
+        "voice_sessions",
+        "mesh_session_owners",
+        "chat_inline_approvals",
+        "chat_stream_events",
+        "chat_tool_artifacts",
+        "chat_tool_runs",
+        "chat_specialist_candidates",
+        "chat_turn_traces",
+        "chat_messages",
+        "session_autonomy_prefs",
+        "chat_session_prefs",
+        "chat_session_branch_state",
+        "chat_session_bindings",
+        "chat_session_projects",
+        "chat_attachments",
+        "chat_session_meta",
+      ];
+      for (const table of simpleSessionDeletes) {
+        this.db.prepare(`DELETE FROM ${table} WHERE session_id = ?`).run(sid);
+      }
+
       this.db.prepare(`
         DELETE FROM tool_grants
         WHERE scope = 'session'
           AND scope_ref = ?
-      `).run(normalizedSessionId);
+      `).run(sid);
       const deleted = Number(
-        this.db.prepare("DELETE FROM sessions WHERE session_id = ?").run(normalizedSessionId).changes ?? 0,
+        this.db.prepare("DELETE FROM sessions WHERE session_id = ?").run(sid).changes ?? 0,
       ) > 0;
       this.db.exec("COMMIT");
       return {
@@ -378,10 +381,12 @@ export * from "./chat-attachment-repo.js";
 export * from "./chat-session-prefs-repo.js";
 export * from "./session-autonomy-prefs-repo.js";
 export * from "./chat-message-repo.js";
+export * from "./chat-stream-event-repo.js";
 export * from "./chat-turn-trace-repo.js";
 export * from "./chat-execution-plan-repo.js";
 export * from "./chat-conversation-summary-repo.js";
 export * from "./chat-tool-run-repo.js";
+export * from "./chat-tool-artifact-repo.js";
 export * from "./chat-inline-approval-repo.js";
 export * from "./chat-delegation-run-repo.js";
 export * from "./chat-delegation-step-repo.js";

@@ -318,6 +318,54 @@ describe("LlmService", () => {
     }
   });
 
+  it("prefers explicit preview credentials over a saved keychain secret for model discovery", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "glm",
+      providers: [
+        {
+          providerId: "glm",
+          label: "GLM",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "glm-5",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, {
+      ...process.env,
+      GLM_API_KEY: "env-preview-token",
+    }, { secretStore: createTrackedSecretStore({ glm: "stale-keychain-token" }) });
+    const originalFetch = globalThis.fetch;
+    let receivedHeaders: Headers | undefined;
+
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      receivedHeaders = new Headers(init?.headers);
+      return new Response(
+        JSON.stringify({
+          data: [{ id: "glm-5" }, { id: "glm-5-turbo" }],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const result = await service.previewModels({
+        providerId: "glm",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        apiKeyEnv: "GLM_API_KEY",
+      });
+      expect(result.items.map((item) => item.id)).toEqual(["glm-5", "glm-5-turbo"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(receivedHeaders?.get("authorization")).toBe("Bearer env-preview-token");
+  });
+
   it("uses provider-template defaults when upserting a new provider without an explicit default model", () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",

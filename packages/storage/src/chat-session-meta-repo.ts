@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { ValidationError } from "@goatcitadel/contracts";
 
 export interface ChatSessionMetaRecord {
   sessionId: string;
@@ -129,10 +130,10 @@ function sanitizeOptional(value: string): string | null {
 function sanitizeWorkspaceId(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error("workspaceId is required");
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "workspaceId" });
   }
   if (!/^[a-zA-Z0-9._-]{1,80}$/.test(trimmed)) {
-    throw new Error("workspaceId contains unsupported characters");
+    throw new ValidationError({ message: "workspaceId contains unsupported characters" });
   }
   return trimmed;
 }

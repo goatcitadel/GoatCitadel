@@ -8,6 +8,7 @@ import type {
   AgentProfileUpdateInput,
   BuiltinAgentProfileSeed,
 } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface AgentProfileRow {
@@ -150,7 +151,7 @@ export class AgentProfileRepository {
   public get(agentId: string): AgentProfileRecord {
     const row = this.getStmt.get(agentId) as AgentProfileRow | undefined;
     if (!row) {
-      throw new Error(`Agent profile ${agentId} not found`);
+      throw new NotFoundError({ entity: "Agent profile", id: agentId });
     }
     return mapRow(row);
   }
@@ -168,7 +169,7 @@ export class AgentProfileRepository {
   public create(input: AgentProfileCreateInput, now = new Date().toISOString()): AgentProfileRecord {
     const roleId = normalizeRoleId(input.roleId);
     if (this.getByRoleId(roleId)) {
-      throw new Error(`Agent role ${roleId} already exists`);
+      throw new ConflictError({ code: "ALREADY_EXISTS", message: `Agent role ${roleId} already exists` });
     }
 
     const agentId = randomUUID();
@@ -246,7 +247,7 @@ export class AgentProfileRepository {
       return false;
     }
     if (current.isBuiltin) {
-      throw new Error("Built-in agents cannot be hard deleted");
+      throw new ConflictError({ code: "STATE_CONFLICT", message: "Built-in agents cannot be hard deleted" });
     }
     this.deleteStmt.run(agentId);
     return true;
@@ -281,7 +282,7 @@ function mapRow(row: AgentProfileRow): AgentProfileRecord {
 function normalizeRoleId(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   if (!normalized) {
-    throw new Error("roleId is required");
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "roleId" });
   }
   return normalized.slice(0, 80);
 }
@@ -289,7 +290,7 @@ function normalizeRoleId(value: string): string {
 function sanitizeRequired(value: string, field: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error(`${field} is required`);
+    throw new ValidationError({ code: "FIELD_REQUIRED", field });
   }
   return trimmed;
 }

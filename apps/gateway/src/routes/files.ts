@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { sendRouteError } from "./_error-handler.js";
 
 const uploadSchema = z.object({
   relativePath: z.string().min(1),
@@ -133,11 +134,7 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
         content: file.isText ? file.content : Buffer.from(file.content).toString("base64"),
       });
     } catch (error) {
-      const message = (error as Error).message;
-      if (message.includes("not found")) {
-        return reply.code(404).send({ error: message });
-      }
-      return reply.code(400).send({ error: message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -157,6 +154,7 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: "Preview supports text HTML files only" });
       }
       reply.header("Content-Type", "text/html; charset=utf-8");
+      reply.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:");
       return reply.send(file.content);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

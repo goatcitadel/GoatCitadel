@@ -1,4 +1,5 @@
 import type { OperatorSummary, SessionMeta } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 import type { DatabaseSync } from "node:sqlite";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -128,7 +129,7 @@ export class SessionRepository {
   public getBySessionKey(sessionKey: string): SessionMeta {
     const row = this.getByKeyStmt.get(sessionKey) as SessionRow | undefined;
     if (!row) {
-      throw new Error(`Session not found for key: ${sessionKey}`);
+      throw new NotFoundError({ entity: "Session", id: sessionKey });
     }
 
     return mapSessionRow(row);
@@ -137,7 +138,7 @@ export class SessionRepository {
   public getBySessionId(sessionId: string): SessionMeta {
     const row = this.getByIdStmt.get(sessionId) as SessionRow | undefined;
     if (!row) {
-      throw new Error(`Session not found for id: ${sessionId}`);
+      throw new NotFoundError({ entity: "Session", id: sessionId });
     }
 
     return mapSessionRow(row);

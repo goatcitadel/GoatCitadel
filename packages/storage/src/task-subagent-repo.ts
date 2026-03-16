@@ -5,6 +5,7 @@ import type {
   TaskSubagentSession,
   TaskSubagentUpdateInput,
 } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 
 interface TaskSubagentRow {
   subagent_session_id: string;
@@ -86,7 +87,7 @@ export class TaskSubagentRepository {
   public getByAgentSessionId(agentSessionId: string): TaskSubagentSession {
     const row = this.getByAgentSessionStmt.get(agentSessionId) as TaskSubagentRow | undefined;
     if (!row) {
-      throw new Error(`Sub-agent session ${agentSessionId} not found`);
+      throw new NotFoundError({ entity: "Sub-agent session", id: agentSessionId });
     }
     return mapSubagentRow(row);
   }

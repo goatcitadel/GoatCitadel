@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatSessionBindingRecord } from "@goatcitadel/contracts";
+import { ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface ChatSessionBindingRow {
@@ -106,10 +107,10 @@ function parseTarget(targetJson: string | null): string | undefined {
 function sanitizeWorkspaceId(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error("workspaceId is required");
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "workspaceId" });
   }
   if (!/^[a-zA-Z0-9._-]{1,80}$/.test(trimmed)) {
-    throw new Error("workspaceId contains unsupported characters");
+    throw new ValidationError({ message: "workspaceId contains unsupported characters" });
   }
   return trimmed;
 }

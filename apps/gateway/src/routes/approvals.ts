@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { sendRouteError } from "./_error-handler.js";
 
 const createSchema = z.object({
   kind: z.string().min(1),
@@ -49,7 +50,11 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/api/v1/approvals/:approvalId/resolve", async (request, reply) => {
-    const approvalId = (request.params as { approvalId: string }).approvalId;
+    const params = z.object({ approvalId: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: "Invalid approval ID format." });
+    }
+    const approvalId = params.data.approvalId;
     const parsed = resolveSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -59,16 +64,16 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
       const result = await fastify.gateway.resolveApproval(approvalId, parsed.data);
       return reply.send(result);
     } catch (error) {
-      const message = (error as Error).message;
-      if (message.includes("already resolved")) {
-        return reply.code(409).send({ error: message });
-      }
-      return reply.code(400).send({ error: message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.get("/api/v1/approvals/:approvalId/replay", async (request, reply) => {
-    const approvalId = (request.params as { approvalId: string }).approvalId;
+    const params = z.object({ approvalId: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: "Invalid approval ID format." });
+    }
+    const approvalId = params.data.approvalId;
     const query = request.query as { replayedBy?: string };
     const replay = fastify.gateway.getApprovalReplay(approvalId, query.replayedBy ?? "operator");
     return reply.send(replay);

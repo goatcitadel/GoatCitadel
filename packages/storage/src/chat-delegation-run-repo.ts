@@ -8,6 +8,7 @@ import type {
   ChatOrchestrationVisibility,
   ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 
 interface ChatDelegationRunRow {
   run_id: string;
@@ -76,7 +77,7 @@ export class ChatDelegationRunRepository {
   public get(runId: string): ChatDelegationRunRecord {
     const row = this.getStmt.get(runId) as ChatDelegationRunRow | undefined;
     if (!row) {
-      throw new Error(`Delegation run ${runId} not found`);
+      throw new NotFoundError({ entity: "Delegation run", id: runId });
     }
     return mapRow(row);
   }

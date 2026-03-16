@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ResearchRunRecord } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 
 interface ResearchRunRow {
   run_id: string;
@@ -48,7 +49,7 @@ export class ResearchRunRepository {
   public get(runId: string): ResearchRunRecord {
     const row = this.getStmt.get(runId) as ResearchRunRow | undefined;
     if (!row) {
-      throw new Error(`Research run ${runId} not found`);
+      throw new NotFoundError({ entity: "Research run", id: runId });
     }
     return mapRow(row);
   }

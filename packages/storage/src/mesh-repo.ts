@@ -11,6 +11,7 @@ import type {
   MeshSessionOwnerRecord,
   MeshStatus,
 } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface MeshNodeRow {
@@ -232,7 +233,7 @@ export class MeshRepository {
   public getNode(nodeId: string): MeshNodeRecord {
     const row = this.getNodeStmt.get(nodeId) as MeshNodeRow | undefined;
     if (!row) {
-      throw new Error(`Mesh node ${nodeId} not found`);
+      throw new NotFoundError({ entity: "Mesh node", id: nodeId });
     }
     return mapNodeRow(row);
   }
@@ -275,7 +276,7 @@ export class MeshRepository {
     }
 
     if (current.holder_node_id !== holderNodeId && Date.parse(current.expires_at) > Date.parse(now)) {
-      throw new Error(`Lease ${leaseKey} is currently held by ${current.holder_node_id}`);
+      throw new ConflictError({ code: "STATE_CONFLICT", message: `Lease ${leaseKey} is currently held by ${current.holder_node_id}` });
     }
 
     const nextToken = current.holder_node_id === holderNodeId
@@ -301,10 +302,10 @@ export class MeshRepository {
   ): MeshLeaseRecord {
     const current = this.getLease(leaseKey);
     if (current.holderNodeId !== holderNodeId || current.fencingToken !== fencingToken) {
-      throw new Error(`Lease ${leaseKey} fencing token mismatch`);
+      throw new ConflictError({ code: "STATE_CONFLICT", message: `Lease ${leaseKey} fencing token mismatch` });
     }
     if (Date.parse(current.expiresAt) <= Date.parse(now)) {
-      throw new Error(`Lease ${leaseKey} is expired`);
+      throw new ConflictError({ code: "STATE_CONFLICT", message: `Lease ${leaseKey} is expired` });
     }
 
     this.updateLeaseStmt.run({
@@ -329,7 +330,7 @@ export class MeshRepository {
   public getLease(leaseKey: string): MeshLeaseRecord {
     const row = this.getLeaseStmt.get(leaseKey) as MeshLeaseRow | undefined;
     if (!row) {
-      throw new Error(`Lease ${leaseKey} not found`);
+      throw new NotFoundError({ entity: "Lease", id: leaseKey });
     }
     return mapLeaseRow(row);
   }
@@ -362,7 +363,7 @@ export class MeshRepository {
       || (input.expectedEpoch !== undefined && input.expectedEpoch === current.epoch);
 
     if (!canTakeOver) {
-      throw new Error(`Session ${sessionId} is owned by ${current.owner_node_id} at epoch ${current.epoch}`);
+      throw new ConflictError({ code: "STATE_CONFLICT", message: `Session ${sessionId} is owned by ${current.owner_node_id} at epoch ${current.epoch}` });
     }
 
     this.updateSessionOwnerStmt.run({
@@ -377,7 +378,7 @@ export class MeshRepository {
   public getSessionOwner(sessionId: string): MeshSessionOwnerRecord {
     const row = this.getSessionOwnerStmt.get(sessionId) as MeshSessionOwnerRow | undefined;
     if (!row) {
-      throw new Error(`Session owner for ${sessionId} not found`);
+      throw new NotFoundError({ entity: "Session owner", id: sessionId });
     }
     return mapSessionOwnerRow(row);
   }
@@ -408,7 +409,7 @@ export class MeshRepository {
     }) as MeshReplicationRow | undefined;
 
     if (!row) {
-      throw new Error("Unable to persist replication event");
+      throw new NotFoundError("Unable to persist replication event");
     }
     return mapReplicationRow(row);
   }
@@ -442,7 +443,7 @@ export class MeshRepository {
       sourceNodeId,
     }) as MeshReplicationOffsetRow | undefined;
     if (!row) {
-      throw new Error(`Replication offset not found for ${consumerNodeId} <= ${sourceNodeId}`);
+      throw new NotFoundError(`Replication offset not found for ${consumerNodeId} <= ${sourceNodeId}`);
     }
     return mapOffsetRow(row);
   }
@@ -471,7 +472,7 @@ export class MeshRepository {
   public join(input: MeshJoinRequest, now = new Date().toISOString()): MeshNodeRecord {
     const accepted = this.consumeJoinToken(input.token, input.nodeId, now);
     if (!accepted) {
-      throw new Error("Join token is invalid, expired, or already used");
+      throw new ValidationError({ message: "Join token is invalid, expired, or already used" });
     }
 
     return this.upsertNode({

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryContextPack, MemoryContextScope, MemoryCitation, MemoryQmdStatus } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface MemoryContextRow {
@@ -134,7 +135,7 @@ export class MemoryContextRepository {
       now: "1970-01-01T00:00:00.000Z",
     }) as MemoryContextRow | undefined;
     if (!fresh) {
-      throw new Error("Failed to read memory context pack after upsert");
+      throw new NotFoundError("Failed to read memory context pack after upsert");
     }
     return mapRow(fresh);
   }
@@ -150,7 +151,7 @@ export class MemoryContextRepository {
   public get(contextId: string): MemoryContextPack {
     const row = this.getStmt.get(contextId) as MemoryContextRow | undefined;
     if (!row) {
-      throw new Error(`Memory context ${contextId} not found`);
+      throw new NotFoundError({ entity: "Memory context", id: contextId });
     }
     return mapRow(row);
   }

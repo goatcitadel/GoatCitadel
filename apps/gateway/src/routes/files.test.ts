@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { filesRoutes } from "./files.js";
 
 describe("files routes", () => {
@@ -55,6 +56,27 @@ describe("files routes", () => {
       fullPath: "./workspace/test.md",
       encoding: "utf8",
       content: "hello world!",
+    });
+  });
+
+  it("maps typed gateway download errors to their contract status", async () => {
+    app = Fastify();
+    app.decorate("gateway", {
+      downloadWorkspaceFile: vi.fn(async () => {
+        throw new NotFoundError({ entity: "File", id: "workspace/missing.md" });
+      }),
+    } as never);
+    await app.register(filesRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/files/download?relativePath=workspace/missing.md",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({
+      error: "File workspace/missing.md not found",
+      code: "ENTITY_NOT_FOUND",
     });
   });
 });

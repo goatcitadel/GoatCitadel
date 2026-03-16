@@ -19,7 +19,7 @@ vi.mock("./useRefreshSubscription", () => ({
   useRefreshSubscription: vi.fn(),
 }));
 
-import { useProviderModelCatalog } from "./useProviderModelCatalog";
+import { resetProviderModelCatalogCacheForTests, useProviderModelCatalog } from "./useProviderModelCatalog";
 
 const baseConfig: RuntimeSettingsResponse["llm"] = {
   activeProviderId: "openai",
@@ -86,6 +86,7 @@ describe("useProviderModelCatalog", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    resetProviderModelCatalogCacheForTests();
     apiMocks.fetchLlmConfig.mockResolvedValue(baseConfig);
     apiMocks.fetchLlmModels.mockImplementation(async (providerId?: string) => ({
       items: providerId === "glm"
@@ -109,7 +110,12 @@ describe("useProviderModelCatalog", () => {
 
     expect(apiMocks.fetchLlmConfig).toHaveBeenCalledTimes(1);
     expect(apiMocks.fetchLlmModels).not.toHaveBeenCalled();
-    expect(latest?.providers.find((provider) => provider.providerId === "glm")?.models).toEqual(["glm-5"]);
+    expect(latest?.providers.find((provider) => provider.providerId === "glm")?.models).toEqual([
+      "glm-5",
+      "glm-5-air",
+      "glm-5-flash",
+      "glm-5-turbo",
+    ]);
   });
 
   it("loads selected provider models lazily and reuses cached results", async () => {
@@ -125,7 +131,12 @@ describe("useProviderModelCatalog", () => {
 
     expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(1);
     expect(apiMocks.fetchLlmModels).toHaveBeenCalledWith("glm");
-    expect(latest?.providers.find((provider) => provider.providerId === "glm")?.models).toEqual(["glm-5", "glm-5-air"]);
+    expect(latest?.providers.find((provider) => provider.providerId === "glm")?.models).toEqual([
+      "glm-5",
+      "glm-5-air",
+      "glm-5-flash",
+      "glm-5-turbo",
+    ]);
 
     await act(async () => {
       await latest?.loadModelsForProvider("glm");

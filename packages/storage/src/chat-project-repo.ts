@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatProjectRecord } from "@goatcitadel/contracts";
+import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 
 interface ChatProjectRow {
   project_id: string;
@@ -98,7 +99,7 @@ export class ChatProjectRepository {
   public get(projectId: string): ChatProjectRecord {
     const row = this.getStmt.get(projectId) as ChatProjectRow | undefined;
     if (!row) {
-      throw new Error(`Chat project ${projectId} not found`);
+      throw new NotFoundError({ entity: "Chat project", id: projectId });
     }
     return mapRow(row);
   }
@@ -190,7 +191,7 @@ function mapRow(row: ChatProjectRow): ChatProjectRecord {
 function sanitizeRequired(value: string, field: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error(`${field} is required`);
+    throw new ValidationError({ code: "FIELD_REQUIRED", field });
   }
   return trimmed;
 }
@@ -206,7 +207,7 @@ function sanitizeOptional(value?: string): string | null {
 function sanitizeWorkspacePath(value: string): string {
   const trimmed = value.trim().replaceAll("\\", "/");
   if (!trimmed) {
-    throw new Error("workspacePath is required");
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "workspacePath" });
   }
   if (
     trimmed.startsWith("/")
@@ -214,7 +215,7 @@ function sanitizeWorkspacePath(value: string): string {
     || trimmed === ".."
     || trimmed.includes("/../")
   ) {
-    throw new Error("workspacePath must be relative and jailed");
+    throw new ValidationError({ message: "workspacePath must be relative and jailed" });
   }
   return trimmed;
 }
@@ -222,10 +223,10 @@ function sanitizeWorkspacePath(value: string): string {
 function sanitizeWorkspaceId(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error("workspaceId is required");
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "workspaceId" });
   }
   if (!/^[a-zA-Z0-9._-]{1,80}$/.test(trimmed)) {
-    throw new Error("workspaceId contains unsupported characters");
+    throw new ValidationError({ message: "workspaceId contains unsupported characters" });
   }
   return trimmed;
 }

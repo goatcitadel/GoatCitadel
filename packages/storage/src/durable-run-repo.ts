@@ -7,6 +7,7 @@ import type {
   DurableRunRecord,
   DurableRunStatus,
 } from "@goatcitadel/contracts";
+import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface DurableRunRow {
@@ -183,7 +184,7 @@ export class DurableRunRepository {
       updatedAt: now,
     };
     if (!run.workflowKey) {
-      throw new Error("workflowKey is required");
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "workflowKey" });
     }
     this.insertRunStmt.run({
       runId: run.runId,
@@ -205,7 +206,7 @@ export class DurableRunRepository {
   public getRun(runId: string): DurableRunRecord {
     const row = this.getRunStmt.get(runId) as DurableRunRow | undefined;
     if (!row) {
-      throw new Error(`Durable run ${runId} not found`);
+      throw new NotFoundError({ entity: "Durable run", id: runId });
     }
     return mapRunRow(row);
   }
@@ -320,7 +321,7 @@ export class DurableRunRepository {
       createdAt: input.createdAt ?? new Date().toISOString(),
     };
     if (!record.reason) {
-      throw new Error("reason is required");
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "reason" });
     }
     this.upsertRetryStmt.run({
       retryId: record.retryId,
@@ -366,7 +367,7 @@ export class DurableRunRepository {
       resolutionNote: input.resolutionNote?.trim() || undefined,
     };
     if (!record.reason) {
-      throw new Error("reason is required");
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "reason" });
     }
     this.upsertDeadLetterStmt.run({
       deadLetterId: record.deadLetterId,

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 export interface OrchestrationCheckpoint {
@@ -130,7 +131,7 @@ export class OrchestrationRepository {
   public getPlan(planId: string): OrchestrationPlan {
     const row = this.getPlanStmt.get(planId) as { plan_json: string } | undefined;
     if (!row) {
-      throw new Error(`Orchestration plan ${planId} not found`);
+      throw new NotFoundError({ entity: "Orchestration plan", id: planId });
     }
     return safeJsonParse<OrchestrationPlan>(row.plan_json, {
       planId,
@@ -176,7 +177,7 @@ export class OrchestrationRepository {
   public getRun(runId: string): OrchestrationRun {
     const row = this.getRunStmt.get(runId) as OrchestrationRunRow | undefined;
     if (!row) {
-      throw new Error(`Orchestration run ${runId} not found`);
+      throw new NotFoundError({ entity: "Orchestration run", id: runId });
     }
     return mapRunRow(row);
   }

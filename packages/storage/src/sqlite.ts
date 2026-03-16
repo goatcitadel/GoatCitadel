@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { clampInt } from "@goatcitadel/contracts";
 
 export interface SqliteOptions {
   dbPath: string;
@@ -23,34 +24,19 @@ export function createDatabase(options: SqliteOptions): DatabaseSync {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec("PRAGMA synchronous = NORMAL;");
   db.exec("PRAGMA busy_timeout = 5000;");
-  const cacheSizeKb = clampInt(options.tuning?.cacheSizeKb, 4_096, 262_144);
-  if (cacheSizeKb !== undefined) {
-    db.exec(`PRAGMA cache_size = -${cacheSizeKb};`);
+  if (options.tuning?.cacheSizeKb !== undefined) {
+    db.exec(`PRAGMA cache_size = -${clampInt(options.tuning.cacheSizeKb, 4_096, 4_096, 262_144)};`);
   }
   if (options.tuning?.tempStoreMemory ?? false) {
     db.exec("PRAGMA temp_store = MEMORY;");
   }
-  const walAutoCheckpointPages = clampInt(options.tuning?.walAutoCheckpointPages, 1_000, 20_000);
-  if (walAutoCheckpointPages !== undefined) {
-    db.exec(`PRAGMA wal_autocheckpoint = ${walAutoCheckpointPages};`);
+  if (options.tuning?.walAutoCheckpointPages !== undefined) {
+    db.exec(`PRAGMA wal_autocheckpoint = ${clampInt(options.tuning.walAutoCheckpointPages, 1_000, 1_000, 20_000)};`);
   }
   migrate(db);
   return db;
 }
 
-function clampInt(value: number | undefined, min: number, max: number): number | undefined {
-  if (value === undefined || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const normalized = Math.floor(value);
-  if (normalized < min) {
-    return min;
-  }
-  if (normalized > max) {
-    return max;
-  }
-  return normalized;
-}
 
 function migrate(db: DatabaseSync): void {
   db.exec(`
@@ -247,6 +233,49 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     version: 30,
     name: "chat_plans_and_summaries",
     up: createChatPlansAndSummariesSchema,
+  },
+  {
+    version: 31,
+    name: "robust_agent_execution_schema",
+    up: createRobustAgentExecutionSchema,
+  },
+  {
+    version: 32,
+    name: "hot_path_covering_indexes",
+    up: (db) => {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_chat_turn_traces_session_status ON chat_turn_traces(session_id, status, started_at DESC);
+      `);
+      // chat_tool_runs may not exist in databases that pre-date migration 31
+      const hasToolRuns = db.prepare(
+        `SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_tool_runs'`
+      ).get();
+      if (hasToolRuns) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_chat_tool_runs_session_status ON chat_tool_runs(session_id, status, started_at DESC);
+        `);
+      }
+    },
+  },
+  {
+    version: 33,
+    name: "prompt_pack_test_mode_and_tool_tier",
+    up: (db) => {
+      addColumnIfMissing(db, "prompt_pack_tests", "mode", "TEXT");
+      addColumnIfMissing(db, "prompt_pack_tests", "tool_tier", "TEXT");
+    },
+  },
+  {
+    version: 34,
+    name: "prompt_pack_run_execution_profile",
+    up: (db) => {
+      addColumnIfMissing(db, "prompt_pack_runs", "mode", "TEXT");
+      addColumnIfMissing(db, "prompt_pack_runs", "tool_tier", "TEXT");
+      addColumnIfMissing(db, "prompt_pack_runs", "tool_autonomy", "TEXT");
+      addColumnIfMissing(db, "prompt_pack_runs", "web_mode", "TEXT");
+      addColumnIfMissing(db, "prompt_pack_runs", "memory_mode", "TEXT");
+      addColumnIfMissing(db, "prompt_pack_runs", "thinking_level", "TEXT");
+    },
   },
 ];
 
@@ -1563,6 +1592,51 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_prompt_pack_scores_pack_test
       ON prompt_pack_scores(pack_id, test_id, created_at DESC);
+  `);
+}
+
+function createRobustAgentExecutionSchema(db: DatabaseSync): void {
+  addColumnIfMissing(db, "chat_turn_traces", "completion_json", "TEXT");
+  addColumnIfMissing(db, "chat_turn_traces", "durable_json", "TEXT");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_stream_events (
+      event_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      turn_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      run_id TEXT,
+      chunk_type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_stream_events_turn_sequence
+      ON chat_stream_events(turn_id, sequence);
+    CREATE INDEX IF NOT EXISTS idx_chat_stream_events_session_turn
+      ON chat_stream_events(session_id, turn_id, sequence ASC);
+    CREATE INDEX IF NOT EXISTS idx_chat_stream_events_created
+      ON chat_stream_events(created_at ASC);
+
+    CREATE TABLE IF NOT EXISTS chat_tool_artifacts (
+      artifact_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      turn_id TEXT NOT NULL,
+      tool_run_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      content_type TEXT,
+      byte_length INTEGER NOT NULL,
+      snippet TEXT,
+      storage_rel_path TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_tool_artifacts_turn
+      ON chat_tool_artifacts(turn_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_chat_tool_artifacts_tool_run
+      ON chat_tool_artifacts(tool_run_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_tool_artifacts_session
+      ON chat_tool_artifacts(session_id, created_at DESC);
   `);
 }
 

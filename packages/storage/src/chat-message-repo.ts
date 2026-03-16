@@ -25,6 +25,7 @@ export class ChatMessageRepository {
   private readonly countStmt;
   private readonly listLatestStmt;
   private readonly listBeforeSeqStmt;
+  private readonly getStmt;
   private readonly getCursorStmt;
 
   public constructor(private readonly db: DatabaseSync) {
@@ -68,6 +69,12 @@ export class ChatMessageRepository {
       ORDER BY seq DESC
       LIMIT ?
     `);
+    this.getStmt = db.prepare(`
+      SELECT *
+      FROM chat_messages
+      WHERE message_id = ?
+      LIMIT 1
+    `);
     this.getCursorStmt = db.prepare(`
       SELECT seq
       FROM chat_messages
@@ -98,11 +105,41 @@ export class ChatMessageRepository {
     if (messages.length === 0) {
       return;
     }
+    const BATCH_SIZE = 50;
+    const columns = [
+      "message_id", "session_id", "role", "actor_type", "actor_id",
+      "content", "parts_json", "attachments_json",
+      "timestamp", "token_input", "token_output", "cost_usd", "created_at",
+    ];
     const savepointName = `chat_messages_upsert_many_${randomUUID().replaceAll("-", "_")}`;
     this.db.exec(`SAVEPOINT ${savepointName}`);
     try {
-      for (const message of messages) {
-        this.upsert(message, now);
+      for (let offset = 0; offset < messages.length; offset += BATCH_SIZE) {
+        const chunk = messages.slice(offset, offset + BATCH_SIZE);
+        const rowPlaceholder = `(${columns.map(() => "?").join(", ")})`;
+        const sql = `
+          INSERT OR REPLACE INTO chat_messages (${columns.join(", ")})
+          VALUES ${chunk.map(() => rowPlaceholder).join(", ")}
+        `;
+        const params: (string | number | null)[] = [];
+        for (const message of chunk) {
+          params.push(
+            message.messageId,
+            message.sessionId,
+            message.role,
+            message.actorType,
+            message.actorId,
+            message.content,
+            message.parts ? JSON.stringify(message.parts) : null,
+            message.attachments ? JSON.stringify(message.attachments) : null,
+            message.timestamp,
+            message.tokenInput ?? null,
+            message.tokenOutput ?? null,
+            message.costUsd ?? null,
+            message.timestamp || now,
+          );
+        }
+        this.db.prepare(sql).run(...params);
       }
       this.db.exec(`RELEASE SAVEPOINT ${savepointName}`);
     } catch (error) {
@@ -115,6 +152,11 @@ export class ChatMessageRepository {
   public countBySession(sessionId: string): number {
     const row = this.countStmt.get(sessionId) as { count?: number } | undefined;
     return Number(row?.count ?? 0);
+  }
+
+  public get(messageId: string): ChatMessageRecord | undefined {
+    const row = this.getStmt.get(messageId) as ChatMessageRow | undefined;
+    return row ? mapRow(row) : undefined;
   }
 
   public list(sessionId: string, limit = 200, cursor?: string): ChatMessageRecord[] {

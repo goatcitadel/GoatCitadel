@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { findProviderTemplate } from "@goatcitadel/contracts";
 import type { RuntimeSettingsResponse } from "../api/client";
 import { fetchLlmConfig, fetchLlmModels, previewLlmModels } from "../api/client";
 import { useRefreshSubscription } from "./useRefreshSubscription";
 
 const PROVIDER_MODELS_POSITIVE_TTL_MS = 5 * 60 * 1000;
 const PROVIDER_MODELS_NEGATIVE_TTL_MS = 30 * 1000;
+
+const sharedProviderModelCache = new Map<string, ProviderModelCacheEntry>();
+const sharedProviderModelRequests = new Map<string, Promise<string[]>>();
 
 export interface ProviderModelCatalogOption {
   providerId: string;
@@ -65,6 +69,7 @@ function buildProviderCatalog(
 ): ProviderModelCatalogOption[] {
   return config.providers.map((provider) => {
     const cached = getValidProviderModelCacheEntry(cache, provider.providerId, now);
+    const template = findProviderTemplate(provider.providerId);
     return {
       providerId: provider.providerId,
       label: provider.label,
@@ -76,6 +81,7 @@ function buildProviderCatalog(
       models: dedupeProviderModels([
         provider.defaultModel,
         provider.providerId === config.activeProviderId ? config.activeModel : undefined,
+        ...(template?.knownModels ?? []),
         ...(cached?.items ?? []),
       ]),
     } satisfies ProviderModelCatalogOption;
@@ -115,8 +121,6 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const configRef = useRef<RuntimeSettingsResponse["llm"] | null>(null);
-  const modelCacheRef = useRef<Map<string, ProviderModelCacheEntry>>(new Map());
-  const inFlightRef = useRef<Map<string, Promise<string[]>>>(new Map());
 
   const syncProviderState = useCallback((nextConfig?: RuntimeSettingsResponse["llm"] | null) => {
     const effectiveConfig = nextConfig ?? configRef.current;
@@ -126,7 +130,7 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
     const now = Date.now();
     configRef.current = effectiveConfig;
     setConfig(effectiveConfig);
-    setProviders(buildProviderCatalog(effectiveConfig, modelCacheRef.current, now));
+    setProviders(buildProviderCatalog(effectiveConfig, sharedProviderModelCache, now));
   }, []);
 
   const reload = useCallback(async () => {
@@ -153,13 +157,13 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
 
     const now = Date.now();
     const cached = !options.force
-      ? getValidProviderModelCacheEntry(modelCacheRef.current, normalized, now)
+      ? getValidProviderModelCacheEntry(sharedProviderModelCache, normalized, now)
       : undefined;
     if (cached) {
       return cached.items;
     }
 
-    const inFlight = inFlightRef.current.get(normalized);
+    const inFlight = sharedProviderModelRequests.get(normalized);
     if (inFlight) {
       return inFlight;
     }
@@ -168,24 +172,24 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
       try {
         const response = await fetchLlmModels(normalized);
         const items = dedupeProviderModels(response.items.map((item) => item.id));
-        modelCacheRef.current.set(normalized, {
+        sharedProviderModelCache.set(normalized, {
           items,
           expiresAt: Date.now() + PROVIDER_MODELS_POSITIVE_TTL_MS,
         });
         return items;
       } catch {
-        modelCacheRef.current.set(normalized, {
+        sharedProviderModelCache.set(normalized, {
           items: [],
           expiresAt: Date.now() + PROVIDER_MODELS_NEGATIVE_TTL_MS,
         });
         return [];
       } finally {
-        inFlightRef.current.delete(normalized);
+        sharedProviderModelRequests.delete(normalized);
         syncProviderState();
       }
     })();
 
-    inFlightRef.current.set(normalized, request);
+    sharedProviderModelRequests.set(normalized, request);
     return request;
   }, [syncProviderState]);
 
@@ -194,7 +198,7 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
     if (!normalized) {
       return [];
     }
-    return getValidProviderModelCacheEntry(modelCacheRef.current, normalized, Date.now())?.items ?? [];
+    return getValidProviderModelCacheEntry(sharedProviderModelCache, normalized, Date.now())?.items ?? [];
   }, []);
 
   useEffect(() => {
@@ -227,4 +231,9 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
     loadModelsForProvider,
     getCachedModels,
   };
+}
+
+export function resetProviderModelCatalogCacheForTests(): void {
+  sharedProviderModelCache.clear();
+  sharedProviderModelRequests.clear();
 }

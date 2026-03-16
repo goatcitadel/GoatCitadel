@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type {
   ChatCitationRecord,
   ChatMessageRecord,
+  ChatStreamChunk,
+  ChatStreamChunkDraft,
   ChatThreadResponse,
   ChatThreadTurnRecord,
   ChatToolRunRecord,
@@ -108,17 +110,28 @@ function makeSeed(overrides: Partial<PendingStreamTurnSeed> = {}): PendingStream
   };
 }
 
+let streamSequence = 0;
+
+function makeChunk(chunk: ChatStreamChunkDraft): ChatStreamChunk {
+  streamSequence += 1;
+  return {
+    ...chunk,
+    eventId: `event-${streamSequence}`,
+    sequence: streamSequence,
+  } as ChatStreamChunk;
+}
+
 describe("chat-thread-reducer", () => {
   it("creates an optimistic turn from message_start", () => {
     const next = updateThreadFromStreamChunk(
       null,
-      {
+      makeChunk({
         type: "message_start",
         sessionId: "sess-1",
         turnId: "turn-1",
         messageId: "assistant-1",
         branchKind: "append",
-      },
+      }),
       makeSeed(),
       "sess-1",
       null,
@@ -133,13 +146,13 @@ describe("chat-thread-reducer", () => {
     const current = makeThread();
     const next = updateThreadFromStreamChunk(
       current,
-      {
+      makeChunk({
         type: "message_start",
         sessionId: "sess-1",
         turnId: "turn-2",
         messageId: "assistant-2",
         branchKind: "append",
-      },
+      }),
       null,
       "sess-1",
       null,
@@ -152,26 +165,26 @@ describe("chat-thread-reducer", () => {
     const current = makeThread();
     const withDelta = updateThreadFromStreamChunk(
       current,
-      {
+      makeChunk({
         type: "delta",
         sessionId: "sess-1",
         turnId: "turn-1",
         messageId: "assistant-1",
         delta: "partial",
-      },
+      }),
       null,
       "sess-1",
       null,
     );
     const done = updateThreadFromStreamChunk(
       withDelta,
-      {
+      makeChunk({
         type: "message_done",
         sessionId: "sess-1",
         turnId: "turn-1",
         messageId: "assistant-1",
         content: "final answer",
-      },
+      }),
       null,
       "sess-1",
       null,
@@ -187,31 +200,31 @@ describe("chat-thread-reducer", () => {
     const citation = makeCitation();
     const withTool = updateThreadFromStreamChunk(
       current,
-      {
+      makeChunk({
         type: "tool_start",
         sessionId: "sess-1",
         turnId: "turn-1",
         toolRun,
-      },
+      }),
       null,
       "sess-1",
       null,
     );
     const withCitation = updateThreadFromStreamChunk(
       withTool,
-      {
+      makeChunk({
         type: "citation",
         sessionId: "sess-1",
         turnId: "turn-1",
         citation,
-      },
+      }),
       null,
       "sess-1",
       null,
     );
     const withSuggestion = updateThreadFromStreamChunk(
       withCitation,
-      {
+      makeChunk({
         type: "capability_upgrade_suggestion",
         sessionId: "sess-1",
         turnId: "turn-1",
@@ -223,7 +236,7 @@ describe("chat-thread-reducer", () => {
           recommendedAction: "switch_tool_profile",
           requiresUserApproval: true,
         }],
-      },
+      }),
       null,
       "sess-1",
       null,
@@ -236,12 +249,12 @@ describe("chat-thread-reducer", () => {
     });
     const withTrace = updateThreadFromStreamChunk(
       withSuggestion,
-      {
+      makeChunk({
         type: "trace_update",
         sessionId: "sess-1",
         turnId: "turn-1",
         trace,
-      },
+      }),
       null,
       "sess-1",
       null,
@@ -264,24 +277,24 @@ describe("chat-thread-reducer", () => {
     };
     const withFirst = updateThreadFromStreamChunk(
       current,
-      {
+      makeChunk({
         type: "citation",
         sessionId: "sess-1",
         turnId: "turn-1",
         citation,
-      },
+      }),
       null,
       "sess-1",
       null,
     );
     const withSecond = updateThreadFromStreamChunk(
       withFirst,
-      {
+      makeChunk({
         type: "citation",
         sessionId: "sess-1",
         turnId: "turn-1",
         citation: duplicate,
-      },
+      }),
       null,
       "sess-1",
       null,
@@ -309,7 +322,7 @@ describe("chat-thread-reducer", () => {
 
     const next = updateThreadFromStreamChunk(
       current,
-      {
+      makeChunk({
         type: "trace_update",
         sessionId: "sess-1",
         turnId: "turn-1",
@@ -317,7 +330,7 @@ describe("chat-thread-reducer", () => {
           status: "completed",
           capabilityUpgradeSuggestions: undefined,
         }),
-      },
+      }),
       null,
       "sess-1",
       null,
@@ -329,18 +342,18 @@ describe("chat-thread-reducer", () => {
 
   it("returns the same object for no-op or irrelevant chunks", () => {
     const current = makeThread();
-    const usageChunk = {
+    const usageChunk = makeChunk({
       type: "usage" as const,
       sessionId: "sess-1",
       turnId: "turn-1",
       usage: { inputTokens: 1 },
-    };
-    const wrongSession = {
+    });
+    const wrongSession = makeChunk({
       type: "delta" as const,
       sessionId: "sess-2",
       turnId: "turn-1",
       delta: "ignored",
-    };
+    });
 
     expect(isThreadMutatingStreamChunk(usageChunk)).toBe(false);
     expect(updateThreadFromStreamChunk(current, usageChunk, null, "sess-1", null)).toBe(current);

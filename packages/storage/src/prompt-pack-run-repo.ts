@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatCitationRecord, ChatTurnTraceRecord, PromptPackRunRecord } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 
 interface PromptPackRunRow {
   run_id: string;
@@ -9,6 +10,12 @@ interface PromptPackRunRow {
   status: PromptPackRunRecord["status"];
   provider_id: string | null;
   model: string | null;
+  mode: PromptPackRunRecord["mode"] | null;
+  tool_tier: PromptPackRunRecord["toolTier"] | null;
+  tool_autonomy: PromptPackRunRecord["toolAutonomy"] | null;
+  web_mode: PromptPackRunRecord["webMode"] | null;
+  memory_mode: PromptPackRunRecord["memoryMode"] | null;
+  thinking_level: PromptPackRunRecord["thinkingLevel"] | null;
   response_text: string | null;
   trace_json: string | null;
   citations_json: string | null;
@@ -29,17 +36,25 @@ export class PromptPackRunRepository {
     this.getStmt = db.prepare("SELECT * FROM prompt_pack_runs WHERE run_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO prompt_pack_runs (
-        run_id, pack_id, test_id, session_id, status, provider_id, model, response_text,
-        trace_json, citations_json, error, started_at, finished_at
+        run_id, pack_id, test_id, session_id, status, provider_id, model,
+        mode, tool_tier, tool_autonomy, web_mode, memory_mode, thinking_level,
+        response_text, trace_json, citations_json, error, started_at, finished_at
       ) VALUES (
-        @runId, @packId, @testId, @sessionId, @status, @providerId, @model, @responseText,
-        @traceJson, @citationsJson, @error, @startedAt, @finishedAt
+        @runId, @packId, @testId, @sessionId, @status, @providerId, @model,
+        @mode, @toolTier, @toolAutonomy, @webMode, @memoryMode, @thinkingLevel,
+        @responseText, @traceJson, @citationsJson, @error, @startedAt, @finishedAt
       )
     `);
     this.patchStmt = db.prepare(`
       UPDATE prompt_pack_runs
       SET
         status = COALESCE(@status, status),
+        mode = CASE WHEN @hasMode = 1 THEN @mode ELSE mode END,
+        tool_tier = CASE WHEN @hasToolTier = 1 THEN @toolTier ELSE tool_tier END,
+        tool_autonomy = CASE WHEN @hasToolAutonomy = 1 THEN @toolAutonomy ELSE tool_autonomy END,
+        web_mode = CASE WHEN @hasWebMode = 1 THEN @webMode ELSE web_mode END,
+        memory_mode = CASE WHEN @hasMemoryMode = 1 THEN @memoryMode ELSE memory_mode END,
+        thinking_level = CASE WHEN @hasThinkingLevel = 1 THEN @thinkingLevel ELSE thinking_level END,
         response_text = CASE WHEN @hasResponseText = 1 THEN @responseText ELSE response_text END,
         trace_json = CASE WHEN @hasTrace = 1 THEN @traceJson ELSE trace_json END,
         citations_json = CASE WHEN @hasCitations = 1 THEN @citationsJson ELSE citations_json END,
@@ -65,7 +80,7 @@ export class PromptPackRunRepository {
   public get(runId: string): PromptPackRunRecord {
     const row = this.getStmt.get(runId) as PromptPackRunRow | undefined;
     if (!row) {
-      throw new Error(`Prompt pack run ${runId} not found`);
+      throw new NotFoundError({ entity: "Prompt pack run", id: runId });
     }
     return mapRow(row);
   }
@@ -78,6 +93,12 @@ export class PromptPackRunRepository {
     status?: PromptPackRunRecord["status"];
     providerId?: string;
     model?: string;
+    mode?: PromptPackRunRecord["mode"];
+    toolTier?: PromptPackRunRecord["toolTier"];
+    toolAutonomy?: PromptPackRunRecord["toolAutonomy"];
+    webMode?: PromptPackRunRecord["webMode"];
+    memoryMode?: PromptPackRunRecord["memoryMode"];
+    thinkingLevel?: PromptPackRunRecord["thinkingLevel"];
     responseText?: string;
     trace?: ChatTurnTraceRecord;
     citations?: ChatCitationRecord[];
@@ -93,6 +114,12 @@ export class PromptPackRunRepository {
       status: input.status ?? "queued",
       providerId: input.providerId ?? null,
       model: input.model ?? null,
+      mode: input.mode ?? null,
+      toolTier: input.toolTier ?? null,
+      toolAutonomy: input.toolAutonomy ?? null,
+      webMode: input.webMode ?? null,
+      memoryMode: input.memoryMode ?? null,
+      thinkingLevel: input.thinkingLevel ?? null,
       responseText: input.responseText ?? null,
       traceJson: input.trace ? JSON.stringify(input.trace) : null,
       citationsJson: input.citations ? JSON.stringify(input.citations) : null,
@@ -105,6 +132,12 @@ export class PromptPackRunRepository {
 
   public patch(runId: string, input: {
     status?: PromptPackRunRecord["status"];
+    mode?: PromptPackRunRecord["mode"];
+    toolTier?: PromptPackRunRecord["toolTier"];
+    toolAutonomy?: PromptPackRunRecord["toolAutonomy"];
+    webMode?: PromptPackRunRecord["webMode"];
+    memoryMode?: PromptPackRunRecord["memoryMode"];
+    thinkingLevel?: PromptPackRunRecord["thinkingLevel"];
     responseText?: string;
     trace?: ChatTurnTraceRecord;
     citations?: ChatCitationRecord[];
@@ -114,6 +147,18 @@ export class PromptPackRunRepository {
     const result = this.patchStmt.run({
       runId,
       status: input.status ?? null,
+      hasMode: input.mode !== undefined ? 1 : 0,
+      mode: input.mode ?? null,
+      hasToolTier: input.toolTier !== undefined ? 1 : 0,
+      toolTier: input.toolTier ?? null,
+      hasToolAutonomy: input.toolAutonomy !== undefined ? 1 : 0,
+      toolAutonomy: input.toolAutonomy ?? null,
+      hasWebMode: input.webMode !== undefined ? 1 : 0,
+      webMode: input.webMode ?? null,
+      hasMemoryMode: input.memoryMode !== undefined ? 1 : 0,
+      memoryMode: input.memoryMode ?? null,
+      hasThinkingLevel: input.thinkingLevel !== undefined ? 1 : 0,
+      thinkingLevel: input.thinkingLevel ?? null,
       hasResponseText: input.responseText !== undefined ? 1 : 0,
       responseText: input.responseText ?? null,
       hasTrace: input.trace !== undefined ? 1 : 0,
@@ -126,7 +171,7 @@ export class PromptPackRunRepository {
       finishedAt: input.finishedAt ?? null,
     });
     if (Number(result.changes ?? 0) < 1) {
-      throw new Error(`Prompt pack run ${runId} not found`);
+      throw new NotFoundError({ entity: "Prompt pack run", id: runId });
     }
     return this.get(runId);
   }
@@ -162,6 +207,12 @@ function mapRow(row: PromptPackRunRow): PromptPackRunRecord {
     status: row.status,
     providerId: row.provider_id ?? undefined,
     model: row.model ?? undefined,
+    mode: row.mode ?? undefined,
+    toolTier: row.tool_tier ?? undefined,
+    toolAutonomy: row.tool_autonomy ?? undefined,
+    webMode: row.web_mode ?? undefined,
+    memoryMode: row.memory_mode ?? undefined,
+    thinkingLevel: row.thinking_level ?? undefined,
     responseText: row.response_text ?? undefined,
     trace: row.trace_json ? safeJsonParse<ChatTurnTraceRecord | undefined>(row.trace_json, undefined) : undefined,
     citations: row.citations_json ? safeJsonParse<ChatCitationRecord[] | undefined>(row.citations_json, undefined) : undefined,

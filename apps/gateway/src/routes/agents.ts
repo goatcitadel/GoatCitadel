@@ -1,5 +1,6 @@
-import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { sendRouteError } from "./_error-handler.js";
 
 const listQuerySchema = z.object({
   view: z.enum(["active", "archived", "all"]).optional(),
@@ -50,7 +51,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(fastify.gateway.getAgent(agentId));
     } catch (error) {
-      return sendAgentError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -63,7 +64,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
       const created = fastify.gateway.createAgentProfile(parsed.data);
       return reply.code(201).send(created);
     } catch (error) {
-      return sendAgentError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -76,7 +77,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(fastify.gateway.updateAgentProfile(agentId, parsed.data));
     } catch (error) {
-      return sendAgentError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -89,7 +90,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(fastify.gateway.archiveAgentProfile(agentId, parsed.data ?? {}));
     } catch (error) {
-      return sendAgentError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -98,7 +99,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(fastify.gateway.restoreAgentProfile(agentId));
     } catch (error) {
-      return sendAgentError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -116,22 +117,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
       }
       return reply.send({ deleted: true, agentId, mode: parsed.data.mode });
     } catch (error) {
-      return sendAgentError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 };
-
-function sendAgentError(reply: FastifyReply, error: unknown) {
-  const message = (error as Error).message;
-  if (message.includes("not found")) {
-    return reply.code(404).send({ error: message });
-  }
-  if (message.includes("cannot be hard deleted")) {
-    return reply.code(409).send({ error: message });
-  }
-  if (message.includes("already exists") || message.includes("required")) {
-    return reply.code(400).send({ error: message });
-  }
-  console.error("[agents] route error", error);
-  return reply.code(500).send({ error: "Internal server error" });
-}

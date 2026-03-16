@@ -38,7 +38,7 @@ import { SelectOrCustom, type SelectOption } from "../components/SelectOrCustom"
 import { StatusChip } from "../components/StatusChip";
 import { GCSelect, GCSwitch } from "../components/ui";
 import { pageCopy } from "../content/copy";
-import { previewProviderModels, useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
+import { dedupeProviderModels, previewProviderModels, useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 
 const TOOL_PROFILE_OPTIONS: SelectOption[] = [
@@ -139,6 +139,7 @@ function scrollToSettingsSection(sectionId: string): void {
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<RuntimeSettingsResponse | null>(null);
+  const [deploymentProfile, setDeploymentProfile] = useState<"local_dev" | "trusted_local" | "remote_hardened">("local_dev");
   const [profile, setProfile] = useState("");
   const [budgetMode, setBudgetMode] = useState<"saver" | "balanced" | "power">("balanced");
   const [networkAllowlistText, setNetworkAllowlistText] = useState("");
@@ -152,6 +153,8 @@ export function SettingsPage() {
   const [providerApiKey, setProviderApiKey] = useState("");
   const [providerApiKeyEnv, setProviderApiKeyEnv] = useState("");
   const [providerSecretStatus, setProviderSecretStatus] = useState<ProviderSecretStatus | null>(null);
+  const [hasUnsavedActiveLlmDraft, setHasUnsavedActiveLlmDraft] = useState(false);
+  const [hasUnsavedProviderDraft, setHasUnsavedProviderDraft] = useState(false);
   const [authMode, setAuthMode] = useState<"none" | "token" | "basic">("none");
   const [allowLoopbackBypass, setAllowLoopbackBypass] = useState(false);
   const [authToken, setAuthToken] = useState("");
@@ -159,6 +162,7 @@ export function SettingsPage() {
   const [basicPassword, setBasicPassword] = useState("");
   const [authStorageMode, setAuthStorageMode] = useState<GatewayAuthStorageMode>("session");
   const [models, setModels] = useState<Array<{ id: string; ownedBy?: string; created?: number }>>([]);
+  const [previewedProviderId, setPreviewedProviderId] = useState("");
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelDiscoverySource, setModelDiscoverySource] = useState<"remote" | "fallback" | null>(null);
   const [modelDiscoveryWarning, setModelDiscoveryWarning] = useState<string | null>(null);
@@ -218,16 +222,37 @@ export function SettingsPage() {
     return [...fromSettings, ...fromTemplates];
   }, [providerOptions]);
 
-  const activeModelOptions = useMemo<SelectOption[]>(() => {
-    const items = [
-      ...models.map((model) => model.id),
-      ...providerOptions.map((provider) => provider.defaultModel),
-      providerDefaultModel,
-      activeModel,
-    ].filter(Boolean) as string[];
+  const effectiveActiveProviderId = activeProviderId.trim() || settings?.llm.activeProviderId || "";
+  const effectiveProviderId = providerId.trim() || effectiveActiveProviderId;
 
-    return [...new Set(items)].map((item) => ({ value: item, label: item }));
-  }, [activeModel, models, providerDefaultModel, providerOptions]);
+  const activeModelOptions = useMemo<SelectOption[]>(() => {
+    return buildProviderScopedModelOptions({
+      providerId: effectiveActiveProviderId,
+      providers: runtimeProviderCatalog,
+      previewedProviderId,
+      previewedModels: models.map((model) => model.id),
+      currentModel: activeModel,
+      fallbackModel: effectiveActiveProviderId === effectiveProviderId ? providerDefaultModel : undefined,
+    });
+  }, [
+    activeModel,
+    effectiveActiveProviderId,
+    effectiveProviderId,
+    models,
+    previewedProviderId,
+    providerDefaultModel,
+    runtimeProviderCatalog,
+  ]);
+
+  const providerDefaultModelOptions = useMemo<SelectOption[]>(() => {
+    return buildProviderScopedModelOptions({
+      providerId: effectiveProviderId,
+      providers: runtimeProviderCatalog,
+      previewedProviderId,
+      previewedModels: models.map((model) => model.id),
+      currentModel: providerDefaultModel,
+    });
+  }, [effectiveProviderId, models, previewedProviderId, providerDefaultModel, runtimeProviderCatalog]);
 
   const providerLabelOptions = useMemo<SelectOption[]>(() => {
     const builtins = providerTemplates.map((template) => ({
@@ -241,10 +266,17 @@ export function SettingsPage() {
     return [...builtins, ...existing];
   }, [providerOptions]);
 
-  const load = () => {
+  const load = (options: { preserveModelDrafts?: boolean } = {}) => {
+    const preserveModelDrafts = options.preserveModelDrafts ?? false;
     void fetchSettings()
       .then((res) => {
+        const hydrateDrafts = resolveModelDraftHydration(
+          preserveModelDrafts,
+          hasUnsavedActiveLlmDraft,
+          hasUnsavedProviderDraft,
+        );
         setSettings(res);
+        setDeploymentProfile(res.deploymentProfile);
         setProfile(res.defaultToolProfile);
         setBudgetMode((res.budgetMode as "saver" | "balanced" | "power") || "balanced");
         setNetworkAllowlistText(res.networkAllowlist.join("\n"));
@@ -252,18 +284,26 @@ export function SettingsPage() {
         setAuthMode(res.auth.mode);
         setAllowLoopbackBypass(res.auth.allowLoopbackBypass);
 
-        setActiveProviderId(res.llm.activeProviderId);
-        setActiveModel(res.llm.activeModel);
-        setProviderId(res.llm.activeProviderId);
+        if (hydrateDrafts.activeSelection) {
+          setActiveProviderId(res.llm.activeProviderId);
+          setActiveModel(res.llm.activeModel);
+        }
 
-        const activeProvider = res.llm.providers.find((provider) => provider.providerId === res.llm.activeProviderId);
-        if (activeProvider) {
-          setProviderLabel(activeProvider.label);
-          setProviderBaseUrl(activeProvider.baseUrl);
-          setProviderDefaultModel(activeProvider.defaultModel);
-          if (activeProvider.apiKeySource === "env" && activeProvider.apiKeyRef) {
-            setProviderApiKeyEnv(activeProvider.apiKeyRef);
+        if (hydrateDrafts.providerEditor) {
+          setProviderId(res.llm.activeProviderId);
+
+          const activeProvider = res.llm.providers.find((provider) => provider.providerId === res.llm.activeProviderId);
+          if (activeProvider) {
+            setProviderLabel(activeProvider.label);
+            setProviderBaseUrl(activeProvider.baseUrl);
+            setProviderDefaultModel(activeProvider.defaultModel);
+            setProviderApiKeyEnv(activeProvider.apiKeySource === "env" && activeProvider.apiKeyRef ? activeProvider.apiKeyRef : "");
           }
+        }
+
+        if (!preserveModelDrafts) {
+          setHasUnsavedActiveLlmDraft(false);
+          setHasUnsavedProviderDraft(false);
         }
 
         setChatPromptPresetId("hello");
@@ -290,7 +330,7 @@ export function SettingsPage() {
       if (!/\b(onboarding|settings)\b/.test(haystack) && signal.eventType !== "fallback_poll") {
         return;
       }
-      load();
+      load({ preserveModelDrafts: true });
     },
     {
       enabled: true,
@@ -324,6 +364,7 @@ export function SettingsPage() {
       riskDebounceRef.current = null;
     }
     const changes = [
+      { field: "deploymentProfile", from: settings.deploymentProfile, to: deploymentProfile },
       { field: "defaultToolProfile", from: settings.defaultToolProfile, to: profile },
       { field: "budgetMode", from: settings.budgetMode, to: budgetMode },
       { field: "networkAllowlist", from: settings.networkAllowlist.join("\n"), to: networkAllowlistText },
@@ -372,7 +413,7 @@ export function SettingsPage() {
       }
       riskAbortRef.current?.abort();
     };
-  }, [settings, profile, budgetMode, networkAllowlistText, authMode, providerId, providerBaseUrl]);
+  }, [settings, deploymentProfile, profile, budgetMode, networkAllowlistText, authMode, providerId, providerBaseUrl]);
 
   useEffect(() => {
     providerSecretAbortRef.current?.abort();
@@ -409,6 +450,7 @@ export function SettingsPage() {
         .map((line) => line.trim())
         .filter(Boolean);
       const next = await patchSettings({
+        deploymentProfile,
         defaultToolProfile: profile,
         budgetMode,
         networkAllowlist: allowlist,
@@ -434,6 +476,7 @@ export function SettingsPage() {
         },
       });
       setSettings(next);
+      setHasUnsavedActiveLlmDraft(false);
       await reloadProviderCatalog();
     } catch (err) {
       setError((err as Error).message);
@@ -459,6 +502,7 @@ export function SettingsPage() {
         },
       });
       setSettings(next);
+      setHasUnsavedProviderDraft(false);
       await reloadProviderCatalog();
       if (providerApiKey.trim()) {
         const status = await saveProviderSecret(providerId, providerApiKey.trim());
@@ -511,17 +555,22 @@ export function SettingsPage() {
       const targetBaseUrl = providerBaseUrl.trim();
       if (!targetProviderId || !targetBaseUrl) {
         setModels([]);
+        setPreviewedProviderId("");
         setModelDiscoverySource(null);
         setModelDiscoveryWarning(null);
         return;
       }
       setLoadingModels(true);
+      setPreviewedProviderId(targetProviderId);
       const res = await previewProviderModels({
         providerId: targetProviderId,
         baseUrl: targetBaseUrl,
         apiKey: providerApiKey.trim() || undefined,
         apiKeyEnv: providerApiKeyEnv.trim() || undefined,
-        fallbackModel: providerDefaultModel || activeModel,
+        fallbackModel: getModelPreviewFallbackModel(
+          targetProviderId === effectiveActiveProviderId ? activeModel : "",
+          providerDefaultModel,
+        ),
       }, {
         signal: options.signal,
       });
@@ -529,10 +578,10 @@ export function SettingsPage() {
       setModelDiscoverySource(res.source);
       setModelDiscoveryWarning(res.warning ?? null);
       const firstModel = res.items[0];
-      if (firstModel && (!activeModel.trim() || !res.items.includes(activeModel))) {
+      if (firstModel && targetProviderId === effectiveActiveProviderId && !activeModel.trim()) {
         setActiveModel(firstModel);
       }
-      if (firstModel && (!providerDefaultModel.trim() || !res.items.includes(providerDefaultModel))) {
+      if (firstModel && !providerDefaultModel.trim()) {
         setProviderDefaultModel(firstModel);
       }
     } catch (err) {
@@ -816,6 +865,8 @@ export function SettingsPage() {
       setProviderLabel(current.label);
       setProviderBaseUrl(current.baseUrl);
       setProviderDefaultModel(current.defaultModel);
+      setProviderApiKeyEnv(current.apiKeySource === "env" ? (current.apiKeyRef ?? "") : "");
+      setProviderApiKey("");
       return;
     }
 
@@ -823,7 +874,13 @@ export function SettingsPage() {
       setProviderLabel(template.label);
       setProviderBaseUrl(template.baseUrl);
       setProviderDefaultModel(template.defaultModel);
+      setProviderApiKeyEnv("");
+      setProviderApiKey("");
     }
+  };
+
+  const selectPreferredProviderModel = (nextProviderId: string) => {
+    setActiveModel((current) => resolveProviderModelSelection(nextProviderId, runtimeProviderCatalog, current));
   };
 
   const applyLocalProviderPreset = (nextProviderId: "lmstudio" | "ollama") => {
@@ -839,6 +896,8 @@ export function SettingsPage() {
     setProviderDefaultModel(template.defaultModel);
     setProviderApiKey("");
     setProviderApiKeyEnv("");
+    setHasUnsavedActiveLlmDraft(true);
+    setHasUnsavedProviderDraft(true);
     setShowAdvanced(true);
   };
 
@@ -900,6 +959,9 @@ export function SettingsPage() {
             >
               <div className="settings-v2-summary">
                 <StatusChip tone="muted">{settings.environment}</StatusChip>
+                <StatusChip tone={deploymentProfile === "remote_hardened" ? "warning" : deploymentProfile === "trusted_local" ? "success" : "muted"}>
+                  {formatDeploymentProfileLabel(deploymentProfile)}
+                </StatusChip>
                 <StatusChip tone={authMode === "none" ? "warning" : "success"}>{authMode === "none" ? "Local-trusted auth" : `${authMode} auth`}</StatusChip>
                 <StatusChip tone="live">{activeProviderId || settings.llm.activeProviderId || "No active provider"}</StatusChip>
                 <StatusChip tone={allowLoopbackBypass ? "warning" : "success"}>{allowLoopbackBypass ? "Loopback bypass on" : "Loopback bypass off"}</StatusChip>
@@ -909,6 +971,10 @@ export function SettingsPage() {
                 <div>
                   <strong>Environment</strong>
                   <p className="office-subtitle">{settings.environment}</p>
+                </div>
+                <div>
+                  <strong>Deployment profile</strong>
+                  <p className="office-subtitle">{formatDeploymentProfileLabel(deploymentProfile)}</p>
                 </div>
                 <div>
                   <strong>Workspace</strong>
@@ -1200,6 +1266,27 @@ export function SettingsPage() {
             >
         <FieldHelp>Runtime controls shape how boldly GoatCitadel acts by default. Use the allowlist preset first, then drop into custom mode only when your network or model layout needs it.</FieldHelp>
         <div className="controls-row">
+          <label htmlFor="deploymentProfile">
+            Deployment Profile
+            <HelpHint label="Deployment profile help" text="local_dev is loose for iteration, trusted_local enables browser state tools on a trusted machine, and remote_hardened requires explicit auth and tighter confirmation flows." />
+          </label>
+          <GCSelect
+            id="deploymentProfile"
+            value={deploymentProfile}
+            onChange={(value) => setDeploymentProfile(value as "local_dev" | "trusted_local" | "remote_hardened")}
+            options={[
+              { value: "local_dev", label: "local_dev" },
+              { value: "trusted_local", label: "trusted_local" },
+              { value: "remote_hardened", label: "remote_hardened" },
+            ]}
+          />
+        </div>
+        {deploymentProfile === "remote_hardened" ? (
+          <FieldHelp>
+            Hardened mode fails closed unless auth is enabled, loopback bypass stays off, outbound hosts are explicitly allowlisted, and browser submit flows include verification plus confirm-before-submit.
+          </FieldHelp>
+        ) : null}
+        <div className="controls-row">
           <label htmlFor="profile">Tool Profile</label>
           <SelectOrCustom
             id="profile"
@@ -1288,9 +1375,12 @@ export function SettingsPage() {
             id="activeProvider"
             value={activeProviderId}
             onChange={(nextProviderId) => {
+              setHasUnsavedActiveLlmDraft(true);
+              setHasUnsavedProviderDraft(true);
               setActiveProviderId(nextProviderId);
               setProviderId(nextProviderId);
               applyProviderTemplate(nextProviderId);
+              selectPreferredProviderModel(nextProviderId);
             }}
             options={providerSelectOptions}
             customPlaceholder="Custom provider id"
@@ -1303,7 +1393,10 @@ export function SettingsPage() {
           <SelectOrCustom
             id="activeModel"
             value={activeModel}
-            onChange={setActiveModel}
+            onChange={(nextModel) => {
+              setHasUnsavedActiveLlmDraft(true);
+              setActiveModel(nextModel);
+            }}
             options={activeModelOptions}
             customPlaceholder="Custom model id"
             customLabel="Custom active model"
@@ -1337,6 +1430,7 @@ export function SettingsPage() {
                 id="providerId"
                 value={providerId}
                 onChange={(nextProviderId) => {
+                  setHasUnsavedProviderDraft(true);
                   setProviderId(nextProviderId);
                   applyProviderTemplate(nextProviderId);
                 }}
@@ -1350,7 +1444,10 @@ export function SettingsPage() {
               <SelectOrCustom
                 id="providerLabel"
                 value={providerLabel}
-                onChange={setProviderLabel}
+                onChange={(nextLabel) => {
+                  setHasUnsavedProviderDraft(true);
+                  setProviderLabel(nextLabel);
+                }}
                 options={providerLabelOptions}
                 customPlaceholder="Provider display label"
                 customLabel="Custom label"
@@ -1361,7 +1458,10 @@ export function SettingsPage() {
               <SelectOrCustom
                 id="providerBaseUrl"
                 value={providerBaseUrl}
-                onChange={setProviderBaseUrl}
+                onChange={(nextBaseUrl) => {
+                  setHasUnsavedProviderDraft(true);
+                  setProviderBaseUrl(nextBaseUrl);
+                }}
                 options={providerTemplates.map((template) => ({
                   value: template.baseUrl,
                   label: template.baseUrl,
@@ -1375,8 +1475,11 @@ export function SettingsPage() {
               <SelectOrCustom
                 id="providerDefaultModel"
                 value={providerDefaultModel}
-                onChange={setProviderDefaultModel}
-                options={activeModelOptions}
+                onChange={(nextDefaultModel) => {
+                  setHasUnsavedProviderDraft(true);
+                  setProviderDefaultModel(nextDefaultModel);
+                }}
+                options={providerDefaultModelOptions}
                 customPlaceholder="Default model id"
                 customLabel="Custom default model"
               />
@@ -1387,7 +1490,10 @@ export function SettingsPage() {
                 id="providerApiKey"
                 type="password"
                 value={providerApiKey}
-                onChange={(event) => setProviderApiKey(event.target.value)}
+                onChange={(event) => {
+                  setHasUnsavedProviderDraft(true);
+                  setProviderApiKey(event.target.value);
+                }}
               />
             </div>
             <p className="office-subtitle">
@@ -1406,7 +1512,10 @@ export function SettingsPage() {
               <SelectOrCustom
                 id="providerApiKeyEnv"
                 value={providerApiKeyEnv}
-                onChange={setProviderApiKeyEnv}
+                onChange={(nextApiKeyEnv) => {
+                  setHasUnsavedProviderDraft(true);
+                  setProviderApiKeyEnv(nextApiKeyEnv);
+                }}
                 options={[
                   { value: "OPENAI_API_KEY", label: "OPENAI_API_KEY" },
                   { value: "ANTHROPIC_API_KEY", label: "ANTHROPIC_API_KEY" },
@@ -1546,6 +1655,70 @@ function matchAllowlistPreset(allowlist: string[]): string {
   return "custom";
 }
 
+interface ProviderScopedModelOptionSource {
+  providerId: string;
+  defaultModel: string;
+  models: string[];
+}
+
+export function buildProviderScopedModelOptions(input: {
+  providerId: string;
+  providers: ProviderScopedModelOptionSource[];
+  previewedProviderId?: string;
+  previewedModels?: string[];
+  currentModel?: string;
+  fallbackModel?: string;
+}): SelectOption[] {
+  const provider = input.providers.find((item) => item.providerId === input.providerId);
+  const previewModels = input.previewedProviderId === input.providerId ? (input.previewedModels ?? []) : [];
+  const items = dedupeProviderModels([
+    provider?.defaultModel,
+    ...(provider?.models ?? []),
+    ...previewModels,
+    input.fallbackModel,
+    input.currentModel,
+  ]);
+  return items.map((item) => ({ value: item, label: item }));
+}
+
+export function getModelPreviewFallbackModel(currentModel: string, providerDefaultModel: string): string | undefined {
+  return currentModel.trim() || providerDefaultModel.trim() || undefined;
+}
+
+export function resolveModelDraftHydration(
+  preserveModelDrafts: boolean,
+  hasUnsavedActiveLlmDraft: boolean,
+  hasUnsavedProviderDraft: boolean,
+): { activeSelection: boolean; providerEditor: boolean } {
+  if (!preserveModelDrafts) {
+    return {
+      activeSelection: true,
+      providerEditor: true,
+    };
+  }
+  return {
+    activeSelection: !hasUnsavedActiveLlmDraft,
+    providerEditor: !hasUnsavedActiveLlmDraft && !hasUnsavedProviderDraft,
+  };
+}
+
+export function resolveProviderModelSelection(
+  providerId: string,
+  providers: ProviderScopedModelOptionSource[],
+  currentModel: string,
+): string {
+  const provider = providers.find((item) => item.providerId === providerId);
+  const options = dedupeProviderModels([
+    provider?.defaultModel,
+    ...(provider?.models ?? []),
+  ]);
+  const normalizedCurrent = currentModel.trim();
+  if (normalizedCurrent && options.includes(normalizedCurrent)) {
+    return normalizedCurrent;
+  }
+  return options[0] ?? "";
+}
+
 export function resolveAuthStorageMode(
   authMode: "none" | "token" | "basic",
   rememberCredentials: boolean,
@@ -1554,6 +1727,16 @@ export function resolveAuthStorageMode(
     return "session";
   }
   return rememberCredentials ? "persistent" : "session";
+}
+
+function formatDeploymentProfileLabel(value: "local_dev" | "trusted_local" | "remote_hardened"): string {
+  if (value === "trusted_local") {
+    return "trusted_local";
+  }
+  if (value === "remote_hardened") {
+    return "remote_hardened";
+  }
+  return "local_dev";
 }
 
 function fileToBase64(file: File): Promise<string> {

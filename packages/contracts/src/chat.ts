@@ -1,3 +1,4 @@
+import type { DurableRunStatus } from "./durable.js";
 import type { SkillSourceProvider } from "./skills.js";
 
 export type ChatProjectLifecycleStatus = "active" | "archived";
@@ -360,6 +361,8 @@ export type ChatTurnFailureClass =
   | "approval_required"
   | "unknown";
 
+export type ChatTurnCompletionStatus = "complete" | "truncated" | "interrupted" | "backgrounded";
+
 export type ChatTurnRecoveryAction =
   | "retry"
   | "retry_narrower"
@@ -374,6 +377,18 @@ export interface ChatTurnFailureRecord {
   message: string;
   retryable?: boolean;
   recommendedAction?: ChatTurnRecoveryAction;
+}
+
+export interface ChatTurnCompletionRecord {
+  finishReason?: string;
+  status: ChatTurnCompletionStatus;
+  repaired: boolean;
+}
+
+export interface ChatTurnDurableRecord {
+  runId?: string;
+  status?: DurableRunStatus | "backgrounded";
+  checkpointKind?: string;
 }
 
 export function getChatTurnRecoveryAction(failureClass: ChatTurnFailureClass): ChatTurnRecoveryAction {
@@ -610,6 +625,7 @@ export interface ChatTurnTraceRecord {
   assistantMessageId?: string;
   status: ChatTurnLifecycleStatus;
   failure?: ChatTurnFailureRecord;
+  completion?: ChatTurnCompletionRecord;
   mode: ChatMode;
   model?: string;
   webMode: ChatWebMode;
@@ -652,6 +668,7 @@ export interface ChatTurnTraceRecord {
     actionCount?: number;
     mode?: ChatProactiveMode;
   };
+  durable?: ChatTurnDurableRecord;
   orchestration?: ChatOrchestrationSummary;
   guidance?: {
     workspaceId: string;
@@ -950,8 +967,11 @@ export interface ChatStreamApprovalRecord {
   reason?: string;
 }
 
-interface ChatStreamChunkBase {
+export interface ChatStreamChunkBase {
   sessionId: string;
+  eventId: string;
+  sequence: number;
+  runId?: string;
 }
 
 export interface ChatStreamMessageStartChunk extends ChatStreamChunkBase {
@@ -1046,3 +1066,7 @@ export type ChatStreamChunk =
   | ChatStreamCapabilitySuggestionChunk
   | ChatStreamErrorChunk
   | ChatStreamDoneChunk;
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+export type ChatStreamChunkDraft = DistributiveOmit<ChatStreamChunk, "eventId" | "sequence" | "runId">;

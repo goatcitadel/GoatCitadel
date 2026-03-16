@@ -2,6 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { ConfigValidationError } from "@goatcitadel/contracts";
 import { loadGatewayConfig } from "./config.js";
 
 const TEMP_ROOTS: string[] = [];
@@ -26,6 +27,9 @@ async function createConfigFixture(): Promise<{ rootDir: string; configDir: stri
   });
 
   await writeJson(path.join(configDir, "tool-policy.json"), {
+    profiles: {},
+    tools: { profile: "minimal", allow: [], deny: [] },
+    agents: {},
     sandbox: {
       writeJailRoots: [],
       readOnlyRoots: [],
@@ -98,5 +102,35 @@ describe("loadGatewayConfig", () => {
     const { rootDir, configDir } = await createConfigFixture();
     await writeFile(path.join(configDir, "llm-providers.json"), "{invalid", "utf8");
     await expect(loadGatewayConfig(rootDir)).rejects.toThrow(/llm-providers\.json/);
+  });
+
+  it("throws ConfigValidationError for structurally invalid budgets config", async () => {
+    const { rootDir, configDir } = await createConfigFixture();
+    await writeJson(path.join(configDir, "budgets.json"), {
+      mode: "turbo",
+      daily: { tokensWarning: "many", tokensHardCap: 2, usdWarning: 1, usdHardCap: 2 },
+      session: { tokensHardCap: 1, turnMaxInputTokens: 1, turnMaxOutputTokens: 1 },
+    });
+    await expect(loadGatewayConfig(rootDir)).rejects.toThrow(ConfigValidationError);
+  });
+
+  it("throws ConfigValidationError for invalid tool-policy config", async () => {
+    const { rootDir, configDir } = await createConfigFixture();
+    await writeJson(path.join(configDir, "tool-policy.json"), {
+      profiles: {},
+      tools: { profile: 123, allow: [], deny: [] },
+      agents: {},
+      sandbox: { writeJailRoots: [], readOnlyRoots: [] },
+    });
+    await expect(loadGatewayConfig(rootDir)).rejects.toThrow(ConfigValidationError);
+  });
+
+  it("loads valid config without error", async () => {
+    const { rootDir } = await createConfigFixture();
+    const config = await loadGatewayConfig(rootDir);
+    expect(config.assistant).toBeDefined();
+    expect(config.toolPolicy).toBeDefined();
+    expect(config.budgets).toBeDefined();
+    expect(config.llm).toBeDefined();
   });
 });

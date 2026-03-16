@@ -1,4 +1,7 @@
-import type { ChatCitationRecord, ChatTurnTraceRecord } from "./chat.js";
+import type { ChatCitationRecord, ChatMode, ChatTurnTraceRecord } from "./chat.js";
+import type { ChatMemoryMode, ChatThinkingLevel, ChatWebMode } from "./chat.js";
+
+export type PromptPackToolTier = "no-tools" | "implicit-tools" | "explicit-tools";
 
 export interface PromptPackRecord {
   packId: string;
@@ -16,6 +19,8 @@ export interface PromptPackTestRecord {
   title: string;
   prompt: string;
   orderIndex: number;
+  mode?: ChatMode;
+  toolTier?: PromptPackToolTier;
   createdAt: string;
 }
 
@@ -27,6 +32,12 @@ export interface PromptPackRunRecord {
   status: "queued" | "running" | "completed" | "failed";
   providerId?: string;
   model?: string;
+  mode?: ChatMode;
+  toolTier?: PromptPackToolTier;
+  toolAutonomy?: "safe_auto" | "manual";
+  webMode?: ChatWebMode;
+  memoryMode?: ChatMemoryMode;
+  thinkingLevel?: ChatThinkingLevel;
   responseText?: string;
   trace?: ChatTurnTraceRecord;
   citations?: ChatCitationRecord[];
@@ -169,6 +180,7 @@ export interface ReplayRegressionRun {
   packId: string;
   status: "queued" | "running" | "completed" | "failed";
   testCodes: string[];
+  /** ISO-8601 timestamp selecting the latest scored baseline run at or before this instant. */
   baselineRef?: string;
   startedAt: string;
   finishedAt?: string;

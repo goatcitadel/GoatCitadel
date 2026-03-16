@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { NotFoundError } from "@goatcitadel/contracts";
 
 export interface ChatSessionBranchStateRecord {
   sessionId: string;
@@ -67,7 +68,7 @@ export class ChatSessionBranchStateRepository {
     });
     const row = this.getStmt.get(sessionId) as ChatSessionBranchStateRow | undefined;
     if (!row) {
-      throw new Error(`chat session branch state row missing for session ${sessionId}`);
+      throw new NotFoundError({ entity: "chat session branch state", id: sessionId });
     }
     return mapRow(row);
   }

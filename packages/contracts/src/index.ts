@@ -38,3 +38,6 @@ export * from "./durable.js";
 export * from "./replay.js";
 export * from "./dev-diagnostics.js";
 export * from "./verification.js";
+export * from "./utils.js";
+export * from "./errors.js";
+export * from "./config-schemas.js";

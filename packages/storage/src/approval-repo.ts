@@ -5,6 +5,7 @@ import type {
   ApprovalRequest,
   ApprovalResolveInput,
 } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { safeJsonParse } from "./safe-json.js";
@@ -102,7 +103,7 @@ export class ApprovalRepository {
   public get(approvalId: string): ApprovalRequest {
     const row = this.getStmt.get(approvalId) as ApprovalRow | undefined;
     if (!row) {
-      throw new Error(`Approval ${approvalId} not found`);
+      throw new NotFoundError({ entity: "Approval", id: approvalId });
     }
 
     return mapRow(row);
@@ -133,7 +134,7 @@ export class ApprovalRepository {
     }).changes;
 
     if (changed < 1) {
-      throw new Error(`Approval ${approvalId} is already resolved`);
+      throw new ConflictError({ code: "STATE_CONFLICT", message: `Approval ${approvalId} is already resolved` });
     }
 
     return this.get(approvalId);

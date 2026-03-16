@@ -956,6 +956,7 @@ export interface AgentsResponse {
 
 export interface RuntimeSettingsResponse {
   environment: string;
+  deploymentProfile: "local_dev" | "trusted_local" | "remote_hardened";
   defaultToolProfile: string;
   budgetMode: "saver" | "balanced" | "power";
   workspaceDir: string;
@@ -1583,6 +1584,39 @@ export async function streamEditChatTurn(
       ...authHeaders,
     },
     body: JSON.stringify(input),
+  });
+  if (!response.ok || !response.body) {
+    const text = await response.text();
+    throw new Error(`API error ${response.status}: ${text}`);
+  }
+  await consumeSseResponse(response.body, onChunk, options.signal);
+}
+
+export async function resumeChatTurnStream(
+  sessionId: string,
+  turnId: string,
+  onChunk: (chunk: ChatStreamChunk) => void,
+  options: { signal?: AbortSignal; sinceEventId?: string } = {},
+): Promise<void> {
+  const query = new URLSearchParams();
+  if (options.sinceEventId) {
+    query.set("sinceEventId", options.sinceEventId);
+  }
+  const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/stream${query.size > 0 ? `?${query.toString()}` : ""}`;
+  const authHeaders = readGatewayAuthHeaders(path);
+  const correlationId = createCorrelationId();
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "GET",
+    signal: options.signal,
+    headers: {
+      Accept: "text/event-stream",
+      "Cache-Control": "no-cache",
+      "x-goatcitadel-correlation-id": correlationId,
+      "x-goatcitadel-origin-surface": "chat",
+      "x-goatcitadel-session-id": sessionId,
+      ...(options.sinceEventId ? { "Last-Event-ID": options.sinceEventId } : {}),
+      ...authHeaders,
+    },
   });
   if (!response.ok || !response.body) {
     const text = await response.text();
@@ -3222,6 +3256,7 @@ export async function completeOnboarding(completedBy?: string): Promise<Onboardi
 }
 
 export async function patchSettings(input: {
+  deploymentProfile?: "local_dev" | "trusted_local" | "remote_hardened";
   defaultToolProfile?: string;
   budgetMode?: "saver" | "balanced" | "power";
   networkAllowlist?: string[];

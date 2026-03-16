@@ -12,8 +12,6 @@ import {
   fetchPromptPackBenchmark,
   fetchPromptPackReplayRegressionStatus,
   fetchPromptPackTrends,
-  fetchLlmConfig,
-  fetchLlmModels,
   fetchPromptPackExport,
   fetchPromptPackReport,
   fetchPromptPacks,
@@ -30,6 +28,7 @@ import { CardSkeleton } from "../components/CardSkeleton";
 import { ChatModelPicker, type ChatModelProviderOption } from "../components/ChatModelPicker";
 import { GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
+import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 
 interface ScoreDraft {
@@ -106,7 +105,6 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   } | null>(null);
   const [reuseLastModel, setReuseLastModel] = useState(true);
   const [autoScoreOnRun, setAutoScoreOnRun] = useState(true);
-  const [providerOptions, setProviderOptions] = useState<ChatModelProviderOption[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   const [benchmarkTestCodes, setBenchmarkTestCodes] = useState(DEFAULT_BENCHMARK_TEST_CODES);
@@ -133,36 +131,19 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   const regressionActive = Boolean(
     regressionRunId && (regressionPending || regressionStatus?.run.status === "queued" || regressionStatus?.run.status === "running"),
   );
-
-  const loadLlmCatalog = useCallback(async () => {
-    const config = await fetchLlmConfig();
-    const options = await Promise.all(config.providers.map(async (provider) => {
-      let discoveredModels: string[] = [];
-      try {
-        const models = await fetchLlmModels(provider.providerId);
-        discoveredModels = models.items.map((item) => item.id);
-      } catch {
-        // Keep the provider visible with known defaults even if remote model discovery fails.
-      }
-      return {
+  const {
+    config: runtimeLlmConfig,
+    providers: runtimeProviderCatalog,
+  } = useProviderModelCatalog("system");
+  const providerOptions = useMemo<ChatModelProviderOption[]>(() => {
+    return runtimeProviderCatalog
+      .map((provider) => ({
         providerId: provider.providerId,
         label: provider.label,
-        models: dedupeStrings([
-          provider.defaultModel,
-          provider.providerId === config.activeProviderId ? config.activeModel : undefined,
-          ...discoveredModels,
-        ]),
-      } satisfies ChatModelProviderOption;
-    }));
-
-    setProviderOptions(options.filter((item) => item.models.length > 0));
-    setSelectedProviderId((current) => {
-      if (current && options.some((item) => item.providerId === current)) {
-        return current;
-      }
-      return config.activeProviderId ?? options[0]?.providerId ?? "";
-    });
-  }, []);
+        models: provider.models,
+      }))
+      .filter((provider) => provider.models.length > 0);
+  }, [runtimeProviderCatalog]);
 
   const loadPack = useCallback(async (packId: string) => {
     const [testsResponse, reportResponse, exportResponse] = await Promise.all([
@@ -229,10 +210,6 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     void load();
   }, [load]);
 
-  useEffect(() => {
-    void loadLlmCatalog().catch((err: Error) => setError((current) => current ?? err.message));
-  }, [loadLlmCatalog]);
-
   useRefreshSubscription(
     "promptLab",
     async () => {
@@ -249,7 +226,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       ]);
     },
     {
-      enabled: !initialLoading,
+      enabled: !initialLoading && (running || benchmarkActive || regressionActive),
       coalesceMs: 1200,
       staleMs: 20000,
       pollIntervalMs: benchmarkActive || regressionActive ? 2500 : 15000,
@@ -372,18 +349,20 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       setSelectedModel("");
       return;
     }
-    const activeProvider = providerOptions.find((item) => item.providerId === selectedProviderId) ?? providerOptions[0];
+    const activeProvider = providerOptions.find((item) => item.providerId === selectedProviderId)
+      ?? providerOptions.find((item) => item.providerId === runtimeLlmConfig?.activeProviderId)
+      ?? providerOptions[0];
     if (!activeProvider) {
       setSelectedModel("");
       return;
     }
-    if (!selectedProviderId) {
+    if (!selectedProviderId || !providerOptions.some((item) => item.providerId === selectedProviderId)) {
       setSelectedProviderId(activeProvider.providerId);
     }
     setSelectedModel((current) => current && activeProvider.models.includes(current)
       ? current
       : activeProvider.models[0] ?? "");
-  }, [providerOptions, selectedProviderId]);
+  }, [providerOptions, runtimeLlmConfig?.activeProviderId, selectedProviderId]);
 
   const selectedRunModel = useMemo(() => {
     if (reuseLastModel && lastSuccessfulModel) {
@@ -845,6 +824,12 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
             pending={benchmarkPending}
             disabled={!selectedPackId || running || importing}
             onClick={() => void runBenchmark()}
+          />
+          <ActionButton
+            label="Refresh data"
+            pending={isRefreshing}
+            disabled={initialLoading}
+            onClick={() => void load({ background: true })}
           />
           <ActionButton
             label="Auto score unscored"

@@ -6,6 +6,7 @@ import type {
   ChatExecutionPlanStatus,
   ChatExecutionPlanStepRecord,
 } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface ChatExecutionPlanRow {
@@ -138,7 +139,7 @@ export class ChatExecutionPlanRepository {
   public get(planId: string): ChatExecutionPlanRecord {
     const row = this.getPlanStmt.get(planId) as ChatExecutionPlanRow | undefined;
     if (!row) {
-      throw new Error(`Chat execution plan ${planId} not found`);
+      throw new NotFoundError({ entity: "Chat execution plan", id: planId });
     }
     return this.mapPlan(row);
   }

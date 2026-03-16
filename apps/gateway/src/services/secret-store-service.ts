@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { GoatError } from "@goatcitadel/contracts";
 
 const SECRET_SERVICE = "goatcitadel";
 
@@ -10,10 +11,11 @@ export interface ProviderSecretStatus {
   source: SecretSource;
 }
 
-export class SecretStoreUnavailableError extends Error {
+export class SecretStoreUnavailableError extends GoatError {
+  readonly code = "SECRET_STORE_UNAVAILABLE" as const;
+  readonly httpStatus = 503;
   public constructor(message: string) {
     super(message);
-    this.name = "SecretStoreUnavailableError";
   }
 }
 

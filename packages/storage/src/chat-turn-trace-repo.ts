@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { NotFoundError } from "@goatcitadel/contracts";
 import type {
   ChatCapabilityUpgradeSuggestion,
   ChatCitationRecord,
@@ -32,6 +33,8 @@ interface ChatTurnTraceRow {
   retrieval_json: string | null;
   reflection_json: string | null;
   proactive_json: string | null;
+  completion_json: string | null;
+  durable_json: string | null;
   orchestration_json: string | null;
   guidance_json: string | null;
   citations_json: string | null;
@@ -62,6 +65,8 @@ export interface ChatTurnTraceCreateInput {
   retrieval?: ChatTurnTraceRecord["retrieval"];
   reflection?: ChatTurnTraceRecord["reflection"];
   proactive?: ChatTurnTraceRecord["proactive"];
+  completion?: ChatTurnTraceRecord["completion"];
+  durable?: ChatTurnTraceRecord["durable"];
   orchestration?: ChatOrchestrationSummary;
   guidance?: ChatTurnTraceRecord["guidance"];
   citations?: ChatCitationRecord[];
@@ -85,6 +90,8 @@ export interface ChatTurnTracePatchInput {
   retrieval?: ChatTurnTraceRecord["retrieval"];
   reflection?: ChatTurnTraceRecord["reflection"];
   proactive?: ChatTurnTraceRecord["proactive"];
+  completion?: ChatTurnTraceRecord["completion"];
+  durable?: ChatTurnTraceRecord["durable"];
   orchestration?: ChatOrchestrationSummary;
   guidance?: ChatTurnTraceRecord["guidance"];
   citations?: ChatCitationRecord[];
@@ -106,13 +113,15 @@ export class ChatTurnTraceRepository {
       INSERT INTO chat_turn_traces (
         turn_id, session_id, user_message_id, parent_turn_id, branch_kind, source_turn_id,
         assistant_message_id, execution_plan_id, status, mode, model, web_mode, memory_mode, thinking_level,
-        routing_json, retrieval_json, reflection_json, proactive_json, orchestration_json, guidance_json, citations_json,
+        routing_json, retrieval_json, reflection_json, proactive_json, completion_json, durable_json,
+        orchestration_json, guidance_json, citations_json,
         failure_json,
         capability_upgrade_suggestions_json, specialist_candidate_suggestions_json, started_at, finished_at
       ) VALUES (
         @turnId, @sessionId, @userMessageId, @parentTurnId, @branchKind, @sourceTurnId,
         @assistantMessageId, @executionPlanId, @status, @mode, @model, @webMode, @memoryMode, @thinkingLevel,
-        @routingJson, @retrievalJson, @reflectionJson, @proactiveJson, @orchestrationJson, @guidanceJson, @citationsJson,
+        @routingJson, @retrievalJson, @reflectionJson, @proactiveJson, @completionJson, @durableJson,
+        @orchestrationJson, @guidanceJson, @citationsJson,
         @failureJson,
         @capabilityUpgradeSuggestionsJson, @specialistCandidateSuggestionsJson, @startedAt, @finishedAt
       )
@@ -131,6 +140,8 @@ export class ChatTurnTraceRepository {
         retrieval_json = @retrievalJson,
         reflection_json = @reflectionJson,
         proactive_json = @proactiveJson,
+        completion_json = @completionJson,
+        durable_json = @durableJson,
         orchestration_json = @orchestrationJson,
         guidance_json = @guidanceJson,
         citations_json = @citationsJson,
@@ -151,7 +162,7 @@ export class ChatTurnTraceRepository {
   public get(turnId: string): ChatTurnTraceRecord {
     const row = this.getStmt.get(turnId) as ChatTurnTraceRow | undefined;
     if (!row) {
-      throw new Error(`Chat turn trace ${turnId} not found`);
+      throw new NotFoundError({ entity: "Chat turn trace", id: turnId });
     }
     return mapRow(row);
   }
@@ -176,6 +187,8 @@ export class ChatTurnTraceRepository {
       retrievalJson: input.retrieval ? JSON.stringify(input.retrieval) : null,
       reflectionJson: input.reflection ? JSON.stringify(input.reflection) : null,
       proactiveJson: input.proactive ? JSON.stringify(input.proactive) : null,
+      completionJson: input.completion ? JSON.stringify(input.completion) : null,
+      durableJson: input.durable ? JSON.stringify(input.durable) : null,
       orchestrationJson: input.orchestration ? JSON.stringify(input.orchestration) : null,
       guidanceJson: input.guidance ? JSON.stringify(input.guidance) : null,
       citationsJson: input.citations ? JSON.stringify(input.citations) : null,
@@ -215,6 +228,8 @@ export class ChatTurnTraceRepository {
       retrievalJson: JSON.stringify(input.retrieval ?? current.retrieval ?? null),
       reflectionJson: JSON.stringify(input.reflection ?? current.reflection ?? null),
       proactiveJson: JSON.stringify(input.proactive ?? current.proactive ?? null),
+      completionJson: JSON.stringify(input.completion ?? current.completion ?? null),
+      durableJson: JSON.stringify(input.durable ?? current.durable ?? null),
       orchestrationJson: JSON.stringify(input.orchestration ?? current.orchestration ?? null),
       guidanceJson: JSON.stringify(input.guidance ?? current.guidance ?? null),
       citationsJson: JSON.stringify(input.citations ?? current.citations ?? []),
@@ -266,6 +281,8 @@ function mapRow(row: ChatTurnTraceRow): ChatTurnTraceRecord {
     retrieval: safeJsonParse<ChatTurnTraceRecord["retrieval"] | undefined>(row.retrieval_json ?? "", undefined),
     reflection: safeJsonParse<ChatTurnTraceRecord["reflection"] | undefined>(row.reflection_json ?? "", undefined),
     proactive: safeJsonParse<ChatTurnTraceRecord["proactive"] | undefined>(row.proactive_json ?? "", undefined),
+    completion: safeJsonParse<ChatTurnTraceRecord["completion"] | undefined>(row.completion_json ?? "", undefined),
+    durable: safeJsonParse<ChatTurnTraceRecord["durable"] | undefined>(row.durable_json ?? "", undefined),
     orchestration: safeJsonParse<ChatOrchestrationSummary | undefined>(row.orchestration_json ?? "", undefined),
     guidance: safeJsonParse<ChatTurnTraceRecord["guidance"] | undefined>(row.guidance_json ?? "", undefined),
     capabilityUpgradeSuggestions: safeJsonParse<ChatCapabilityUpgradeSuggestion[] | undefined>(

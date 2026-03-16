@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface SystemSettingRow {
@@ -48,7 +49,7 @@ export class SystemSettingsRepository {
     });
     const saved = this.get<T>(key);
     if (!saved) {
-      throw new Error(`Failed to persist setting ${key}`);
+      throw new NotFoundError(`Failed to persist setting ${key}`);
     }
     return saved;
   }

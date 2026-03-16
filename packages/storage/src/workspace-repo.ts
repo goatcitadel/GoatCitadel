@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { WorkspaceCreateInput, WorkspacePrefs, WorkspaceRecord, WorkspaceUpdateInput } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface WorkspaceRow {
@@ -83,7 +84,7 @@ export class WorkspaceRepository {
   public get(workspaceId: string): WorkspaceRecord {
     const row = this.getStmt.get(workspaceId) as WorkspaceRow | undefined;
     if (!row) {
-      throw new Error(`Workspace ${workspaceId} not found`);
+      throw new NotFoundError({ entity: "Workspace", id: workspaceId });
     }
     return mapRow(row);
   }
@@ -138,7 +139,7 @@ export class WorkspaceRepository {
   public archive(workspaceId: string, now = new Date().toISOString()): WorkspaceRecord {
     const current = this.get(workspaceId);
     if (current.workspaceId === "default") {
-      throw new Error("default workspace cannot be archived");
+      throw new ConflictError({ code: "STATE_CONFLICT", message: "default workspace cannot be archived" });
     }
     if (current.lifecycleStatus === "archived") {
       return current;
@@ -166,7 +167,7 @@ export class WorkspaceRepository {
   private assertSlugAvailable(slug: string, excludingWorkspaceId?: string): void {
     const existing = this.findBySlug(slug);
     if (existing && existing.workspaceId !== excludingWorkspaceId) {
-      throw new Error(`Workspace slug "${slug}" is already in use`);
+      throw new ConflictError({ code: "ALREADY_EXISTS", message: `Workspace slug "${slug}" is already in use` });
     }
   }
 }
@@ -189,7 +190,7 @@ function mapRow(row: WorkspaceRow): WorkspaceRecord {
 function sanitizeRequired(value: string, field: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error(`${field} is required`);
+    throw new ValidationError({ code: "FIELD_REQUIRED", field });
   }
   return trimmed;
 }
@@ -210,7 +211,7 @@ function normalizeSlug(value: string): string {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
   if (!normalized) {
-    throw new Error("slug is required");
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "slug" });
   }
   if (normalized.length > 64) {
     return normalized.slice(0, 64).replace(/-+$/g, "");

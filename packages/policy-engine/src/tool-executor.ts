@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
+import { clampInt } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { assertReadPathAllowed, assertWritePathInJail } from "./sandbox/path-jail.js";
 import { assertHostAllowed } from "./sandbox/network-guard.js";
@@ -106,6 +107,8 @@ export async function executeTool(
       return runRestricted("lint", request.args);
     case "build.run":
       return runRestricted("build", request.args);
+    case "memory.read":
+      return memoryRead(request.args, storage);
     case "memory.write":
       return memoryWrite(request.args, storage, false);
     case "memory.upsert":
@@ -283,12 +286,10 @@ async function bankrPrompt(
       dailyUsageUsdAfter,
     };
   } catch (error) {
-    const err = error as {
-      stdout?: string;
-      stderr?: string;
-      message: string;
-      code?: number | string;
-    };
+    const message = error instanceof Error ? error.message : String(error);
+    const stdout = (error as { stdout?: string })?.stdout;
+    const stderr = (error as { stderr?: string })?.stderr;
+    const code = (error as { code?: number | string })?.code;
     appendBankrActionAudit(storage, {
       sessionId: request.sessionId,
       actorId: request.agentId,
@@ -300,12 +301,12 @@ async function bankrPrompt(
       policyReason: "cli_execution_failed",
       details: {
         command: ["bankr", ...cliArgs],
-        code: err.code,
-        stdout: (err.stdout ?? "").slice(0, 12000),
-        stderr: (err.stderr ?? err.message).slice(0, 4000),
+        code,
+        stdout: (stdout ?? "").slice(0, 12000),
+        stderr: (stderr ?? message).slice(0, 4000),
       },
     });
-    throw new Error(`Bankr command failed: ${err.stderr ?? err.message}`);
+    throw new Error(`Bankr command failed: ${stderr ?? message}`);
   }
 }
 
@@ -496,7 +497,14 @@ async function httpGet(args: Record<string, unknown>, config: ToolPolicyConfig, 
   const url = required(args.url, "url");
   const res = await fetchAllowlisted(url, { method: "GET" }, config.sandbox.networkAllowlist, signal);
   const text = await res.response.text();
-  return { url: res.finalUrl, status: res.response.status, bodySnippet: text.slice(0, 4000) };
+  return {
+    url: res.finalUrl,
+    status: res.response.status,
+    contentType: res.response.headers.get("content-type") ?? undefined,
+    byteLength: Buffer.byteLength(text, "utf8"),
+    body: text,
+    bodySnippet: text.slice(0, 4000),
+  };
 }
 
 async function httpPost(args: Record<string, unknown>, config: ToolPolicyConfig, signal?: AbortSignal) {
@@ -509,7 +517,14 @@ async function httpPost(args: Record<string, unknown>, config: ToolPolicyConfig,
     signal,
   );
   const text = await res.response.text();
-  return { url: res.finalUrl, status: res.response.status, bodySnippet: text.slice(0, 4000) };
+  return {
+    url: res.finalUrl,
+    status: res.response.status,
+    contentType: res.response.headers.get("content-type") ?? undefined,
+    byteLength: Buffer.byteLength(text, "utf8"),
+    body: text,
+    bodySnippet: text.slice(0, 4000),
+  };
 }
 
 async function shellExec(
@@ -544,15 +559,18 @@ async function shellExec(
       exitCode: 0,
     };
   } catch (error) {
-    const err = error as { stdout?: string; stderr?: string; code?: number | string; message: string };
+    const message = error instanceof Error ? error.message : String(error);
+    const stdout = (error as { stdout?: string })?.stdout;
+    const stderr = (error as { stderr?: string })?.stderr;
+    const code = (error as { code?: number | string })?.code;
     return {
       command,
       cwd,
       executable: parsed.file,
       argv: parsed.args,
-      stdout: (err.stdout ?? "").slice(0, 8000),
-      stderr: (err.stderr ?? err.message).slice(0, 8000),
-      exitCode: typeof err.code === "number" ? err.code : -1,
+      stdout: (stdout ?? "").slice(0, 8000),
+      stderr: (stderr ?? message).slice(0, 8000),
+      exitCode: typeof code === "number" ? code : -1,
     };
   }
 }
@@ -608,13 +626,14 @@ async function gitDiff(args: Record<string, unknown>) {
 
 async function gitAdd(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const paths = stringArray(args.paths);
-  for (const p of paths) {
-    if (p !== ".") {
-      assertWritePathInJail(path.resolve(p), config.sandbox.writeJailRoots);
-    }
+  // SEC: Always run jail check on every path, including ".". Never allow
+  // wildcard staging that bypasses write-jail enforcement.
+  const resolvedPaths = paths.length > 0 ? paths : ["."];
+  for (const p of resolvedPaths) {
+    assertWritePathInJail(path.resolve(p), config.sandbox.writeJailRoots);
   }
-  await execFileAsync("git", ["add", ...(paths.length > 0 ? paths : ["."])], { timeout: 15000, windowsHide: true });
-  return { staged: paths.length > 0 ? paths : ["."] };
+  await execFileAsync("git", ["add", ...resolvedPaths], { timeout: 15000, windowsHide: true });
+  return { staged: resolvedPaths };
 }
 
 async function gitCommit(args: Record<string, unknown>) {
@@ -689,6 +708,71 @@ async function memoryWrite(args: Record<string, unknown>, storage: Storage, upse
     mode: upsert ? "upsert" : "write",
     document: doc,
     chunksSaved: chunks.length,
+  };
+}
+
+async function memoryRead(args: Record<string, unknown>, storage: Storage) {
+  const namespace = asString(args.namespace);
+  const query = (asString(args.query) ?? asString(args.title) ?? asString(args.key) ?? "").trim().toLowerCase();
+  const limit = clampInt(args.limit, 5, 1, 50);
+  const documents = storage.knowledge.listDocuments(namespace, 500);
+  const chunkMap = new Map<string, ReturnType<Storage["knowledge"]["listChunksByDocument"]>>();
+  const readChunks = (docId: string) => {
+    const existing = chunkMap.get(docId);
+    if (existing) {
+      return existing;
+    }
+    const next = storage.knowledge.listChunksByDocument(docId, 25);
+    chunkMap.set(docId, next);
+    return next;
+  };
+
+  if (!query) {
+    return {
+      namespace: namespace ?? "all",
+      items: documents.slice(0, limit).map((doc) => {
+        const chunks = readChunks(doc.docId);
+        return {
+          docId: doc.docId,
+          title: doc.title,
+          sourceRef: doc.sourceRef,
+          metadata: doc.metadata,
+          snippet: chunks[0]?.content.slice(0, 320) ?? "",
+        };
+      }),
+    };
+  }
+
+  const items = documents
+    .map((doc) => {
+      const chunks = readChunks(doc.docId);
+      const titleScore = scoreLexical(query, `${doc.title} ${doc.sourceRef}`.toLowerCase());
+      const bestChunk = chunks
+        .map((chunk) => ({
+          chunk,
+          score: scoreLexical(query, chunk.content.toLowerCase()),
+        }))
+        .sort((left, right) => right.score - left.score)[0];
+      const score = Math.max(titleScore, bestChunk?.score ?? 0);
+      return score > 0
+        ? {
+          docId: doc.docId,
+          title: doc.title,
+          sourceRef: doc.sourceRef,
+          metadata: doc.metadata,
+          score,
+          snippet: bestChunk?.chunk.content.slice(0, 320) ?? "",
+        }
+        : undefined;
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit);
+
+  return {
+    namespace: namespace ?? "all",
+    query,
+    items,
   };
 }
 
@@ -1093,11 +1177,6 @@ function stringArray(value: unknown): string[] {
   return value.map((entry) => asString(entry)).filter((entry): entry is string => Boolean(entry));
 }
 
-function clampInt(value: unknown, fallback: number, min: number, max: number): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(max, Math.max(min, Math.floor(parsed)));
-}
 
 function parseExecFileCommand(command: string): { file: string; args: string[] } {
   const input = command.trim();

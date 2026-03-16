@@ -3,6 +3,7 @@ export interface ProviderTemplateDefinition {
   label: string;
   baseUrl: string;
   defaultModel: string;
+  knownModels?: string[];
 }
 
 export const providerTemplates = [
@@ -89,6 +90,7 @@ export const providerTemplates = [
     label: "GLM (Z.AI)",
     baseUrl: "https://api.z.ai/api/paas/v4",
     defaultModel: "glm-5",
+    knownModels: ["glm-5", "glm-5-air", "glm-5-flash", "glm-5-turbo"],
   },
   {
     providerId: "moonshot",

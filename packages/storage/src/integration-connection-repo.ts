@@ -6,6 +6,7 @@ import type {
   IntegrationConnectionUpdateInput,
   IntegrationKind,
 } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface IntegrationConnectionRow {
@@ -83,7 +84,7 @@ export class IntegrationConnectionRepository {
   public get(connectionId: string): IntegrationConnection {
     const row = this.getStmt.get(connectionId) as IntegrationConnectionRow | undefined;
     if (!row) {
-      throw new Error(`Integration connection ${connectionId} not found`);
+      throw new NotFoundError({ entity: "Integration connection", id: connectionId });
     }
     return mapRow(row);
   }

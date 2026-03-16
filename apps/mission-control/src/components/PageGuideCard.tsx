@@ -44,7 +44,7 @@ export function PageGuideCard(props: PageGuideCardProps) {
       </header>
       <p className="field-help page-guide-mode-note">
         {mode === "simple"
-          ? "Simple mode keeps more guidance visible on first pass."
+          ? "Beginner mode keeps more guidance visible on first pass."
           : "Advanced mode keeps guidance compact unless you expand it."}
       </p>
       {!compact || expanded ? (

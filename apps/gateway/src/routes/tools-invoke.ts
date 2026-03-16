@@ -1,5 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import {
+  evaluateComputerUseSafety,
+  evaluateDeploymentProfileToolAccess,
+} from "../tool-runtime-guardrails.js";
 
 const bodySchema = z.object({
   toolName: z.string().min(1),
@@ -10,7 +14,12 @@ const bodySchema = z.object({
   consentContext: z.object({
     operatorId: z.string().optional(),
     source: z.enum(["ui", "tui", "agent"]).optional(),
-    reason: z.string().optional(),
+    reason: z.string().optional().transform((value) =>
+      // SEC: Strip "approval:" prefix from client-supplied reason to prevent
+      // bypass of the risky-shell approval gate. Only the engine itself may
+      // set this prefix after verifying a real approval record.
+      value && value.startsWith("approval:") ? value.slice("approval:".length) : value
+    ),
   }).optional(),
   dryRun: z.boolean().optional(),
 });
@@ -23,6 +32,19 @@ export const toolsInvokeRoute: FastifyPluginAsync = async (fastify) => {
     }
 
     const requestInput = parsed.data;
+    const deploymentProfile = fastify.gateway.getDeploymentProfile();
+    const deploymentGuard = evaluateDeploymentProfileToolAccess(
+      deploymentProfile,
+      requestInput.toolName,
+      requestInput.args,
+    );
+    if (deploymentGuard) {
+      return reply.code(deploymentGuard.statusCode).send({
+        error: deploymentGuard.reason,
+        details: deploymentGuard.details,
+      });
+    }
+
     if (fastify.gateway.isFeatureEnabled("computerUseGuardrailsV1Enabled")) {
       const safety = evaluateComputerUseSafety(requestInput.toolName, requestInput.args);
       if (safety.requiresVerification && !safety.verified) {
@@ -51,30 +73,3 @@ export const toolsInvokeRoute: FastifyPluginAsync = async (fastify) => {
     return reply.send(result);
   });
 };
-
-function evaluateComputerUseSafety(
-  toolName: string,
-  args: Record<string, unknown>,
-): {
-  requiresVerification: boolean;
-  requiresConfirmation: boolean;
-  verified: boolean;
-  confirmed: boolean;
-} {
-  const isBrowserInteract = toolName === "browser.interact";
-  const steps = Array.isArray(args.steps) ? args.steps as Array<Record<string, unknown>> : [];
-  const mutatingStep = steps.some((step) => {
-    const action = typeof step.action === "string" ? step.action : "";
-    return action === "click" || action === "type" || action === "press";
-  });
-  const requiresVerification = isBrowserInteract && mutatingStep;
-  const requiresConfirmation = isBrowserInteract && mutatingStep;
-  const verified = args.verifyStep === true;
-  const confirmed = args.confirmBeforeSubmit === true;
-  return {
-    requiresVerification,
-    requiresConfirmation,
-    verified,
-    confirmed,
-  };
-}

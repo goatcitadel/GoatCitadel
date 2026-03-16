@@ -6,6 +6,7 @@ import type {
   ChatSpecialistCandidatePatchInput,
   ChatSpecialistCandidateRecord,
 } from "@goatcitadel/contracts";
+import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 
 interface ChatSpecialistCandidateRow {
   candidate_id: string;
@@ -81,7 +82,7 @@ export class ChatSpecialistCandidateRepository {
   public get(candidateId: string): ChatSpecialistCandidateRecord {
     const row = this.getStmt.get(candidateId) as ChatSpecialistCandidateRow | undefined;
     if (!row) {
-      throw new Error(`Specialist candidate ${candidateId} not found`);
+      throw new NotFoundError({ entity: "Specialist candidate", id: candidateId });
     }
     return mapRow(row);
   }
@@ -225,7 +226,7 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
 function sanitizeRequired(value: string, field: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error(`${field} is required`);
+    throw new ValidationError({ code: "FIELD_REQUIRED", field });
   }
   return trimmed;
 }

@@ -76,6 +76,8 @@ describe("sqlite chat turn trace repair migration", () => {
       "guidance_json",
       "citations_json",
       "failure_json",
+      "completion_json",
+      "durable_json",
       "capability_upgrade_suggestions_json",
       "specialist_candidate_suggestions_json",
       "parent_turn_id",
@@ -85,15 +87,28 @@ describe("sqlite chat turn trace repair migration", () => {
       assert.ok(columns.has(column), `expected repaired chat_turn_traces column: ${column}`);
     }
 
+    const createdTables = new Set(
+      (
+        db.prepare(`
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'table'
+        `).all() as Array<{ name: string }>
+      ).map((row) => row.name),
+    );
+    assert.ok(createdTables.has("chat_stream_events"));
+    assert.ok(createdTables.has("chat_tool_artifacts"));
+
     db.prepare(`
       INSERT INTO chat_turn_traces (
         turn_id, session_id, user_message_id, assistant_message_id, status, mode, model,
         web_mode, memory_mode, thinking_level, routing_json, retrieval_json, reflection_json,
         proactive_json, orchestration_json, guidance_json, citations_json, failure_json,
-        capability_upgrade_suggestions_json, specialist_candidate_suggestions_json, started_at, finished_at
+        completion_json, durable_json, capability_upgrade_suggestions_json,
+        specialist_candidate_suggestions_json, started_at, finished_at
       ) VALUES (
         'turn-repair-1', 'sess-repair-1', 'user-repair-1', 'assistant-repair-1', 'completed', 'chat', 'glm-5',
-        'auto', 'auto', 'standard', '{}', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+        'auto', 'auto', 'standard', '{}', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
         '2026-03-10T00:00:01.000Z', '2026-03-10T00:00:02.000Z'
       )
     `).run();

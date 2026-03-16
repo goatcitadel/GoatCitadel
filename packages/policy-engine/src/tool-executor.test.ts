@@ -183,6 +183,47 @@ describe("executeTool", () => {
     expect((result.matches as Array<Record<string, unknown>>)[0]?.path).toBe(filePath);
   });
 
+  it("reads saved memory entries with memory.read", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const memoryStorage = {
+      knowledge: {
+        listDocuments: vi.fn(() => [
+          {
+            docId: "doc-1",
+            title: "Preferences",
+            sourceRef: "memory://preferences",
+            metadata: { kind: "note" },
+          },
+        ]),
+        listChunksByDocument: vi.fn(() => [
+          {
+            chunkId: "chunk-1",
+            content: "User prefers dark mode and vim keybindings.",
+          },
+        ]),
+      },
+    } as unknown as Storage;
+
+    const request: ToolInvokeRequest = {
+      toolName: "memory.read",
+      args: { namespace: "user", query: "dark mode" },
+      agentId: "agent",
+      sessionId: "sess-memory-read",
+    };
+
+    const result = await executeTool(request, policyConfig, memoryStorage);
+    expect(result).toMatchObject({
+      namespace: "user",
+      query: "dark mode",
+    });
+    expect(Array.isArray(result.items)).toBe(true);
+    expect((result.items as Array<Record<string, unknown>>)[0]).toMatchObject({
+      docId: "doc-1",
+      title: "Preferences",
+    });
+    expect(String((result.items as Array<Record<string, unknown>>)[0]?.snippet ?? "")).toContain("dark mode");
+  });
+
   it("starts background shell commands without blocking", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const request: ToolInvokeRequest = {

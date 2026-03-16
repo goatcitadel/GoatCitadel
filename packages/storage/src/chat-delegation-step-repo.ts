@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatCitationRecord, ChatDelegationStepRecord, ChatDelegationStepStatus } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 
 interface ChatDelegationStepRow {
   step_id: string;
@@ -65,7 +66,7 @@ export class ChatDelegationStepRepository {
   public get(stepId: string): ChatDelegationStepRecord {
     const row = this.getStmt.get(stepId) as ChatDelegationStepRow | undefined;
     if (!row) {
-      throw new Error(`Delegation step ${stepId} not found`);
+      throw new NotFoundError({ entity: "Delegation step", id: stepId });
     }
     return mapRow(row);
   }

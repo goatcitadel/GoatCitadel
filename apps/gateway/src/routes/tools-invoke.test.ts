@@ -19,6 +19,7 @@ describe("tools invoke route", () => {
     app.decorate("gateway", {
       invokeTool,
       isFeatureEnabled: vi.fn((flag: string) => flag === "computerUseGuardrailsV1Enabled"),
+      getDeploymentProfile: vi.fn(() => "local_dev"),
     } as never);
     await app.register(toolsInvokeRoute);
 
@@ -45,6 +46,7 @@ describe("tools invoke route", () => {
     app.decorate("gateway", {
       invokeTool,
       isFeatureEnabled: vi.fn((flag: string) => flag === "computerUseGuardrailsV1Enabled"),
+      getDeploymentProfile: vi.fn(() => "local_dev"),
     } as never);
     await app.register(toolsInvokeRoute);
 
@@ -73,5 +75,58 @@ describe("tools invoke route", () => {
         },
       }),
     }));
+  });
+
+  it("blocks browser cookie tools outside trusted_local", async () => {
+    const invokeTool = vi.fn();
+    app = Fastify();
+    app.decorate("gateway", {
+      invokeTool,
+      isFeatureEnabled: vi.fn(() => false),
+      getDeploymentProfile: vi.fn(() => "remote_hardened"),
+    } as never);
+    await app.register(toolsInvokeRoute);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tools/invoke",
+      payload: {
+        toolName: "browser.cookies.get",
+        args: {},
+        agentId: "agent-1",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("enforces confirm-before-submit in remote_hardened even when the feature flag is off", async () => {
+    const invokeTool = vi.fn();
+    app = Fastify();
+    app.decorate("gateway", {
+      invokeTool,
+      isFeatureEnabled: vi.fn(() => false),
+      getDeploymentProfile: vi.fn(() => "remote_hardened"),
+    } as never);
+    await app.register(toolsInvokeRoute);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tools/invoke",
+      payload: {
+        toolName: "browser.interact",
+        args: {
+          steps: [{ action: "click" }],
+          verifyStep: true,
+        },
+        agentId: "agent-1",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(invokeTool).not.toHaveBeenCalled();
   });
 });

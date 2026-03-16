@@ -261,9 +261,7 @@ function appendOrReplaceToolRun(
   current: ChatThreadTurnRecord["toolRuns"],
   toolRun: ChatThreadTurnRecord["toolRuns"][number],
 ): ChatThreadTurnRecord["toolRuns"] {
-  const next = current.filter((item) => item.toolRunId !== toolRun.toolRunId);
-  next.push(toolRun);
-  return next;
+  return [...current.filter((item) => item.toolRunId !== toolRun.toolRunId), toolRun];
 }
 
 function appendOrReplaceCitation(
@@ -276,7 +274,7 @@ function appendOrReplaceCitation(
 function dedupeCitations(
   citations: ChatThreadTurnRecord["citations"],
 ): ChatThreadTurnRecord["citations"] {
-  const deduped: ChatThreadTurnRecord["citations"] = [];
+  let deduped: ChatThreadTurnRecord["citations"] = [];
   const seen = new Map<string, number>();
   for (const citation of citations) {
     const key = citation.url.trim().toLowerCase();
@@ -292,14 +290,14 @@ function dedupeCitations(
       deduped.push(citation);
       continue;
     }
-    deduped[existingIndex] = {
+    deduped = deduped.map((item, i) => i === existingIndex ? {
       ...existing,
       citationId: existing.citationId,
       url: existing.url,
       title: existing.title ?? citation.title,
       snippet: existing.snippet ?? citation.snippet,
       sourceType: existing.sourceType ?? citation.sourceType,
-    };
+    } : item);
   }
   return deduped;
 }

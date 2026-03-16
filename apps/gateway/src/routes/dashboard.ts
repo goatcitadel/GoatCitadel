@@ -43,6 +43,7 @@ const authUpdateSchema = z.object({
 });
 
 const updateSettingsSchema = z.object({
+  deploymentProfile: z.enum(["local_dev", "trusted_local", "remote_hardened"]).optional(),
   defaultToolProfile: z.string().min(1).optional(),
   budgetMode: z.enum(["saver", "balanced", "power"]).optional(),
   networkAllowlist: z.array(z.string().min(1)).optional(),

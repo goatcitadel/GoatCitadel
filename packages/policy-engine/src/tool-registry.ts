@@ -29,7 +29,24 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     riskLevel: "safe",
     requiresApproval: false,
     description: "Read memory context from local memory sources.",
+    argSchema: {
+      type: "object",
+      properties: {
+        namespace: { type: "string" },
+        query: { type: "string" },
+        title: { type: "string" },
+        key: { type: "string" },
+        limit: { type: "number" },
+      },
+      required: [],
+    },
     pack: "core",
+    recommendedContexts: ["chat", "cowork", "code"],
+    preferredForIntents: ["memory_lookup", "project_context"],
+    usageHints: [
+      "Use when you need to retrieve existing memory context or recent saved notes.",
+      "Provide query, title, or key when you want a focused lookup.",
+    ],
   },
   {
     name: "time.now",
@@ -293,6 +310,19 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     usageHints: [
       "Prefer for direct URL/API fetches when full browser automation is unnecessary.",
     ],
+    argSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", format: "uri" },
+      },
+      required: ["url"],
+    },
+    examples: [
+      {
+        title: "Fetch an allowlisted JSON endpoint",
+        args: { url: "https://example.com/api/status" },
+      },
+    ],
   },
   {
     name: "http.post",
@@ -301,6 +331,20 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     requiresApproval: true,
     description: "HTTP POST request to allowlisted hosts.",
     pack: "core",
+    argSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", format: "uri" },
+        body: { type: "object" },
+      },
+      required: ["url"],
+    },
+    examples: [
+      {
+        title: "POST JSON to an allowlisted endpoint",
+        args: { url: "https://example.com/api/search", body: { query: "latest status" } },
+      },
+    ],
   },
   {
     name: "shell.exec",
@@ -479,6 +523,20 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     usageHints: [
       "Use to discover candidate sources before navigating to a page.",
     ],
+    argSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        maxResults: { type: "integer", minimum: 1, maximum: 10 },
+      },
+      required: ["query"],
+    },
+    examples: [
+      {
+        title: "Search for authoritative sources before extracting",
+        args: { query: "OpenAI background mode docs", maxResults: 5 },
+      },
+    ],
   },
   {
     name: "browser.navigate",
@@ -492,6 +550,20 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     usageHints: [
       "Use when you already have a specific page URL to inspect.",
     ],
+    argSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", format: "uri" },
+        maxChars: { type: "integer", minimum: 200, maximum: 50000 },
+      },
+      required: ["url"],
+    },
+    examples: [
+      {
+        title: "Read a known documentation page",
+        args: { url: "https://example.com/docs/guide", maxChars: 12000 },
+      },
+    ],
   },
   {
     name: "browser.extract",
@@ -504,6 +576,21 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     preferredForIntents: ["web_extract", "research"],
     usageHints: [
       "Use for targeted extraction when a generic page read is too noisy.",
+    ],
+    argSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", format: "uri" },
+        selector: { type: "string" },
+        maxChars: { type: "integer", minimum: 200, maximum: 50000 },
+      },
+      required: ["url", "selector"],
+    },
+    examples: [
+      {
+        title: "Extract a specific results panel",
+        args: { url: "https://example.com/results", selector: "main article", maxChars: 8000 },
+      },
     ],
   },
   {
@@ -610,6 +697,11 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     requiresApproval: false,
     description: "Write structured memory note into knowledge index.",
     pack: "knowledge",
+    recommendedContexts: ["chat", "cowork", "code"],
+    preferredForIntents: ["memory_persist"],
+    usageHints: [
+      "Use only when the user explicitly asks to save or remember something.",
+    ],
   },
   {
     name: "memory.upsert",
@@ -618,6 +710,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     requiresApproval: false,
     description: "Upsert structured memory note by deterministic key.",
     pack: "knowledge",
+    recommendedContexts: ["chat", "cowork", "code"],
+    preferredForIntents: ["memory_persist"],
   },
   {
     name: "memory.search",

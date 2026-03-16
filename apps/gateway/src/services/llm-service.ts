@@ -305,13 +305,15 @@ export class LlmService {
       baseUrl: input.baseUrl,
       apiStyle: "openai-chat-completions",
       defaultModel: existing?.defaultModel ?? defaultModelForProvider(input.providerId),
-      apiKey: input.apiKey,
-      apiKeyEnv: input.apiKeyEnv,
-      headers: input.headers,
+      apiKey: input.apiKey ?? existing?.apiKey,
+      apiKeyEnv: input.apiKeyEnv ?? existing?.apiKeyEnv,
+      headers: input.headers ?? existing?.headers,
     });
+    const explicitPreviewApiKey = input.apiKey?.trim()
+      || (input.apiKeyEnv ? this.env[input.apiKeyEnv]?.trim() : undefined);
     const resolved: ResolvedProvider = {
       provider,
-      apiKey: this.resolveApiKey(provider),
+      apiKey: explicitPreviewApiKey || this.resolveApiKey(provider),
     };
 
     try {

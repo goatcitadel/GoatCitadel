@@ -105,6 +105,7 @@ class TestBoundary extends React.Component<
 function createRuntimeSettings() {
   return {
     environment: "coverage",
+    deploymentProfile: "local_dev",
     workspaceDir: "workspace",
     defaultToolProfile: "standard",
     budgetMode: "balanced",

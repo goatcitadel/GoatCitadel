@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { PromptPackRecord, PromptPackTestRecord } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 
 interface PromptPackRow {
   pack_id: string;
@@ -18,6 +19,8 @@ interface PromptPackTestRow {
   title: string;
   prompt: string;
   order_index: number;
+  mode: string | null;
+  tool_tier: string | null;
   created_at: string;
 }
 
@@ -48,8 +51,8 @@ export class PromptPackRepository {
     `);
     this.deleteTestsByPackStmt = db.prepare("DELETE FROM prompt_pack_tests WHERE pack_id = ?");
     this.insertTestStmt = db.prepare(`
-      INSERT INTO prompt_pack_tests (test_id, pack_id, code, title, prompt, order_index, created_at)
-      VALUES (@testId, @packId, @code, @title, @prompt, @orderIndex, @createdAt)
+      INSERT INTO prompt_pack_tests (test_id, pack_id, code, title, prompt, order_index, mode, tool_tier, created_at)
+      VALUES (@testId, @packId, @code, @title, @prompt, @orderIndex, @mode, @toolTier, @createdAt)
     `);
     this.listTestsStmt = db.prepare(`
       SELECT * FROM prompt_pack_tests
@@ -63,7 +66,7 @@ export class PromptPackRepository {
   public getPack(packId: string): PromptPackRecord {
     const row = this.getPackStmt.get(packId) as PromptPackRow | undefined;
     if (!row) {
-      throw new Error(`Prompt pack ${packId} not found`);
+      throw new NotFoundError({ entity: "Prompt pack", id: packId });
     }
     return mapPackRow(row);
   }
@@ -86,7 +89,7 @@ export class PromptPackRepository {
   public getTest(testId: string): PromptPackTestRecord {
     const row = this.getTestStmt.get(testId) as PromptPackTestRow | undefined;
     if (!row) {
-      throw new Error(`Prompt pack test ${testId} not found`);
+      throw new NotFoundError({ entity: "Prompt pack test", id: testId });
     }
     return mapTestRow(row);
   }
@@ -100,6 +103,8 @@ export class PromptPackRepository {
       title: string;
       prompt: string;
       orderIndex: number;
+      mode?: string;
+      toolTier?: string;
     }>;
   }): {
     pack: PromptPackRecord;
@@ -126,6 +131,8 @@ export class PromptPackRepository {
         title: test.title,
         prompt: test.prompt,
         orderIndex: test.orderIndex,
+        mode: test.mode ?? null,
+        toolTier: test.toolTier ?? null,
         createdAt: now,
       });
     }
@@ -156,6 +163,8 @@ function mapTestRow(row: PromptPackTestRow): PromptPackTestRecord {
     title: row.title,
     prompt: row.prompt,
     orderIndex: row.order_index,
+    mode: (row.mode as PromptPackTestRecord["mode"]) ?? undefined,
+    toolTier: (row.tool_tier as PromptPackTestRecord["toolTier"]) ?? undefined,
     createdAt: row.created_at,
   };
 }

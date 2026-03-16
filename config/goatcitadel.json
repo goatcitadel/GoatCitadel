@@ -167,6 +167,8 @@
         "time.now",
         "memory.read",
         "memory.search",
+        "memory.write",
+        "memory.upsert",
         "browser.search",
         "browser.navigate",
         "browser.extract",
@@ -189,8 +191,7 @@
         "./data"
       ],
       "readOnlyRoots": [
-        "./skills",
-        "./config"
+        "./skills"
       ],
       "networkAllowlist": [],
       "riskyShellPatterns": [

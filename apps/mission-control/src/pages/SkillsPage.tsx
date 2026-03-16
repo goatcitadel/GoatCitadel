@@ -575,7 +575,24 @@ export function SkillsPage() {
             ) : null}
           </div>
         ) : null}
-        {validationResult ? <pre>{JSON.stringify(validationResult, null, 2)}</pre> : null}
+        {validationResult ? (
+          <div className="stack-md">
+            <p className="field-help">
+              Trust report: {describeValidationTrust(validationResult)}
+            </p>
+            <ul className="improvement-simple-list">
+              <li>Declared tools: {formatValidationList(validationResult.declaredTools, "none declared")}</li>
+              <li>Network signals: {formatValidationList(validationResult.networkSignals, "none detected")}</li>
+              <li>Suspicious signals: {formatValidationList(validationResult.suspiciousSignals, "none detected")}</li>
+              <li>Required dependencies: {formatValidationList(validationResult.requires, "none declared")}</li>
+              <li>License files: {formatValidationList(validationResult.licenseFiles, "none found")}</li>
+            </ul>
+            <details className="advanced-panel">
+              <summary>Raw validation payload</summary>
+              <pre>{JSON.stringify(validationResult, null, 2)}</pre>
+            </details>
+          </div>
+        ) : null}
         <details className="advanced-panel">
           <summary>Recent import history</summary>
           {importHistory.length === 0 ? (
@@ -846,3 +863,16 @@ export function SkillsPage() {
   );
 }
 
+function formatValidationList(items: string[], fallback: string): string {
+  if (items.length === 0) {
+    return fallback;
+  }
+  return items.join(", ");
+}
+
+function describeValidationTrust(validation: Awaited<ReturnType<typeof validateSkillImport>>): string {
+  const status = validation.valid ? "ready for operator review" : "not installable yet";
+  const network = validation.networkSignals.length > 0 ? "network-touching" : "self-contained";
+  const suspicious = validation.suspiciousSignals.length > 0 ? "flagged signals detected" : "no suspicious signals detected";
+  return `${validation.riskLevel} risk, ${network}, ${suspicious}, and ${status}.`;
+}

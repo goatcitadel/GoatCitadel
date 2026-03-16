@@ -235,6 +235,8 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
         enabled: false,
         diagnosticsEnabled: false,
         maxAttemptsDefault: 1,
+        executionEnabled: false,
+        chatAutoPromoteEnabled: false,
       },
       features: {
         durableKernelV1Enabled: false,

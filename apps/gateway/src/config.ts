@@ -1,11 +1,21 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AuthMode, LlmConfigFile, ToolPolicyConfig } from "@goatcitadel/contracts";
+import type { AuthMode, DeploymentProfile, LlmConfigFile, ToolPolicyConfig } from "@goatcitadel/contracts";
+import {
+  AssistantConfigInputSchema,
+  BudgetConfigSchema,
+  ConfigValidationError,
+  LlmConfigFileSchema,
+  ToolPolicyConfigSchema,
+  clampInt,
+} from "@goatcitadel/contracts";
+import { ZodError, type ZodType } from "zod";
 import { syncUnifiedConfig } from "./config-sync-lib.js";
 
 export interface AssistantConfig {
   environment: string;
+  deploymentProfile: DeploymentProfile;
   defaultToolProfile: string;
   dataDir: string;
   transcriptsDir: string;
@@ -132,6 +142,8 @@ export interface NpuConfig {
 export interface DurableConfig {
   enabled: boolean;
   diagnosticsEnabled: boolean;
+  executionEnabled: boolean;
+  chatAutoPromoteEnabled: boolean;
   maxAttemptsDefault: number;
 }
 
@@ -188,10 +200,11 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
   const budgetsPath = path.join(configDir, "budgets.json");
   const llmPath = path.join(configDir, "llm-providers.json");
 
-  const assistant = withAssistantDefaults(parseJsonConfig<Partial<AssistantConfig>>(assistantRaw, assistantPath));
-  const toolPolicy = parseJsonConfig<ToolPolicyConfig>(toolPolicyRaw, toolPolicyPath);
-  const budgets = parseJsonConfig<BudgetConfig>(budgetsRaw, budgetsPath);
-  const llm = parseJsonConfig<LlmConfigFile>(llmRaw, llmPath);
+  const assistantInput = parseAndValidate(assistantRaw, AssistantConfigInputSchema, assistantPath);
+  const assistant = withAssistantDefaults(assistantInput as Partial<AssistantConfig>);
+  const toolPolicy = parseAndValidate(toolPolicyRaw, ToolPolicyConfigSchema, toolPolicyPath) as ToolPolicyConfig;
+  const budgets = parseAndValidate(budgetsRaw, BudgetConfigSchema, budgetsPath) as BudgetConfig;
+  const llm = parseAndValidate(llmRaw, LlmConfigFileSchema, llmPath) as LlmConfigFile;
 
   applyEnvironmentOverrides(assistant);
 
@@ -220,7 +233,36 @@ function parseJsonConfig<T>(raw: string, filePath: string): T {
   }
 }
 
+function parseAndValidate<T>(raw: string, schema: ZodType<T>, filePath: string): T {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`Failed to parse config JSON at ${filePath}: invalid JSON`);
+  }
+  try {
+    return schema.parse(parsed);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      const issues = error.issues.map((issue) => ({
+        path: issue.path.join(".") || "(root)",
+        message: issue.message,
+      }));
+      throw new ConfigValidationError(filePath, issues);
+    }
+    throw error;
+  }
+}
+
 function applyEnvironmentOverrides(assistant: AssistantConfig): void {
+  const deploymentProfile = process.env.GOATCITADEL_DEPLOYMENT_PROFILE?.trim();
+  if (
+    deploymentProfile === "local_dev"
+    || deploymentProfile === "trusted_local"
+    || deploymentProfile === "remote_hardened"
+  ) {
+    assistant.deploymentProfile = deploymentProfile;
+  }
   const mode = process.env.GOATCITADEL_AUTH_MODE;
   if (mode === "none" || mode === "token" || mode === "basic") {
     assistant.auth.mode = mode;
@@ -297,6 +339,18 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
       || durableDiagnosticsEnabled.toLowerCase() === "true";
   }
 
+  const durableExecutionEnabled = process.env.GOATCITADEL_DURABLE_EXECUTION_ENABLED;
+  if (durableExecutionEnabled) {
+    assistant.durable.executionEnabled = durableExecutionEnabled === "1"
+      || durableExecutionEnabled.toLowerCase() === "true";
+  }
+
+  const durableChatAutoPromoteEnabled = process.env.GOATCITADEL_DURABLE_CHAT_AUTO_PROMOTE_ENABLED;
+  if (durableChatAutoPromoteEnabled) {
+    assistant.durable.chatAutoPromoteEnabled = durableChatAutoPromoteEnabled === "1"
+      || durableChatAutoPromoteEnabled.toLowerCase() === "true";
+  }
+
   const featureFlagMap: Array<[keyof FeatureFlagsConfig, string | undefined]> = [
     ["durableKernelV1Enabled", process.env.GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED],
     ["replayOverridesV1Enabled", process.env.GOATCITADEL_FEATURE_REPLAY_OVERRIDES_V1_ENABLED],
@@ -316,7 +370,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
 
   const sqliteCacheSizeKb = parseIntEnv(process.env.GOATCITADEL_SQLITE_CACHE_SIZE_KB);
   if (sqliteCacheSizeKb !== undefined) {
-    assistant.sqlite.cacheSizeKb = clampInt(sqliteCacheSizeKb, 4_096, 262_144) ?? assistant.sqlite.cacheSizeKb;
+    assistant.sqlite.cacheSizeKb = clampInt(sqliteCacheSizeKb, assistant.sqlite.cacheSizeKb, 4_096, 262_144);
   }
   const sqliteTempStoreMemory = parseBooleanEnv(process.env.GOATCITADEL_SQLITE_TEMP_STORE_MEMORY);
   if (sqliteTempStoreMemory !== undefined) {
@@ -324,8 +378,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   }
   const sqliteWalAutoCheckpoint = parseIntEnv(process.env.GOATCITADEL_SQLITE_WAL_AUTOCHECKPOINT_PAGES);
   if (sqliteWalAutoCheckpoint !== undefined) {
-    assistant.sqlite.walAutoCheckpointPages = clampInt(sqliteWalAutoCheckpoint, 1_000, 20_000)
-      ?? assistant.sqlite.walAutoCheckpointPages;
+    assistant.sqlite.walAutoCheckpointPages = clampInt(sqliteWalAutoCheckpoint, assistant.sqlite.walAutoCheckpointPages, 1_000, 20_000);
   }
 }
 
@@ -359,6 +412,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
 
   return {
     environment: input.environment ?? "local",
+    deploymentProfile: input.deploymentProfile ?? "local_dev",
     defaultToolProfile: input.defaultToolProfile ?? "minimal",
     dataDir: input.dataDir ?? "./data",
     transcriptsDir: input.transcriptsDir ?? "./data/transcripts",
@@ -458,13 +512,15 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       },
     },
     sqlite: {
-      cacheSizeKb: clampInt(sqliteInput.cacheSizeKb, 4_096, 262_144) ?? 65_536,
+      cacheSizeKb: clampInt(sqliteInput.cacheSizeKb, 65_536, 4_096, 262_144),
       tempStoreMemory: sqliteInput.tempStoreMemory ?? true,
-      walAutoCheckpointPages: clampInt(sqliteInput.walAutoCheckpointPages, 1_000, 20_000) ?? 5_000,
+      walAutoCheckpointPages: clampInt(sqliteInput.walAutoCheckpointPages, 5_000, 1_000, 20_000),
     },
     durable: {
       enabled: durableInput.enabled ?? false,
       diagnosticsEnabled: durableInput.diagnosticsEnabled ?? false,
+      executionEnabled: durableInput.executionEnabled ?? false,
+      chatAutoPromoteEnabled: durableInput.chatAutoPromoteEnabled ?? false,
       maxAttemptsDefault: Math.max(1, Math.floor(durableInput.maxAttemptsDefault ?? 3)),
     },
     features: {
@@ -586,7 +642,7 @@ function defaultLlmConfig(): string {
         baseUrl: "http://127.0.0.1:1234/v1",
         apiStyle: "openai-chat-completions",
         defaultModel: "local-model",
-        apiKey: "lm-studio",
+        apiKeyEnv: "LM_STUDIO_API_KEY",
       },
       {
         providerId: "ollama",
@@ -626,18 +682,4 @@ function parseIntEnv(value: string | undefined): number | undefined {
   }
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function clampInt(value: number | undefined, min: number, max: number): number | undefined {
-  if (value === undefined || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const normalized = Math.floor(value);
-  if (normalized < min) {
-    return min;
-  }
-  if (normalized > max) {
-    return max;
-  }
-  return normalized;
 }
