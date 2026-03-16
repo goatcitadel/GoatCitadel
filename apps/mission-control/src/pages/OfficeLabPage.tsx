@@ -11,6 +11,7 @@ import { CardSkeleton } from "../components/CardSkeleton";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
+import { PixelOfficeCanvas } from "../components/PixelOfficeCanvas";
 import { StatusChip } from "../components/StatusChip";
 import { pageCopy } from "../content/copy";
 import { buildAgentDirectory, type AgentDirectoryRecord } from "../data/agent-roster";
@@ -50,14 +51,6 @@ const ROOM_META: Record<OfficeZoneId, { eyebrow: string; summary: string; suppor
   research: { eyebrow: "Collab Corner", summary: "Discovery and analysis cluster around a shared board.", support: "Research board", cls: "office-lab-room-research" },
   security: { eyebrow: "Watch Station", summary: "Approvals and alerts route through the monitor wall.", support: "Alert monitors", cls: "office-lab-room-security" },
   operations: { eyebrow: "Pantry + Ops", summary: "Runtime support and quiet coordination live in the back lane.", support: "Relay counter", cls: "office-lab-room-operations" },
-};
-
-const ROOM_SLOTS: Record<OfficeZoneId, Array<{ top: string; left: string }>> = {
-  command: [{ top: "28%", left: "26%" }, { top: "28%", left: "58%" }, { top: "60%", left: "26%" }, { top: "60%", left: "58%" }],
-  build: [{ top: "24%", left: "14%" }, { top: "24%", left: "40%" }, { top: "24%", left: "67%" }, { top: "62%", left: "14%" }, { top: "62%", left: "40%" }, { top: "62%", left: "67%" }],
-  research: [{ top: "26%", left: "22%" }, { top: "26%", left: "62%" }, { top: "64%", left: "40%" }],
-  security: [{ top: "28%", left: "24%" }, { top: "28%", left: "58%" }, { top: "68%", left: "40%" }],
-  operations: [{ top: "34%", left: "18%" }, { top: "34%", left: "44%" }, { top: "34%", left: "70%" }],
 };
 
 export function OfficeLabPage() {
@@ -243,60 +236,26 @@ export function OfficeLabPage() {
       <div className="office-lab-layout">
         <Panel
           title="Agent Office"
-          subtitle="Room-based pixel office adapted from the agent-office reference and remapped onto GoatCitadel decks."
+          subtitle="Pixel Agents style office scene adapted for Mission Control and remapped onto GoatCitadel decks."
           className="office-lab-floor-panel"
         >
           {isLoading ? (
             <div className="office-lab-skeleton-grid">{OFFICE_ZONE_ORDER.map((zoneId) => <CardSkeleton key={zoneId} lines={5} />)}</div>
           ) : (
             <div className="office-lab-scene">
-              <div className="office-lab-scene-overlay">
-                <div>
-                  <p className="office-lab-scene-kicker">Focus mode</p>
-                  <strong>{selectedAgent ? `${selectedAgent.name} in ${selectedAgent.zoneLabel}` : selectedZone?.label ?? "Agent Office"}</strong>
-                </div>
-                <p>{selectedAgent?.latestAction ?? selectedZone?.leadAction ?? "Waiting for room activity."}</p>
-              </div>
-              <div className="office-lab-hallway office-lab-hallway-horizontal" aria-hidden="true" />
-              <div className="office-lab-hallway office-lab-hallway-vertical" aria-hidden="true" />
-              {zones.map((zone) => (
-                <section key={zone.zoneId} className={`office-lab-room ${ROOM_META[zone.zoneId].cls}${selectedZone?.zoneId === zone.zoneId ? " is-selected" : ""}`}>
-                  <button type="button" className="office-lab-room-header" onClick={() => { setSelectedAgentId(null); setSelectedZoneId(zone.zoneId); }}>
-                    <div>
-                      <p className="office-lab-room-kicker">{ROOM_META[zone.zoneId].eyebrow}</p>
-                      <h3>{zone.label}</h3>
-                      <p className="office-lab-room-summary">{ROOM_META[zone.zoneId].summary}</p>
-                    </div>
-                    <div className="office-lab-room-header-meta">
-                      <StatusChip tone={zone.tone}>{zone.activeAgents} active</StatusChip>
-                      <StatusChip tone={zone.pendingApprovalCount > 0 ? "critical" : "muted"}>{zone.pendingApprovalCount} approvals</StatusChip>
-                    </div>
-                  </button>
-                  <div className="office-lab-room-status"><span>{ROOM_META[zone.zoneId].support}</span><strong>{zone.leadAction}</strong></div>
-                  <div className="office-lab-room-floor">
-                    <div className={`office-lab-furniture office-lab-furniture-${zone.zoneId}`} aria-hidden="true">{renderFurniture(zone.zoneId)}</div>
-                    {zone.agents.map((agent, index) => (
-                      <button
-                        key={agent.agentId}
-                        type="button"
-                        className={`office-lab-agent-token office-lab-agent-token-${agent.urgency}${selectedAgent?.agentId === agent.agentId ? " is-selected" : ""}`}
-                        style={ROOM_SLOTS[zone.zoneId][Math.min(index, ROOM_SLOTS[zone.zoneId].length - 1)]}
-                        onClick={() => { setSelectedZoneId(agent.zoneId); setSelectedAgentId(agent.agentId); }}
-                      >
-                        <span className="office-lab-agent-bubble">{agent.pendingApprovalCount > 0 ? "!" : agent.activeSessions > 0 ? "↺" : agent.latestEvent?.eventType === "approval_resolved" ? "✓" : "…"}</span>
-                        <span className={`office-lab-agent-sprite office-lab-agent-sprite-${agent.urgency}`} aria-hidden="true">
-                          <span className="office-lab-agent-horn office-lab-agent-horn-left" />
-                          <span className="office-lab-agent-horn office-lab-agent-horn-right" />
-                          <span className="office-lab-agent-head" />
-                          <span className="office-lab-agent-body" />
-                        </span>
-                        <span className="office-lab-agent-name">{agent.name}</span>
-                      </button>
-                    ))}
-                    {zone.agents.length === 0 ? <div className="office-lab-room-empty"><p>No crew active here.</p></div> : null}
-                  </div>
-                </section>
-              ))}
+              <PixelOfficeCanvas
+                zones={zones}
+                selectedAgentId={selectedAgent?.agentId ?? null}
+                selectedZoneId={selectedAgent?.zoneId ?? selectedZone?.zoneId ?? null}
+                onSelectAgent={(agentId, zoneId) => {
+                  setSelectedZoneId(zoneId);
+                  setSelectedAgentId(agentId);
+                }}
+                onSelectZone={(zoneId) => {
+                  setSelectedAgentId(null);
+                  setSelectedZoneId(zoneId);
+                }}
+              />
             </div>
           )}
         </Panel>
@@ -364,22 +323,6 @@ export function OfficeLabPage() {
       </div>
     </section>
   );
-}
-
-function renderFurniture(zoneId: OfficeZoneId) {
-  if (zoneId === "command") {
-    return <><div className="office-lab-table" /><div className="office-lab-chair office-lab-chair-top-left" /><div className="office-lab-chair office-lab-chair-top-right" /><div className="office-lab-chair office-lab-chair-bottom-left" /><div className="office-lab-chair office-lab-chair-bottom-right" /><div className="office-lab-whiteboard" /></>;
-  }
-  if (zoneId === "build") {
-    return <><div className="office-lab-desk office-lab-desk-left" /><div className="office-lab-desk office-lab-desk-center" /><div className="office-lab-desk office-lab-desk-right" /><div className="office-lab-monitor office-lab-monitor-left" /><div className="office-lab-monitor office-lab-monitor-center" /><div className="office-lab-monitor office-lab-monitor-right" /></>;
-  }
-  if (zoneId === "research") {
-    return <><div className="office-lab-bookshelf" /><div className="office-lab-research-board" /><div className="office-lab-lounge office-lab-lounge-left" /><div className="office-lab-lounge office-lab-lounge-right" /></>;
-  }
-  if (zoneId === "security") {
-    return <><div className="office-lab-watch-console" /><div className="office-lab-watch-monitor office-lab-watch-monitor-left" /><div className="office-lab-watch-monitor office-lab-watch-monitor-center" /><div className="office-lab-watch-monitor office-lab-watch-monitor-right" /><div className="office-lab-alert-strip" /></>;
-  }
-  return <><div className="office-lab-counter" /><div className="office-lab-machine office-lab-machine-coffee" /><div className="office-lab-machine office-lab-machine-cooler" /><div className="office-lab-snack-table" /></>;
 }
 
 function buildAgentHints(agent: AgentDirectoryRecord): Set<string> {
