@@ -2560,7 +2560,10 @@ function buildEssentialToolSet(input: {
   projectBound: boolean;
 }): string[] {
   const tools = new Set<string>(["time.now"]);
-  if (input.mode !== "chat" || input.localFileIntent || input.memoryLookupIntent) {
+  if (
+    input.memoryLookupIntent
+    || (input.mode !== "chat" && !input.localFileIntent && !input.webLookupIntent && !input.liveDataIntent)
+  ) {
     tools.add("memory.search");
   }
   if (input.memoryLookupIntent) {
@@ -2647,6 +2650,13 @@ function scoreToolForTurn(input: {
     score += scoreToolIntentMatch(tool, ["memory_lookup", "project_context"], 7);
     if (tool.toolName === "memory.search" || tool.toolName === "memory.read") {
       score += 8;
+    }
+  } else if (tool.toolName === "memory.search" || tool.toolName === "memory.read") {
+    if (input.localFileIntent) {
+      score -= 10;
+    }
+    if (input.webLookupIntent || input.liveDataIntent) {
+      score -= 8;
     }
   }
   if (input.memoryPersistenceIntent) {

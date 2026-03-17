@@ -368,6 +368,8 @@ import {
 } from "./gateway/auth-credential-planner.js";
 import { verifyBackupAtPath } from "./gateway/backup-verify.js";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
+import { buildDelegatedSessionToolGrantCopies } from "./delegated-session-tool-grants.js";
+import { resolveToolRequestPaths } from "./tool-path-resolution.js";
 import type { ServiceContext } from "./service-context.js";
 import { ChatProjectService } from "./chat-project-service.js";
 import { DurableRunService } from "./durable-run-service.js";
@@ -2652,6 +2654,19 @@ export class GatewayService {
     }
   }
 
+  private inheritDelegatedSessionToolGrants(parentSessionId: string, childSessionId: string): void {
+    const inheritedGrants = buildDelegatedSessionToolGrantCopies({
+      parentSessionId,
+      childSessionId,
+      parentGrants: this.listToolGrants("session", parentSessionId, 1000),
+      childGrants: this.listToolGrants("session", childSessionId, 1000),
+    });
+
+    for (const grantInput of inheritedGrants) {
+      this.createToolGrant(grantInput);
+    }
+  }
+
   public listChatCommandCatalog(): Array<{
     command: string;
     usage: string;
@@ -4933,6 +4948,7 @@ export class GatewayService {
       projectId: parentProjectId,
       mode: input.task.mode,
     });
+    this.inheritDelegatedSessionToolGrants(prepared.session.sessionId, childSession.sessionId);
 
     this.updateChatSessionPrefs(childSession.sessionId, {
       mode: input.task.mode,
@@ -7097,10 +7113,11 @@ export class GatewayService {
   }
 
   public async invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
+    const normalizedRequest = this.resolveToolInvokeRequestPaths(request);
     const deploymentGuard = evaluateDeploymentProfileToolAccess(
       this.config.assistant.deploymentProfile,
-      request.toolName,
-      request.args,
+      normalizedRequest.toolName,
+      normalizedRequest.args,
     );
     if (deploymentGuard) {
       return {
@@ -7110,12 +7127,12 @@ export class GatewayService {
       };
     }
 
-    const result = await this.policyEngine.invoke(request);
+    const result = await this.policyEngine.invoke(normalizedRequest);
     this.publishRealtime("tool_invoked", "policy", {
-      toolName: request.toolName,
-      sessionId: request.sessionId,
-      agentId: request.agentId,
-      taskId: request.taskId,
+      toolName: normalizedRequest.toolName,
+      sessionId: normalizedRequest.sessionId,
+      agentId: normalizedRequest.agentId,
+      taskId: normalizedRequest.taskId,
       outcome: result.outcome,
       policyReason: result.policyReason,
       approvalId: result.approvalId,
@@ -7127,6 +7144,18 @@ export class GatewayService {
     }
 
     return result;
+  }
+
+  private resolveToolInvokeRequestPaths(request: ToolInvokeRequest): ToolInvokeRequest {
+    const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
+    const projectId = this.storage.chatSessionProjects.get(request.sessionId)?.projectId;
+    const project = projectId ? this.storage.chatProjects.get(projectId) : undefined;
+    const projectRoot = project ? path.resolve(workspaceRoot, project.workspacePath) : undefined;
+    return resolveToolRequestPaths(request, {
+      workspaceRoot,
+      projectRoot,
+      projectWorkspacePath: project?.workspacePath,
+    });
   }
 
   public listToolCatalog(): ToolCatalogEntry[] {

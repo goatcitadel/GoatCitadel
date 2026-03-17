@@ -273,6 +273,27 @@ describe("executeTool", () => {
     expect(typeof result.pid).toBe("number");
   });
 
+  it("runs shell commands from the provided cwd", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const packageDir = path.join(testWorkspaceRoot, "runner");
+    await fs.mkdir(packageDir, { recursive: true });
+
+    const request: ToolInvokeRequest = {
+      toolName: "shell.exec",
+      args: { command: 'node -e "process.stdout.write(process.cwd())"', cwd: packageDir },
+      agentId: "agent",
+      sessionId: "sess-runner",
+    };
+
+    const result = await executeTool(request, policyConfig, storageStub);
+    expect(result).toMatchObject({
+      cwd: packageDir,
+      executable: "node",
+      exitCode: 0,
+    });
+    expect(String(result.stdout ?? "")).toContain(packageDir);
+  });
+
   it("rejects malformed shell command parsing", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const request: ToolInvokeRequest = {

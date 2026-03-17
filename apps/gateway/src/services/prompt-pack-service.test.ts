@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type {
+  ChatProjectRecord,
   PromptPackRunRecord,
   PromptPackScoreRecord,
   PromptPackTestRecord,
 } from "@goatcitadel/contracts";
 import {
+  buildPromptPackSessionToolAllowlist,
+  findPromptPackProjectBinding,
   finalizePromptPackResponseText,
   buildPromptPackSessionPrefsOverride,
   buildPromptPackCapabilitySeries,
@@ -17,6 +20,31 @@ import {
 } from "./prompt-pack-service.js";
 
 describe("prompt-pack helpers", () => {
+  it("finds prompt-pack project bindings and prefers the jailed fixture workspace path", () => {
+    const legacyProject: ChatProjectRecord = {
+      projectId: "legacy-project",
+      workspaceId: "default",
+      name: "Prompt Lab Workspace",
+      description: "Auto-created project binding for prompt-pack code evaluations.",
+      workspacePath: ".",
+      lifecycleStatus: "active",
+      createdAt: "2026-03-16T00:00:00.000Z",
+      updatedAt: "2026-03-16T00:00:00.000Z",
+    };
+    const currentProject: ChatProjectRecord = {
+      ...legacyProject,
+      projectId: "current-project",
+      workspacePath: "fixtures/prompt-pack-workspace",
+    };
+
+    expect(findPromptPackProjectBinding([legacyProject])).toMatchObject({
+      projectId: "legacy-project",
+    });
+    expect(findPromptPackProjectBinding([legacyProject, currentProject])).toMatchObject({
+      projectId: "current-project",
+    });
+  });
+
   it("resolves no-tools profiles and honors mode presets", () => {
     const noToolsProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -330,6 +358,72 @@ describe("prompt-pack helpers", () => {
       webMode: "auto",
       memoryMode: "off",
     });
+  });
+
+  it("builds prompt-pack session tool allowlists from mode and explicit directives", () => {
+    const codeProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-code-tools",
+        packId: "pack-1",
+        code: "TEST-TOOLS-01",
+        title: "Code Tools",
+        prompt: "Read local project files and implement a fix.",
+        orderIndex: 0,
+        mode: "code",
+        toolTier: "explicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    expect(buildPromptPackSessionToolAllowlist(codeProfile)).toEqual([
+      "fs.read",
+      "file.read_range",
+      "file.find",
+      "code.search",
+      "code.search_files",
+      "shell.exec",
+      "tests.run",
+      "lint.run",
+    ]);
+
+    const coworkProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-tools",
+        packId: "pack-1",
+        code: "TEST-TOOLS-02",
+        title: "Cowork Tools",
+        prompt: "Read fixtures/prompt-pack-workspace/package.json using file tools, then use browser.search to compare versions.",
+        orderIndex: 1,
+        mode: "cowork",
+        toolTier: "explicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    expect(buildPromptPackSessionToolAllowlist(
+      coworkProfile,
+      "Read fixtures/prompt-pack-workspace/package.json using file tools, then use browser.search to compare versions.",
+    )).toEqual([
+      "fs.read",
+      "file.read_range",
+      "file.find",
+      "code.search",
+      "code.search_files",
+      "browser.search",
+    ]);
+
+    const noToolsProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-no-tools-allowlist",
+        packId: "pack-1",
+        code: "TEST-TOOLS-03",
+        title: "No Tools",
+        prompt: "Answer directly.",
+        orderIndex: 2,
+        mode: "chat",
+        toolTier: "no-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    expect(buildPromptPackSessionToolAllowlist(noToolsProfile, "Use browser.search if needed.")).toEqual([]);
   });
 
   it("does not append generic constraints boilerplate to non-empty prompt-pack answers", () => {

@@ -102,11 +102,11 @@ export async function executeTool(
     case "git.worktree.remove":
       return gitWorktreeRemove(request.args, config);
     case "tests.run":
-      return runRestricted("test", request.args);
+      return runRestricted("test", request.args, config);
     case "lint.run":
-      return runRestricted("lint", request.args);
+      return runRestricted("lint", request.args, config);
     case "build.run":
-      return runRestricted("build", request.args);
+      return runRestricted("build", request.args, config);
     case "memory.read":
       return memoryRead(request.args, storage);
     case "memory.write":
@@ -671,9 +671,14 @@ async function gitWorktreeRemove(args: Record<string, unknown>, config: ToolPoli
   return { removed: true, path: path.resolve(p) };
 }
 
-async function runRestricted(kind: "test" | "lint" | "build", args: Record<string, unknown>) {
+async function runRestricted(
+  kind: "test" | "lint" | "build",
+  args: Record<string, unknown>,
+  config: ToolPolicyConfig,
+) {
   const manager = asString(args.manager) ?? "pnpm";
   const filter = asString(args.filter);
+  const cwd = resolveOptionalCwd(args.cwd, config);
   if (filter && !/^[a-zA-Z0-9@/_\-.]+$/.test(filter)) {
     throw new Error(`Invalid filter: ${filter}`);
   }
@@ -683,8 +688,13 @@ async function runRestricted(kind: "test" | "lint" | "build", args: Record<strin
   const cmdArgs = manager === "pnpm"
     ? [...(filter ? ["--filter", filter] : []), kind]
     : ["run", kind];
-  const { stdout, stderr } = await execFileAsync(manager, cmdArgs, { timeout: 120000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
-  return { manager, kind, stdout: stdout.slice(0, 10000), stderr: stderr.slice(0, 10000) };
+  const { stdout, stderr } = await execFileAsync(manager, cmdArgs, {
+    timeout: 120000,
+    windowsHide: true,
+    maxBuffer: 8 * 1024 * 1024,
+    cwd,
+  });
+  return { manager, kind, cwd, stdout: stdout.slice(0, 10000), stderr: stderr.slice(0, 10000) };
 }
 
 async function memoryWrite(args: Record<string, unknown>, storage: Storage, upsert: boolean) {

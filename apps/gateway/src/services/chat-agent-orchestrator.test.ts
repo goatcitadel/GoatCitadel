@@ -132,6 +132,70 @@ function createToolCatalog(toolNames: string[] = ["browser.search"]): ToolCatalo
         pack: "core",
       };
     }
+    if (toolName === "file.read_range") {
+      return {
+        toolName: "file.read_range",
+        category: "fs",
+        riskLevel: "safe",
+        requiresApproval: false,
+        description: "Read file range",
+        argSchema: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            startLine: { type: "integer" },
+            endLine: { type: "integer" },
+          },
+          required: ["path", "startLine", "endLine"],
+        },
+        examples: [],
+        pack: "devops",
+        recommendedContexts: ["cowork", "code", "project_bound"],
+        preferredForIntents: ["local_file", "inspect_code", "targeted_read"],
+      };
+    }
+    if (toolName === "file.find") {
+      return {
+        toolName: "file.find",
+        category: "fs",
+        riskLevel: "safe",
+        requiresApproval: false,
+        description: "Find text in files",
+        argSchema: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            pattern: { type: "string" },
+          },
+          required: ["path", "pattern"],
+        },
+        examples: [],
+        pack: "devops",
+        recommendedContexts: ["cowork", "code", "project_bound"],
+        preferredForIntents: ["local_file", "inspect_code", "search_text"],
+      };
+    }
+    if (toolName === "code.search" || toolName === "code.search_files") {
+      return {
+        toolName,
+        category: "fs",
+        riskLevel: "safe",
+        requiresApproval: false,
+        description: toolName === "code.search" ? "Search code" : "Search file names",
+        argSchema: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            query: { type: "string" },
+          },
+          required: ["path", "query"],
+        },
+        examples: [],
+        pack: "devops",
+        recommendedContexts: ["cowork", "code", "project_bound"],
+        preferredForIntents: ["local_file", "inspect_code", toolName === "code.search" ? "search_code" : "search_files"],
+      };
+    }
     if (toolName === "http.post") {
       return {
         toolName: "http.post",
@@ -1811,6 +1875,69 @@ describe("ChatAgentOrchestrator", () => {
         {
           role: "user",
           content: "Remember this as a memory note: I prefer concise status updates. Then search memory to confirm it was saved.",
+        },
+      ],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("prefers file and code tools over memory lookup for code file-analysis prompts", async () => {
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockImplementationOnce(async (request) => {
+        const toolNames = (request.tools ?? [])
+          .map((tool) => (tool.function as { name?: string } | undefined)?.name)
+          .filter((name): name is string => Boolean(name));
+        expect(toolNames).toContain("file_read_range");
+        expect(toolNames).toContain("code_search");
+        expect(toolNames).toContain("code_search_files");
+        expect(toolNames).not.toContain("memory_search");
+        return {
+          model: "glm-5",
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: "I can inspect the local files directly.",
+              },
+            },
+          ],
+        };
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([
+        "memory.search",
+        "file.read_range",
+        "file.find",
+        "code.search",
+        "code.search_files",
+        "time.now",
+      ]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-code-file-tools-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-code-file-tools-1",
+      content: "Read fixtures/prompt-pack-workspace/package.json using file tools and analyze the scripts section.",
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "auto",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: "Read fixtures/prompt-pack-workspace/package.json using file tools and analyze the scripts section.",
         },
       ],
     });

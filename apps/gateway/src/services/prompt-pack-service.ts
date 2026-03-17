@@ -6,6 +6,7 @@ import type {
   CapabilityTrendSeries,
   ChatMemoryMode,
   ChatMode,
+  ChatProjectRecord,
   ChatSessionPrefsPatch,
   ChatThinkingLevel,
   ChatWebMode,
@@ -42,6 +43,9 @@ const PROMPT_PACK_BENCHMARK_MAX_TESTS = 200;
 const PROMPT_PACK_BENCHMARK_MAX_PROVIDERS = 10;
 const DEFAULT_PROMPT_RUNNER_SOURCE = "goatcitadel_prompt_pack.md";
 const DEFAULT_PROMPT_PACK_EXPORT_DIR = "artifacts/prompt-lab";
+const PROMPT_PACK_PROJECT_NAME = "Prompt Lab Workspace";
+const PROMPT_PACK_PROJECT_DESCRIPTION = "Auto-created project binding for prompt-pack code evaluations.";
+const PROMPT_PACK_PROJECT_WORKSPACE_PATH = "fixtures/prompt-pack-workspace";
 
 // ── row types ────────────────────────────────────────────────────────
 interface PromptPackBenchmarkRunRow {
@@ -113,6 +117,21 @@ interface PromptPackToolDirectives {
   prefersWebTools: boolean;
   prefersMemoryTools: boolean;
 }
+
+const PROMPT_PACK_FILE_TOOL_NAMES = [
+  "fs.read",
+  "file.read_range",
+  "file.find",
+  "code.search",
+  "code.search_files",
+] as const;
+
+const PROMPT_PACK_CODE_TOOL_NAMES = [
+  ...PROMPT_PACK_FILE_TOOL_NAMES,
+  "shell.exec",
+  "tests.run",
+  "lint.run",
+] as const;
 
 /**
  * Encapsulates all prompt-pack (Prompt Lab) operations previously inlined
@@ -204,6 +223,7 @@ export class PromptPackService {
         : undefined,
       mode: executionProfile.mode,
     }).sessionId;
+    this.ensurePromptPackSessionToolGrants(sessionId, executionProfile, resolvedPrompt.prompt);
 
     this.ctx.storage.promptPackRuns.create({
       runId,
@@ -1324,22 +1344,85 @@ export class PromptPackService {
   }
 
   private ensurePromptPackProjectBinding(): string {
+    this.ensurePromptPackWorkspaceMirror();
     const workspaceId = this.ctx.normalizeWorkspaceId(undefined);
-    const existingProject = this.ctx.storage.chatProjects
-      .list("all", 500, workspaceId)
-      .find((project) => project.workspacePath === ".");
+    const existingProject = findPromptPackProjectBinding(
+      this.ctx.storage.chatProjects.list("all", 500, workspaceId),
+    );
     if (existingProject) {
       if (existingProject.lifecycleStatus === "archived") {
         this.ctx.storage.chatProjects.restore(existingProject.projectId);
+      }
+      if (existingProject.workspacePath !== PROMPT_PACK_PROJECT_WORKSPACE_PATH) {
+        this.ctx.storage.chatProjects.update(existingProject.projectId, {
+          name: PROMPT_PACK_PROJECT_NAME,
+          description: PROMPT_PACK_PROJECT_DESCRIPTION,
+          workspacePath: PROMPT_PACK_PROJECT_WORKSPACE_PATH,
+        });
       }
       return existingProject.projectId;
     }
     return this.ctx.storage.chatProjects.create({
       workspaceId,
-      name: "Prompt Lab Workspace",
-      description: "Auto-created project binding for prompt-pack code evaluations.",
-      workspacePath: ".",
+      name: PROMPT_PACK_PROJECT_NAME,
+      description: PROMPT_PACK_PROJECT_DESCRIPTION,
+      workspacePath: PROMPT_PACK_PROJECT_WORKSPACE_PATH,
     }).projectId;
+  }
+
+  private ensurePromptPackWorkspaceMirror(): void {
+    const sourceRoot = path.resolve(this.ctx.config.rootDir, PROMPT_PACK_PROJECT_WORKSPACE_PATH);
+    const targetRoot = path.resolve(
+      this.ctx.config.rootDir,
+      this.ctx.config.assistant.workspaceDir,
+      PROMPT_PACK_PROJECT_WORKSPACE_PATH,
+    );
+    if (!fsSync.existsSync(sourceRoot)) {
+      return;
+    }
+    if (path.normalize(sourceRoot) === path.normalize(targetRoot)) {
+      return;
+    }
+    fsSync.mkdirSync(path.dirname(targetRoot), { recursive: true });
+    fsSync.cpSync(sourceRoot, targetRoot, {
+      recursive: true,
+      force: true,
+    });
+  }
+
+  private ensurePromptPackSessionToolGrants(
+    sessionId: string,
+    profile: PromptPackExecutionProfile,
+    prompt: string,
+  ): void {
+    const toolNames = buildPromptPackSessionToolAllowlist(profile, prompt);
+    if (toolNames.length === 0) {
+      return;
+    }
+    const now = new Date().toISOString();
+    const activeAllowPatterns = new Set(
+      this.ctx.storage.toolGrants
+        .list("session", sessionId, 500)
+        .filter((grant) => (
+          grant.decision === "allow"
+          && !grant.revokedAt
+          && (!grant.expiresAt || Date.parse(grant.expiresAt) > Date.now())
+        ))
+        .map((grant) => grant.toolPattern),
+    );
+    for (const toolName of toolNames) {
+      if (activeAllowPatterns.has(toolName)) {
+        continue;
+      }
+      this.ctx.storage.toolGrants.create({
+        toolPattern: toolName,
+        decision: "allow",
+        scope: "session",
+        scopeRef: sessionId,
+        grantType: "persistent",
+        createdBy: "system-prompt-pack-bootstrap",
+      }, now);
+    }
   }
 }
 
@@ -2079,6 +2162,41 @@ export function buildPromptPackSessionPrefsOverride(
     orchestrationEnabled: profile.mode !== "chat" && profile.toolTier !== "no-tools",
     orchestrationParallelism: "sequential",
   };
+}
+
+export function findPromptPackProjectBinding(projects: ChatProjectRecord[]): ChatProjectRecord | undefined {
+  return projects.find((project) => project.workspacePath === PROMPT_PACK_PROJECT_WORKSPACE_PATH)
+    ?? projects.find((project) => (
+      project.name === PROMPT_PACK_PROJECT_NAME
+      || (
+        project.workspacePath === "."
+        && project.description === PROMPT_PACK_PROJECT_DESCRIPTION
+      )
+    ));
+}
+
+export function buildPromptPackSessionToolAllowlist(
+  profile: PromptPackExecutionProfile,
+  prompt = "",
+): string[] {
+  if (profile.toolTier === "no-tools") {
+    return [];
+  }
+  const directives = detectPromptPackToolDirectives(prompt);
+  const tools = new Set<string>();
+  if (profile.mode === "code") {
+    for (const toolName of PROMPT_PACK_CODE_TOOL_NAMES) {
+      tools.add(toolName);
+    }
+  } else if (directives.prefersFileTools) {
+    for (const toolName of PROMPT_PACK_FILE_TOOL_NAMES) {
+      tools.add(toolName);
+    }
+  }
+  for (const toolName of directives.namedTools) {
+    tools.add(toolName);
+  }
+  return [...tools];
 }
 
 function buildPromptPackPromptInput(
