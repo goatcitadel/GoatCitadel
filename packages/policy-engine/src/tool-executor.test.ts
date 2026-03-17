@@ -323,11 +323,11 @@ describe("executeTool", () => {
   });
 
   it("uses cmd.exe to resolve restricted package-manager commands on Windows", () => {
-    const resolved = resolveRestrictedCommand("pnpm", ["--filter", "workspace/pkg", "test"], "win32");
+    const resolved = resolveRestrictedCommand("pnpm", ["--filter", "workspace/pkg", "run", "test"], "win32");
 
     expect(resolved).toEqual({
       file: process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe",
-      args: ["/d", "/s", "/c", "pnpm --filter workspace/pkg test"],
+      args: ["/d", "/s", "/c", "pnpm --filter workspace/pkg run test"],
     });
   });
 
@@ -356,6 +356,34 @@ describe("executeTool", () => {
       file: "npm",
       args: ["run", "lint"],
     });
+  });
+
+  it("runs pnpm-backed restricted tools as package scripts", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const packageDir = path.join(testWorkspaceRoot, "restricted-pnpm-runner");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "package.json"), JSON.stringify({
+      name: "restricted-pnpm-runner",
+      private: true,
+      scripts: {
+        lint: 'node -e "process.stdout.write(\'lint-script\')"',
+      },
+    }, null, 2), "utf8");
+
+    const request: ToolInvokeRequest = {
+      toolName: "lint.run",
+      args: { manager: "pnpm", cwd: packageDir },
+      agentId: "agent",
+      sessionId: "sess-restricted-pnpm",
+    };
+
+    const result = await executeTool(request, policyConfig, storageStub);
+    expect(result).toMatchObject({
+      manager: "pnpm",
+      kind: "lint",
+      cwd: packageDir,
+    });
+    expect(String(result.stdout ?? "")).toContain("lint-script");
   });
 
   it("rejects malformed shell command parsing", async () => {

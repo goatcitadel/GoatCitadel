@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 export function assertWritePathInJail(targetPath: string, writeJailRoots: string[]): void {
-  const resolvedTarget = resolveWriteTargetPath(targetPath);
+  const resolvedTarget = resolvePathViaExistingAncestor(targetPath);
   assertWithinRoots(resolvedTarget, writeJailRoots, "write jail");
 }
 
@@ -11,7 +11,7 @@ export function assertReadPathAllowed(
   writeJailRoots: string[],
   readOnlyRoots: string[],
 ): void {
-  const resolvedTarget = fs.realpathSync(path.resolve(targetPath));
+  const resolvedTarget = resolvePathViaExistingAncestor(targetPath);
   assertWithinRoots(resolvedTarget, [...writeJailRoots, ...readOnlyRoots], "read allowlist");
 }
 
@@ -36,11 +36,11 @@ function assertWithinRoots(target: string, roots: string[], scope: string): void
   }
 }
 
-function resolveWriteTargetPath(targetPath: string): string {
+function resolvePathViaExistingAncestor(targetPath: string): string {
   const absoluteTarget = path.resolve(targetPath);
 
-  // Resolve symlinks for the closest existing ancestor so writes cannot escape
-  // via links inside an otherwise allowed directory.
+  // Resolve symlinks for the closest existing ancestor so read/write checks
+  // cannot escape via links inside an otherwise allowed directory.
   let probe = absoluteTarget;
   while (true) {
     if (fs.existsSync(probe)) {

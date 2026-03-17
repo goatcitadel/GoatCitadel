@@ -50,6 +50,17 @@ describe("assertReadPathAllowed", () => {
     expect(() => assertReadPathAllowed(escapedFile, [fixture.jailRoot], []))
       .toThrow(/outside read allowlist/i);
   });
+
+  it("blocks nonexistent absolute paths outside the allowlist before filesystem access", () => {
+    const fixture = createSymlinkFixture();
+    if (!fixture) {
+      return;
+    }
+
+    const missingOutsidePath = path.join(path.dirname(fixture.jailRoot), "outside-missing", "ghost.txt");
+    expect(() => assertReadPathAllowed(missingOutsidePath, [fixture.jailRoot], []))
+      .toThrow(/outside read allowlist/i);
+  });
 });
 
 function createSymlinkFixture():

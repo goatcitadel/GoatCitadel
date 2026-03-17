@@ -688,7 +688,7 @@ async function runRestricted(
     throw new Error("Only pnpm/npm are allowed");
   }
   const cmdArgs = manager === "pnpm"
-    ? [...(filter ? ["--filter", filter] : []), kind]
+    ? [...(filter ? ["--filter", filter] : []), "run", kind]
     : ["run", kind];
   const command = resolveRestrictedCommand(manager, cmdArgs);
   const { stdout, stderr } = await execFileAsync(command.file, command.args, {
