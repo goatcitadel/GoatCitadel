@@ -544,8 +544,9 @@ async function shellExec(
     );
   }
   const parsed = parseExecFileCommand(command);
+  const executable = resolveExecutableCommand(parsed.file, parsed.args);
   try {
-    const { stdout, stderr } = await execFileAsync(parsed.file, parsed.args, {
+    const { stdout, stderr } = await execFileAsync(executable.file, executable.args, {
       timeout: 20000,
       windowsHide: true,
       maxBuffer: 1024 * 1024,
@@ -592,8 +593,9 @@ async function shellExecBackground(
     );
   }
   const parsed = parseExecFileCommand(command);
+  const executable = resolveExecutableCommand(parsed.file, parsed.args);
   return await new Promise<Record<string, unknown>>((resolve, reject) => {
-    const child = spawn(parsed.file, parsed.args, {
+    const child = spawn(executable.file, executable.args, {
       cwd,
       detached: true,
       stdio: "ignore",
@@ -688,13 +690,43 @@ async function runRestricted(
   const cmdArgs = manager === "pnpm"
     ? [...(filter ? ["--filter", filter] : []), kind]
     : ["run", kind];
-  const { stdout, stderr } = await execFileAsync(manager, cmdArgs, {
+  const command = resolveRestrictedCommand(manager, cmdArgs);
+  const { stdout, stderr } = await execFileAsync(command.file, command.args, {
     timeout: 120000,
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
     cwd,
   });
   return { manager, kind, cwd, stdout: stdout.slice(0, 10000), stderr: stderr.slice(0, 10000) };
+}
+
+export function resolveRestrictedCommand(
+  manager: "pnpm" | "npm",
+  cmdArgs: string[],
+  platform: NodeJS.Platform = process.platform,
+): { file: string; args: string[] } {
+  return resolveExecutableCommand(manager, cmdArgs, platform);
+}
+
+export function resolveExecutableCommand(
+  file: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): { file: string; args: string[] } {
+  if (platform !== "win32" || (file !== "pnpm" && file !== "npm")) {
+    return { file, args };
+  }
+  return {
+    file: process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe",
+    args: ["/d", "/s", "/c", [file, ...args].map(quoteForCmd).join(" ")],
+  };
+}
+
+function quoteForCmd(value: string): string {
+  if (!/[\s"]/u.test(value)) {
+    return value;
+  }
+  return `"${value.replace(/"/g, '\\"')}"`;
 }
 
 async function memoryWrite(args: Record<string, unknown>, storage: Storage, upsert: boolean) {

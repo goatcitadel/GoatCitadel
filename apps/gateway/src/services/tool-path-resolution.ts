@@ -95,7 +95,8 @@ function resolveRelativeToolPath(
   }
 
   const workspaceCandidate = path.resolve(context.workspaceRoot, trimmed);
-  const projectCandidate = context.projectRoot ? path.resolve(context.projectRoot, trimmed) : undefined;
+  const projectRelativePath = normalizeProjectRelativeInput(trimmed, context.projectWorkspacePath);
+  const projectCandidate = context.projectRoot ? path.resolve(context.projectRoot, projectRelativePath) : undefined;
   if (!projectCandidate) {
     return workspaceCandidate;
   }
@@ -148,6 +149,25 @@ function shouldPreferWorkspaceRoot(rawPath: string, projectWorkspacePath?: strin
   }
   return normalizedRawPath === normalizedProjectPath
     || normalizedRawPath.startsWith(`${normalizedProjectPath}/`);
+}
+
+function normalizeProjectRelativeInput(rawPath: string, projectWorkspacePath?: string): string {
+  if (!projectWorkspacePath) {
+    return rawPath;
+  }
+  const normalizedRawPath = normalizeRelativePath(rawPath);
+  const normalizedProjectPath = normalizeRelativePath(projectWorkspacePath);
+  const projectBaseName = normalizedProjectPath.split("/").at(-1);
+  if (!projectBaseName) {
+    return rawPath;
+  }
+  if (normalizedRawPath === projectBaseName) {
+    return ".";
+  }
+  if (normalizedRawPath.startsWith(`${projectBaseName}/`)) {
+    return normalizedRawPath.slice(projectBaseName.length + 1);
+  }
+  return rawPath;
 }
 
 function normalizeRelativePath(value: string): string {

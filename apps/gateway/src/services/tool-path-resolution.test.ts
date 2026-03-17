@@ -48,6 +48,24 @@ describe("resolveToolRequestPaths", () => {
     expect(resolved.args.path).toBe(path.join(projectRoot, "src", "utils.ts"));
   });
 
+  it("collapses a redundant project-name prefix back to the assigned project root", async () => {
+    const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
+    const request: ToolInvokeRequest = {
+      toolName: "code.search",
+      args: { path: "prompt-pack-workspace/src/utils.ts", query: "slugify" },
+      agentId: "agent",
+      sessionId: "session",
+    };
+
+    const resolved = resolveToolRequestPaths(request, {
+      workspaceRoot,
+      projectRoot,
+      projectWorkspacePath: "fixtures/prompt-pack-workspace",
+    });
+
+    expect(resolved.args.path).toBe(path.join(projectRoot, "src", "utils.ts"));
+  });
+
   it("prefers the assigned project root for top-level files when both roots contain a match", async () => {
     const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
     await fs.writeFile(path.join(workspaceRoot, "package.json"), '{"name":"workspace-root"}\n', "utf8");

@@ -21,7 +21,7 @@ vi.mock("./browser-tools.js", () => ({
   executeBrowserTool: mocked.executeBrowserTool,
 }));
 
-import { executeTool } from "./tool-executor.js";
+import { executeTool, resolveExecutableCommand, resolveRestrictedCommand } from "./tool-executor.js";
 
 const storageStub = {} as Storage;
 
@@ -292,6 +292,70 @@ describe("executeTool", () => {
       exitCode: 0,
     });
     expect(String(result.stdout ?? "")).toContain(packageDir);
+  });
+
+  it("runs restricted tools from the provided cwd", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const packageDir = path.join(testWorkspaceRoot, "restricted-runner");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "package.json"), JSON.stringify({
+      name: "restricted-runner",
+      private: true,
+      scripts: {
+        test: 'node -e "process.stdout.write(process.cwd())"',
+      },
+    }, null, 2), "utf8");
+
+    const request: ToolInvokeRequest = {
+      toolName: "tests.run",
+      args: { manager: "npm", cwd: packageDir },
+      agentId: "agent",
+      sessionId: "sess-restricted-cwd",
+    };
+
+    const result = await executeTool(request, policyConfig, storageStub);
+    expect(result).toMatchObject({
+      manager: "npm",
+      kind: "test",
+      cwd: packageDir,
+    });
+    expect(String(result.stdout ?? "")).toContain(packageDir);
+  });
+
+  it("uses cmd.exe to resolve restricted package-manager commands on Windows", () => {
+    const resolved = resolveRestrictedCommand("pnpm", ["--filter", "workspace/pkg", "test"], "win32");
+
+    expect(resolved).toEqual({
+      file: process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe",
+      args: ["/d", "/s", "/c", "pnpm --filter workspace/pkg test"],
+    });
+  });
+
+  it("uses cmd.exe to resolve shell package-manager commands on Windows", () => {
+    const resolved = resolveExecutableCommand("pnpm", ["exec", "vitest", "run"], "win32");
+
+    expect(resolved).toEqual({
+      file: process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe",
+      args: ["/d", "/s", "/c", "pnpm exec vitest run"],
+    });
+  });
+
+  it("quotes shell package-manager args with spaces on Windows", () => {
+    const resolved = resolveExecutableCommand("npm", ["run", "test:unit", "--", "path with spaces"], "win32");
+
+    expect(resolved).toEqual({
+      file: process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe",
+      args: ["/d", "/s", "/c", 'npm run test:unit -- "path with spaces"'],
+    });
+  });
+
+  it("runs restricted package-manager commands directly on non-Windows platforms", () => {
+    const resolved = resolveRestrictedCommand("npm", ["run", "lint"], "linux");
+
+    expect(resolved).toEqual({
+      file: "npm",
+      args: ["run", "lint"],
+    });
   });
 
   it("rejects malformed shell command parsing", async () => {
