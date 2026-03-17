@@ -823,13 +823,7 @@ function citationsBuild(args: Record<string, unknown>) {
         sourceType: asString(source.sourceType) ?? "web",
       };
     })
-    .filter((item): item is {
-      citationId: string;
-      title?: string;
-      url: string;
-      snippet?: string;
-      sourceType: string;
-    } => Boolean(item));
+    .filter((item): item is NonNullable<typeof item> => item !== undefined);
 
   return {
     count: results.length,

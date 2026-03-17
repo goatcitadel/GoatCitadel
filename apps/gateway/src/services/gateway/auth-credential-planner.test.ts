@@ -152,6 +152,7 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
     dbPath: path.join(rootDir, "data", "index.db"),
     assistant: {
       environment: "test",
+      deploymentProfile: "local_dev",
       defaultToolProfile: "standard",
       dataDir: "./data",
       transcriptsDir: "./data/transcripts",
