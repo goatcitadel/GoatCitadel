@@ -134,6 +134,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   const {
     config: runtimeLlmConfig,
     providers: runtimeProviderCatalog,
+    loadModelsForProvider,
   } = useProviderModelCatalog("system");
   const providerOptions = useMemo<ChatModelProviderOption[]>(() => {
     return runtimeProviderCatalog
@@ -363,6 +364,13 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       ? current
       : activeProvider.models[0] ?? "");
   }, [providerOptions, runtimeLlmConfig?.activeProviderId, selectedProviderId]);
+
+  useEffect(() => {
+    if (!selectedProviderId) {
+      return;
+    }
+    void loadModelsForProvider(selectedProviderId);
+  }, [loadModelsForProvider, selectedProviderId]);
 
   const selectedRunModel = useMemo(() => {
     if (reuseLastModel && lastSuccessfulModel) {

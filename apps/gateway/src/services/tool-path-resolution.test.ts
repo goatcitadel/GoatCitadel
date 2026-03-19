@@ -104,6 +104,24 @@ describe("resolveToolRequestPaths", () => {
     expect(resolved.args.path).toBe(projectRoot);
   });
 
+  it("re-anchors filesystem root placeholders back to the assigned project root", async () => {
+    const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
+    const request: ToolInvokeRequest = {
+      toolName: "code.search_files",
+      args: { path: path.parse(workspaceRoot).root, query: "package.json" },
+      agentId: "agent",
+      sessionId: "session",
+    };
+
+    const resolved = resolveToolRequestPaths(request, {
+      workspaceRoot,
+      projectRoot,
+      projectWorkspacePath: "fixtures/prompt-pack-workspace",
+    });
+
+    expect(resolved.args.path).toBe(projectRoot);
+  });
+
   it("routes project-relative write targets into the assigned project root", async () => {
     const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
     const request: ToolInvokeRequest = {

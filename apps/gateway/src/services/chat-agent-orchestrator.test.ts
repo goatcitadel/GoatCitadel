@@ -274,6 +274,31 @@ function toolCallCompletion(query: string): ChatCompletionResponse {
   };
 }
 
+function namedToolCallCompletion(toolName: string, args: Record<string, unknown>): ChatCompletionResponse {
+  return {
+    model: "glm-5",
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: `call-${toolName.replace(/\./g, "-")}-1`,
+              type: "function",
+              function: {
+                name: toolName.replace(/\./g, "_"),
+                arguments: JSON.stringify(args),
+              },
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
 function navigateToolCallCompletion(args: Record<string, unknown>): ChatCompletionResponse {
   return {
     model: "glm-5",
@@ -1289,6 +1314,86 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("REST APIs are widely used");
   });
 
+  it("ignores Prompt Lab tooling contract text when grounding browser.search queries", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Tooling Contract",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: web lookup tools",
+      "- Do not substitute memory tools unless the prompt explicitly asks for memory.",
+      "",
+      "## User Task",
+      "Use browser.search to find the current Node.js LTS version.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", {
+        query: "navigate - Required tool families: web lookup tools - Do not substitute memory tools unless the prompt explicitly asks for memory.",
+      }))
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Node.js 22 is the current LTS line.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-node-lts-grounded-1",
+        result: {
+          query: "current Node.js LTS version",
+          results: [
+            {
+              title: "Node.js Releases",
+              url: "https://nodejs.org/en/about/previous-releases",
+              snippet: "Node.js release schedule and LTS lines.",
+            },
+          ],
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-browser-search-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-browser-search-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    const firstInvokeCall = (invokeTool.mock.calls as unknown as Array<[{
+      toolName: string;
+      args: Record<string, unknown>;
+    }]>) [0]?.[0];
+    expect(firstInvokeCall).toMatchObject({
+      toolName: "browser.search",
+      args: expect.objectContaining({
+        query: expect.stringMatching(/node\.js lts/i),
+      }),
+    });
+    expect(String(firstInvokeCall?.args.query)).not.toMatch(/required tool families|memory tools/i);
+    expect(result.assistantContent).toContain("Node.js 22");
+  });
+
   it("redirects community browser.navigate urls to a better recent source when the prompt did not ask for community results", async () => {
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
@@ -1780,7 +1885,7 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("inspect that page");
   });
 
-  it("exposes explicit browser.search requests in chat mode", async () => {
+  it("executes explicit browser.search requests in chat mode and allows fallback retries", async () => {
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
       .mockImplementationOnce(async (request) => {
@@ -1801,7 +1906,29 @@ describe("ChatAgentOrchestrator", () => {
           ],
         };
       });
-    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-explicit-browser-search-1",
+        result: {
+          results: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-explicit-browser-search-2",
+        result: {
+          results: [
+            {
+              title: "Node.js releases",
+              url: "https://nodejs.org/en/about/previous-releases",
+              snippet: "The current LTS line is available on the Node.js release schedule.",
+            },
+          ],
+        },
+      });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate", "http.get", "time.now"]),
@@ -1825,7 +1952,23 @@ describe("ChatAgentOrchestrator", () => {
     });
 
     expect(createChatCompletion).toHaveBeenCalledTimes(1);
-    expect(invokeTool).not.toHaveBeenCalled();
+    expect(invokeTool).toHaveBeenCalledTimes(2);
+    const explicitSearchCalls = invokeTool.mock.calls as unknown as Array<[{ toolName: string; args: Record<string, unknown> }]>;
+    const initialSearchCall = explicitSearchCalls[0]![0]!;
+    const fallbackSearchCall = explicitSearchCalls[1]![0]!;
+    expect(initialSearchCall).toMatchObject({
+      toolName: "browser.search",
+      args: expect.objectContaining({
+        query: expect.stringMatching(/lts version/i),
+      }),
+    });
+    expect(fallbackSearchCall).toMatchObject({
+      toolName: "browser.search",
+      args: expect.objectContaining({
+        engine: "bing",
+      }),
+    });
+    expect(fallbackSearchCall.args.query).toBe(initialSearchCall.args.query);
   });
 
   it("exposes memory write and lookup tools for explicit save-and-confirm chat prompts", async () => {
@@ -1886,7 +2029,7 @@ describe("ChatAgentOrchestrator", () => {
   it("prefers file and code tools over memory lookup for code file-analysis prompts", async () => {
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
-      .mockImplementationOnce(async (request) => {
+      .mockImplementation(async (request) => {
         const toolNames = (request.tools ?? [])
           .map((tool) => (tool.function as { name?: string } | undefined)?.name)
           .filter((name): name is string => Boolean(name));
@@ -1942,8 +2085,204 @@ describe("ChatAgentOrchestrator", () => {
       ],
     });
 
-    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(createChatCompletion).toHaveBeenCalled();
+    const invokedToolNames = (invokeTool.mock.calls as unknown as Array<[{ toolName: string }]>)
+      .map((call) => call[0]?.toolName)
+      .filter((toolName): toolName is string => Boolean(toolName));
+    expect(invokedToolNames).not.toContain("memory.search");
+  });
+
+  it("infers a missing file.find path from explicit local file prompts", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("file.find", { pattern: "tasks" }))
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The file defines a task map and CRUD routes.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-file-find-inferred-path-1",
+        result: {
+          path: "src/index.ts",
+          pattern: "tasks",
+          count: 1,
+          matches: [
+            { path: "src/index.ts", line: 15, lineText: "const tasks: Map<string, Task> = new Map();" },
+          ],
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.find"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-file-find-inferred-path-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-file-find-inferred-path-1",
+      content: "Look at src/index.ts and identify code quality improvements around task handling.",
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: "Look at src/index.ts and identify code quality improvements around task handling.",
+        },
+      ],
+    });
+
+    const firstInvokeCall = (invokeTool.mock.calls as unknown as Array<[{
+      toolName: string;
+      args: Record<string, unknown>;
+    }]>) [0]?.[0];
+    expect(firstInvokeCall).toMatchObject({
+      toolName: "file.find",
+      args: expect.objectContaining({
+        path: "src/index.ts",
+        pattern: "tasks",
+      }),
+    });
+  });
+
+  it("infers missing code.search_files args for full-project file audits", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("code.search_files", {}))
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The fixture project contains package.json, tsconfig.json, and two source files.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-code-search-files-inferred-1",
+        result: {
+          path: "fixtures/prompt-pack-workspace/",
+          query: ".",
+          count: 4,
+          matches: [
+            { path: "fixtures/prompt-pack-workspace/package.json", name: "package.json", type: "file" },
+          ],
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-code-search-files-inferred-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-code-search-files-inferred-1",
+      content: "Read all source files in fixtures/prompt-pack-workspace/ using file tools. Produce a project audit report covering structure, code quality, and test coverage gaps.",
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: "Read all source files in fixtures/prompt-pack-workspace/ using file tools. Produce a project audit report covering structure, code quality, and test coverage gaps.",
+        },
+      ],
+    });
+
+    const firstInvokeCall = (invokeTool.mock.calls as unknown as Array<[{
+      toolName: string;
+      args: Record<string, unknown>;
+    }]>) [0]?.[0];
+    expect(firstInvokeCall).toMatchObject({
+      toolName: "code.search_files",
+      args: expect.objectContaining({
+        path: "fixtures/prompt-pack-workspace/",
+        query: ".",
+      }),
+    });
+  });
+
+  it("does not invent local file paths from bare technology names", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("file.read_range", {
+        startLine: 1,
+        endLine: 20,
+      }))
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "I need an actual project file path before I can inspect local code.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-no-bogus-tech-path-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-no-bogus-tech-path-1",
+      content: "Explain whether this project should upgrade Node.js and TypeScript next quarter.",
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: "Explain whether this project should upgrade Node.js and TypeScript next quarter.",
+        },
+      ],
+    });
+
     expect(invokeTool).not.toHaveBeenCalled();
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
   });
 
   it("treats release-window prompts like this week as live-data intent", async () => {
@@ -4729,5 +5068,366 @@ describe("ChatAgentOrchestrator", () => {
     ).length;
     expect(totalNavigateCalls).toBeLessThanOrEqual(2);
     expect(result.turnTrace.status).toBe("cancelled");
+  });
+
+  it("promotes a recovered no-tool failure back to completed", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Adopt event sourcing only if auditability and replay are first-order billing requirements; otherwise keep the current model and add targeted ledger controls.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-recover-no-tools-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-recover-no-tools-1",
+      content: "Assess whether to adopt event sourcing for a billing system. Include one final recommendation.",
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "manual",
+      historyMessages: [
+        {
+          role: "user",
+          content: "Assess whether to adopt event sourcing for a billing system. Include one final recommendation.",
+        },
+      ],
+    });
+
+    expect(result.assistantContent).toContain("Adopt event sourcing only if auditability and replay are first-order billing requirements");
+    expect(result.assistantContent).not.toContain("This turn failed before completion.");
+    expect(result.turnTrace.status).toBe("completed");
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+  });
+
+  it("repairs hallucinated continuation references in standalone no-tool answers", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: {
+              role: "assistant",
+              content: [
+                "If Kubernetes is still the right answer, treat the nine workstreams above as your migration backlog.",
+                "Sequence them in the order listed within each lens and do not begin cutover until each workstream above has a verified deliverable.",
+              ].join(" "),
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "Recommendation: stay on Heroku unless you need Kubernetes-specific controls that clearly outweigh platform simplicity.",
+                "Evaluate the move across three lenses:",
+                "1. Delivery risk: cluster operations, deployment safety, and staffing overhead increase immediately.",
+                "2. Operational burden: observability, patching, scaling policy, and incident ownership move onto your team.",
+                "3. Rollback readiness: you need rehearsed rollback drills, migration checkpoints, and database escape hatches before cutover.",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-broken-standalone-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-broken-standalone-1",
+      content: "Evaluate whether a team should move from Heroku to Kubernetes across delivery risk, operational burden, and rollback readiness, then give one recommendation.",
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "manual",
+      historyMessages: [
+        {
+          role: "user",
+          content: "Evaluate whether a team should move from Heroku to Kubernetes across delivery risk, operational burden, and rollback readiness, then give one recommendation.",
+        },
+      ],
+    });
+
+    expect(result.assistantContent).toContain("Recommendation: stay on Heroku unless you need Kubernetes-specific controls");
+    expect(result.assistantContent).not.toContain("nine workstreams above");
+    expect(result.turnTrace.status).toBe("completed");
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+  });
+
+  it("repairs structured answers that end mid-clause despite a stop finish reason", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: {
+              role: "assistant",
+              content: [
+                "# Migration Recommendation",
+                "",
+                "## Assumptions",
+                "",
+                "| # | Assumption | Impact if wrong |",
+                "|---|---|---|",
+                "| A1 | Existing Sentry SDKs are recent | Older SDKs may need migration work |",
+                "| A2 | The team can run Docker or Kubernetes | Managed hosting cost changes the math |",
+                "",
+                "## Technical Feasibility",
+                "",
+                "- **GlitchTip**: near-zero SDK migration path for error tracking.",
+                "- **Grafana Loki + Tempo**: add OpenTelemetry during parallel run;",
+              ].join("\n"),
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "# Migration Recommendation",
+                "",
+                "Use GlitchTip first for Sentry-compatible error tracking, then add Loki + Tempo if you need broader observability.",
+                "",
+                "Next step: run GlitchTip in parallel for two weeks, compare error capture coverage, and only then decide whether to add Loki + Tempo.",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-fragmentary-stop-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-fragmentary-stop-1",
+      content: "Recommend an open-source replacement for Sentry and explain the migration path.",
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "manual",
+      historyMessages: [
+        {
+          role: "user",
+          content: "Recommend an open-source replacement for Sentry and explain the migration path.",
+        },
+      ],
+    });
+
+    expect(result.assistantContent).toContain("Use GlitchTip first for Sentry-compatible error tracking");
+    expect(result.assistantContent).not.toContain("during parallel run;");
+    expect(result.turnTrace.status).toBe("completed");
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+  });
+
+  it("repairs structured answers that end on a hanging markdown bullet", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: {
+              role: "assistant",
+              content: [
+                "# Migration Recommendation",
+                "",
+                "## Delivery Risk",
+                "",
+                "- Heroku lowers platform-operating risk for small teams.",
+                "- Kubernetes increases flexibility but raises the number of failure domains.",
+                "",
+                "## Operational Burden",
+                "",
+                "- **Cluster lifecycle management**: upgrades, patching, and capacity planning.",
+                "- **Observability and incident response**: metrics, logs, traces, and runbooks.",
+                "- **People burden",
+              ].join("\n"),
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "# Migration Recommendation",
+                "",
+                "Recommendation: stay on Heroku unless you need Kubernetes-specific controls or platform-level compliance guarantees.",
+                "",
+                "If you do move, staff platform ownership first: upgrades, observability, rollback drills, and security operations all become an ongoing team obligation.",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-fragmentary-bullet-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-fragmentary-bullet-1",
+      content: "Evaluate whether a team should move from Heroku to Kubernetes across delivery risk, operational burden, and rollback readiness, then give one recommendation.",
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "manual",
+      historyMessages: [
+        {
+          role: "user",
+          content: "Evaluate whether a team should move from Heroku to Kubernetes across delivery risk, operational burden, and rollback readiness, then give one recommendation.",
+        },
+      ],
+    });
+
+    expect(result.assistantContent).toContain("Recommendation: stay on Heroku");
+    expect(result.assistantContent).not.toContain("- **People burden");
+    expect(result.turnTrace.status).toBe("completed");
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not use extraction fallback for file-analysis prompts that mention package.json", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-file-1",
+                  type: "function",
+                  function: {
+                    name: "file_read_range",
+                    arguments: JSON.stringify({
+                      path: "fixtures/prompt-pack-workspace/package.json",
+                      startLine: 1,
+                      endLine: 20,
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: "" } }],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: "" } }],
+      })
+      .mockRejectedValueOnce(new Error("timeout"));
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-file-analysis-1",
+      result: {
+        path: "fixtures/prompt-pack-workspace/package.json",
+        content: "{\n  \"name\": \"prompt-pack-workspace\",\n  \"scripts\": {\n    \"build\": \"tsc\"\n  }\n}",
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-file-analysis-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-file-analysis-1",
+      content: "Read fixtures/prompt-pack-workspace/package.json using file tools. Analyze the scripts section and suggest missing scripts.",
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: "Read fixtures/prompt-pack-workspace/package.json using file tools. Analyze the scripts section and suggest missing scripts.",
+        },
+      ],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.assistantContent).not.toContain("recovered item(s)");
+    expect(result.assistantContent).not.toContain("deterministic crawl");
+    expect(result.assistantContent).toContain("I couldn't finish that cleanly because");
   });
 });

@@ -86,8 +86,11 @@ function resolveRelativeToolPath(
   kind: PathResolutionKind,
 ): string {
   const trimmed = rawPath.trim();
-  if (!trimmed || path.isAbsolute(trimmed)) {
+  if (!trimmed) {
     return rawPath;
+  }
+  if (path.isAbsolute(trimmed)) {
+    return resolveAbsoluteToolPath(trimmed, context, kind) ?? rawPath;
   }
 
   if (isDotPath(trimmed)) {
@@ -119,6 +122,20 @@ function resolveRelativeToolPath(
   }
 
   return projectCandidate;
+}
+
+function resolveAbsoluteToolPath(
+  rawPath: string,
+  context: ToolPathResolutionContext,
+  kind: PathResolutionKind,
+): string | undefined {
+  const resolved = path.resolve(rawPath);
+  if (!isFilesystemRootPath(resolved)) {
+    return undefined;
+  }
+  return kind === "cwd"
+    ? defaultToolCwd(context)
+    : (context.projectRoot ?? path.resolve(context.workspaceRoot));
 }
 
 function candidateLooksValid(candidate: string, kind: PathResolutionKind): boolean {
@@ -180,6 +197,11 @@ function normalizeRelativePath(value: string): string {
 function isDotPath(value: string): boolean {
   const normalized = normalizeRelativePath(value);
   return normalized === "" || normalized === ".";
+}
+
+function isFilesystemRootPath(value: string): boolean {
+  const parsed = path.parse(value);
+  return parsed.root === value;
 }
 
 function defaultToolCwd(context: ToolPathResolutionContext): string {

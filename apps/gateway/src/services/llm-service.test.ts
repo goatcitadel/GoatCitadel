@@ -158,6 +158,97 @@ describe("LlmService", () => {
     }
   });
 
+  it("uses max_completion_tokens for OpenAI gpt-5 chat completions", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5.4",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let payloadBody: Record<string, unknown> | undefined;
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      return new Response(
+        JSON.stringify({
+          id: "cmpl_openai_gpt5",
+          choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      await service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-5.4",
+        max_tokens: 512,
+        messages: [{ role: "user", content: "hello" }],
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(payloadBody?.max_completion_tokens).toBe(512);
+    expect(payloadBody?.max_tokens).toBeUndefined();
+  });
+
+  it("uses max_completion_tokens for OpenAI gpt-5 streamed chat completions", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5.4",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let payloadBody: Record<string, unknown> | undefined;
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      return new Response(
+        "data: {\"id\":\"chunk_openai_gpt5\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      for await (const _chunk of service.chatCompletionsStream({
+        providerId: "openai",
+        model: "gpt-5.4",
+        max_tokens: 384,
+        messages: [{ role: "user", content: "hello" }],
+      })) {
+        // consume stream
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(payloadBody?.max_completion_tokens).toBe(384);
+    expect(payloadBody?.max_tokens).toBeUndefined();
+  });
+
   it("canonicalizes legacy Perplexity /v1 endpoints back to the root API base", () => {
     const config: LlmConfigFile = {
       activeProviderId: "perplexity",

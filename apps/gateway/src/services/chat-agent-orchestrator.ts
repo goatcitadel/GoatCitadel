@@ -33,6 +33,8 @@ const TOOL_FAILURE_CIRCUIT_BREAKER_THRESHOLD = 2;
 const TOOL_FAILURE_RATE_LIMIT_THRESHOLD = 4;
 const SAFE_WRITE_FALLBACK_DIR = "./workspace/goatcitadel_out";
 const QUERY_TOOL_NAMES = new Set(["browser.search", "memory.search", "embeddings.query"]);
+const LOCAL_PATH_TOOL_NAMES = new Set(["file.read_range", "file.find", "code.search", "code.search_files"]);
+const LOCAL_QUERY_TOOL_NAMES = new Set(["code.search", "code.search_files"]);
 const WEB_TOOL_NAMES = new Set([
   "browser.search",
   "browser.navigate",
@@ -57,6 +59,40 @@ const REMOTE_BLOCK_MARKERS = [
   "enable javascript and cookies",
   "sorry, you have been blocked",
 ];
+const PROMPT_HARNESS_QUERY_MARKERS = [
+  "prompt lab tooling contract",
+  "explicit-tools evaluation",
+  "required named tools",
+  "required tool families",
+  "do not substitute memory tools",
+  "if a required tool fails",
+];
+const KNOWN_BARE_FILE_BASENAMES = new Set([
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "tsconfig.json",
+  "tsconfig.app.json",
+  "tsconfig.base.json",
+  "README.md",
+  ".env",
+  ".env.example",
+  "docker-compose.yml",
+  "docker-compose.yaml",
+  "compose.yml",
+  "compose.yaml",
+  "vite.config.ts",
+  "vite.config.js",
+  "vitest.config.ts",
+  "vitest.config.js",
+  "jest.config.ts",
+  "jest.config.js",
+  "eslint.config.js",
+  "eslint.config.mjs",
+  "prettier.config.js",
+  "turbo.json",
+]);
 const TOOL_REQUIRED_ARGS: Record<string, string[]> = {
   "browser.search": ["query"],
   "browser.navigate": ["url"],
@@ -628,7 +664,11 @@ export class ChatAgentOrchestrator {
 
         const choice = completion.choices?.[0];
         const message = choice?.message as Record<string, unknown> | undefined;
-        const completionOutcome = classifyCompletionOutcome(completion);
+        const completionOutcome = classifyCompletionOutcome({
+          completion,
+          originalRequest: input.content,
+          priorMessages: input.historyMessages,
+        });
         if (completionOutcome.finishReason) {
           completionState = {
             ...completionState,
@@ -879,6 +919,10 @@ export class ChatAgentOrchestrator {
             }),
             (error as Error).message,
           );
+          completionState = {
+            ...completionState,
+            status: "interrupted",
+          };
           assistantContent = buildUserSafeFailureMessage(finalFailure);
           yield {
             type: "error",
@@ -916,6 +960,9 @@ export class ChatAgentOrchestrator {
             repaired: true,
           };
         }
+        if (finalStatus === "failed") {
+          finalStatus = "completed";
+        }
       }
       if (!finalFailure) {
         finalFailure = buildChatTurnFailureRecord(
@@ -940,6 +987,12 @@ export class ChatAgentOrchestrator {
           status: "complete",
           repaired: true,
         };
+        if (
+          finalStatus === "failed"
+          && !looksLikeRecoverableAssistantFallbackContent(assistantContent)
+        ) {
+          finalStatus = "completed";
+        }
       }
     }
 
@@ -957,6 +1010,12 @@ export class ChatAgentOrchestrator {
           status: "complete",
           repaired: true,
         };
+        if (
+          finalStatus === "failed"
+          && !looksLikeRecoverableAssistantFallbackContent(assistantContent)
+        ) {
+          finalStatus = "completed";
+        }
       }
       if (synthesizedFallback.deterministic && !finalFailure && toolRuns.length > 0) {
         finalFailure = buildChatTurnFailureRecord(
@@ -2185,6 +2244,17 @@ export class ChatAgentOrchestrator {
           blockedReason: `execution skipped: ${input.toolName} requires query; unable to infer a safe query from the prompt`,
         };
       }
+      if (
+        (field === "query" && LOCAL_QUERY_TOOL_NAMES.has(input.toolName))
+        || (field === "pattern" && input.toolName === "file.find")
+        || (field === "path" && LOCAL_PATH_TOOL_NAMES.has(input.toolName))
+      ) {
+        return {
+          toolName: effectiveToolName,
+          args,
+          blockedReason: `execution skipped: ${input.toolName} requires ${field}; unable to infer a safe ${field} from the prompt`,
+        };
+      }
       return {
         toolName: effectiveToolName,
         args,
@@ -2329,6 +2399,7 @@ export class ChatAgentOrchestrator {
       ? Math.min(15000, Math.max(3000, input.turnBudgetDeadline - Date.now()))
       : 12000;
     const toolSummary = summarizeToolRunsForSynthesis(input.toolRuns, input.input.content);
+    const ignoreDraft = looksLikeUserSafeFailureMessage(input.partialAssistantContent);
     try {
       const completion = await this.deps.createChatCompletion({
         providerId: input.input.providerId,
@@ -2348,7 +2419,9 @@ export class ChatAgentOrchestrator {
               "You are repairing a partially completed assistant answer.",
               "Tools are unavailable for this repair pass.",
               "Use only the existing conversation and tool evidence already gathered.",
-              "Finish cleanly. Do not restart from scratch unless the draft is unusable.",
+              ignoreDraft
+                ? "The prior draft is only a runtime failure placeholder. Ignore it and answer the original request from scratch."
+                : "Finish cleanly. Do not restart from scratch unless the draft is unusable.",
               "Do not mention finish reasons, token limits, truncation, or internal runtime state.",
             ].join("\n"),
           },
@@ -2358,7 +2431,9 @@ export class ChatAgentOrchestrator {
               `Original request: ${input.input.content}`,
               "",
               "Partial assistant draft:",
-              input.partialAssistantContent.trim() || "(empty)",
+              ignoreDraft
+                ? "(runtime failure placeholder omitted)"
+                : (input.partialAssistantContent.trim() || "(empty)"),
               "",
               "Captured tool evidence:",
               toolSummary || "- No tool evidence captured.",
@@ -2378,11 +2453,15 @@ export class ChatAgentOrchestrator {
   }
 }
 
-function classifyCompletionOutcome(completion: ChatCompletionResponse): {
+function classifyCompletionOutcome(input: {
+  completion: ChatCompletionResponse;
+  originalRequest: string;
+  priorMessages?: ChatCompletionRequest["messages"];
+}): {
   finishReason?: string;
   status: NonNullable<ChatTurnTraceRecord["completion"]>["status"];
 } {
-  const choice = completion.choices?.[0];
+  const choice = input.completion.choices?.[0];
   const finishReason = typeof choice?.finish_reason === "string" ? choice.finish_reason : undefined;
   const message = choice?.message as Record<string, unknown> | undefined;
   if (message && hasIncompleteToolCalls(message)) {
@@ -2401,6 +2480,19 @@ function classifyCompletionOutcome(completion: ChatCompletionResponse): {
     return {
       finishReason,
       status: "interrupted",
+    };
+  }
+  if (
+    message
+    && looksLikeFragmentaryStandaloneAnswer({
+      content: extractMessageContent(message),
+      originalRequest: input.originalRequest,
+      priorMessages: input.priorMessages,
+    })
+  ) {
+    return {
+      finishReason,
+      status: "truncated",
     };
   }
   return {
@@ -3325,12 +3417,12 @@ function detectWebFollowUpIntent(
 }
 
 function deriveLiveDataQuery(content: string): string {
-  const normalized = content.replace(/\s+/g, " ").trim();
+  const normalized = extractPrimaryUserTaskContent(content).replace(/\s+/g, " ").trim();
   if (!normalized) {
     return content;
   }
   const clauses = normalized
-    .split(/[.!?]+/)
+    .split(/[\n\r]+|(?<=[.!?])\s+/)
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
   if (clauses.length === 0) {
@@ -3690,6 +3782,15 @@ function inferToolArgValue(toolName: string, field: string, userContent: string)
   if (field === "query" && QUERY_TOOL_NAMES.has(toolName)) {
     return inferQueryFromPrompt(userContent);
   }
+  if (field === "query" && LOCAL_QUERY_TOOL_NAMES.has(toolName)) {
+    return inferLocalSearchQueryFromPrompt(toolName, userContent);
+  }
+  if (field === "pattern" && toolName === "file.find") {
+    return inferFileFindPatternFromPrompt(userContent);
+  }
+  if (field === "path" && LOCAL_PATH_TOOL_NAMES.has(toolName)) {
+    return inferLocalToolPathFromPrompt(toolName, userContent);
+  }
   if (field === "url" && (toolName === "browser.navigate" || toolName === "browser.extract" || toolName === "http.get" || toolName === "http.post" || toolName === "browser.interact")) {
     return extractFirstUrl(userContent);
   }
@@ -3704,15 +3805,19 @@ function resolveGroundedBrowserSearchQuery(input: {
 }): string | undefined {
   const queryCandidates = readBrowserSearchQueryCandidatesFromArgs(input.rawArgs);
   const currentQuery = queryCandidates[0];
-  if (currentQuery && !looksLikeContinuationSearchPrompt(currentQuery)) {
-    return currentQuery;
+  if (currentQuery && !looksLikeContinuationSearchPrompt(currentQuery) && !looksLikeHarnessContaminatedQuery(currentQuery)) {
+    return sanitizeQueryClause(currentQuery).slice(0, 240);
   }
 
   const alternatives = [
     ...queryCandidates.slice(1),
     inferMeaningfulQueryFromRecentToolRuns(input.priorToolRuns),
     inferMeaningfulPriorUserQuery(input.userContent, input.historyMessages),
-  ].filter((value): value is string => typeof value === "string" && value.trim().length >= 3);
+  ].filter((value): value is string => (
+    typeof value === "string"
+    && value.trim().length >= 3
+    && !looksLikeHarnessContaminatedQuery(value)
+  ));
   const bestAlternative = selectBestQueryCandidate(alternatives);
   if (bestAlternative) {
     return bestAlternative;
@@ -4436,7 +4541,7 @@ function scoreBrowserResultCandidate(
 }
 
 function inferQueryFromPrompt(userContent: string): string | undefined {
-  const normalizedInput = userContent
+  const normalizedInput = extractPrimaryUserTaskContent(userContent)
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^["'`]+|["'`]+$/g, "");
@@ -4444,7 +4549,7 @@ function inferQueryFromPrompt(userContent: string): string | undefined {
     return undefined;
   }
   const clauses = normalizedInput
-    .split(/[\n\r]+|[.!?]+/)
+    .split(/[\n\r]+|(?<=[.!?])\s+/)
     .map((item) => sanitizeQueryClause(item))
     .filter((item) => item.length >= 3);
   const candidatePool = clauses.length > 0
@@ -4502,7 +4607,7 @@ function readBrowserSearchQueryCandidatesFromArgs(rawArgs: Record<string, unknow
 
 function selectBestQueryCandidate(candidates: string[]): string | undefined {
   const ranked = candidates
-    .filter((candidate) => !looksLikeContinuationSearchPrompt(candidate))
+    .filter((candidate) => !looksLikeContinuationSearchPrompt(candidate) && !looksLikeHarnessContaminatedQuery(candidate))
     .sort((left, right) => scoreQueryCandidate(right) - scoreQueryCandidate(left))[0];
   return ranked ? sanitizeQueryClause(ranked).slice(0, 240) : undefined;
 }
@@ -4517,7 +4622,7 @@ function inferMeaningfulQueryFromRecentToolRuns(toolRuns: ChatToolRunRecord[] | 
       continue;
     }
     const query = typeof run.args?.query === "string" ? run.args.query.trim() : "";
-    if (query && !looksLikeContinuationSearchPrompt(query)) {
+    if (query && !looksLikeContinuationSearchPrompt(query) && !looksLikeHarnessContaminatedQuery(query)) {
       return query;
     }
   }
@@ -4575,11 +4680,13 @@ function looksLikeContinuationSearchPrompt(value: string): boolean {
 function sanitizeQueryClause(value: string): string {
   return value
     .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/\b(prompt lab tooling contract|explicit-tools evaluation|required named tools|required tool families|do not substitute memory tools|if a required tool fails)\b[\s\S]*$/i, "")
     .replace(/^(please|can you|could you|would you)\b[:,\s-]*/i, "")
     .replace(/^(?:please\s+)?(?:look|search|browse|check|research)\b(?:\s+(?:online|on the web|the web|web|internet))?(?:\s+(?:and|to|for|about|into))?\s*/i, "")
     .replace(/^(?:find(?:\s+out)?|tell|show|give|explain|summarize)\b(?:\s+me)?(?:\s+about)?\s*/i, "")
     .replace(/^(from|on|about)\s+/i, "")
     .replace(/\b(return|respond|output)\b.*$/i, "")
+    .replace(/[?!.,:;]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -4587,6 +4694,9 @@ function sanitizeQueryClause(value: string): string {
 function scoreQueryCandidate(value: string): number {
   const text = value.trim();
   if (!text) {
+    return -1000;
+  }
+  if (looksLikeHarnessContaminatedQuery(text)) {
     return -1000;
   }
   let score = Math.min(text.length, 180);
@@ -4697,7 +4807,27 @@ function buildExtractionFailureFallback(
   reason?: string,
 ): string | undefined {
   const normalized = userPrompt.toLowerCase();
-  const isExtractionPrompt = /\bcollect\b|\bextract\b|\breturn an array\b|\bjson\b|\bpagination\b/.test(normalized);
+  const isStrongExtractionPrompt = (
+    /\bcollect\b|\bextract\b|\bscrape\b|\bcrawl\b|\bpaginate\b|\bpagination\b|\btitle\s*(?:and|&|\+)\s*url\b|\breturn an array\b|\bjson array\b|\bfull json\b|\braw json\b|\bexact extraction set\b/.test(normalized)
+    || /\b(return|respond|output|format)\b[\s\S]{0,40}\bjson\b/.test(normalized)
+  );
+  const hasExtractionToolSignal = toolRuns.some((run) => {
+    if (
+      run.toolName.startsWith("browser.")
+      || run.toolName === "http.get"
+      || run.toolName === "http.post"
+    ) {
+      return true;
+    }
+    return isStrongExtractionPrompt
+      && (
+        run.toolName === "file.read_range"
+        || run.toolName === "file.find"
+        || run.toolName === "code.search"
+        || run.toolName === "code.search_files"
+      );
+  });
+  const isExtractionPrompt = isStrongExtractionPrompt && hasExtractionToolSignal;
   if (!isExtractionPrompt) {
     return undefined;
   }
@@ -4845,8 +4975,250 @@ function looksLikeDegradedAssistantFallbackContent(content: string): boolean {
   }
   return normalized.startsWith("i ran out of time before i could finish")
     || normalized.startsWith("i couldn't finish that cleanly because")
+    || normalized.startsWith("- i completed tool execution but could not confidently produce the full requested extraction set")
+    || normalized.includes("recovered item(s)")
+    || normalized.includes("deterministic crawl")
     || normalized.includes("recover useful content from")
     || normalized.includes("strongest leads so far");
+}
+
+function looksLikeUserSafeFailureMessage(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return normalized.startsWith("the model request timed out before completion.")
+    || normalized.startsWith("the request was interrupted before the turn could finish.")
+    || normalized.startsWith("a required source blocked automated access.")
+    || normalized.startsWith("a required tool failed before the turn could finish.")
+    || normalized.startsWith("the selected provider or integration needs valid auth")
+    || normalized.startsWith("this turn hit the current execution budget before a full pass finished.")
+    || normalized.startsWith("this turn is waiting for approval before it can continue.")
+    || normalized.startsWith("this turn failed before completion.");
+}
+
+function looksLikeRecoverableAssistantFallbackContent(content: string): boolean {
+  return looksLikeDegradedAssistantFallbackContent(content) || looksLikeUserSafeFailureMessage(content);
+}
+
+function looksLikeFragmentaryStandaloneAnswer(input: {
+  content: string;
+  originalRequest: string;
+  priorMessages?: ChatCompletionRequest["messages"];
+}): boolean {
+  const content = input.content.trim();
+  if (!content) {
+    return false;
+  }
+  const normalized = content.toLowerCase();
+  const normalizedRequest = input.originalRequest.trim().toLowerCase();
+  const priorAssistantContext = Array.isArray(input.priorMessages)
+    && input.priorMessages.some((message) => message?.role === "assistant");
+
+  if (!priorAssistantContext && !/\b(above|below|earlier|previous)\b/.test(normalizedRequest)) {
+    if (
+      /\b(the|those|these|all)\s+[a-z0-9 -]{0,40}\b(above|below|earlier|previous)\b/.test(normalized)
+      || /\bas noted above\b/.test(normalized)
+      || /\bas covered earlier\b/.test(normalized)
+    ) {
+      return true;
+    }
+  }
+
+  if (content.length < 240) {
+    return false;
+  }
+
+  const structureHits = Array.from(content.matchAll(/(^|\n)(#{1,6}\s+|- |\d+\.\s+|\|)/gm)).length;
+  if (structureHits < 3) {
+    return false;
+  }
+
+  const lastLine = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? "";
+  if (!lastLine) {
+    return false;
+  }
+  if (/[;:,([{\\/-]$/.test(lastLine)) {
+    return true;
+  }
+  if (looksLikeHangingMarkdownLine(lastLine)) {
+    return true;
+  }
+  return /\b(a|an|and|are|as|at|because|by|during|for|from|if|in|into|is|of|on|or|the|to|under|via|when|while|with|without)\s*$/i.test(lastLine);
+}
+
+function extractPrimaryUserTaskContent(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const userTaskMatch = trimmed.match(/(?:^|\n)##\s+User Task\s*\n([\s\S]*)$/i);
+  if (userTaskMatch?.[1]) {
+    return userTaskMatch[1].trim();
+  }
+  return trimmed;
+}
+
+function looksLikeHarnessContaminatedQuery(value: string): boolean {
+  const normalized = value
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  return PROMPT_HARNESS_QUERY_MARKERS.some((marker) => normalized.includes(marker));
+}
+
+function inferLocalToolPathFromPrompt(toolName: string, userContent: string): string | undefined {
+  const taskContent = extractPrimaryUserTaskContent(userContent);
+  const explicitPath = extractExplicitPromptPath(taskContent);
+  if (explicitPath) {
+    if (toolName === "code.search_files") {
+      return collapsePromptPathToSearchRoot(explicitPath);
+    }
+    return explicitPath;
+  }
+  const normalized = taskContent.toLowerCase();
+  const broadProjectScanIntent = (
+    /\b(all|entire|whole)\s+(?:source\s+)?files?\b/.test(normalized)
+    || /\b(?:search|scan|audit|inspect|read|list|walk)\b[\s\S]{0,40}\b(project|repository|repo|workspace|codebase)\b/.test(normalized)
+    || /\b(project|repository|repo|workspace|codebase)\b[\s\S]{0,40}\b(files?|source|tree|structure)\b/.test(normalized)
+  );
+  if (toolName === "code.search_files" || toolName === "code.search" || toolName === "file.find") {
+    return broadProjectScanIntent || detectLocalFileIntent(taskContent) ? "." : undefined;
+  }
+  return undefined;
+}
+
+function inferLocalSearchQueryFromPrompt(toolName: string, userContent: string): string | undefined {
+  const taskContent = extractPrimaryUserTaskContent(userContent);
+  const explicitPath = extractExplicitPromptPath(taskContent);
+  if (explicitPath) {
+    if (toolName === "code.search_files" && !/\.[a-z0-9]{1,8}$/i.test(explicitPath.replaceAll("\\", "/").replace(/\/+$/, ""))) {
+      return ".";
+    }
+    return promptPathBasename(explicitPath);
+  }
+  const normalized = taskContent.toLowerCase();
+  if (toolName === "code.search_files" && /\b(all|entire|whole)\s+(?:source\s+)?files?\b/.test(normalized)) {
+    return ".";
+  }
+  if (/\btests?\b|\bcoverage\b/.test(normalized)) {
+    return "test";
+  }
+  if (toolName === "code.search") {
+    return inferFileFindPatternFromPrompt(taskContent);
+  }
+  return undefined;
+}
+
+function inferFileFindPatternFromPrompt(userContent: string): string | undefined {
+  const taskContent = extractPrimaryUserTaskContent(userContent);
+  const quotedNeedle = extractQuotedSearchNeedle(taskContent);
+  if (quotedNeedle) {
+    return quotedNeedle;
+  }
+  const actionMatch = taskContent.match(/\b(?:find|search(?:\s+for)?|look\s+for|grep|match(?:ing)?)\s+(?:the\s+)?(?:text|string|term|pattern)?\s*([a-z0-9_.:-]{2,80})/i);
+  if (actionMatch?.[1]) {
+    return actionMatch[1].trim();
+  }
+  return undefined;
+}
+
+function extractExplicitPromptPath(content: string): string | undefined {
+  const candidates: string[] = [];
+  const pushCandidate = (value: string | undefined): void => {
+    if (!value) {
+      return;
+    }
+    const normalized = normalizePromptPathCandidate(value);
+    if (!looksLikePromptPathCandidate(normalized) || candidates.includes(normalized)) {
+      return;
+    }
+    candidates.push(normalized);
+  };
+  for (const match of content.matchAll(/`([^`\r\n]+)`/g)) {
+    pushCandidate(match[1]);
+  }
+  for (const match of content.matchAll(/\b(?:[a-zA-Z]:\\|\.{1,2}[\\/])?[a-zA-Z0-9_.-]+(?:[\\/][a-zA-Z0-9_.-]+)+(?:[\\/])?/g)) {
+    pushCandidate(match[0]);
+  }
+  for (const match of content.matchAll(/\b[a-zA-Z0-9_.-]+\.(?:[a-z0-9]{1,8})\b/gi)) {
+    pushCandidate(match[0]);
+  }
+  return candidates[0];
+}
+
+function normalizePromptPathCandidate(value: string): string {
+  return value
+    .trim()
+    .replace(/^["'`(]+|["'`),.:;]+$/g, "");
+}
+
+function looksLikePromptPathCandidate(value: string): boolean {
+  if (!value || /\s{2,}/.test(value) || /^[a-z]+:\/\//i.test(value)) {
+    return false;
+  }
+  const normalized = value.replaceAll("\\", "/");
+  if (!(/[\\/]/.test(normalized) || /\.[a-z0-9]{1,8}$/i.test(normalized))) {
+    return false;
+  }
+  if (!/[\\/]/.test(normalized)) {
+    const basename = normalized.trim();
+    const stem = basename.replace(/\.[a-z0-9]{1,8}$/i, "");
+    const isKnownBareFile = KNOWN_BARE_FILE_BASENAMES.has(basename);
+    const isLowercaseBareName = stem.length > 0 && stem === stem.toLowerCase();
+    if (!isKnownBareFile && !isLowercaseBareName) {
+      return false;
+    }
+  }
+  return /^(?:[a-zA-Z]:\/|\/|\.{1,2}\/)?[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*(?:\/)?$/i.test(normalized);
+}
+
+function collapsePromptPathToSearchRoot(value: string): string {
+  const normalized = value.replaceAll("\\", "/").replace(/\/+$/, "");
+  if (!normalized) {
+    return ".";
+  }
+  if (!/\.[a-z0-9]{1,8}$/i.test(normalized)) {
+    return value;
+  }
+  const slashIndex = normalized.lastIndexOf("/");
+  if (slashIndex < 0) {
+    return ".";
+  }
+  const parent = normalized.slice(0, slashIndex);
+  return parent || ".";
+}
+
+function promptPathBasename(value: string): string | undefined {
+  const normalized = value.replaceAll("\\", "/").replace(/\/+$/, "");
+  const basename = normalized.split("/").at(-1)?.trim();
+  return basename && basename !== "." && basename !== ".." ? basename : undefined;
+}
+
+function extractQuotedSearchNeedle(content: string): string | undefined {
+  for (const match of content.matchAll(/[`'"]([^`'"\r\n]{2,80})[`'"]/g)) {
+    const candidate = match[1]?.trim();
+    if (candidate && !looksLikePromptPathCandidate(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function looksLikeHangingMarkdownLine(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const boldMarkerCount = (trimmed.match(/\*\*/g) ?? []).length;
+  if (boldMarkerCount % 2 === 1) {
+    return true;
+  }
+  const backtickCount = (trimmed.match(/`/g) ?? []).length;
+  if (backtickCount % 2 === 1) {
+    return true;
+  }
+  return /^[-*+]\s+\*\*[^*]+$/u.test(trimmed);
 }
 
 function truncateJson(value: unknown, maxChars: number): string {

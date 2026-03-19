@@ -365,7 +365,12 @@ export class LlmService {
     };
     if (request.temperature !== undefined) payload.temperature = request.temperature;
     if (request.top_p !== undefined) payload.top_p = request.top_p;
-    if (request.max_tokens !== undefined) payload.max_tokens = request.max_tokens;
+    applyMaxTokensPayloadField({
+      payload,
+      providerId: resolved.provider.providerId,
+      model,
+      maxTokens: request.max_tokens,
+    });
     if (request.tools !== undefined) payload.tools = request.tools;
     if (request.tool_choice !== undefined) payload.tool_choice = request.tool_choice;
     if (request.stop !== undefined) payload.stop = request.stop;
@@ -422,7 +427,12 @@ export class LlmService {
     };
     if (request.temperature !== undefined) payload.temperature = request.temperature;
     if (request.top_p !== undefined) payload.top_p = request.top_p;
-    if (request.max_tokens !== undefined) payload.max_tokens = request.max_tokens;
+    applyMaxTokensPayloadField({
+      payload,
+      providerId: resolved.provider.providerId,
+      model,
+      maxTokens: request.max_tokens,
+    });
     if (request.tools !== undefined) payload.tools = request.tools;
     if (request.tool_choice !== undefined) payload.tool_choice = request.tool_choice;
     if (request.stop !== undefined) payload.stop = request.stop;
@@ -780,6 +790,30 @@ function resolveChatCompletionTimeoutMs(value: number | undefined, fallbackMs: n
     return fallbackMs;
   }
   return Math.max(1, Math.floor(value));
+}
+
+function applyMaxTokensPayloadField(input: {
+  payload: Record<string, unknown>;
+  providerId: string;
+  model: string;
+  maxTokens: number | undefined;
+}): void {
+  if (input.maxTokens === undefined) {
+    return;
+  }
+  if (shouldUseMaxCompletionTokens(input.providerId, input.model)) {
+    input.payload.max_completion_tokens = input.maxTokens;
+    return;
+  }
+  input.payload.max_tokens = input.maxTokens;
+}
+
+function shouldUseMaxCompletionTokens(providerId: string, model: string): boolean {
+  if (providerId !== "openai") {
+    return false;
+  }
+  const normalized = model.trim().toLowerCase();
+  return /^gpt-5(?:$|[.-])/.test(normalized);
 }
 
 async function postChatCompletionsRequest(
