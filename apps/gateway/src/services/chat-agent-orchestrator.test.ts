@@ -4915,6 +4915,110 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.turnTrace.status).toBe("cancelled");
   });
 
+  it("passes prompt-lab OpenAI reasoning controls for cowork runs", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Researcher: risk is concentrated in migrations.\n\nArchitect: phase the rollout.\n\nSynthesis: keep the cutover staged.",
+            },
+          },
+        ],
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+    const content = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: no-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "",
+      "## User Task",
+      "Assess the migration risk and recommend a rollout plan.",
+    ].join("\n");
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-cowork-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-cowork-1",
+      content,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "manual",
+      historyMessages: [{ role: "user", content }],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    const firstCall = (createChatCompletion.mock.calls as unknown as Array<[ChatCompletionRequest]>)[0]?.[0];
+    expect(firstCall?.reasoning).toEqual({ effort: "high" });
+    expect(firstCall?.verbosity).toBe("medium");
+  });
+
+  it("passes prompt-lab OpenAI reasoning controls for code runs", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Plan: inspect the repo.\n\nChanges: update the config.\n\nValidation: run the tests.\n\nRisks: watch for regressions.",
+            },
+          },
+        ],
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+    const content = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: no-tools",
+      "- This is a Code evaluation. Stay project-bound, concrete, and evidence-backed.",
+      "",
+      "## User Task",
+      "Inspect the config surface and propose the smallest fix.",
+    ].join("\n");
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-code-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-code-1",
+      content,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4-mini",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "manual",
+      historyMessages: [{ role: "user", content }],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    const firstCall = (createChatCompletion.mock.calls as unknown as Array<[ChatCompletionRequest]>)[0]?.[0];
+    expect(firstCall?.reasoning).toEqual({ effort: "medium" });
+    expect(firstCall?.verbosity).toBe("low");
+  });
+
   it("continues MCP fallback tiers when one tier throws instead of returning", async () => {
     let mcpInvokeCallCount = 0;
     const createChatCompletion = vi

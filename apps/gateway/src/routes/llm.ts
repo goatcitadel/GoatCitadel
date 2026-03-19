@@ -31,7 +31,7 @@ const chatCompletionSchema = z.object({
   providerId: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   messages: z.array(z.object({
-    role: z.enum(["system", "user", "assistant", "tool"]),
+    role: z.enum(["system", "developer", "user", "assistant", "tool"]),
     content: z.union([z.string(), z.array(z.record(z.unknown()))]),
     name: z.string().optional(),
     tool_call_id: z.string().optional(),
@@ -48,11 +48,17 @@ const chatCompletionSchema = z.object({
   temperature: z.number().optional(),
   top_p: z.number().optional(),
   max_tokens: z.number().int().positive().optional(),
+  reasoning: z.object({
+    effort: z.enum(["none", "low", "medium", "high", "xhigh"]),
+  }).optional(),
+  verbosity: z.enum(["low", "medium", "high"]).optional(),
   stream: z.boolean().optional(),
   tools: z.array(z.record(z.unknown())).optional(),
   tool_choice: z.union([z.string(), z.record(z.unknown())]).optional(),
   stop: z.union([z.string(), z.array(z.string())]).optional(),
   response_format: z.record(z.unknown()).optional(),
+  service_tier: z.string().min(1).optional(),
+  prompt_cache_retention: z.string().min(1).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 

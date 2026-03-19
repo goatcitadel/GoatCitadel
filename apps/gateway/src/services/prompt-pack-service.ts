@@ -1264,6 +1264,7 @@ export class PromptPackService {
           ],
           temperature: resolvePromptPackJudgeTemperature(providerId, model),
           max_tokens: 500,
+          service_tier: resolvePromptPackJudgeServiceTier(providerId),
           response_format: useJsonResponseFormat
             ? {
               type: "json_object",
@@ -1310,6 +1311,7 @@ export class PromptPackService {
           ],
           temperature: resolvePromptPackJudgeTemperature(providerId, model),
           max_tokens: 400,
+          service_tier: resolvePromptPackJudgeServiceTier(providerId),
         });
         const fallbackText = extractCompletionText(fallbackCompletion);
         payload = parsePromptJudgeScoreRecord(fallbackText) ?? parseLooseJsonRecord(fallbackText);
@@ -2159,8 +2161,9 @@ export function buildPromptPackSessionPrefsOverride(
     webMode,
     memoryMode,
     thinkingLevel: profile.thinkingLevel,
-    orchestrationEnabled: profile.mode !== "chat" && profile.toolTier !== "no-tools",
-    orchestrationParallelism: "sequential",
+    orchestrationEnabled: profile.mode === "cowork" || (profile.mode === "code" && profile.toolTier !== "no-tools"),
+    orchestrationVisibility: profile.mode === "chat" ? undefined : "explicit",
+    orchestrationParallelism: profile.mode === "cowork" ? "parallel" : "sequential",
   };
 }
 
@@ -2199,7 +2202,7 @@ export function buildPromptPackSessionToolAllowlist(
   return [...tools];
 }
 
-function buildPromptPackPromptInput(
+export function buildPromptPackPromptInput(
   prompt: string,
   profile: PromptPackExecutionProfile,
 ): {
@@ -2207,14 +2210,10 @@ function buildPromptPackPromptInput(
   directives: PromptPackToolDirectives;
 } {
   const directives = detectPromptPackToolDirectives(prompt);
-  if (
-    profile.toolTier !== "explicit-tools"
-    || (directives.namedTools.length === 0 && !directives.prefersFileTools && !directives.prefersWebTools)
-  ) {
-    return {
-      prompt,
-      directives,
-    };
+  const shouldWrapPrompt = profile.mode !== "chat"
+    || profile.toolTier === "explicit-tools";
+  if (!shouldWrapPrompt) {
+    return { prompt, directives };
   }
 
   const requiredFamilies: string[] = [];
@@ -2226,19 +2225,41 @@ function buildPromptPackPromptInput(
   }
 
   const harnessLines = [
-    "## Prompt Lab Tooling Contract",
-    "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+    "## Prompt Lab Run Contract",
+    `- Mode: ${profile.mode}`,
+    `- Tool tier: ${profile.toolTier}`,
+    "- Finish with a complete answer in one turn. Prefer concise coverage over a long partial draft.",
+    "- Do not leave required sections trailing or unfinished.",
   ];
-  if (directives.namedTools.length > 0) {
-    harnessLines.push(`- Required named tools: ${directives.namedTools.map((toolName) => `\`${toolName}\``).join(", ")}`);
+
+  if (profile.mode === "cowork") {
+    harnessLines.push("- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.");
+    harnessLines.push("- For non-trivial tasks, use at least two role-labeled sections chosen from Product, Researcher, Architect, Coder, QA, or Ops, then end with a synthesis.");
+    harnessLines.push("- Keep each role section compact and decision-oriented.");
   }
-  if (requiredFamilies.length > 0) {
-    harnessLines.push(`- Required tool families: ${requiredFamilies.join(", ")}`);
+
+  if (profile.mode === "code") {
+    harnessLines.push("- This is a Code evaluation. Stay project-bound, concrete, and evidence-backed.");
+    harnessLines.push("- If you read files or inspect code, name the exact file paths and the specific symbols, imports, scripts, or config values you observed.");
+    harnessLines.push("- Do not claim validation or execution unless you include the exact command/check and the result.");
+    harnessLines.push("- For non-trivial tasks, structure the answer as Findings or Plan, Changes, Validation, and Risks.");
+    harnessLines.push("- If exact line numbers are requested, provide them only when tool output directly supports them.");
   }
-  harnessLines.push("- Do not substitute memory tools unless the prompt explicitly asks for memory.");
-  harnessLines.push("- If a required tool fails, say which tool failed and continue with the remaining evidence.");
-  if (directives.prefersFileTools) {
-    harnessLines.push("- Do not claim a local file was read unless a file/code tool actually executed.");
+
+  if (profile.toolTier === "explicit-tools") {
+    harnessLines.push("- This is an explicit-tools evaluation. Use the tools requested in the prompt.");
+    if (directives.namedTools.length > 0) {
+      harnessLines.push(`- Required named tools: ${directives.namedTools.map((toolName) => `\`${toolName}\``).join(", ")}`);
+    }
+    if (requiredFamilies.length > 0) {
+      harnessLines.push(`- Required tool families: ${requiredFamilies.join(", ")}`);
+    }
+    harnessLines.push("- Surface tool-backed evidence in the answer. Mention which files, URLs, or tool outputs materially informed the result.");
+    harnessLines.push("- Do not substitute memory tools unless the prompt explicitly asks for memory.");
+    harnessLines.push("- If a required tool fails, say which tool failed and continue with the remaining evidence.");
+    if (directives.prefersFileTools) {
+      harnessLines.push("- Do not claim a local file was read unless a file/code tool actually executed.");
+    }
   }
 
   return {
@@ -2288,6 +2309,10 @@ export function resolvePromptPackJudgeTemperature(providerId?: string, model?: s
     return 1;
   }
   return 0;
+}
+
+export function resolvePromptPackJudgeServiceTier(providerId?: string): string | undefined {
+  return (providerId ?? "").trim().toLowerCase() === "openai" ? "flex" : undefined;
 }
 
 function formatPromptPackExecutionProfile(profile: PromptPackExecutionProfile): string {

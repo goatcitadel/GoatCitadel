@@ -69,8 +69,14 @@ export interface LlmModelPreviewResponse {
   warning?: string;
 }
 
+export type ChatCompletionRole = "system" | "developer" | "user" | "assistant" | "tool";
+
+export interface ChatCompletionReasoningConfig {
+  effort: "none" | "low" | "medium" | "high" | "xhigh";
+}
+
 export interface ChatCompletionMessage {
-  role: "system" | "user" | "assistant" | "tool";
+  role: ChatCompletionRole;
   content: string | Array<Record<string, unknown>>;
   name?: string;
   tool_call_id?: string;
@@ -93,12 +99,16 @@ export interface ChatCompletionRequest {
   temperature?: number;
   top_p?: number;
   max_tokens?: number;
+  reasoning?: ChatCompletionReasoningConfig;
+  verbosity?: "low" | "medium" | "high";
   timeoutMs?: number;
   stream?: boolean;
   tools?: Array<Record<string, unknown>>;
   tool_choice?: string | Record<string, unknown>;
   stop?: string | string[];
   response_format?: Record<string, unknown>;
+  service_tier?: string;
+  prompt_cache_retention?: string;
   metadata?: Record<string, unknown>;
 }
 

@@ -356,7 +356,11 @@ export class LlmService {
         resolved.provider.providerId,
         request.model ?? (resolved.provider.providerId === this.activeProviderId ? this.activeModel : resolved.provider.defaultModel),
       );
-      const normalizedMessages = normalizeProviderMessages(request.messages, model);
+      const normalizedMessages = normalizeProviderMessages(
+        request.messages,
+        resolved.provider.providerId,
+        model,
+      );
 
     const payload: Record<string, unknown> = {
       model,
@@ -375,6 +379,12 @@ export class LlmService {
     if (request.tool_choice !== undefined) payload.tool_choice = request.tool_choice;
     if (request.stop !== undefined) payload.stop = request.stop;
     if (request.response_format !== undefined) payload.response_format = request.response_format;
+    applyProviderSpecificChatOptions({
+      payload,
+      providerId: resolved.provider.providerId,
+      model,
+      request,
+    });
     if (request.metadata !== undefined) payload.metadata = request.metadata;
 
     const endpoint = `${resolved.provider.baseUrl}/chat/completions`;
@@ -417,7 +427,11 @@ export class LlmService {
         resolved.provider.providerId,
         request.model ?? (resolved.provider.providerId === this.activeProviderId ? this.activeModel : resolved.provider.defaultModel),
       );
-      const normalizedMessages = normalizeProviderMessages(request.messages, model);
+      const normalizedMessages = normalizeProviderMessages(
+        request.messages,
+        resolved.provider.providerId,
+        model,
+      );
 
     const payload: Record<string, unknown> = {
       model,
@@ -437,6 +451,12 @@ export class LlmService {
     if (request.tool_choice !== undefined) payload.tool_choice = request.tool_choice;
     if (request.stop !== undefined) payload.stop = request.stop;
     if (request.response_format !== undefined) payload.response_format = request.response_format;
+    applyProviderSpecificChatOptions({
+      payload,
+      providerId: resolved.provider.providerId,
+      model,
+      request,
+    });
     if (request.metadata !== undefined) payload.metadata = request.metadata;
 
     const endpoint = `${resolved.provider.baseUrl}/chat/completions`;
@@ -965,12 +985,16 @@ function tryParseJsonRecord(payload: string): Record<string, unknown> | null {
 
 function normalizeProviderMessages(
   messages: ChatCompletionRequest["messages"],
+  providerId: string,
   model: string,
 ): ChatCompletionRequest["messages"] {
+  let normalizedMessages = providerId === "openai"
+    ? messages.map((message) => normalizeOpenAiMessageRole(message))
+    : messages;
   if (!modelRequiresReasoningContentForToolCalls(model)) {
-    return messages;
+    return normalizedMessages;
   }
-  return messages.map((message) => {
+  return normalizedMessages.map((message) => {
     const value = message as unknown as Record<string, unknown>;
     if (value.role !== "assistant" || !Array.isArray(value.tool_calls)) {
       return message;
@@ -985,6 +1009,18 @@ function normalizeProviderMessages(
       reasoning_content: content || "Using tools to gather and verify information.",
     } as unknown as ChatCompletionRequest["messages"][number];
   });
+}
+
+function normalizeOpenAiMessageRole(
+  message: ChatCompletionRequest["messages"][number],
+): ChatCompletionRequest["messages"][number] {
+  if (message.role !== "system") {
+    return message;
+  }
+  return {
+    ...message,
+    role: "developer",
+  };
 }
 
 function modelRequiresReasoningContentForToolCalls(model: string): boolean {
@@ -1030,5 +1066,62 @@ function inferProviderCapabilities(provider: LlmProviderConfig): {
 }
 
 function defaultModelForProvider(providerId: string): string {
-  return findProviderTemplate(providerId.trim().toLowerCase())?.defaultModel ?? "gpt-4.1-mini";
+  return findProviderTemplate(providerId.trim().toLowerCase())?.defaultModel ?? "gpt-5.4-mini";
+}
+
+function applyProviderSpecificChatOptions(input: {
+  payload: Record<string, unknown>;
+  providerId: string;
+  model: string;
+  request: ChatCompletionRequest;
+}): void {
+  if (input.providerId !== "openai") {
+    return;
+  }
+  validateOpenAiChatRequestCompatibility(input.request, input.model);
+  if (input.request.reasoning?.effort) {
+    input.payload.reasoning_effort = input.request.reasoning.effort;
+  }
+  if (input.request.verbosity) {
+    input.payload.verbosity = input.request.verbosity;
+  }
+  if (input.request.service_tier) {
+    input.payload.service_tier = input.request.service_tier;
+  }
+  if (input.request.prompt_cache_retention) {
+    input.payload.prompt_cache_retention = input.request.prompt_cache_retention;
+  }
+}
+
+function validateOpenAiChatRequestCompatibility(
+  request: ChatCompletionRequest,
+  model: string,
+): void {
+  const hasSamplingControls = request.temperature !== undefined || request.top_p !== undefined;
+  if (!hasSamplingControls) {
+    return;
+  }
+  if (isOpenAiGpt54Or52Model(model)) {
+    if (request.reasoning?.effort && request.reasoning.effort !== "none") {
+      throw new Error(
+        "OpenAI GPT-5.4/GPT-5.2 only support temperature/top_p when reasoning effort is set to none.",
+      );
+    }
+    return;
+  }
+  if (isOlderOpenAiGpt5Model(model)) {
+    throw new Error(
+      "Older OpenAI GPT-5 family models do not support temperature/top_p in chat/completions.",
+    );
+  }
+}
+
+function isOpenAiGpt54Or52Model(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  return /^gpt-5\.(?:4|2)(?:$|[.-])/.test(normalized);
+}
+
+function isOlderOpenAiGpt5Model(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  return /^gpt-5(?:$|-)/.test(normalized) && !isOpenAiGpt54Or52Model(normalized);
 }

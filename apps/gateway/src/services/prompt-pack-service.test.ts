@@ -10,12 +10,14 @@ import {
   findPromptPackProjectBinding,
   finalizePromptPackResponseText,
   buildPromptPackSessionPrefsOverride,
+  buildPromptPackPromptInput,
   buildPromptPackCapabilitySeries,
   buildPromptPackRunFailureRateSeries,
   evaluatePromptPackRuleScores,
   pickReplayBaselineScore,
   resolvePromptPackJudgeTarget,
   resolvePromptPackJudgeTemperature,
+  resolvePromptPackJudgeServiceTier,
   resolvePromptPackExecutionProfile,
 } from "./prompt-pack-service.js";
 
@@ -326,6 +328,30 @@ describe("prompt-pack helpers", () => {
       webMode: "off",
       memoryMode: "off",
       orchestrationEnabled: false,
+      orchestrationVisibility: "explicit",
+    });
+
+    const noToolsCoworkProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-no-tools",
+        packId: "pack-1",
+        code: "TEST-04C",
+        title: "Cowork No Tools",
+        prompt: "Analyze and synthesize without tools.",
+        orderIndex: 0,
+        mode: "cowork",
+        toolTier: "no-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    expect(buildPromptPackSessionPrefsOverride(noToolsCoworkProfile)).toMatchObject({
+      mode: "cowork",
+      toolAutonomy: "manual",
+      webMode: "off",
+      memoryMode: "off",
+      orchestrationEnabled: true,
+      orchestrationVisibility: "explicit",
+      orchestrationParallelism: "parallel",
     });
 
     const codeProfile = resolvePromptPackExecutionProfile({
@@ -345,6 +371,7 @@ describe("prompt-pack helpers", () => {
       mode: "code",
       planningMode: "off",
       orchestrationEnabled: true,
+      orchestrationVisibility: "explicit",
       orchestrationParallelism: "sequential",
       toolAutonomy: "safe_auto",
     });
@@ -426,6 +453,67 @@ describe("prompt-pack helpers", () => {
     expect(buildPromptPackSessionToolAllowlist(noToolsProfile, "Use browser.search if needed.")).toEqual([]);
   });
 
+  it("wraps cowork, code, and explicit-tools prompts with prompt-lab contracts", () => {
+    const coworkProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-contract",
+        packId: "pack-1",
+        code: "TEST-CONTRACT-01",
+        title: "Cowork Contract",
+        prompt: "Map the tradeoffs and recommend a path.",
+        orderIndex: 0,
+        mode: "cowork",
+        toolTier: "no-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    const coworkInput = buildPromptPackPromptInput("Map the tradeoffs and recommend a path.", coworkProfile);
+    expect(coworkInput.prompt).toContain("## Prompt Lab Run Contract");
+    expect(coworkInput.prompt).toContain("This is a Cowork evaluation");
+    expect(coworkInput.prompt).toContain("use at least two role-labeled sections");
+    expect(coworkInput.prompt).toContain("end with a synthesis");
+
+    const codeProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-code-contract",
+        packId: "pack-1",
+        code: "TEST-CONTRACT-02",
+        title: "Code Contract",
+        prompt: "Inspect the repo and explain the fix.",
+        orderIndex: 1,
+        mode: "code",
+        toolTier: "no-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    const codeInput = buildPromptPackPromptInput("Inspect the repo and explain the fix.", codeProfile);
+    expect(codeInput.prompt).toContain("This is a Code evaluation");
+    expect(codeInput.prompt).toContain("name the exact file paths");
+    expect(codeInput.prompt).toContain("Do not claim validation or execution unless you include the exact command/check and the result.");
+
+    const explicitToolsProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-explicit-contract",
+        packId: "pack-1",
+        code: "TEST-CONTRACT-03",
+        title: "Explicit Tools Contract",
+        prompt: "Read package.json using file tools, then use browser.search to compare versions.",
+        orderIndex: 2,
+        mode: "chat",
+        toolTier: "explicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    const explicitToolsInput = buildPromptPackPromptInput(
+      "Read package.json using file tools, then use browser.search to compare versions.",
+      explicitToolsProfile,
+    );
+    expect(explicitToolsInput.prompt).toContain("This is an explicit-tools evaluation");
+    expect(explicitToolsInput.prompt).toContain("Required named tools: `browser.search`");
+    expect(explicitToolsInput.prompt).toContain("Required tool families: file/code tools");
+    expect(explicitToolsInput.prompt).toContain("Surface tool-backed evidence in the answer.");
+  });
+
   it("does not append generic constraints boilerplate to non-empty prompt-pack answers", () => {
     const response = finalizePromptPackResponseText({
       prompt: "Use browser.navigate and summarize the page.",
@@ -467,6 +555,12 @@ describe("prompt-pack helpers", () => {
     expect(resolvePromptPackJudgeTemperature("moonshot", "moonshot/kimi-k2.5")).toBe(1);
     expect(resolvePromptPackJudgeTemperature("openai", "gpt-5")).toBe(0);
     expect(resolvePromptPackJudgeTemperature(undefined, "kimi-k2")).toBe(1);
+  });
+
+  it("uses flex processing only for OpenAI prompt-pack judging", () => {
+    expect(resolvePromptPackJudgeServiceTier("openai")).toBe("flex");
+    expect(resolvePromptPackJudgeServiceTier("moonshot")).toBeUndefined();
+    expect(resolvePromptPackJudgeServiceTier(undefined)).toBeUndefined();
   });
 
   it("prefers the run model for judging except for kimi-family runs", () => {

@@ -60,8 +60,11 @@ const REMOTE_BLOCK_MARKERS = [
   "sorry, you have been blocked",
 ];
 const PROMPT_HARNESS_QUERY_MARKERS = [
+  "prompt lab run contract",
   "prompt lab tooling contract",
   "explicit-tools evaluation",
+  "this is a cowork evaluation",
+  "this is a code evaluation",
   "required named tools",
   "required tool families",
   "do not substitute memory tools",
@@ -602,6 +605,7 @@ export class ChatAgentOrchestrator {
             effectiveCompletionTimeoutMs,
             ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs),
           );
+          const promptLabControls = resolvePromptLabOpenAiControls(input);
           const completionRequest: ChatCompletionRequest = {
             providerId: input.providerId,
             model: input.model,
@@ -610,6 +614,8 @@ export class ChatAgentOrchestrator {
             max_tokens: executionBudget.maxTokens,
             timeoutMs: completionTimeoutMs,
             signal: input.signal,
+            reasoning: promptLabControls.reasoning,
+            verbosity: promptLabControls.verbosity,
             memory: {
               enabled: input.memoryMode !== "off",
               mode: input.memoryMode === "off" ? "off" : "qmd",
@@ -4680,7 +4686,7 @@ function looksLikeContinuationSearchPrompt(value: string): boolean {
 function sanitizeQueryClause(value: string): string {
   return value
     .replace(/^["'`]+|["'`]+$/g, "")
-    .replace(/\b(prompt lab tooling contract|explicit-tools evaluation|required named tools|required tool families|do not substitute memory tools|if a required tool fails)\b[\s\S]*$/i, "")
+    .replace(/\b(prompt lab run contract|prompt lab tooling contract|explicit-tools evaluation|this is a cowork evaluation|this is a code evaluation|required named tools|required tool families|do not substitute memory tools|if a required tool fails)\b[\s\S]*$/i, "")
     .replace(/^(please|can you|could you|would you)\b[:,\s-]*/i, "")
     .replace(/^(?:please\s+)?(?:look|search|browse|check|research)\b(?:\s+(?:online|on the web|the web|web|internet))?(?:\s+(?:and|to|for|about|into))?\s*/i, "")
     .replace(/^(?:find(?:\s+out)?|tell|show|give|explain|summarize)\b(?:\s+me)?(?:\s+about)?\s*/i, "")
@@ -5065,6 +5071,50 @@ function looksLikeHarnessContaminatedQuery(value: string): boolean {
     .replace(/\s+/g, " ")
     .trim();
   return PROMPT_HARNESS_QUERY_MARKERS.some((marker) => normalized.includes(marker));
+}
+
+function resolvePromptLabOpenAiControls(
+  input: Pick<ChatAgentTurnInput, "content" | "providerId" | "model" | "mode" | "thinkingLevel">,
+): Pick<ChatCompletionRequest, "reasoning" | "verbosity"> {
+  if (!isPromptLabHarnessContent(input.content) || !isOpenAiReasoningEligible(input.providerId, input.model)) {
+    return {};
+  }
+  if (input.mode !== "cowork" && input.mode !== "code") {
+    return {};
+  }
+
+  return {
+    reasoning: {
+      effort: resolvePromptLabReasoningEffort(input.mode, input.thinkingLevel),
+    },
+    verbosity: input.mode === "code" ? "low" : "medium",
+  };
+}
+
+function isPromptLabHarnessContent(content: string): boolean {
+  const normalized = content.toLowerCase();
+  return normalized.includes("## prompt lab run contract")
+    || normalized.includes("## prompt lab tooling contract");
+}
+
+function isOpenAiReasoningEligible(providerId?: string, model?: string): boolean {
+  const normalizedProvider = (providerId ?? "").trim().toLowerCase();
+  const normalizedModel = (model ?? "").trim().toLowerCase();
+  return normalizedProvider === "openai"
+    || normalizedModel.startsWith("gpt-5");
+}
+
+function resolvePromptLabReasoningEffort(
+  mode: ChatMode,
+  thinkingLevel: ChatThinkingLevel,
+): NonNullable<ChatCompletionRequest["reasoning"]>["effort"] {
+  if (thinkingLevel === "minimal") {
+    return "low";
+  }
+  if (thinkingLevel === "standard") {
+    return mode === "cowork" ? "medium" : "low";
+  }
+  return mode === "cowork" ? "high" : "medium";
 }
 
 function inferLocalToolPathFromPrompt(toolName: string, userContent: string): string | undefined {

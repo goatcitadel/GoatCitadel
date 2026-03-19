@@ -249,6 +249,163 @@ describe("LlmService", () => {
     expect(payloadBody?.max_tokens).toBeUndefined();
   });
 
+  it("preserves developer messages and forwards OpenAI GPT controls", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let payloadBody: Record<string, unknown> | undefined;
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      return new Response(
+        JSON.stringify({
+          id: "cmpl_openai_gpt54_controls",
+          choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      await service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-5.4-mini",
+        messages: [
+          { role: "developer", content: "Be terse." },
+          { role: "user", content: "hello" },
+        ],
+        reasoning: { effort: "none" },
+        verbosity: "low",
+        service_tier: "flex",
+        prompt_cache_retention: "in_memory",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(payloadBody?.messages).toEqual([
+      { role: "developer", content: "Be terse." },
+      { role: "user", content: "hello" },
+    ]);
+    expect(payloadBody?.reasoning_effort).toBe("none");
+    expect(payloadBody?.verbosity).toBe("low");
+    expect(payloadBody?.service_tier).toBe("flex");
+    expect(payloadBody?.prompt_cache_retention).toBe("in_memory");
+  });
+
+  it("normalizes OpenAI system messages into developer messages", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let payloadBody: Record<string, unknown> | undefined;
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      return new Response(
+        JSON.stringify({
+          id: "cmpl_openai_gpt54_roles",
+          choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      await service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-5.4-mini",
+        messages: [
+          { role: "system", content: "Follow policy." },
+          { role: "user", content: "hello" },
+        ],
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(payloadBody?.messages).toEqual([
+      { role: "developer", content: "Follow policy." },
+      { role: "user", content: "hello" },
+    ]);
+  });
+
+  it("rejects sampling controls for GPT-5.4 when reasoning is not none", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5.4",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+
+    await expect(service.chatCompletions({
+      providerId: "openai",
+      model: "gpt-5.4",
+      messages: [{ role: "user", content: "hello" }],
+      reasoning: { effort: "high" },
+      temperature: 0.2,
+    })).rejects.toThrowError(/reasoning effort is set to none/i);
+  });
+
+  it("rejects sampling controls for older GPT-5 chat models", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+
+    await expect(service.chatCompletions({
+      providerId: "openai",
+      model: "gpt-5-mini",
+      messages: [{ role: "user", content: "hello" }],
+      temperature: 0.2,
+    })).rejects.toThrowError(/older openai gpt-5 family models/i);
+  });
+
   it("canonicalizes legacy Perplexity /v1 endpoints back to the root API base", () => {
     const config: LlmConfigFile = {
       activeProviderId: "perplexity",

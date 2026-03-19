@@ -11,7 +11,7 @@ export const providerTemplates = [
     providerId: "openai",
     label: "OpenAI",
     baseUrl: "https://api.openai.com/v1",
-    defaultModel: "gpt-4.1-mini",
+    defaultModel: "gpt-5.4-mini",
   },
   {
     providerId: "anthropic",
@@ -35,7 +35,7 @@ export const providerTemplates = [
     providerId: "vercel",
     label: "Vercel AI Gateway",
     baseUrl: "https://ai-gateway.vercel.sh/v1",
-    defaultModel: "openai/gpt-4.1-mini",
+    defaultModel: "openai/gpt-5.4-mini",
   },
   {
     providerId: "lmstudio",
@@ -71,7 +71,7 @@ export const providerTemplates = [
     providerId: "openrouter",
     label: "OpenRouter",
     baseUrl: "https://openrouter.ai/api/v1",
-    defaultModel: "openai/gpt-4.1-mini",
+    defaultModel: "openai/gpt-5.4-mini",
   },
   {
     providerId: "mistral",
