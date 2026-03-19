@@ -261,6 +261,86 @@ export function applyBankrBudgetUsage(
   return readBankrDailyUsage(storage, day);
 }
 
+/**
+ * Atomically reserve budget for a write action.
+ *
+ * Uses a BEGIN IMMEDIATE transaction so that the read-check-increment
+ * sequence is serialised.  Two concurrent callers cannot both pass the
+ * cap check when their combined cost would exceed `dailyUsdCap`.
+ *
+ * Returns `{ reserved: true, newTotal }` on success, or
+ * `{ reserved: false, currentTotal }` when the cap would be exceeded.
+ */
+export function reserveBankrBudget(
+  storage: Storage,
+  usdEstimate: number,
+  dailyUsdCap: number,
+  at = new Date(),
+): { reserved: boolean; dailyTotal: number } {
+  if (!Number.isFinite(usdEstimate) || usdEstimate <= 0) {
+    const total = readBankrDailyUsage(storage, currentDayKey(at));
+    return { reserved: true, dailyTotal: total };
+  }
+
+  const day = currentDayKey(at);
+  const now = at.toISOString();
+
+  // BEGIN IMMEDIATE acquires a reserved lock immediately, serialising
+  // concurrent writers so the read+check+write is atomic.
+  return storage.runImmediateTransaction(() => {
+    const currentTotal = readBankrDailyUsage(storage, day);
+
+    if (currentTotal + usdEstimate > dailyUsdCap) {
+      return { reserved: false, dailyTotal: currentTotal };
+    }
+
+    storage.db.prepare(`
+      INSERT INTO bankr_budget_usage_daily (day, usd_total, updated_at)
+      VALUES (@day, @usdTotal, @updatedAt)
+      ON CONFLICT(day) DO UPDATE SET
+        usd_total = usd_total + excluded.usd_total,
+        updated_at = excluded.updated_at
+    `).run({
+      day,
+      usdTotal: usdEstimate,
+      updatedAt: now,
+    });
+
+    const newTotal = readBankrDailyUsage(storage, day);
+    return { reserved: true, dailyTotal: newTotal };
+  });
+}
+
+export function releaseBankrBudgetReservation(
+  storage: Storage,
+  usdEstimate: number,
+  at = new Date(),
+): number {
+  if (!Number.isFinite(usdEstimate) || usdEstimate <= 0) {
+    return readBankrDailyUsage(storage, currentDayKey(at));
+  }
+
+  const day = currentDayKey(at);
+  const now = at.toISOString();
+
+  return storage.runImmediateTransaction(() => {
+    const currentTotal = readBankrDailyUsage(storage, day);
+    const nextTotal = Math.max(0, currentTotal - usdEstimate);
+    storage.db.prepare(`
+      INSERT INTO bankr_budget_usage_daily (day, usd_total, updated_at)
+      VALUES (@day, @usdTotal, @updatedAt)
+      ON CONFLICT(day) DO UPDATE SET
+        usd_total = @usdTotal,
+        updated_at = excluded.updated_at
+    `).run({
+      day,
+      usdTotal: nextTotal,
+      updatedAt: now,
+    });
+    return readBankrDailyUsage(storage, day);
+  });
+}
+
 export function readBankrDailyUsage(storage: Storage, day = currentDayKey()): number {
   const row = storage.db.prepare(`
     SELECT usd_total AS usdTotal

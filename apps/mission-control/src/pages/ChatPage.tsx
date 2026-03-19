@@ -463,6 +463,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
   const lastLocalPrefMutationAtRef = useRef(0);
   const latestMessagesRef = useRef<ChatMessagesResponse["items"]>([]);
   const selectedSessionIdRef = useRef<string | null>(null);
+  const loadGenerationRef = useRef(0);
   const finalizedStreamMessageRef = useRef<FinalizedStreamMessageState | null>(null);
   const streamReconcileTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendingRef = useRef(false);
@@ -589,6 +590,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
       includeThread?: boolean;
     } = {},
   ) => {
+    const generation = ++loadGenerationRef.current;
     const background = options.background ?? false;
     const includeThread = options.includeThread ?? true;
     const messageVersionAtStart = includeThread ? messageMutationVersionRef.current : null;
@@ -601,6 +603,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
         fetchChatSessionBinding(sessionId),
         fetchChatSessionPrefs(sessionId),
       ]);
+      if (generation !== loadGenerationRef.current) return; // stale response
       if (nextThread) {
         applyFetchedThread(nextThread, messageVersionAtStart);
       }
@@ -642,6 +645,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
       background?: boolean;
     } = {},
   ) => {
+    const generation = ++loadGenerationRef.current;
     const background = options.background ?? false;
     if (!background) {
       setSecondaryLoading(true);
@@ -653,6 +657,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
         fetchChatLearnedMemory(sessionId, 80),
         fetchChatSpecialistCandidates(sessionId, 80),
       ]);
+      if (generation !== loadGenerationRef.current) return; // stale response
       setProactiveStatus(nextProactiveStatus.policy);
       setProactiveRuns(nextProactiveRuns.items);
       setLearnedMemory(nextMemory.items);

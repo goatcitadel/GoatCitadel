@@ -682,7 +682,7 @@ export class LlmService {
 function normalizeProvider(provider: LlmProviderConfig): LlmProviderConfig {
   const base = provider.baseUrl.trim().replace(/\/+$/, "");
   validateProviderBaseUrl(base);
-  const canonicalBase = canonicalizeProviderBaseUrl(provider.providerId, base);
+  const canonicalBase = canonicalizeProviderUrl(provider.providerId, base);
   const withV1 = shouldAppendV1(provider.providerId, canonicalBase) ? `${canonicalBase}/v1` : canonicalBase;
   return {
     ...provider,
@@ -708,28 +708,44 @@ function normalizeRequestedModel(providerId: string, model: string): string {
   return trimmed;
 }
 
-function canonicalizeProviderBaseUrl(providerId: string, baseUrl: string): string {
-  if (providerId === "google" && /\/v1beta\/openai\/v1$/i.test(baseUrl)) {
-    return baseUrl.replace(/\/v1$/i, "");
+/**
+ * Data-driven provider URL canonicalization rules.
+ * Adding a new provider URL quirk is a config change, not a code change.
+ */
+const PROVIDER_URL_CANONICALIZATION: Record<string, { match: RegExp; replace: string }[]> = {
+  google: [
+    { match: /\/v1beta\/openai\/v1$/i, replace: "/v1beta/openai" },
+  ],
+  moonshot: [
+    { match: /api\.moonshot\.cn/i, replace: "api.moonshot.ai" },
+  ],
+  minimax: [
+    { match: /api\.minimax\.chat/i, replace: "api.minimax.io" },
+  ],
+};
+
+function canonicalizeProviderUrl(providerId: string, baseUrl: string): string {
+  const rules = PROVIDER_URL_CANONICALIZATION[providerId];
+  if (rules) {
+    let result = baseUrl;
+    for (const rule of rules) {
+      if (rule.match.test(result)) {
+        result = result.replace(rule.match, rule.replace);
+      }
+    }
+    return result;
   }
 
-  if (providerId === "moonshot" && /api\.moonshot\.cn/i.test(baseUrl)) {
-    return baseUrl.replace(/api\.moonshot\.cn/i, "api.moonshot.ai");
+  // Perplexity needs pathname-level logic that doesn't fit the simple match/replace model.
+  if (providerId === "perplexity") {
+    const parsed = new URL(baseUrl);
+    const urlPath = parsed.pathname.replace(/\/+$/, "");
+    if (urlPath === "/v1" || urlPath === "/api/v1") {
+      parsed.pathname = "/";
+      return parsed.toString().replace(/\/+$/, "");
+    }
   }
 
-  if (providerId === "minimax" && /api\.minimax\.chat/i.test(baseUrl)) {
-    return baseUrl.replace(/api\.minimax\.chat/i, "api.minimax.io");
-  }
-
-  if (providerId !== "perplexity") {
-    return baseUrl;
-  }
-  const parsed = new URL(baseUrl);
-  const path = parsed.pathname.replace(/\/+$/, "");
-  if (path === "/v1" || path === "/api/v1") {
-    parsed.pathname = "/";
-    return parsed.toString().replace(/\/+$/, "");
-  }
   return baseUrl;
 }
 

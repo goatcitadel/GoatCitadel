@@ -95,15 +95,13 @@
     }
   },
   "sqlite": {
-    "cacheSizeKb": 32768,
+    "cacheSizeKb": 65536,
     "tempStoreMemory": true,
-    "walAutoCheckpointPages": 4000
+    "walAutoCheckpointPages": 5000
   },
   "durable": {
     "enabled": false,
     "diagnosticsEnabled": false,
-    "executionEnabled": false,
-    "chatAutoPromoteEnabled": false,
     "maxAttemptsDefault": 3
   },
   "features": {

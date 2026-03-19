@@ -3,10 +3,14 @@ export interface ShellRiskDecision {
   matchedPattern?: string;
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export function classifyShellRisk(command: string, riskyPatterns: string[]): ShellRiskDecision {
-  const lower = command.toLowerCase();
   for (const pattern of riskyPatterns) {
-    if (lower.includes(pattern.toLowerCase())) {
+    const re = new RegExp("\\b" + escapeRegExp(pattern) + "\\b", "i");
+    if (re.test(command)) {
       return {
         risky: true,
         matchedPattern: pattern,

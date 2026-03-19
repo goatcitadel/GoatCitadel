@@ -12,13 +12,34 @@ import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import {
   appendBankrActionAudit,
-  applyBankrBudgetUsage,
   evaluateBankrActionPreview,
+  releaseBankrBudgetReservation,
   readBankrSafetyPolicy,
+  reserveBankrBudget,
 } from "./bankr-guard.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_HTTP_REDIRECTS = 5;
+const MAX_SHELL_OUTPUT_BYTES = 4096;
+
+const SENSITIVE_PATTERNS: readonly RegExp[] = [
+  /sk-[a-zA-Z0-9]{20,}/g,
+  /key-[a-zA-Z0-9]{20,}/g,
+  /Bearer [a-zA-Z0-9._-]{20,}/g,
+  /[A-Z_]+=\S{20,}/g,
+  /\/etc\/\S+/g,
+  /\/home\/[^/]+\/\.[^\s]+/g,
+  /C:\\Users\\[^\\]+\\AppData\S*/gi,
+];
+
+function scrubSensitiveOutput(text: string): string {
+  let scrubbed = text;
+  for (const pattern of SENSITIVE_PATTERNS) {
+    scrubbed = scrubbed.replace(new RegExp(pattern.source, pattern.flags), "[REDACTED]");
+  }
+  return scrubbed.slice(0, MAX_SHELL_OUTPUT_BYTES);
+}
+
 const BANKR_OPTIONAL_MIGRATION_MESSAGE =
   "Bankr built-in is disabled. Install the optional skill pack (docs/OPTIONAL_BANKR_SKILL.md; templates/skills/bankr-optional/SKILL.md).";
 
@@ -231,6 +252,38 @@ async function bankrPrompt(
     throw new Error("Bankr CLI not found. Install @bankr/cli and authenticate before invoking bankr tools.");
   }
 
+  // Atomically reserve budget BEFORE executing the CLI call so that
+  // concurrent requests cannot both pass the cap check when their
+  // combined cost would exceed the daily cap.
+  let dailyUsageUsdAfter = preview.dailyUsageUsd;
+  let reservedUsdEstimate = 0;
+  if (mode === "write" && Number.isFinite(preview.normalized.usdEstimate)) {
+    const reservation = reserveBankrBudget(
+      storage,
+      Number(preview.normalized.usdEstimate),
+      preview.policy.dailyUsdCap,
+    );
+    if (!reservation.reserved) {
+      const remaining = Math.max(0, preview.policy.dailyUsdCap - reservation.dailyTotal);
+      appendBankrActionAudit(storage, {
+        sessionId: request.sessionId,
+        actorId: request.agentId,
+        actionType: preview.normalized.actionType,
+        chain: preview.normalized.chain,
+        symbol: preview.normalized.symbol,
+        usdEstimate: preview.normalized.usdEstimate,
+        status: "blocked",
+        policyReason: `daily_cap_exceeded: Estimated USD amount exceeds remaining daily cap ($${remaining}).`,
+        details: { preview, reservationTotal: reservation.dailyTotal },
+      });
+      throw new Error(
+        `Bankr policy blocked action: Estimated USD amount exceeds remaining daily cap ($${remaining}).`,
+      );
+    }
+    dailyUsageUsdAfter = reservation.dailyTotal;
+    reservedUsdEstimate = Number(preview.normalized.usdEstimate);
+  }
+
   const prompt = required(
     request.args.prompt ?? request.args.content ?? request.args.text,
     "prompt",
@@ -252,14 +305,6 @@ async function bankrPrompt(
       windowsHide: true,
       maxBuffer: 8 * 1024 * 1024,
     });
-
-    let dailyUsageUsdAfter = preview.dailyUsageUsd;
-    if (mode === "write" && Number.isFinite(preview.normalized.usdEstimate)) {
-      dailyUsageUsdAfter = applyBankrBudgetUsage(
-        storage,
-        Number(preview.normalized.usdEstimate),
-      );
-    }
 
     appendBankrActionAudit(storage, {
       sessionId: request.sessionId,
@@ -293,6 +338,9 @@ async function bankrPrompt(
     const stdout = (error as { stdout?: string })?.stdout;
     const stderr = (error as { stderr?: string })?.stderr;
     const code = (error as { code?: number | string })?.code;
+    if (reservedUsdEstimate > 0) {
+      dailyUsageUsdAfter = releaseBankrBudgetReservation(storage, reservedUsdEstimate);
+    }
     appendBankrActionAudit(storage, {
       sessionId: request.sessionId,
       actorId: request.agentId,
@@ -307,6 +355,7 @@ async function bankrPrompt(
         code,
         stdout: (stdout ?? "").slice(0, 12000),
         stderr: (stderr ?? message).slice(0, 4000),
+        dailyUsageUsdAfter,
       },
     });
     throw new Error(`Bankr command failed: ${stderr ?? message}`);
@@ -558,8 +607,8 @@ async function shellExec(
       cwd,
       executable: parsed.file,
       argv: parsed.args,
-      stdout: stdout.slice(0, 8000),
-      stderr: stderr.slice(0, 8000),
+      stdout: scrubSensitiveOutput(stdout),
+      stderr: scrubSensitiveOutput(stderr),
       exitCode: 0,
     };
   } catch (error) {
@@ -572,8 +621,8 @@ async function shellExec(
       cwd,
       executable: parsed.file,
       argv: parsed.args,
-      stdout: (stdout ?? "").slice(0, 8000),
-      stderr: (stderr ?? message).slice(0, 8000),
+      stdout: scrubSensitiveOutput(stdout ?? ""),
+      stderr: scrubSensitiveOutput(stderr ?? message),
       exitCode: typeof code === "number" ? code : -1,
     };
   }

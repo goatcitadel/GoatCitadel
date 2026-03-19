@@ -34,10 +34,18 @@ const shutdown = async (signal: string) => {
   }
   shuttingDown = true;
   app.log.info({ signal }, "shutting down gateway");
+  const forceExitTimer = setTimeout(() => {
+    console.error("[gateway] graceful shutdown timed out after 10 s — forcing exit");
+    process.exit(1);
+  }, 10_000);
+  forceExitTimer.unref(); // don't keep event loop alive just for this
+
   try {
     await app.close();
+    clearTimeout(forceExitTimer);
     process.exitCode = 0;
   } catch (error) {
+    clearTimeout(forceExitTimer);
     app.log.error(error, "gateway shutdown failed");
     process.exitCode = 1;
   }

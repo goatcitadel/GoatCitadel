@@ -915,6 +915,68 @@ describe("LlmService", () => {
     expect(chunks[0]?.id).toBe("chunk_1");
   });
 
+  it("rejects HTTP redirect responses to prevent SSRF", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-4.1-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response("", {
+      status: 301,
+      headers: { Location: "http://169.254.169.254/latest/meta-data/" },
+    })) as unknown as typeof fetch;
+
+    try {
+      await expect(service.chatCompletions({
+        providerId: "openai",
+        messages: [{ role: "user", content: "hello" }],
+      })).rejects.toThrowError(/blocked redirect/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("rejects when request times out", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-4.1-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => {
+      const err = new DOMException("The operation was aborted", "AbortError");
+      throw err;
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(service.chatCompletions({
+        providerId: "openai",
+        messages: [{ role: "user", content: "hello" }],
+      })).rejects.toThrow();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("parses SSE events whose JSON payload spans multiple data lines", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "glm",
