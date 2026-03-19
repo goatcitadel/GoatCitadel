@@ -287,7 +287,7 @@ export const CHAT_MODE_PRESETS = {
       orchestrationVisibility: "expandable",
       orchestrationProviderPreference: "quality",
       orchestrationReviewDepth: "strict",
-      orchestrationParallelism: "sequential",
+      orchestrationParallelism: "auto",
       codeAutoApply: "manual",
     },
     requiresProjectBindingForExecution: true,

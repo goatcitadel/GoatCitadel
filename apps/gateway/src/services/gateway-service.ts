@@ -5,6 +5,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { isVerboseLoggingEnabled } from "../runtime-ux.js";
 import { EventIngestService } from "@goatcitadel/gateway-core";
 import { MeshService } from "@goatcitadel/mesh-core";
 import {
@@ -1317,10 +1318,14 @@ export class GatewayService {
     this.improvementService.startScheduler();
     this.startMaintenanceScheduler();
     this.durableRunService.startWorker();
-    console.info(
-      "[goatcitadel] feature flags",
-      JSON.stringify(this.readFeatureFlags()),
-    );
+    if (isVerboseLoggingEnabled()) {
+      console.info(
+        "[goatcitadel] feature flags",
+        JSON.stringify(this.readFeatureFlags()),
+      );
+    } else {
+      console.info("[goatcitadel] runtime ready");
+    }
   }
 
   public subscribeRealtime(listener: RealtimeListener): () => void {
@@ -8990,6 +8995,7 @@ export class GatewayService {
       status: connection.lastError ? "warn" : "pass",
       message: connection.lastError ? `Last error: ${connection.lastError}` : "No recent errors recorded.",
     });
+    checks.push(...this.buildIntegrationConnectionChecks(connection));
     const report: ConnectorDiagnosticReport = {
       connectorType: "integration_connection",
       connectorId: connection.connectionId,
@@ -11342,6 +11348,216 @@ export class GatewayService {
     return checks.some((check) => check.status === "warn")
       ? "Review warning checks and tighten policy before production use."
       : undefined;
+  }
+
+  private buildIntegrationConnectionChecks(
+    connection: IntegrationConnection,
+  ): ConnectorDiagnosticReport["checks"] {
+    const checks: ConnectorDiagnosticReport["checks"] = [];
+    const config = connection.config;
+    const requireSecretRef = (
+      key: string,
+      label: string,
+      directKey: string,
+      envKey: string,
+    ) => {
+      const direct = this.readConnectionConfigValue(config, directKey);
+      const envName = this.readConnectionConfigValue(config, envKey);
+      const envPresent = envName ? Boolean(process.env[envName]) : false;
+      checks.push({
+        key,
+        status: direct || envPresent ? "pass" : "fail",
+        message: direct || envPresent
+          ? `${label} is configured${envName ? ` via ${envName}` : ""}.`
+          : `${label} is missing.`,
+      });
+    };
+    const requireText = (key: string, label: string, value: string | undefined, status: "warn" | "fail" = "fail") => {
+      checks.push({
+        key,
+        status: value ? "pass" : status,
+        message: value ? `${label} is set.` : `${label} is missing.`,
+      });
+    };
+    const checkUrl = (key: string, label: string, urlValue: string | undefined, required = false) => {
+      if (!urlValue && !required) {
+        return;
+      }
+      const safeRemote = !urlValue || this.isConnectionUrlRemoteSafe(urlValue);
+      const allowlisted = !urlValue || this.isConnectionUrlAllowlisted(urlValue);
+      checks.push({
+        key,
+        status: !urlValue
+          ? "fail"
+          : !safeRemote
+            ? "fail"
+            : allowlisted
+              ? "pass"
+              : "warn",
+        message: !urlValue
+          ? `${label} is missing.`
+          : !safeRemote
+            ? `${label} uses non-local plain HTTP.`
+            : allowlisted
+              ? `${label} is reachable under current allowlist posture.`
+              : `${label} host is not in the current outbound allowlist.`,
+      });
+    };
+
+    if (connection.kind === "channel") {
+      switch (connection.key) {
+        case "slack":
+          checks.push({
+            key: "auth",
+            status: this.readConnectionConfigValue(config, "webhookUrl")
+              || this.readConnectionConfigValue(config, "botToken")
+              || this.hasConnectionEnvValue(config, "botTokenEnv")
+              ? "pass"
+              : "fail",
+            message: this.readConnectionConfigValue(config, "webhookUrl")
+              || this.readConnectionConfigValue(config, "botToken")
+              || this.hasConnectionEnvValue(config, "botTokenEnv")
+              ? "Slack bot token or webhook is configured."
+              : "Slack bot token or webhook is missing.",
+          });
+          checkUrl("url", "Slack webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), false);
+          requireText("target", "Default Slack channel", this.readConnectionConfigValue(config, "defaultChannel"), "warn");
+          break;
+        case "discord":
+          checks.push({
+            key: "auth",
+            status: this.readConnectionConfigValue(config, "webhookUrl")
+              || this.readConnectionConfigValue(config, "botToken")
+              || this.hasConnectionEnvValue(config, "botTokenEnv")
+              ? "pass"
+              : "fail",
+            message: this.readConnectionConfigValue(config, "webhookUrl")
+              || this.readConnectionConfigValue(config, "botToken")
+              || this.hasConnectionEnvValue(config, "botTokenEnv")
+              ? "Discord bot token or webhook is configured."
+              : "Discord bot token or webhook is missing.",
+          });
+          checkUrl("url", "Discord webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), false);
+          requireText("target", "Default Discord channel", this.readConnectionConfigValue(config, "defaultChannelId"), "warn");
+          break;
+        case "telegram":
+          requireSecretRef("auth", "Telegram bot token", "botToken", "botTokenEnv");
+          requireText("target", "Default Telegram chat", this.readConnectionConfigValue(config, "defaultChatId"), "warn");
+          checks.push({
+            key: "url",
+            status: this.isHostAllowlisted("api.telegram.org") ? "pass" : "warn",
+            message: this.isHostAllowlisted("api.telegram.org")
+              ? "Telegram API host is allowlisted."
+              : "Telegram API host is not allowlisted.",
+          });
+          break;
+        case "matrix":
+          requireSecretRef("auth", "Matrix access token", "accessToken", "accessTokenEnv");
+          checkUrl("url", "Matrix homeserver URL", this.readConnectionConfigValue(config, "homeserverUrl"), true);
+          requireText("target", "Default Matrix room", this.readConnectionConfigValue(config, "defaultRoomId"), "warn");
+          break;
+        case "google-chat":
+          checkUrl("url", "Google Chat webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), true);
+          requireText("target", "Default Google Chat thread key", this.readConnectionConfigValue(config, "defaultThreadKey"), "warn");
+          break;
+        case "teams":
+          checkUrl("url", "Teams webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), true);
+          break;
+        default:
+          requireText("target", "Default target", this.readConnectionConfigValue(config, "target") ?? this.readConnectionConfigValue(config, "defaultTarget"), "warn");
+          requireSecretRef("auth", "Channel token", "token", "tokenEnv");
+          break;
+      }
+    } else if (connection.kind === "model_provider") {
+      checkUrl("url", "Provider base URL", this.readConnectionConfigValue(config, "baseUrl"), true);
+      requireText("target", "Default model", this.readConnectionConfigValue(config, "model"), "warn");
+      const isLocal = this.isConnectionValueLocalUrl(this.readConnectionConfigValue(config, "baseUrl"));
+      checks.push({
+        key: "auth",
+        status: isLocal || this.readConnectionConfigValue(config, "apiKey") || this.hasConnectionEnvValue(config, "apiKeyEnv") ? "pass" : "fail",
+        message: isLocal
+          ? "Local model endpoint does not require an API key."
+          : this.readConnectionConfigValue(config, "apiKey") || this.hasConnectionEnvValue(config, "apiKeyEnv")
+            ? "API key is configured."
+            : "API key is missing.",
+      });
+    } else if (connection.kind === "automation") {
+      if (connection.key === "webhooks") {
+        checkUrl("url", "Webhook base URL", this.readConnectionConfigValue(config, "baseUrl"), true);
+      }
+      if (connection.key === "gmail") {
+        requireText("auth", "Gmail refresh token handle", this.readConnectionConfigValue(config, "refreshTokenHandle"));
+      }
+    }
+
+    return checks;
+  }
+
+  private readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined {
+    const value = config[key];
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  private hasConnectionEnvValue(config: Record<string, unknown>, key: string): boolean {
+    const envName = this.readConnectionConfigValue(config, key);
+    return Boolean(envName && process.env[envName]?.trim());
+  }
+
+  private isConnectionValueLocalUrl(urlValue: string | undefined): boolean {
+    if (!urlValue) {
+      return false;
+    }
+    try {
+      const url = new URL(urlValue);
+      return url.hostname === "127.0.0.1" || url.hostname === "localhost";
+    } catch {
+      return false;
+    }
+  }
+
+  private isConnectionUrlRemoteSafe(urlValue: string): boolean {
+    try {
+      const url = new URL(urlValue);
+      if (url.protocol === "https:") {
+        return true;
+      }
+      return url.hostname === "127.0.0.1" || url.hostname === "localhost";
+    } catch {
+      return false;
+    }
+  }
+
+  private isConnectionUrlAllowlisted(urlValue: string): boolean {
+    try {
+      const url = new URL(urlValue);
+      return this.isHostAllowlisted(url.hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  private isHostAllowlisted(hostname: string): boolean {
+    const normalizedHost = hostname.trim().toLowerCase();
+    const allowlist = this.config.toolPolicy.sandbox.networkAllowlist
+      .map((host) => host.trim().toLowerCase())
+      .filter(Boolean);
+    if (allowlist.length === 0) {
+      return false;
+    }
+    return allowlist.some((allowed) => {
+      if (allowed === "*" || allowed === normalizedHost) {
+        return true;
+      }
+      if (allowed.startsWith("*.")) {
+        const suffix = allowed.slice(1);
+        return normalizedHost.endsWith(suffix);
+      }
+      return false;
+    });
   }
 
   private tryParseJson<T>(raw: string | null | undefined, fallback: T): T {

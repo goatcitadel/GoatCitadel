@@ -11,6 +11,6 @@ export const CODE_MODE_POLICY: ModeOrchestrationPolicy = {
   maxSteps: 5,
   maxParallelAgents: 2,
   allowHiddenOrchestration: false,
-  allowParallelWorkers: false,
+  allowParallelWorkers: true,
   defaultCodeAutoApply: preset.defaultPrefs.codeAutoApply ?? "manual",
 };

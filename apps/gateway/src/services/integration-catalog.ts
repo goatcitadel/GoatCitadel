@@ -8,14 +8,17 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.discord": {
     catalogId: "channel.discord",
     title: "Discord Connection",
-    description: "Connect a Discord bot token and default send target.",
+    description: "Connect a Discord bot token or webhook and default send target.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "Discord" }),
       text("botTokenEnv", "Bot Token ENV Var", {
         placeholder: "DISCORD_BOT_TOKEN",
-        required: true,
         secretRef: true,
+      }),
+      url("webhookUrl", "Webhook URL", {
+        placeholder: "https://discord.com/api/webhooks/...",
+        advanced: true,
       }),
       text("defaultChannelId", "Default Channel ID", { required: true }),
       text("defaultGuildId", "Default Guild ID", { advanced: true }),
@@ -35,6 +38,90 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         secretRef: true,
       }),
       text("defaultChannel", "Default Channel", { placeholder: "#general" }),
+      text("defaultThreadTs", "Default Thread TS", { advanced: true }),
+      url("webhookUrl", "Incoming Webhook URL", {
+        placeholder: "https://hooks.slack.com/services/...",
+        advanced: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "channel.telegram": {
+    catalogId: "channel.telegram",
+    title: "Telegram Connection",
+    description: "Connect a Telegram bot token and default chat target.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Telegram" }),
+      text("botTokenEnv", "Bot Token ENV Var", {
+        placeholder: "TELEGRAM_BOT_TOKEN",
+        required: true,
+        secretRef: true,
+      }),
+      text("defaultChatId", "Default Chat ID", {
+        placeholder: "123456789 or @channel_name",
+        required: true,
+      }),
+      select("parseMode", "Parse Mode", ["Markdown", "MarkdownV2", "HTML"], "Markdown"),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "channel.matrix": {
+    catalogId: "channel.matrix",
+    title: "Matrix Connection",
+    description: "Connect a Matrix homeserver, access token, and default room.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Matrix" }),
+      url("homeserverUrl", "Homeserver URL", {
+        defaultValue: "https://matrix-client.matrix.org",
+        required: true,
+      }),
+      text("accessTokenEnv", "Access Token ENV Var", {
+        placeholder: "MATRIX_ACCESS_TOKEN",
+        required: true,
+        secretRef: true,
+      }),
+      text("defaultRoomId", "Default Room ID", {
+        placeholder: "!room:matrix.org",
+        required: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "channel.google-chat": {
+    catalogId: "channel.google-chat",
+    title: "Google Chat Connection",
+    description: "Connect a Google Chat incoming webhook and optional thread key.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Google Chat" }),
+      url("webhookUrl", "Webhook URL", {
+        placeholder: "https://chat.googleapis.com/v1/spaces/...",
+        required: true,
+      }),
+      text("defaultThreadKey", "Default Thread Key", {
+        placeholder: "goatcitadel-thread",
+        advanced: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "channel.teams": {
+    catalogId: "channel.teams",
+    title: "Teams Connection",
+    description: "Connect a Microsoft Teams incoming webhook for outbound operator messages.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Teams" }),
+      url("webhookUrl", "Webhook URL", {
+        placeholder: "https://outlook.office.com/webhook/...",
+        required: true,
+      }),
+      text("cardTitle", "Card Title", {
+        placeholder: "GoatCitadel",
+        advanced: true,
+      }),
       bool("enabled", "Enabled", true),
     ],
   },
@@ -101,10 +188,10 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   entry("channel", "whatsapp", "WhatsApp", "WhatsApp business bridge.", "planned", ["oauth", "token"], ["chat", "media"]),
   entry("channel", "telegram", "Telegram", "Telegram bot integration.", "beta", ["bot-token"], ["chat", "threads"]),
   entry("channel", "slack", "Slack", "Slack app/bot integration.", "beta", ["oauth"], ["chat", "threads", "mentions"]),
-  entry("channel", "google-chat", "Google Chat", "Google Chat app and webhook integration.", "planned", ["oauth", "token"], ["chat", "spaces", "threads"]),
+  entry("channel", "google-chat", "Google Chat", "Google Chat app and webhook integration.", "beta", ["oauth", "token"], ["chat", "spaces", "threads"]),
   entry("channel", "mattermost", "Mattermost", "Mattermost bot/webhook integration.", "planned", ["token"], ["chat", "channels", "threads"]),
   entry("channel", "imessage", "iMessage", "iMessage bridge (platform dependent).", "planned", ["local-agent"], ["chat", "attachments"]),
-  entry("channel", "teams", "Microsoft Teams", "Teams bot/webhook integration.", "planned", ["oauth"], ["chat", "threads"]),
+  entry("channel", "teams", "Microsoft Teams", "Teams bot/webhook integration.", "beta", ["oauth", "webhook"], ["chat", "threads"]),
   entry("channel", "nextcloud-talk", "Nextcloud Talk", "Nextcloud Talk channel bridge.", "planned", ["token"], ["chat", "rooms"]),
   entry("channel", "matrix", "Matrix", "Matrix room bot integration.", "beta", ["access-token"], ["chat", "rooms"]),
 

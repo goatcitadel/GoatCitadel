@@ -66,6 +66,7 @@ import {
   retryChatTurn,
   pinChatSession,
   restoreChatSession,
+  runChatDelegation,
   runChatResearch,
   sendAgentChatMessage,
   selectChatBranchTurn,
@@ -125,6 +126,33 @@ import {
 import "../styles/chat.css";
 
 const STREAM_PREF_KEY = "goatcitadel.chat.agent.stream.enabled";
+
+const CODE_DELEGATION_PRESETS = {
+  implement: {
+    label: "Implement",
+    mode: "sequential" as const,
+    roles: ["Architect", "Coder"],
+    prefix: "Implement the requested change with a minimal, reviewable diff. ",
+  },
+  review: {
+    label: "Review",
+    mode: "sequential" as const,
+    roles: ["Coder", "QA"],
+    prefix: "Review the current implementation for bugs, regressions, and missing tests. ",
+  },
+  test: {
+    label: "Test",
+    mode: "sequential" as const,
+    roles: ["Coder", "QA"],
+    prefix: "Add or improve validation for the current implementation and report residual risk. ",
+  },
+  ship: {
+    label: "Ship cycle",
+    mode: "parallel" as const,
+    roles: ["Architect", "Coder", "QA"],
+    prefix: "Run an implement-review-test cycle for this task, then stitch the result into one operator-ready handoff. ",
+  },
+} as const;
 
 interface PendingApprovalState {
   approvalId: string;
@@ -1288,6 +1316,54 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
     }
   }, [delegationSuggestion, loadSidebar, prefs?.model, prefs?.providerId, pushLocalNotice, selectedSession, sending]);
 
+  const handleRunCodeDelegation = useCallback(async (
+    presetKey: keyof typeof CODE_DELEGATION_PRESETS,
+  ) => {
+    if (!selectedSession || sending) {
+      return;
+    }
+    if (codeModeNeedsProjectBinding) {
+      setError("Bind this Code session to a project before running delegated implementation work.");
+      return;
+    }
+    const baseObjective = draft.trim()
+      || messages.filter((item) => item.role === "user").at(-1)?.content?.trim()
+      || selectedSession.title?.trim()
+      || "";
+    if (!baseObjective) {
+      setError("Write a coding objective first so GoatCitadel has something concrete to implement or review.");
+      return;
+    }
+    const preset = CODE_DELEGATION_PRESETS[presetKey];
+    setSending(true);
+    try {
+      const result = await runChatDelegation(selectedSession.sessionId, {
+        objective: `${preset.prefix}${baseObjective}`,
+        roles: [...preset.roles],
+        mode: preset.mode,
+        providerId: prefs?.providerId,
+        model: prefs?.model,
+      });
+      pushLocalNotice(`${preset.label} completed:\n${result.stitchedOutput}`, "success");
+      setDelegationSuggestion(null);
+      await loadSidebar();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSending(false);
+    }
+  }, [
+    codeModeNeedsProjectBinding,
+    draft,
+    loadSidebar,
+    messages,
+    prefs?.model,
+    prefs?.providerId,
+    pushLocalNotice,
+    selectedSession,
+    sending,
+  ]);
+
   const handleMemoryStatusUpdate = useCallback(async (
     itemId: string,
     status: "active" | "superseded" | "conflict" | "disabled",
@@ -2432,6 +2508,26 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
                     )}
                   />
                   <FieldHelp>{activeModePreset.growthPolicySummary}</FieldHelp>
+                  {isCodeSurface ? (
+                    <div className="chat-v11-suggestion-card">
+                      <p><strong>Code delegation accelerators:</strong> Launch focused implement, review, test, or full ship-cycle runs without leaving the session.</p>
+                      <div className="chat-v11-row-actions">
+                        {(Object.entries(CODE_DELEGATION_PRESETS) as Array<[keyof typeof CODE_DELEGATION_PRESETS, (typeof CODE_DELEGATION_PRESETS)[keyof typeof CODE_DELEGATION_PRESETS]]>).map(([key, preset]) => (
+                          <button
+                            key={key}
+                            type="button"
+                            disabled={!selectedSessionId || sending || codeModeNeedsProjectBinding}
+                            onClick={() => void handleRunCodeDelegation(key)}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                      {codeModeNeedsProjectBinding ? (
+                        <p className="chat-v11-muted">Code delegation is blocked until this session is bound to a project.</p>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {isChatSurface ? null : (
                     <div className="chat-v11-orchestration-controls">
                       <GCSwitch

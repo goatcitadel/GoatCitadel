@@ -23,15 +23,25 @@ const managedMutableConfigPaths = [
 const args = process.argv.slice(2);
 const command = args[0] || "help";
 const rawRest = args.slice(1);
+const runtimeArgs = extractVerboseFlag(rawRest);
 const installArgs = command === "install" || command === "update"
   ? parseInstallArgs(rawRest)
-  : { passthrough: rawRest };
+  : { passthrough: runtimeArgs.passthrough, verbose: runtimeArgs.verbose };
 const repoUrl = installArgs.repoUrl || defaultRepoUrl;
 const baseDir = resolveBaseDir(installArgs.installDir);
 const appDir = path.join(baseDir, "app");
 const rest = installArgs.passthrough;
+const taskTitle = resolveTaskTitle(command);
+const verboseEnv = installArgs.verbose ? { GOATCITADEL_VERBOSE: "1" } : {};
+const runtimeProcessEnv = {
+  ...process.env,
+  ...verboseEnv,
+  GOATCITADEL_TERMINAL_TASK: taskTitle,
+};
 
 async function main() {
+  setTerminalTitle(taskTitle);
+
   if (command === "help" || command === "-h" || command === "--help") {
     printHelp();
     return;
@@ -49,37 +59,39 @@ async function main() {
 
   if (command === "up") {
     ensureWorkspaceBootstrapBuilds();
-    runPnpm(["--dir", appDir, "dev", ...rest]);
+    runPnpm(["--dir", appDir, "dev", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "gateway") {
-    runPnpm(["--dir", appDir, "dev:gateway", ...rest]);
+    runPnpm(["--dir", appDir, "dev:gateway", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "ui") {
     ensureWorkspaceBootstrapBuilds();
-    runPnpm(["--dir", appDir, "dev:ui", ...rest]);
+    runPnpm(["--dir", appDir, "dev:ui", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "onboard") {
     runPnpm(["--dir", appDir, "onboarding:tui", ...rest], {
       env: {
-        ...process.env,
+        ...runtimeProcessEnv,
         GOATCITADEL_APP_DIR: appDir,
       },
     });
     return;
   }
   if (command === "tui") {
-    runPnpm(["--dir", appDir, "tui", ...rest]);
+    runPnpm(["--dir", appDir, "tui", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "tools") {
-    runPnpm(["--dir", appDir, "tools", ...rest]);
+    runPnpm(["--dir", appDir, "tools", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "voice") {
-    runPnpm(["--dir", appDir, "--filter", "@goatcitadel/gateway", "run", "voice:runtime", ...rest]);
+    runPnpm(["--dir", appDir, "--filter", "@goatcitadel/gateway", "run", "voice:runtime", ...rest], {
+      env: runtimeProcessEnv,
+    });
     return;
   }
   if (command === "verify") {
@@ -94,15 +106,15 @@ async function main() {
       : lane === "deep:ecosystem"
         ? "verify:deep:ecosystem"
         : `verify:${lane}`;
-    runPnpm(["--dir", appDir, scriptName, ...laneArgs]);
+    runPnpm(["--dir", appDir, scriptName, ...laneArgs], { env: runtimeProcessEnv });
     return;
   }
   if (command === "admin") {
-    runPnpm(["--dir", appDir, "admin", ...rest]);
+    runPnpm(["--dir", appDir, "admin", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "smoke") {
-    runPnpm(["--dir", appDir, "smoke", ...rest]);
+    runPnpm(["--dir", appDir, "smoke", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "npu" || command === "npu-sidecar") {
@@ -143,13 +155,19 @@ function installOrUpdate() {
 
   run(corepackCmd, ["enable"]);
   run(corepackCmd, ["prepare", `pnpm@${pnpmVersion}`, "--activate"]);
-  runPnpm(["--dir", appDir, "install", "--frozen-lockfile"]);
+  runPnpm(["--dir", appDir, "install", "--frozen-lockfile"], {
+    env: runtimeProcessEnv,
+  });
   buildWorkspaceBootstrapPackages();
   console.log("Installing Playwright Chromium runtime...");
-  runPnpm(["--dir", appDir, "--filter", "@goatcitadel/policy-engine", "exec", "playwright", "install", "chromium"]);
+  runPnpm(["--dir", appDir, "--filter", "@goatcitadel/policy-engine", "exec", "playwright", "install", "chromium"], {
+    env: runtimeProcessEnv,
+  });
   if (preservedManagedConfig) {
     console.log("Re-syncing preserved GoatCitadel config after update...");
-    runPnpm(["--dir", appDir, "config:sync"]);
+    runPnpm(["--dir", appDir, "config:sync"], {
+      env: runtimeProcessEnv,
+    });
   }
   if (!installArgs.skipVoice) {
     console.log(`Installing managed local voice runtime (${installArgs.voiceModel})...`);
@@ -164,7 +182,9 @@ function installOrUpdate() {
         "install",
         "--model",
         installArgs.voiceModel,
-      ]);
+      ], {
+        env: runtimeProcessEnv,
+      });
     } catch (error) {
       console.warn(
         `Managed voice runtime install failed: ${error instanceof Error ? error.message : String(error)}. ` +
@@ -193,6 +213,7 @@ function parseInstallArgs(argv) {
   let repoUrlOverride;
   let skipVoice = false;
   let voiceModel = "base.en";
+  let verbose = false;
   const passthrough = [];
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
@@ -224,6 +245,10 @@ function parseInstallArgs(argv) {
       index += 1;
       continue;
     }
+    if (value === "--verbose" || value === "-verbose") {
+      verbose = true;
+      continue;
+    }
     passthrough.push(value);
   }
   return {
@@ -231,8 +256,22 @@ function parseInstallArgs(argv) {
     repoUrl: repoUrlOverride,
     skipVoice,
     voiceModel,
+    verbose,
     passthrough,
   };
+}
+
+function extractVerboseFlag(argv) {
+  const passthrough = [];
+  let verbose = false;
+  for (const value of argv) {
+    if (value === "--verbose" || value === "-verbose") {
+      verbose = true;
+      continue;
+    }
+    passthrough.push(value);
+  }
+  return { verbose, passthrough };
 }
 
 function resolveBaseDir(installDirOverride) {
@@ -305,7 +344,9 @@ function restorePreservedManagedConfig(repositoryPath, preservedState) {
 
 function doctor(extraArgs = []) {
   console.log("Running GoatCitadel doctor...");
-  runPnpm(["--dir", appDir, "--filter", "@goatcitadel/gateway", "run", "doctor", ...extraArgs]);
+  runPnpm(["--dir", appDir, "--filter", "@goatcitadel/gateway", "run", "doctor", ...extraArgs], {
+    env: runtimeProcessEnv,
+  });
 }
 
 function ensureWorkspaceBootstrapBuilds() {
@@ -453,10 +494,10 @@ Usage:
   goat <command> (short shell shortcut; works in PowerShell)
 
 Commands:
-  install    Install GoatCitadel from GitHub [--install-dir <path>] [--repo <url>] [--skip-voice] [--voice-model <id>]
-  update     Update existing install from GitHub [--install-dir <path>] [--repo <url>] [--skip-voice] [--voice-model <id>]
-  up         Start gateway + mission control
-  gateway    Start gateway only
+  install    Install GoatCitadel from GitHub [--install-dir <path>] [--repo <url>] [--skip-voice] [--voice-model <id>] [--verbose]
+  update     Update existing install from GitHub [--install-dir <path>] [--repo <url>] [--skip-voice] [--voice-model <id>] [--verbose]
+  up         Start gateway + mission control [--verbose]
+  gateway    Start gateway only [--verbose]
   ui         Start mission control UI only
   onboard    Run TUI onboarding wizard
   tui        Run terminal Mission Control
@@ -474,6 +515,38 @@ Install defaults:
   base dir   ${baseDir}
   voice      base.en (managed whisper.cpp + local audio helper)
 `);
+}
+
+function resolveTaskTitle(currentCommand) {
+  switch (currentCommand) {
+    case "install":
+      return "Install";
+    case "update":
+      return "Update";
+    case "up":
+      return "Dev";
+    case "gateway":
+      return "Gateway";
+    case "ui":
+      return "Mission Control";
+    case "onboard":
+      return "Onboarding";
+    case "tui":
+      return "TUI";
+    case "doctor":
+      return "Doctor";
+    case "verify":
+      return "Verify";
+    default:
+      return "CLI";
+  }
+}
+
+function setTerminalTitle(task) {
+  if (!process.stdout.isTTY) {
+    return;
+  }
+  process.stdout.write(`\u001b]0;GoatCitadel - ${task}\u0007`);
 }
 
 main().catch((error) => {

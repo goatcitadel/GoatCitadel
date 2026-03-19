@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type {
   ChatProjectRecord,
@@ -10,10 +11,13 @@ import {
   findPromptPackProjectBinding,
   finalizePromptPackResponseText,
   buildPromptPackSessionPrefsOverride,
+  buildPromptPackReportSummary,
+  pickPromptPackAutoScoreRun,
   buildPromptPackPromptInput,
   buildPromptPackCapabilitySeries,
   buildPromptPackRunFailureRateSeries,
   evaluatePromptPackRuleScores,
+  parsePromptPackTests,
   pickReplayBaselineScore,
   resolvePromptPackJudgeTarget,
   resolvePromptPackJudgeTemperature,
@@ -551,6 +555,40 @@ describe("prompt-pack helpers", () => {
     expect(response).not.toContain("## Constraints");
   });
 
+  it("adds cowork scaffold sections when the prompt-lab contract is missing roles or synthesis", () => {
+    const response = finalizePromptPackResponseText({
+      prompt: [
+        "## Prompt Lab Run Contract",
+        "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+        "- For non-trivial tasks, use at least two role-labeled sections chosen from Product, Researcher, Architect, Coder, QA, or Ops, then end with a synthesis.",
+        "",
+        "## User Task",
+        "Figure out the next migration step.",
+      ].join("\n"),
+      responseText: "### Product\n- Goal: Ship the migration safely.",
+      trace: {
+        turnId: "turn-1",
+        sessionId: "sess-1",
+        userMessageId: "user-1",
+        branchKind: "append",
+        status: "completed",
+        mode: "cowork",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "extended",
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+        toolRuns: [],
+        citations: [],
+        routing: {},
+      },
+    });
+
+    expect(response).toContain("## Role Handoff Scaffold");
+    expect(response).toContain("### Architect Goat");
+    expect(response).toContain("### Synthesis");
+  });
+
   it("uses kimi-compatible temperature for prompt-pack model judging", () => {
     expect(resolvePromptPackJudgeTemperature("moonshot", "moonshot/kimi-k2.5")).toBe(1);
     expect(resolvePromptPackJudgeTemperature("openai", "gpt-5")).toBe(0);
@@ -657,6 +695,198 @@ describe("prompt-pack helpers", () => {
     expect(evaluation.signals).toContain("off_target_meta_analysis");
   });
 
+  it("scores prompt-pack summaries from the latest run per test only", () => {
+    const tests: PromptPackTestRecord[] = [
+      {
+        testId: "test-1",
+        packId: "pack-1",
+        code: "TEST-01",
+        title: "First",
+        prompt: "First prompt",
+        orderIndex: 0,
+        mode: "chat",
+        toolTier: "implicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+      {
+        testId: "test-2",
+        packId: "pack-1",
+        code: "TEST-02",
+        title: "Second",
+        prompt: "Second prompt",
+        orderIndex: 1,
+        mode: "chat",
+        toolTier: "implicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    ];
+    const runs: PromptPackRunRecord[] = [
+      {
+        ...createRun("run-1-new", "completed", "2026-03-15T00:00:00.000Z"),
+        testId: "test-1",
+      },
+      {
+        ...createRun("run-1-old", "completed", "2026-03-14T00:00:00.000Z"),
+        testId: "test-1",
+      },
+      {
+        ...createRun("run-2", "failed", "2026-03-15T00:05:00.000Z"),
+        testId: "test-2",
+      },
+    ];
+    const scores: PromptPackScoreRecord[] = [
+      {
+        ...createScore("score-old", "run-1-old", "2026-03-14T00:05:00.000Z", 2),
+        testId: "test-1",
+      },
+    ];
+
+    const summary = buildPromptPackReportSummary(tests, runs, scores);
+
+    expect(summary.completedRuns).toBe(1);
+    expect(summary.failedRuns).toBe(1);
+    expect(summary.runFailureCount).toBe(1);
+    expect(summary.scoreFailureCount).toBe(0);
+    expect(summary.needsScoreCount).toBe(1);
+    expect(summary.averageTotalScore).toBe(0);
+    expect(summary.passRate).toBe(0);
+    expect(summary.failingCodes).toEqual(["TEST-02"]);
+  });
+
+  it("requires file-specific evidence for code prompt-pack responses", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-file-evidence",
+      packId: "pack-1",
+      code: "TEST-D18",
+      title: "File evidence",
+      prompt: "Inspect package.json and explain the scripts.",
+      orderIndex: 0,
+      mode: "code",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        runId: "run-file-evidence",
+        packId: "pack-1",
+        testId: test.testId,
+        sessionId: "sess-1",
+        status: "completed",
+        mode: "code",
+        toolTier: "explicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "extended",
+        responseText: "I inspected the repo and found the main scripts for development and testing.",
+        trace: {
+          turnId: "turn-1",
+          sessionId: "sess-1",
+          userMessageId: "user-1",
+          branchKind: "append",
+          status: "completed",
+          mode: "code",
+          webMode: "auto",
+          memoryMode: "auto",
+          thinkingLevel: "extended",
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+          toolRuns: [
+            {
+              toolRunId: "tool-1",
+              turnId: "turn-1",
+              sessionId: "sess-1",
+              toolName: "file.read_range",
+              status: "executed",
+              args: { path: "package.json" },
+              result: { path: "package.json" },
+              startedAt: "2026-03-14T00:00:00.000Z",
+              finishedAt: "2026-03-14T00:00:01.000Z",
+            },
+          ],
+          citations: [],
+          routing: {},
+        },
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.scores.honestyScore).toBe(1);
+    expect(evaluation.signals).toContain("missing_file_specific_evidence");
+    expect(evaluation.signals).not.toContain("file_specific_evidence_present");
+  });
+
+  it("enforces the cowork prompt-pack role contract in scoring", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-cowork-contract",
+      packId: "pack-1",
+      code: "TEST-W17",
+      title: "Cowork contract",
+      prompt: "Plan the next release.",
+      orderIndex: 0,
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        runId: "run-cowork-contract",
+        packId: "pack-1",
+        testId: test.testId,
+        sessionId: "sess-1",
+        status: "completed",
+        mode: "cowork",
+        toolTier: "explicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "extended",
+        responseText: "### Product\n- Scope: Ship the release.",
+        trace: {
+          turnId: "turn-1",
+          sessionId: "sess-1",
+          userMessageId: "user-1",
+          branchKind: "append",
+          status: "completed",
+          mode: "cowork",
+          webMode: "auto",
+          memoryMode: "auto",
+          thinkingLevel: "extended",
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+          toolRuns: [
+            {
+              toolRunId: "tool-1",
+              turnId: "turn-1",
+              sessionId: "sess-1",
+              toolName: "browser.search",
+              status: "executed",
+              startedAt: "2026-03-14T00:00:00.000Z",
+              finishedAt: "2026-03-14T00:00:01.000Z",
+            },
+          ],
+          citations: [],
+          routing: {},
+        },
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.scores.handoffScore).toBe(0);
+    expect(evaluation.scores.routingScore).toBe(1);
+    expect(evaluation.signals).toContain("cowork_role_contract_missing_sections");
+    expect(evaluation.signals).toContain("cowork_missing_role_sections");
+    expect(evaluation.signals).toContain("cowork_missing_synthesis_section");
+  });
+
   it("chooses previous or timestamp baselines from scored history", () => {
     const current: PromptPackScoreRecord = createScore("score-3", "run-3", "2026-03-14T00:05:00.000Z", 2);
     const previous: PromptPackScoreRecord = createScore("score-2", "run-2", "2026-03-12T00:05:00.000Z", 1);
@@ -666,6 +896,20 @@ describe("prompt-pack helpers", () => {
     expect(pickReplayBaselineScore(scores, current)?.scoreId).toBe("score-2");
     expect(pickReplayBaselineScore(scores, current, "2026-03-11T00:00:00.000Z")?.scoreId).toBe("score-1");
     expect(pickReplayBaselineScore(scores, current, "2026-03-13T00:00:00.000Z")?.scoreId).toBe("score-2");
+    expect(pickReplayBaselineScore(scores, current, "2026-03-14T00:05:00.000Z")?.scoreId).toBe("score-2");
+  });
+
+  it("prefers the latest run when auto-score selection has no explicit run id", () => {
+    const latestFailed: PromptPackRunRecord = {
+      ...createRun("run-latest-failed", "failed", "2026-03-14T00:10:00.000Z"),
+      testId: "test-1",
+    };
+    const olderCompleted: PromptPackRunRecord = {
+      ...createRun("run-older-completed", "completed", "2026-03-13T00:10:00.000Z"),
+      testId: "test-1",
+    };
+
+    expect(pickPromptPackAutoScoreRun([latestFailed, olderCompleted])?.runId).toBe("run-latest-failed");
   });
 
   it("builds trend series from historical score and run timestamps only", () => {
@@ -690,6 +934,48 @@ describe("prompt-pack helpers", () => {
       { timestamp: "2026-03-12T00:00:02.000Z", value: 0.5 },
       { timestamp: "2026-03-14T00:00:03.000Z", value: 0.3333 },
     ]);
+  });
+
+  it("parses the repo expansion prompt pack markdown with stable mode and tool tiers", async () => {
+    const markdown = await fs.readFile(
+      new URL("../../../../goatcitadel_prompt_pack_repo_expansion.md", import.meta.url),
+      "utf8",
+    );
+
+    const tests = parsePromptPackTests(markdown);
+
+    expect(tests.map((test) => test.code)).toEqual([
+      "TEST-D26",
+      "TEST-D27",
+      "TEST-D28",
+      "TEST-D29",
+      "TEST-D30",
+      "TEST-D31",
+      "TEST-D32",
+      "TEST-W31",
+      "TEST-W32",
+    ]);
+    expect(tests.slice(0, 7).every((test) => test.mode === "code" && test.toolTier === "explicit-tools")).toBe(true);
+    expect(tests.slice(7).every((test) => test.mode === "cowork" && test.toolTier === "explicit-tools")).toBe(true);
+    expect(tests[0]?.prompt).toContain("F:/code/goatcitadel-arena/packages/engine/src/judge/rules-judge.ts");
+    expect(tests[7]?.prompt).toContain("Roles in order: `Researcher`, `Architect`, `QA`.");
+  });
+
+  it("parses the canonical merged prompt pack markdown with all 89 tests", async () => {
+    const markdown = await fs.readFile(
+      new URL("../../../../goatcitadel_prompt_pack.md", import.meta.url),
+      "utf8",
+    );
+
+    const tests = parsePromptPackTests(markdown);
+    const codes = tests.map((test) => test.code);
+
+    expect(tests).toHaveLength(89);
+    expect(new Set(codes).size).toBe(89);
+    expect(codes[0]).toBe("TEST-C01");
+    expect(codes).toContain("TEST-W30");
+    expect(codes).toContain("TEST-D32");
+    expect(codes[codes.length - 1]).toBe("TEST-D32");
   });
 });
 

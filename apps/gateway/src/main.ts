@@ -4,14 +4,29 @@ import {
   resolveWarnUnauthNonLoopback,
   shouldWarnUnauthNonLoopbackBind,
 } from "./startup-guard.js";
+import { setGoatcitadelTerminalTitle } from "./runtime-ux.js";
 
 const port = Number(process.env.GATEWAY_PORT ?? 8787);
 const host = process.env.GATEWAY_HOST ?? "127.0.0.1";
 const warnUnauthNonLoopback = resolveWarnUnauthNonLoopback();
 const allowUnauthNetwork = resolveAllowUnauthNetwork();
 
+setGoatcitadelTerminalTitle(process.env.GOATCITADEL_TERMINAL_TASK?.trim() || "Gateway");
+
 const app = await buildApp();
 let shuttingDown = false;
+
+process.on("warning", (warning) => {
+  app.log.warn(
+    {
+      warningName: warning.name,
+      code: "code" in warning ? (warning as Error & { code?: string }).code : undefined,
+      detail: warning.message,
+      stack: warning.stack,
+    },
+    `node warning: ${warning.name}`,
+  );
+});
 
 const shutdown = async (signal: string) => {
   if (shuttingDown) {

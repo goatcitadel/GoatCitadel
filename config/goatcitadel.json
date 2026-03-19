@@ -114,7 +114,7 @@
       "computerUseGuardrailsV1Enabled": true,
       "bankrBuiltinEnabled": false,
       "cronReviewQueueV1Enabled": false,
-      "replayRegressionV1Enabled": false
+      "replayRegressionV1Enabled": true
     },
     "budgets": {
       "dailyUsdWarning": 10,

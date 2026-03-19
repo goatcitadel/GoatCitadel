@@ -6,6 +6,12 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadLocalEnvFile } from "./env-file.js";
 import {
+  createTerminalReporter,
+  formatVerboseFlagHint,
+  isVerboseLoggingEnabled,
+  setGoatcitadelTerminalTitle,
+} from "./runtime-ux.js";
+import {
   isLoopbackHost,
   resolveAllowUnauthNetwork,
   resolveWarnUnauthNonLoopback,
@@ -13,6 +19,13 @@ import {
 } from "./startup-guard.js";
 
 loadLocalEnvFile();
+
+const cliArgs = process.argv.slice(2);
+const verboseRequested = cliArgs.includes("--verbose") || cliArgs.includes("-verbose") || isVerboseLoggingEnabled();
+if (verboseRequested) {
+  process.env.GOATCITADEL_VERBOSE = "1";
+}
+setGoatcitadelTerminalTitle(process.env.GOATCITADEL_TERMINAL_TASK?.trim() || "Gateway Dev");
 
 const gatewayHost = process.env.GATEWAY_HOST ?? "127.0.0.1";
 const gatewayHealthHost = resolveGatewayHealthHost(gatewayHost);
@@ -28,6 +41,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const configuredRoot = process.env.GOATCITADEL_ROOT_DIR?.trim();
 const runtimeRoot = configuredRoot ? path.resolve(configuredRoot) : repoRoot;
 const gatewayDir = path.join(repoRoot, "apps", "gateway");
+const log = createTerminalReporter({
+  scope: "gateway-dev",
+  verbose: verboseRequested,
+});
 
 const watchRoots = [
   path.join(gatewayDir, "src"),
@@ -50,19 +67,30 @@ let circuitOpenUntil = 0;
 const failureTimestamps: number[] = [];
 
 async function main(): Promise<void> {
-  console.log(`[gateway-supervisor] root: ${repoRoot}`);
-  console.log(`[gateway-supervisor] runtime root: ${runtimeRoot}`);
-  console.log(`[gateway-supervisor] watching for changes (${pollMs}ms poll)`);
-  console.log(`[gateway-supervisor] target health: http://${gatewayHealthHost}:${gatewayPort}/health`);
+  log.info(`watching gateway on http://${gatewayHealthHost}:${gatewayPort}/health`);
+  if (verboseRequested) {
+    log.debug("workspace roots loaded", {
+      repoRoot,
+      runtimeRoot,
+      watchRoots,
+      pollMs,
+    });
+  } else {
+    log.info(formatVerboseFlagHint());
+  }
   assertGatewayBindIsSafeForDev(gatewayHost);
-  console.log(
-    `[gateway-supervisor] restart budget: max ${restartMaxFailures} failures per ${restartWindowMs}ms`,
-  );
+  log.info(`restart budget ${restartMaxFailures} failures / ${restartWindowMs}ms`, verboseRequested
+    ? {
+        restartBaseBackoffMs,
+        restartMaxBackoffMs,
+        restartCircuitOpenMs,
+      }
+    : undefined);
   if (warnUnauthNonLoopback && shouldWarnUnauthNonLoopbackBind(gatewayHost, readSupervisorAuthConfig())) {
-    console.warn(
-      "[gateway-supervisor] warning: non-loopback bind without explicit auth env detected. "
-      + "Consider GOATCITADEL_AUTH_TOKEN or GOATCITADEL_AUTH_MODE=basic for safer remote access.",
-    );
+    log.warn("non-loopback bind without explicit auth env detected", {
+      host: gatewayHost,
+      suggestion: "Set GOATCITADEL_AUTH_TOKEN or GOATCITADEL_AUTH_MODE=basic for safer remote access.",
+    });
   }
 
   process.on("SIGINT", () => {
@@ -103,16 +131,14 @@ async function restartGateway(reason: string): Promise<void> {
   const now = Date.now();
   if (now < circuitOpenUntil) {
     const remaining = circuitOpenUntil - now;
-    console.warn(
-      `[gateway-supervisor] restart circuit is open for ${remaining}ms (reason=${reason})`,
-    );
+    log.warn(`restart circuit open for ${remaining}ms`, { reason });
     scheduleRestartAfter(remaining, "circuit reopen");
     return;
   }
   restarting = true;
   try {
     clearRestartTimer();
-    console.log(`[gateway-supervisor] restarting gateway (${reason})`);
+    log.info(`restarting gateway (${reason})`);
     await stopChild("restart");
     await startChild();
   } finally {
@@ -127,7 +153,9 @@ async function startChild(): Promise<void> {
     cwd: gatewayDir,
     env: {
       ...process.env,
+      NODE_NO_WARNINGS: "1",
       GOATCITADEL_ROOT_DIR: runtimeRoot,
+      GOATCITADEL_VERBOSE: verboseRequested ? "1" : process.env.GOATCITADEL_VERBOSE,
       GATEWAY_HOST: gatewayHost,
       GATEWAY_PORT: String(gatewayPort),
       GOATCITADEL_GATEWAY_SUPERVISED: "1",
@@ -148,9 +176,11 @@ async function startChild(): Promise<void> {
     if (shuttingDown || restarting) {
       return;
     }
-    console.warn(
-      `[gateway-supervisor] gateway exited (pid=${currentPid}, code=${code ?? "null"}, signal=${signal ?? "null"}). Waiting for file changes...`,
-    );
+    log.warn("gateway exited", {
+      pid: currentPid,
+      code: code ?? "null",
+      signal: signal ?? "null",
+    });
     const delay = registerFailureAndGetDelay("process_exit");
     if (delay !== null) {
       scheduleRestartAfter(delay, "process exit");
@@ -160,11 +190,11 @@ async function startChild(): Promise<void> {
   const healthy = await waitForGatewayHealth(15_000);
   if (healthy) {
     resetFailureBudget();
-    console.log(`[gateway-supervisor] gateway online (pid=${currentPid})`);
+    log.success("gateway online", { pid: currentPid });
     return;
   }
 
-  console.warn("[gateway-supervisor] gateway did not become healthy in time");
+  log.warn("gateway did not become healthy in time");
   const delay = registerFailureAndGetDelay("health_timeout");
   if (delay !== null) {
     scheduleRestartAfter(delay, "health timeout");
@@ -194,7 +224,7 @@ async function stopChild(reason: string): Promise<void> {
   }
 
   const pid = running.pid;
-  console.log(`[gateway-supervisor] stopping gateway (pid=${pid}, reason=${reason})`);
+  log.info("stopping gateway", { pid, reason });
 
   try {
     if (process.platform === "win32") {
@@ -221,9 +251,10 @@ async function stopChild(reason: string): Promise<void> {
   child = null;
   const portClosed = await waitForPortClosed(10_000);
   if (!portClosed) {
-    console.warn(
-      `[gateway-supervisor] warning: gateway port ${gatewayHost}:${gatewayPort} did not release before timeout`,
-    );
+    log.warn("gateway port did not release before timeout", {
+      host: gatewayHost,
+      port: gatewayPort,
+    });
   }
 }
 
@@ -333,7 +364,7 @@ async function shutdown(signal: string): Promise<void> {
   }
   shuttingDown = true;
   clearRestartTimer();
-  console.log(`[gateway-supervisor] shutdown signal: ${signal}`);
+  log.info("shutdown signal", { signal });
   await stopChild(signal);
   process.exitCode = 0;
 }
@@ -350,9 +381,12 @@ function registerFailureAndGetDelay(reason: string): number | null {
 
   if (failures > restartMaxFailures) {
     circuitOpenUntil = now + restartCircuitOpenMs;
-    console.error(
-      `[gateway-supervisor] restart budget exceeded (${failures}/${restartMaxFailures}) after ${reason}; circuit open for ${restartCircuitOpenMs}ms`,
-    );
+    log.error("restart budget exceeded", {
+      failures,
+      restartMaxFailures,
+      reason,
+      restartCircuitOpenMs,
+    });
     return restartCircuitOpenMs;
   }
 
@@ -364,7 +398,7 @@ function scheduleRestartAfter(delayMs: number, reason: string): void {
     return;
   }
   const delay = Math.max(100, delayMs);
-  console.log(`[gateway-supervisor] scheduling restart in ${delay}ms (${reason})`);
+  log.info(`scheduling restart in ${delay}ms`, { reason });
   restartTimer = setTimeout(() => {
     restartTimer = null;
     void restartGateway(reason);
@@ -434,6 +468,6 @@ function readSupervisorAuthConfig() {
 }
 
 main().catch((error) => {
-  console.error(`[gateway-supervisor] fatal: ${(error as Error).message}`);
+  log.fatal((error as Error).message, error);
   process.exitCode = 1;
 });

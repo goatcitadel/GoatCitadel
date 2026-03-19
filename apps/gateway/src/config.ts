@@ -12,6 +12,7 @@ import {
 } from "@goatcitadel/contracts";
 import { ZodError, type ZodType } from "zod";
 import { syncUnifiedConfig } from "./config-sync-lib.js";
+import { isVerboseLoggingEnabled } from "./runtime-ux.js";
 
 export interface AssistantConfig {
   environment: string;
@@ -184,7 +185,10 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
       syncResult.createdUnified ? "created config/goatcitadel.json" : undefined,
       ...syncResult.syncedSections.map((name) => `synced ${name}`),
     ].filter(Boolean);
-    console.info(`[goatcitadel:config] ${changes.join(", ")}`);
+    const prefix = isVerboseLoggingEnabled()
+      ? "[goatcitadel:config]"
+      : "[goatcitadel]";
+    console.info(`${prefix} config sync: ${changes.join(", ")}`);
   }
 
   const configDir = path.join(rootDir, "config");

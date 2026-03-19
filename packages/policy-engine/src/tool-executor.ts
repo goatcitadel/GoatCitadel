@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
@@ -966,7 +967,9 @@ async function commsInvoke(
 ) {
   const connectionId = required(args.connectionId, "connectionId");
   const connection = storage.integrationConnections.get(connectionId);
-  const target = asString(args.target) ?? connection.key;
+  const target = asString(args.target)
+    ?? resolveDefaultChannelTarget(connection.key, connection.config)
+    ?? connection.key;
   const message = asString(args.message) ?? "";
   const queued = storage.commsDeliveries.createQueued({
     connectionId,
@@ -985,7 +988,15 @@ async function commsInvoke(
       storage.commsDeliveries.markSent(queued.deliveryId, "calendar-list");
       return { ...queued, status: "sent", providerMessageId: "calendar-list", records };
     }
-    const providerMessageId = await commsSend(toolName, connection.config, args, config.sandbox.networkAllowlist, target, message);
+    const providerMessageId = await commsSend(
+      toolName,
+      connection.key,
+      connection.config,
+      args,
+      config.sandbox.networkAllowlist,
+      target,
+      message,
+    );
     storage.commsDeliveries.markSent(queued.deliveryId, providerMessageId);
     return { ...queued, status: "sent", providerMessageId, updatedAt: new Date().toISOString() };
   } catch (error) {
@@ -997,6 +1008,7 @@ async function commsInvoke(
 
 async function commsSend(
   toolName: string,
+  connectionKey: string,
   connectionConfig: Record<string, unknown>,
   args: Record<string, unknown>,
   allowlist: string[],
@@ -1009,15 +1021,33 @@ async function commsSend(
   if (toolName === "calendar.create_event") {
     return calendarCreate(connectionConfig, args, allowlist);
   }
+  const channelKey = resolveChannelKey(toolName, connectionKey);
+  const renderedMessage = renderChannelMessage(message, args.attachments);
+  switch (channelKey) {
+    case "slack":
+      return slackSend(connectionConfig, args, allowlist, target, renderedMessage);
+    case "discord":
+      return discordSend(connectionConfig, args, allowlist, target, renderedMessage);
+    case "telegram":
+      return telegramSend(connectionConfig, args, allowlist, target, renderedMessage);
+    case "matrix":
+      return matrixSend(connectionConfig, args, allowlist, target, renderedMessage);
+    case "teams":
+      return teamsSend(connectionConfig, args, allowlist, renderedMessage);
+    case "google-chat":
+      return googleChatSend(connectionConfig, args, allowlist, target, renderedMessage);
+    default:
+      break;
+  }
   const webhookUrl = asString(args.url)
     ?? secretFrom(connectionConfig, "webhookUrl", "webhookUrlEnv")
     ?? secretFrom(connectionConfig, "url", "urlEnv");
   if (!webhookUrl) {
     throw new Error("Missing webhook URL");
   }
-  const payload = toolName === "discord.send"
-    ? { content: message }
-    : { text: message, target, payload: record(args.payload) };
+  const payload = channelKey === "discord"
+    ? { content: renderedMessage }
+    : { text: renderedMessage, target, payload: record(args.payload) };
   const res = await fetchAllowlisted(
     webhookUrl,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
@@ -1027,6 +1057,356 @@ async function commsSend(
     throw new Error(`${toolName} failed (${res.response.status})`);
   }
   return `${toolName}-${Date.now()}`;
+}
+
+function resolveChannelKey(toolName: string, connectionKey: string): string {
+  if (toolName === "channel.send") {
+    return connectionKey;
+  }
+  if (toolName.endsWith(".send")) {
+    return toolName.slice(0, -".send".length);
+  }
+  return connectionKey;
+}
+
+function resolveDefaultChannelTarget(
+  connectionKey: string,
+  config: Record<string, unknown>,
+): string | undefined {
+  switch (connectionKey) {
+    case "slack":
+      return asString(config.defaultChannel);
+    case "discord":
+      return asString(config.defaultChannelId);
+    case "telegram":
+      return asString(config.defaultChatId);
+    case "matrix":
+      return asString(config.defaultRoomId);
+    case "google-chat":
+      return asString(config.defaultThreadKey);
+    default:
+      return asString(config.target) ?? asString(config.defaultTarget);
+  }
+}
+
+function renderChannelMessage(
+  message: string,
+  attachmentsRaw: unknown,
+): string {
+  const attachments = Array.isArray(attachmentsRaw)
+    ? attachmentsRaw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    : [];
+  if (attachments.length === 0) {
+    return message;
+  }
+  const lines = attachments.map((attachment) => {
+    const title = asString(attachment.title);
+    const url = asString(attachment.url);
+    if (title && url) {
+      return `- ${title}: ${url}`;
+    }
+    if (url) {
+      return `- ${url}`;
+    }
+    if (title) {
+      return `- ${title}`;
+    }
+    return null;
+  }).filter((line): line is string => Boolean(line));
+  if (lines.length === 0) {
+    return message;
+  }
+  return `${message}\n\nAttachments:\n${lines.join("\n")}`;
+}
+
+async function slackSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+): Promise<string> {
+  const resolvedTarget = normalizeChannelTarget(target, "slack");
+  const webhookUrl = secretFrom(config, "webhookUrl", "webhookUrlEnv");
+  if (webhookUrl) {
+    const res = await fetchAllowlisted(
+      webhookUrl,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: message }),
+      },
+      allowlist,
+    );
+    if (!res.response.ok) {
+      throw new Error(`slack.send failed (${res.response.status})`);
+    }
+    return `slack-webhook-${Date.now()}`;
+  }
+
+  const token = secretFrom(config, "botToken", "botTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const channel = asString(args.target) ?? resolvedTarget ?? asString(config.defaultChannel);
+  const threadTs = asString(args.threadTs) ?? asString(config.defaultThreadTs);
+  if (!token) {
+    throw new Error("Missing Slack bot token");
+  }
+  if (!channel) {
+    throw new Error("Missing Slack channel target");
+  }
+  const res = await fetchAllowlisted(
+    "https://slack.com/api/chat.postMessage",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel,
+        text: message,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const body = parseJsonRecord(bodyText);
+  if (!res.response.ok || body.ok === false) {
+    throw new Error(`slack.send failed (${res.response.status})${body.error ? `: ${body.error}` : ""}`);
+  }
+  return asString(body.ts) ?? `slack-${Date.now()}`;
+}
+
+async function discordSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+): Promise<string> {
+  const resolvedTarget = normalizeChannelTarget(target, "discord");
+  const webhookUrl = secretFrom(config, "webhookUrl", "webhookUrlEnv");
+  if (webhookUrl) {
+    const res = await fetchAllowlisted(
+      webhookUrl,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: message }),
+      },
+      allowlist,
+    );
+    if (!res.response.ok) {
+      throw new Error(`discord.send failed (${res.response.status})`);
+    }
+    return `discord-webhook-${Date.now()}`;
+  }
+
+  const token = secretFrom(config, "botToken", "botTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const channelId = asString(args.target) ?? resolvedTarget ?? asString(config.defaultChannelId);
+  if (!token) {
+    throw new Error("Missing Discord bot token");
+  }
+  if (!channelId) {
+    throw new Error("Missing Discord channel target");
+  }
+  const res = await fetchAllowlisted(
+    `https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bot ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ content: message }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`discord.send failed (${res.response.status})`);
+  }
+  const body = parseJsonRecord(bodyText);
+  return asString(body.id) ?? `discord-${Date.now()}`;
+}
+
+async function telegramSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+): Promise<string> {
+  const resolvedTarget = normalizeChannelTarget(target, "telegram");
+  const token = secretFrom(config, "botToken", "botTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const chatId = asString(args.target) ?? resolvedTarget ?? asString(config.defaultChatId);
+  if (!token) {
+    throw new Error("Missing Telegram bot token");
+  }
+  if (!chatId) {
+    throw new Error("Missing Telegram chat target");
+  }
+  const res = await fetchAllowlisted(
+    `https://api.telegram.org/bot${token}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+        parse_mode: asString(config.parseMode) ?? undefined,
+      }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const body = parseJsonRecord(bodyText);
+  if (!res.response.ok || body.ok === false) {
+    throw new Error(`telegram.send failed (${res.response.status})${body.description ? `: ${body.description}` : ""}`);
+  }
+  const result = record(body.result);
+  return asString(result.message_id) ?? `telegram-${Date.now()}`;
+}
+
+async function matrixSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+): Promise<string> {
+  const resolvedTarget = normalizeChannelTarget(target, "matrix");
+  const homeserverUrl = asString(config.homeserverUrl) ?? "https://matrix-client.matrix.org";
+  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const roomId = asString(args.target) ?? resolvedTarget ?? asString(config.defaultRoomId);
+  if (!accessToken) {
+    throw new Error("Missing Matrix access token");
+  }
+  if (!roomId) {
+    throw new Error("Missing Matrix room target");
+  }
+  const txnId = randomUUID();
+  const res = await fetchAllowlisted(
+    `${homeserverUrl.replace(/\/+$/, "")}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        msgtype: "m.text",
+        body: message,
+      }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`matrix.send failed (${res.response.status})`);
+  }
+  const body = parseJsonRecord(bodyText);
+  return asString(body.event_id) ?? `matrix-${Date.now()}`;
+}
+
+async function teamsSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  message: string,
+): Promise<string> {
+  const webhookUrl = asString(args.url)
+    ?? secretFrom(config, "webhookUrl", "webhookUrlEnv")
+    ?? secretFrom(config, "url", "urlEnv");
+  if (!webhookUrl) {
+    throw new Error("Missing Teams webhook URL");
+  }
+  const title = asString(config.cardTitle) ?? "GoatCitadel";
+  const res = await fetchAllowlisted(
+    webhookUrl,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "message",
+        attachments: [
+          {
+            contentType: "application/vnd.microsoft.card.adaptive",
+            contentUrl: null,
+            content: {
+              type: "AdaptiveCard",
+              version: "1.4",
+              body: [
+                { type: "TextBlock", text: title, weight: "Bolder", wrap: true },
+                { type: "TextBlock", text: message, wrap: true },
+              ],
+            },
+          },
+        ],
+      }),
+    },
+    allowlist,
+  );
+  if (!res.response.ok) {
+    throw new Error(`teams.send failed (${res.response.status})`);
+  }
+  return `teams-${Date.now()}`;
+}
+
+async function googleChatSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+): Promise<string> {
+  const resolvedTarget = normalizeChannelTarget(target, "google-chat");
+  const webhookUrl = asString(args.url)
+    ?? secretFrom(config, "webhookUrl", "webhookUrlEnv")
+    ?? secretFrom(config, "url", "urlEnv");
+  if (!webhookUrl) {
+    throw new Error("Missing Google Chat webhook URL");
+  }
+  const url = new URL(webhookUrl);
+  const threadKey = asString(args.target) ?? resolvedTarget ?? asString(config.defaultThreadKey);
+  if (threadKey) {
+    url.searchParams.set("threadKey", threadKey);
+  }
+  const res = await fetchAllowlisted(
+    url.toString(),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: message }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`google-chat.send failed (${res.response.status})`);
+  }
+  const body = parseJsonRecord(bodyText);
+  return asString(body.name) ?? `google-chat-${Date.now()}`;
+}
+
+function parseJsonRecord(bodyText: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(bodyText) as unknown;
+    return record(parsed);
+  } catch {
+    return {};
+  }
+}
+
+function normalizeChannelTarget(target: string | undefined, channelKey: string): string | undefined {
+  if (!target || target === channelKey) {
+    return undefined;
+  }
+  return target;
 }
 
 async function gmailRead(config: Record<string, unknown>, args: Record<string, unknown>, allowlist: string[]) {

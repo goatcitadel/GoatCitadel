@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isVerboseLoggingEnabled } from "./runtime-ux.js";
 
 const UNIFIED_FILENAME = "goatcitadel.json";
 
@@ -241,7 +242,10 @@ async function warnIfSplitIsNewer(
     }
   }
 
+  const detail = `${path.basename(splitPath)} is newer than ${path.basename(unifiedPath)}; unified config values are being applied`;
   console.warn(
-    `[goatcitadel:config] warning: ${path.basename(splitPath)} is newer than ${path.basename(unifiedPath)}; unified config values are being applied`,
+    isVerboseLoggingEnabled()
+      ? `[goatcitadel:config] warning: ${detail}`
+      : `[goatcitadel] config override: ${detail}`,
   );
 }

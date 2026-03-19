@@ -307,7 +307,7 @@ describe("LlmService", () => {
     expect(payloadBody?.prompt_cache_retention).toBe("in_memory");
   });
 
-  it("normalizes OpenAI system messages into developer messages", async () => {
+  it("preserves OpenAI system messages for backward compatibility", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",
       providers: [
@@ -352,7 +352,7 @@ describe("LlmService", () => {
     }
 
     expect(payloadBody?.messages).toEqual([
-      { role: "developer", content: "Follow policy." },
+      { role: "system", content: "Follow policy." },
       { role: "user", content: "hello" },
     ]);
   });

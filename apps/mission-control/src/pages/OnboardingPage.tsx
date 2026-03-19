@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { providerTemplates } from "@goatcitadel/contracts";
 import {
   bootstrapOnboarding,
-  completeOnboarding,
   evaluateUiChangeRisk,
+  fetchDaemonStatus,
   fetchOnboardingState,
-  type OnboardingCompleteResponse,
+  resolveGatewayInstallToken,
+  restartDaemon,
+  startDaemon,
   type RuntimeSettingsResponse,
 } from "../api/client";
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
@@ -55,6 +57,60 @@ const STEP_TITLES = [
   "Review & Apply",
 ] as const;
 
+const QUICKSTART_PRESETS = [
+  {
+    id: "solo-local",
+    title: "Solo Local",
+    summary: "Fastest path for one machine and one operator.",
+    apply: () => ({
+      authMode: "none" as const,
+      allowLoopbackBypass: true,
+      defaultToolProfile: "coding",
+      budgetMode: "balanced" as const,
+      allowlistPreset: "local",
+      networkAllowlistText: "127.0.0.1\nlocalhost",
+      meshEnabled: false,
+      meshMode: "lan" as const,
+      meshRequireMtls: true,
+      meshTailnetEnabled: false,
+    }),
+  },
+  {
+    id: "hybrid-operator",
+    title: "Hybrid Operator",
+    summary: "Local-first with cloud model access and safer defaults.",
+    apply: () => ({
+      authMode: "token" as const,
+      allowLoopbackBypass: true,
+      defaultToolProfile: "coding",
+      budgetMode: "balanced" as const,
+      allowlistPreset: "common",
+      networkAllowlistText: "127.0.0.1\nlocalhost\napi.openai.com\nopenrouter.ai",
+      meshEnabled: false,
+      meshMode: "lan" as const,
+      meshRequireMtls: true,
+      meshTailnetEnabled: false,
+    }),
+  },
+  {
+    id: "remote-hardened",
+    title: "Remote Hardened",
+    summary: "Token-gated, explicit outbound hosts, ready for wider exposure.",
+    apply: () => ({
+      authMode: "token" as const,
+      allowLoopbackBypass: false,
+      defaultToolProfile: "standard",
+      budgetMode: "saver" as const,
+      allowlistPreset: "web-research",
+      networkAllowlistText: "127.0.0.1\nlocalhost\n*.github.com\n*.developer.mozilla.org\napi.openai.com\nopenrouter.ai",
+      meshEnabled: false,
+      meshMode: "wan" as const,
+      meshRequireMtls: true,
+      meshTailnetEnabled: false,
+    }),
+  },
+] as const;
+
 type StepId = 0 | 1 | 2 | 3 | 4;
 
 function isAbortError(error: unknown): boolean {
@@ -67,6 +123,10 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   const [step, setStep] = useState<StepId>(0);
   const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<Awaited<ReturnType<typeof fetchOnboardingState>> | null>(null);
+  const [daemonStatus, setDaemonStatus] = useState<Awaited<ReturnType<typeof fetchDaemonStatus>> | null>(null);
+  const [daemonBusy, setDaemonBusy] = useState<"start" | "restart" | null>(null);
+  const [installTokenInfo, setInstallTokenInfo] = useState<Awaited<ReturnType<typeof resolveGatewayInstallToken>> | null>(null);
+  const [installTokenBusy, setInstallTokenBusy] = useState(false);
 
   const [authMode, setAuthMode] = useState<"none" | "token" | "basic">("none");
   const [allowLoopbackBypass, setAllowLoopbackBypass] = useState(false);
@@ -181,8 +241,12 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     setLoading(true);
     setError(null);
     try {
-      const next = await fetchOnboardingState();
+      const [next, daemon] = await Promise.all([
+        fetchOnboardingState(),
+        fetchDaemonStatus().catch(() => null),
+      ]);
       setState(next);
+      setDaemonStatus(daemon);
       hydrateFromState(next);
     } catch (err) {
       setError((err as Error).message);
@@ -207,6 +271,12 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       },
     } : current);
   }, [runtimeLlmConfig]);
+
+  useEffect(() => {
+    if (authMode !== "token") {
+      setInstallTokenInfo(null);
+    }
+  }, [authMode]);
 
   useRefreshSubscription(
     "system",
@@ -376,6 +446,56 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     }
   };
 
+  const applyQuickstartPreset = (presetId: (typeof QUICKSTART_PRESETS)[number]["id"]) => {
+    const preset = QUICKSTART_PRESETS.find((item) => item.id === presetId);
+    if (!preset) {
+      return;
+    }
+    const values = preset.apply();
+    setAuthMode(values.authMode);
+    setAllowLoopbackBypass(values.allowLoopbackBypass);
+    setDefaultToolProfile(values.defaultToolProfile);
+    setBudgetMode(values.budgetMode);
+    setAllowlistPreset(values.allowlistPreset);
+    setNetworkAllowlistText(values.networkAllowlistText);
+    setMeshEnabled(values.meshEnabled);
+    setMeshMode(values.meshMode);
+    setMeshRequireMtls(values.meshRequireMtls);
+    setMeshTailnetEnabled(values.meshTailnetEnabled);
+    setApplyMessage(`Loaded ${preset.title} defaults. Review provider and credentials before applying.`);
+  };
+
+  const handleDaemonAction = async (action: "start" | "restart") => {
+    setDaemonBusy(action);
+    setError(null);
+    try {
+      const response = action === "start"
+        ? await startDaemon()
+        : await restartDaemon();
+      setDaemonStatus(response.status);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDaemonBusy(null);
+    }
+  };
+
+  const handleResolveInstallToken = async () => {
+    setInstallTokenBusy(true);
+    setError(null);
+    try {
+      const resolved = await resolveGatewayInstallToken({
+        generateWhenMissing: true,
+        persistToEnv: false,
+      });
+      setInstallTokenInfo(resolved);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setInstallTokenBusy(false);
+    }
+  };
+
   const submit = async () => {
     if (changeReview.overall === "critical" && !criticalConfirmed) {
       setError("Confirm critical changes before applying onboarding.");
@@ -427,19 +547,16 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       if (bootstrap.state.completed) {
         onCompleted?.();
       }
-      if (!markComplete) {
-        const completed: OnboardingCompleteResponse = await completeOnboarding("mission-control");
-        setState(completed.state);
-        if (completed.state.completed) {
-          onCompleted?.();
-        }
-      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setApplying(false);
     }
   };
+
+  const completedChecklistItems = state?.checklist.filter((item) => item.status === "complete").length ?? 0;
+  const totalChecklistItems = state?.checklist.length ?? 0;
+  const daemonReady = daemonStatus?.running === true;
 
   if (loading) {
     return <p>Loading Launch Wizard...</p>;
@@ -457,6 +574,55 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       />
       {error ? <p className="error">{error}</p> : null}
       {applyMessage ? <p className="office-subtitle">{applyMessage}</p> : null}
+
+      <article className="card">
+        <h3>Launch Readiness</h3>
+        <div className="token-row">
+          <span className={`token-chip ${daemonReady ? "token-chip-active" : ""}`}>Daemon {daemonReady ? "running" : "stopped"}</span>
+          <span className={`token-chip ${completedChecklistItems === totalChecklistItems ? "token-chip-active" : ""}`}>
+            Checklist {completedChecklistItems}/{totalChecklistItems}
+          </span>
+          <span className={`token-chip ${state?.completed ? "token-chip-active" : ""}`}>
+            Wizard {state?.completed ? "complete" : "in progress"}
+          </span>
+          {daemonStatus?.host ? <span className="token-chip">Host {daemonStatus.host}</span> : null}
+        </div>
+        <div className="controls-row">
+          <button type="button" onClick={() => void handleDaemonAction("start")} disabled={daemonBusy !== null || daemonReady}>
+            {daemonBusy === "start" ? "Starting..." : daemonReady ? "Daemon running" : "Start daemon"}
+          </button>
+          <button type="button" onClick={() => void handleDaemonAction("restart")} disabled={daemonBusy !== null}>
+            {daemonBusy === "restart" ? "Restarting..." : "Restart daemon"}
+          </button>
+          <button type="button" onClick={() => void load()}>
+            Refresh readiness
+          </button>
+        </div>
+        {daemonStatus ? (
+          <p className="office-subtitle">
+            State: {daemonStatus.state}
+            {daemonStatus.pid ? ` · pid ${daemonStatus.pid}` : ""}
+            {daemonStatus.uptimeSeconds ? ` · uptime ${Math.floor(daemonStatus.uptimeSeconds)}s` : ""}
+          </p>
+        ) : (
+          <p className="office-subtitle">Daemon status is unavailable right now.</p>
+        )}
+      </article>
+
+      <article className="card">
+        <h3>Quickstart Profiles</h3>
+        <p className="office-subtitle">Pick the closest operator posture, then refine provider and mesh details before apply.</p>
+        <div className="compact-list">
+          {QUICKSTART_PRESETS.map((preset) => (
+            <li key={preset.id}>
+              <strong>{preset.title}</strong> {preset.summary}
+              <div className="actions" style={{ marginTop: 8 }}>
+                <button type="button" onClick={() => applyQuickstartPreset(preset.id)}>Load profile</button>
+              </div>
+            </li>
+          ))}
+        </div>
+      </article>
 
       <article className="card">
         <div className="controls-row">
@@ -499,15 +665,31 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
             />
           </div>
           {authMode === "token" ? (
-            <div className="controls-row">
-              <label htmlFor="wizard-token">Gateway token</label>
-              <input
-                id="wizard-token"
-                type="password"
-                value={authToken}
-                onChange={(event) => setAuthToken(event.target.value)}
-              />
-            </div>
+            <>
+              <div className="controls-row">
+                <label htmlFor="wizard-token">Gateway token</label>
+                <input
+                  id="wizard-token"
+                  type="password"
+                  value={authToken}
+                  onChange={(event) => setAuthToken(event.target.value)}
+                />
+                <button type="button" onClick={() => void handleResolveInstallToken()} disabled={installTokenBusy}>
+                  {installTokenBusy ? "Resolving..." : "Generate install token"}
+                </button>
+              </div>
+              {installTokenInfo ? (
+                <div className="card">
+                  <p><strong>Install token source:</strong> {installTokenInfo.source}</p>
+                  {installTokenInfo.token ? <p><code>{installTokenInfo.token}</code></p> : null}
+                  {installTokenInfo.warnings.length > 0 ? (
+                    <ul className="compact-list">
+                      {installTokenInfo.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
           ) : null}
           {authMode === "basic" ? (
             <>
@@ -804,7 +986,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
           <button type="button" onClick={() => void submit()} disabled={applying}>
             {applying ? "Applying..." : "Apply onboarding"}
           </button>
-          <p className="office-subtitle">After apply, use sidebar navigation to continue setup and testing.</p>
+          <p className="office-subtitle">After apply, use Integrations to validate channels and Code mode to exercise implementation workflows.</p>
         </article>
       ) : null}
 

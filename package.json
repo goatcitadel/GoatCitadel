@@ -9,8 +9,8 @@
     "gc": "./bin/goatcitadel.mjs"
   },
   "scripts": {
-    "dev": "pnpm dev:all",
-    "dev:all": "pnpm --parallel --filter @goatcitadel/gateway --filter @goatcitadel/mission-control dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:all": "node scripts/dev.mjs",
     "up": "pnpm dev:all",
     "dev:gateway": "pnpm --filter @goatcitadel/gateway dev",
     "dev:gateway:watch": "pnpm --filter @goatcitadel/gateway dev:watch",

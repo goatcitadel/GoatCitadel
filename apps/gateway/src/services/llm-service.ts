@@ -358,7 +358,6 @@ export class LlmService {
       );
       const normalizedMessages = normalizeProviderMessages(
         request.messages,
-        resolved.provider.providerId,
         model,
       );
 
@@ -429,7 +428,6 @@ export class LlmService {
       );
       const normalizedMessages = normalizeProviderMessages(
         request.messages,
-        resolved.provider.providerId,
         model,
       );
 
@@ -985,16 +983,12 @@ function tryParseJsonRecord(payload: string): Record<string, unknown> | null {
 
 function normalizeProviderMessages(
   messages: ChatCompletionRequest["messages"],
-  providerId: string,
   model: string,
 ): ChatCompletionRequest["messages"] {
-  let normalizedMessages = providerId === "openai"
-    ? messages.map((message) => normalizeOpenAiMessageRole(message))
-    : messages;
   if (!modelRequiresReasoningContentForToolCalls(model)) {
-    return normalizedMessages;
+    return messages;
   }
-  return normalizedMessages.map((message) => {
+  return messages.map((message) => {
     const value = message as unknown as Record<string, unknown>;
     if (value.role !== "assistant" || !Array.isArray(value.tool_calls)) {
       return message;
@@ -1009,18 +1003,6 @@ function normalizeProviderMessages(
       reasoning_content: content || "Using tools to gather and verify information.",
     } as unknown as ChatCompletionRequest["messages"][number];
   });
-}
-
-function normalizeOpenAiMessageRole(
-  message: ChatCompletionRequest["messages"][number],
-): ChatCompletionRequest["messages"][number] {
-  if (message.role !== "system") {
-    return message;
-  }
-  return {
-    ...message,
-    role: "developer",
-  };
 }
 
 function modelRequiresReasoningContentForToolCalls(model: string): boolean {

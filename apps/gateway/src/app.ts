@@ -45,6 +45,7 @@ import { daemonRoutes } from "./routes/daemon.js";
 import { improvementRoutes } from "./routes/improvement.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
 import { durableRoutes } from "./routes/durable.js";
+import { createGatewayLogger, isVerboseLoggingEnabled } from "./runtime-ux.js";
 import { isLoopbackDevOrigin, isTailnetDevOrigin, resolveTailnetShortHostAllowlist } from "./cors-origin-guard.js";
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
 import { isSuspiciousEncodedPath } from "./path-guard.js";
@@ -53,7 +54,11 @@ import { enterDevDiagnosticsContext } from "./dev-diagnostics/service.js";
 loadLocalEnvFile();
 
 export async function buildApp() {
-  const app = Fastify({ logger: true });
+  const verbose = isVerboseLoggingEnabled();
+  const app = Fastify({
+    loggerInstance: createGatewayLogger(verbose),
+    disableRequestLogging: !verbose,
+  });
   const allowedOrigins = resolveAllowedOrigins();
   const allowTailnetDevOrigins = resolveAllowTailnetDevOrigins();
   const tailnetShortHostAllowlist = resolveTailnetShortHostAllowlist();

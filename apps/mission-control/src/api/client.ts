@@ -50,6 +50,7 @@ import type {
   EmbeddingQueryInput,
   GmailReadQuery,
   GmailSendInput,
+  GatewayInstallTokenResolution,
   CalendarCreateEventInput,
   CalendarListQuery,
   MemoryContextPack,
@@ -3256,6 +3257,17 @@ export async function completeOnboarding(completedBy?: string): Promise<Onboardi
     body: JSON.stringify({
       completedBy,
     }),
+  });
+}
+
+export async function resolveGatewayInstallToken(input?: {
+  token?: string;
+  generateWhenMissing?: boolean;
+  persistToEnv?: boolean;
+}): Promise<GatewayInstallTokenResolution> {
+  return request<GatewayInstallTokenResolution>("/api/v1/auth/install-token", {
+    method: "POST",
+    body: JSON.stringify(input ?? {}),
   });
 }
 

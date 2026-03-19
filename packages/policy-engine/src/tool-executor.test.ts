@@ -53,6 +53,8 @@ describe("executeTool", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllGlobals();
+    delete process.env.SLACK_BOT_TOKEN;
     await fs.rm(testWorkspaceRoot, { recursive: true, force: true });
   });
 
@@ -461,5 +463,141 @@ describe("executeTool", () => {
     await expect(executeTool(request, policyConfig, storageStub, {
       bankrBuiltinEnabled: false,
     })).rejects.toThrow("Bankr built-in is disabled.");
+  });
+
+  it("sends channel messages through Slack bot API with rendered attachments", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      ts: "1712345678.000100",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const queuedSpy = vi.fn((input: Record<string, unknown>) => ({
+      deliveryId: "delivery-1",
+      status: "queued",
+      channelKey: input.channelKey,
+      target: input.target,
+      createdAt: "2026-03-18T00:00:00.000Z",
+      updatedAt: "2026-03-18T00:00:00.000Z",
+    }));
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-slack",
+          key: "slack",
+          config: {
+            botTokenEnv: "SLACK_BOT_TOKEN",
+            defaultChannel: "#build-alerts",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: queuedSpy,
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-slack",
+        message: "Build green again.",
+        attachments: [{ title: "Runbook", url: "https://example.com/runbook" }],
+      },
+      agentId: "operator",
+      sessionId: "sess-slack",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["slack.com"],
+      },
+    }, commsStorage);
+
+    expect(queuedSpy).toHaveBeenCalledWith(expect.objectContaining({
+      target: "#build-alerts",
+    }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://slack.com/api/chat.postMessage",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer xoxb-test",
+        }),
+      }),
+    );
+    const slackCall = fetchMock.mock.calls[0] as unknown as [string, RequestInit & { body?: BodyInit | null }];
+    expect(String(slackCall[1]?.body ?? "")).toContain("Runbook");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "1712345678.000100",
+    });
+  });
+
+  it("sends channel messages through Teams webhook adapters", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async () => new Response("1", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-teams",
+          key: "teams",
+          config: {
+            webhookUrl: "https://outlook.office.com/webhook/example",
+            cardTitle: "GoatCitadel Test",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-2",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-teams",
+        target: "ops-room",
+        message: "Nightly validation passed.",
+      },
+      agentId: "operator",
+      sessionId: "sess-teams",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["outlook.office.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://outlook.office.com/webhook/example",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const teamsCall = fetchMock.mock.calls[0] as unknown as [string, RequestInit & { body?: BodyInit | null }];
+    expect(String(teamsCall[1]?.body ?? "")).toContain("AdaptiveCard");
+    expect(result).toMatchObject({
+      status: "sent",
+    });
   });
 });

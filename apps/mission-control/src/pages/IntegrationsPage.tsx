@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  commsSend,
   createIntegrationConnection,
   disableIntegrationPlugin,
   deleteIntegrationConnection,
@@ -110,6 +111,11 @@ export function IntegrationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [diagnosticsByConnectionId, setDiagnosticsByConnectionId] = useState<Record<string, Awaited<ReturnType<typeof fetchIntegrationConnectionDiagnostics>>>>({});
   const [selectedDiagnosticConnectionId, setSelectedDiagnosticConnectionId] = useState<string | null>(null);
+  const [selectedChannelConnectionId, setSelectedChannelConnectionId] = useState("");
+  const [channelTestTarget, setChannelTestTarget] = useState("");
+  const [channelTestMessage, setChannelTestMessage] = useState("Operator test message from GoatCitadel Mission Control.");
+  const [channelTestResult, setChannelTestResult] = useState<string | null>(null);
+  const [channelTestBusy, setChannelTestBusy] = useState(false);
   const requestSeq = useRef(0);
   const createAction = useAction();
   const deleteAction = useAction();
@@ -261,6 +267,16 @@ export function IntegrationsPage() {
     });
   }, [catalogLabelById, connectionSearch, connections]);
 
+  const channelConnections = useMemo(
+    () => connections.filter((connection) => connection.kind === "channel"),
+    [connections],
+  );
+
+  const selectedChannelConnection = useMemo(
+    () => channelConnections.find((connection) => connection.connectionId === selectedChannelConnectionId) ?? null,
+    [channelConnections, selectedChannelConnectionId],
+  );
+
   const effectiveConfig = useMemo(() => {
     if (showAdvancedJson) {
       try {
@@ -312,6 +328,25 @@ export function IntegrationsPage() {
         });
       });
   }, [kindFilter, selectedCatalogId, selectedCatalog, status, enabled, effectiveConfig]);
+
+  useEffect(() => {
+    if (channelConnections.length === 0) {
+      setSelectedChannelConnectionId("");
+      return;
+    }
+    if (!channelConnections.some((connection) => connection.connectionId === selectedChannelConnectionId)) {
+      setSelectedChannelConnectionId(channelConnections[0]?.connectionId ?? "");
+    }
+  }, [channelConnections, selectedChannelConnectionId]);
+
+  useEffect(() => {
+    if (!selectedChannelConnection) {
+      setChannelTestTarget("");
+      return;
+    }
+    setChannelTestTarget(guessDefaultChannelTarget(selectedChannelConnection));
+    setChannelTestResult(null);
+  }, [selectedChannelConnection]);
 
   const onCreate = async () => {
     if (changeReview.overall === "critical" && !criticalConfirmed) {
@@ -437,6 +472,48 @@ export function IntegrationsPage() {
       load({ background: true });
     } catch (err) {
       setError((err as Error).message);
+    }
+  };
+
+  const onSendChannelTest = async () => {
+    if (!selectedChannelConnection) {
+      setError("Choose a channel connection first.");
+      return;
+    }
+    const message = channelTestMessage.trim();
+    const target = channelTestTarget.trim();
+    if (!message) {
+      setError("Enter a test message.");
+      return;
+    }
+    if (!target && requiresExplicitChannelTarget(selectedChannelConnection)) {
+      setError("Enter a destination target or configure a default one.");
+      return;
+    }
+    setChannelTestBusy(true);
+    setChannelTestResult(null);
+    try {
+      const result = await commsSend({
+        connectionId: selectedChannelConnection.connectionId,
+        target,
+        message,
+      });
+      const statusText = typeof result === "object" && result && "status" in result
+        ? String((result as { status?: unknown }).status ?? "sent")
+        : "sent";
+      const providerMessageId = typeof result === "object" && result && "providerMessageId" in result
+        ? String((result as { providerMessageId?: unknown }).providerMessageId ?? "")
+        : "";
+      setChannelTestResult(
+        providerMessageId
+          ? `Delivered with status ${statusText}. Provider message id: ${providerMessageId}.`
+          : `Delivered with status ${statusText}.`,
+      );
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setChannelTestBusy(false);
     }
   };
 
@@ -996,6 +1073,58 @@ export function IntegrationsPage() {
       </Panel>
 
       <Panel
+        title="Channel Test Bench"
+        subtitle="Send operator test messages through each channel adapter with the exact delivery semantics that connection uses."
+      >
+        {channelConnections.length === 0 ? (
+          <p className="table-subtext">No channel connections configured yet. Create one above, then validate it here.</p>
+        ) : (
+          <>
+            <div className="controls-row">
+              <label htmlFor="channelTestConnection">Channel connection</label>
+              <GCSelect
+                id="channelTestConnection"
+                value={selectedChannelConnectionId}
+                onChange={(value) => setSelectedChannelConnectionId(value)}
+                options={channelConnections.map((connection) => ({
+                  value: connection.connectionId,
+                  label: `${connection.label} (${connection.key})`,
+                }))}
+              />
+              <label htmlFor="channelTestTarget">Target</label>
+              <input
+                id="channelTestTarget"
+                value={channelTestTarget}
+                onChange={(event) => setChannelTestTarget(event.target.value)}
+                placeholder="channel / room / chat id / thread key"
+              />
+              <button type="button" onClick={() => void onSendChannelTest()} disabled={channelTestBusy}>
+                {channelTestBusy ? "Sending..." : "Send test"}
+              </button>
+            </div>
+            {selectedChannelConnection ? (
+              <p className="office-subtitle">
+                Adapter: {selectedChannelConnection.key}
+                {" · "}
+                Status: {selectedChannelConnection.status}
+                {" · "}
+                Suggested default target: {guessDefaultChannelTarget(selectedChannelConnection) || "none configured"}
+              </p>
+            ) : null}
+            <label htmlFor="channelTestMessage">Message</label>
+            <textarea
+              id="channelTestMessage"
+              rows={5}
+              className="full-textarea"
+              value={channelTestMessage}
+              onChange={(event) => setChannelTestMessage(event.target.value)}
+            />
+            {channelTestResult ? <p className="office-subtitle">{channelTestResult}</p> : null}
+          </>
+        )}
+      </Panel>
+
+      <Panel
         title="Plugin Adapters"
         subtitle="Optional adapters for services that are not built in yet. Most users can skip this section."
       >
@@ -1231,6 +1360,29 @@ function formatStatus(status: IntegrationConnection["status"]): string {
     default:
       return status;
   }
+}
+
+function guessDefaultChannelTarget(connection: IntegrationConnection): string {
+  const config = connection.config as Record<string, unknown>;
+  const candidates = [
+    config.defaultChannel,
+    config.defaultChannelId,
+    config.defaultChatId,
+    config.defaultRoomId,
+    config.defaultThreadKey,
+    config.defaultTarget,
+    config.target,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return "";
+}
+
+function requiresExplicitChannelTarget(connection: IntegrationConnection): boolean {
+  return !["teams", "google-chat"].includes(connection.key);
 }
 
 function formatMaturity(maturity: IntegrationCatalogEntry["maturity"]): string {

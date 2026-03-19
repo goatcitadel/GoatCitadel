@@ -51,6 +51,10 @@ Best for:
 - low-latency local use
 - token-efficient operations when you do not need browser UI overhead
 
+Future TODO:
+
+- Align TUI runtime log styling and `--verbose` behavior with the gateway dev surface so operator output stays consistent across local channels.
+
 ### Webchat (`channel.webchat`)
 
 Start GoatCitadel and open Mission Control in the browser.

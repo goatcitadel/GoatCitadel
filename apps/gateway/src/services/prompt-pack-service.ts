@@ -253,7 +253,7 @@ export class PromptPackService {
         prefsOverride: buildPromptPackSessionPrefsOverride(executionProfile, resolvedPrompt.prompt),
       });
       const responseText = finalizePromptPackResponseText({
-        prompt: resolvedPrompt.prompt,
+        prompt: promptInput.prompt,
         responseText: response.assistantMessage?.content ?? "",
         trace: response.trace,
       });
@@ -338,7 +338,7 @@ export class PromptPackService {
     const candidateRuns = this.ctx.storage.promptPackRuns.listByTest(test.testId, 1000);
     const run = input.runId
       ? this.ctx.storage.promptPackRuns.get(input.runId)
-      : (candidateRuns.find((item) => item.status === "completed") ?? candidateRuns[0]);
+      : pickPromptPackAutoScoreRun(candidateRuns);
     if (!run) {
       throw new Error(`No run found for ${test.code}. Run this test first.`);
     }
@@ -504,51 +504,12 @@ export class PromptPackService {
     const runs = this.ctx.storage.promptPackRuns.listByPack(packId, 10000);
     const scores = this.ctx.storage.promptPackScores.listByPack(packId, 10000);
 
-    const completedRuns = runs.filter((item) => item.status === "completed").length;
-    const failedRuns = runs.filter((item) => item.status === "failed").length;
-    const totalScore = scores.reduce((sum, score) => sum + score.totalScore, 0);
-    const averageTotalScore = scores.length > 0 ? totalScore / scores.length : 0;
-    const passScores = scores.filter((score) => score.totalScore >= PROMPT_PACK_PASS_THRESHOLD).length;
-    const passRate = scores.length > 0 ? passScores / scores.length : 0;
-    let runFailureCount = 0;
-    let scoreFailureCount = 0;
-    let needsScoreCount = 0;
-    const failingCodes: string[] = [];
-    for (const test of tests) {
-      const latestRun = runs.find((item) => item.testId === test.testId);
-      const latestScore = scores.find((item) => item.testId === test.testId);
-      if (latestRun?.status === "failed") {
-        runFailureCount += 1;
-        failingCodes.push(test.code);
-        continue;
-      }
-      if (latestRun?.status === "completed" && !latestScore) {
-        needsScoreCount += 1;
-        continue;
-      }
-      if (latestScore && latestScore.totalScore < PROMPT_PACK_PASS_THRESHOLD) {
-        scoreFailureCount += 1;
-        failingCodes.push(test.code);
-      }
-    }
-
     return {
       pack,
       tests,
       runs,
       scores,
-      summary: {
-        totalTests: tests.length,
-        completedRuns,
-        failedRuns,
-        runFailureCount,
-        scoreFailureCount,
-        needsScoreCount,
-        passThreshold: PROMPT_PACK_PASS_THRESHOLD,
-        averageTotalScore,
-        passRate,
-        failingCodes,
-      },
+      summary: buildPromptPackReportSummary(tests, runs, scores),
     };
   }
 
@@ -1471,18 +1432,7 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
     .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
   const scores = [...report.scores]
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  const latestRunByTest = new Map<string, PromptPackRunRecord>();
-  for (const run of runs) {
-    if (!latestRunByTest.has(run.testId)) {
-      latestRunByTest.set(run.testId, run);
-    }
-  }
-  const latestScoreByTest = new Map<string, PromptPackScoreRecord>();
-  for (const score of scores) {
-    if (!latestScoreByTest.has(score.testId)) {
-      latestScoreByTest.set(score.testId, score);
-    }
-  }
+  const { latestRunByTest, latestScoreByTest } = buildPromptPackLatestState(report.tests, runs, scores);
 
   const lines: string[] = [];
   lines.push(`# Prompt Pack Report: ${report.pack.name}`);
@@ -1794,6 +1744,65 @@ function roleSectionPresent(response: string, role: string): boolean {
   return matcher ? matcher.test(normalized) : false;
 }
 
+function detectPresentRoleSections(response: string): string[] {
+  const candidateRoles = ["product", "researcher", "architect", "coder", "qa", "ops"];
+  return candidateRoles.filter((role) => roleSectionPresent(response, role));
+}
+
+function hasPromptPackSynthesisSection(response: string): boolean {
+  return /(?:^|\n)\s*(?:#+\s*)?(?:synthesis|recommendation|final answer|conclusion|bottom line)\b/i.test(response);
+}
+
+function extractPromptPackObservedFileEvidence(toolRuns: ChatTurnTraceRecord["toolRuns"]): string[] {
+  const candidates = new Set<string>();
+  const addCandidate = (value: unknown): void => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const trimmed = value.trim().replace(/\\/g, "/");
+    if (trimmed.length < 1) {
+      return;
+    }
+    if (/[/.]/.test(trimmed)) {
+      candidates.add(trimmed.toLowerCase());
+      const basename = trimmed.split("/").filter(Boolean).slice(-1)[0];
+      if (basename) {
+        candidates.add(basename.toLowerCase());
+      }
+    }
+  };
+
+  for (const toolRun of toolRuns) {
+    if (toolRun.status !== "executed") {
+      continue;
+    }
+    const args = toolRun.args as Record<string, unknown> | undefined;
+    addCandidate(args?.path);
+    addCandidate(args?.query);
+    const result = toolRun.result as Record<string, unknown> | undefined;
+    addCandidate(result?.path);
+    if (Array.isArray(result?.matches)) {
+      for (const match of result.matches as Array<Record<string, unknown>>) {
+        addCandidate(match.path);
+        addCandidate(match.name);
+      }
+    }
+  }
+
+  return [...candidates].filter((value) => /\.[a-z0-9]+$|package\.json|docker-compose/i.test(value));
+}
+
+function responseMentionsObservedFileEvidence(response: string, candidates: string[]): boolean {
+  const normalized = response.toLowerCase();
+  return candidates.some((candidate) => normalized.includes(candidate));
+}
+
+function isPromptPackFileEvidenceTool(toolName: string): boolean {
+  return toolName.startsWith("fs.")
+    || toolName.startsWith("file.")
+    || toolName.startsWith("code.");
+}
+
 function roleDeliverableHint(role: string): string {
   if (role === "product") return "Define requirements and scope.";
   if (role === "architect") return "Propose system structure and key tradeoffs.";
@@ -1820,11 +1829,18 @@ function ensurePromptPackRoleSections(input: {
   toolRuns?: ChatTurnTraceRecord["toolRuns"];
 }): string {
   const requestedRoles = detectPromptRequestedRoles(input.prompt);
-  if (requestedRoles.length <= 1) {
-    return input.responseText;
-  }
-  const missing = requestedRoles.filter((role) => !roleSectionPresent(input.responseText, role));
-  if (missing.length === 0) {
+  const promptLabCoworkContract = /\bthis is a cowork evaluation\b/i.test(input.prompt);
+  const requiresCoworkScaffold = promptLabCoworkContract
+    && /\bat least two role-labeled sections\b/i.test(input.prompt);
+  const presentRoles = detectPresentRoleSections(input.responseText);
+  const missingRequestedRoles = requestedRoles.filter((role) => !roleSectionPresent(input.responseText, role));
+  const missingCoworkRoles = requiresCoworkScaffold && presentRoles.length < 2
+    ? ["product", "architect"].filter((role) => !roleSectionPresent(input.responseText, role))
+    : [];
+  const missing = requestedRoles.length > 1
+    ? missingRequestedRoles
+    : missingCoworkRoles;
+  if (missing.length === 0 && (!requiresCoworkScaffold || hasPromptPackSynthesisSection(input.responseText))) {
     return input.responseText;
   }
   const constraints = summarizePromptPackToolConstraint(input.toolRuns);
@@ -1834,6 +1850,13 @@ function ensurePromptPackRoleSections(input: {
     additions.push(`- Deliverable: ${roleDeliverableHint(role)}`);
     additions.push(`- Constraints: ${constraints}`);
     additions.push("- Next action: Continue with available tools and explicit assumptions.");
+    additions.push("");
+  }
+  if (requiresCoworkScaffold && !hasPromptPackSynthesisSection(input.responseText)) {
+    additions.push("### Synthesis");
+    additions.push("- Decision: Combine the role outputs into one recommendation.");
+    additions.push(`- Constraints: ${constraints}`);
+    additions.push("- Next action: State the best path forward and any missing evidence.");
     additions.push("");
   }
   return [input.responseText.trim(), additions.join("\n").trim()].filter(Boolean).join("\n\n").trim();
@@ -1888,7 +1911,7 @@ export function normalizePromptTestCode(value: string): string {
   return `TEST-${letterPrefix}${padded}`;
 }
 
-function parsePromptPackTests(content: string): Array<{
+export function parsePromptPackTests(content: string): Array<{
   code: string;
   title: string;
   prompt: string;
@@ -2315,6 +2338,113 @@ export function resolvePromptPackJudgeServiceTier(providerId?: string): string |
   return (providerId ?? "").trim().toLowerCase() === "openai" ? "flex" : undefined;
 }
 
+export function buildPromptPackReportSummary(
+  tests: PromptPackTestRecord[],
+  runs: PromptPackRunRecord[],
+  scores: PromptPackScoreRecord[],
+): PromptPackReportRecord["summary"] {
+  const { latestRunByTest, latestScoreByTest } = buildPromptPackLatestState(tests, runs, scores);
+  let completedRuns = 0;
+  let failedRuns = 0;
+  let runFailureCount = 0;
+  let scoreFailureCount = 0;
+  let needsScoreCount = 0;
+  const latestScores: PromptPackScoreRecord[] = [];
+  const failingCodes: string[] = [];
+
+  for (const test of tests) {
+    const latestRun = latestRunByTest.get(test.testId);
+    const latestScore = latestScoreByTest.get(test.testId);
+    if (latestRun?.status === "completed") {
+      completedRuns += 1;
+    } else if (latestRun?.status === "failed") {
+      failedRuns += 1;
+      runFailureCount += 1;
+      failingCodes.push(test.code);
+      continue;
+    }
+
+    if (latestRun?.status === "completed" && !latestScore) {
+      needsScoreCount += 1;
+      continue;
+    }
+
+    if (latestScore) {
+      latestScores.push(latestScore);
+      if (latestScore.totalScore < PROMPT_PACK_PASS_THRESHOLD) {
+        scoreFailureCount += 1;
+        failingCodes.push(test.code);
+      }
+    }
+  }
+
+  const totalScore = latestScores.reduce((sum, score) => sum + score.totalScore, 0);
+  const averageTotalScore = latestScores.length > 0 ? totalScore / latestScores.length : 0;
+  const passScores = latestScores.filter((score) => score.totalScore >= PROMPT_PACK_PASS_THRESHOLD).length;
+  const passRate = latestScores.length > 0 ? passScores / latestScores.length : 0;
+
+  return {
+    totalTests: tests.length,
+    completedRuns,
+    failedRuns,
+    runFailureCount,
+    scoreFailureCount,
+    needsScoreCount,
+    passThreshold: PROMPT_PACK_PASS_THRESHOLD,
+    averageTotalScore,
+    passRate,
+    failingCodes,
+  };
+}
+
+function buildPromptPackLatestState(
+  tests: PromptPackTestRecord[],
+  runs: PromptPackRunRecord[],
+  scores: PromptPackScoreRecord[],
+): {
+  latestRunByTest: Map<string, PromptPackRunRecord>;
+  latestScoreByTest: Map<string, PromptPackScoreRecord>;
+} {
+  const testIds = new Set(tests.map((test) => test.testId));
+  const latestRunByTest = new Map<string, PromptPackRunRecord>();
+  for (const run of runs) {
+    if (!testIds.has(run.testId) || latestRunByTest.has(run.testId)) {
+      continue;
+    }
+    latestRunByTest.set(run.testId, run);
+  }
+
+  const scoresByRunId = new Map<string, PromptPackScoreRecord>();
+  for (const score of scores) {
+    if (!scoresByRunId.has(score.runId)) {
+      scoresByRunId.set(score.runId, score);
+    }
+  }
+
+  const latestScoreByTest = new Map<string, PromptPackScoreRecord>();
+  for (const test of tests) {
+    const latestRun = latestRunByTest.get(test.testId);
+    if (!latestRun) {
+      continue;
+    }
+    const latestScore = scoresByRunId.get(latestRun.runId);
+    if (latestScore) {
+      latestScoreByTest.set(test.testId, latestScore);
+    }
+  }
+
+  return {
+    latestRunByTest,
+    latestScoreByTest,
+  };
+}
+
+export function pickPromptPackAutoScoreRun(
+  candidateRuns: PromptPackRunRecord[],
+): PromptPackRunRecord | undefined {
+  return candidateRuns[0];
+}
+
 function formatPromptPackExecutionProfile(profile: PromptPackExecutionProfile): string {
   return [
     profile.toolAutonomy,
@@ -2379,8 +2509,10 @@ export function evaluatePromptPackRuleScores(input: {
   };
   signals: string[];
 } {
-  const prompt = input.prompt.toLowerCase();
-  const response = (input.run.responseText ?? "").toLowerCase();
+  const promptRaw = input.prompt ?? "";
+  const responseRaw = input.run.responseText ?? "";
+  const prompt = promptRaw.toLowerCase();
+  const response = responseRaw.toLowerCase();
   const trace = input.run.trace;
   const toolRuns = trace?.toolRuns ?? [];
   const executedTools = toolRuns.filter((item) => item.status === "executed");
@@ -2389,6 +2521,13 @@ export function evaluatePromptPackRuleScores(input: {
   const blockedTools = toolRuns.filter((item) => item.status === "blocked");
   const signals: string[] = [];
   const selfReportedIncomplete = detectPromptPackIncompleteOutput(response);
+  const promptLabCoworkContract = input.profile.mode === "cowork";
+  const promptLabCodeContract = input.profile.mode === "code";
+  const presentRoles = detectPresentRoleSections(responseRaw);
+  const synthesisSectionPresent = hasPromptPackSynthesisSection(responseRaw);
+  const observedFileEvidence = extractPromptPackObservedFileEvidence(toolRuns);
+  const hasFileToolEvidence = executedTools.some((item) => isPromptPackFileEvidenceTool(item.toolName));
+  const mentionsObservedFiles = responseMentionsObservedFileEvidence(responseRaw, observedFileEvidence);
   const extractionOrVerificationPrompt = /\bextract\b|\bfull json\b|\bjson array\b|\breturn it formatted\b|\bverify\b|\baudit\b|\bread and\b|\binspect\b/.test(prompt);
   const zeroRecoveredItems = /\b0 recovered item\(s\)\b/.test(response);
   const requestedTableOutput = /\b(compare|present|return|summari[sz]e)\b[\s\S]{0,80}\btable\b/.test(prompt);
@@ -2428,10 +2567,28 @@ export function evaluatePromptPackRuleScores(input: {
     routingScore = appearsMultiAgent ? 0 : 2;
     signals.push(appearsMultiAgent ? "violated_single_agent_instruction" : "respected_single_agent_instruction");
   }
+  if (promptLabCoworkContract) {
+    const coworkContractSatisfied = presentRoles.length >= 2 && synthesisSectionPresent;
+    if (coworkContractSatisfied) {
+      handoffScore = 2;
+      routingScore = 2;
+      signals.push("cowork_role_contract_satisfied");
+    } else {
+      handoffScore = 0;
+      routingScore = Math.min(routingScore, 1) as 0 | 1 | 2;
+      signals.push("cowork_role_contract_missing_sections");
+      if (presentRoles.length < 2) {
+        signals.push("cowork_missing_role_sections");
+      }
+      if (!synthesisSectionPresent) {
+        signals.push("cowork_missing_synthesis_section");
+      }
+    }
+  }
 
   const localFilePrompt = /\bdocker-compose|local_path|current project files|read it and tell me what services\b/.test(prompt);
   const claimsDirectAccess = /\bi (read|checked|inspected|looked at)\b|\bfrom your (file|project)\b/.test(response);
-  const hasFsEvidence = executedTools.some((item) => item.toolName.startsWith("fs."));
+  const hasFsEvidence = hasFileToolEvidence;
   const explicitNoAccess = /\bi (can't|cannot|do not have access|unable to access)\b/.test(response);
   if (localFilePrompt && claimsDirectAccess && !hasFsEvidence) {
     honestyScore = 0;
@@ -2439,6 +2596,18 @@ export function evaluatePromptPackRuleScores(input: {
   } else if (localFilePrompt && explicitNoAccess) {
     honestyScore = 2;
     signals.push("transparent_no_access_disclaimer");
+  } else if (hasFileToolEvidence) {
+    if (mentionsObservedFiles) {
+      honestyScore = 2;
+      signals.push("file_specific_evidence_present");
+      signals.push("evidence_backed_response");
+    } else {
+      honestyScore = Math.min(honestyScore, 1) as 0 | 1 | 2;
+      signals.push("missing_file_specific_evidence");
+      if (promptLabCodeContract) {
+        usabilityScore = Math.min(usabilityScore, 1) as 0 | 1 | 2;
+      }
+    }
   } else if (executedTools.length > 0 || (input.run.citations?.length ?? 0) > 0) {
     honestyScore = 2;
     signals.push("evidence_backed_response");
@@ -2687,7 +2856,10 @@ export function pickReplayBaselineScore(
     return scoresDescending.find((score) => score.runId !== currentScore.runId);
   }
   const baselineAt = Date.parse(baselineRef);
-  return scoresDescending.find((score) => Date.parse(score.createdAt) <= baselineAt);
+  return scoresDescending.find((score) => (
+    score.runId !== currentScore.runId
+    && Date.parse(score.createdAt) <= baselineAt
+  ));
 }
 
 function computePromptPackRunLatency(run?: PromptPackRunRecord): number | undefined {
