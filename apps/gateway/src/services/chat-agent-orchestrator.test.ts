@@ -5682,4 +5682,197 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("Missing required tool evidence: file/code tools.");
     expect(result.assistantContent).not.toContain("The sandbox uses strict schema guards and appears safe.");
   });
+
+  it("retries once then accepts a tool-backed answer for Prompt Lab explicit-tools", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Read `F:/code/project/src/index.ts` using file/code tools and summarize the exports.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The file exports a main function and several helpers.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-prefetch-retry-1",
+        result: {
+          path: "F:/code/project/src/index.ts",
+          content: "export function main() {}\nexport function helper() {}",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range", "file.find", "code.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-retry-succeed-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-retry-succeed-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: wrappedPrompt,
+        },
+      ],
+    });
+
+    // Prefetch should have fired for the listed file path, satisfying the requirement.
+    // The model's prose answer should pass through because tool evidence exists.
+    expect(createChatCompletion).toHaveBeenCalled();
+    expect(result.assistantContent).not.toContain("I couldn't verify that with the required tools");
+    expect(result.assistantContent).not.toContain("Missing required tool evidence");
+    expect(result.turnTrace.toolRuns.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("falls back after retry when Prompt Lab explicit-tools evidence remains missing", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Inspect the build output and explain the bundling strategy.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      // First completion: prose without tools
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The bundling strategy uses tree-shaking and code splitting.",
+            },
+          },
+        ],
+      })
+      // Second completion (after retry instruction): still prose without tools
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "I believe the build uses webpack with default settings.",
+            },
+          },
+        ],
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range", "file.find"]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-retry-fail-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-retry-fail-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: wrappedPrompt,
+        },
+      ],
+    });
+
+    // No file paths listed → no prefetch. Model bluffed twice → fallback.
+    expect(result.assistantContent).toContain("I couldn't verify that with the required tools before answering.");
+    expect(result.assistantContent).toContain("Missing required tool evidence: file/code tools.");
+    expect(result.assistantContent).not.toContain("tree-shaking");
+    expect(result.assistantContent).not.toContain("webpack");
+    // Two completions should have been requested (initial + retry)
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes non-Prompt-Lab prompts through without explicit-tools enforcement", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Here is a plain answer without any tools.",
+            },
+          },
+        ],
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range", "browser.search"]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-non-prompt-lab-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-non-prompt-lab-1",
+      content: "Explain how tree-shaking works in webpack.",
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: "Explain how tree-shaking works in webpack.",
+        },
+      ],
+    });
+
+    // No Prompt Lab contract → no enforcement, prose answer accepted as-is
+    expect(result.assistantContent).toBe("Here is a plain answer without any tools.");
+    expect(result.assistantContent).not.toContain("Missing required tool evidence");
+  });
 });

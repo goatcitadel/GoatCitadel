@@ -33,7 +33,8 @@ const TOOL_FAILURE_CIRCUIT_BREAKER_THRESHOLD = 2;
 const TOOL_FAILURE_RATE_LIMIT_THRESHOLD = 4;
 const SAFE_WRITE_FALLBACK_DIR = "./workspace/goatcitadel_out";
 const QUERY_TOOL_NAMES = new Set(["browser.search", "memory.search", "embeddings.query"]);
-const LOCAL_PATH_TOOL_NAMES = new Set(["file.read_range", "file.find", "code.search", "code.search_files"]);
+// Keep in sync with PROMPT_PACK_FILE_TOOL_NAMES in prompt-pack-service.ts
+const LOCAL_PATH_TOOL_NAMES = new Set(["fs.read", "file.read_range", "file.find", "code.search", "code.search_files"]);
 const LOCAL_QUERY_TOOL_NAMES = new Set(["code.search", "code.search_files"]);
 const WEB_TOOL_NAMES = new Set([
   "browser.search",
@@ -390,6 +391,9 @@ export class ChatAgentOrchestrator {
         && toolSchema.canonicalToModel.has("file.read_range")
       ) {
         for (const filePath of promptLabFilePaths.slice(0, 6)) {
+          if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
+            break;
+          }
           throwIfChatTurnCancelled(input);
           this.deps.storage.chatTurnTraces.patch(input.turnId, {
             status: "waiting_for_tool",
@@ -441,12 +445,22 @@ export class ChatAgentOrchestrator {
               },
             ] as unknown as Array<Record<string, unknown>>,
           } as unknown as ChatCompletionMessage);
+          const prefetchResultPayload: Record<string, unknown> = {
+            ...(syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." }),
+          };
+          if (syntheticRun.record.status === "executed") {
+            const returnedContent = typeof prefetchResultPayload.content === "string"
+              ? prefetchResultPayload.content
+              : "";
+            const returnedLineCount = returnedContent.split("\n").length;
+            if (returnedLineCount >= prefetchEndLine) {
+              prefetchResultPayload._truncated = `Content truncated at line ${prefetchEndLine}; the file may continue beyond this point.`;
+            }
+          }
           conversationMessages.push({
             role: "tool",
             tool_call_id: toolMessageId,
-            content: JSON.stringify(
-              syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." },
-            ),
+            content: JSON.stringify(prefetchResultPayload),
           } as ChatCompletionMessage);
           for (const citation of inferCitationsFromToolResult(syntheticRun.record)) {
             citations.push(citation);
@@ -487,6 +501,7 @@ export class ChatAgentOrchestrator {
         !approvalPayload
         && promptLabContractRequiresWebTools(promptLabContract)
         && canUseSearchTool
+        && toolRunCount < executionBudget.maxToolRunsPerTurn
         && isMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns)
       ) {
         const promptLabSearchQuery = inferQueryFromPrompt(promptLabContract.userTask)
@@ -5374,13 +5389,13 @@ function listMissingPromptLabRequiredToolEvidence(
 
   for (const family of contract.requiredToolFamilies) {
     if (family === "file/code tools") {
-      if (!completedToolRuns.some((run) => LOCAL_PATH_TOOL_NAMES.has(run.toolName))) {
+      if (!completedToolRuns.some((run) => LOCAL_PATH_TOOL_NAMES.has(normalizeToolNameForComparison(run.toolName) ?? run.toolName))) {
         missing.push("file/code tools");
       }
       continue;
     }
     if (family === "web lookup tools") {
-      if (!completedToolRuns.some((run) => WEB_TOOL_NAMES.has(run.toolName))) {
+      if (!completedToolRuns.some((run) => WEB_TOOL_NAMES.has(normalizeToolNameForComparison(run.toolName) ?? run.toolName))) {
         missing.push("web lookup tools");
       }
     }

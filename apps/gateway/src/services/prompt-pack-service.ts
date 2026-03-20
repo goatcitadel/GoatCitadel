@@ -118,6 +118,7 @@ interface PromptPackToolDirectives {
   prefersMemoryTools: boolean;
 }
 
+// Keep in sync with LOCAL_PATH_TOOL_NAMES in chat-agent-orchestrator.ts
 const PROMPT_PACK_FILE_TOOL_NAMES = [
   "fs.read",
   "file.read_range",
