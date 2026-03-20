@@ -2167,6 +2167,7 @@ export function buildPromptPackSessionPrefsOverride(
   prompt = "",
 ): ChatSessionPrefsPatch {
   const directives = detectPromptPackToolDirectives(prompt);
+  const disableModeOrchestration = profile.toolTier === "explicit-tools";
   const webMode = (
     profile.toolTier === "explicit-tools"
     && (directives.namedTools.length > 0 || directives.prefersFileTools || directives.prefersWebTools || directives.prefersMemoryTools)
@@ -2185,7 +2186,12 @@ export function buildPromptPackSessionPrefsOverride(
     webMode,
     memoryMode,
     thinkingLevel: profile.thinkingLevel,
-    orchestrationEnabled: profile.mode === "cowork" || (profile.mode === "code" && profile.toolTier !== "no-tools"),
+    // Prompt Lab explicit-tools runs must stay on the single-agent path so the
+    // harness contract, exact file-path requirements, and tool-evidence
+    // enforcement are preserved for the answering turn.
+    orchestrationEnabled: disableModeOrchestration
+      ? false
+      : profile.mode === "cowork" || (profile.mode === "code" && profile.toolTier !== "no-tools"),
     orchestrationVisibility: profile.mode === "chat" ? undefined : "explicit",
     orchestrationParallelism: profile.mode === "cowork" ? "parallel" : "sequential",
   };

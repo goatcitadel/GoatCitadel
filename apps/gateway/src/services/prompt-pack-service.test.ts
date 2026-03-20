@@ -374,7 +374,7 @@ describe("prompt-pack helpers", () => {
     expect(buildPromptPackSessionPrefsOverride(codeProfile)).toMatchObject({
       mode: "code",
       planningMode: "off",
-      orchestrationEnabled: true,
+      orchestrationEnabled: false,
       orchestrationVisibility: "explicit",
       orchestrationParallelism: "sequential",
       toolAutonomy: "safe_auto",
@@ -388,6 +388,27 @@ describe("prompt-pack helpers", () => {
     expect(buildPromptPackSessionPrefsOverride(codeProfile, "Read package.json using file tools, then use browser.search to check the latest versions.")).toMatchObject({
       webMode: "auto",
       memoryMode: "off",
+    });
+
+    const coworkProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-explicit-2",
+        packId: "pack-1",
+        code: "TEST-06",
+        title: "Cowork Explicit Tools",
+        prompt: "Read local files using file/code tools and produce a role-labeled review.",
+        orderIndex: 2,
+        mode: "cowork",
+        toolTier: "explicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    expect(buildPromptPackSessionPrefsOverride(coworkProfile)).toMatchObject({
+      mode: "cowork",
+      orchestrationEnabled: false,
+      orchestrationVisibility: "explicit",
+      orchestrationParallelism: "parallel",
+      toolAutonomy: "safe_auto",
     });
   });
 
