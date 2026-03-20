@@ -501,7 +501,7 @@ describe("prompt-pack helpers", () => {
         packId: "pack-1",
         code: "TEST-CONTRACT-03",
         title: "Explicit Tools Contract",
-        prompt: "Read package.json using file tools, then use browser.search to compare versions.",
+        prompt: "Read package.json using file/code tools, then use browser.search to compare versions.",
         orderIndex: 2,
         mode: "chat",
         toolTier: "explicit-tools",
@@ -509,13 +509,16 @@ describe("prompt-pack helpers", () => {
       },
     });
     const explicitToolsInput = buildPromptPackPromptInput(
-      "Read package.json using file tools, then use browser.search to compare versions.",
+      "Read package.json using file/code tools, then use browser.search to compare versions.",
       explicitToolsProfile,
     );
     expect(explicitToolsInput.prompt).toContain("This is an explicit-tools evaluation");
+    expect(explicitToolsInput.prompt).toContain("Before drafting findings or recommendations, execute the required tool calls");
     expect(explicitToolsInput.prompt).toContain("Required named tools: `browser.search`");
     expect(explicitToolsInput.prompt).toContain("Required tool families: file/code tools");
     expect(explicitToolsInput.prompt).toContain("Surface tool-backed evidence in the answer.");
+    expect(explicitToolsInput.prompt).toContain("A prose-only answer without the required tool evidence is non-compliant.");
+    expect(explicitToolsInput.prompt).toContain("If local file paths are listed, inspect those paths before answering.");
   });
 
   it("does not append generic constraints boilerplate to non-empty prompt-pack answers", () => {

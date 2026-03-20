@@ -5534,4 +5534,152 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("deterministic crawl");
     expect(result.assistantContent).toContain("I couldn't finish that cleanly because");
   });
+
+  it("prefetches explicit Prompt Lab file evidence before accepting a prose-only completion", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Using file/code tools, inspect these local files only:",
+      "- `F:/code/personal-ai-mobile-app/src/api/streaming.ts`",
+      "- `F:/code/personal-ai-mobile-app/src/api/client.ts`",
+      "",
+      "Summarize the main streaming risks.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Researcher\n- The streaming path has abort and cleanup risk.\n\nSynthesis\n- Audit cleanup and idempotency first.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-prefetch-streaming-1",
+        result: {
+          path: "F:/code/personal-ai-mobile-app/src/api/streaming.ts",
+          content: "export function streamChatCompletion(signal?: AbortSignal) { /* ... */ }",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-prefetch-client-1",
+        result: {
+          path: "F:/code/personal-ai-mobile-app/src/api/client.ts",
+          content: "export async function createClientStream() { /* ... */ }",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range", "file.find", "code.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-prefetch-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-prefetch-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: wrappedPrompt,
+        },
+      ],
+    });
+
+    const invokedPaths = (invokeTool.mock.calls as unknown as Array<[{
+      toolName: string;
+      args: Record<string, unknown>;
+    }]>)
+      .map((call) => call[0])
+      .filter((call) => call.toolName === "file.read_range")
+      .map((call) => String(call.args.path));
+    expect(invokedPaths).toEqual([
+      "F:/code/personal-ai-mobile-app/src/api/streaming.ts",
+      "F:/code/personal-ai-mobile-app/src/api/client.ts",
+    ]);
+    expect(result.turnTrace.toolRuns).toHaveLength(2);
+    expect(result.assistantContent).not.toContain("I couldn't verify that with the required tools");
+  });
+
+  it("replaces prose-only Prompt Lab explicit-tools answers with an honest fallback when no tool path is available", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Read `F:/code/sql-teacher/lib/db/sandbox.ts` using file/code tools and review the sandbox safety.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Findings\n- The sandbox uses strict schema guards and appears safe.",
+            },
+          },
+        ],
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-fallback-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-fallback-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: wrappedPrompt,
+        },
+      ],
+    });
+
+    expect(result.assistantContent).toContain("I couldn't verify that with the required tools before answering.");
+    expect(result.assistantContent).toContain("Missing required tool evidence: file/code tools.");
+    expect(result.assistantContent).not.toContain("The sandbox uses strict schema guards and appears safe.");
+  });
 });

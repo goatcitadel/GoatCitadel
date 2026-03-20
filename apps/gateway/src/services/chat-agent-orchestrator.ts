@@ -292,6 +292,7 @@ export class ChatAgentOrchestrator {
     };
 
     const conversationMessages: ChatCompletionRequest["messages"] = [...input.historyMessages];
+    const promptLabContract = parsePromptLabRunContract(input.content);
     const toolSchema = input.toolAutonomy === "manual"
       ? { tools: [], modelToCanonical: new Map<string, string>(), canonicalToModel: new Map<string, string>() }
       : await this.buildToolSchema(input, intents);
@@ -330,6 +331,7 @@ export class ChatAgentOrchestrator {
     let usageObserved = false;
     let circuitBreakerReason: string | undefined;
     const toolFailureSignatureCounts = new Map<string, number>();
+    let promptLabToolComplianceRetryIssued = false;
     const outputMessageId = input.outputMessageId ?? `assistant-${input.turnId}`;
     const executionBudget = resolveChatExecutionBudget({
       webMode: input.webMode,
@@ -368,6 +370,203 @@ export class ChatAgentOrchestrator {
       });
       if (settingsConflict) {
         assistantContent = settingsConflict;
+      }
+    }
+
+    if (
+      !assistantContent
+      && !approvalPayload
+      && input.toolAutonomy !== "manual"
+      && promptLabContract.explicitTools
+      && toolRunCount === 0
+    ) {
+      const promptLabFilePaths = promptLabContractRequiresFileTools(promptLabContract)
+        ? extractExplicitLocalFilePathsFromPrompt(promptLabContract.userTask)
+        : [];
+      const prefetchEndLine = resolvePromptLabFilePrefetchEndLine(promptLabFilePaths.length);
+      if (
+        promptLabContractRequiresFileTools(promptLabContract)
+        && promptLabFilePaths.length > 0
+        && toolSchema.canonicalToModel.has("file.read_range")
+      ) {
+        for (const filePath of promptLabFilePaths.slice(0, 6)) {
+          throwIfChatTurnCancelled(input);
+          this.deps.storage.chatTurnTraces.patch(input.turnId, {
+            status: "waiting_for_tool",
+          });
+          ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+          const syntheticRun = await this.executeToolCall({
+            input,
+            turnId: input.turnId,
+            toolName: "file.read_range",
+            rawArgs: {
+              path: filePath,
+              startLine: 1,
+              endLine: prefetchEndLine,
+            },
+            localFileIntent,
+            priorToolRuns: toolRuns,
+            turnBudgetDeadline,
+          });
+          toolRunCount += 1;
+          toolRuns.push(syntheticRun.record);
+          yield {
+            type: "tool_start",
+            sessionId: input.sessionId,
+            turnId: input.turnId,
+            toolRun: {
+              ...syntheticRun.record,
+              status: "started",
+            },
+          };
+          if (syntheticRun.chunk) {
+            yield syntheticRun.chunk;
+          }
+          const toolMessageId = `prefetch-file-${randomUUID()}`;
+          conversationMessages.push({
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: toolMessageId,
+                type: "function",
+                function: {
+                  name: this.resolveModelToolName("file.read_range", toolSchema.canonicalToModel),
+                  arguments: JSON.stringify({
+                    path: filePath,
+                    startLine: 1,
+                    endLine: prefetchEndLine,
+                  }),
+                },
+              },
+            ] as unknown as Array<Record<string, unknown>>,
+          } as unknown as ChatCompletionMessage);
+          conversationMessages.push({
+            role: "tool",
+            tool_call_id: toolMessageId,
+            content: JSON.stringify(
+              syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." },
+            ),
+          } as ChatCompletionMessage);
+          for (const citation of inferCitationsFromToolResult(syntheticRun.record)) {
+            citations.push(citation);
+            yield {
+              type: "citation",
+              sessionId: input.sessionId,
+              turnId: input.turnId,
+              citation,
+            };
+          }
+          if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId) {
+            finalStatus = "waiting_for_approval";
+            finalFailure = {
+              failureClass: "approval_required",
+              message: "Approval required by policy.",
+              retryable: true,
+              recommendedAction: getChatTurnRecoveryAction("approval_required"),
+            };
+            approvalPayload = {
+              approvalId: syntheticRun.record.approvalId,
+              toolName: syntheticRun.record.toolName,
+              reason: "Approval required by policy.",
+            };
+            this.deps.storage.chatInlineApprovals.upsert({
+              approvalId: syntheticRun.record.approvalId,
+              sessionId: input.sessionId,
+              turnId: input.turnId,
+              toolName: syntheticRun.record.toolName,
+              status: "pending",
+              reason: "Approval required by policy.",
+            });
+            break;
+          }
+        }
+      }
+
+      if (
+        !approvalPayload
+        && promptLabContractRequiresWebTools(promptLabContract)
+        && canUseSearchTool
+        && isMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns)
+      ) {
+        const promptLabSearchQuery = inferQueryFromPrompt(promptLabContract.userTask)
+          ?? deriveLiveDataQuery(promptLabContract.userTask);
+        if (promptLabSearchQuery.trim().length > 0) {
+          throwIfChatTurnCancelled(input);
+          this.deps.storage.chatTurnTraces.patch(input.turnId, {
+            status: "waiting_for_tool",
+          });
+          ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+          const syntheticRun = await this.executeToolCall({
+            input,
+            turnId: input.turnId,
+            toolName: "browser.search",
+            rawArgs: {
+              query: promptLabSearchQuery,
+              maxResults: executionBudget.searchMaxResults,
+            },
+            localFileIntent,
+            priorToolRuns: toolRuns,
+            turnBudgetDeadline,
+          });
+          toolRunCount += 1;
+          toolRuns.push(syntheticRun.record);
+          ({ turnBudgetDeadline, effectiveTurnBudgetMs, effectiveCompletionTimeoutMs } = extendTurnBudgetForExecutedBrowserTool({
+            toolName: syntheticRun.record.toolName,
+            toolStatus: syntheticRun.record.status,
+            webMode: input.webMode,
+            webLookupIntent: true,
+            currentTurnBudgetMs: effectiveTurnBudgetMs,
+            currentCompletionTimeoutMs: effectiveCompletionTimeoutMs,
+            turnBudgetDeadline,
+          }));
+          yield {
+            type: "tool_start",
+            sessionId: input.sessionId,
+            turnId: input.turnId,
+            toolRun: {
+              ...syntheticRun.record,
+              status: "started",
+            },
+          };
+          if (syntheticRun.chunk) {
+            yield syntheticRun.chunk;
+          }
+          const toolMessageId = `prefetch-search-${randomUUID()}`;
+          conversationMessages.push({
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: toolMessageId,
+                type: "function",
+                function: {
+                  name: this.resolveModelToolName("browser.search", toolSchema.canonicalToModel),
+                  arguments: JSON.stringify({
+                    query: promptLabSearchQuery,
+                    maxResults: executionBudget.searchMaxResults,
+                  }),
+                },
+              },
+            ] as unknown as Array<Record<string, unknown>>,
+          } as unknown as ChatCompletionMessage);
+          conversationMessages.push({
+            role: "tool",
+            tool_call_id: toolMessageId,
+            content: JSON.stringify(
+              syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." },
+            ),
+          } as ChatCompletionMessage);
+          for (const citation of inferCitationsFromToolResult(syntheticRun.record)) {
+            citations.push(citation);
+            yield {
+              type: "citation",
+              sessionId: input.sessionId,
+              turnId: input.turnId,
+              citation,
+            };
+          }
+        }
       }
     }
 
@@ -705,6 +904,28 @@ export class ChatAgentOrchestrator {
           break;
         }
         if (toolCalls.length === 0 || input.toolAutonomy === "manual") {
+          if (
+            input.toolAutonomy !== "manual"
+            && promptLabContract.explicitTools
+            && isMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns)
+          ) {
+            const missingRequirements = listMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns);
+            const canStillSatisfy = canSatisfyPromptLabRequiredToolEvidence(promptLabContract, toolSchema.canonicalToModel);
+            if (!promptLabToolComplianceRetryIssued && canStillSatisfy) {
+              promptLabToolComplianceRetryIssued = true;
+              conversationMessages.push({
+                role: "system",
+                content: buildPromptLabRequiredToolRetryInstruction(missingRequirements),
+              } as ChatCompletionMessage);
+              continue;
+            }
+            assistantContent = buildPromptLabRequiredToolFallback(missingRequirements);
+            finalFailure ??= buildChatTurnFailureRecord(
+              "unknown",
+              "Prompt Lab required tools were not executed before answer generation.",
+            );
+            break;
+          }
           assistantContent = extractMessageContent(message);
           if (completionOutcome.status !== "complete") {
             completionState = {
@@ -3479,10 +3700,16 @@ function inferMemoryQueryFromPrompt(userContent: string): string | undefined {
 
 function detectLocalFileIntent(content: string): boolean {
   const normalized = content.toLowerCase();
-  if (/\b([a-z]:\\|\\\\)\b/i.test(content)) {
+  if (/[a-z]:[\\/]/i.test(content) || /\\\\/.test(content)) {
+    return true;
+  }
+  if (extractExplicitLocalFilePathsFromPrompt(content).length > 0) {
     return true;
   }
   if (/\b(local|workspace|project)\s+(file|files|path|paths|stack)\b/.test(normalized)) {
+    return true;
+  }
+  if (/\b(use|using|with)\s+(?:file|filesystem|code|file\/code)\s+tools\b/.test(normalized)) {
     return true;
   }
   return (
@@ -3491,7 +3718,7 @@ function detectLocalFileIntent(content: string): boolean {
     || normalized.includes("current project files")
     || normalized.includes("read it and tell me what services")
     || normalized.includes("what services i'm running")
-    || /\bread\s+.*\.(yml|yaml|json|md|txt)\b/.test(normalized)
+    || /\bread\s+.*\.(?:yml|yaml|json|md|txt|ts|tsx|js|jsx|mjs|cjs|go|rs|py|java|kt|swift|cs|sql|sh)\b/.test(normalized)
   );
 }
 
@@ -5063,6 +5290,212 @@ function extractPrimaryUserTaskContent(content: string): string {
     return userTaskMatch[1].trim();
   }
   return trimmed;
+}
+
+function parsePromptLabRunContract(content: string): {
+  explicitTools: boolean;
+  requiredToolFamilies: string[];
+  requiredNamedTools: string[];
+  userTask: string;
+} {
+  const userTask = extractPrimaryUserTaskContent(content);
+  if (!isPromptLabHarnessContent(content)) {
+    return {
+      explicitTools: false,
+      requiredToolFamilies: [],
+      requiredNamedTools: [],
+      userTask,
+    };
+  }
+  const contractBody = content.match(/(?:^|\n)##\s+Prompt Lab Run Contract\s*\n([\s\S]*?)(?:\n##\s+User Task\s*\n|$)/i)?.[1] ?? "";
+  const explicitTools = /\btool tier:\s*explicit-tools\b/i.test(contractBody)
+    || /\bexplicit-tools evaluation\b/i.test(contractBody);
+  const requiredToolFamilies = Array.from(new Set(
+    contractBody
+      .split(/\r?\n/)
+      .filter((line) => /required tool families:/i.test(line))
+      .flatMap((line) => line.split(":").slice(1).join(":").split(","))
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean),
+  ));
+  const requiredNamedTools = Array.from(new Set(
+    contractBody
+      .split(/\r?\n/)
+      .filter((line) => /required named tools:/i.test(line))
+      .flatMap((line) => [...line.matchAll(/`([^`]+)`/g)].map((match) => match[1]?.trim().toLowerCase()))
+      .filter((item): item is string => Boolean(item)),
+  ));
+  return {
+    explicitTools,
+    requiredToolFamilies,
+    requiredNamedTools,
+    userTask,
+  };
+}
+
+function promptLabContractRequiresFileTools(input: {
+  requiredToolFamilies: string[];
+  requiredNamedTools: string[];
+}): boolean {
+  return input.requiredToolFamilies.includes("file/code tools")
+    || input.requiredNamedTools.some((toolName) => LOCAL_PATH_TOOL_NAMES.has(toolName));
+}
+
+function promptLabContractRequiresWebTools(input: {
+  requiredToolFamilies: string[];
+  requiredNamedTools: string[];
+}): boolean {
+  return input.requiredToolFamilies.includes("web lookup tools")
+    || input.requiredNamedTools.some((toolName) => WEB_TOOL_NAMES.has(toolName));
+}
+
+function listMissingPromptLabRequiredToolEvidence(
+  contract: {
+    explicitTools: boolean;
+    requiredToolFamilies: string[];
+    requiredNamedTools: string[];
+  },
+  toolRuns: ChatToolRunRecord[],
+): string[] {
+  if (!contract.explicitTools) {
+    return [];
+  }
+  const completedToolRuns = toolRuns.filter((run) => run.status !== "started");
+  const usedToolNames = new Set(
+    completedToolRuns.map((run) => normalizeToolNameForComparison(run.toolName) ?? run.toolName),
+  );
+  const missing: string[] = [];
+
+  for (const toolName of contract.requiredNamedTools) {
+    if (!usedToolNames.has(toolName)) {
+      missing.push(`named tool \`${toolName}\``);
+    }
+  }
+
+  for (const family of contract.requiredToolFamilies) {
+    if (family === "file/code tools") {
+      if (!completedToolRuns.some((run) => LOCAL_PATH_TOOL_NAMES.has(run.toolName))) {
+        missing.push("file/code tools");
+      }
+      continue;
+    }
+    if (family === "web lookup tools") {
+      if (!completedToolRuns.some((run) => WEB_TOOL_NAMES.has(run.toolName))) {
+        missing.push("web lookup tools");
+      }
+    }
+  }
+
+  if (contract.requiredNamedTools.length === 0 && contract.requiredToolFamilies.length === 0 && completedToolRuns.length === 0) {
+    missing.push("at least one required tool run");
+  }
+
+  return missing;
+}
+
+function isMissingPromptLabRequiredToolEvidence(
+  contract: {
+    explicitTools: boolean;
+    requiredToolFamilies: string[];
+    requiredNamedTools: string[];
+  },
+  toolRuns: ChatToolRunRecord[],
+): boolean {
+  return listMissingPromptLabRequiredToolEvidence(contract, toolRuns).length > 0;
+}
+
+function canSatisfyPromptLabRequiredToolEvidence(
+  contract: {
+    explicitTools: boolean;
+    requiredToolFamilies: string[];
+    requiredNamedTools: string[];
+  },
+  availableTools: Map<string, string>,
+): boolean {
+  if (!contract.explicitTools) {
+    return false;
+  }
+  if (contract.requiredNamedTools.some((toolName) => !availableTools.has(toolName))) {
+    return false;
+  }
+  for (const family of contract.requiredToolFamilies) {
+    if (family === "file/code tools") {
+      if (![...LOCAL_PATH_TOOL_NAMES].some((toolName) => availableTools.has(toolName))) {
+        return false;
+      }
+      continue;
+    }
+    if (family === "web lookup tools" && ![...WEB_TOOL_NAMES].some((toolName) => availableTools.has(toolName))) {
+      return false;
+    }
+  }
+  if (contract.requiredNamedTools.length === 0 && contract.requiredToolFamilies.length === 0) {
+    return availableTools.size > 0;
+  }
+  return true;
+}
+
+function buildPromptLabRequiredToolRetryInstruction(missingRequirements: string[]): string {
+  return [
+    "Prompt Lab compliance check: the answer cannot be finalized yet.",
+    `Missing required tool evidence: ${missingRequirements.join(", ")}.`,
+    "Do not answer from memory or inference. Execute the required tool path first, then answer strictly from the retrieved evidence.",
+  ].join("\n");
+}
+
+function buildPromptLabRequiredToolFallback(missingRequirements: string[]): string {
+  return [
+    "I couldn't verify that with the required tools before answering.",
+    "",
+    `Missing required tool evidence: ${missingRequirements.join(", ")}.`,
+    "A file-specific or source-backed answer would be speculative here, so I’m stopping instead of bluffing.",
+  ].join("\n");
+}
+
+function resolvePromptLabFilePrefetchEndLine(fileCount: number): number {
+  if (fileCount >= 5) {
+    return 180;
+  }
+  if (fileCount >= 3) {
+    return 260;
+  }
+  return 320;
+}
+
+function extractExplicitLocalFilePathsFromPrompt(content: string): string[] {
+  const userTask = extractPrimaryUserTaskContent(content);
+  const candidates = new Set<string>();
+
+  for (const match of userTask.matchAll(/`([^`\r\n]+)`/g)) {
+    const value = match[1]?.trim();
+    if (value && looksLikeLocalFilePath(value)) {
+      candidates.add(normalizePromptLabFilePath(value));
+    }
+  }
+
+  for (const match of userTask.matchAll(/(?:^|\s)([A-Za-z]:[\\/][^\s`"']+\.[A-Za-z0-9._-]+|(?:\.{0,2}\/)?(?:[\w.-]+[\\/])+[\w.-]+\.[A-Za-z0-9._-]+)(?=$|\s)/gm)) {
+    const value = match[1]?.trim();
+    if (value && looksLikeLocalFilePath(value)) {
+      candidates.add(normalizePromptLabFilePath(value));
+    }
+  }
+
+  return [...candidates];
+}
+
+function looksLikeLocalFilePath(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized || /^https?:\/\//i.test(normalized)) {
+    return false;
+  }
+  if (!/[\\/]/.test(normalized)) {
+    return KNOWN_BARE_FILE_BASENAMES.has(normalized);
+  }
+  return /\.[A-Za-z0-9._-]+$/.test(normalized);
+}
+
+function normalizePromptLabFilePath(value: string): string {
+  return value.trim().replace(/\\/g, "/");
 }
 
 function looksLikeHarnessContaminatedQuery(value: string): boolean {

@@ -2271,6 +2271,7 @@ export function buildPromptPackPromptInput(
 
   if (profile.toolTier === "explicit-tools") {
     harnessLines.push("- This is an explicit-tools evaluation. Use the tools requested in the prompt.");
+    harnessLines.push("- Before drafting findings or recommendations, execute the required tool calls or explicitly state which required tool path was unavailable.");
     if (directives.namedTools.length > 0) {
       harnessLines.push(`- Required named tools: ${directives.namedTools.map((toolName) => `\`${toolName}\``).join(", ")}`);
     }
@@ -2278,9 +2279,11 @@ export function buildPromptPackPromptInput(
       harnessLines.push(`- Required tool families: ${requiredFamilies.join(", ")}`);
     }
     harnessLines.push("- Surface tool-backed evidence in the answer. Mention which files, URLs, or tool outputs materially informed the result.");
+    harnessLines.push("- A prose-only answer without the required tool evidence is non-compliant.");
     harnessLines.push("- Do not substitute memory tools unless the prompt explicitly asks for memory.");
     harnessLines.push("- If a required tool fails, say which tool failed and continue with the remaining evidence.");
     if (directives.prefersFileTools) {
+      harnessLines.push("- If local file paths are listed, inspect those paths before answering.");
       harnessLines.push("- Do not claim a local file was read unless a file/code tool actually executed.");
     }
   }
@@ -2312,7 +2315,8 @@ function detectPromptPackToolDirectives(prompt: string): PromptPackToolDirective
     "citations.build",
   ];
   const namedTools = toolNames.filter((toolName) => lower.includes(toolName));
-  const prefersFileTools = /\b(use|using|with)\s+(file|filesystem|code)\s+tools\b/.test(lower)
+  const prefersFileTools = /\b(use|using|with)\s+(?:file|filesystem|code|file\/code)\s+tools\b/.test(lower)
+    || /\b(use|using|with)\s+file\s+or\s+code\s+tools\b/.test(lower)
     || /\bread\b[\s\S]{0,80}\busing file tools\b/.test(lower);
   const prefersWebTools = namedTools.some((toolName) => toolName.startsWith("browser.") || toolName.startsWith("http."));
   const prefersMemoryTools = namedTools.some((toolName) => toolName.startsWith("memory."));
