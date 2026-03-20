@@ -135,6 +135,11 @@ interface ChatExecutionBudget {
   expensiveToolMinimumRemainingMs: number;
 }
 
+// Temporary testing override: use effectively-unbounded turn/completion budgets
+// so model speed differences do not truncate evaluation quality mid-run.
+const TESTING_CHAT_TURN_BUDGET_MS = 30 * 60 * 1000;
+const TESTING_CHAT_COMPLETION_TIMEOUT_MS = 30 * 60 * 1000;
+
 class ChatTurnBudgetExceededError extends BudgetExceededError {
   public constructor(
     public readonly webMode: ChatWebMode,
@@ -346,7 +351,12 @@ export class ChatAgentOrchestrator {
     if (intents.missingLogPayload) {
       assistantContent = buildMissingLogInputTemplate();
     }
-    if (!assistantContent && localFileIntent && detectLocalFileAccessCheckIntent(input.content)) {
+    if (
+      !assistantContent
+      && localFileIntent
+      && detectLocalFileAccessCheckIntent(input.content)
+      && !hasAvailableLocalFileTools(toolSchema.canonicalToModel)
+    ) {
       assistantContent = buildLocalFileAccessFallback(input.content);
     }
     if (!assistantContent) {
@@ -693,7 +703,11 @@ export class ChatAgentOrchestrator {
         status: "waiting_for_tool",
       });
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
-      const liveDataQuery = deriveLiveDataQuery(input.content);
+      const derivedLiveDataQuery = deriveLiveDataQuery(input.content);
+      const inferredLiveDataQuery = inferQueryFromPrompt(input.content);
+      const liveDataQuery = shouldPreferInferredLiveDataQuery(inferredLiveDataQuery, derivedLiveDataQuery)
+        ? inferredLiveDataQuery ?? derivedLiveDataQuery
+        : derivedLiveDataQuery;
       const syntheticRun = await this.executeToolCall({
         input,
         turnId: input.turnId,
@@ -819,7 +833,7 @@ export class ChatAgentOrchestrator {
             effectiveCompletionTimeoutMs,
             ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs),
           );
-          const promptLabControls = resolvePromptLabOpenAiControls(input);
+          const promptLabControls = resolvePromptLabOpenAiControls(input, toolSchema.tools.length > 0);
           const completionRequest: ChatCompletionRequest = {
             providerId: input.providerId,
             model: input.model,
@@ -1043,7 +1057,16 @@ export class ChatAgentOrchestrator {
             yield executed.chunk;
           }
 
-          if (executed.record.status === "approval_required" && executed.record.approvalId) {
+          const softFailApprovalRequiredTool = executed.record.status === "approval_required"
+            && executed.record.approvalId
+            && shouldSoftFailApprovalRequiredTool({
+              mode: input.mode,
+              prompt: input.content,
+              promptLabContract,
+              toolRuns,
+            });
+
+          if (executed.record.status === "approval_required" && executed.record.approvalId && !softFailApprovalRequiredTool) {
             finalStatus = "waiting_for_approval";
             finalFailure = {
               failureClass: "approval_required",
@@ -1094,15 +1117,30 @@ export class ChatAgentOrchestrator {
           }
         }
 
+          const toolFailureGuidance = softFailApprovalRequiredTool
+            ? executed.record.failureGuidance
+              ?? "Approval-gated shell execution is unavailable for this evaluation. Continue with the completed file/code evidence and state any remaining unknowns explicitly."
+            : executed.record.failureGuidance;
           const toolResultPayload = {
-            ...(executed.record.result ?? { error: executed.record.error ?? "Tool failed." }),
-            ...(executed.record.failureGuidance ? { failureGuidance: executed.record.failureGuidance } : {}),
+            ...(executed.record.result ?? {
+              error: executed.record.error ?? (executed.record.status === "approval_required"
+                ? "Approval required by policy."
+                : "Tool failed."),
+            }),
+            ...(executed.record.status === "approval_required" ? { approvalRequired: true } : {}),
+            ...(toolFailureGuidance ? { failureGuidance: toolFailureGuidance } : {}),
           };
           conversationMessages.push({
             role: "tool",
             tool_call_id: toolCall.id,
             content: JSON.stringify(toolResultPayload),
           } as ChatCompletionMessage);
+          if (softFailApprovalRequiredTool) {
+            conversationMessages.push({
+              role: "system",
+              content: "Prompt Lab compliance note: do not request `shell.exec` again for this turn. Continue from the completed file/code evidence and make any remaining uncertainty explicit.",
+            } as ChatCompletionMessage);
+          }
 
           for (const citation of inferCitationsFromToolResult(executed.record)) {
             citations.push(citation);
@@ -2569,10 +2607,10 @@ export class ChatAgentOrchestrator {
     );
     const toolSummary = summarizeToolRunsForSynthesis(input.toolRuns, input.input.content);
     const synthesisTimeoutMs = input.allowOverBudget
-      ? 20000
+      ? TESTING_CHAT_COMPLETION_TIMEOUT_MS
       : input.turnBudgetDeadline
-        ? Math.min(15000, Math.max(3000, input.turnBudgetDeadline - Date.now()))
-        : 15000;
+        ? Math.min(TESTING_CHAT_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
+        : TESTING_CHAT_COMPLETION_TIMEOUT_MS;
     try {
       const completion = await this.deps.createChatCompletion({
         providerId: input.input.providerId,
@@ -2638,8 +2676,8 @@ export class ChatAgentOrchestrator {
     turnBudgetDeadline?: number;
   }): Promise<{ content: string }> {
     const timeoutMs = input.turnBudgetDeadline
-      ? Math.min(15000, Math.max(3000, input.turnBudgetDeadline - Date.now()))
-      : 12000;
+      ? Math.min(TESTING_CHAT_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
+      : TESTING_CHAT_COMPLETION_TIMEOUT_MS;
     const toolSummary = summarizeToolRunsForSynthesis(input.toolRuns, input.input.content);
     const ignoreDraft = looksLikeUserSafeFailureMessage(input.partialAssistantContent);
     try {
@@ -3741,10 +3779,11 @@ function detectLocalFileAccessCheckIntent(content: string): boolean {
   const normalized = content.toLowerCase();
   return (
     normalized.includes("check whether you can access")
-    || normalized.includes("if you can't")
-    || normalized.includes("if you cannot")
-    || normalized.includes("do not guess")
-    || normalized.includes("local project files")
+    || normalized.includes("confirm whether you can access")
+    || normalized.includes("verify whether you can access")
+    || /\b(can|could|do)\s+you\s+(?:directly\s+)?access\s+(?:my\s+)?local project files\b/.test(normalized)
+    || /\b(can|could|do)\s+you\s+(?:directly\s+)?read\s+(?:my\s+)?local project files\b/.test(normalized)
+    || /\b(can|could)\s+you\s+(?:actually\s+)?open\b.*\blocal project files\b/.test(normalized)
   );
 }
 
@@ -3759,6 +3798,26 @@ function buildLocalFileAccessFallback(userPrompt: string): string {
     "",
     composeHint,
   ].join("\n");
+}
+
+function hasAvailableLocalFileTools(availableTools: Map<string, string>): boolean {
+  return [...LOCAL_PATH_TOOL_NAMES].some((toolName) => availableTools.has(toolName));
+}
+
+function shouldSoftFailApprovalRequiredTool(input: {
+  mode: ChatMode;
+  prompt: string;
+  promptLabContract: {
+    explicitTools: boolean;
+    requiredToolFamilies: string[];
+    requiredNamedTools: string[];
+  };
+  toolRuns: ChatToolRunRecord[];
+}): boolean {
+  if (!isPromptLabHarnessContent(input.prompt) || input.promptLabContract.explicitTools || input.mode !== "code") {
+    return false;
+  }
+  return true;
 }
 
 function buildClarificationPromptIfNeeded(userPrompt: string): string | undefined {
@@ -4800,6 +4859,13 @@ function inferQueryFromPrompt(userContent: string): string | undefined {
     .split(/[\n\r]+|(?<=[.!?])\s+/)
     .map((item) => sanitizeQueryClause(item))
     .filter((item) => item.length >= 3);
+  const entityRichComparisonClause = clauses.find((candidate) => {
+    const comparisonEntityCount = (candidate.match(/\b(node(?:\.js)?|bun|deno|python|javascript|typescript|react|next(?:\.js)?|go|rust|java|kotlin|swift|postgres|mysql)\b/gi) ?? []).length;
+    return /\b(benchmark|benchmarks|comparison|compare|vs\.?)\b/i.test(candidate) && comparisonEntityCount >= 2;
+  });
+  if (entityRichComparisonClause) {
+    return entityRichComparisonClause.slice(0, 240);
+  }
   const candidatePool = clauses.length > 0
     ? clauses
     : [sanitizeQueryClause(deriveLiveDataQuery(normalizedInput))];
@@ -4933,6 +4999,9 @@ function sanitizeQueryClause(value: string): string {
     .replace(/^(?:please\s+)?(?:look|search|browse|check|research)\b(?:\s+(?:online|on the web|the web|web|internet))?(?:\s+(?:and|to|for|about|into))?\s*/i, "")
     .replace(/^(?:find(?:\s+out)?|tell|show|give|explain|summarize)\b(?:\s+me)?(?:\s+about)?\s*/i, "")
     .replace(/^(from|on|about)\s+/i, "")
+    .replace(/\b(cite|citing|include|surface)\s+(?:them|the results|sources?|citations?)\b.*$/i, "")
+    .replace(/\b(with|including)\s+(?:sources?|citations?)\b.*$/i, "")
+    .replace(/\b(do not answer from memory|do not use memory|don'?t use memory|answer strictly from retrieved evidence)\b.*$/i, "")
     .replace(/\b(return|respond|output)\b.*$/i, "")
     .replace(/[?!.,:;]+$/g, "")
     .replace(/\s+/g, " ")
@@ -4957,13 +5026,38 @@ function scoreQueryCandidate(value: string): number {
   if (/\bcurrent\s+(news|events|weather|forecast|temperature|price|prices|stock|stocks|market|markets|headlines?|score|scores|conditions?|traffic)\b/i.test(text)) {
     score += 20;
   }
+  const comparisonEntityCount = (text.match(/\b(node(?:\.js)?|bun|deno|python|javascript|typescript|react|next(?:\.js)?|go|rust|java|kotlin|swift|postgres|mysql)\b/gi) ?? []).length;
+  if (/\b(benchmark|benchmarks|comparison|compare|vs\.?)\b/i.test(text) && comparisonEntityCount >= 2) {
+    score += 18;
+  }
   if (/\b(json|markdown|format|bullet|score|rubric)\b/i.test(text)) {
     score -= 30;
+  }
+  if (/\b(cite|citation|citations|source|sources|tool|tools|workflow|scaffold|researcher|architect|synthesis|prompt lab)\b/i.test(text)) {
+    score -= 25;
   }
   if (/^test-\d+/i.test(text)) {
     score -= 15;
   }
   return score;
+}
+
+function shouldPreferInferredLiveDataQuery(inferred: string | undefined, derived: string): boolean {
+  if (!inferred) {
+    return false;
+  }
+  const comparisonEntityCount = (inferred.match(/\b(node(?:\.js)?|bun|deno|python|javascript|typescript|react|next(?:\.js)?|go|rust|java|kotlin|swift|postgres|mysql)\b/gi) ?? []).length;
+  if (comparisonEntityCount >= 2) {
+    return true;
+  }
+  const hasCapitalizedEntity = /\b(?:[A-Z][a-z]+(?:\.[A-Za-z]+)?|[A-Z]{2,})(?:\s+[A-Z][a-z]+)?\b/.test(inferred);
+  if (hasCapitalizedEntity) {
+    return true;
+  }
+  if (/\b(news|headlines?)\b/i.test(derived)) {
+    return false;
+  }
+  return false;
 }
 
 function detectMissingLogPayloadIntent(content: string): boolean {
@@ -5221,13 +5315,24 @@ function looksLikeDegradedAssistantFallbackContent(content: string): boolean {
   if (!normalized) {
     return false;
   }
-  return normalized.startsWith("i ran out of time before i could finish")
+  return looksLikePromptLabMissingEvidenceFallbackContent(content)
+    || normalized.startsWith("i ran out of time before i could finish")
     || normalized.startsWith("i couldn't finish that cleanly because")
     || normalized.startsWith("- i completed tool execution but could not confidently produce the full requested extraction set")
     || normalized.includes("recovered item(s)")
     || normalized.includes("deterministic crawl")
     || normalized.includes("recover useful content from")
     || normalized.includes("strongest leads so far");
+}
+
+function looksLikePromptLabMissingEvidenceFallbackContent(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return normalized.startsWith("i couldn't verify that with the required tools before answering.")
+    || normalized.startsWith("missing required tool evidence:")
+    || normalized.includes("a file-specific or source-backed answer would be speculative here");
 }
 
 function looksLikeUserSafeFailureMessage(content: string): boolean {
@@ -5523,11 +5628,18 @@ function looksLikeHarnessContaminatedQuery(value: string): boolean {
 
 function resolvePromptLabOpenAiControls(
   input: Pick<ChatAgentTurnInput, "content" | "providerId" | "model" | "mode" | "thinkingLevel">,
+  hasFunctionTools = false,
 ): Pick<ChatCompletionRequest, "reasoning" | "verbosity"> {
   if (!isPromptLabHarnessContent(input.content) || !isOpenAiReasoningEligible(input.providerId, input.model)) {
     return {};
   }
   if (input.mode !== "cowork" && input.mode !== "code") {
+    return {};
+  }
+  // Prompt Lab currently runs through chat/completions. GPT-5.* rejects
+  // reasoning_effort on tool-enabled turns there, so keep these controls for
+  // no-tools evaluations only until responses API support is added.
+  if (hasFunctionTools) {
     return {};
   }
 
@@ -5936,8 +6048,8 @@ function resolveChatExecutionBudget(
   const defaultMaxTokens = defaultThinkingTokens(input.thinkingLevel);
   if (input.webMode === "deep") {
     return {
-      turnBudgetMs: 120000,
-      completionTimeoutMs: 90000,
+      turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
+      completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
       maxToolLoops: MAX_TOOL_LOOPS,
       maxToolRunsPerTurn: MAX_TOOL_RUNS_PER_TURN,
       searchMaxResults: 8,
@@ -5948,8 +6060,8 @@ function resolveChatExecutionBudget(
   }
   if (input.webMode === "quick") {
     return {
-      turnBudgetMs: 18000,
-      completionTimeoutMs: 12000,
+      turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
+      completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
       maxToolLoops: 2,
       maxToolRunsPerTurn: 3,
       searchMaxResults: 4,
@@ -5960,8 +6072,8 @@ function resolveChatExecutionBudget(
   }
   if (input.webMode === "off") {
     return {
-      turnBudgetMs: 22000,
-      completionTimeoutMs: 15000,
+      turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
+      completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
       maxToolLoops: 2,
       maxToolRunsPerTurn: 4,
       searchMaxResults: 0,
@@ -5972,8 +6084,8 @@ function resolveChatExecutionBudget(
   }
   if (input.liveDataIntent) {
     return {
-      turnBudgetMs: 70000,
-      completionTimeoutMs: 35000,
+      turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
+      completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
       maxToolLoops: 5,
       maxToolRunsPerTurn: 8,
       searchMaxResults: 6,
@@ -5983,8 +6095,8 @@ function resolveChatExecutionBudget(
     };
   }
   return {
-    turnBudgetMs: 40000,
-    completionTimeoutMs: 22000,
+    turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
+    completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
     maxToolLoops: 4,
     maxToolRunsPerTurn: 7,
     searchMaxResults: 5,

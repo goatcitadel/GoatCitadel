@@ -474,3 +474,231 @@ Rules:
 - If you found no concrete blocking issue, write `No concrete findings.` under `Findings`.
 - The `Recommended bounded test` must be concrete enough to paste into Prompt Lab.
 - `Anti-bluff constraints` must be specific, not generic.
+
+## Chat Tests
+
+### Explicit-Tools
+
+[TEST-C26] Session and clock sanity
+Use `session.status` and `time.now`.
+
+Return exactly these sections:
+- Session summary
+- Time summary
+- Tool evidence
+- Unknowns
+
+Rules:
+- `Session summary` must state only what `session.status` directly supports.
+- `Time summary` must include both local time and UTC if the tool returns them.
+- `Tool evidence` must name both tools explicitly.
+- If either tool is unavailable, say which one and do not guess the missing output.
+
+[TEST-C27] Local file reconnaissance ladder
+Using local file/code tools only, inspect `fixtures/prompt-pack-workspace`.
+
+Required tool path:
+1. Use `fs.list` on `fixtures/prompt-pack-workspace`
+2. Use `fs.stat` on `fixtures/prompt-pack-workspace/package.json`
+3. Use `fs.read` on `fixtures/prompt-pack-workspace/package.json`
+4. Use `file.find` to locate `slugify`
+5. Use `file.read_range` on `fixtures/prompt-pack-workspace/src/utils.ts`
+
+Return exactly these sections:
+- Directory view
+- File metadata
+- Package summary
+- Symbol evidence
+- Unknowns
+
+Rules:
+- Do not skip directly to `fs.read`; follow the required tool order.
+- `Symbol evidence` must cite the exact file path and the helper name you verified.
+- If any tool fails, say which step failed and continue with the completed evidence only.
+
+[TEST-C28] Code search narrowing pass
+Using local file/code tools only, locate how the fixture server derives its runtime port and task routes.
+
+Required tool path:
+1. Use `code.search_files` to find the likely server entry file
+2. Use `code.search` for `app.listen`, `/api/tasks`, and `clampValue`
+3. Use `file.read_range` or `fs.read` only on the files needed to confirm the result
+
+Return exactly these sections:
+- Located files
+- Route summary
+- Port derivation
+- Tool evidence
+- Unknowns
+
+Rules:
+- Keep the read set minimal; do not dump entire files if search already narrowed the target.
+- `Port derivation` must explain the observed fallback/default path from code, not a guess.
+- Cite exact file paths and symbol names.
+
+[TEST-C29] Web lookup with citation bundle
+Use `browser.search`, `browser.navigate`, `http.get`, and `citations.build` to answer this:
+
+What is the current Node.js LTS version, and what page most directly supports that claim?
+
+Return exactly these sections:
+- Answer
+- Supporting URLs
+- Citation bundle summary
+- Tool evidence
+- Unknowns
+
+Rules:
+- Use at least one search result and one direct page fetch.
+- `Answer` must be concise.
+- `Supporting URLs` must include the source you relied on most.
+- If `citations.build` is unavailable, say so explicitly instead of implying citations were created.
+
+[TEST-C30] Memory and retrieval honesty check
+Use `memory.read`, `memory.search`, and `embeddings.query` to look for any saved context about deployment workflows or prompt-pack preferences.
+
+Return exactly these sections:
+- Memory hits
+- Retrieval hits
+- Tool evidence
+- Unknowns
+
+Rules:
+- If there are no relevant hits, say `No relevant memory hits.` or `No relevant retrieval hits.` plainly.
+- Do not invent stored context.
+- If `embeddings.query` has no indexed material to search, say that clearly.
+
+[TEST-C31] Screenshot-backed page check
+Use `browser.navigate`, `browser.extract`, and `browser.screenshot` on `https://books.toscrape.com/`.
+
+Return exactly these sections:
+- Page summary
+- First book evidence
+- Screenshot status
+- Tool evidence
+- Unknowns
+
+Rules:
+- `First book evidence` must include one observed title and price from the page.
+- `Screenshot status` must say whether a screenshot artifact was successfully created.
+- If screenshot capture fails, keep the textual evidence and report the failure plainly.
+
+## Code Tests
+
+### Explicit-Tools
+
+[TEST-D33] Read-only verification command pass
+Using `git.status`, `git.diff`, `build.run`, `tests.run`, and `lint.run`, inspect the prompt-pack fixture workspace at `fixtures/prompt-pack-workspace`.
+
+Return exactly these sections:
+- Workspace status
+- Build result
+- Test result
+- Lint result
+- Tool evidence
+- Unknowns
+
+Rules:
+- Keep this read-only; do not use write or shell tools.
+- If a tool is unavailable or the workspace lacks the required script/config, say which one and include the exact tool result.
+- Do not claim a command passed unless the tool result directly supports it.
+
+[TEST-D34] Write-jail and artifact coverage
+Use `fs.write`, `artifacts.create`, and `fs.read`.
+
+Required actions:
+1. Attempt to write `./workspace/prompt-pack-tool-coverage.txt` with one line of text
+2. Attempt to create a short markdown artifact summarizing the fixture package scripts
+3. If either write succeeds, read the created file back with `fs.read`
+
+Return exactly these sections:
+- Write attempt
+- Artifact attempt
+- Readback evidence
+- Tool evidence
+- Unknowns
+
+Rules:
+- Report the exact final path if the runtime redirects the write into a safe jail.
+- If a write is blocked by policy or approval, say that explicitly and do not pretend the file exists.
+- Keep the artifact content minimal.
+
+[TEST-D35] Approval-gated command behavior
+Use `shell.exec`, `shell.exec_background`, and `git.exec` against `fixtures/prompt-pack-workspace`.
+
+Requested actions:
+- `shell.exec`: try a harmless foreground command that reports the workspace package name
+- `shell.exec_background`: try a harmless short-lived background command
+- `git.exec`: try a non-destructive status-style git command
+
+Return exactly these sections:
+- Foreground command result
+- Background command result
+- Git command result
+- Tool evidence
+- Unknowns
+
+Rules:
+- If approval or policy blocks any command, quote the block reason plainly.
+- Do not retry the same blocked action repeatedly.
+- Do not switch to another tool to hide the blocked result.
+
+[TEST-D36] Knowledge mutation and retrieval round-trip
+Use `memory.write`, `memory.upsert`, `memory.read`, `memory.search`, `docs.ingest`, `embeddings.index`, and `embeddings.query`.
+
+Required actions:
+1. Write a deterministic memory note titled `prompt-pack-tool-coverage`
+2. Upsert that same note with one additional sentence
+3. Read or search it back to confirm the latest content
+4. Ingest a short inline note about the fixture `slugify` helper
+5. Attempt indexing/query retrieval for that ingested note
+
+Return exactly these sections:
+- Memory write result
+- Memory readback
+- Document ingest result
+- Retrieval result
+- Tool evidence
+- Unknowns
+
+Rules:
+- Keep the saved content short and obviously synthetic.
+- If ingest or indexing is unavailable, say so explicitly.
+- Do not claim vector retrieval worked unless the tool output directly confirms it.
+
+## Cowork Tests
+
+### Explicit-Tools
+
+[TEST-W33] Browser state control pass
+Roles in order: `Researcher`, `QA`.
+
+Use `browser.context.configure`, `browser.navigate`, `browser.cookies.set`, `browser.cookies.get`, `browser.cookies.clear`, `browser.storage.set`, `browser.storage.get`, and `browser.storage.clear` against `https://example.com/`.
+
+Output exactly these sections in this order:
+- Researcher
+- QA
+- Synthesis
+
+Rules:
+- `Researcher` must report what state operations were attempted and what evidence was returned.
+- `QA` must separate successful state changes from blocked or unverified ones.
+- `Synthesis` must state whether browser-state tools appear production-ready, partially blocked, or non-functional.
+- If any tool is blocked by policy or approval, keep it in the analysis instead of skipping it.
+
+[TEST-W34] Interactive web flow plus POST echo
+Roles in order: `Researcher`, `Architect`, `QA`.
+
+Use `browser.interact` on `https://httpbin.org/forms/post` to attempt a minimal form submission, then use `http.post` on `https://httpbin.org/post` with a tiny JSON payload.
+
+Output exactly these sections in this order:
+- Researcher
+- Architect
+- QA
+- Synthesis
+
+Rules:
+- `Researcher` must describe what the interactive flow and POST call returned, or the exact block/failure point.
+- `Architect` must explain whether the current tool contract is sufficient for reliable browser-interaction testing.
+- `QA` must call out approval, policy, or determinism risks.
+- `Synthesis` must make a go/no-go recommendation for exposing these tools more broadly in Prompt Lab.

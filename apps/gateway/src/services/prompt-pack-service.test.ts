@@ -428,6 +428,8 @@ describe("prompt-pack helpers", () => {
     });
     expect(buildPromptPackSessionToolAllowlist(codeProfile)).toEqual([
       "fs.read",
+      "fs.list",
+      "fs.stat",
       "file.read_range",
       "file.find",
       "code.search",
@@ -455,11 +457,25 @@ describe("prompt-pack helpers", () => {
       "Read fixtures/prompt-pack-workspace/package.json using file tools, then use browser.search to compare versions.",
     )).toEqual([
       "fs.read",
+      "fs.list",
+      "fs.stat",
       "file.read_range",
       "file.find",
       "code.search",
       "code.search_files",
       "browser.search",
+    ]);
+
+    expect(buildPromptPackSessionToolAllowlist(
+      coworkProfile,
+      "Use session.status, time.now, git.status, build.run, browser.context.configure, and browser.cookies.get, then explain what worked.",
+    )).toEqual([
+      "session.status",
+      "time.now",
+      "build.run",
+      "git.status",
+      "browser.cookies.get",
+      "browser.context.configure",
     ]);
 
     const noToolsProfile = resolvePromptPackExecutionProfile({
@@ -611,6 +627,44 @@ describe("prompt-pack helpers", () => {
     expect(response).toContain("## Role Handoff Scaffold");
     expect(response).toContain("### Architect Goat");
     expect(response).toContain("### Synthesis");
+  });
+
+  it("does not append cowork scaffold sections to prompt-pack fallback responses", () => {
+    const response = finalizePromptPackResponseText({
+      prompt: [
+        "## Prompt Lab Run Contract",
+        "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+        "- For non-trivial tasks, use at least two role-labeled sections chosen from Product, Researcher, Architect, Coder, QA, or Ops, then end with a synthesis.",
+        "",
+        "## User Task",
+        "Audit these files using file/code tools only.",
+      ].join("\n"),
+      responseText: [
+        "I couldn't verify that with the required tools before answering.",
+        "",
+        "Missing required tool evidence: file/code tools.",
+        "A file-specific or source-backed answer would be speculative here, so I’m stopping instead of bluffing.",
+      ].join("\n"),
+      trace: {
+        turnId: "turn-1",
+        sessionId: "sess-1",
+        userMessageId: "user-1",
+        branchKind: "append",
+        status: "completed",
+        mode: "cowork",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "extended",
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+        toolRuns: [],
+        citations: [],
+        routing: {},
+      },
+    });
+
+    expect(response).not.toContain("## Role Handoff Scaffold");
+    expect(response).toContain("I couldn't verify that with the required tools before answering.");
   });
 
   it("uses kimi-compatible temperature for prompt-pack model judging", () => {
@@ -985,7 +1039,7 @@ describe("prompt-pack helpers", () => {
     expect(tests[7]?.prompt).toContain("Roles in order: `Researcher`, `Architect`, `QA`.");
   });
 
-  it("parses the canonical merged prompt pack markdown with all 89 tests", async () => {
+  it("parses the canonical merged prompt pack markdown with all 101 tests", async () => {
     const markdown = await fs.readFile(
       new URL("../../../../goatcitadel_prompt_pack.md", import.meta.url),
       "utf8",
@@ -994,12 +1048,15 @@ describe("prompt-pack helpers", () => {
     const tests = parsePromptPackTests(markdown);
     const codes = tests.map((test) => test.code);
 
-    expect(tests).toHaveLength(89);
-    expect(new Set(codes).size).toBe(89);
+    expect(tests).toHaveLength(101);
+    expect(new Set(codes).size).toBe(101);
     expect(codes[0]).toBe("TEST-C01");
     expect(codes).toContain("TEST-W30");
     expect(codes).toContain("TEST-D32");
-    expect(codes[codes.length - 1]).toBe("TEST-D32");
+    expect(codes).toContain("TEST-C31");
+    expect(codes).toContain("TEST-D36");
+    expect(codes).toContain("TEST-W34");
+    expect(codes[codes.length - 1]).toBe("TEST-W34");
   });
 });
 

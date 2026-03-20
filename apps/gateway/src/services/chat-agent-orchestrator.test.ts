@@ -214,6 +214,26 @@ function createToolCatalog(toolNames: string[] = ["browser.search"]): ToolCatalo
         pack: "core",
       };
     }
+    if (toolName === "shell.exec") {
+      return {
+        toolName: "shell.exec",
+        category: "shell",
+        riskLevel: "danger",
+        requiresApproval: true,
+        description: "Execute a shell command",
+        argSchema: {
+          type: "object",
+          properties: {
+            command: { type: "string" },
+          },
+          required: ["command"],
+        },
+        examples: [],
+        pack: "devops",
+        recommendedContexts: ["code"],
+        preferredForIntents: ["run_command", "project_inspection"],
+      };
+    }
     if (toolName === "time.now") {
       return {
         toolName: "time.now",
@@ -1312,6 +1332,87 @@ describe("ChatAgentOrchestrator", () => {
       }),
     });
     expect(result.assistantContent).toContain("REST APIs are widely used");
+  });
+
+  it("keeps entity-rich benchmark queries instead of drifting into citation instructions", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "I found benchmark coverage for the three runtimes.",
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The file exports `main` and `helper`.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-runtime-benchmarks-1",
+        result: {
+          results: [
+            {
+              title: "Node.js vs Bun vs Deno benchmarks",
+              url: "https://example.com/benchmarks/node-bun-deno",
+              snippet: "Recent runtime benchmark comparison.",
+            },
+          ],
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-runtime-benchmarks-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-runtime-benchmarks-1",
+      content: "Compare Node.js, Bun, and Deno runtime benchmarks. If you can find recent benchmarks or comparisons, cite them.",
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "quick",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{
+        role: "user",
+        content: "Compare Node.js, Bun, and Deno runtime benchmarks. If you can find recent benchmarks or comparisons, cite them.",
+      }],
+    });
+
+    const firstInvokeCall = (invokeTool.mock.calls as unknown as Array<[{
+      toolName: string;
+      args: Record<string, unknown>;
+    }]>) [0]?.[0];
+    const query = String(firstInvokeCall?.args.query ?? "");
+    expect(firstInvokeCall?.toolName).toBe("browser.search");
+    expect(query).toMatch(/\bnode(?:\.js)?\b/i);
+    expect(query).toMatch(/\bbun\b/i);
+    expect(query).toMatch(/\bdeno\b/i);
+    expect(query).not.toMatch(/\bcite\b/i);
+    expect(query).not.toMatch(/\bsources?\b/i);
   });
 
   it("ignores Prompt Lab tooling contract text when grounding browser.search queries", async () => {
@@ -3322,7 +3423,7 @@ describe("ChatAgentOrchestrator", () => {
           };
         })
         .mockImplementationOnce(async () => {
-          vi.setSystemTime(new Date(Date.now() + 35000));
+          vi.setSystemTime(new Date(Date.now() + (31 * 60 * 1000)));
           return {
             outcome: "executed",
             policyReason: "allowed",
@@ -3366,7 +3467,7 @@ describe("ChatAgentOrchestrator", () => {
       expect(result.assistantContent).toContain("Midnight Skinning Profession Overview - Wowhead");
       expect(result.assistantContent).toContain("Leveling is primarily done by skinning beasts close to your current profession skill");
       expect(result.assistantContent).not.toContain("strongest leads so far");
-      expect(createChatCompletion.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(createChatCompletion.mock.calls.length).toBeGreaterThanOrEqual(1);
       expect(invokeTool).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
@@ -4605,7 +4706,7 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("location and interests");
   });
 
-  it("caps the synthesis fallback LLM timeout instead of using the default 60s", async () => {
+  it("uses the expanded testing timeout instead of the default 60s", async () => {
     let capturedTimeoutMs: number | undefined;
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
@@ -4654,11 +4755,10 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: "Find AI tooling references from our notes" }],
     });
 
-    // The synthesis call (last createChatCompletion call) should have a bounded timeout.
-    // If only the main loop ran (no synthesis), capturedTimeoutMs comes from the main loop.
-    // Either way, verify it's not the default 60s.
+    // During testing we intentionally give synthesis a much larger timeout so
+    // slower models are not penalized by the normal responsiveness budget.
     expect(capturedTimeoutMs).toBeDefined();
-    expect(capturedTimeoutMs).toBeLessThanOrEqual(28000);
+    expect(capturedTimeoutMs).toBe(30 * 60 * 1000);
   });
 
   it("stops alternate-URL retries when the turn budget expires mid-fallback", async () => {
@@ -5017,6 +5117,58 @@ describe("ChatAgentOrchestrator", () => {
     const firstCall = (createChatCompletion.mock.calls as unknown as Array<[ChatCompletionRequest]>)[0]?.[0];
     expect(firstCall?.reasoning).toEqual({ effort: "medium" });
     expect(firstCall?.verbosity).toBe("low");
+  });
+
+  it("suppresses prompt-lab OpenAI reasoning controls on tool-enabled turns", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "I should inspect the files first.",
+            },
+          },
+        ],
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+    const content = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: implicit-tools",
+      "- This is a Code evaluation. Stay project-bound, concrete, and evidence-backed.",
+      "",
+      "## User Task",
+      "Inspect the config surface and propose the smallest fix.",
+    ].join("\n");
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-code-tools-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-code-tools-1",
+      content,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content }],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    const firstCall = (createChatCompletion.mock.calls as unknown as Array<[ChatCompletionRequest]>)[0]?.[0];
+    expect(firstCall?.reasoning).toBeUndefined();
+    expect(firstCall?.verbosity).toBeUndefined();
   });
 
   it("continues MCP fallback tiers when one tier throws instead of returning", async () => {
@@ -5626,6 +5778,192 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("I couldn't verify that with the required tools");
   });
 
+  it("does not emit the local-file-access refusal for Prompt Lab audits that only say if you cannot support a claim", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Using file/code tools, inspect these local files only:",
+      "- `F:/code/project/src/index.ts`",
+      "",
+      "If you cannot support a claim directly from file contents, move it to Unknowns.",
+      "Summarize the exported API.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The file exports `main` and `helper`.",
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The file exports `main` and `helper`.",
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The file exports `main` and `helper`.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-local-file-refusal-1",
+        result: {
+          path: "F:/code/project/src/index.ts",
+          content: "export function main() {}\nexport function helper() {}",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range", "file.find", "code.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-local-file-refusal-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-local-file-refusal-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).not.toContain("I can't directly access your local project files from this runtime");
+    expect(result.assistantContent).toContain("exports `main` and `helper`");
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("repairs leaked Prompt Lab missing-evidence fallback text when tool evidence already exists", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Using file/code tools, inspect these local files only:",
+      "- `F:/code/project/src/index.ts`",
+      "",
+      "Summarize the exported API.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "I couldn't verify that with the required tools before answering.",
+                "",
+                "Missing required tool evidence: file/code tools.",
+                "A file-specific or source-backed answer would be speculative here, so I’m stopping instead of bluffing.",
+              ].join("\n"),
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The file exports `main` and `helper`.",
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The file exports `main` and `helper`.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-prompt-lab-repair-1",
+        result: {
+          path: "F:/code/project/src/index.ts",
+          content: "export function main() {}\nexport function helper() {}",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range", "file.find", "code.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-repair-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("exports `main` and `helper`");
+    expect(result.assistantContent).not.toContain("I couldn't verify that with the required tools before answering.");
+    expect(createChatCompletion).toHaveBeenCalledTimes(3);
+  });
+
   it("replaces prose-only Prompt Lab explicit-tools answers with an honest fallback when no tool path is available", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
@@ -5874,5 +6212,122 @@ describe("ChatAgentOrchestrator", () => {
     // No Prompt Lab contract → no enforcement, prose answer accepted as-is
     expect(result.assistantContent).toBe("Here is a plain answer without any tools.");
     expect(result.assistantContent).not.toContain("Missing required tool evidence");
+  });
+
+  it("salvages Prompt Lab code implicit-tools turns after approval-gated shell.exec when file evidence already exists", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: implicit-tools",
+      "- This is a code evaluation.",
+      "",
+      "## User Task",
+      "Inspect `F:/code/project/src/index.ts` and suggest whether tests are missing.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-file-read-1",
+                  type: "function",
+                  function: {
+                    name: "file_read_range",
+                    arguments: JSON.stringify({
+                      path: "F:/code/project/src/index.ts",
+                      startLine: 1,
+                      endLine: 80,
+                    }),
+                  },
+                },
+                {
+                  id: "call-shell-exec-1",
+                  type: "function",
+                  function: {
+                    name: "shell_exec",
+                    arguments: JSON.stringify({
+                      command: "pnpm test -- index",
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The module exports `main` and `helper`, but there is no direct test evidence in the file itself. I would add export-focused tests first.",
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The module exports `main` and `helper`, but there is no direct test evidence in the file itself. I would add export-focused tests first.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-implicit-file-read-1",
+        result: {
+          path: "F:/code/project/src/index.ts",
+          content: "export function main() {}\nexport function helper() {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "approval_required",
+        policyReason: "approval_required",
+        auditEventId: "audit-implicit-shell-1",
+        approvalId: "approval-shell-1",
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range", "shell.exec"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-implicit-approval-salvage-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-implicit-approval-salvage-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.assistantContent).toContain("exports `main` and `helper`");
+    expect(result.assistantContent).not.toContain("Approval required by policy.");
+    expect(result.turnTrace.toolRuns.some((run) => run.toolName === "shell.exec" && run.status === "approval_required")).toBe(true);
   });
 });

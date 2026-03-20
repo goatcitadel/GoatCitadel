@@ -121,6 +121,8 @@ interface PromptPackToolDirectives {
 // Keep in sync with LOCAL_PATH_TOOL_NAMES in chat-agent-orchestrator.ts
 const PROMPT_PACK_FILE_TOOL_NAMES = [
   "fs.read",
+  "fs.list",
+  "fs.stat",
   "file.read_range",
   "file.find",
   "code.search",
@@ -132,6 +134,58 @@ const PROMPT_PACK_CODE_TOOL_NAMES = [
   "shell.exec",
   "tests.run",
   "lint.run",
+] as const;
+
+const PROMPT_PACK_SAFE_EXPLICIT_TOOL_NAMES = [
+  "session.status",
+  "time.now",
+  "fs.read",
+  "fs.list",
+  "fs.stat",
+  "file.read_range",
+  "file.find",
+  "code.search",
+  "code.search_files",
+  "http.get",
+  "tests.run",
+  "lint.run",
+  "build.run",
+  "git.status",
+  "git.diff",
+  "browser.search",
+  "browser.navigate",
+  "browser.extract",
+  "browser.screenshot",
+  "citations.build",
+  "memory.read",
+  "memory.search",
+  "embeddings.query",
+] as const;
+
+const PROMPT_PACK_GATED_EXPLICIT_TOOL_NAMES = [
+  "fs.write",
+  "artifacts.create",
+  "shell.exec",
+  "shell.exec_background",
+  "git.exec",
+  "http.post",
+  "browser.interact",
+  "browser.cookies.get",
+  "browser.cookies.set",
+  "browser.cookies.clear",
+  "browser.storage.get",
+  "browser.storage.set",
+  "browser.storage.clear",
+  "browser.context.configure",
+  "memory.write",
+  "memory.upsert",
+  "docs.ingest",
+  "embeddings.index",
+] as const;
+
+const PROMPT_PACK_EXPLICIT_TOOL_NAMES = [
+  ...PROMPT_PACK_SAFE_EXPLICIT_TOOL_NAMES,
+  ...PROMPT_PACK_GATED_EXPLICIT_TOOL_NAMES,
 ] as const;
 
 /**
@@ -1364,18 +1418,28 @@ export class PromptPackService {
       return;
     }
     const now = new Date().toISOString();
+    const activeAllowGrants = this.ctx.storage.toolGrants
+      .list("session", sessionId, 500)
+      .filter((grant) => (
+        grant.decision === "allow"
+        && !grant.revokedAt
+        && (!grant.expiresAt || Date.parse(grant.expiresAt) > Date.now())
+      ));
     const activeAllowPatterns = new Set(
-      this.ctx.storage.toolGrants
-        .list("session", sessionId, 500)
-        .filter((grant) => (
-          grant.decision === "allow"
-          && !grant.revokedAt
-          && (!grant.expiresAt || Date.parse(grant.expiresAt) > Date.now())
-        ))
+      activeAllowGrants
+        .map((grant) => grant.toolPattern),
+    );
+    const hasWildcardReadGrantByPattern = new Set(
+      activeAllowGrants
+        .filter((grant) => grant.constraints?.allowedPaths?.includes("*"))
         .map((grant) => grant.toolPattern),
     );
     for (const toolName of toolNames) {
-      if (activeAllowPatterns.has(toolName)) {
+      const needsWildcardReadGrant = isPromptPackReadTool(toolName);
+      if (
+        activeAllowPatterns.has(toolName)
+        && (!needsWildcardReadGrant || hasWildcardReadGrantByPattern.has(toolName))
+      ) {
         continue;
       }
       this.ctx.storage.toolGrants.create({
@@ -1384,6 +1448,9 @@ export class PromptPackService {
         scope: "session",
         scopeRef: sessionId,
         grantType: "persistent",
+        constraints: needsWildcardReadGrant
+          ? { allowedPaths: ["*"] }
+          : undefined,
         createdBy: "system-prompt-pack-bootstrap",
       }, now);
     }
@@ -1829,6 +1896,9 @@ function ensurePromptPackRoleSections(input: {
   responseText: string;
   toolRuns?: ChatTurnTraceRecord["toolRuns"];
 }): string {
+  if (looksLikePromptPackFallbackResponse(input.responseText)) {
+    return input.responseText.trim();
+  }
   const requestedRoles = detectPromptRequestedRoles(input.prompt);
   const promptLabCoworkContract = /\bthis is a cowork evaluation\b/i.test(input.prompt);
   const requiresCoworkScaffold = promptLabCoworkContract
@@ -1861,6 +1931,22 @@ function ensurePromptPackRoleSections(input: {
     additions.push("");
   }
   return [input.responseText.trim(), additions.join("\n").trim()].filter(Boolean).join("\n\n").trim();
+}
+
+function looksLikePromptPackFallbackResponse(responseText: string): boolean {
+  const normalized = responseText.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return normalized.startsWith("i couldn't verify that with the required tools before answering.")
+    || normalized.startsWith("the model request timed out before completion.")
+    || normalized.startsWith("the request was interrupted before the turn could finish.")
+    || normalized.startsWith("a required source blocked automated access.")
+    || normalized.startsWith("a required tool failed before the turn could finish.")
+    || normalized.startsWith("the selected provider or integration needs valid auth")
+    || normalized.startsWith("this turn hit the current execution budget before a full pass finished.")
+    || normalized.startsWith("this turn is waiting for approval before it can continue.")
+    || normalized.startsWith("this turn failed before completion.");
 }
 
 function buildPromptPackConstraintsBlock(toolRuns: ChatTurnTraceRecord["toolRuns"] | undefined): string | undefined {
@@ -2232,6 +2318,10 @@ export function buildPromptPackSessionToolAllowlist(
   return [...tools];
 }
 
+function isPromptPackReadTool(toolName: string): boolean {
+  return PROMPT_PACK_FILE_TOOL_NAMES.includes(toolName as (typeof PROMPT_PACK_FILE_TOOL_NAMES)[number]);
+}
+
 export function buildPromptPackPromptInput(
   prompt: string,
   profile: PromptPackExecutionProfile,
@@ -2252,6 +2342,9 @@ export function buildPromptPackPromptInput(
   }
   if (directives.prefersWebTools) {
     requiredFamilies.push("web lookup tools");
+  }
+  if (directives.prefersMemoryTools) {
+    requiredFamilies.push("memory tools");
   }
 
   const harnessLines = [
@@ -2303,25 +2396,7 @@ export function buildPromptPackPromptInput(
 
 function detectPromptPackToolDirectives(prompt: string): PromptPackToolDirectives {
   const lower = prompt.toLowerCase();
-  const toolNames = [
-    "browser.search",
-    "browser.navigate",
-    "browser.extract",
-    "browser.screenshot",
-    "http.get",
-    "http.post",
-    "fs.read",
-    "file.read_range",
-    "file.find",
-    "code.search",
-    "code.search_files",
-    "memory.read",
-    "memory.search",
-    "memory.write",
-    "memory.upsert",
-    "citations.build",
-  ];
-  const namedTools = toolNames.filter((toolName) => lower.includes(toolName));
+  const namedTools = PROMPT_PACK_EXPLICIT_TOOL_NAMES.filter((toolName) => lower.includes(toolName));
   const prefersFileTools = /\b(use|using|with)\s+(?:file|filesystem|code|file\/code)\s+tools\b/.test(lower)
     || /\b(use|using|with)\s+file\s+or\s+code\s+tools\b/.test(lower)
     || /\bread\b[\s\S]{0,80}\busing file tools\b/.test(lower);
