@@ -74,12 +74,12 @@ function createPlan(): OrchestrationPlan {
       providerPreference: "balanced",
       reviewDepth: "standard",
       parallelism: "parallel",
-      selectedRoles: ["researcher", "researcher", "synthesizer", "critic"],
+      selectedRoles: ["researcher", "researcher", "critic", "synthesizer"],
       selectedProviders: [
         { role: "researcher", providerId: "perplexity", model: "sonar" },
         { role: "researcher", providerId: "openai", model: "gpt-4.1-mini" },
-        { role: "synthesizer", providerId: "anthropic", model: "claude-sonnet-4-6" },
         { role: "critic", providerId: "openai", model: "gpt-4.1-mini" },
+        { role: "synthesizer", providerId: "anthropic", model: "claude-sonnet-4-6" },
       ],
       triggerReason: "cowork_explicit_orchestration",
     },
@@ -107,22 +107,22 @@ function createPlan(): OrchestrationPlan {
       {
         stepId: "step-3",
         index: 2,
-        role: "synthesizer",
-        stage: 2,
-        objective: "Merge the evidence into one recommendation.",
-        parallelizable: false,
-        providerId: "anthropic",
-        model: "claude-sonnet-4-6",
-      },
-      {
-        stepId: "step-4",
-        index: 3,
         role: "critic",
-        stage: 3,
+        stage: 2,
         objective: "Identify the main weaknesses and caveats.",
         parallelizable: false,
         providerId: "openai",
         model: "gpt-4.1-mini",
+      },
+      {
+        stepId: "step-4",
+        index: 3,
+        role: "synthesizer",
+        stage: 3,
+        objective: "Merge the evidence into one recommendation.",
+        parallelizable: false,
+        providerId: "anthropic",
+        model: "claude-sonnet-4-6",
       },
     ],
   };
@@ -157,8 +157,8 @@ describe("orchestration engine", () => {
         "Research angle two",
         [{ citationId: "c1b", url: "https://example.com/1", title: "Source 1" }],
       ))
-      .mockResolvedValueOnce(createCompletion("Synthesized recommendation"))
-      .mockResolvedValueOnce(createCompletion("Critical caveats"));
+      .mockResolvedValueOnce(createCompletion("Critical caveats"))
+      .mockResolvedValueOnce(createCompletion("Synthesized recommendation"));
 
     const result = await executeOrchestrationPlan({
       task: createTask(),
@@ -171,13 +171,65 @@ describe("orchestration engine", () => {
 
     expect(createChatCompletion).toHaveBeenCalledTimes(4);
     expect(onStepResult).toHaveBeenCalledTimes(4);
-    expect(result.finalOutput).toBe("Critical caveats");
-    expect(result.finalSummary).toContain("Critical caveats");
+    expect(result.finalOutput).toBe("Synthesized recommendation");
+    expect(result.finalSummary).toContain("Synthesized recommendation");
+    expect(result.finalStep?.role).toBe("synthesizer");
     expect(result.stepResults).toHaveLength(4);
     expect(result.stepResults.every((step) => step.status === "completed")).toBe(true);
     expect(result.citations).toEqual([
       { citationId: "c1", url: "https://example.com/1", title: "Source 1" },
     ]);
+  });
+
+  it("prefers the synthesizer as final output even if a later non-terminal role completed", async () => {
+    const result = await executeOrchestrationPlan({
+      task: createTask(),
+      plan: {
+        ...createPlan(),
+        steps: [
+          {
+            stepId: "step-1",
+            index: 0,
+            role: "answerer",
+            stage: 1,
+            objective: "Produce the draft answer.",
+            parallelizable: false,
+            providerId: "openai",
+            model: "gpt-4.1-mini",
+          },
+          {
+            stepId: "step-2",
+            index: 1,
+            role: "synthesizer",
+            stage: 2,
+            objective: "Produce the final answer.",
+            parallelizable: false,
+            providerId: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+          {
+            stepId: "step-3",
+            index: 2,
+            role: "critic",
+            stage: 3,
+            objective: "Add critique notes after the draft.",
+            parallelizable: false,
+            providerId: "openai",
+            model: "gpt-4.1-mini",
+          },
+        ],
+      },
+      callbacks: {
+        createChatCompletion: vi
+          .fn()
+          .mockResolvedValueOnce(createCompletion("Draft answer"))
+          .mockResolvedValueOnce(createCompletion("Final answer"))
+          .mockResolvedValueOnce(createCompletion("Critic notes")),
+      },
+    });
+
+    expect(result.finalOutput).toBe("Final answer");
+    expect(result.finalStep?.role).toBe("synthesizer");
   });
 
   it("degrades cleanly when every stage fails", async () => {
@@ -237,18 +289,18 @@ describe("orchestration engine", () => {
       error: "provider unavailable",
     });
     expect(result.stepResults[2]).toMatchObject({
-      role: "synthesizer",
-      status: "failed",
-      summary: "Synthesizer blocked",
-      error: "No completed upstream handoffs were available for synthesizer.",
-    });
-    expect(result.stepResults[3]).toMatchObject({
       role: "critic",
       status: "failed",
       summary: "Critic blocked",
       error: "No completed upstream handoffs were available for critic.",
     });
-    expect(result.finalOutput).toContain("Synthesizer");
+    expect(result.stepResults[3]).toMatchObject({
+      role: "synthesizer",
+      status: "failed",
+      summary: "Synthesizer blocked",
+      error: "No completed upstream handoffs were available for synthesizer.",
+    });
     expect(result.finalOutput).toContain("Critic");
+    expect(result.finalOutput).toContain("Synthesizer");
   });
 });

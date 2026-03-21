@@ -56,13 +56,15 @@ export async function executeOrchestrationPlan(input: {
     }
   }
 
-  const finalOutput = buildFinalOutput(input.task.mode, completedSteps);
+  const finalStep = selectFinalStep(input.task.mode, input.plan.workflowTemplate, completedSteps);
+  const finalOutput = buildFinalOutput(input.task.mode, completedSteps, finalStep);
   const finalSummary = summarizeOutput(finalOutput);
   const citations = dedupeCitations(completedSteps.flatMap((step) => step.citations));
 
   return {
     finalOutput,
     finalSummary,
+    finalStep,
     citations,
     routeDecision: input.plan.routeDecision,
     stepResults: completedSteps,
@@ -310,12 +312,51 @@ function buildParallelHint(
   return `Parallel diversity hint: cover the ${angle} angle instead of repeating another researcher.`;
 }
 
-function buildFinalOutput(mode: ChatMode, steps: OrchestrationStepExecutionResult[]): string {
-  const bestCompleted = [...steps]
-    .reverse()
-    .find((step) => step.status === "completed" && step.output?.trim());
-  if (bestCompleted?.output?.trim()) {
-    return bestCompleted.output.trim();
+function selectFinalStep(
+  mode: ChatMode,
+  workflowTemplate: string,
+  steps: OrchestrationStepExecutionResult[],
+): OrchestrationStepExecutionResult | undefined {
+  const completed = steps.filter((step) => step.status === "completed" && step.output?.trim());
+  if (completed.length === 0) {
+    return undefined;
+  }
+  const preferredRoles = getPreferredFinalRoles(mode, workflowTemplate);
+  for (const role of preferredRoles) {
+    const preferred = [...completed].reverse().find((step) => step.role === role);
+    if (preferred) {
+      return preferred;
+    }
+  }
+  return [...completed].reverse().find((step) => step.output?.trim());
+}
+
+function getPreferredFinalRoles(mode: ChatMode, workflowTemplate: string): OrchestrationRole[] {
+  switch (workflowTemplate) {
+    case "cowork.research.synthesize.critic":
+      return ["synthesizer", "critic", "researcher"];
+    case "cowork.plan.work.synthesize":
+      return ["synthesizer", "worker", "planner", "reviewer"];
+    case "code.plan.code.review.qa":
+      return ["synthesizer", "qa-validator", "reviewer", "coder", "planner"];
+    case "chat.answer.review":
+      return ["synthesizer", "answerer", "reviewer"];
+    default:
+      return mode === "code"
+        ? ["synthesizer", "qa-validator", "reviewer", "coder", "planner", "worker", "answerer", "critic", "researcher"]
+        : mode === "cowork"
+          ? ["synthesizer", "worker", "planner", "answerer", "critic", "reviewer", "researcher", "qa-validator", "coder"]
+          : ["synthesizer", "answerer", "reviewer", "researcher", "critic", "planner", "worker", "coder", "qa-validator"];
+  }
+}
+
+function buildFinalOutput(
+  mode: ChatMode,
+  steps: OrchestrationStepExecutionResult[],
+  finalStep?: OrchestrationStepExecutionResult,
+): string {
+  if (finalStep?.output?.trim()) {
+    return finalStep.output.trim();
   }
   const failureLines = steps
     .filter((step) => step.status === "failed")

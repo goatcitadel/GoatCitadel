@@ -4896,8 +4896,8 @@ export class GatewayService {
       citations: result.citations,
       trace: {
         ...runTrace,
-        effectiveProviderId: result.stepResults.at(-1)?.providerId ?? runTrace.effectiveProviderId,
-        effectiveModel: result.stepResults.at(-1)?.model ?? runTrace.effectiveModel,
+        effectiveProviderId: result.finalStep?.providerId ?? result.stepResults.at(-1)?.providerId ?? runTrace.effectiveProviderId,
+        effectiveModel: result.finalStep?.model ?? result.stepResults.at(-1)?.model ?? runTrace.effectiveModel,
       },
       finishedAt: new Date().toISOString(),
     });
@@ -4918,8 +4918,8 @@ export class GatewayService {
       message: "Completed chat orchestration run",
       sessionId: prepared.session.sessionId,
       turnId: prepared.turnId,
-      providerId: result.stepResults.at(-1)?.providerId,
-      modelId: result.stepResults.at(-1)?.model,
+      providerId: result.finalStep?.providerId ?? result.stepResults.at(-1)?.providerId,
+      modelId: result.finalStep?.model ?? result.stepResults.at(-1)?.model,
       context: {
         status: summary.status,
         workflowTemplate: summary.workflowTemplate,
@@ -5188,12 +5188,12 @@ export class GatewayService {
             executionPlanId: orchestrationResult.executionPlanId,
             status: orchestrationResult.summary.status === "failed" ? "failed" : "completed",
             finishedAt: new Date().toISOString(),
-            model: orchestrationResult.summary.steps.at(-1)?.model ?? modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
+            model: orchestrationResult.finalStep?.model ?? orchestrationResult.summary.steps.at(-1)?.model ?? modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
             routing: {
               primaryProviderId: input.providerId ?? prepared.prefs.providerId,
               primaryModel: input.model ?? prepared.prefs.model,
-              effectiveProviderId: orchestrationResult.summary.steps.at(-1)?.providerId ?? modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ?? input.providerId ?? prepared.prefs.providerId,
-              effectiveModel: orchestrationResult.summary.steps.at(-1)?.model ?? modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
+              effectiveProviderId: orchestrationResult.finalStep?.providerId ?? orchestrationResult.summary.steps.at(-1)?.providerId ?? modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ?? input.providerId ?? prepared.prefs.providerId,
+              effectiveModel: orchestrationResult.finalStep?.model ?? orchestrationResult.summary.steps.at(-1)?.model ?? modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
             },
             retrieval: prepared.retrievalTrace,
             reflection: {

@@ -120,6 +120,7 @@ export interface OrchestrationStepExecutionResult {
 export interface OrchestrationExecutionResult {
   finalOutput: string;
   finalSummary: string;
+  finalStep?: OrchestrationStepExecutionResult;
   citations: ChatCitationRecord[];
   routeDecision: ChatOrchestrationRouteDecision;
   stepResults: OrchestrationStepExecutionResult[];

@@ -239,6 +239,7 @@ describe("orchestration router", () => {
     const plan = buildOrchestrationPlan(input);
     expect(plan.workflowTemplate).toBe("cowork.research.synthesize.critic");
     expect(plan.routeDecision.visibility).toBe("explicit");
+    expect(plan.steps.map((step) => step.role)).toEqual(["researcher", "researcher", "critic", "synthesizer"]);
     expect(plan.steps.filter((step) => step.role === "researcher")).toHaveLength(2);
     expect(plan.steps.filter((step) => step.role === "researcher").every((step) => step.stage === 1)).toBe(true);
   });

@@ -122,7 +122,7 @@ function selectWorkflowTemplate(mode: ChatMode, objective: string): string {
 function selectRolesForWorkflow(workflowTemplate: string): OrchestrationRole[] {
   switch (workflowTemplate) {
     case "cowork.research.synthesize.critic":
-      return ["researcher", "researcher", "synthesizer", "critic"];
+      return ["researcher", "researcher", "critic", "synthesizer"];
     case "cowork.plan.work.synthesize":
       return ["planner", "worker", "reviewer", "synthesizer"];
     case "code.plan.code.review.qa":
