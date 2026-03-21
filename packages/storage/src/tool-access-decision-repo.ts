@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { ToolRiskLevel } from "@goatcitadel/contracts";
+import type { ToolGrantScope, ToolRiskLevel } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 export interface ToolAccessDecisionRecord {
@@ -33,8 +33,14 @@ interface ToolAccessDecisionRow {
 
 export class ToolAccessDecisionRepository {
   private readonly insertStmt;
-  private readonly countByToolSinceStmt;
-  private readonly countWritesSinceStmt;
+  private readonly countByToolGlobalSinceStmt;
+  private readonly countByToolAgentSinceStmt;
+  private readonly countByToolSessionSinceStmt;
+  private readonly countByToolTaskSinceStmt;
+  private readonly countWritesGlobalSinceStmt;
+  private readonly countWritesAgentSinceStmt;
+  private readonly countWritesSessionSinceStmt;
+  private readonly countWritesTaskSinceStmt;
 
   public constructor(private readonly db: DatabaseSync) {
     this.insertStmt = db.prepare(`
@@ -46,7 +52,20 @@ export class ToolAccessDecisionRepository {
         @allowed, @reasonCodesJson, @matchedGrantId, @requiresApproval, @riskLevel
       )
     `);
-    this.countByToolSinceStmt = db.prepare(`
+    this.countByToolGlobalSinceStmt = db.prepare(`
+      SELECT COUNT(*) as count
+      FROM tool_access_decisions
+      WHERE tool_name = @toolName
+        AND timestamp >= @since
+    `);
+    this.countByToolAgentSinceStmt = db.prepare(`
+      SELECT COUNT(*) as count
+      FROM tool_access_decisions
+      WHERE tool_name = @toolName
+        AND agent_id = @agentId
+        AND timestamp >= @since
+    `);
+    this.countByToolSessionSinceStmt = db.prepare(`
       SELECT COUNT(*) as count
       FROM tool_access_decisions
       WHERE tool_name = @toolName
@@ -54,11 +73,41 @@ export class ToolAccessDecisionRepository {
         AND session_id = @sessionId
         AND timestamp >= @since
     `);
-    this.countWritesSinceStmt = db.prepare(`
+    this.countByToolTaskSinceStmt = db.prepare(`
+      SELECT COUNT(*) as count
+      FROM tool_access_decisions
+      WHERE tool_name = @toolName
+        AND task_id = @taskId
+        AND timestamp >= @since
+    `);
+    this.countWritesGlobalSinceStmt = db.prepare(`
+      SELECT COUNT(*) as count
+      FROM tool_access_decisions
+      WHERE allowed = 1
+        AND tool_name IN ('fs.write', 'fs.move', 'fs.delete', 'git.add', 'git.commit', 'git.branch.switch', 'git.worktree.create', 'git.worktree.remove', 'gmail.send', 'calendar.create_event')
+        AND timestamp >= @since
+    `);
+    this.countWritesAgentSinceStmt = db.prepare(`
+      SELECT COUNT(*) as count
+      FROM tool_access_decisions
+      WHERE agent_id = @agentId
+        AND allowed = 1
+        AND tool_name IN ('fs.write', 'fs.move', 'fs.delete', 'git.add', 'git.commit', 'git.branch.switch', 'git.worktree.create', 'git.worktree.remove', 'gmail.send', 'calendar.create_event')
+        AND timestamp >= @since
+    `);
+    this.countWritesSessionSinceStmt = db.prepare(`
       SELECT COUNT(*) as count
       FROM tool_access_decisions
       WHERE agent_id = @agentId
         AND session_id = @sessionId
+        AND allowed = 1
+        AND tool_name IN ('fs.write', 'fs.move', 'fs.delete', 'git.add', 'git.commit', 'git.branch.switch', 'git.worktree.create', 'git.worktree.remove', 'gmail.send', 'calendar.create_event')
+        AND timestamp >= @since
+    `);
+    this.countWritesTaskSinceStmt = db.prepare(`
+      SELECT COUNT(*) as count
+      FROM tool_access_decisions
+      WHERE task_id = @taskId
         AND allowed = 1
         AND tool_name IN ('fs.write', 'fs.move', 'fs.delete', 'git.add', 'git.commit', 'git.branch.switch', 'git.worktree.create', 'git.worktree.remove', 'gmail.send', 'calendar.create_event')
         AND timestamp >= @since
@@ -88,23 +137,106 @@ export class ToolAccessDecisionRepository {
   }
 
   public countToolCallsInLastHour(toolName: string, agentId: string, sessionId: string): number {
-    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const row = this.countByToolSinceStmt.get({
+    return this.countToolCallsInLastHourInScope({
       toolName,
+      scope: "session",
       agentId,
       sessionId,
-      since,
-    }) as { count: number };
-    return row.count;
+    });
   }
 
   public countWritesInLastHour(agentId: string, sessionId: string): number {
-    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const row = this.countWritesSinceStmt.get({
+    return this.countWritesInLastHourInScope({
+      scope: "session",
       agentId,
       sessionId,
-      since,
-    }) as { count: number };
+    });
+  }
+
+  public countToolCallsInLastHourInScope(input: {
+    toolName: string;
+    scope: ToolGrantScope;
+    agentId: string;
+    sessionId: string;
+    taskId?: string;
+  }): number {
+    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    let row: { count: number };
+    switch (input.scope) {
+      case "global":
+        row = this.countByToolGlobalSinceStmt.get({
+          toolName: input.toolName,
+          since,
+        }) as { count: number };
+        break;
+      case "agent":
+        row = this.countByToolAgentSinceStmt.get({
+          toolName: input.toolName,
+          agentId: input.agentId,
+          since,
+        }) as { count: number };
+        break;
+      case "task":
+        if (!input.taskId) {
+          return 0;
+        }
+        row = this.countByToolTaskSinceStmt.get({
+          toolName: input.toolName,
+          taskId: input.taskId,
+          since,
+        }) as { count: number };
+        break;
+      case "session":
+      default:
+        row = this.countByToolSessionSinceStmt.get({
+          toolName: input.toolName,
+          agentId: input.agentId,
+          sessionId: input.sessionId,
+          since,
+        }) as { count: number };
+        break;
+    }
+    return row.count;
+  }
+
+  public countWritesInLastHourInScope(input: {
+    scope: ToolGrantScope;
+    agentId: string;
+    sessionId: string;
+    taskId?: string;
+  }): number {
+    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    let row: { count: number };
+    switch (input.scope) {
+      case "global":
+        row = this.countWritesGlobalSinceStmt.get({
+          since,
+        }) as { count: number };
+        break;
+      case "agent":
+        row = this.countWritesAgentSinceStmt.get({
+          agentId: input.agentId,
+          since,
+        }) as { count: number };
+        break;
+      case "task":
+        if (!input.taskId) {
+          return 0;
+        }
+        row = this.countWritesTaskSinceStmt.get({
+          taskId: input.taskId,
+          since,
+        }) as { count: number };
+        break;
+      case "session":
+      default:
+        row = this.countWritesSessionSinceStmt.get({
+          agentId: input.agentId,
+          sessionId: input.sessionId,
+          since,
+        }) as { count: number };
+        break;
+    }
     return row.count;
   }
 }

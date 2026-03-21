@@ -26,6 +26,7 @@ import {
 import { ActionButton } from "../components/ActionButton";
 import { CardSkeleton } from "../components/CardSkeleton";
 import { ChatModelPicker, type ChatModelProviderOption } from "../components/ChatModelPicker";
+import { ConfirmModal } from "../components/ConfirmModal";
 import { GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
@@ -67,6 +68,7 @@ const DEFAULT_BENCHMARK_TEST_CODES = "TEST-03, TEST-06, TEST-10, TEST-12, TEST-1
 
 export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   const hasLoadedOnceRef = useRef(false);
+  const selectedPackIdRef = useRef<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isFallbackRefreshing, setIsFallbackRefreshing] = useState(false);
@@ -75,6 +77,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   const [autoScoring, setAutoScoring] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [confirmResetOpen, setConfirmResetOpen] = useState(false);
   const [resetClearRuns, setResetClearRuns] = useState(true);
   const [resetClearScores, setResetClearScores] = useState(true);
   const [importing, setImporting] = useState(false);
@@ -149,6 +152,10 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       .filter((provider) => provider.models.length > 0);
   }, [runtimeProviderCatalog]);
 
+  useEffect(() => {
+    selectedPackIdRef.current = selectedPackId;
+  }, [selectedPackId]);
+
   const loadPack = useCallback(async (packId: string) => {
     const [testsResponse, reportResponse, exportResponse] = await Promise.all([
       fetchPromptPackTests(packId),
@@ -186,8 +193,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         name: item.name,
         testCount: item.testCount,
       })));
-      const resolvedPackId = selectedPackId && response.items.some((item) => item.packId === selectedPackId)
-        ? selectedPackId
+      const currentSelectedPackId = selectedPackIdRef.current;
+      const resolvedPackId = currentSelectedPackId && response.items.some((item) => item.packId === currentSelectedPackId)
+        ? currentSelectedPackId
         : response.items[0]?.packId ?? null;
       setSelectedPackId(resolvedPackId);
       if (resolvedPackId) {
@@ -208,7 +216,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         hasLoadedOnceRef.current = true;
       }
     }
-  }, [loadPack, selectedPackId]);
+  }, [loadPack]);
 
   useEffect(() => {
     void load();
@@ -217,9 +225,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   useRefreshSubscription(
     "promptLab",
     async () => {
-      if (!running) {
-        await load({ background: true });
-      }
+      await load({ background: true });
       await Promise.all([
         benchmarkActive && benchmarkRunId
           ? loadBenchmarkStatus(benchmarkRunId).catch(() => undefined)
@@ -230,7 +236,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       ]);
     },
     {
-      enabled: !initialLoading && (running || benchmarkActive || regressionActive),
+      enabled: !initialLoading,
       coalesceMs: 1200,
       staleMs: 20000,
       pollIntervalMs: benchmarkActive || regressionActive ? 2500 : 15000,
@@ -576,15 +582,11 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       setError("Select at least one reset option (runs or scores).");
       return;
     }
-    const scopeLabel = resetClearRuns && resetClearScores
-      ? "run history and scores"
-      : resetClearRuns
-        ? "run history"
-        : "scores";
-    const confirmed = window.confirm(
-      `Reset this prompt pack? This will clear ${scopeLabel} for this pack.`,
-    );
-    if (!confirmed) {
+    setConfirmResetOpen(true);
+  }, [resetClearRuns, resetClearScores, selectedPackId]);
+
+  const confirmResetPack = useCallback(async () => {
+    if (!selectedPackId) {
       return;
     }
     setResetting(true);
@@ -771,8 +773,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       setTrendSeries([]);
       return;
     }
-    void loadTrends(selectedPackId).catch(() => {
+    void loadTrends(selectedPackId).catch((err: Error) => {
       setTrendSeries([]);
+      setError(err.message || "Failed to load capability trend series.");
     });
   }, [loadTrends, selectedPackId]);
 
@@ -865,6 +868,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
 
       {error ? <p className="error">{error}</p> : null}
       {success ? <p className="status-banner">{success}</p> : null}
+      <p className="office-subtitle">
+        Re-running a test creates a fresh run. Historical scores stay attached to older runs until you rescore the new output.
+      </p>
       {activeRun ? (
         <div className="status-banner">
           Run in progress: {activeRun.testCode ?? "prompt-pack run"} ({activeRun.mode})
@@ -1324,6 +1330,28 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
           ) : null}
         </article>
       ) : null}
+      <ConfirmModal
+        open={confirmResetOpen}
+        title="Reset Prompt Pack"
+        message={`Reset this prompt pack? This will clear ${
+          resetClearRuns && resetClearScores
+            ? "run history and scores"
+            : resetClearRuns
+              ? "run history"
+              : "scores"
+        } for this pack.`}
+        confirmLabel="Reset"
+        danger
+        pending={resetting}
+        cancelDisabled={resetting}
+        disableDismiss={resetting}
+        onCancel={() => setConfirmResetOpen(false)}
+        onConfirm={() => {
+          void confirmResetPack().finally(() => {
+            setConfirmResetOpen(false);
+          });
+        }}
+      />
     </section>
   );
 }

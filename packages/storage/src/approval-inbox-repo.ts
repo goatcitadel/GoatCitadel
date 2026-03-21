@@ -75,6 +75,7 @@ export class ApprovalInboxRepository {
           delivery_count = delivery_count + 1,
           last_delivered_at = @lastDeliveredAt
       WHERE inbox_item_id = @inboxItemId
+        AND state = 'pending'
     `);
     this.updateResolutionStmt = db.prepare(`
       UPDATE approval_inbox_items
@@ -85,6 +86,7 @@ export class ApprovalInboxRepository {
           resolved_by = @resolvedBy,
           last_error = @lastError
       WHERE inbox_item_id = @inboxItemId
+        AND state = 'pending'
     `);
     this.deleteByReceiverStmt = db.prepare(`
       DELETE FROM approval_inbox_items
@@ -130,7 +132,10 @@ export class ApprovalInboxRepository {
 
     const current = this.getByReceiverAndToken("mcp", receiverId, tokenId);
     if (current) {
-      this.updateOnRedeliveryStmt.run({
+      if (current.state !== "pending") {
+        return current;
+      }
+      const update = this.updateOnRedeliveryStmt.run({
         inboxItemId: current.inboxItemId,
         approvalStatus: input.approvalStatus,
         previewJson: JSON.stringify(normalizeObject(input.preview)),
@@ -138,7 +143,7 @@ export class ApprovalInboxRepository {
         updatedAt: now,
         lastDeliveredAt: now,
       });
-      return this.get(current.inboxItemId);
+      return update.changes === 0 ? this.get(current.inboxItemId) : this.get(current.inboxItemId);
     }
 
     const record: ApprovalInboxItemRecord = {
@@ -148,7 +153,7 @@ export class ApprovalInboxRepository {
       receiverKind: "mcp",
       receiverId,
       tokenId,
-      token,
+      token: redactApprovalToken(tokenId),
       actionType: "approval.resolve",
       state: "pending",
       approvalKind: input.approvalKind,
@@ -233,7 +238,10 @@ export class ApprovalInboxRepository {
     },
   ): ApprovalInboxItemRecord {
     const current = this.get(inboxItemId);
-    this.updateResolutionStmt.run({
+    if (current.state !== "pending") {
+      return current;
+    }
+    const update = this.updateResolutionStmt.run({
       inboxItemId,
       state: input.state,
       approvalStatus: input.approvalStatus,
@@ -242,6 +250,9 @@ export class ApprovalInboxRepository {
       resolvedBy: input.resolvedBy ?? current.resolvedBy ?? null,
       lastError: input.lastError ?? null,
     });
+    if (update.changes === 0) {
+      return this.get(inboxItemId);
+    }
     return this.get(inboxItemId);
   }
 
@@ -282,4 +293,8 @@ function normalizeObject(value: Record<string, unknown> | undefined): Record<str
     return {};
   }
   return value;
+}
+
+function redactApprovalToken(tokenId: string): string {
+  return `redacted:${tokenId}`;
 }

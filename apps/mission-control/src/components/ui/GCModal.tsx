@@ -11,6 +11,8 @@ interface GCModalProps {
   cancelLabel?: string;
   danger?: boolean;
   confirmPending?: boolean;
+  confirmDisabled?: boolean;
+  dismissDisabled?: boolean;
   onConfirm?: () => void | Promise<void>;
 }
 
@@ -24,10 +26,20 @@ export function GCModal({
   cancelLabel = "Cancel",
   danger = false,
   confirmPending = false,
+  confirmDisabled = false,
+  dismissDisabled = false,
   onConfirm,
 }: GCModalProps) {
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && dismissDisabled) {
+          return;
+        }
+        onOpenChange(nextOpen);
+      }}
+    >
       <Dialog.Portal>
         <Dialog.Overlay className="gc-modal-overlay" />
         <Dialog.Content className="gc-modal-content">
@@ -35,12 +47,12 @@ export function GCModal({
           {description ? <Dialog.Description className="gc-modal-description">{description}</Dialog.Description> : null}
           {children ? <div className="gc-modal-body">{children}</div> : null}
           <div className="gc-modal-actions">
-            <button type="button" onClick={() => onOpenChange(false)}>{cancelLabel}</button>
+            <button type="button" disabled={dismissDisabled} onClick={() => onOpenChange(false)}>{cancelLabel}</button>
             {onConfirm ? (
               <button
                 type="button"
                 className={danger ? "danger" : ""}
-                disabled={confirmPending}
+                disabled={confirmPending || confirmDisabled}
                 onClick={() => void onConfirm()}
               >
                 {confirmPending ? "Working..." : confirmLabel}
@@ -52,4 +64,3 @@ export function GCModal({
     </Dialog.Root>
   );
 }
-

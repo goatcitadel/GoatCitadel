@@ -115,6 +115,7 @@ export function McpPage() {
   const [policyAllowed, setPolicyAllowed] = useState("");
   const [policyBlocked, setPolicyBlocked] = useState("");
   const [policyNotes, setPolicyNotes] = useState("");
+  const [policyDirty, setPolicyDirty] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -198,6 +199,9 @@ export function McpPage() {
         await loadServers();
         if (selectedServerId) {
           await loadTools(selectedServerId);
+        }
+        if (selected && selectedIsInternalApprovalInbox && selected.status === "connected") {
+          await loadApprovalInbox(selected.serverId, inboxFilterState);
         }
       } catch (err) {
         setError(formatMcpError((err as Error).message));
@@ -302,7 +306,8 @@ export function McpPage() {
     setPolicyAllowed(selected.policy.allowedToolPatterns.join(", "));
     setPolicyBlocked(selected.policy.blockedToolPatterns.join(", "));
     setPolicyNotes(selected.policy.notes ?? "");
-  }, [selected]);
+    setPolicyDirty(false);
+  }, [selected?.serverId]);
 
   const loadApprovalInbox = useCallback(async (
     serverId: string,
@@ -872,7 +877,10 @@ export function McpPage() {
                 <label className="checkbox-inline">
                   <GCSwitch
                     checked={policyRequireFirst}
-                    onCheckedChange={setPolicyRequireFirst}
+                    onCheckedChange={(checked) => {
+                      setPolicyRequireFirst(checked);
+                      setPolicyDirty(true);
+                    }}
                     label="Require first-use approval"
                   />
                 </label>
@@ -880,7 +888,10 @@ export function McpPage() {
                 <GCSelect
                   id="mcpPolicyRedaction"
                   value={policyRedaction}
-                  onChange={(value) => setPolicyRedaction(value as "off" | "basic" | "strict")}
+                  onChange={(value) => {
+                    setPolicyRedaction(value as "off" | "basic" | "strict");
+                    setPolicyDirty(true);
+                  }}
                   options={[
                     { value: "off", label: "off" },
                     { value: "basic", label: "basic" },
@@ -894,7 +905,10 @@ export function McpPage() {
                   id="mcpAllowedPatterns"
                   placeholder="search.*, fetch"
                   value={policyAllowed}
-                  onChange={(event) => setPolicyAllowed(event.target.value)}
+                  onChange={(event) => {
+                    setPolicyAllowed(event.target.value);
+                    setPolicyDirty(true);
+                  }}
                 />
               </div>
               <div className="controls-row">
@@ -903,7 +917,10 @@ export function McpPage() {
                   id="mcpBlockedPatterns"
                   placeholder="admin.*, shell.*"
                   value={policyBlocked}
-                  onChange={(event) => setPolicyBlocked(event.target.value)}
+                  onChange={(event) => {
+                    setPolicyBlocked(event.target.value);
+                    setPolicyDirty(true);
+                  }}
                 />
               </div>
               <div className="controls-row">
@@ -912,11 +929,15 @@ export function McpPage() {
                   id="mcpPolicyNotes"
                   placeholder="Optional policy note"
                   value={policyNotes}
-                  onChange={(event) => setPolicyNotes(event.target.value)}
+                  onChange={(event) => {
+                    setPolicyNotes(event.target.value);
+                    setPolicyDirty(true);
+                  }}
                 />
                 <ActionButton
                   label="Save Policy"
                   pending={busy}
+                  disabled={!policyDirty}
                   onClick={async () => {
                     if (!selected) {
                       return;
@@ -930,6 +951,7 @@ export function McpPage() {
                         blockedToolPatterns: policyBlocked.split(",").map((item) => item.trim()).filter(Boolean),
                         notes: policyNotes.trim() || undefined,
                       });
+                      setPolicyDirty(false);
                       await loadServers();
                       setError(null);
                     } catch (err) {

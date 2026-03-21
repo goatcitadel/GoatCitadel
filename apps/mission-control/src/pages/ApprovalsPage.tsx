@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   fetchApprovalReplay,
   fetchApprovals,
@@ -17,6 +17,7 @@ import { ConfirmModal } from "../components/ConfirmModal";
 import { CardSkeleton } from "../components/CardSkeleton";
 import { StatusChip } from "../components/StatusChip";
 import { useAction } from "../hooks/useAction";
+import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { pageCopy } from "../content/copy";
 
 interface ApprovalDurableStatus {
@@ -61,18 +62,36 @@ export function ApprovalsPage() {
   const [durableBusyByApprovalId, setDurableBusyByApprovalId] = useState<Record<string, boolean>>({});
   const [tracePreviewByApprovalId, setTracePreviewByApprovalId] = useState<Record<string, string[]>>({});
   const [pendingDecision, setPendingDecision] = useState<{ approvalId: string; decision: "approve" | "reject" } | null>(null);
+  const [pendingResumeApprovalId, setPendingResumeApprovalId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const resolveAction = useAction();
 
-  const load = () => {
-    void fetchApprovals("pending")
-      .then(setData)
-      .catch((err: Error) => setError(err.message));
-  };
+  const load = useCallback(async () => {
+    try {
+      const response = await fetchApprovals("pending");
+      setData(response);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, []);
 
   useEffect(() => {
-    load();
-  }, []);
+    void load();
+  }, [load]);
+
+  useRefreshSubscription(
+    "approvals",
+    async () => {
+      await load();
+    },
+    {
+      enabled: true,
+      coalesceMs: 1000,
+      staleMs: 15000,
+      pollIntervalMs: 15000,
+    },
+  );
 
   const onResolve = async (approvalId: string, decision: "approve" | "reject") => {
     try {
@@ -82,7 +101,7 @@ export function ApprovalsPage() {
           `Approval ${approvalId} resolved and action ${result.executedAction.outcome}: ${result.executedAction.policyReason}`,
         );
       }
-      load();
+      await load();
       const replay = await fetchApprovalReplay(approvalId);
       setReplayById((prev) => ({ ...prev, [approvalId]: replay }));
     } catch (err) {
@@ -354,7 +373,7 @@ export function ApprovalsPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { void resumeFromCheckpoint(approval.approvalId); }}
+                  onClick={() => setPendingResumeApprovalId(approval.approvalId)}
                   disabled={durableBusy || !durable?.runId}
                 >
                   Resume from checkpoint
@@ -385,6 +404,9 @@ export function ApprovalsPage() {
         }
         confirmLabel={resolveAction.pending ? "Applying..." : (pendingDecision?.decision === "approve" ? "Approve" : "Reject")}
         danger={pendingDecision?.decision === "reject"}
+        pending={resolveAction.pending}
+        cancelDisabled={resolveAction.pending}
+        disableDismiss={resolveAction.pending}
         onCancel={() => setPendingDecision(null)}
         onConfirm={() => {
           if (!pendingDecision) {
@@ -392,6 +414,24 @@ export function ApprovalsPage() {
           }
           void onResolve(pendingDecision.approvalId, pendingDecision.decision).finally(() => {
             setPendingDecision(null);
+          });
+        }}
+      />
+      <ConfirmModal
+        open={Boolean(pendingResumeApprovalId)}
+        title="Resume Durable Run"
+        message="Resume the durable run from its last checkpoint now?"
+        confirmLabel="Resume"
+        pending={Boolean(pendingResumeApprovalId && durableBusyByApprovalId[pendingResumeApprovalId])}
+        cancelDisabled={Boolean(pendingResumeApprovalId && durableBusyByApprovalId[pendingResumeApprovalId])}
+        disableDismiss={Boolean(pendingResumeApprovalId && durableBusyByApprovalId[pendingResumeApprovalId])}
+        onCancel={() => setPendingResumeApprovalId(null)}
+        onConfirm={() => {
+          if (!pendingResumeApprovalId) {
+            return;
+          }
+          void resumeFromCheckpoint(pendingResumeApprovalId).finally(() => {
+            setPendingResumeApprovalId(null);
           });
         }}
       />

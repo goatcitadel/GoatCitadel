@@ -29,6 +29,9 @@ export function RemoteApprovalActionModal({
   onReject,
   onDismiss,
 }: RemoteApprovalActionModalProps) {
+  const expiresAt = prompt?.expiresAt ? Date.parse(prompt.expiresAt) : Number.NaN;
+  const tokenExpired = Number.isFinite(expiresAt) && expiresAt <= Date.now();
+
   return (
     <GCModal
       open={open}
@@ -39,11 +42,15 @@ export function RemoteApprovalActionModal({
       }}
       title="Resolve remote approval"
       description={prompt
-        ? `${prompt.kind} is ready for a Mission Control decision with a single-use connector action token.`
+        ? tokenExpired
+          ? `${prompt.kind} is no longer actionable because its single-use connector token expired.`
+          : `${prompt.kind} is ready for a Mission Control decision with a single-use connector action token.`
         : "A remote approval action is ready."}
       confirmLabel="Approve action"
       cancelLabel="Dismiss"
       confirmPending={busy}
+      confirmDisabled={tokenExpired}
+      dismissDisabled={busy}
       onConfirm={onApprove}
     >
       {prompt ? (
@@ -72,6 +79,11 @@ export function RemoteApprovalActionModal({
               </div>
             ) : null}
           </div>
+          {tokenExpired ? (
+            <p className="error" style={{ marginTop: "1rem" }}>
+              This approval token expired. Issue a fresh token before approving this action.
+            </p>
+          ) : null}
           {prompt.preview ? (
             <pre style={{ marginTop: "1rem", maxHeight: "14rem", overflow: "auto" }}>
               {JSON.stringify(prompt.preview, null, 2)}
@@ -80,7 +92,7 @@ export function RemoteApprovalActionModal({
         </>
       ) : null}
       <div className="gc-modal-actions" style={{ marginTop: "1rem" }}>
-        <button type="button" className="danger" disabled={busy} onClick={() => void onReject()}>
+        <button type="button" className="danger" disabled={busy || tokenExpired} onClick={() => void onReject()}>
           {busy ? "Working..." : "Reject action"}
         </button>
       </div>

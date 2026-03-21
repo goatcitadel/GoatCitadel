@@ -12,6 +12,7 @@ import type {
 import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 import { ApprovalGate } from "./approval-gate.js";
+import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { resolveEffectivePolicy } from "./policy-resolver.js";
 import { createDefaultToolRegistry, type ToolDefinition, type ToolRegistry } from "./tool-registry.js";
 import { assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
@@ -471,21 +472,25 @@ export class ToolPolicyEngine {
     }
 
     if (typeof constraints.maxCallsPerHour === "number") {
-      const count = this.storage.toolAccessDecisions.countToolCallsInLastHour(
-        request.toolName,
-        request.agentId,
-        request.sessionId,
-      );
+      const count = this.storage.toolAccessDecisions.countToolCallsInLastHourInScope({
+        toolName: request.toolName,
+        scope: grant.scope,
+        agentId: request.agentId,
+        sessionId: request.sessionId,
+        taskId: request.taskId,
+      });
       if (count >= constraints.maxCallsPerHour) {
         return `grant maxCallsPerHour exceeded (${constraints.maxCallsPerHour})`;
       }
     }
 
     if (typeof constraints.maxWritesPerHour === "number" && isMutationTool(toolDef)) {
-      const count = this.storage.toolAccessDecisions.countWritesInLastHour(
-        request.agentId,
-        request.sessionId,
-      );
+      const count = this.storage.toolAccessDecisions.countWritesInLastHourInScope({
+        scope: grant.scope,
+        agentId: request.agentId,
+        sessionId: request.sessionId,
+        taskId: request.taskId,
+      });
       if (count >= constraints.maxWritesPerHour) {
         return `grant maxWritesPerHour exceeded (${constraints.maxWritesPerHour})`;
       }
@@ -515,35 +520,13 @@ export class ToolPolicyEngine {
   }
 
   private isFirstMutationInScope(request: ToolAccessEvaluateRequest, grant: ToolGrantRecord): boolean {
-    if (grant.scope === "global") {
-      return this.storage.toolAccessDecisions.countToolCallsInLastHour(
-        request.toolName,
-        request.agentId,
-        request.sessionId,
-      ) === 0;
-    }
-
-    if (grant.scope === "task") {
-      return this.storage.toolAccessDecisions.countToolCallsInLastHour(
-        request.toolName,
-        request.agentId,
-        request.sessionId,
-      ) === 0;
-    }
-
-    if (grant.scope === "agent") {
-      return this.storage.toolAccessDecisions.countToolCallsInLastHour(
-        request.toolName,
-        request.agentId,
-        request.sessionId,
-      ) === 0;
-    }
-
-    return this.storage.toolAccessDecisions.countToolCallsInLastHour(
-      request.toolName,
-      request.agentId,
-      request.sessionId,
-    ) === 0;
+    return this.storage.toolAccessDecisions.countToolCallsInLastHourInScope({
+      toolName: request.toolName,
+      scope: grant.scope,
+      agentId: request.agentId,
+      sessionId: request.sessionId,
+      taskId: request.taskId,
+    }) === 0;
   }
 
   private validateStructuralSafety(
@@ -648,8 +631,7 @@ export class ToolPolicyEngine {
   }
 
   private hasApprovalBypass(request: ToolAccessEvaluateRequest): boolean {
-    const reason = (request as ToolInvokeRequest).consentContext?.reason;
-    return typeof reason === "string" && reason.startsWith("approval:");
+    return hasVerifiedApprovalBypass(request, this.storage);
   }
 
   private grantAllowsReadPath(grant: ToolGrantRecord | undefined, resolvedPath: string): boolean {

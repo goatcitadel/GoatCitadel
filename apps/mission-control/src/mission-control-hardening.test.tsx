@@ -1,0 +1,395 @@
+import React from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, create, type ReactTestInstance } from "react-test-renderer";
+import { ConfirmModal } from "./components/ConfirmModal";
+import { RemoteApprovalActionModal } from "./components/RemoteApprovalActionModal";
+import { McpPage } from "./pages/McpPage";
+import { PromptLabPage } from "./pages/PromptLabPage";
+
+const testState = vi.hoisted(() => {
+  const refreshRegistrations = new Map<string, {
+    callback: (signal: unknown) => Promise<void> | void;
+    options: Record<string, unknown>;
+  }>();
+
+  return {
+    refreshRegistrations,
+    api: {
+      fetchConnectorRecords: vi.fn(),
+      connectMcpServer: vi.fn(),
+      createMcpServer: vi.fn(),
+      deleteMcpServer: vi.fn(),
+      disconnectMcpServer: vi.fn(),
+      fetchMcpTemplateDiscovery: vi.fn(),
+      fetchMcpTemplates: vi.fn(),
+      fetchMcpServers: vi.fn(),
+      fetchMcpTools: vi.fn(),
+      invokeMcpTool: vi.fn(),
+      runMcpServerHealthCheck: vi.fn(),
+      startMcpOAuth: vi.fn(),
+      updateMcpServerPolicy: vi.fn(),
+      autoScorePromptPackBatch: vi.fn(),
+      autoScorePromptPackTest: vi.fn(),
+      exportPromptPackReport: vi.fn(),
+      fetchPromptPackBenchmark: vi.fn(),
+      fetchPromptPackReplayRegressionStatus: vi.fn(),
+      fetchPromptPackTrends: vi.fn(),
+      fetchPromptPackExport: vi.fn(),
+      fetchPromptPackReport: vi.fn(),
+      fetchPromptPacks: vi.fn(),
+      fetchPromptPackTests: vi.fn(),
+      importPromptPack: vi.fn(),
+      resetPromptPack: vi.fn(),
+      runPromptPackTest: vi.fn(),
+      runPromptPackBenchmark: vi.fn(),
+      runPromptPackReplayRegression: vi.fn(),
+      scorePromptPackTest: vi.fn(),
+    },
+    loadModelsForProvider: vi.fn(),
+  };
+});
+
+vi.mock("react-virtuoso", () => ({
+  Virtuoso: (props: {
+    data?: unknown[];
+    itemContent?: (index: number, item: unknown) => React.ReactNode;
+  }) => (
+    <div>
+      {(props.data ?? []).map((item, index) => (
+        <div key={index}>{props.itemContent?.(index, item)}</div>
+      ))}
+    </div>
+  ),
+}));
+
+vi.mock("./api/client", () => testState.api);
+
+vi.mock("./hooks/useRefreshSubscription", () => ({
+  useRefreshSubscription: (
+    topic: string,
+    callback: (signal: unknown) => Promise<void> | void,
+    options: Record<string, unknown> = {},
+  ) => {
+    testState.refreshRegistrations.set(topic, { callback, options });
+  },
+}));
+
+vi.mock("./hooks/useProviderModelCatalog", () => ({
+  useProviderModelCatalog: () => ({
+    config: null,
+    providers: [],
+    loadModelsForProvider: testState.loadModelsForProvider,
+  }),
+}));
+
+vi.mock("./components/ActionButton", () => ({
+  ActionButton: (props: {
+    label: string;
+    pending?: boolean;
+    disabled?: boolean;
+    danger?: boolean;
+    onClick?: () => void;
+  }) => (
+    <button type="button" disabled={props.disabled} data-danger={props.danger ? "true" : "false"} onClick={props.onClick}>
+      {props.pending ? "Working..." : props.label}
+    </button>
+  ),
+}));
+
+vi.mock("./components/ChatModelPicker", () => ({
+  ChatModelPicker: () => <div>chat-model-picker</div>,
+}));
+
+vi.mock("./components/ui", () => ({
+  GCModal: (props: {
+    open: boolean;
+    title: string;
+    description?: string;
+    confirmDisabled?: boolean;
+    dismissDisabled?: boolean;
+    children?: React.ReactNode;
+  }) => (
+    <div
+      data-mock-modal="true"
+      data-open={props.open ? "true" : "false"}
+      data-title={props.title}
+      data-description={props.description ?? ""}
+      data-confirm-disabled={props.confirmDisabled ? "true" : "false"}
+      data-dismiss-disabled={props.dismissDisabled ? "true" : "false"}
+    >
+      {props.children}
+    </div>
+  ),
+  GCSelect: (props: {
+    id?: string;
+    value: string;
+    options: Array<{ value: string; label: string }>;
+    onChange: (value: string) => void;
+  }) => (
+    <select id={props.id} value={props.value} onChange={(event) => props.onChange(event.target.value)}>
+      {props.options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  ),
+  GCSwitch: (props: {
+    checked: boolean;
+    onCheckedChange: (checked: boolean) => void;
+    label?: string;
+  }) => (
+    <label>
+      <input
+        type="checkbox"
+        checked={props.checked}
+        onChange={(event) => props.onCheckedChange(event.target.checked)}
+      />
+      {props.label}
+    </label>
+  ),
+}));
+
+async function flush(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function resetApiMocks(): void {
+  for (const mockFn of Object.values(testState.api)) {
+    mockFn.mockReset();
+  }
+  testState.loadModelsForProvider.mockReset();
+  testState.refreshRegistrations.clear();
+}
+
+function textContent(node: ReactTestInstance): string {
+  const flatten = (value: unknown): string[] => {
+    if (typeof value === "string" || typeof value === "number") {
+      return [String(value)];
+    }
+    if (Array.isArray(value)) {
+      return value.flatMap(flatten);
+    }
+    return [];
+  };
+  return flatten(node.props.children).join("");
+}
+
+function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  const match = root.findAllByType("button").find((button) => textContent(button) === label);
+  if (!match) {
+    throw new Error(`Unable to find button ${label}`);
+  }
+  return match;
+}
+
+function createPromptPackReport() {
+  return {
+    runs: [],
+    scores: [],
+    summary: {
+      totalTests: 1,
+      completedRuns: 0,
+      failedRuns: 0,
+      runFailureCount: 0,
+      scoreFailureCount: 0,
+      needsScoreCount: 0,
+      durableRuns: 0,
+      approvalPausedRuns: 0,
+      backgroundedRuns: 0,
+      passThreshold: 7,
+      averageTotalScore: 0,
+      passRate: 0,
+      failingCodes: [],
+    },
+  };
+}
+
+beforeEach(() => {
+  resetApiMocks();
+
+  testState.api.fetchMcpServers.mockResolvedValue({
+    items: [
+      {
+        serverId: "srv-1",
+        label: "Primary MCP",
+        transport: "http",
+        status: "connected",
+        enabled: true,
+        category: "development",
+        trustTier: "trusted",
+        costTier: "free",
+        policy: {
+          requireFirstToolApproval: false,
+          redactionMode: "basic",
+          allowedToolPatterns: [],
+          blockedToolPatterns: [],
+          notes: "original note",
+        },
+        url: "https://mcp.example.test",
+        authType: "none",
+      },
+    ],
+  });
+  testState.api.fetchMcpTemplates.mockResolvedValue({ items: [] });
+  testState.api.fetchMcpTemplateDiscovery.mockResolvedValue({ items: [] });
+  testState.api.fetchConnectorRecords.mockResolvedValue({ items: [] });
+  testState.api.fetchMcpTools.mockResolvedValue({ items: [] });
+  testState.api.invokeMcpTool.mockResolvedValue({ ok: true, output: { items: [] } });
+  testState.api.runMcpServerHealthCheck.mockResolvedValue({
+    connectorType: "mcp_server",
+    connectorId: "srv-1",
+    status: "ok",
+    checks: [],
+    checkedAt: "2026-03-21T12:00:00.000Z",
+  });
+  testState.api.fetchPromptPacks.mockResolvedValue({
+    items: [
+      { packId: "pack-a", name: "Pack A", testCount: 1 },
+      { packId: "pack-b", name: "Pack B", testCount: 1 },
+    ],
+  });
+  testState.api.fetchPromptPackTests.mockImplementation(async (packId: string) => ({
+    items: [
+      {
+        testId: `${packId}-test-1`,
+        packId,
+        code: packId === "pack-a" ? "A-01" : "B-01",
+        title: packId === "pack-a" ? "Alpha test" : "Bravo test",
+        prompt: `Prompt for ${packId}`,
+        createdAt: "2026-03-21T12:00:00.000Z",
+        updatedAt: "2026-03-21T12:00:00.000Z",
+      },
+    ],
+  }));
+  testState.api.fetchPromptPackReport.mockResolvedValue(createPromptPackReport());
+  testState.api.fetchPromptPackExport.mockImplementation(async (packId: string) => ({
+    packId,
+    path: "",
+    exists: false,
+    sizeBytes: 0,
+  }));
+  testState.api.fetchPromptPackTrends.mockResolvedValue({ items: [] });
+});
+
+describe("mission-control hardening", () => {
+  it("prevents backdrop dismissal when confirm modal dismiss is disabled", () => {
+    const onCancel = vi.fn();
+
+    const renderer = create(
+      <ConfirmModal
+        open
+        title="Confirm dangerous action"
+        message="Do the thing?"
+        disableDismiss
+        onConfirm={() => undefined}
+        onCancel={onCancel}
+      />,
+    );
+
+    const backdrop = renderer.root.findByProps({ className: "modal-backdrop" });
+    act(() => {
+      backdrop.props.onClick();
+    });
+
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("disables remote approval actions when the single-use token has expired", () => {
+    const renderer = create(
+      <RemoteApprovalActionModal
+        open
+        prompt={{
+          approvalId: "apr-1",
+          actionType: "approval.resolve",
+          tokenId: "tok-1",
+          token: "grat_tok_1",
+          kind: "tool.invoke",
+          riskLevel: "danger",
+          status: "pending",
+          preview: { summary: "Approve deploy" },
+          expiresAt: "2000-01-01T00:00:00.000Z",
+        }}
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        onDismiss={() => undefined}
+      />,
+    );
+
+    const modal = renderer.root.findByProps({ "data-mock-modal": "true" });
+    expect(modal.props["data-confirm-disabled"]).toBe("true");
+    expect(renderer.root.findByType("button").props.disabled).toBe(true);
+    expect(
+      renderer.root.findAllByType("p").some((node) => textContent(node).includes("This approval token expired")),
+    ).toBe(true);
+  });
+
+  it("preserves dirty MCP policy edits across a refresh reload", async () => {
+    let renderer: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<McpPage />);
+    });
+    await flush();
+
+    const policyNotesInput = renderer!.root.findByProps({ id: "mcpPolicyNotes" });
+    act(() => {
+      policyNotesInput.props.onChange({ target: { value: "edited note" } });
+    });
+
+    expect(renderer!.root.findByProps({ id: "mcpPolicyNotes" }).props.value).toBe("edited note");
+    expect(findButton(renderer!.root, "Save Policy").props.disabled).toBe(false);
+
+    const refresh = testState.refreshRegistrations.get("mcp");
+    expect(refresh?.options.enabled).toBe(true);
+
+    await act(async () => {
+      await refresh?.callback({
+        topic: "mcp",
+        timestamp: Date.now(),
+        reason: "test-refresh",
+        source: "test",
+      });
+    });
+    await flush();
+
+    expect(renderer!.root.findByProps({ id: "mcpPolicyNotes" }).props.value).toBe("edited note");
+    expect(findButton(renderer!.root, "Save Policy").props.disabled).toBe(false);
+  });
+
+  it("keeps prompt lab refresh enabled while idle and preserves the selected pack on refresh", async () => {
+    let renderer: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<PromptLabPage workspaceId="default" />);
+    });
+    await flush();
+
+    let refresh = testState.refreshRegistrations.get("promptLab");
+    expect(refresh?.options.enabled).toBe(true);
+    expect(refresh?.options.pollIntervalMs).toBe(15000);
+
+    act(() => {
+      findButton(renderer!.root, "Pack B").props.onClick();
+    });
+    await flush();
+
+    expect(findButton(renderer!.root, "Pack B").props.className).toContain("active");
+    expect(findButton(renderer!.root, "Pack A").props.className ?? "").not.toContain("active");
+
+    refresh = testState.refreshRegistrations.get("promptLab");
+    await act(async () => {
+      await refresh?.callback({
+        topic: "promptLab",
+        timestamp: Date.now(),
+        reason: "test-refresh",
+        source: "test",
+      });
+    });
+    await flush();
+
+    expect(findButton(renderer!.root, "Pack B").props.className).toContain("active");
+    expect(findButton(renderer!.root, "Pack A").props.className ?? "").not.toContain("active");
+  });
+});

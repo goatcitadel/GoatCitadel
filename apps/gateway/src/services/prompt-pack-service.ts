@@ -38,6 +38,13 @@ import type { ServiceContext } from "./service-context.js";
 
 // ── constants ────────────────────────────────────────────────────────
 const PROMPT_PACK_PASS_THRESHOLD = 7;
+const PROMPT_PACK_CAPABILITY_KEYS = [
+  "routing",
+  "honesty",
+  "handoff",
+  "robustness",
+  "usability",
+] as const;
 const PROMPT_PACK_BENCHMARK_MAX_FAILURE_SIGNALS = 5;
 const PROMPT_PACK_BENCHMARK_MAX_TESTS = 200;
 const PROMPT_PACK_BENCHMARK_MAX_PROVIDERS = 10;
@@ -789,7 +796,7 @@ export class PromptPackService {
       }
     }
 
-    this.ctx.gatewaySql.prepare(`
+      this.ctx.gatewaySql.prepare(`
       UPDATE replay_regression_runs
       SET status = 'completed',
           summary_json = @summaryJson,
@@ -799,7 +806,7 @@ export class PromptPackService {
       regressionRunId,
       summaryJson: JSON.stringify({
         totalTests: selectedCodes.length,
-        comparedTests: resultRows / 5,
+        comparedTests: resultRows / PROMPT_PACK_CAPABILITY_KEYS.length,
         omittedTests,
         resultRows,
       }),
@@ -1028,7 +1035,10 @@ export class PromptPackService {
         sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE,
       });
       return imported.pack;
-    } catch {
+    } catch (error) {
+      console.warn(
+        `[prompt-pack] failed to load prompt pack from ${sourcePath}: ${(error as Error).message}`,
+      );
       return undefined;
     }
   }
@@ -1179,7 +1189,8 @@ export class PromptPackService {
   private resolvePromptPackExportPath(pack: PromptPackRecord): string {
     const dir = path.join(this.ctx.config.rootDir, DEFAULT_PROMPT_PACK_EXPORT_DIR);
     const baseName = sanitizeFileName(pack.name || pack.packId || "prompt-pack");
-    return path.join(dir, `${baseName}-latest.md`);
+    const packSuffix = sanitizeFileName(pack.packId).slice(0, 18);
+    return path.join(dir, `${baseName}-${packSuffix}-latest.md`);
   }
 
   private async judgePromptPackRunScores(input: {
@@ -1340,19 +1351,12 @@ export class PromptPackService {
           };
         }
       }
-      const asScore = (value: unknown): 0 | 1 | 2 => {
-        if (typeof value === "number" || typeof value === "string") {
-          return clampPromptScore(value);
-        }
-        return 1;
-      };
-      const scores = {
-        routingScore: asScore(payload.routingScore),
-        honestyScore: asScore(payload.honestyScore),
-        handoffScore: asScore(payload.handoffScore),
-        robustnessScore: asScore(payload.robustnessScore),
-        usabilityScore: asScore(payload.usabilityScore),
-      };
+      const scores = normalizePromptPackJudgeScores(payload);
+      if (!scores) {
+        return {
+          error: "Model judge omitted one or more required score keys.",
+        };
+      }
       return {
         scores,
         rationale: typeof payload.rationale === "string"
@@ -1421,6 +1425,7 @@ export class PromptPackService {
       return;
     }
     const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + (2 * 60 * 60 * 1000)).toISOString();
     const activeAllowGrants = this.ctx.storage.toolGrants
       .list("session", sessionId, 500)
       .filter((grant) => (
@@ -1432,17 +1437,8 @@ export class PromptPackService {
       activeAllowGrants
         .map((grant) => grant.toolPattern),
     );
-    const hasWildcardReadGrantByPattern = new Set(
-      activeAllowGrants
-        .filter((grant) => grant.constraints?.allowedPaths?.includes("*"))
-        .map((grant) => grant.toolPattern),
-    );
     for (const toolName of toolNames) {
-      const needsWildcardReadGrant = isPromptPackReadTool(toolName);
-      if (
-        activeAllowPatterns.has(toolName)
-        && (!needsWildcardReadGrant || hasWildcardReadGrantByPattern.has(toolName))
-      ) {
+      if (activeAllowPatterns.has(toolName)) {
         continue;
       }
       this.ctx.storage.toolGrants.create({
@@ -1450,10 +1446,8 @@ export class PromptPackService {
         decision: "allow",
         scope: "session",
         scopeRef: sessionId,
-        grantType: "persistent",
-        constraints: needsWildcardReadGrant
-          ? { allowedPaths: ["*"] }
-          : undefined,
+        grantType: "ttl",
+        expiresAt,
         createdBy: "system-prompt-pack-bootstrap",
       }, now);
     }
@@ -1478,6 +1472,42 @@ function sanitizeFileName(input: string): string {
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
   return cleaned || "prompt-pack";
+}
+
+export function normalizePromptPackJudgeScores(payload: Record<string, unknown>): {
+  routingScore: 0 | 1 | 2;
+  honestyScore: 0 | 1 | 2;
+  handoffScore: 0 | 1 | 2;
+  robustnessScore: 0 | 1 | 2;
+  usabilityScore: 0 | 1 | 2;
+} | undefined {
+  const asScore = (value: unknown): 0 | 1 | 2 | undefined => {
+    if (typeof value === "number" || typeof value === "string") {
+      return clampPromptScore(value);
+    }
+    return undefined;
+  };
+  const routingScore = asScore(payload.routingScore);
+  const honestyScore = asScore(payload.honestyScore);
+  const handoffScore = asScore(payload.handoffScore);
+  const robustnessScore = asScore(payload.robustnessScore);
+  const usabilityScore = asScore(payload.usabilityScore);
+  if (
+    routingScore === undefined
+    || honestyScore === undefined
+    || handoffScore === undefined
+    || robustnessScore === undefined
+    || usabilityScore === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    routingScore,
+    honestyScore,
+    handoffScore,
+    robustnessScore,
+    usabilityScore,
+  };
 }
 
 function toTitleCase(value: string): string {
@@ -1953,7 +1983,7 @@ function looksLikePromptPackFallbackResponse(responseText: string): boolean {
   if (!normalized) {
     return false;
   }
-  return normalized.startsWith("i couldn't verify that with the required tools before answering.")
+  return normalized.startsWith("i couldn't verify that with the required tools before answering")
     || normalized.startsWith("the model request timed out before completion.")
     || normalized.startsWith("the request was interrupted before the turn could finish.")
     || normalized.startsWith("a required source blocked automated access.")
@@ -2070,7 +2100,7 @@ export function parsePromptPackTests(content: string): Array<{
     return normalized;
   };
 
-  const MODE_SECTION_RE = /^#{1,3}\s+(chat|cowork|code)\s+tests?\b/i;
+  const MODE_SECTION_RE = /^#{1,3}\s+(chat|cowork|code)(?:\s+tests?)?\b/i;
   const TOOL_TIER_RE = /^#{1,4}\s+(no[- ]tools|implicit[- ]tools|explicit[- ]tools)\b/i;
   const VALID_MODES = new Set(["chat", "cowork", "code"]);
   const VALID_TOOL_TIERS = new Set(["no-tools", "implicit-tools", "explicit-tools"]);
@@ -2558,15 +2588,19 @@ function buildPromptPackLatestState(
   const testIds = new Set(tests.map((test) => test.testId));
   const latestRunByTest = new Map<string, PromptPackRunRecord>();
   for (const run of runs) {
-    if (!testIds.has(run.testId) || latestRunByTest.has(run.testId)) {
+    if (!testIds.has(run.testId)) {
       continue;
     }
-    latestRunByTest.set(run.testId, run);
+    const current = latestRunByTest.get(run.testId);
+    if (!current || getRunOrderingTimestamp(run) > getRunOrderingTimestamp(current)) {
+      latestRunByTest.set(run.testId, run);
+    }
   }
 
   const scoresByRunId = new Map<string, PromptPackScoreRecord>();
   for (const score of scores) {
-    if (!scoresByRunId.has(score.runId)) {
+    const current = scoresByRunId.get(score.runId);
+    if (!current || Date.parse(score.createdAt) > Date.parse(current.createdAt)) {
       scoresByRunId.set(score.runId, score);
     }
   }
@@ -2592,7 +2626,11 @@ function buildPromptPackLatestState(
 export function pickPromptPackAutoScoreRun(
   candidateRuns: PromptPackRunRecord[],
 ): PromptPackRunRecord | undefined {
-  return candidateRuns[0];
+  return [...candidateRuns].sort((left, right) => getRunOrderingTimestamp(right) - getRunOrderingTimestamp(left))[0];
+}
+
+function getRunOrderingTimestamp(run: PromptPackRunRecord): number {
+  return Date.parse(run.startedAt || run.finishedAt || "1970-01-01T00:00:00.000Z");
 }
 
 function formatPromptPackExecutionProfile(profile: PromptPackExecutionProfile): string {
@@ -3210,7 +3248,6 @@ function detectPromptPackIncompleteOutput(response: string): boolean {
     || /\bincomplete\b/.test(response)
     || /\bbest next move: retry\b/.test(response)
     || /\brecovered from tool output\b/.test(response)
-    || /\bblocked\b/.test(response)
   );
 }
 

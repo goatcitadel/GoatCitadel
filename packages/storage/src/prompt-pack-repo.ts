@@ -113,28 +113,36 @@ export class PromptPackRepository {
     const now = new Date().toISOString();
     const packId = input.packId ?? `pack-${randomUUID()}`;
     const existing = this.getPackStmt.get(packId) as PromptPackRow | undefined;
-    this.upsertPackStmt.run({
-      packId,
-      name: input.name,
-      sourceLabel: input.sourceLabel ?? null,
-      testCount: input.tests.length,
-      createdAt: existing?.created_at ?? now,
-      updatedAt: now,
-    });
-
-    this.deleteTestsByPackStmt.run(packId);
-    for (const test of input.tests) {
-      this.insertTestStmt.run({
-        testId: `ppt-${randomUUID()}`,
+    this.db.exec("SAVEPOINT prompt_pack_replace");
+    try {
+      this.upsertPackStmt.run({
         packId,
-        code: test.code,
-        title: test.title,
-        prompt: test.prompt,
-        orderIndex: test.orderIndex,
-        mode: test.mode ?? null,
-        toolTier: test.toolTier ?? null,
-        createdAt: now,
+        name: input.name,
+        sourceLabel: input.sourceLabel ?? null,
+        testCount: input.tests.length,
+        createdAt: existing?.created_at ?? now,
+        updatedAt: now,
       });
+
+      this.deleteTestsByPackStmt.run(packId);
+      for (const test of input.tests) {
+        this.insertTestStmt.run({
+          testId: `ppt-${randomUUID()}`,
+          packId,
+          code: test.code,
+          title: test.title,
+          prompt: test.prompt,
+          orderIndex: test.orderIndex,
+          mode: test.mode ?? null,
+          toolTier: test.toolTier ?? null,
+          createdAt: now,
+        });
+      }
+      this.db.exec("RELEASE SAVEPOINT prompt_pack_replace");
+    } catch (error) {
+      this.db.exec("ROLLBACK TO SAVEPOINT prompt_pack_replace");
+      this.db.exec("RELEASE SAVEPOINT prompt_pack_replace");
+      throw error;
     }
 
     return {

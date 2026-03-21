@@ -7,6 +7,10 @@ interface ConfirmModalProps {
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
+  pending?: boolean;
+  confirmDisabled?: boolean;
+  cancelDisabled?: boolean;
+  disableDismiss?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -18,6 +22,10 @@ export function ConfirmModal({
   confirmLabel = globalCopy.common.apply,
   cancelLabel = globalCopy.common.cancel,
   danger = false,
+  pending = false,
+  confirmDisabled = false,
+  cancelDisabled = false,
+  disableDismiss = false,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
@@ -26,7 +34,15 @@ export function ConfirmModal({
   }
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onClick={() => {
+        if (!disableDismiss) {
+          onCancel();
+        }
+      }}
+    >
       <div
         className="modal-card"
         role="dialog"
@@ -37,9 +53,14 @@ export function ConfirmModal({
         <h3>{title}</h3>
         <p>{message}</p>
         <div className="actions">
-          <button type="button" onClick={onCancel}>{cancelLabel}</button>
-          <button type="button" className={danger ? "danger" : ""} onClick={onConfirm}>
-            {confirmLabel}
+          <button type="button" disabled={cancelDisabled || pending} onClick={onCancel}>{cancelLabel}</button>
+          <button
+            type="button"
+            className={danger ? "danger" : ""}
+            disabled={confirmDisabled || pending}
+            onClick={onConfirm}
+          >
+            {pending ? "Working..." : confirmLabel}
           </button>
         </div>
       </div>

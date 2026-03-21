@@ -26,7 +26,7 @@ describe("mcp approval inbox", () => {
 
   it("receives, lists, and resolves approval inbox items end to end", async () => {
     const approvalInbox = createRepo();
-    const resolveApprovalWithRemoteToken = vi.fn(async () => ({
+    const resolveApprovalWithRemoteTokenId = vi.fn(async () => ({
       approval: {
         approvalId: "apr-1",
         kind: "tool.invoke",
@@ -61,11 +61,15 @@ describe("mcp approval inbox", () => {
       },
       {
         approvalInbox,
-        resolveApprovalWithRemoteToken,
+        resolveApprovalWithRemoteTokenId,
       },
     );
 
     expect(receive.ok).toBe(true);
+    expect(receive.output?.item).toMatchObject({
+      tokenId: "tok-1",
+      token: "redacted:tok-1",
+    });
     const item = receive.output?.item as { inboxItemId: string };
 
     const listed = await handleInternalMcpApprovalInboxInvoke(
@@ -79,7 +83,7 @@ describe("mcp approval inbox", () => {
       },
       {
         approvalInbox,
-        resolveApprovalWithRemoteToken,
+        resolveApprovalWithRemoteTokenId,
       },
     );
 
@@ -99,12 +103,12 @@ describe("mcp approval inbox", () => {
       },
       {
         approvalInbox,
-        resolveApprovalWithRemoteToken,
+        resolveApprovalWithRemoteTokenId,
       },
     );
 
-    expect(resolveApprovalWithRemoteToken).toHaveBeenCalledWith({
-      token: "grat_tok_1",
+    expect(resolveApprovalWithRemoteTokenId).toHaveBeenCalledWith({
+      tokenId: "tok-1",
       decision: "approve",
       editedPayload: undefined,
       resolutionNote: undefined,
@@ -118,6 +122,170 @@ describe("mcp approval inbox", () => {
       approvalId: "apr-1",
       status: "approved",
     });
+  });
+
+  it("returns the winning terminal state when a second resolver loses the race", async () => {
+    let resolved = false;
+    const approvalInbox = {
+      receiveMcpApprovalDelivery() {
+        return {
+          inboxItemId: "inbox-1",
+          approvalId: "apr-1",
+          connectorId: "mcp:srv-1",
+          receiverKind: "mcp" as const,
+          receiverId: "srv-1",
+          tokenId: "tok-1",
+          token: "redacted:tok-1",
+          actionType: "approval.resolve" as const,
+          state: "pending" as const,
+          approvalKind: "tool.invoke",
+          riskLevel: "danger" as const,
+          approvalStatus: "pending" as const,
+          preview: { summary: "Approve deploy" },
+          createdAt: "2026-03-21T12:00:00.000Z",
+          updatedAt: "2026-03-21T12:00:00.000Z",
+          expiresAt: "2026-03-21T12:30:00.000Z",
+          deliveryCount: 1,
+          lastDeliveredAt: "2026-03-21T12:00:00.000Z",
+        };
+      },
+      get() {
+        return {
+          inboxItemId: "inbox-1",
+          approvalId: "apr-1",
+          connectorId: "mcp:srv-1",
+          receiverKind: "mcp" as const,
+          receiverId: "srv-1",
+          tokenId: "tok-1",
+          token: "redacted:tok-1",
+          actionType: "approval.resolve" as const,
+          state: "pending" as const,
+          approvalKind: "tool.invoke",
+          riskLevel: "danger" as const,
+          approvalStatus: "pending" as const,
+          preview: { summary: "Approve deploy" },
+          createdAt: "2026-03-21T12:00:00.000Z",
+          updatedAt: "2026-03-21T12:00:00.000Z",
+          expiresAt: "2026-03-21T12:30:00.000Z",
+          deliveryCount: 1,
+          lastDeliveredAt: "2026-03-21T12:00:00.000Z",
+        };
+      },
+      listByReceiver() {
+        return [];
+      },
+      markResolved(_inboxItemId: string, input: {
+        state: Extract<ApprovalInboxItemState, "approved" | "rejected" | "edited" | "expired" | "failed">;
+        approvalStatus: ApprovalRequest["status"];
+        resolvedAt?: string;
+        resolvedBy?: string;
+        lastError?: string;
+      }) {
+        if (!resolved && input.state === "approved") {
+          resolved = true;
+          return {
+            inboxItemId: "inbox-1",
+            approvalId: "apr-1",
+            connectorId: "mcp:srv-1",
+            receiverKind: "mcp" as const,
+            receiverId: "srv-1",
+            tokenId: "tok-1",
+            token: "redacted:tok-1",
+            actionType: "approval.resolve" as const,
+            state: "approved" as const,
+            approvalKind: "tool.invoke",
+            riskLevel: "danger" as const,
+            approvalStatus: "approved" as const,
+            preview: { summary: "Approve deploy" },
+            createdAt: "2026-03-21T12:00:00.000Z",
+            updatedAt: "2026-03-21T12:05:00.000Z",
+            resolvedAt: "2026-03-21T12:05:00.000Z",
+            resolvedBy: "operator:mcp",
+            expiresAt: "2026-03-21T12:30:00.000Z",
+            deliveryCount: 1,
+            lastDeliveredAt: "2026-03-21T12:00:00.000Z",
+          };
+        }
+        return {
+          inboxItemId: "inbox-1",
+          approvalId: "apr-1",
+          connectorId: "mcp:srv-1",
+          receiverKind: "mcp" as const,
+          receiverId: "srv-1",
+          tokenId: "tok-1",
+          token: "redacted:tok-1",
+          actionType: "approval.resolve" as const,
+          state: "approved" as const,
+          approvalKind: "tool.invoke" as const,
+          riskLevel: "danger" as const,
+          approvalStatus: "approved" as const,
+          preview: { summary: "Approve deploy" },
+          createdAt: "2026-03-21T12:00:00.000Z",
+          updatedAt: "2026-03-21T12:05:00.000Z",
+          resolvedAt: "2026-03-21T12:05:00.000Z",
+          resolvedBy: "operator:mcp",
+          expiresAt: "2026-03-21T12:30:00.000Z",
+          deliveryCount: 1,
+          lastDeliveredAt: "2026-03-21T12:00:00.000Z",
+        };
+      },
+    };
+    const resolveApprovalWithRemoteTokenId = vi
+      .fn()
+      .mockResolvedValueOnce({
+        approval: {
+          approvalId: "apr-1",
+          kind: "tool.invoke",
+          riskLevel: "danger" as const,
+          status: "approved" as const,
+          payload: {},
+          preview: { summary: "Approve deploy" },
+          createdAt: "2026-03-21T12:00:00.000Z",
+          resolvedAt: "2026-03-21T12:05:00.000Z",
+          resolvedBy: "connector:mcp:srv-1",
+          explanationStatus: "not_requested" as const,
+        },
+      })
+      .mockRejectedValueOnce(new Error("token already consumed"));
+    const server = createServer();
+
+    const first = await handleInternalMcpApprovalInboxInvoke(
+      server,
+      {
+        serverId: server.serverId,
+        toolName: MCP_APPROVAL_INBOX_RESOLVE_TOOL_NAME,
+        arguments: {
+          inboxItemId: "inbox-1",
+          decision: "approve",
+          resolvedBy: "operator:mcp",
+        },
+      },
+      {
+        approvalInbox,
+        resolveApprovalWithRemoteTokenId,
+      },
+    );
+    const second = await handleInternalMcpApprovalInboxInvoke(
+      server,
+      {
+        serverId: server.serverId,
+        toolName: MCP_APPROVAL_INBOX_RESOLVE_TOOL_NAME,
+        arguments: {
+          inboxItemId: "inbox-1",
+          decision: "approve",
+          resolvedBy: "operator:mcp",
+        },
+      },
+      {
+        approvalInbox,
+        resolveApprovalWithRemoteTokenId,
+      },
+    );
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(first.output?.item).toMatchObject({ state: "approved" });
+    expect(second.output?.item).toMatchObject({ state: "approved" });
   });
 
   function createRepo() {
@@ -157,7 +325,7 @@ describe("mcp approval inbox", () => {
           receiverKind: "mcp",
           receiverId: input.receiverId,
           tokenId: input.tokenId,
-          token: input.token,
+          token: `redacted:${input.tokenId}`,
           actionType: "approval.resolve",
           state: "pending",
           approvalKind: input.approvalKind,

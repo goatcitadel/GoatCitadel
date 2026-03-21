@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import type { ToolGrantRecord, ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail } from "./sandbox/path-jail.js";
 import { assertHostAllowed } from "./sandbox/network-guard.js";
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
@@ -600,7 +601,7 @@ async function shellExec(
   const command = required(args.command, "command");
   const cwd = resolveOptionalCwd(args.cwd, request, config, storage);
   const shellRisk = classifyShellRisk(command, config.sandbox.riskyShellPatterns);
-  const approvalBypass = typeof request.consentContext?.reason === "string" && request.consentContext.reason.startsWith("approval:");
+  const approvalBypass = hasVerifiedApprovalBypass(request, storage);
   if (shellRisk.risky && config.sandbox.requireApprovalForRiskyShell && !approvalBypass) {
     throw new Error(
       `Risky shell command requires approval (matched pattern: ${shellRisk.matchedPattern ?? "unknown"})`,

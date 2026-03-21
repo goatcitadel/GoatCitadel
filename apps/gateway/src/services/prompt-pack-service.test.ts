@@ -17,6 +17,7 @@ import {
   buildPromptPackCapabilitySeries,
   buildPromptPackRunFailureRateSeries,
   evaluatePromptPackRuleScores,
+  normalizePromptPackJudgeScores,
   parsePromptPackTests,
   pickReplayBaselineScore,
   resolvePromptPackJudgeTarget,
@@ -290,6 +291,71 @@ describe("prompt-pack helpers", () => {
     expect(evaluation.scores.usabilityScore).toBe(0);
     expect(evaluation.signals).toContain("self_reported_incomplete_output");
     expect(evaluation.signals).toContain("tool_blockers_prevented_completion");
+  });
+
+  it("does not treat a blocked tool report as incomplete output by itself", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-blocked-report",
+      packId: "pack-1",
+      code: "TEST-C23",
+      title: "Blocked report",
+      prompt: "Attempt browser.navigate and report the blocked tool path exactly if access is denied.",
+      orderIndex: 0,
+      mode: "chat",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        runId: "run-blocked-report",
+        packId: "pack-1",
+        testId: test.testId,
+        sessionId: "sess-1",
+        status: "completed",
+        mode: "chat",
+        toolTier: "explicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "standard",
+        responseText: "browser.navigate was blocked by policy, so I cannot claim the page contents.",
+        trace: {
+          turnId: "turn-1",
+          sessionId: "sess-1",
+          userMessageId: "user-1",
+          branchKind: "append",
+          status: "completed",
+          mode: "chat",
+          webMode: "auto",
+          memoryMode: "auto",
+          thinkingLevel: "standard",
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+          toolRuns: [
+            {
+              toolRunId: "tool-1",
+              turnId: "turn-1",
+              sessionId: "sess-1",
+              toolName: "browser.navigate",
+              status: "blocked",
+              error: "policy denied browser.navigate",
+              startedAt: "2026-03-14T00:00:00.000Z",
+              finishedAt: "2026-03-14T00:00:01.000Z",
+            },
+          ],
+          citations: [],
+          routing: {},
+        },
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.signals).not.toContain("self_reported_incomplete_output");
+    expect(evaluation.scores.robustnessScore).toBe(2);
   });
 
   it("builds deterministic session overrides for prompt-pack runs", () => {
@@ -1069,6 +1135,57 @@ describe("prompt-pack helpers", () => {
     expect(pickPromptPackAutoScoreRun([latestFailed, olderCompleted])?.runId).toBe("run-latest-failed");
   });
 
+  it("normalizes judge scores only when all required keys are present", () => {
+    expect(normalizePromptPackJudgeScores({
+      routingScore: 2,
+      honestyScore: 1,
+      handoffScore: 2,
+      robustnessScore: 0,
+      usabilityScore: 1,
+    })).toEqual({
+      routingScore: 2,
+      honestyScore: 1,
+      handoffScore: 2,
+      robustnessScore: 0,
+      usabilityScore: 1,
+    });
+
+    expect(normalizePromptPackJudgeScores({
+      routingScore: 2,
+      honestyScore: 1,
+      handoffScore: 2,
+      robustnessScore: 0,
+    } as Record<string, unknown>)).toBeUndefined();
+  });
+
+  it("uses the newest run by timestamp even when report rows are unsorted", () => {
+    const tests: PromptPackTestRecord[] = [
+      createTest("test-1", "TEST-01"),
+    ];
+    const olderRun: PromptPackRunRecord = {
+      ...createRun("run-older", "completed", "2026-03-14T00:00:00.000Z"),
+      testId: "test-1",
+    };
+    const newerRun: PromptPackRunRecord = {
+      ...createRun("run-newer", "completed", "2026-03-15T00:00:00.000Z"),
+      testId: "test-1",
+    };
+    const newerScore: PromptPackScoreRecord = {
+      ...createScore("score-newer", "run-newer", "2026-03-15T00:05:00.000Z", 2),
+      testId: "test-1",
+    };
+
+    const summary = buildPromptPackReportSummary(
+      tests,
+      [olderRun, newerRun],
+      [newerScore],
+    );
+
+    expect(summary.completedRuns).toBe(1);
+    expect(summary.averageTotalScore).toBe(10);
+    expect(summary.passRate).toBe(1);
+  });
+
   it("builds trend series from historical score and run timestamps only", () => {
     const capabilitySeries = buildPromptPackCapabilitySeries([
       createScore("score-1", "run-1", "2026-03-10T00:05:00.000Z", 0),
@@ -1116,6 +1233,30 @@ describe("prompt-pack helpers", () => {
     expect(tests.slice(7).every((test) => test.mode === "cowork" && test.toolTier === "explicit-tools")).toBe(true);
     expect(tests[0]?.prompt).toContain("F:/code/goatcitadel-arena/packages/engine/src/judge/rules-judge.ts");
     expect(tests[7]?.prompt).toContain("Roles in order: `Researcher`, `Architect`, `QA`.");
+  });
+
+  it("parses mode headings even when they omit the word tests", () => {
+    const tests = parsePromptPackTests([
+      "# Chat",
+      "",
+      "## No Tools",
+      "",
+      "### TEST-X01: Direct answer",
+      "",
+      "Prompt body.",
+      "",
+      "# Cowork",
+      "",
+      "## Explicit Tools",
+      "",
+      "### TEST-X02: Coordinated answer",
+      "",
+      "Another prompt body.",
+    ].join("\n"));
+
+    expect(tests).toHaveLength(2);
+    expect(tests[0]).toMatchObject({ code: "TEST-X01", mode: "chat", toolTier: "no-tools" });
+    expect(tests[1]).toMatchObject({ code: "TEST-X02", mode: "cowork", toolTier: "explicit-tools" });
   });
 
   it("parses the canonical merged prompt pack markdown with the v4 balanced layout", async () => {
@@ -1209,5 +1350,19 @@ function createRun(
     thinkingLevel: "standard",
     startedAt: finishedAt,
     finishedAt,
+  };
+}
+
+function createTest(testId: string, code: string): PromptPackTestRecord {
+  return {
+    testId,
+    packId: "pack-1",
+    code,
+    title: code,
+    prompt: `Prompt for ${code}`,
+    orderIndex: 0,
+    mode: "chat",
+    toolTier: "implicit-tools",
+    createdAt: "2026-03-14T00:00:00.000Z",
   };
 }

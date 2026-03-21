@@ -62,20 +62,21 @@ function createMissionControlBrowserConnectorRecord(): ConnectorRecord {
 
 function toIntegrationConnectorRecord(connection: IntegrationConnection): ConnectorRecord {
   const isChannel = connection.kind === "channel";
+  const status = !connection.enabled
+    ? "disabled"
+    : connection.lastError
+      ? "degraded"
+      : connection.status === "connected"
+        ? "active"
+        : "degraded";
   const approvalDeliveryTarget = resolveIntegrationApprovalDeliveryTarget(connection);
-  const approvalDeliveryReady = Boolean(approvalDeliveryTarget);
+  const approvalDeliveryReady = status === "active" && Boolean(approvalDeliveryTarget);
   return {
     connectorId: `integration:${connection.connectionId}`,
     connectorType: "integration_connection",
     label: connection.label,
     sourceId: connection.connectionId,
-    status: !connection.enabled
-      ? "disabled"
-      : connection.lastError
-        ? "degraded"
-        : connection.status === "connected"
-          ? "active"
-          : "degraded",
+    status,
     capabilities: [
       createCapability("health_checks"),
       createCapability("inbound_messages", isChannel),
@@ -100,18 +101,19 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
 }
 
 function toMcpConnectorRecord(server: McpServerRecord, tools: McpToolRecord[]): ConnectorRecord {
+  const status = !server.enabled
+    ? "disabled"
+    : server.status === "connected"
+      ? "active"
+      : "degraded";
   const approvalDeliveryTool = tools.find((tool) => tool.toolName === MCP_APPROVAL_DELIVERY_TOOL_NAME);
-  const approvalDeliveryReady = Boolean(approvalDeliveryTool);
+  const approvalDeliveryReady = status === "active" && Boolean(approvalDeliveryTool);
   return {
     connectorId: `mcp:${server.serverId}`,
     connectorType: "mcp_server",
     label: server.label,
     sourceId: server.serverId,
-    status: !server.enabled
-      ? "disabled"
-      : server.status === "connected"
-        ? "active"
-        : "degraded",
+    status,
     capabilities: [
       createCapability("health_checks"),
       createCapability("interactive_actions"),

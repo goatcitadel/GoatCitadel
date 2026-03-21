@@ -7504,6 +7504,27 @@ export class GatewayService {
     resolutionNote?: string;
   }): Promise<ApprovalResolveResult> {
     const tokenRecord = this.consumeRemoteActionToken(input.token, "approval.resolve");
+    return this.resolveApprovalWithConsumedRemoteToken(tokenRecord, input);
+  }
+
+  public async resolveApprovalWithRemoteTokenId(input: {
+    tokenId: string;
+    decision: ApprovalResolveInput["decision"];
+    editedPayload?: Record<string, unknown>;
+    resolutionNote?: string;
+  }): Promise<ApprovalResolveResult> {
+    const tokenRecord = this.consumeRemoteActionTokenById(input.tokenId, "approval.resolve");
+    return this.resolveApprovalWithConsumedRemoteToken(tokenRecord, input);
+  }
+
+  private async resolveApprovalWithConsumedRemoteToken(
+    tokenRecord: RemoteActionTokenRecord,
+    input: {
+      decision: ApprovalResolveInput["decision"];
+      editedPayload?: Record<string, unknown>;
+      resolutionNote?: string;
+    },
+  ): Promise<ApprovalResolveResult> {
     const approvalId = tokenRecord.approvalId ?? String(tokenRecord.mutation.approvalId ?? "").trim();
     if (!approvalId) {
       throw new ValidationError({
@@ -7556,34 +7577,56 @@ export class GatewayService {
       return this.resolveDeviceAccessApproval(current, input);
     }
 
-    const approval = this.storage.approvals.resolve(approvalId, input);
-
-    this.storage.approvalEvents.append({
-      approvalId,
-      eventType: "resolved",
-      actorId: input.resolvedBy,
-      payload: {
-        decision: input.decision,
-        status: approval.status,
-        editedPayload: input.editedPayload,
-      },
-    });
-
     let executedAction: ToolInvokeResult | undefined;
+    const pendingAction = this.storage.pendingApprovalActions.find(approvalId);
 
     if (input.decision === "approve") {
       executedAction = await this.policyEngine.executeApprovedAction(approvalId);
-    } else {
-      const pending = this.storage.pendingApprovalActions.find(approvalId);
-      if (pending && pending.resolutionStatus === "pending") {
-        this.storage.pendingApprovalActions.markResolved(approvalId, "rejected", {
-          decision: input.decision,
+      if (pendingAction?.resolutionStatus === "pending" && executedAction?.outcome !== "executed") {
+        this.storage.pendingApprovalActions.upsertPending({
+          approvalId,
+          actionType: pendingAction.actionType,
+          request: pendingAction.request,
+          createdAt: pendingAction.createdAt,
+        });
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: `Approved action could not execute and remains pending: ${executedAction?.policyReason ?? "unknown execution error"}`,
         });
       }
     }
 
+    let approval!: ApprovalRequest;
+    let wakeRunId: string | undefined;
+
+    this.storage.runImmediateTransaction(() => {
+      approval = this.storage.approvals.resolve(approvalId, input);
+
+      this.storage.approvalEvents.append({
+        approvalId,
+        eventType: "resolved",
+        actorId: input.resolvedBy,
+        payload: {
+          decision: input.decision,
+          status: approval.status,
+          editedPayload: input.editedPayload,
+          executedOutcome: executedAction?.outcome,
+        },
+      });
+
+      if (input.decision !== "approve" && pendingAction && pendingAction.resolutionStatus === "pending") {
+        this.storage.pendingApprovalActions.markResolved(approvalId, "rejected", {
+          decision: input.decision,
+        });
+      }
+      wakeRunId = this.markApprovalWaitDurableRunResolved(approval, input, executedAction);
+    });
+
+    if (wakeRunId) {
+      this.durableRunService.requestRunProcessing(wakeRunId);
+    }
+
     await this.recordApprovalResolutionEffects(approval, input, executedAction);
-    await this.wakeApprovalWaitDurableRun(approval, input, executedAction);
 
     return {
       approval,
@@ -7604,7 +7647,10 @@ export class GatewayService {
     if (existing?.run_id) {
       try {
         return this.getDurableRun(existing.run_id);
-      } catch {
+      } catch (error) {
+        if (!(error instanceof NotFoundError)) {
+          throw error;
+        }
         // Fall through and repair the mapping with a new waiting run.
       }
     }
@@ -7683,6 +7729,48 @@ export class GatewayService {
         throw error;
       }
     }
+  }
+
+  private markApprovalWaitDurableRunResolved(
+    approval: ApprovalRequest,
+    input: ApprovalResolveInput,
+    executedAction?: ToolInvokeResult,
+  ): string | undefined {
+    const row = this.gatewaySql.prepare(`
+      SELECT run_id
+      FROM approval_wait_runs
+      WHERE approval_id = @approvalId
+      LIMIT 1
+    `).get({ approvalId: approval.approvalId }) as { run_id: string } | undefined;
+    if (!row?.run_id) {
+      return undefined;
+    }
+    this.gatewaySql.prepare(`
+      UPDATE approval_wait_runs
+      SET resolved_at = @resolvedAt
+      WHERE approval_id = @approvalId
+    `).run({
+      approvalId: approval.approvalId,
+      resolvedAt: approval.resolvedAt ?? new Date().toISOString(),
+    });
+    try {
+      this.durableRunService.wakeDurableRun(row.run_id, {
+        eventKey: "approval.resolved",
+        correlationId: approval.approvalId,
+        payload: {
+          approvalId: approval.approvalId,
+          status: approval.status,
+          decision: input.decision,
+          resolvedBy: input.resolvedBy,
+          executedOutcome: executedAction?.outcome,
+        },
+      });
+    } catch (error) {
+      if (!String((error as Error).message ?? "").includes("not waiting/paused")) {
+        throw error;
+      }
+    }
+    return row.run_id;
   }
 
   private enqueueApprovalRemoteTokenDelivery(
@@ -7772,6 +7860,40 @@ export class GatewayService {
         id: "unknown",
       });
     }
+    if (current.actionType !== expectedActionType) {
+      throw new ConflictError({
+        message: `Remote action token is bound to ${current.actionType}, not ${expectedActionType}.`,
+      });
+    }
+    if (current.state !== "pending") {
+      throw new ConflictError({
+        message: "Remote action token has already been consumed.",
+      });
+    }
+    const expiresAt = Date.parse(current.expiresAt);
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+      this.storage.remoteActionTokens.updateState(current.tokenId, "expired");
+      throw new ConflictError({
+        message: "Remote action token has expired.",
+      });
+    }
+    return this.storage.remoteActionTokens.updateState(current.tokenId, "consumed", {
+      consumedAt: new Date().toISOString(),
+      consumedBy: `connector:${current.connectorId}`,
+    });
+  }
+
+  private consumeRemoteActionTokenById(
+    tokenId: string,
+    expectedActionType: RemoteActionTokenRecord["actionType"],
+  ): RemoteActionTokenRecord {
+    const normalizedTokenId = tokenId.trim();
+    if (!normalizedTokenId) {
+      throw new ValidationError({
+        message: "Remote action token id is required.",
+      });
+    }
+    const current = this.storage.remoteActionTokens.get(normalizedTokenId);
     if (current.actionType !== expectedActionType) {
       throw new ConflictError({
         message: `Remote action token is bound to ${current.actionType}, not ${expectedActionType}.`,
@@ -10310,7 +10432,7 @@ export class GatewayService {
     const runtime = isInternalMcpApprovalInboxServer(server)
       ? await handleInternalMcpApprovalInboxInvoke(server, input, {
           approvalInbox: this.storage.approvalInbox,
-          resolveApprovalWithRemoteToken: (request) => this.resolveApprovalWithRemoteToken(request),
+          resolveApprovalWithRemoteTokenId: (request) => this.resolveApprovalWithRemoteTokenId(request),
         })
       : await invokeMcpRuntimeTool(server, {
           toolName: input.toolName,

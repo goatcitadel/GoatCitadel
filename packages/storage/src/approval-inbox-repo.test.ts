@@ -50,7 +50,7 @@ describe("ApprovalInboxRepository", () => {
     assert.equal(listed.length, 1);
     assert.equal(listed[0]?.approvalId, "apr-1");
     assert.equal(listed[0]?.tokenId, "tok-1");
-    assert.equal(listed[0]?.token, "grat_tok_1");
+    assert.equal(listed[0]?.token, "redacted:tok-1");
     assert.equal(listed[0]?.state, "pending");
   });
 
@@ -115,5 +115,81 @@ describe("ApprovalInboxRepository", () => {
     assert.equal(updated.state, "approved");
     assert.equal(updated.approvalStatus, "approved");
     assert.equal(updated.resolvedBy, "operator:mcp");
+  });
+
+  it("does not let redelivery overwrite a terminal inbox item", () => {
+    const repo = createRepo();
+    const item = repo.receiveMcpApprovalDelivery({
+      connectorId: "mcp:server-1",
+      receiverId: "server-1",
+      approvalId: "apr-1",
+      tokenId: "tok-1",
+      token: "grat_tok_1",
+      approvalKind: "tool.invoke",
+      riskLevel: "danger",
+      approvalStatus: "pending",
+      preview: { summary: "First delivery" },
+      expiresAt: "2026-03-21T12:30:00.000Z",
+      receivedAt: "2026-03-21T12:00:00.000Z",
+    });
+    repo.markResolved(item.inboxItemId, {
+      state: "approved",
+      approvalStatus: "approved",
+      resolvedAt: "2026-03-21T12:05:00.000Z",
+      resolvedBy: "operator:mcp",
+    });
+
+    const redelivered = repo.receiveMcpApprovalDelivery({
+      connectorId: "mcp:server-1",
+      receiverId: "server-1",
+      approvalId: "apr-1",
+      tokenId: "tok-1",
+      token: "grat_tok_1",
+      approvalKind: "tool.invoke",
+      riskLevel: "danger",
+      approvalStatus: "pending",
+      preview: { summary: "Late retry" },
+      expiresAt: "2026-03-21T12:45:00.000Z",
+      receivedAt: "2026-03-21T12:06:00.000Z",
+    });
+
+    assert.equal(redelivered.state, "approved");
+    assert.equal(redelivered.approvalStatus, "approved");
+    assert.equal(redelivered.preview.summary, "First delivery");
+    assert.equal(redelivered.deliveryCount, 1);
+  });
+
+  it("keeps the first terminal resolution when a second resolver arrives later", () => {
+    const repo = createRepo();
+    const item = repo.receiveMcpApprovalDelivery({
+      connectorId: "mcp:server-1",
+      receiverId: "server-1",
+      approvalId: "apr-1",
+      tokenId: "tok-1",
+      token: "grat_tok_1",
+      approvalKind: "tool.invoke",
+      riskLevel: "danger",
+      approvalStatus: "pending",
+      preview: { summary: "Approve deployment?" },
+      expiresAt: "2026-03-21T12:30:00.000Z",
+    });
+
+    const approved = repo.markResolved(item.inboxItemId, {
+      state: "approved",
+      approvalStatus: "approved",
+      resolvedAt: "2026-03-21T12:06:00.000Z",
+      resolvedBy: "operator:mcp",
+    });
+    const second = repo.markResolved(item.inboxItemId, {
+      state: "failed",
+      approvalStatus: "pending",
+      resolvedAt: "2026-03-21T12:07:00.000Z",
+      resolvedBy: "operator:mcp",
+      lastError: "token already consumed",
+    });
+
+    assert.equal(approved.state, "approved");
+    assert.equal(second.state, "approved");
+    assert.equal(second.lastError, undefined);
   });
 });

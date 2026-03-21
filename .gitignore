@@ -23,6 +23,9 @@ artifacts/reviews/*
 !artifacts/release/
 artifacts/release/*
 !artifacts/release/public-share-readiness.md
+!artifacts/prompt-lab/
+!artifacts/prompt-lab/*.md
+!artifacts/prompt-lab/*.json
 data/index.db
 data/index.db-shm
 data/index.db-wal

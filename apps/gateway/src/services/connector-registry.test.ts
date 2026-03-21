@@ -51,6 +51,36 @@ describe("buildGatewayConnectorRecords", () => {
     expect(connector?.metadata?.approvalDeliveryReady).toBe(true);
   });
 
+  it("does not advertise approval delivery readiness for degraded connectors", () => {
+    const records = buildGatewayConnectorRecords({
+      integrationConnections: [
+        {
+          ...createIntegrationConnection("channel", "slack", {
+            defaultChannel: "#ops-approvals",
+          }),
+          lastError: "delivery failed",
+        },
+      ],
+      mcpServers: [
+        {
+          ...createMcpServer(),
+          status: "disconnected",
+        },
+      ],
+      mcpTools: [createMcpTool("server-1", "goatcitadel.approval.remote_action_ready")],
+    });
+
+    const integrationConnector = records.find((item) => item.connectorId === "integration:conn-1");
+    expect(integrationConnector?.status).toBe("degraded");
+    expect(integrationConnector?.capabilities.find((item) => item.id === "approvals")?.enabled).toBe(false);
+    expect(integrationConnector?.metadata?.approvalDeliveryReady).toBe(false);
+
+    const mcpConnector = records.find((item) => item.connectorId === "mcp:server-1");
+    expect(mcpConnector?.status).toBe("degraded");
+    expect(mcpConnector?.capabilities.find((item) => item.id === "approvals")?.enabled).toBe(false);
+    expect(mcpConnector?.metadata?.approvalDeliveryReady).toBe(false);
+  });
+
   it("keeps MCP approval delivery disabled when the receiver tool is missing", () => {
     const records = buildGatewayConnectorRecords({
       integrationConnections: [],

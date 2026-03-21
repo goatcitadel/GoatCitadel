@@ -15,6 +15,11 @@ export const MCP_APPROVAL_INBOX_LIST_TOOL_NAME = "goatcitadel.approval.remote_ac
 export const MCP_APPROVAL_INBOX_RESOLVE_TOOL_NAME = "goatcitadel.approval.remote_action_inbox.resolve";
 export const MCP_APPROVAL_INBOX_URL = "goatcitadel://approval-inbox";
 
+type ApprovalInboxPort = Pick<
+  ApprovalInboxRepository,
+  "receiveMcpApprovalDelivery" | "listByReceiver" | "get" | "markResolved"
+>;
+
 export function isInternalMcpApprovalInboxServer(server: Pick<McpServerRecord, "url">): boolean {
   return server.url?.trim().toLowerCase() === MCP_APPROVAL_INBOX_URL;
 }
@@ -83,9 +88,9 @@ export async function handleInternalMcpApprovalInboxInvoke(
   server: McpServerRecord,
   input: McpInvokeRequest,
   deps: {
-    approvalInbox: ApprovalInboxRepository;
-    resolveApprovalWithRemoteToken: (input: {
-      token: string;
+    approvalInbox: ApprovalInboxPort;
+    resolveApprovalWithRemoteTokenId: (input: {
+      tokenId: string;
       decision: "approve" | "reject" | "edit";
       editedPayload?: Record<string, unknown>;
       resolutionNote?: string;
@@ -196,9 +201,9 @@ async function resolveInboxItem(
   serverId: string,
   args: Record<string, unknown> | undefined,
   deps: {
-    approvalInbox: ApprovalInboxRepository;
-    resolveApprovalWithRemoteToken: (input: {
-      token: string;
+    approvalInbox: ApprovalInboxPort;
+    resolveApprovalWithRemoteTokenId: (input: {
+      tokenId: string;
       decision: "approve" | "reject" | "edit";
       editedPayload?: Record<string, unknown>;
       resolutionNote?: string;
@@ -221,8 +226,8 @@ async function resolveInboxItem(
   }
 
   try {
-    const result = await deps.resolveApprovalWithRemoteToken({
-      token: item.token,
+    const result = await deps.resolveApprovalWithRemoteTokenId({
+      tokenId: item.tokenId,
       decision,
       editedPayload: normalizeOptionalObject(args?.editedPayload),
       resolutionNote: optionalString(args?.resolutionNote),
@@ -246,6 +251,9 @@ async function resolveInboxItem(
       resolvedBy,
       lastError: (error as Error).message,
     });
+    if (updated.state !== currentState) {
+      return { item: updated };
+    }
     throw new Error(updated.lastError);
   }
 }
