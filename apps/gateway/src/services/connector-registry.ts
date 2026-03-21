@@ -4,18 +4,26 @@ import type {
   ConnectorRecord,
   ConnectorType,
   IntegrationConnection,
+  McpToolRecord,
   McpServerRecord,
 } from "@goatcitadel/contracts";
+import { MCP_APPROVAL_DELIVERY_TOOL_NAME } from "./mcp-approval-inbox.js";
 
 const CONNECTOR_CAPABILITY_VERSION = "v1";
 
 export function buildGatewayConnectorRecords(input: {
   integrationConnections: IntegrationConnection[];
   mcpServers: McpServerRecord[];
+  mcpTools: McpToolRecord[];
 }): ConnectorRecord[] {
   return [
     createMissionControlBrowserConnectorRecord(),
-    ...input.mcpServers.map(toMcpConnectorRecord),
+    ...input.mcpServers.map((server) =>
+      toMcpConnectorRecord(
+        server,
+        input.mcpTools.filter((tool) => tool.serverId === server.serverId && tool.enabled),
+      ),
+    ),
     ...input.integrationConnections.map(toIntegrationConnectorRecord),
   ];
 }
@@ -45,6 +53,9 @@ function createMissionControlBrowserConnectorRecord(): ConnectorRecord {
     ],
     metadata: {
       surface: "mission-control-web",
+      approvalDeliveryMode: "browser_realtime",
+      approvalDeliveryReady: true,
+      approvalDeliveryReason: "Mission Control listens for approval_remote_action_ready and can resolve remote approval tokens.",
     },
   };
 }
@@ -52,6 +63,7 @@ function createMissionControlBrowserConnectorRecord(): ConnectorRecord {
 function toIntegrationConnectorRecord(connection: IntegrationConnection): ConnectorRecord {
   const isChannel = connection.kind === "channel";
   const approvalDeliveryTarget = resolveIntegrationApprovalDeliveryTarget(connection);
+  const approvalDeliveryReady = Boolean(approvalDeliveryTarget);
   return {
     connectorId: `integration:${connection.connectionId}`,
     connectorType: "integration_connection",
@@ -69,7 +81,7 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
       createCapability("inbound_messages", isChannel),
       createCapability("outbound_messages", isChannel),
       createCapability("interactive_actions", isChannel),
-      createCapability("approvals", Boolean(approvalDeliveryTarget)),
+      createCapability("approvals", approvalDeliveryReady),
     ],
     metadata: {
       catalogId: connection.catalogId,
@@ -77,6 +89,9 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
       key: connection.key,
       enabled: connection.enabled,
       connectionStatus: connection.status,
+      approvalDeliveryMode: isChannel ? "integration_channel_send" : undefined,
+      approvalDeliveryReady,
+      approvalDeliveryReason: describeIntegrationApprovalDelivery(connection, approvalDeliveryTarget),
       approvalDeliveryTarget,
     },
     lastSeenAt: connection.lastSyncAt,
@@ -84,7 +99,9 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
   };
 }
 
-function toMcpConnectorRecord(server: McpServerRecord): ConnectorRecord {
+function toMcpConnectorRecord(server: McpServerRecord, tools: McpToolRecord[]): ConnectorRecord {
+  const approvalDeliveryTool = tools.find((tool) => tool.toolName === MCP_APPROVAL_DELIVERY_TOOL_NAME);
+  const approvalDeliveryReady = Boolean(approvalDeliveryTool);
   return {
     connectorId: `mcp:${server.serverId}`,
     connectorType: "mcp_server",
@@ -98,7 +115,7 @@ function toMcpConnectorRecord(server: McpServerRecord): ConnectorRecord {
     capabilities: [
       createCapability("health_checks"),
       createCapability("interactive_actions"),
-      createCapability("approvals"),
+      createCapability("approvals", approvalDeliveryReady),
       createCapability("outbound_messages", false),
       createCapability("inbound_messages", false),
     ],
@@ -108,7 +125,12 @@ function toMcpConnectorRecord(server: McpServerRecord): ConnectorRecord {
       category: server.category,
       trustTier: server.trustTier,
       runtimeStatus: server.status,
-      approvalDeliveryToolName: "goatcitadel.approval.remote_action_ready",
+      approvalDeliveryMode: "mcp_invoke",
+      approvalDeliveryReady,
+      approvalDeliveryReason: approvalDeliveryReady
+        ? `Tool ${MCP_APPROVAL_DELIVERY_TOOL_NAME} is enabled on this MCP server.`
+        : `Tool ${MCP_APPROVAL_DELIVERY_TOOL_NAME} is not enabled on this MCP server.`,
+      approvalDeliveryToolName: approvalDeliveryTool?.toolName,
     },
     lastSeenAt: server.lastConnectedAt,
     lastError: server.lastError,
@@ -139,6 +161,38 @@ function resolveIntegrationApprovalDeliveryTarget(connection: IntegrationConnect
 function readConfigString(config: Record<string, unknown>, key: string): string | undefined {
   const value = config[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function describeIntegrationApprovalDelivery(
+  connection: IntegrationConnection,
+  approvalDeliveryTarget: string | undefined,
+): string {
+  if (connection.kind !== "channel") {
+    return "Only channel integrations can receive approval deliveries.";
+  }
+  if (!connection.enabled) {
+    return "Connection is disabled.";
+  }
+  if (connection.status !== "connected") {
+    return `Connection status is ${connection.status}.`;
+  }
+  if (approvalDeliveryTarget) {
+    return `Approval deliveries will be sent with channel.send to ${approvalDeliveryTarget}.`;
+  }
+  switch (connection.key) {
+    case "slack":
+      return "Set config.defaultChannel to enable approval delivery.";
+    case "discord":
+      return "Set config.defaultChannelId to enable approval delivery.";
+    case "telegram":
+      return "Set config.defaultChatId to enable approval delivery.";
+    case "matrix":
+      return "Set config.defaultRoomId to enable approval delivery.";
+    case "google-chat":
+      return "Set config.defaultThreadKey to enable approval delivery.";
+    default:
+      return "Set config.target or config.defaultTarget to enable approval delivery.";
+  }
 }
 
 function createCapability(id: ConnectorCapabilityId, enabled = true): ConnectorCapability {

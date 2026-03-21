@@ -10,6 +10,7 @@ import { CostLedgerRepository } from "./cost-ledger-repo.js";
 import { ApprovalEventRepository } from "./approval-event-repo.js";
 import { PendingApprovalActionRepository } from "./pending-approval-action-repo.js";
 import { RemoteActionTokenRepository } from "./remote-action-token-repo.js";
+import { ApprovalInboxRepository } from "./approval-inbox-repo.js";
 import { OrchestrationRepository } from "./orchestration-repo.js";
 import { TaskRepository } from "./task-repo.js";
 import { TaskActivityRepository } from "./task-activity-repo.js";
@@ -78,6 +79,7 @@ export class Storage {
   public readonly approvalEvents: ApprovalEventRepository;
   public readonly pendingApprovalActions: PendingApprovalActionRepository;
   public readonly remoteActionTokens: RemoteActionTokenRepository;
+  public readonly approvalInbox: ApprovalInboxRepository;
   public readonly costLedger: CostLedgerRepository;
   public readonly orchestration: OrchestrationRepository;
   public readonly tasks: TaskRepository;
@@ -138,6 +140,7 @@ export class Storage {
     this.approvalEvents = new ApprovalEventRepository(this.db);
     this.pendingApprovalActions = new PendingApprovalActionRepository(this.db);
     this.remoteActionTokens = new RemoteActionTokenRepository(this.db);
+    this.approvalInbox = new ApprovalInboxRepository(this.db);
     this.costLedger = new CostLedgerRepository(this.db);
     this.orchestration = new OrchestrationRepository(this.db);
     this.tasks = new TaskRepository(this.db);
@@ -409,3 +412,4 @@ export * from "./gateway-sql-repo.js";
 export * from "./assembly-repo.js";
 export * from "./request-attribution.js";
 export * from "./remote-action-token-repo.js";
+export * from "./approval-inbox-repo.js";

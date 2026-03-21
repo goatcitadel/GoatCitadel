@@ -389,6 +389,13 @@ import { evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
+import {
+  MCP_APPROVAL_DELIVERY_TOOL_NAME,
+  MCP_APPROVAL_INBOX_URL,
+  createInternalMcpApprovalInboxTools,
+  handleInternalMcpApprovalInboxInvoke,
+  isInternalMcpApprovalInboxServer,
+} from "./mcp-approval-inbox.js";
 
 export interface ApprovalResolveResult {
   approval: ApprovalRequest;
@@ -585,6 +592,27 @@ const DEFAULT_MCP_SERVER_POLICY: McpServerPolicy = {
   blockedToolPatterns: [],
 };
 const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
+  {
+    templateId: "approval-inbox",
+    label: "GoatCitadel Approval Inbox",
+    description: "Internal MCP receiver for durable approval deliveries, inbox review, and non-browser approval resolution.",
+    transport: "http",
+    url: MCP_APPROVAL_INBOX_URL,
+    authType: "none",
+    category: "orchestration",
+    trustTier: "trusted",
+    costTier: "free",
+    policy: {
+      requireFirstToolApproval: false,
+      redactionMode: "basic",
+      allowedToolPatterns: [
+        MCP_APPROVAL_DELIVERY_TOOL_NAME,
+        "goatcitadel.approval.remote_action_inbox.*",
+      ],
+      blockedToolPatterns: [],
+    },
+    enabledByDefault: false,
+  },
   {
     templateId: "filesystem",
     label: "Filesystem (Local)",
@@ -9532,6 +9560,7 @@ export class GatewayService {
       buildGatewayConnectorRecords({
         integrationConnections: this.storage.integrationConnections.list(undefined, 1000),
         mcpServers: this.readMcpServers(),
+        mcpTools: this.readMcpTools(),
       }),
       connectorType,
     );
@@ -10083,6 +10112,7 @@ export class GatewayService {
     if (deleted) {
       this.writeMcpServers(next);
       this.writeMcpTools(this.readMcpTools().filter((tool) => tool.serverId !== serverId));
+      this.storage.approvalInbox.deleteByReceiver("mcp", serverId);
       this.publishRealtime("system", "mcp", {
         type: "mcp_server_deleted",
         serverId,
@@ -10277,11 +10307,16 @@ export class GatewayService {
       }
     }
 
-    const runtime = await invokeMcpRuntimeTool(server, {
-      toolName: input.toolName,
-      arguments: input.arguments,
-      signal: input.signal,
-    });
+    const runtime = isInternalMcpApprovalInboxServer(server)
+      ? await handleInternalMcpApprovalInboxInvoke(server, input, {
+          approvalInbox: this.storage.approvalInbox,
+          resolveApprovalWithRemoteToken: (request) => this.resolveApprovalWithRemoteToken(request),
+        })
+      : await invokeMcpRuntimeTool(server, {
+          toolName: input.toolName,
+          arguments: input.arguments,
+          signal: input.signal,
+        });
     const output = runtime.output
       ? {
           serverId: input.serverId,
@@ -12212,6 +12247,9 @@ export class GatewayService {
     server: McpServerRecord,
     existingTools: McpToolRecord[],
   ): Promise<McpToolRecord[]> {
+    if (isInternalMcpApprovalInboxServer(server)) {
+      return createInternalMcpApprovalInboxTools(server.serverId);
+    }
     if (server.transport === "stdio") {
       const discovered = await discoverMcpTools(server);
       if (discovered.length > 0) {

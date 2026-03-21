@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import {
+  fetchConnectorRecords,
   connectMcpServer,
   createMcpServer,
   deleteMcpServer,
@@ -14,6 +15,7 @@ import {
   startMcpOAuth,
   updateMcpServerPolicy,
 } from "../api/client";
+import type { ApprovalInboxItemRecord, ConnectorRecord } from "@goatcitadel/contracts";
 import { ActionButton } from "../components/ActionButton";
 import { CardSkeleton } from "../components/CardSkeleton";
 import { ConfirmModal } from "../components/ConfirmModal";
@@ -33,8 +35,12 @@ type McpTrustTier = "trusted" | "restricted" | "quarantined";
 type McpCostTier = "free" | "mixed" | "paid" | "unknown";
 type McpTemplateRecord = Awaited<ReturnType<typeof fetchMcpTemplates>>["items"][number];
 type McpTemplateDiscoveryRecord = Awaited<ReturnType<typeof fetchMcpTemplateDiscovery>>["items"][number];
+type ApprovalInboxFilterState = "all" | ApprovalInboxItemRecord["state"];
 
-const FEATURED_MCP_TEMPLATE_IDS = ["github", "stripe", "microsoft-learn"] as const;
+const INTERNAL_APPROVAL_INBOX_URL = "goatcitadel://approval-inbox";
+const APPROVAL_INBOX_LIST_TOOL_NAME = "goatcitadel.approval.remote_action_inbox.list";
+const APPROVAL_INBOX_RESOLVE_TOOL_NAME = "goatcitadel.approval.remote_action_inbox.resolve";
+const FEATURED_MCP_TEMPLATE_IDS = ["github", "approval-inbox", "stripe"] as const;
 
 const FEATURED_MCP_NOTES: Record<(typeof FEATURED_MCP_TEMPLATE_IDS)[number], {
   why: string;
@@ -44,13 +50,13 @@ const FEATURED_MCP_NOTES: Record<(typeof FEATURED_MCP_TEMPLATE_IDS)[number], {
     why: "Best first MCP for code-heavy work: repos, issues, pull requests, and code navigation.",
     setup: "Review auth and trust policy before first live use. This is the official GitHub endpoint shape, not the older deprecated local package.",
   },
+  "approval-inbox": {
+    why: "Turns durable remote approvals into a real non-browser MCP inbox with pending actions, retries, and explicit operator resolution.",
+    setup: "Use this when you want approval delivery outside Mission Control realtime. Connect it once, then resolve approvals from the inbox panel below.",
+  },
   stripe: {
     why: "High-value if your site runs on Stripe and you want billing, customer, and subscription workflows inside GoatCitadel.",
     setup: "Treat this as restricted and keep first-use approval on. Billing data and account actions deserve a tighter policy posture.",
-  },
-  "microsoft-learn": {
-    why: "Reliable live Microsoft documentation source for Code and research work without generic search sprawl.",
-    setup: "This is a read-oriented official docs endpoint, so it is a good default docs MCP when you work with Microsoft stacks.",
   },
 };
 
@@ -85,6 +91,7 @@ export function McpPage() {
   }>>([]);
   const [templates, setTemplates] = useState<McpTemplateRecord[]>([]);
   const [templateDiscovery, setTemplateDiscovery] = useState<McpTemplateDiscoveryRecord[]>([]);
+  const [connectorRecords, setConnectorRecords] = useState<ConnectorRecord[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [tools, setTools] = useState<Array<{
     serverId: string;
@@ -111,8 +118,13 @@ export function McpPage() {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [inboxBusy, setInboxBusy] = useState(false);
   const [result, setResult] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
+  const [inboxError, setInboxError] = useState<string | null>(null);
+  const [inboxItems, setInboxItems] = useState<ApprovalInboxItemRecord[]>([]);
+  const [inboxFilterState, setInboxFilterState] = useState<ApprovalInboxFilterState>("pending");
+  const [pendingInboxActionId, setPendingInboxActionId] = useState<string | null>(null);
   const [confirmDeleteServer, setConfirmDeleteServer] = useState<{
     serverId: string;
     label: string;
@@ -131,14 +143,16 @@ export function McpPage() {
   }>>({});
 
   const loadServers = useCallback(async () => {
-    const [response, templateResponse, discoveryResponse] = await Promise.all([
+    const [response, templateResponse, discoveryResponse, connectorResponse] = await Promise.all([
       fetchMcpServers(),
       fetchMcpTemplates(),
       fetchMcpTemplateDiscovery().catch(() => ({ items: [] })),
+      fetchConnectorRecords("mcp_server"),
     ]);
     setServers(response.items);
     setTemplates(templateResponse.items);
     setTemplateDiscovery(discoveryResponse.items);
+    setConnectorRecords(connectorResponse.items);
     setSelectedServerId((current) => {
       if (current && response.items.some((item) => item.serverId === current)) {
         return current;
@@ -221,6 +235,11 @@ export function McpPage() {
     () => servers.find((item) => item.serverId === selectedServerId) ?? null,
     [selectedServerId, servers],
   );
+  const selectedConnector = useMemo(
+    () => connectorRecords.find((item) => item.sourceId === selectedServerId) ?? null,
+    [connectorRecords, selectedServerId],
+  );
+  const selectedIsInternalApprovalInbox = selected?.url?.trim().toLowerCase() === INTERNAL_APPROVAL_INBOX_URL;
   const templatesById = useMemo(
     () => new Map(templates.map((template) => [template.templateId, template])),
     [templates],
@@ -284,6 +303,70 @@ export function McpPage() {
     setPolicyBlocked(selected.policy.blockedToolPatterns.join(", "));
     setPolicyNotes(selected.policy.notes ?? "");
   }, [selected]);
+
+  const loadApprovalInbox = useCallback(async (
+    serverId: string,
+    state: ApprovalInboxFilterState,
+  ) => {
+    setInboxBusy(true);
+    try {
+      const response = await invokeMcpTool({
+        serverId,
+        toolName: APPROVAL_INBOX_LIST_TOOL_NAME,
+        arguments: state === "all" ? { limit: 50 } : { state, limit: 50 },
+      });
+      if (!response.ok) {
+        throw new Error(response.error ?? "Unable to load approval inbox.");
+      }
+      setInboxItems(parseApprovalInboxItems(response.output?.items));
+      setInboxError(null);
+    } catch (err) {
+      setInboxItems([]);
+      setInboxError(formatMcpError((err as Error).message));
+    } finally {
+      setInboxBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selected || !selectedIsInternalApprovalInbox || selected.status !== "connected") {
+      setInboxItems([]);
+      setInboxError(null);
+      return;
+    }
+    void loadApprovalInbox(selected.serverId, inboxFilterState);
+  }, [inboxFilterState, loadApprovalInbox, selected, selectedIsInternalApprovalInbox]);
+
+  const handleResolveInboxItem = useCallback(async (
+    item: ApprovalInboxItemRecord,
+    decision: "approve" | "reject",
+  ) => {
+    if (!selected) {
+      return;
+    }
+    setPendingInboxActionId(item.inboxItemId);
+    try {
+      const response = await invokeMcpTool({
+        serverId: selected.serverId,
+        toolName: APPROVAL_INBOX_RESOLVE_TOOL_NAME,
+        arguments: {
+          inboxItemId: item.inboxItemId,
+          decision,
+          resolvedBy: "mission-control:mcp",
+        },
+      });
+      if (!response.ok) {
+        throw new Error(response.error ?? `Unable to ${decision} approval inbox item.`);
+      }
+      setResult(JSON.stringify(response, null, 2));
+      setInboxError(null);
+      await loadApprovalInbox(selected.serverId, inboxFilterState);
+    } catch (err) {
+      setInboxError(formatMcpError((err as Error).message));
+    } finally {
+      setPendingInboxActionId(null);
+    }
+  }, [inboxFilterState, loadApprovalInbox, selected]);
 
   const handleCreateServer = useCallback(async () => {
     if (!label.trim()) {
@@ -401,7 +484,7 @@ export function McpPage() {
         subtitle="A practical first stack for repo work, billing operations, live docs, and local knowledge."
       >
         <p className="office-subtitle">
-          Start with GitHub, Stripe, and Microsoft Learn here. If you already use Obsidian locally, use the native
+          Start with GitHub, the Approval Inbox, and Stripe here. If you already use Obsidian locally, use the native
           Obsidian connection in <strong>Connections</strong> instead of adding a generic notes MCP.
         </p>
         <div className="stack-md">
@@ -753,6 +836,17 @@ export function McpPage() {
                 />
               </div>
               <p className="office-subtitle">{describeMcpBlockReason(selected)}</p>
+              {selectedConnector ? (
+                <div className="prompt-lab-run-summary">
+                  <p>
+                    <strong>Approval delivery</strong> {" "}
+                    <span className={`token-chip ${readConnectorApprovalReady(selectedConnector) ? "token-chip-active" : ""}`}>
+                      {readConnectorApprovalReady(selectedConnector) ? "ready" : "not ready"}
+                    </span>
+                  </p>
+                  <p className="office-subtitle">{describeConnectorApprovalDelivery(selectedConnector)}</p>
+                </div>
+              ) : null}
               {selectedDiagnostic ? (
                 <details open>
                   <summary>
@@ -846,8 +940,8 @@ export function McpPage() {
                   }}
                 />
               </div>
-              </div>
-            ) : null}
+            </div>
+          ) : null}
         </Panel>
       </div>
 
@@ -907,6 +1001,87 @@ export function McpPage() {
           <pre>{result}</pre>
         ) : null}
       </Panel>
+      {selected && selectedIsInternalApprovalInbox ? (
+        <Panel
+          title="Approval Inbox"
+          subtitle="Resolve non-browser approval deliveries that arrive through the internal MCP approval inbox."
+        >
+          <div className="controls-row">
+            <label htmlFor="approvalInboxState">State</label>
+            <GCSelect
+              id="approvalInboxState"
+              value={inboxFilterState}
+              onChange={(value) => setInboxFilterState(value as ApprovalInboxFilterState)}
+              options={[
+                { value: "pending", label: "pending" },
+                { value: "all", label: "all" },
+                { value: "approved", label: "approved" },
+                { value: "rejected", label: "rejected" },
+                { value: "edited", label: "edited" },
+                { value: "expired", label: "expired" },
+                { value: "failed", label: "failed" },
+              ]}
+            />
+            <ActionButton
+              label="Refresh Inbox"
+              pending={inboxBusy}
+              onClick={() => void loadApprovalInbox(selected.serverId, inboxFilterState)}
+            />
+          </div>
+          <p className="office-subtitle">
+            This inbox is the internal non-browser receiver for durable approval actions. Each item keeps token state,
+            delivery count, and terminal resolution details for later debugging.
+          </p>
+          {selected.status !== "connected" ? (
+            <p className="office-subtitle">Connect this server before loading approval inbox items.</p>
+          ) : null}
+          {inboxError ? <p className="error">{inboxError}</p> : null}
+          <div className="stack-md">
+            {inboxItems.map((item) => (
+              <div key={item.inboxItemId} className="prompt-lab-run-summary">
+                <p>
+                  <strong>{item.approvalKind}</strong>
+                  <span className="token-chip" style={{ marginLeft: 8 }}>{item.state}</span>
+                  <span className="token-chip" style={{ marginLeft: 8 }}>{item.riskLevel}</span>
+                  <span className="token-chip" style={{ marginLeft: 8 }}>deliveries {item.deliveryCount}</span>
+                </p>
+                <p className="office-subtitle">{summarizeApprovalPreview(item.preview)}</p>
+                <p className="office-subtitle">
+                  Approval {item.approvalId} | token {item.tokenId} | expires {new Date(item.expiresAt).toLocaleString()}
+                </p>
+                {item.lastError ? (
+                  <p className="office-subtitle">Last error: {item.lastError}</p>
+                ) : null}
+                {item.state === "pending" ? (
+                  <div className="actions">
+                    <ActionButton
+                      label="Approve"
+                      pending={pendingInboxActionId === item.inboxItemId}
+                      disabled={pendingInboxActionId !== null && pendingInboxActionId !== item.inboxItemId}
+                      onClick={() => void handleResolveInboxItem(item, "approve")}
+                    />
+                    <ActionButton
+                      label="Reject"
+                      pending={pendingInboxActionId === item.inboxItemId}
+                      disabled={pendingInboxActionId !== null && pendingInboxActionId !== item.inboxItemId}
+                      danger
+                      onClick={() => void handleResolveInboxItem(item, "reject")}
+                    />
+                  </div>
+                ) : (
+                  <p className="office-subtitle">
+                    Resolved {item.resolvedAt ? new Date(item.resolvedAt).toLocaleString() : "pending timestamp"}
+                    {item.resolvedBy ? ` by ${item.resolvedBy}` : ""}
+                  </p>
+                )}
+              </div>
+            ))}
+            {!inboxBusy && inboxItems.length === 0 && selected.status === "connected" ? (
+              <p className="office-subtitle">No approval inbox items matched the current filter.</p>
+            ) : null}
+          </div>
+        </Panel>
+      ) : null}
       <ConfirmModal
         open={Boolean(confirmDeleteServer)}
         title="Delete MCP Server"
@@ -977,4 +1152,45 @@ function describeMcpBlockReason(server: {
     return "Only tool names matching allow patterns can run.";
   }
   return "No active policy blocks detected.";
+}
+
+function parseApprovalInboxItems(value: unknown): ApprovalInboxItemRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is ApprovalInboxItemRecord => (
+    Boolean(item)
+    && typeof item === "object"
+    && typeof (item as ApprovalInboxItemRecord).inboxItemId === "string"
+    && typeof (item as ApprovalInboxItemRecord).approvalId === "string"
+  ));
+}
+
+function readConnectorApprovalReady(connector: ConnectorRecord): boolean {
+  return connector.metadata?.approvalDeliveryReady === true;
+}
+
+function describeConnectorApprovalDelivery(connector: ConnectorRecord): string {
+  const reason = typeof connector.metadata?.approvalDeliveryReason === "string"
+    ? connector.metadata.approvalDeliveryReason
+    : "No approval delivery details reported.";
+  const mode = typeof connector.metadata?.approvalDeliveryMode === "string"
+    ? connector.metadata.approvalDeliveryMode
+    : undefined;
+  if (!mode) {
+    return reason;
+  }
+  return `${mode}: ${reason}`;
+}
+
+function summarizeApprovalPreview(preview: Record<string, unknown>): string {
+  const summary = preview.summary;
+  if (typeof summary === "string" && summary.trim().length > 0) {
+    return summary.trim();
+  }
+  const serialized = JSON.stringify(preview);
+  if (!serialized || serialized === "{}") {
+    return "No preview summary provided.";
+  }
+  return serialized.length <= 220 ? serialized : `${serialized.slice(0, 217)}...`;
 }

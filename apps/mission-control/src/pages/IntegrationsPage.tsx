@@ -8,6 +8,7 @@ import {
   evaluateUiChangeRisk,
   fetchIntegrationCatalog,
   fetchIntegrationConnections,
+  fetchConnectorRecords,
   fetchIntegrationFormSchema,
   fetchIntegrationPlugins,
   fetchObsidianIntegrationStatus,
@@ -22,6 +23,7 @@ import {
   type IntegrationConnection,
   type ObsidianIntegrationStatus,
 } from "../api/client";
+import type { ConnectorRecord } from "@goatcitadel/contracts";
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { DataToolbar } from "../components/DataToolbar";
 import { PageGuideCard } from "../components/PageGuideCard";
@@ -73,6 +75,7 @@ const KIND_DESCRIPTIONS: Record<Exclude<IntegrationKind, "all">, string> = {
 export function IntegrationsPage() {
   const [catalog, setCatalog] = useState<IntegrationCatalogEntry[]>([]);
   const [connections, setConnections] = useState<IntegrationConnection[]>([]);
+  const [connectorRecords, setConnectorRecords] = useState<ConnectorRecord[]>([]);
   const [plugins, setPlugins] = useState<Awaited<ReturnType<typeof fetchIntegrationPlugins>>["items"]>([]);
   const [pluginSource, setPluginSource] = useState("");
   const [pluginBusyId, setPluginBusyId] = useState<string | null>(null);
@@ -132,16 +135,18 @@ export function IntegrationsPage() {
     return Promise.all([
       fetchIntegrationCatalog(kind),
       fetchIntegrationConnections(kind),
+      fetchConnectorRecords("integration_connection"),
       fetchIntegrationPlugins(),
       fetchObsidianIntegrationStatus(),
     ])
-      .then(([catalogRes, connectionRes, pluginRes, obsidianRes]) => {
+      .then(([catalogRes, connectionRes, connectorRes, pluginRes, obsidianRes]) => {
         if (requestId !== requestSeq.current) {
           return;
         }
         const nextCatalog = catalogRes.items;
         setCatalog(nextCatalog);
         setConnections(connectionRes.items);
+        setConnectorRecords(connectorRes.items);
         setPlugins(pluginRes.items);
         setObsidianStatus(obsidianRes);
         setObsidianEnabled(obsidianRes.enabled);
@@ -270,6 +275,10 @@ export function IntegrationsPage() {
   const channelConnections = useMemo(
     () => connections.filter((connection) => connection.kind === "channel"),
     [connections],
+  );
+  const connectorBySourceId = useMemo(
+    () => new Map(connectorRecords.map((record) => [record.sourceId, record])),
+    [connectorRecords],
   );
 
   const selectedChannelConnection = useMemo(
@@ -992,6 +1001,7 @@ export function IntegrationsPage() {
               <th>Catalog</th>
               <th>Kind</th>
               <th>Status</th>
+              <th>Approval delivery</th>
               <th>Enabled</th>
               <th>Updated</th>
               <th>Actions</th>
@@ -1000,7 +1010,7 @@ export function IntegrationsPage() {
           <tbody>
             {filteredConnections.length === 0 ? (
               <tr>
-                <td colSpan={7}>
+                <td colSpan={8}>
                   {connections.length === 0
                     ? "No configured connections yet. Create one above to get started."
                     : "No connections match this filter."}
@@ -1017,6 +1027,9 @@ export function IntegrationsPage() {
                 <td>
                   {formatStatus(connection.status)}
                   {connection.lastError ? <div className="table-subtext">{connection.lastError}</div> : null}
+                </td>
+                <td>
+                  {renderConnectorApprovalDeliverySummary(connectorBySourceId.get(connection.connectionId), connection)}
                 </td>
                 <td>{connection.enabled ? "yes" : "no"}</td>
                 <td>{new Date(connection.updatedAt).toLocaleString()}</td>
@@ -1383,6 +1396,34 @@ function guessDefaultChannelTarget(connection: IntegrationConnection): string {
 
 function requiresExplicitChannelTarget(connection: IntegrationConnection): boolean {
   return !["teams", "google-chat"].includes(connection.key);
+}
+
+function renderConnectorApprovalDeliverySummary(
+  connector: ConnectorRecord | undefined,
+  connection: IntegrationConnection,
+) {
+  const mode = typeof connector?.metadata?.approvalDeliveryMode === "string"
+    ? connector.metadata.approvalDeliveryMode
+    : undefined;
+  const target = typeof connector?.metadata?.approvalDeliveryTarget === "string"
+    ? connector.metadata.approvalDeliveryTarget
+    : guessDefaultChannelTarget(connection);
+  const reason = typeof connector?.metadata?.approvalDeliveryReason === "string"
+    ? connector.metadata.approvalDeliveryReason
+    : undefined;
+  const ready = connector?.capabilities.some((item) => item.id === "approvals" && item.enabled) ?? false;
+
+  return (
+    <>
+      {ready ? "ready" : "not ready"}
+      <div className="table-subtext">
+        {mode ? `${mode}${target ? ` -> ${target}` : ""}` : "no delivery mode"}
+      </div>
+      <div className="table-subtext">
+        {reason ?? "No approval delivery reason available."}
+      </div>
+    </>
+  );
 }
 
 function formatMaturity(maturity: IntegrationCatalogEntry["maturity"]): string {

@@ -115,6 +115,7 @@ import type {
   MemoryItemRecord,
   MemoryLifecyclePatch,
   MemoryChangeEvent,
+  ConnectorRecord,
   ConnectorDiagnosticReport,
   CronReviewItem,
   CronRunDiff,
@@ -3471,6 +3472,13 @@ export async function fetchIntegrationConnections(
 ): Promise<{ items: IntegrationConnection[] }> {
   const query = kind ? `?kind=${encodeURIComponent(kind)}&limit=300` : "?limit=300";
   return request(`/api/v1/integrations/connections${query}`);
+}
+
+export async function fetchConnectorRecords(
+  connectorType?: ConnectorRecord["connectorType"],
+): Promise<{ items: ConnectorRecord[] }> {
+  const query = connectorType ? `?connectorType=${encodeURIComponent(connectorType)}` : "";
+  return request<{ items: ConnectorRecord[] }>(`/api/v1/connectors${query}`);
 }
 
 export async function createIntegrationConnection(input: {

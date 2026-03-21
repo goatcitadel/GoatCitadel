@@ -69,6 +69,13 @@ export interface PendingApprovalAction {
 
 export type RemoteActionTokenState = "pending" | "consumed" | "expired";
 export type RemoteActionType = "approval.resolve" | "connector.mutation";
+export type ApprovalInboxItemState =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "edited"
+  | "expired"
+  | "failed";
 
 export interface RemoteActionTokenRecord {
   tokenId: string;
@@ -81,4 +88,28 @@ export interface RemoteActionTokenRecord {
   state: RemoteActionTokenState;
   consumedAt?: string;
   consumedBy?: string;
+}
+
+export interface ApprovalInboxItemRecord {
+  inboxItemId: string;
+  approvalId: string;
+  connectorId: string;
+  receiverKind: "mcp";
+  receiverId: string;
+  tokenId: string;
+  token: string;
+  actionType: "approval.resolve";
+  state: ApprovalInboxItemState;
+  approvalKind: string;
+  riskLevel: ApprovalRequest["riskLevel"];
+  approvalStatus: ApprovalStatus;
+  preview: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+  lastError?: string;
+  deliveryCount: number;
+  lastDeliveredAt: string;
 }

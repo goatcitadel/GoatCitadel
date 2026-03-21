@@ -292,6 +292,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "phase2_approval_runtime_schema",
     up: createPhase2ApprovalRuntimeSchema,
   },
+  {
+    version: 38,
+    name: "approval_inbox_schema",
+    up: createApprovalInboxSchema,
+  },
 ];
 
 function createBaseSchema(db: DatabaseSync): void {
@@ -2424,6 +2429,41 @@ function createPhase2ApprovalRuntimeSchema(db: DatabaseSync): void {
       ON remote_action_tokens(connector_id, state, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_remote_action_tokens_expires_at
       ON remote_action_tokens(expires_at);
+  `);
+}
+
+function createApprovalInboxSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS approval_inbox_items (
+      inbox_item_id TEXT PRIMARY KEY,
+      approval_id TEXT NOT NULL,
+      connector_id TEXT NOT NULL,
+      receiver_kind TEXT NOT NULL,
+      receiver_id TEXT NOT NULL,
+      token_id TEXT NOT NULL,
+      token TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending',
+      approval_kind TEXT NOT NULL,
+      risk_level TEXT NOT NULL,
+      approval_status TEXT NOT NULL,
+      preview_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      resolved_at TEXT,
+      resolved_by TEXT,
+      last_error TEXT,
+      delivery_count INTEGER NOT NULL DEFAULT 1,
+      last_delivered_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_inbox_receiver_token
+      ON approval_inbox_items(receiver_kind, receiver_id, token_id);
+    CREATE INDEX IF NOT EXISTS idx_approval_inbox_receiver_state_created
+      ON approval_inbox_items(receiver_kind, receiver_id, state, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_approval_inbox_approval_created
+      ON approval_inbox_items(approval_id, created_at DESC);
   `);
 }
 

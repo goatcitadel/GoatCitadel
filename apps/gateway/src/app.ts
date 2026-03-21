@@ -46,6 +46,7 @@ import { daemonRoutes } from "./routes/daemon.js";
 import { improvementRoutes } from "./routes/improvement.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
 import { durableRoutes } from "./routes/durable.js";
+import { connectorsRoutes } from "./routes/connectors.js";
 import { createGatewayLogger, isVerboseLoggingEnabled } from "./runtime-ux.js";
 import { isLoopbackDevOrigin, isTailnetDevOrigin, resolveTailnetShortHostAllowlist } from "./cors-origin-guard.js";
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
@@ -237,6 +238,7 @@ export async function buildApp() {
   await app.register(improvementRoutes);
   await app.register(workspacesRoutes);
   await app.register(durableRoutes);
+  await app.register(connectorsRoutes);
   await app.register(addonsRoutes);
   await app.register(adminRoutes);
   await app.register(docsRoutes);
