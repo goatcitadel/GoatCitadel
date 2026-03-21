@@ -1118,7 +1118,7 @@ describe("prompt-pack helpers", () => {
     expect(tests[7]?.prompt).toContain("Roles in order: `Researcher`, `Architect`, `QA`.");
   });
 
-  it("parses the canonical merged prompt pack markdown with all 101 tests", async () => {
+  it("parses the canonical merged prompt pack markdown with the v4 balanced layout", async () => {
     const markdown = await fs.readFile(
       new URL("../../../../goatcitadel_prompt_pack.md", import.meta.url),
       "utf8",
@@ -1126,16 +1126,25 @@ describe("prompt-pack helpers", () => {
 
     const tests = parsePromptPackTests(markdown);
     const codes = tests.map((test) => test.code);
+    const byMode = new Map<string, number>();
+    for (const test of tests) {
+      if (!test.mode) {
+        continue;
+      }
+      byMode.set(test.mode, (byMode.get(test.mode) ?? 0) + 1);
+    }
 
-    expect(tests).toHaveLength(101);
-    expect(new Set(codes).size).toBe(101);
+    expect(tests).toHaveLength(108);
+    expect(new Set(codes).size).toBe(108);
     expect(codes[0]).toBe("TEST-C01");
-    expect(codes).toContain("TEST-W30");
-    expect(codes).toContain("TEST-D32");
-    expect(codes).toContain("TEST-C31");
-    expect(codes).toContain("TEST-D36");
-    expect(codes).toContain("TEST-W34");
-    expect(codes[codes.length - 1]).toBe("TEST-W34");
+    expect(codes).toContain("TEST-W27");
+    expect(codes).toContain("TEST-D27");
+    expect(codes).toContain("TEST-T01");
+    expect(codes).toContain("TEST-T27");
+    expect(codes[codes.length - 1]).toBe("TEST-T27");
+    expect(byMode.get("chat")).toBe(36);
+    expect(byMode.get("cowork")).toBe(36);
+    expect(byMode.get("code")).toBe(36);
   });
 
   it("parses dotted manual test codes so they survive import refreshes", () => {
