@@ -21,6 +21,33 @@ export interface DurableEventWait {
   correlationId?: string;
 }
 
+export type DurableSupportedWorkflowKey =
+  | "chat.turn.execute"
+  | "approval.wait"
+  | "connector.delivery";
+
+export interface ApprovalWaitWorkflowPayload {
+  version: "approval.wait.v1";
+  approvalId: string;
+  approvalKind: string;
+  createdAt: string;
+  correlationId?: string;
+  traceId?: string;
+  originSurface?: string;
+}
+
+export interface ConnectorDeliveryWorkflowPayload {
+  version: "connector.delivery.v1";
+  connectorId: string;
+  connectorType?: string;
+  action: string;
+  payload?: Record<string, unknown>;
+  correlationId?: string;
+  traceId?: string;
+  originSurface?: string;
+  simulateFailureReason?: string;
+}
+
 export interface DurableRunCreateRequest {
   workflowKey: string;
   payload?: Record<string, unknown>;

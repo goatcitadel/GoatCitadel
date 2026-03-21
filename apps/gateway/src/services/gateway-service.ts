@@ -65,6 +65,7 @@ import type {
   FilesystemReadAccessMode,
   DeviceAccessRequestCreateInput,
   DeviceAccessRequestCreateResponse,
+  DeviceAccessGrantRecord as DeviceAccessGrantContractRecord,
   DeviceAccessRequestStatus,
   DeviceAccessRequestStatusResponse,
   DeploymentProfile,
@@ -72,6 +73,7 @@ import type {
   ApprovalReplayEvent,
   ApprovalRequest,
   ApprovalResolveInput,
+  ApprovalWaitWorkflowPayload,
   AssemblyRunDetailResponse,
   AssemblyRunRecord,
   CreateAssemblyRunInput,
@@ -230,6 +232,7 @@ import type {
   DecisionReplayItemRuleScores,
   DecisionReplayRunRecord,
   DurableCheckpointRecord,
+  ConnectorDeliveryWorkflowPayload,
   DurableDeadLetterRecord,
   DurableDiagnosticsResponse,
   DurableRunRecord,
@@ -284,10 +287,13 @@ import type {
   DurableRunCreateRequest,
   DurableRunTimelineEvent,
   DurableRetryPolicy,
+  RemoteActionTokenRecord,
 } from "@goatcitadel/contracts";
+import type { ConnectorRecord, ConnectorType } from "@goatcitadel/contracts";
 import { BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
+import { getRequestAttribution } from "../../../../packages/storage/src/request-attribution.js";
 import { LlmService } from "./llm-service.js";
 import { AssemblyService } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
@@ -380,6 +386,9 @@ import { PromptPackService, normalizePromptTestCode, clampPromptScore } from "./
 import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
 import { evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.js";
+import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
+import { dispatchConnectorDelivery } from "./connector-delivery.js";
+import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 
 export interface ApprovalResolveResult {
   approval: ApprovalRequest;
@@ -1006,6 +1015,11 @@ interface DurableChatTurnExecutionPayload {
   request: ChatSendMessageRequest;
 }
 
+interface RemoteApprovalActionTokenIssueResult extends RemoteActionTokenRecord {
+  approvalId: string;
+  token: string;
+}
+
 const CHAT_COMPACTION_RECENT_TURN_LIMIT = 6;
 const CHAT_COMPACTION_WINDOW_SIZE = 8;
 const CHAT_COMPACTION_TRIGGER_TOKENS = 2200;
@@ -1339,6 +1353,14 @@ export class GatewayService {
 
   public listRealtimeEvents(limit = 100, cursor?: string): RealtimeEvent[] {
     return this.storage.realtimeEvents.list(limit, cursor);
+  }
+
+  public listRealtimeEventsAfterSequence(afterSequence: number, limit = 100): RealtimeEvent[] {
+    return this.storage.realtimeEvents.listAfterSequence(afterSequence, limit);
+  }
+
+  public getRealtimeEventSequenceBounds(): { oldestSequence?: number; newestSequence?: number } {
+    return this.storage.realtimeEvents.getSequenceBounds();
   }
 
   public async ingestEvent(
@@ -3982,7 +4004,11 @@ export class GatewayService {
   }
 
   public createDurableRun(input: DurableRunCreateRequest): DurableRunRecord {
-    return this.durableRunService.createDurableRun(input);
+    const run = this.durableRunService.createDurableRun(input);
+    if (run.status === "queued") {
+      this.durableRunService.requestRunProcessing(run.runId);
+    }
+    return run;
   }
 
   public getDurableRun(runId: string): DurableRunRecord {
@@ -3998,7 +4024,9 @@ export class GatewayService {
   }
 
   public resumeDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    return this.durableRunService.resumeDurableRun(runId, actorId);
+    const run = this.durableRunService.resumeDurableRun(runId, actorId);
+    this.durableRunService.requestRunProcessing(runId);
+    return run;
   }
 
   public cancelDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
@@ -4006,7 +4034,11 @@ export class GatewayService {
   }
 
   public retryDurableRun(runId: string, reason = "manual_retry", actorId = "operator"): DurableRunRecord {
-    return this.durableRunService.retryDurableRun(runId, reason, actorId);
+    const run = this.durableRunService.retryDurableRun(runId, reason, actorId);
+    if (run.status === "queued") {
+      this.durableRunService.requestRunProcessing(runId);
+    }
+    return run;
   }
 
   public wakeDurableRun(
@@ -4017,7 +4049,9 @@ export class GatewayService {
       correlationId?: string;
     },
   ): DurableRunRecord {
-    return this.durableRunService.wakeDurableRun(runId, event);
+    const run = this.durableRunService.wakeDurableRun(runId, event);
+    this.durableRunService.requestRunProcessing(runId);
+    return run;
   }
 
   public recoverDurableDeadLetter(entryId: string, actorId = "operator"): DurableRunRecord {
@@ -6229,6 +6263,41 @@ export class GatewayService {
     return payload as DurableChatTurnExecutionPayload;
   }
 
+  private parseApprovalWaitWorkflowPayload(run: DurableRunRecord): ApprovalWaitWorkflowPayload | undefined {
+    const payload = run.payload as Partial<ApprovalWaitWorkflowPayload> | undefined;
+    if (!payload || payload.version !== "approval.wait.v1") {
+      return undefined;
+    }
+    if (
+      typeof payload.approvalId !== "string"
+      || typeof payload.approvalKind !== "string"
+      || typeof payload.createdAt !== "string"
+    ) {
+      return undefined;
+    }
+    return payload as ApprovalWaitWorkflowPayload;
+  }
+
+  private parseConnectorDeliveryWorkflowPayload(run: DurableRunRecord): ConnectorDeliveryWorkflowPayload | undefined {
+    const payload = run.payload as Partial<ConnectorDeliveryWorkflowPayload> | undefined;
+    if (!payload || payload.version !== "connector.delivery.v1") {
+      return undefined;
+    }
+    if (
+      typeof payload.connectorId !== "string"
+      || typeof payload.action !== "string"
+    ) {
+      return undefined;
+    }
+    if (
+      payload.payload !== undefined
+      && (typeof payload.payload !== "object" || Array.isArray(payload.payload))
+    ) {
+      return undefined;
+    }
+    return payload as ConnectorDeliveryWorkflowPayload;
+  }
+
   private createDurableChatTurnPayload(
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
@@ -6511,15 +6580,35 @@ export class GatewayService {
   }
 
   private async executeDurableWorkflowRun(run: DurableRunRecord): Promise<void> {
-    if (run.workflowKey !== "chat.turn.execute") {
-      throw new Error(`Unsupported durable workflow: ${run.workflowKey}`);
+    switch (run.workflowKey) {
+      case "chat.turn.execute":
+        await this.executeDurableChatTurnRun(run);
+        return;
+      case "approval.wait":
+        await this.executeDurableApprovalWaitRun(run);
+        return;
+      case "connector.delivery":
+        await this.executeDurableConnectorDeliveryRun(run);
+        return;
+      default:
+        throw new Error(`Unsupported durable workflow: ${run.workflowKey}`);
     }
-    await this.executeDurableChatTurnRun(run);
   }
 
   private isDurableWorkflowRecoverable(run: DurableRunRecord): { recoverable: boolean; reason?: string } {
-    if (run.workflowKey !== "chat.turn.execute") {
-      return { recoverable: false, reason: `Unsupported durable workflow: ${run.workflowKey}` };
+    switch (run.workflowKey) {
+      case "chat.turn.execute":
+        break;
+      case "approval.wait":
+        return this.parseApprovalWaitWorkflowPayload(run)
+          ? { recoverable: true }
+          : { recoverable: false, reason: "Durable approval wait payload is invalid or incomplete." };
+      case "connector.delivery":
+        return this.parseConnectorDeliveryWorkflowPayload(run)
+          ? { recoverable: true }
+          : { recoverable: false, reason: "Durable connector delivery payload is invalid or incomplete." };
+      default:
+        return { recoverable: false, reason: `Unsupported durable workflow: ${run.workflowKey}` };
     }
     const payload = this.parseDurableChatTurnPayload(run);
     if (!payload) {
@@ -6550,6 +6639,15 @@ export class GatewayService {
   }
 
   private async markDurableWorkflowUnrecoverable(run: DurableRunRecord, reason: string): Promise<void> {
+    if (run.workflowKey === "approval.wait" || run.workflowKey === "connector.delivery") {
+      this.publishRealtime("system", "durable", {
+        type: "durable_workflow_unrecoverable",
+        runId: run.runId,
+        workflowKey: run.workflowKey,
+        reason,
+      });
+      return;
+    }
     const payload = this.parseDurableChatTurnPayload(run);
     if (!payload) {
       return;
@@ -6592,6 +6690,62 @@ export class GatewayService {
     }, run.runId);
   }
 
+  private async executeDurableApprovalWaitRun(run: DurableRunRecord): Promise<void> {
+    const payload = this.parseApprovalWaitWorkflowPayload(run);
+    if (!payload) {
+      throw new Error("Durable approval wait payload is invalid or incomplete.");
+    }
+    const approval = this.storage.approvals.get(payload.approvalId);
+    if (approval.status === "pending") {
+      throw new ConflictError({
+        message: `Approval ${payload.approvalId} is still pending and cannot complete its durable wait workflow.`,
+      });
+    }
+    const checkpointState = {
+      approvalId: approval.approvalId,
+      approvalKind: approval.kind,
+      status: approval.status,
+      resolvedAt: approval.resolvedAt,
+      resolvedBy: approval.resolvedBy,
+    };
+    await this.storage.audit.append("approvals", {
+      event: "durable.approval_wait.complete",
+      runId: run.runId,
+      workflowKey: run.workflowKey,
+      ...checkpointState,
+    });
+    this.completeDurableWorkflowRun(run.runId, checkpointState);
+  }
+
+  private async executeDurableConnectorDeliveryRun(run: DurableRunRecord): Promise<void> {
+    const payload = this.parseConnectorDeliveryWorkflowPayload(run);
+    if (!payload) {
+      throw new Error("Durable connector delivery payload is invalid or incomplete.");
+    }
+    const connector = this.requireConnectorRecord(payload.connectorId);
+    if (payload.simulateFailureReason?.trim()) {
+      throw new Error(payload.simulateFailureReason.trim());
+    }
+    const dispatch = await dispatchConnectorDelivery(connector, payload, {
+      commsSend: (input) => this.commsSend(input),
+      invokeMcpTool: (input) => this.invokeMcpTool(input),
+      publishRealtime: (eventType, source, eventPayload) => this.publishRealtime(eventType, source, eventPayload),
+    });
+    const checkpointState = {
+      connectorId: connector.connectorId,
+      connectorType: connector.connectorType,
+      action: payload.action,
+      capabilityId: dispatch.capabilityId,
+      dispatchKind: dispatch.dispatchKind,
+      result: dispatch.result ?? null,
+    };
+    this.publishRealtime("connector_delivery_completed", "connectors", {
+      runId: run.runId,
+      ...checkpointState,
+    });
+    this.completeDurableWorkflowRun(run.runId, checkpointState);
+  }
+
   private async executeDurableChatTurnRun(run: DurableRunRecord): Promise<void> {
     const payload = this.parseDurableChatTurnPayload(run);
     if (!payload) {
@@ -6620,6 +6774,29 @@ export class GatewayService {
       undefined,
       { skipMessageStart: true },
     );
+  }
+
+  private completeDurableWorkflowRun(runId: string, checkpointState: Record<string, unknown>): void {
+    const now = new Date().toISOString();
+    this.storage.durableRuns.updateRun({
+      runId,
+      status: "completed",
+      updatedAt: now,
+      finishedAt: now,
+      lastError: undefined,
+    });
+    this.storage.durableRuns.createCheckpoint({
+      runId,
+      checkpointKind: "run_completed",
+      state: checkpointState,
+      createdAt: now,
+    });
+    this.recordDurableTimelineEvent(runId, "run_completed", checkpointState);
+    this.publishRealtime("system", "durable", {
+      type: "durable_run_completed",
+      runId,
+      checkpoint: checkpointState,
+    });
   }
 
   public async *resumeAgentChatTurnStream(
@@ -7235,9 +7412,91 @@ export class GatewayService {
       status: approval.status,
     });
 
+    this.ensureApprovalWaitDurableRun(approval);
     this.scheduleApprovalExplanation(approval);
 
     return approval;
+  }
+
+  public createApprovalRemoteActionToken(
+    approvalId: string,
+    input: {
+      connectorId: string;
+      issuedBy?: string;
+      expiresInMs?: number;
+    },
+  ): RemoteApprovalActionTokenIssueResult {
+    const approval = this.storage.approvals.get(approvalId);
+    if (approval.status !== "pending") {
+      throw new ConflictError({
+        message: `Approval ${approvalId} is already resolved`,
+      });
+    }
+    const connector = this.requireConnectorRecord(input.connectorId);
+    const expiresInMs = clampInt(input.expiresInMs ?? 15 * 60_000, 15 * 60_000, 60_000, 24 * 60 * 60_000);
+    const token = `grat_${randomBytes(32).toString("base64url")}`;
+    const created = this.storage.remoteActionTokens.create({
+      tokenHash: hashSensitiveToken(token),
+      actionType: "approval.resolve",
+      approvalId,
+      connectorId: input.connectorId,
+      mutation: { approvalId },
+      expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
+    });
+    void this.storage.audit.append("approvals", {
+      event: "approval.remote_token.create",
+      approvalId,
+      connectorId: input.connectorId,
+      issuedBy: input.issuedBy ?? "operator",
+      expiresAt: created.expiresAt,
+      tokenId: created.tokenId,
+    });
+    this.publishRealtime("approval_remote_token_created", "approvals", {
+      approvalId,
+      connectorId: input.connectorId,
+      expiresAt: created.expiresAt,
+      tokenId: created.tokenId,
+    });
+    this.enqueueApprovalRemoteTokenDelivery(approval, connector, {
+      token,
+      tokenId: created.tokenId,
+      expiresAt: created.expiresAt,
+    });
+    return {
+      ...created,
+      approvalId,
+      token,
+    };
+  }
+
+  public async resolveApprovalWithRemoteToken(input: {
+    token: string;
+    decision: ApprovalResolveInput["decision"];
+    editedPayload?: Record<string, unknown>;
+    resolutionNote?: string;
+  }): Promise<ApprovalResolveResult> {
+    const tokenRecord = this.consumeRemoteActionToken(input.token, "approval.resolve");
+    const approvalId = tokenRecord.approvalId ?? String(tokenRecord.mutation.approvalId ?? "").trim();
+    if (!approvalId) {
+      throw new ValidationError({
+        message: "Remote action token is missing an approval binding.",
+      });
+    }
+    const resolvedBy = `connector:${tokenRecord.connectorId}`;
+    void this.storage.audit.append("approvals", {
+      event: "approval.remote_token.consume",
+      approvalId,
+      connectorId: tokenRecord.connectorId,
+      tokenId: tokenRecord.tokenId,
+      decision: input.decision,
+      resolvedBy,
+    });
+    return this.resolveApproval(approvalId, {
+      decision: input.decision,
+      editedPayload: input.editedPayload,
+      resolutionNote: input.resolutionNote,
+      resolvedBy,
+    });
   }
 
   public listApprovals(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
@@ -7296,11 +7555,216 @@ export class GatewayService {
     }
 
     await this.recordApprovalResolutionEffects(approval, input, executedAction);
+    await this.wakeApprovalWaitDurableRun(approval, input, executedAction);
 
     return {
       approval,
       executedAction,
     };
+  }
+
+  private ensureApprovalWaitDurableRun(approval: ApprovalRequest): DurableRunRecord | undefined {
+    if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
+      return undefined;
+    }
+    const existing = this.gatewaySql.prepare(`
+      SELECT run_id
+      FROM approval_wait_runs
+      WHERE approval_id = @approvalId
+      LIMIT 1
+    `).get({ approvalId: approval.approvalId }) as { run_id: string } | undefined;
+    if (existing?.run_id) {
+      try {
+        return this.getDurableRun(existing.run_id);
+      } catch {
+        // Fall through and repair the mapping with a new waiting run.
+      }
+    }
+    const requestAttribution = this.getCurrentRequestAttribution();
+    const run = this.createDurableRun({
+      workflowKey: "approval.wait",
+      payload: ({
+        version: "approval.wait.v1",
+        approvalId: approval.approvalId,
+        approvalKind: approval.kind,
+        createdAt: approval.createdAt,
+        correlationId: requestAttribution.correlationId,
+        traceId: requestAttribution.traceId,
+        originSurface: requestAttribution.originSurface,
+      } satisfies ApprovalWaitWorkflowPayload) as unknown as Record<string, unknown>,
+      metadata: {
+        approvalId: approval.approvalId,
+        approvalKind: approval.kind,
+      },
+      waitForEvent: {
+        eventKey: "approval.resolved",
+        correlationId: approval.approvalId,
+      },
+    });
+    this.gatewaySql.prepare(`
+      INSERT INTO approval_wait_runs (approval_id, run_id, created_at, resolved_at)
+      VALUES (@approvalId, @runId, @createdAt, NULL)
+      ON CONFLICT(approval_id) DO UPDATE SET
+        run_id = excluded.run_id,
+        created_at = excluded.created_at,
+        resolved_at = NULL
+    `).run({
+      approvalId: approval.approvalId,
+      runId: run.runId,
+      createdAt: new Date().toISOString(),
+    });
+    return run;
+  }
+
+  private async wakeApprovalWaitDurableRun(
+    approval: ApprovalRequest,
+    input: ApprovalResolveInput,
+    executedAction?: ToolInvokeResult,
+  ): Promise<void> {
+    const row = this.gatewaySql.prepare(`
+      SELECT run_id
+      FROM approval_wait_runs
+      WHERE approval_id = @approvalId
+      LIMIT 1
+    `).get({ approvalId: approval.approvalId }) as { run_id: string } | undefined;
+    if (!row?.run_id) {
+      return;
+    }
+    this.gatewaySql.prepare(`
+      UPDATE approval_wait_runs
+      SET resolved_at = @resolvedAt
+      WHERE approval_id = @approvalId
+    `).run({
+      approvalId: approval.approvalId,
+      resolvedAt: approval.resolvedAt ?? new Date().toISOString(),
+    });
+    try {
+      this.wakeDurableRun(row.run_id, {
+        eventKey: "approval.resolved",
+        correlationId: approval.approvalId,
+        payload: {
+          approvalId: approval.approvalId,
+          status: approval.status,
+          decision: input.decision,
+          resolvedBy: input.resolvedBy,
+          executedOutcome: executedAction?.outcome,
+        },
+      });
+    } catch (error) {
+      if (!String((error as Error).message ?? "").includes("not waiting/paused")) {
+        throw error;
+      }
+    }
+  }
+
+  private enqueueApprovalRemoteTokenDelivery(
+    approval: ApprovalRequest,
+    connector: ConnectorRecord,
+    tokenRecord: {
+      token: string;
+      tokenId: string;
+      expiresAt: string;
+    },
+  ): DurableRunRecord | undefined {
+    if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
+      return undefined;
+    }
+    const requestAttribution = this.getCurrentRequestAttribution();
+    const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval,
+      connector,
+      token: tokenRecord.token,
+      tokenId: tokenRecord.tokenId,
+      expiresAt: tokenRecord.expiresAt,
+    });
+    if (!payload) {
+      return undefined;
+    }
+    return this.createDurableRun({
+      workflowKey: "connector.delivery",
+      payload: {
+        ...payload,
+        traceId: requestAttribution.traceId,
+        originSurface: requestAttribution.originSurface,
+      } as unknown as Record<string, unknown>,
+      metadata: {
+        approvalId: approval.approvalId,
+        connectorId: connector.connectorId,
+        connectorType: connector.connectorType,
+        deliveryKind: "approval.remote_token",
+        tokenId: tokenRecord.tokenId,
+      },
+    });
+  }
+
+  private getCurrentRequestAttribution(): {
+    correlationId?: string;
+    traceId?: string;
+    originSurface?: string;
+  } {
+    const attribution = getRequestAttribution();
+    return {
+      correlationId: typeof attribution?.correlationId === "string" ? attribution.correlationId : undefined,
+      traceId: typeof attribution?.traceId === "string" ? attribution.traceId : undefined,
+      originSurface: typeof attribution?.originSurface === "string" ? attribution.originSurface : undefined,
+    };
+  }
+
+  private requireConnectorRecord(connectorId: string): ConnectorRecord {
+    const normalizedConnectorId = connectorId.trim();
+    if (!normalizedConnectorId) {
+      throw new ValidationError({
+        message: "connectorId is required.",
+      });
+    }
+    const connector = this.listConnectorRecords().find((item) => item.connectorId === normalizedConnectorId);
+    if (!connector) {
+      throw new NotFoundError({
+        entity: "Connector",
+        id: normalizedConnectorId,
+      });
+    }
+    return connector;
+  }
+
+  private consumeRemoteActionToken(
+    token: string,
+    expectedActionType: RemoteActionTokenRecord["actionType"],
+  ): RemoteActionTokenRecord {
+    const normalizedToken = token.trim();
+    if (!normalizedToken) {
+      throw new ValidationError({
+        message: "Remote action token is required.",
+      });
+    }
+    const current = this.storage.remoteActionTokens.findByTokenHash(hashSensitiveToken(normalizedToken));
+    if (!current) {
+      throw new NotFoundError({
+        entity: "Remote action token",
+        id: "unknown",
+      });
+    }
+    if (current.actionType !== expectedActionType) {
+      throw new ConflictError({
+        message: `Remote action token is bound to ${current.actionType}, not ${expectedActionType}.`,
+      });
+    }
+    if (current.state !== "pending") {
+      throw new ConflictError({
+        message: "Remote action token has already been consumed.",
+      });
+    }
+    const expiresAt = Date.parse(current.expiresAt);
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+      this.storage.remoteActionTokens.updateState(current.tokenId, "expired");
+      throw new ConflictError({
+        message: "Remote action token has expired.",
+      });
+    }
+    return this.storage.remoteActionTokens.updateState(current.tokenId, "consumed", {
+      consumedAt: new Date().toISOString(),
+      consumedBy: `connector:${current.connectorId}`,
+    });
   }
 
   public costSummary(
@@ -8758,6 +9222,9 @@ export class GatewayService {
       requestedOrigin?: string;
       requestedIp?: string;
       userAgent?: string;
+      correlationId?: string;
+      traceId?: string;
+      originSurface?: string;
     },
   ): Promise<DeviceAccessRequestCreateResponse> {
     if (this.config.assistant.auth.mode === "none") {
@@ -8779,6 +9246,9 @@ export class GatewayService {
     const requestedOrigin = normalizeOptionalDeviceAccessText(context.requestedOrigin, 240);
     const requestedIp = normalizeOptionalDeviceAccessText(context.requestedIp, 120);
     const userAgent = normalizeOptionalDeviceAccessText(context.userAgent, 512);
+    const correlationId = normalizeOptionalDeviceAccessText(context.correlationId, 128);
+    const traceId = normalizeOptionalDeviceAccessText(context.traceId, 128);
+    const originSurface = normalizeOptionalDeviceAccessText(context.originSurface, 120);
 
     const approval = await this.createApproval({
       kind: DEVICE_ACCESS_APPROVAL_KIND,
@@ -8848,6 +9318,9 @@ export class GatewayService {
       platform,
       requestedOrigin,
       requestedIp,
+      correlationId,
+      traceId,
+      originSurface,
     });
 
     this.publishRealtime("auth_device_request_created", "auth", {
@@ -8858,6 +9331,9 @@ export class GatewayService {
       platform,
       requestedOrigin,
       requestedIp,
+      correlationId,
+      traceId,
+      originSurface,
       createdAt,
       expiresAt,
     });
@@ -8911,7 +9387,78 @@ export class GatewayService {
     return mapDeviceAccessStatusResponse(current);
   }
 
-  public validateDeviceAccessToken(token: string): { actorId: string } | undefined {
+  public listDeviceAccessGrants(): DeviceAccessGrantContractRecord[] {
+    const rows = this.gatewaySql.prepare(`
+      SELECT *
+      FROM auth_device_grants
+      ORDER BY
+        CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END,
+        COALESCE(last_used_at, created_at) DESC,
+        created_at DESC
+    `).all() as Record<string, unknown>[];
+    return rows.map((row) => toDeviceAccessGrantRecord(mapAuthDeviceGrantRow(row)));
+  }
+
+  public async revokeDeviceAccessGrant(
+    grantId: string,
+    revokedBy: string,
+  ): Promise<DeviceAccessGrantContractRecord> {
+    const existingRow = this.gatewaySql.prepare(`
+      SELECT *
+      FROM auth_device_grants
+      WHERE grant_id = @grantId
+      LIMIT 1
+    `).get({ grantId }) as Record<string, unknown> | undefined;
+    if (!existingRow) {
+      throw new NotFoundError("Device access grant not found.");
+    }
+
+    const revokedAt = new Date().toISOString();
+    this.gatewaySql.prepare(`
+      UPDATE auth_device_grants
+      SET revoked_at = COALESCE(revoked_at, @revokedAt)
+      WHERE grant_id = @grantId
+    `).run({
+      grantId,
+      revokedAt,
+    });
+
+    const grant = mapAuthDeviceGrantRow(
+      (this.gatewaySql.prepare(`
+        SELECT *
+        FROM auth_device_grants
+        WHERE grant_id = @grantId
+        LIMIT 1
+      `).get({ grantId }) as Record<string, unknown> | undefined) ?? existingRow,
+    );
+    const result = toDeviceAccessGrantRecord(grant);
+
+    await this.storage.audit.append("approvals", {
+      event: "auth.device_grant.revoke",
+      grantId: result.grantId,
+      requestId: result.requestId,
+      revokedBy,
+      deviceLabel: result.deviceLabel,
+      deviceType: result.deviceType,
+      platform: result.platform,
+      revokedAt: result.revokedAt,
+    });
+
+    this.publishRealtime("auth_device_grant_revoked", "auth", {
+      grantId: result.grantId,
+      requestId: result.requestId,
+      actorId: result.actorId,
+      deviceLabel: result.deviceLabel,
+      deviceType: result.deviceType,
+      platform: result.platform,
+      revokedAt: result.revokedAt,
+      revokedBy,
+    });
+
+    return result;
+  }
+
+  public validateDeviceAccessToken(token: string): { actorId: string; deviceId: string; grantId: string } | undefined {
     const tokenHash = hashSensitiveToken(token);
     const now = new Date().toISOString();
     const row = this.gatewaySql.prepare(`
@@ -8942,6 +9489,8 @@ export class GatewayService {
 
     return {
       actorId: `device:${grant.grantId}`,
+      deviceId: grant.grantId,
+      grantId: grant.grantId,
     };
   }
 
@@ -8976,6 +9525,16 @@ export class GatewayService {
       throw new Error(`Unknown integration catalog id: ${catalogId}`);
     }
     return schema;
+  }
+
+  public listConnectorRecords(connectorType?: ConnectorType): ConnectorRecord[] {
+    return filterConnectorRecords(
+      buildGatewayConnectorRecords({
+        integrationConnections: this.storage.integrationConnections.list(undefined, 1000),
+        mcpServers: this.readMcpServers(),
+      }),
+      connectorType,
+    );
   }
 
   public listIntegrationConnections(kind?: IntegrationKind, limit = 300): IntegrationConnection[] {
@@ -12140,6 +12699,7 @@ export class GatewayService {
     });
 
     await this.recordApprovalResolutionEffects(approval!, input);
+    await this.wakeApprovalWaitDurableRun(approval!, input);
     await this.storage.audit.append("approvals", {
       event: "auth.device_request.resolve",
       requestId: request.requestId,
@@ -12221,6 +12781,7 @@ export class GatewayService {
 
     if (approval) {
       await this.recordApprovalResolutionEffects(approval, resolutionInput);
+      await this.wakeApprovalWaitDurableRun(approval, resolutionInput);
     }
     await this.storage.audit.append("approvals", {
       event: "auth.device_request.expire",
@@ -16116,7 +16677,9 @@ function timingSafeStringEqual(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function normalizeDeviceAccessDeviceType(value?: string): string {
+function normalizeDeviceAccessDeviceType(
+  value?: string,
+): DeviceAccessGrantContractRecord["deviceType"] {
   if (
     value === "mobile"
     || value === "desktop"
@@ -16244,6 +16807,23 @@ function mapAuthDeviceGrantRow(row: Record<string, unknown>): AuthDeviceGrantRec
     lastUsedAt: typeof row.last_used_at === "string" ? row.last_used_at : undefined,
     revokedAt: typeof row.revoked_at === "string" ? row.revoked_at : undefined,
     metadata: safeJsonParse<Record<string, unknown>>(typeof row.metadata_json === "string" ? row.metadata_json : "{}", {}),
+  };
+}
+
+function toDeviceAccessGrantRecord(grant: AuthDeviceGrantRecord): DeviceAccessGrantContractRecord {
+  return {
+    grantId: grant.grantId,
+    requestId: grant.requestId,
+    actorId: `device:${grant.grantId}`,
+    deviceLabel: grant.deviceLabel,
+    deviceType: normalizeDeviceAccessDeviceType(grant.deviceType),
+    platform: grant.platform,
+    grantedBy: grant.grantedBy,
+    createdAt: grant.createdAt,
+    expiresAt: grant.expiresAt,
+    lastUsedAt: grant.lastUsedAt,
+    revokedAt: grant.revokedAt,
+    metadata: grant.metadata,
   };
 }
 

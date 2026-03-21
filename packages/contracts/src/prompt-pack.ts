@@ -107,6 +107,9 @@ export interface PromptPackReportRecord {
     runFailureCount: number;
     scoreFailureCount: number;
     needsScoreCount: number;
+    durableRuns?: number;
+    approvalPausedRuns?: number;
+    backgroundedRuns?: number;
     passThreshold: number;
     averageTotalScore: number;
     passRate: number;

@@ -20,9 +20,13 @@ export type RealtimeEventType =
 
 export interface RealtimeEvent {
   eventId: string;
+  sequence: number;
   eventType: RealtimeEventType | string;
   source: string;
   timestamp: string;
+  correlationId?: string;
+  traceId?: string;
+  originSurface?: string;
   payload: Record<string, unknown>;
 }
 

@@ -837,6 +837,27 @@ describe("prompt-pack helpers", () => {
       {
         ...createRun("run-1-new", "completed", "2026-03-15T00:00:00.000Z"),
         testId: "test-1",
+        trace: {
+          turnId: "turn-1-new",
+          sessionId: "sess-run-1-new",
+          userMessageId: "msg-1",
+          branchKind: "append",
+          status: "completed",
+          mode: "chat",
+          webMode: "auto",
+          memoryMode: "auto",
+          thinkingLevel: "standard",
+          startedAt: "2026-03-15T00:00:00.000Z",
+          finishedAt: "2026-03-15T00:00:01.000Z",
+          toolRuns: [],
+          citations: [],
+          routing: {},
+          durable: {
+            runId: "dur-run-1",
+            status: "completed",
+            checkpointKind: "run_completed",
+          },
+        },
       },
       {
         ...createRun("run-1-old", "completed", "2026-03-14T00:00:00.000Z"),
@@ -845,6 +866,26 @@ describe("prompt-pack helpers", () => {
       {
         ...createRun("run-2", "failed", "2026-03-15T00:05:00.000Z"),
         testId: "test-2",
+        trace: {
+          turnId: "turn-2",
+          sessionId: "sess-run-2",
+          userMessageId: "msg-2",
+          branchKind: "append",
+          status: "waiting_for_approval",
+          mode: "chat",
+          webMode: "auto",
+          memoryMode: "auto",
+          thinkingLevel: "standard",
+          startedAt: "2026-03-15T00:05:00.000Z",
+          toolRuns: [],
+          citations: [],
+          routing: {},
+          durable: {
+            runId: "dur-run-2",
+            status: "backgrounded",
+            checkpointKind: "run_waiting",
+          },
+        },
       },
     ];
     const scores: PromptPackScoreRecord[] = [
@@ -861,6 +902,9 @@ describe("prompt-pack helpers", () => {
     expect(summary.runFailureCount).toBe(1);
     expect(summary.scoreFailureCount).toBe(0);
     expect(summary.needsScoreCount).toBe(1);
+    expect(summary.durableRuns).toBe(2);
+    expect(summary.approvalPausedRuns).toBe(1);
+    expect(summary.backgroundedRuns).toBe(1);
     expect(summary.averageTotalScore).toBe(0);
     expect(summary.passRate).toBe(0);
     expect(summary.failingCodes).toEqual(["TEST-02"]);

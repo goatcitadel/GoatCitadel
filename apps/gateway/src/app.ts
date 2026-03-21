@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
+import { enterRequestAttribution } from "../../../packages/storage/src/request-attribution.js";
 import { loadLocalEnvFile } from "./env-file.js";
 import { gatewayPlugin } from "./plugins/sqlite.js";
 import { authPlugin } from "./plugins/auth.js";
@@ -94,12 +95,19 @@ export async function buildApp() {
 
   app.addHook("onRequest", async (request, reply) => {
     const correlationId = readRequestHeader(request.headers["x-goatcitadel-correlation-id"]) ?? randomUUID();
+    const traceId = readTraceId(request.headers.traceparent, correlationId);
     const originSurface = readRequestHeader(request.headers["x-goatcitadel-origin-surface"]);
     const sessionId = readRequestHeader(request.headers["x-goatcitadel-session-id"]);
-    (request as typeof request & { correlationId?: string; originSurface?: string; requestSessionId?: string }).correlationId = correlationId;
-    (request as typeof request & { correlationId?: string; originSurface?: string; requestSessionId?: string }).originSurface = originSurface;
-    (request as typeof request & { correlationId?: string; originSurface?: string; requestSessionId?: string }).requestSessionId = sessionId;
+    (request as typeof request & { correlationId?: string; traceId?: string; originSurface?: string; requestSessionId?: string }).correlationId = correlationId;
+    (request as typeof request & { correlationId?: string; traceId?: string; originSurface?: string; requestSessionId?: string }).traceId = traceId;
+    (request as typeof request & { correlationId?: string; traceId?: string; originSurface?: string; requestSessionId?: string }).originSurface = originSurface;
+    (request as typeof request & { correlationId?: string; traceId?: string; originSurface?: string; requestSessionId?: string }).requestSessionId = sessionId;
     reply.header("x-goatcitadel-correlation-id", correlationId);
+    enterRequestAttribution({
+      correlationId,
+      traceId,
+      originSurface,
+    });
     enterDevDiagnosticsContext({
       correlationId,
       route: request.routeOptions.url || request.url,
@@ -248,6 +256,17 @@ function readRequestHeader(value: string | string[] | undefined): string | undef
     return first?.trim();
   }
   return undefined;
+}
+
+function readTraceId(traceparent: string | string[] | undefined, fallbackCorrelationId: string): string {
+  const rawTraceparent = readRequestHeader(traceparent);
+  if (rawTraceparent) {
+    const parts = rawTraceparent.split("-");
+    if (parts.length >= 4 && parts[1]?.trim()) {
+      return parts[1].trim();
+    }
+  }
+  return fallbackCorrelationId;
 }
 
 function resolveAllowedOrigins(): Set<string> {

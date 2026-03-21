@@ -1221,6 +1221,7 @@ export class PromptPackService {
     const trace = input.run.trace;
     const traceSummary = {
       runStatus: input.run.status,
+      turnStatus: trace?.status,
       toolRunCount: trace?.toolRuns.length ?? 0,
       executedToolRuns: trace?.toolRuns.filter((item) => item.status === "executed").length ?? 0,
       failedToolRuns: trace?.toolRuns.filter((item) => item.status === "failed").length ?? 0,
@@ -1228,6 +1229,9 @@ export class PromptPackService {
       approvalRequiredCount: trace?.toolRuns.filter((item) => item.status === "approval_required").length ?? 0,
       citationCount: input.run.citations?.length ?? 0,
       fallbackUsed: trace?.routing?.fallbackUsed ?? false,
+      durableRunId: trace?.durable?.runId,
+      durableStatus: trace?.durable?.status,
+      durableCheckpointKind: trace?.durable?.checkpointKind,
     };
 
     const modeRubric = buildModeRubricGuidance(input.profile.mode);
@@ -1512,6 +1516,9 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
   lines.push(`- Run failures: ${report.summary.runFailureCount}`);
   lines.push(`- Score failures: ${report.summary.scoreFailureCount}`);
   lines.push(`- Needs score: ${report.summary.needsScoreCount}`);
+  lines.push(`- Durable-backed latest runs: ${report.summary.durableRuns ?? 0}`);
+  lines.push(`- Approval-paused latest runs: ${report.summary.approvalPausedRuns ?? 0}`);
+  lines.push(`- Backgrounded latest runs: ${report.summary.backgroundedRuns ?? 0}`);
   lines.push(`- Average score: ${report.summary.averageTotalScore.toFixed(2)}/10`);
   lines.push(`- Pass rate: ${(report.summary.passRate * 100).toFixed(1)}% (threshold ${report.summary.passThreshold}/10)`);
   lines.push("");
@@ -1598,6 +1605,15 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
       lines.push(`- Approval required: ${trace.toolRuns.filter((item) => item.status === "approval_required").length}`);
       lines.push(`- Blocked: ${trace.toolRuns.filter((item) => item.status === "blocked").length}`);
       lines.push(`- Failed: ${trace.toolRuns.filter((item) => item.status === "failed").length}`);
+      if (trace.durable?.runId) {
+        lines.push(`- Durable run: ${trace.durable.runId}`);
+      }
+      if (trace.durable?.status) {
+        lines.push(`- Durable status: ${trace.durable.status}`);
+      }
+      if (trace.durable?.checkpointKind) {
+        lines.push(`- Durable checkpoint: ${trace.durable.checkpointKind}`);
+      }
       if (trace.routing?.fallbackUsed) {
         lines.push(`- Fallback: ${trace.routing.fallbackProviderId ?? "-"} / ${trace.routing.fallbackModel ?? "-"}`);
         if (trace.routing.fallbackReason) {
@@ -2468,12 +2484,24 @@ export function buildPromptPackReportSummary(
   let runFailureCount = 0;
   let scoreFailureCount = 0;
   let needsScoreCount = 0;
+  let durableRuns = 0;
+  let approvalPausedRuns = 0;
+  let backgroundedRuns = 0;
   const latestScores: PromptPackScoreRecord[] = [];
   const failingCodes: string[] = [];
 
   for (const test of tests) {
     const latestRun = latestRunByTest.get(test.testId);
     const latestScore = latestScoreByTest.get(test.testId);
+    if (latestRun?.trace?.durable?.runId) {
+      durableRuns += 1;
+    }
+    if (latestRun?.trace?.status === "waiting_for_approval") {
+      approvalPausedRuns += 1;
+    }
+    if (latestRun?.trace?.durable?.status === "backgrounded") {
+      backgroundedRuns += 1;
+    }
     if (latestRun?.status === "completed") {
       completedRuns += 1;
     } else if (latestRun?.status === "failed") {
@@ -2509,6 +2537,9 @@ export function buildPromptPackReportSummary(
     runFailureCount,
     scoreFailureCount,
     needsScoreCount,
+    durableRuns,
+    approvalPausedRuns,
+    backgroundedRuns,
     passThreshold: PROMPT_PACK_PASS_THRESHOLD,
     averageTotalScore,
     passRate,

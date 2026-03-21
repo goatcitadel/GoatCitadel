@@ -72,4 +72,74 @@ describe("approvals routes", () => {
     expect(response.statusCode).toBe(201);
     expect(createApproval).toHaveBeenCalledTimes(1);
   });
+
+  it("issues remote action tokens for approval resolution", async () => {
+    const createApprovalRemoteActionToken = vi.fn(() => ({
+      approvalId: "apr_123",
+      connectorId: "mission-control",
+      tokenId: "rat_123",
+      token: "grat_token",
+      actionType: "approval.resolve",
+      mutation: { approvalId: "apr_123" },
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      state: "pending",
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      createApprovalRemoteActionToken,
+    } as never);
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals/3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d/remote-token",
+      payload: {
+        connectorId: "mission-control",
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(createApprovalRemoteActionToken).toHaveBeenCalledTimes(1);
+    expect(createApprovalRemoteActionToken).toHaveBeenCalledWith(
+      "3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d",
+      expect.objectContaining({
+        connectorId: "mission-control",
+      }),
+    );
+  });
+
+  it("resolves approvals via remote action token", async () => {
+    const resolveApprovalWithRemoteToken = vi.fn(async () => ({
+      approval: {
+        approvalId: "apr_123",
+        kind: "tool.invoke",
+        status: "approved",
+        riskLevel: "danger",
+        payload: {},
+        preview: {},
+        createdAt: new Date().toISOString(),
+      },
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      resolveApprovalWithRemoteToken,
+    } as never);
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals/remote-resolve",
+      payload: {
+        token: "grat_token",
+        decision: "approve",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(resolveApprovalWithRemoteToken).toHaveBeenCalledWith({
+      token: "grat_token",
+      decision: "approve",
+    });
+  });
 });

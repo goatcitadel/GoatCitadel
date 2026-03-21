@@ -6,6 +6,7 @@ import {
   getGatewayApiBaseUrl,
   preflightGatewayAccess,
   resolveApproval,
+  resolveApprovalWithRemoteToken,
   type GatewayAccessPreflightResult,
   type RealtimeEvent,
   type EventStreamConnectionState,
@@ -15,6 +16,7 @@ import { GatewayAccessGate } from "./components/GatewayAccessGate";
 import { GlobalFreshnessPill } from "./components/GlobalFreshnessPill";
 import { HelpHint } from "./components/HelpHint";
 import { NotificationStack, type NotificationItem, upsertNotificationItem } from "./components/NotificationStack";
+import { RemoteApprovalActionModal, type RemoteApprovalActionPrompt } from "./components/RemoteApprovalActionModal";
 import { ClockBadge } from "./components/ClockBadge";
 import { ShellActionGroup } from "./components/ShellActionGroup";
 import { StatusChip } from "./components/StatusChip";
@@ -174,6 +176,9 @@ type GatewayAccessViewState =
   };
 
 function deriveRefreshTopics(event: RealtimeEvent): RefreshTopic[] {
+  if (event.payload.kind === "replay_gap") {
+    return [...new Set(refreshTopicRules.map((rule) => rule.topic))];
+  }
   const haystack = `${event.eventType} ${event.source}`.toLowerCase();
   const topics = new Set<RefreshTopic>();
 
@@ -329,6 +334,8 @@ export function App() {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [deviceAccessPrompts, setDeviceAccessPrompts] = useState<DeviceAccessApprovalPrompt[]>([]);
   const [deviceAccessResolveBusy, setDeviceAccessResolveBusy] = useState(false);
+  const [remoteApprovalPrompts, setRemoteApprovalPrompts] = useState<RemoteApprovalActionPrompt[]>([]);
+  const [remoteApprovalResolveBusy, setRemoteApprovalResolveBusy] = useState(false);
   const [gatewayAccess, setGatewayAccess] = useState<GatewayAccessViewState>({
     status: "checking",
     message: "Verifying gateway reachability and access policy.",
@@ -366,9 +373,14 @@ export function App() {
   }, []);
 
   const activeDeviceAccessPrompt = deviceAccessPrompts[0];
+  const activeRemoteApprovalPrompt = remoteApprovalPrompts[0];
 
   const dismissDeviceAccessPrompt = useCallback((approvalId: string) => {
     setDeviceAccessPrompts((current) => current.filter((item) => item.approvalId !== approvalId));
+  }, []);
+
+  const dismissRemoteApprovalPrompt = useCallback((approvalId: string) => {
+    setRemoteApprovalPrompts((current) => current.filter((item) => item.approvalId !== approvalId));
   }, []);
 
   const handleResolveDeviceAccessPrompt = useCallback(async (decision: "approve" | "reject") => {
@@ -400,6 +412,30 @@ export function App() {
       setDeviceAccessResolveBusy(false);
     }
   }, [activeDeviceAccessPrompt, dismissDeviceAccessPrompt, pushNotification]);
+
+  const handleResolveRemoteApprovalPrompt = useCallback(async (decision: "approve" | "reject") => {
+    if (!activeRemoteApprovalPrompt) {
+      return;
+    }
+    setRemoteApprovalResolveBusy(true);
+    try {
+      await resolveApprovalWithRemoteToken(activeRemoteApprovalPrompt.token, decision);
+      dismissRemoteApprovalPrompt(activeRemoteApprovalPrompt.approvalId);
+      pushNotification(
+        decision === "approve" ? "success" : "warning",
+        `${activeRemoteApprovalPrompt.kind} ${decision === "approve" ? "was approved" : "was rejected"} from Mission Control.`,
+        `remote-approval:${activeRemoteApprovalPrompt.approvalId}`,
+      );
+    } catch (error) {
+      pushNotification(
+        "error",
+        (error as Error).message,
+        `remote-approval-error:${activeRemoteApprovalPrompt.approvalId}`,
+      );
+    } finally {
+      setRemoteApprovalResolveBusy(false);
+    }
+  }, [activeRemoteApprovalPrompt, dismissRemoteApprovalPrompt, pushNotification]);
 
   const handleOnboardingCompleted = useCallback(() => {
     setOnboardingComplete(true);
@@ -484,9 +520,9 @@ export function App() {
         const topics = deriveRefreshTopics(event);
         for (const topic of topics) {
           emitRefresh(topic, {
-            reason: event.eventType,
+            reason: event.payload.kind === "replay_gap" ? "replay_gap" : event.eventType,
             source: event.source,
-            eventType: event.eventType,
+            eventType: event.payload.kind === "replay_gap" ? "replay_gap" : event.eventType,
             eventId: event.eventId,
             timestamp: Date.now(),
           });
@@ -507,6 +543,30 @@ export function App() {
           if (approvalId) {
             dismissDeviceAccessPrompt(approvalId);
           }
+        }
+        if (event.eventType === "approval_remote_action_ready") {
+          const prompt = parseRemoteApprovalActionPrompt(event);
+          if (prompt) {
+            setRemoteApprovalPrompts((current) => upsertRemoteApprovalPrompt(current, prompt));
+            pushNotification(
+              "warning",
+              `${prompt.kind} is waiting for a Mission Control decision.`,
+              `remote-approval:${prompt.approvalId}`,
+            );
+          }
+        }
+        if (event.eventType === "approval_resolved") {
+          const approvalId = readDeviceAccessPromptField(event.payload, "approvalId");
+          if (approvalId) {
+            dismissRemoteApprovalPrompt(approvalId);
+          }
+        }
+        if (event.payload.kind === "replay_gap") {
+          pushNotification(
+            "warning",
+            "Live event history rotated past this browser cursor. Mission Control is refreshing from the latest retained state.",
+            "stream-replay-gap",
+          );
         }
       },
       (nextState) => {
@@ -535,7 +595,7 @@ export function App() {
       close();
       resetEventStreamStatus();
     };
-  }, [gatewayAccess.status, pushNotification, dismissDeviceAccessPrompt]);
+  }, [gatewayAccess.status, pushNotification, dismissDeviceAccessPrompt, dismissRemoteApprovalPrompt]);
 
   useEffect(() => {
     if (gatewayAccess.status !== "ready") {
@@ -919,6 +979,18 @@ export function App() {
           }
         }}
       />
+      <RemoteApprovalActionModal
+        open={Boolean(activeRemoteApprovalPrompt)}
+        prompt={activeRemoteApprovalPrompt}
+        busy={remoteApprovalResolveBusy}
+        onApprove={() => void handleResolveRemoteApprovalPrompt("approve")}
+        onReject={() => void handleResolveRemoteApprovalPrompt("reject")}
+        onDismiss={() => {
+          if (activeRemoteApprovalPrompt) {
+            dismissRemoteApprovalPrompt(activeRemoteApprovalPrompt.approvalId);
+          }
+        }}
+      />
     </div>
   );
 }
@@ -945,6 +1017,42 @@ function upsertDeviceAccessPrompt(
   current: DeviceAccessApprovalPrompt[],
   incoming: DeviceAccessApprovalPrompt,
 ): DeviceAccessApprovalPrompt[] {
+  const withoutMatch = current.filter((item) => item.approvalId !== incoming.approvalId);
+  return [incoming, ...withoutMatch];
+}
+
+function parseRemoteApprovalActionPrompt(event: RealtimeEvent): RemoteApprovalActionPrompt | undefined {
+  const nested = event.payload.payload;
+  if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
+    return undefined;
+  }
+  const payload = nested as Record<string, unknown>;
+  const approvalId = readDeviceAccessPromptField(payload, "approvalId");
+  const tokenId = readDeviceAccessPromptField(payload, "tokenId");
+  const token = readDeviceAccessPromptField(payload, "token");
+  if (!approvalId || !tokenId || !token) {
+    return undefined;
+  }
+  const preview = payload.preview;
+  return {
+    approvalId,
+    actionType: "approval.resolve",
+    tokenId,
+    token,
+    kind: readDeviceAccessPromptField(payload, "kind") ?? "approval",
+    riskLevel: readDeviceAccessPromptField(payload, "riskLevel") ?? "danger",
+    status: readDeviceAccessPromptField(payload, "status") ?? "pending",
+    preview: preview && typeof preview === "object" && !Array.isArray(preview)
+      ? preview as Record<string, unknown>
+      : undefined,
+    expiresAt: readDeviceAccessPromptField(payload, "expiresAt"),
+  };
+}
+
+function upsertRemoteApprovalPrompt(
+  current: RemoteApprovalActionPrompt[],
+  incoming: RemoteApprovalActionPrompt,
+): RemoteApprovalActionPrompt[] {
   const withoutMatch = current.filter((item) => item.approvalId !== incoming.approvalId);
   return [incoming, ...withoutMatch];
 }

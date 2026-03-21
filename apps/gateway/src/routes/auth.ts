@@ -11,6 +11,14 @@ const deviceRequestParamsSchema = z.object({
   requestId: z.string().uuid(),
 });
 
+const deviceGrantParamsSchema = z.object({
+  grantId: z.string().uuid(),
+});
+
+const deviceGrantListQuerySchema = z.object({
+  view: z.enum(["active", "all"]).default("active"),
+});
+
 const deviceRequestSecretHeaderSchema = z.object({
   "x-goatcitadel-device-request-secret": z.string().trim().min(16).max(256),
 });
@@ -44,6 +52,9 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         requestedOrigin: typeof request.headers.origin === "string" ? request.headers.origin : undefined,
         requestedIp: request.raw.socket.remoteAddress ?? request.ip,
         userAgent: typeof request.headers["user-agent"] === "string" ? request.headers["user-agent"] : undefined,
+        correlationId: readHeaderValue(request.headers["x-goatcitadel-correlation-id"]),
+        traceId: readTraceId(request.headers.traceparent, request.headers["x-goatcitadel-correlation-id"]),
+        originSurface: readHeaderValue(request.headers["x-goatcitadel-origin-surface"]),
       });
       return reply.code(201).send(created);
     } catch (error) {
@@ -55,6 +66,37 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/auth/plan", async (_request, reply) => {
     return reply.send(fastify.gateway.getAuthCredentialPlan());
+  });
+
+  fastify.get("/api/v1/auth/devices", async (request, reply) => {
+    const parsed = deviceGrantListQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+
+    const items = fastify.gateway
+      .listDeviceAccessGrants()
+      .filter((item) => parsed.data.view === "all" || !item.revokedAt);
+    return reply.send({ items });
+  });
+
+  fastify.post("/api/v1/auth/devices/:grantId/revoke", async (request, reply) => {
+    const params = deviceGrantParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+
+    try {
+      const grant = await fastify.gateway.revokeDeviceAccessGrant(
+        params.data.grantId,
+        request.authActorId,
+      );
+      return reply.send({ grant });
+    } catch (error) {
+      const message = (error as Error).message;
+      const statusCode = /not found/i.test(message) ? 404 : 400;
+      return reply.code(statusCode).send({ error: message });
+    }
   });
 
   fastify.post("/api/v1/auth/install-token", async (request, reply) => {
@@ -97,3 +139,25 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 };
+
+function readHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (!value || Array.isArray(value)) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readTraceId(
+  traceparent: string | string[] | undefined,
+  correlationId: string | string[] | undefined,
+): string | undefined {
+  const rawTraceparent = readHeaderValue(traceparent);
+  if (rawTraceparent) {
+    const parts = rawTraceparent.split("-");
+    if (parts.length >= 4 && parts[1]?.length === 32) {
+      return parts[1];
+    }
+  }
+  return readHeaderValue(correlationId);
+}

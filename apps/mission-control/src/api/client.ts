@@ -10,6 +10,8 @@ import type {
   AgentProfileRecord,
   AgentProfileUpdateInput,
   AuthSettingsUpdateInput,
+  DeviceAccessGrantListResponse,
+  DeviceAccessGrantRevokeResponse,
   ApprovalReplayEvent,
   ApprovalRequest,
   AssemblyRunDetailResponse,
@@ -173,6 +175,7 @@ const MAX_SSE_BUFFER_CHARS = 256_000;
 const MAX_SSE_EVENT_PREVIEW_CHARS = 180;
 const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
+const EVENT_CURSOR_STORAGE_KEY = "goatcitadel.events.cursor.v1";
 
 export interface GatewayAuthState {
   mode?: "none" | "token" | "basic";
@@ -893,9 +896,13 @@ export interface TaskSubagentSession {
 
 export interface RealtimeEvent {
   eventId: string;
+  sequence: number;
   eventType: string;
   source: string;
   timestamp: string;
+  correlationId?: string;
+  traceId?: string;
+  originSurface?: string;
   payload: Record<string, unknown>;
 }
 
@@ -2501,6 +2508,19 @@ export async function resolveApproval(
   });
 }
 
+export async function resolveApprovalWithRemoteToken(
+  token: string,
+  decision: "approve" | "reject",
+): Promise<{ approval: ApprovalRequest; executedAction?: ToolInvokeResult }> {
+  return request("/api/v1/approvals/remote-resolve", {
+    method: "POST",
+    body: JSON.stringify({
+      token,
+      decision,
+    }),
+  });
+}
+
 export async function fetchApprovalReplay(approvalId: string): Promise<ApprovalReplayResponse> {
   return request<ApprovalReplayResponse>(`/api/v1/approvals/${approvalId}/replay`);
 }
@@ -2799,8 +2819,17 @@ export async function updateTaskSubagent(
   });
 }
 
-export async function fetchRealtimeEvents(limit = 100): Promise<{ items: RealtimeEvent[]; nextCursor?: string }> {
-  return request<{ items: RealtimeEvent[]; nextCursor?: string }>(`/api/v1/events?limit=${limit}`);
+export async function fetchRealtimeEvents(
+  limit = 100,
+  cursor?: string,
+): Promise<{ items: RealtimeEvent[]; nextCursor?: string }> {
+  const query = new URLSearchParams({
+    limit: String(limit),
+  });
+  if (cursor?.trim()) {
+    query.set("cursor", cursor.trim());
+  }
+  return request<{ items: RealtimeEvent[]; nextCursor?: string }>(`/api/v1/events?${query.toString()}`);
 }
 
 export async function fetchDashboardState(): Promise<DashboardStateResponse> {
@@ -3193,6 +3222,19 @@ export async function patchSkillActivationPolicies(
 
 export async function fetchSettings(): Promise<RuntimeSettingsResponse> {
   return request<RuntimeSettingsResponse>("/api/v1/settings");
+}
+
+export async function fetchDeviceAccessGrants(
+  view: "active" | "all" = "active",
+): Promise<DeviceAccessGrantListResponse> {
+  return request<DeviceAccessGrantListResponse>(`/api/v1/auth/devices?view=${encodeURIComponent(view)}`);
+}
+
+export async function revokeDeviceAccessGrant(grantId: string): Promise<DeviceAccessGrantRevokeResponse> {
+  return request<DeviceAccessGrantRevokeResponse>(`/api/v1/auth/devices/${encodeURIComponent(grantId)}/revoke`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function fetchAddonsCatalog(): Promise<{ items: AddonCatalogEntry[] }> {
@@ -4041,7 +4083,12 @@ export function connectEventStream(
 
 async function buildEventStreamUrl(): Promise<string> {
   const url = new URL(`${API_BASE}/api/v1/events/stream`);
-  url.searchParams.set("replay", "20");
+  const lastCursor = readStoredRealtimeCursor();
+  if (lastCursor !== undefined) {
+    url.searchParams.set("afterCursor", String(lastCursor));
+  } else {
+    url.searchParams.set("replay", "20");
+  }
 
   const auth = readGatewayAuthState();
   if (!auth) {
@@ -4129,6 +4176,9 @@ async function ensureEventStreamConnected(): Promise<void> {
     }
     try {
       const event = JSON.parse(evt.data) as RealtimeEvent;
+      if (typeof event.sequence === "number" && Number.isFinite(event.sequence)) {
+        persistRealtimeCursor(event.sequence);
+      }
       lastEventAt = event.timestamp || new Date().toISOString();
       recordClientDiagnostic({
         level: "debug",
@@ -4148,6 +4198,19 @@ async function ensureEventStreamConnected(): Promise<void> {
       // ignore malformed messages
     }
   };
+
+  source.addEventListener("replay-gap", (evt) => {
+    if (sharedEventSource !== source) {
+      return;
+    }
+    clearStoredRealtimeCursor();
+    lastErrorAt = new Date().toISOString();
+    const replayGapEvent = buildReplayGapRealtimeEvent(evt.data);
+    notifyEventStreamStatusToAll();
+    for (const subscriber of eventStreamSubscribers) {
+      subscriber.onEvent(replayGapEvent);
+    }
+  });
 
   source.onerror = () => {
     if (sharedEventSource !== source) {
@@ -4315,6 +4378,55 @@ function buildEventStreamStatus(): EventStreamStatus {
     reconnectAttempts,
     lastEventAt,
     lastErrorAt,
+  };
+}
+
+function readStoredRealtimeCursor(): number | undefined {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+  const raw = window.localStorage.getItem(EVENT_CURSOR_STORAGE_KEY)?.trim();
+  if (!raw || !/^\d+$/.test(raw)) {
+    return undefined;
+  }
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function persistRealtimeCursor(sequence: number): void {
+  if (typeof window === "undefined" || !Number.isFinite(sequence) || sequence <= 0) {
+    return;
+  }
+  window.localStorage.setItem(EVENT_CURSOR_STORAGE_KEY, String(sequence));
+}
+
+function clearStoredRealtimeCursor(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.removeItem(EVENT_CURSOR_STORAGE_KEY);
+}
+
+function buildReplayGapRealtimeEvent(rawPayload: string): RealtimeEvent {
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = JSON.parse(rawPayload) as Record<string, unknown>;
+  } catch {
+    payload = { error: "replay_gap" };
+  }
+  return {
+    eventId: `replay-gap-${Date.now()}`,
+    sequence: Number(payload.oldestCursor ?? 0),
+    eventType: "system",
+    source: "events",
+    timestamp: new Date().toISOString(),
+    correlationId: undefined,
+    traceId: undefined,
+    originSurface: "mission-control-web",
+    payload: {
+      kind: "replay_gap",
+      ...payload,
+    },
   };
 }
 

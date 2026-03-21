@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { SseTokenIssueResponse } from "@goatcitadel/contracts";
+import { enterRequestAttribution } from "../../../../packages/storage/src/request-attribution.js";
 import fp from "fastify-plugin";
 
 declare module "fastify" {
@@ -10,6 +11,8 @@ declare module "fastify" {
   interface FastifyRequest {
     authActorId: string;
     authActorSource: "none" | "token" | "basic" | "loopback" | "sse" | "device";
+    authDeviceId?: string;
+    authGrantId?: string;
   }
 }
 
@@ -27,6 +30,8 @@ export const authPlugin = fp(async (fastify) => {
   const sseTokens = new Map<string, SseTokenRecord>();
   fastify.decorateRequest("authActorId", "anonymous");
   fastify.decorateRequest("authActorSource", "none");
+  fastify.decorateRequest("authDeviceId", undefined);
+  fastify.decorateRequest("authGrantId", undefined);
 
   fastify.decorate("issueSseToken", (scope: "events:stream", ttlMs = 2 * 60 * 1000) => {
     purgeExpiredSseTokens(sseTokens);
@@ -47,6 +52,8 @@ export const authPlugin = fp(async (fastify) => {
 
   fastify.addHook("onRequest", async (request, reply) => {
     setAuthActor(request, "anonymous", "none");
+    request.authDeviceId = undefined;
+    request.authGrantId = undefined;
     if (request.method === "OPTIONS") {
       return;
     }
@@ -88,6 +95,13 @@ export const authPlugin = fp(async (fastify) => {
       const deviceGrant = fastify.gateway.validateDeviceAccessToken(providedBearerToken);
       if (deviceGrant) {
         setAuthActor(request, deviceGrant.actorId, "device");
+        request.authDeviceId = deviceGrant.deviceId;
+        request.authGrantId = deviceGrant.grantId;
+        enterRequestAttribution({
+          actorId: deviceGrant.actorId,
+          deviceId: deviceGrant.deviceId,
+          grantId: deviceGrant.grantId,
+        });
         return;
       }
     }
@@ -265,6 +279,7 @@ function setAuthActor(
 ): void {
   request.authActorId = actorId;
   request.authActorSource = source;
+  enterRequestAttribution({ actorId });
 }
 
 function hashForTimingCompare(value: string): Buffer {

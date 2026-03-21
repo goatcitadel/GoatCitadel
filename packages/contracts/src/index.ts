@@ -9,6 +9,7 @@ export * from "./tasks.js";
 export * from "./monitoring.js";
 export * from "./llm.js";
 export * from "./auth.js";
+export * from "./connectors.js";
 export * from "./integrations.js";
 export * from "./mesh.js";
 export * from "./onboarding.js";

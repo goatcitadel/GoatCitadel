@@ -97,6 +97,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       runFailureCount: number;
       scoreFailureCount: number;
       needsScoreCount: number;
+      durableRuns?: number;
+      approvalPausedRuns?: number;
+      backgroundedRuns?: number;
       passThreshold: number;
       averageTotalScore: number;
       passRate: number;
@@ -1218,6 +1221,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
           <p>Run failures (execution/runtime): {testOutcomeSummary.runFailureCount}</p>
           <p>Score failures (completed but below threshold): {testOutcomeSummary.scoreFailureCount}</p>
           <p>Runs waiting for score: {testOutcomeSummary.needsScoreCount}</p>
+          <p>Durable-backed latest runs: {report.summary.durableRuns ?? 0}</p>
+          <p>Approval-paused latest runs: {report.summary.approvalPausedRuns ?? 0}</p>
+          <p>Backgrounded latest runs: {report.summary.backgroundedRuns ?? 0}</p>
           <p>Passing tests: {testOutcomeSummary.passingCount}</p>
           <p>Average score: {report.summary.averageTotalScore.toFixed(2)}/10</p>
           <p>Pass rate: {(report.summary.passRate * 100).toFixed(1)}% (threshold {passThreshold}/10)</p>

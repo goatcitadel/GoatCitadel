@@ -25,6 +25,7 @@ const DEFAULT_GATEWAY_HOST_ALLOWLIST: string[] = [];
 const API_BASE = import.meta.env.VITE_GATEWAY_URL ?? inferDefaultGatewayBaseUrl();
 const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
+const EVENT_CURSOR_STORAGE_KEY = "goatcitadel.events.cursor.v1";
 
 export interface GatewayAuthState {
   mode?: "none" | "token" | "basic";
@@ -370,6 +371,19 @@ export async function resolveApproval(
   return request<{ approval: ApprovalRequest }>(`/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`, {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export async function resolveApprovalWithRemoteToken(
+  token: string,
+  decision: "approve" | "reject",
+): Promise<{ approval: ApprovalRequest }> {
+  return request<{ approval: ApprovalRequest }>("/api/v1/approvals/remote-resolve", {
+    method: "POST",
+    body: JSON.stringify({
+      token,
+      decision,
+    }),
   });
 }
 
@@ -726,7 +740,12 @@ async function probeGatewayHealth(): Promise<{ ok: boolean; detail: string }> {
 
 async function buildEventStreamUrl(): Promise<string> {
   const url = new URL(`${API_BASE}/api/v1/events/stream`);
-  url.searchParams.set("replay", "20");
+  const lastCursor = readStoredRealtimeCursor();
+  if (lastCursor !== undefined) {
+    url.searchParams.set("afterCursor", String(lastCursor));
+  } else {
+    url.searchParams.set("replay", "20");
+  }
 
   const auth = readGatewayAuthState();
   if (!auth) {
@@ -814,6 +833,9 @@ async function ensureEventStreamConnected(): Promise<void> {
     }
     try {
       const payload = JSON.parse(event.data) as RealtimeEvent;
+      if (typeof payload.sequence === "number" && Number.isFinite(payload.sequence)) {
+        persistRealtimeCursor(payload.sequence);
+      }
       lastEventAt = payload.timestamp || new Date().toISOString();
       recordClientDiagnostic({
         level: "debug",
@@ -833,6 +855,19 @@ async function ensureEventStreamConnected(): Promise<void> {
       // Ignore malformed stream payloads.
     }
   };
+
+  source.addEventListener("replay-gap", (event) => {
+    if (sharedEventSource !== source) {
+      return;
+    }
+    clearStoredRealtimeCursor();
+    lastErrorAt = new Date().toISOString();
+    const payload = buildReplayGapRealtimeEvent(event.data);
+    notifyEventStreamStatusToAll();
+    for (const subscriber of eventStreamSubscribers) {
+      subscriber.onEvent(payload);
+    }
+  });
 
   source.onerror = () => {
     if (sharedEventSource !== source) {
@@ -931,6 +966,53 @@ function buildEventStreamStatus(): EventStreamStatus {
     reconnectAttempts,
     lastEventAt,
     lastErrorAt,
+  };
+}
+
+function readStoredRealtimeCursor(): number | undefined {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+  const raw = window.localStorage.getItem(EVENT_CURSOR_STORAGE_KEY)?.trim();
+  if (!raw || !/^\d+$/.test(raw)) {
+    return undefined;
+  }
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function persistRealtimeCursor(sequence: number): void {
+  if (typeof window === "undefined" || !Number.isFinite(sequence) || sequence <= 0) {
+    return;
+  }
+  window.localStorage.setItem(EVENT_CURSOR_STORAGE_KEY, String(sequence));
+}
+
+function clearStoredRealtimeCursor(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.removeItem(EVENT_CURSOR_STORAGE_KEY);
+}
+
+function buildReplayGapRealtimeEvent(rawPayload: string): RealtimeEvent {
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = JSON.parse(rawPayload) as Record<string, unknown>;
+  } catch {
+    payload = { error: "replay_gap" };
+  }
+  return {
+    eventId: `replay-gap-${Date.now()}`,
+    sequence: Number(payload.oldestCursor ?? 0),
+    eventType: "system",
+    source: "events",
+    timestamp: new Date().toISOString(),
+    originSurface: "mission-control-web",
+    payload: {
+      kind: "replay_gap",
+      ...payload,
+    },
   };
 }
 

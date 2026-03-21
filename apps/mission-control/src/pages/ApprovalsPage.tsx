@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   fetchApprovalReplay,
   fetchApprovals,
+  fetchDevDiagnostics,
   fetchDurableRun,
   fetchDurableRunTimeline,
   resolveApproval,
@@ -58,6 +59,7 @@ export function ApprovalsPage() {
   const [replayById, setReplayById] = useState<Record<string, ApprovalReplayResponse>>({});
   const [durableByApprovalId, setDurableByApprovalId] = useState<Record<string, ApprovalDurableStatus | null>>({});
   const [durableBusyByApprovalId, setDurableBusyByApprovalId] = useState<Record<string, boolean>>({});
+  const [tracePreviewByApprovalId, setTracePreviewByApprovalId] = useState<Record<string, string[]>>({});
   const [pendingDecision, setPendingDecision] = useState<{ approvalId: string; decision: "approve" | "reject" } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const resolveAction = useAction();
@@ -162,6 +164,25 @@ export function ApprovalsPage() {
     }
   };
 
+  const loadTracePreview = async (approvalId: string, correlationId?: string) => {
+    if (!correlationId) {
+      return;
+    }
+    try {
+      const response = await fetchDevDiagnostics({
+        correlationId,
+        limit: 12,
+      });
+      setTracePreviewByApprovalId((prev) => ({
+        ...prev,
+        [approvalId]: response.items.map((item) => `${new Date(item.timestamp).toLocaleTimeString()} ${item.event}: ${item.message}`),
+      }));
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
   if (!data) {
     return <CardSkeleton lines={7} />;
   }
@@ -207,6 +228,10 @@ export function ApprovalsPage() {
         const replay = replayById[approval.approvalId];
         const durable = durableByApprovalId[approval.approvalId];
         const durableBusy = Boolean(durableBusyByApprovalId[approval.approvalId]);
+        const tracePreview = tracePreviewByApprovalId[approval.approvalId];
+        const traceMetadata = findTraceMetadata(replay?.pendingAction?.request)
+          ?? findTraceMetadata(approval.payload)
+          ?? findTraceMetadata(approval.preview);
         const explanationLabel =
           approval.explanationStatus === "pending"
             ? "Pending explanation"
@@ -275,6 +300,25 @@ export function ApprovalsPage() {
             ) : null}
 
             <pre>{JSON.stringify(approval.preview, null, 2)}</pre>
+            {traceMetadata?.traceId ? <p>trace: {traceMetadata.traceId}</p> : null}
+            {traceMetadata?.correlationId ? <p>correlation: {traceMetadata.correlationId}</p> : null}
+            {traceMetadata?.correlationId ? (
+              <div className="actions">
+                <button type="button" onClick={() => void loadTracePreview(approval.approvalId, traceMetadata.correlationId)}>
+                  {tracePreview ? "Refresh trace detail" : "Load trace detail"}
+                </button>
+              </div>
+            ) : null}
+            {tracePreview?.length ? (
+              <div className="replay-box">
+                <h4>Trace detail</h4>
+                <ul className="compact-list">
+                  {tracePreview.map((item) => (
+                    <li key={`${approval.approvalId}-${item}`}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <div className="actions">
               <button type="button" onClick={() => setPendingDecision({ approvalId: approval.approvalId, decision: "approve" })}>Approve</button>
               <button type="button" className="danger" onClick={() => setPendingDecision({ approvalId: approval.approvalId, decision: "reject" })}>Reject</button>
@@ -353,5 +397,30 @@ export function ApprovalsPage() {
       />
     </section>
   );
+}
+
+function findTraceMetadata(payload: unknown): { correlationId?: string; traceId?: string } | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const stack: unknown[] = [payload];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    const record = current as Record<string, unknown>;
+    const correlationId = typeof record.correlationId === "string" ? record.correlationId : undefined;
+    const traceId = typeof record.traceId === "string" ? record.traceId : undefined;
+    if (correlationId || traceId) {
+      return { correlationId, traceId };
+    }
+    for (const value of Object.values(record)) {
+      if (value && typeof value === "object") {
+        stack.push(value);
+      }
+    }
+  }
+  return null;
 }
 

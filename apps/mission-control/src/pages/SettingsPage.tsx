@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { providerTemplates } from "@goatcitadel/contracts";
+import { providerTemplates, type DeviceAccessGrantRecord } from "@goatcitadel/contracts";
 import {
   clearGatewayAuthState,
   createLlmChatCompletion,
   deleteProviderSecret,
   evaluateUiChangeRisk,
+  fetchDeviceAccessGrants,
   getGatewayAuthStorageMode,
   persistGatewayAuthState,
   readStoredGatewayAuthState,
+  revokeDeviceAccessGrant,
   fetchVoiceStatus,
   fetchVoiceRuntimeStatus,
   fetchProviderSecretStatus,
@@ -168,6 +170,8 @@ export function SettingsPage() {
   const [basicUsername, setBasicUsername] = useState("");
   const [basicPassword, setBasicPassword] = useState("");
   const [authStorageMode, setAuthStorageMode] = useState<GatewayAuthStorageMode>("session");
+  const [deviceGrants, setDeviceGrants] = useState<DeviceAccessGrantRecord[]>([]);
+  const [deviceGrantBusyId, setDeviceGrantBusyId] = useState<string | null>(null);
   const [models, setModels] = useState<Array<{ id: string; ownedBy?: string; created?: number }>>([]);
   const [previewedProviderId, setPreviewedProviderId] = useState("");
   const [loadingModels, setLoadingModels] = useState(false);
@@ -318,6 +322,9 @@ export function SettingsPage() {
         hydrateStoredAuthCredentials();
       })
       .catch((err: Error) => setError(err.message));
+    void fetchDeviceAccessGrants("all")
+      .then((res) => setDeviceGrants(res.items))
+      .catch(() => setDeviceGrants([]));
   };
 
   useEffect(() => {
@@ -335,7 +342,11 @@ export function SettingsPage() {
     "system",
     async (signal) => {
       const haystack = `${signal.reason} ${signal.eventType ?? ""} ${signal.source ?? ""}`.toLowerCase();
-      if (!/\b(onboarding|settings)\b/.test(haystack) && signal.eventType !== "fallback_poll") {
+      if (
+        !/\b(onboarding|settings|auth|device)\b/.test(haystack)
+        && signal.eventType !== "fallback_poll"
+        && signal.reason !== "replay_gap"
+      ) {
         return;
       }
       load({ preserveModelDrafts: true });
@@ -362,6 +373,21 @@ export function SettingsPage() {
         setVoiceRuntime(null);
       });
   }, []);
+
+  const onRevokeDeviceGrant = async (grantId: string) => {
+    setDeviceGrantBusyId(grantId);
+    try {
+      const response = await revokeDeviceAccessGrant(grantId);
+      setDeviceGrants((current) => current.map((item) => (
+        item.grantId === response.grant.grantId ? response.grant : item
+      )));
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDeviceGrantBusyId(null);
+    }
+  };
 
   useEffect(() => {
     if (!settings) {
@@ -1076,6 +1102,45 @@ export function SettingsPage() {
                 Server status: token configured: {settings.auth.tokenConfigured ? "yes" : "no"} | basic configured: {settings.auth.basicConfigured ? "yes" : "no"}
               </p>
               <button type="button" onClick={onSaveAuth} disabled={blockSaves}>Save Access Control</button>
+              <div className="replay-box">
+                <h4>Approved device grants</h4>
+                <p className="office-subtitle">
+                  Active grants stay visible here with last-seen and expiry data so operators can revoke stale devices without guessing.
+                </p>
+                {deviceGrants.length === 0 ? (
+                  <p className="office-subtitle">No approved device grants yet.</p>
+                ) : (
+                  <ul className="compact-list">
+                    {deviceGrants.map((grant) => (
+                      <li key={grant.grantId}>
+                        <div>
+                          <strong>{grant.deviceLabel}</strong> ({grant.deviceType})
+                          {grant.platform ? ` on ${grant.platform}` : ""}
+                        </div>
+                        <div className="office-subtitle">
+                          actor: {grant.actorId} | granted by {grant.grantedBy}
+                        </div>
+                        <div className="office-subtitle">
+                          created: {new Date(grant.createdAt).toLocaleString()}
+                          {grant.lastUsedAt ? ` | last seen: ${new Date(grant.lastUsedAt).toLocaleString()}` : " | last seen: never"}
+                          {grant.expiresAt ? ` | expires: ${new Date(grant.expiresAt).toLocaleString()}` : " | expires: no TTL"}
+                          {grant.revokedAt ? ` | revoked: ${new Date(grant.revokedAt).toLocaleString()}` : ""}
+                        </div>
+                        <div className="actions">
+                          <button
+                            type="button"
+                            className="danger"
+                            disabled={Boolean(grant.revokedAt) || deviceGrantBusyId === grant.grantId}
+                            onClick={() => { void onRevokeDeviceGrant(grant.grantId); }}
+                          >
+                            {grant.revokedAt ? "Revoked" : deviceGrantBusyId === grant.grantId ? "Revoking..." : "Revoke device"}
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </Panel>
           </section>
 

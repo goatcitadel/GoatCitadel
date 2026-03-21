@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DurableRunRecord } from "@goatcitadel/contracts";
+import type { DurableRetryRecord, DurableRunRecord } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
 import { DurableRunService } from "./durable-run-service.js";
 
@@ -38,13 +38,108 @@ describe("DurableRunService", () => {
     expect(checkpoints.map((item) => item.checkpointKind)).toContain("run_started");
     expect(timeline.map((item) => item.eventType)).toContain("run_started");
   });
+
+  it("waits until retry backoff is due before claiming queued runs", async () => {
+    const run = createRun("run-retry", "queued", "connector.delivery");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const retries = new Map<string, DurableRetryRecord[]>([
+      [run.runId, [createRetry(run.runId, 1, new Date(Date.now() + 60_000).toISOString())]],
+    ]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn(async (current: DurableRunRecord) => {
+      updateRun(runs, current.runId, {
+        status: "completed",
+        finishedAt: "2026-03-14T00:00:05.000Z",
+      });
+    });
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { retries }) as unknown as ServiceContext,
+      {
+        backgroundTasks,
+        executeWorkflow,
+      },
+    );
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(runs.get(run.runId)?.status).toBe("queued");
+    expect(timeline.map((item) => item.eventType)).not.toContain("run_started");
+
+    retries.set(run.runId, [createRetry(run.runId, 1, "2026-03-14T00:00:00.000Z")]);
+    service.requestRunProcessing(run.runId);
+    await Promise.all([...backgroundTasks]);
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(runs.get(run.runId)?.status).toBe("completed");
+    expect(timeline.map((item) => item.eventType)).toContain("run_started");
+  });
+
+  it("requeues recovered dead letters and immediately schedules them for execution", async () => {
+    const run = createRun("run-dead", "dead_lettered", "connector.delivery");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const deadLetters = new Map([
+      ["dead-1", { dead_letter_id: "dead-1", run_id: run.runId, reason: "connector_timeout" }],
+    ]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn(async (current: DurableRunRecord) => {
+      updateRun(runs, current.runId, {
+        status: "completed",
+        finishedAt: "2026-03-14T00:00:06.000Z",
+      });
+    });
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { deadLetters }) as unknown as ServiceContext,
+      {
+        backgroundTasks,
+        executeWorkflow,
+      },
+    );
+
+    const recovered = service.recoverDurableDeadLetter("dead-1", "operator-1");
+    await Promise.all([...backgroundTasks]);
+
+    expect(recovered.status).toBe("queued");
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(runs.get(run.runId)?.status).toBe("completed");
+    expect(deadLetters.get("dead-1")).toMatchObject({
+      resolved_at: expect.any(String),
+      resolution_note: "recovered by operator-1",
+    });
+    expect(timeline.map((item) => item.eventType)).toContain("dead_letter_recovered");
+    expect(timeline.map((item) => item.eventType)).toContain("run_started");
+  });
 });
 
 function createContext(
   runs: Map<string, DurableRunRecord>,
   checkpoints: Array<{ runId: string; checkpointKind: string }>,
   timeline: Array<{ runId: string; eventType: string }>,
+  options?: {
+    retries?: Map<string, DurableRetryRecord[]>;
+    deadLetters?: Map<string, {
+      dead_letter_id: string;
+      run_id: string;
+      reason: string;
+      resolved_at?: string;
+      resolution_note?: string;
+    }>;
+  },
 ) {
+  const retries = options?.retries ?? new Map<string, DurableRetryRecord[]>();
+  const deadLetters = options?.deadLetters ?? new Map<string, {
+    dead_letter_id: string;
+    run_id: string;
+    reason: string;
+    resolved_at?: string;
+    resolution_note?: string;
+  }>();
+
   return {
     storage: {
       durableRuns: {
@@ -53,6 +148,7 @@ function createContext(
         listDeadLetters: () => [],
         listRuns: () => [...runs.values()],
         listCheckpoints: () => [],
+        listRetries: (runId: string) => retries.get(runId) ?? [],
         getRun: (runId: string) => {
           const run = runs.get(runId);
           if (!run) {
@@ -101,19 +197,34 @@ function createContext(
           }
           return [];
         },
-        get: () => {
-          if (sql.includes("WHERE status = 'queued'")) {
-            const queued = [...runs.values()].find((run) => run.status === "queued");
-            return queued ? { run_id: queued.runId } : undefined;
+        get: (arg?: string) => {
+          if (sql.includes("FROM durable_dead_letters") && sql.includes("WHERE dead_letter_id = ?")) {
+            return arg ? deadLetters.get(arg) : undefined;
           }
           return undefined;
         },
-        run: (params: { runId?: string; eventType?: string } | undefined) => {
+        run: (params: {
+          runId?: string;
+          eventType?: string;
+          entryId?: string;
+          resolvedAt?: string;
+          note?: string;
+        } | undefined) => {
           if (sql.includes("INSERT INTO durable_run_events") && params?.runId && params?.eventType) {
             timeline.push({
               runId: params.runId,
               eventType: params.eventType,
             });
+          }
+          if (sql.includes("UPDATE durable_dead_letters") && params?.entryId) {
+            const current = deadLetters.get(params.entryId);
+            if (current) {
+              deadLetters.set(params.entryId, {
+                ...current,
+                resolved_at: params.resolvedAt,
+                resolution_note: params.note,
+              });
+            }
           }
           return { changes: 1 };
         },
@@ -126,10 +237,14 @@ function createContext(
   };
 }
 
-function createRun(runId: string, status: DurableRunRecord["status"]): DurableRunRecord {
+function createRun(
+  runId: string,
+  status: DurableRunRecord["status"],
+  workflowKey: DurableRunRecord["workflowKey"] = "chat.turn.execute",
+): DurableRunRecord {
   return {
     runId,
-    workflowKey: "chat.turn.execute",
+    workflowKey,
     status,
     attemptCount: 0,
     maxAttempts: 3,
@@ -166,4 +281,15 @@ function updateRun(
   };
   runs.set(runId, next);
   return next;
+}
+
+function createRetry(runId: string, attemptNo: number, nextRetryAt: string): DurableRetryRecord {
+  return {
+    retryId: `${runId}-retry-${attemptNo}`,
+    runId,
+    attemptNo,
+    reason: "temporary failure",
+    nextRetryAt,
+    createdAt: "2026-03-14T00:00:00.000Z",
+  };
 }

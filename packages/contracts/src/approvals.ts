@@ -66,3 +66,19 @@ export interface PendingApprovalAction {
   resolutionStatus?: "pending" | "executed" | "rejected" | "failed";
   result?: Record<string, unknown>;
 }
+
+export type RemoteActionTokenState = "pending" | "consumed" | "expired";
+export type RemoteActionType = "approval.resolve" | "connector.mutation";
+
+export interface RemoteActionTokenRecord {
+  tokenId: string;
+  actionType: RemoteActionType;
+  approvalId?: string;
+  connectorId: string;
+  mutation: Record<string, unknown>;
+  createdAt: string;
+  expiresAt: string;
+  state: RemoteActionTokenState;
+  consumedAt?: string;
+  consumedBy?: string;
+}

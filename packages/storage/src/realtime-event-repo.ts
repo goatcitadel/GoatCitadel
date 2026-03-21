@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
+import { getRequestAttribution } from "./request-attribution.js";
 
 interface RealtimeEventRow {
   event_id: string;
+  sequence: number;
   event_type: string;
   source: string;
   payload_json: string;
@@ -13,18 +15,54 @@ interface RealtimeEventRow {
 
 export class RealtimeEventRepository {
   private readonly insertStmt;
+  private readonly nextSequenceStmt;
+  private readonly listLatestStmt;
+  private readonly listBySequenceStmt;
+  private readonly listAfterSequenceStmt;
+  private readonly boundsStmt;
   private readonly listStmt;
   private readonly pruneStmt;
   private readonly pruneOlderThanStmt;
   private appendCount = 0;
 
   public constructor(private readonly db: DatabaseSync) {
+    this.nextSequenceStmt = db.prepare(`
+      SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
+      FROM realtime_events
+    `);
     this.insertStmt = db.prepare(`
       INSERT INTO realtime_events (
-        event_id, event_type, source, payload_json, created_at
+        event_id, sequence, event_type, source, payload_json, created_at
       ) VALUES (
-        @eventId, @eventType, @source, @payloadJson, @createdAt
+        @eventId, @sequence, @eventType, @source, @payloadJson, @createdAt
       )
+    `);
+
+    this.listLatestStmt = db.prepare(`
+      SELECT * FROM realtime_events
+      ORDER BY sequence DESC
+      LIMIT @limit
+    `);
+
+    this.listBySequenceStmt = db.prepare(`
+      SELECT * FROM realtime_events
+      WHERE sequence < @cursorSequence
+      ORDER BY sequence DESC
+      LIMIT @limit
+    `);
+
+    this.listAfterSequenceStmt = db.prepare(`
+      SELECT * FROM realtime_events
+      WHERE sequence > @afterSequence
+      ORDER BY sequence ASC
+      LIMIT @limit
+    `);
+
+    this.boundsStmt = db.prepare(`
+      SELECT
+        MIN(sequence) AS oldest_sequence,
+        MAX(sequence) AS newest_sequence
+      FROM realtime_events
     `);
 
     this.listStmt = db.prepare(`
@@ -58,12 +96,25 @@ export class RealtimeEventRepository {
     payload: Record<string, unknown>,
     createdAt = new Date().toISOString(),
   ): RealtimeEvent {
+    const attribution = getRequestAttribution();
+    const attributedPayload = {
+      ...payload,
+      correlationId: payload.correlationId ?? attribution?.correlationId,
+      traceId: payload.traceId ?? attribution?.traceId,
+      originSurface: payload.originSurface ?? attribution?.originSurface,
+      actorId: payload.actorId ?? attribution?.actorId,
+      deviceId: payload.deviceId ?? attribution?.deviceId,
+      grantId: payload.grantId ?? attribution?.grantId,
+    };
     const eventId = randomUUID();
+    const nextSequenceRow = this.nextSequenceStmt.get() as { next_sequence?: number } | undefined;
+    const sequence = Number(nextSequenceRow?.next_sequence ?? 1);
     this.insertStmt.run({
       eventId,
+      sequence,
       eventType,
       source,
-      payloadJson: JSON.stringify(payload),
+      payloadJson: JSON.stringify(attributedPayload),
       createdAt,
     });
     this.appendCount += 1;
@@ -73,28 +124,60 @@ export class RealtimeEventRepository {
 
     return {
       eventId,
+      sequence,
       eventType,
       source,
       timestamp: createdAt,
-      payload,
+      ...extractRealtimeMetadata(attributedPayload),
+      payload: attributedPayload,
     };
   }
 
   public list(limit: number, cursor?: string): RealtimeEvent[] {
-    const parsedCursor = parseCompositeCursor(cursor);
-    const rows = this.listStmt.all({
-      limit,
-      cursorCreatedAt: parsedCursor?.timestamp ?? null,
-      cursorEventId: parsedCursor?.key ?? null,
-    }) as unknown as RealtimeEventRow[];
+    const sequenceCursor = parseSequenceCursor(cursor);
+    if (sequenceCursor !== undefined) {
+      const rows = (
+        sequenceCursor > 0
+          ? this.listBySequenceStmt.all({
+            limit,
+            cursorSequence: sequenceCursor,
+          })
+          : this.listLatestStmt.all({ limit })
+      ) as unknown as RealtimeEventRow[];
+      return rows.map(mapRealtimeEventRow);
+    }
 
-    return rows.map((row) => ({
-      eventId: row.event_id,
-      eventType: row.event_type,
-      source: row.source,
-      timestamp: row.created_at,
-      payload: safeJsonParse<Record<string, unknown>>(row.payload_json, {}),
-    }));
+    const parsedCursor = parseCompositeCursor(cursor);
+    const rows = parsedCursor
+      ? this.listStmt.all({
+        limit,
+        cursorCreatedAt: parsedCursor.timestamp,
+        cursorEventId: parsedCursor.key,
+      })
+      : this.listLatestStmt.all({ limit });
+
+    return (rows as unknown as RealtimeEventRow[]).map(mapRealtimeEventRow);
+  }
+
+  public listAfterSequence(afterSequence: number, limit: number): RealtimeEvent[] {
+    const rows = this.listAfterSequenceStmt.all({
+      afterSequence,
+      limit,
+    }) as unknown as RealtimeEventRow[];
+    return rows.map(mapRealtimeEventRow);
+  }
+
+  public getSequenceBounds(): { oldestSequence?: number; newestSequence?: number } {
+    const row = this.boundsStmt.get() as
+      | {
+        oldest_sequence?: number | null;
+        newest_sequence?: number | null;
+      }
+      | undefined;
+    return {
+      oldestSequence: typeof row?.oldest_sequence === "number" ? row.oldest_sequence : undefined,
+      newestSequence: typeof row?.newest_sequence === "number" ? row.newest_sequence : undefined,
+    };
   }
 
   public pruneOlderThan(cutoffIso: string): number {
@@ -134,4 +217,36 @@ function parseCompositeCursor(cursor?: string): CompositeCursor | undefined {
   }
 
   return { timestamp, key };
+}
+
+function parseSequenceCursor(cursor?: string): number | undefined {
+  if (!cursor || !/^\d+$/.test(cursor.trim())) {
+    return undefined;
+  }
+  const value = Number.parseInt(cursor.trim(), 10);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function mapRealtimeEventRow(row: RealtimeEventRow): RealtimeEvent {
+  const payload = safeJsonParse<Record<string, unknown>>(row.payload_json, {});
+  return {
+    eventId: row.event_id,
+    sequence: Number(row.sequence),
+    eventType: row.event_type,
+    source: row.source,
+    timestamp: row.created_at,
+    ...extractRealtimeMetadata(payload),
+    payload,
+  };
+}
+
+function extractRealtimeMetadata(payload: Record<string, unknown>): Pick<
+  RealtimeEvent,
+  "correlationId" | "traceId" | "originSurface"
+> {
+  return {
+    correlationId: typeof payload.correlationId === "string" ? payload.correlationId : undefined,
+    traceId: typeof payload.traceId === "string" ? payload.traceId : undefined,
+    originSurface: typeof payload.originSurface === "string" ? payload.originSurface : undefined,
+  };
 }

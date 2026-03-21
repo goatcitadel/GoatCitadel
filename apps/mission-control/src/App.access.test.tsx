@@ -8,6 +8,7 @@ const clearGatewayAuthStateMock = vi.fn();
 const createGatewayDeviceAccessRequestMock = vi.fn();
 const pollGatewayDeviceAccessRequestStatusMock = vi.fn();
 const resolveApprovalMock = vi.fn();
+const resolveApprovalWithRemoteTokenMock = vi.fn();
 const fetchWorkspacesMock = vi.fn();
 const getGatewayAuthStorageModeMock = vi.fn();
 const getGatewayApiBaseUrlMock = vi.fn();
@@ -28,6 +29,7 @@ vi.mock("./api/shell-client", () => ({
   preflightGatewayAccess: preflightGatewayAccessMock,
   readStoredGatewayAuthState: readStoredGatewayAuthStateMock,
   resolveApproval: resolveApprovalMock,
+  resolveApprovalWithRemoteToken: resolveApprovalWithRemoteTokenMock,
 }));
 
 vi.mock("./pages/DashboardPage", () => ({
@@ -37,6 +39,30 @@ vi.mock("./pages/DashboardPage", () => ({
 vi.mock("./components/DeviceAccessApprovalModal", () => ({
   DeviceAccessApprovalModal: ({ open, prompt }: { open: boolean; prompt?: { deviceLabel?: string } }) => (
     open ? <div>device-access-modal:{prompt?.deviceLabel ?? "unknown"}</div> : null
+  ),
+}));
+
+vi.mock("./components/RemoteApprovalActionModal", () => ({
+  RemoteApprovalActionModal: ({
+    open,
+    prompt,
+    onApprove,
+    onReject,
+  }: {
+    open: boolean;
+    prompt?: { kind?: string };
+    onApprove: () => void;
+    onReject: () => void;
+  }) => (
+    open
+      ? (
+        <div>
+          <div>remote-approval-modal:{prompt?.kind ?? "unknown"}</div>
+          <button type="button" onClick={onApprove}>approve remote approval</button>
+          <button type="button" onClick={onReject}>reject remote approval</button>
+        </div>
+      )
+      : null
   ),
 }));
 
@@ -170,6 +196,7 @@ describe("App gateway access gate", () => {
     pollGatewayDeviceAccessRequestStatusMock.mockReset();
     readStoredGatewayAuthStateMock.mockReturnValue(undefined);
     resolveApprovalMock.mockReset();
+    resolveApprovalWithRemoteTokenMock.mockReset();
   });
 
   afterEach(() => {
@@ -349,6 +376,7 @@ describe("App gateway access gate", () => {
     const { App } = await import("./App");
     let onEvent: ((event: {
       eventId: string;
+      sequence: number;
       eventType: string;
       source: string;
       timestamp: string;
@@ -456,6 +484,7 @@ describe("App gateway access gate", () => {
     await act(async () => {
       onEvent?.({
         eventId: "evt-device-1",
+        sequence: 101,
         eventType: "auth_device_request_created",
         source: "auth",
         timestamp: new Date().toISOString(),
@@ -472,5 +501,169 @@ describe("App gateway access gate", () => {
     const text = renderTreeText(renderer!);
     expect(text).toContain("device-access-modal");
     expect(text).toContain("iPhone Safari");
+  });
+
+  it("surfaces remote approval action prompts from realtime events and resolves them with the delivered token", async () => {
+    const { App } = await import("./App");
+    let onEvent: ((event: {
+      eventId: string;
+      sequence: number;
+      eventType: string;
+      source: string;
+      timestamp: string;
+      payload: Record<string, unknown>;
+    }) => void) | undefined;
+    connectEventStreamMock.mockImplementation((handler: typeof onEvent) => {
+      onEvent = handler;
+      return () => undefined;
+    });
+    preflightGatewayAccessMock.mockResolvedValue({
+      status: "ready",
+      message: "Gateway reachability and access checks passed.",
+      healthDetail: "Gateway health check OK (200).",
+      onboardingState: {
+        completed: true,
+        checklist: [],
+        settings: {
+          environment: "coverage",
+          deploymentProfile: "local_dev",
+          defaultToolProfile: "standard",
+          budgetMode: "balanced",
+          workspaceDir: "workspace",
+          writeJailRoots: [],
+          readOnlyRoots: [],
+          networkAllowlist: [],
+          approvalExplainer: {
+            enabled: false,
+            mode: "async",
+            minRiskLevel: "danger",
+            timeoutMs: 1000,
+            maxPayloadChars: 1000,
+          },
+          memory: {
+            enabled: false,
+            qmd: {
+              enabled: false,
+              applyToChat: false,
+              applyToOrchestration: false,
+              minPromptChars: 0,
+              maxContextTokens: 0,
+              cacheTtlSeconds: 0,
+            },
+          },
+          auth: {
+            mode: "token",
+            allowLoopbackBypass: false,
+            tokenConfigured: true,
+            basicConfigured: false,
+          },
+          llm: {
+            activeProviderId: "glm",
+            activeModel: "glm-5",
+            providers: [],
+          },
+          mesh: {
+            enabled: false,
+            mode: "lan",
+            nodeId: "mesh-local",
+            mdns: false,
+            staticPeers: [],
+            requireMtls: true,
+            tailnetEnabled: false,
+          },
+          npu: {
+            enabled: false,
+            autoStart: false,
+            sidecarUrl: "http://127.0.0.1:11440",
+            status: {
+              processState: "stopped",
+              desiredState: "stopped",
+              healthy: false,
+              backend: "local",
+              sidecarUrl: "http://127.0.0.1:11440",
+              updatedAt: new Date().toISOString(),
+              capability: {
+                isWindowsArm64: false,
+                onnxRuntimeAvailable: false,
+                onnxRuntimeGenAiAvailable: false,
+                qnnExecutionProviderAvailable: false,
+                supported: false,
+                details: [],
+              },
+            },
+          },
+          features: {
+            durableKernelV1Enabled: true,
+            replayOverridesV1Enabled: false,
+            memoryLifecycleAdminV1Enabled: false,
+            connectorDiagnosticsV1Enabled: false,
+            computerUseGuardrailsV1Enabled: false,
+            bankrBuiltinEnabled: false,
+            cronReviewQueueV1Enabled: false,
+            replayRegressionV1Enabled: false,
+          },
+        },
+      },
+    });
+    resolveApprovalWithRemoteTokenMock.mockResolvedValue({
+      approval: {
+        approvalId: "apr-remote-1",
+        kind: "tool.invoke",
+        status: "approved",
+        riskLevel: "danger",
+        payload: {},
+        preview: {},
+        createdAt: new Date().toISOString(),
+        explanationStatus: "not_requested",
+      },
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<App />);
+    });
+    await flush();
+
+    await act(async () => {
+      onEvent?.({
+        eventId: "evt-remote-approval-1",
+        sequence: 201,
+        eventType: "approval_remote_action_ready",
+        source: "approvals",
+        timestamp: new Date().toISOString(),
+        payload: {
+          payload: {
+            approvalId: "apr-remote-1",
+            tokenId: "rat-remote-1",
+            token: "grat_remote_token",
+            kind: "tool.invoke",
+            riskLevel: "danger",
+            status: "pending",
+            preview: {
+              summary: "Write a file",
+            },
+            expiresAt: "2026-03-10T12:00:00.000Z",
+          },
+        },
+      });
+    });
+    await flush();
+
+    const remoteApprovalModal = renderer!.root.findAll(
+      (node) => flattenNodeText(node).includes("remote-approval-modal:tool.invoke"),
+    )[0];
+    expect(remoteApprovalModal).toBeDefined();
+
+    const approveButton = renderer!.root.findAll(
+      (node) => node.type === "button" && flattenNodeText(node).includes("approve remote approval"),
+    )[0];
+    expect(approveButton).toBeDefined();
+
+    await act(async () => {
+      approveButton?.props.onClick();
+    });
+    await flush();
+
+    expect(resolveApprovalWithRemoteTokenMock).toHaveBeenCalledWith("grat_remote_token", "approve");
   });
 });

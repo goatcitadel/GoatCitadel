@@ -63,6 +63,36 @@ async function buildApp(mode: AuthConfig["mode"]): Promise<FastifyInstance> {
       deviceTokenExpiresAt: "2026-04-09T11:55:00.000Z",
       message: "Access approved.",
     }),
+    listDeviceAccessGrants: () => ([
+      {
+        grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+        requestId: "request-device-1",
+        actorId: "device:ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+        deviceLabel: "LAN laptop",
+        deviceType: "desktop",
+        platform: "windows",
+        grantedBy: "operator:test",
+        createdAt: "2026-03-10T11:55:00.000Z",
+        expiresAt: "2026-04-09T11:55:00.000Z",
+        lastUsedAt: "2026-03-10T12:05:00.000Z",
+        revokedAt: undefined,
+        metadata: {},
+      },
+    ]),
+    revokeDeviceAccessGrant: async (grantId: string) => ({
+      grantId,
+      requestId: "request-device-1",
+      actorId: `device:${grantId}`,
+      deviceLabel: "LAN laptop",
+      deviceType: "desktop",
+      platform: "windows",
+      grantedBy: "operator:test",
+      createdAt: "2026-03-10T11:55:00.000Z",
+      expiresAt: "2026-04-09T11:55:00.000Z",
+      lastUsedAt: "2026-03-10T12:05:00.000Z",
+      revokedAt: "2026-03-10T12:10:00.000Z",
+      metadata: {},
+    }),
     validateDeviceAccessToken: () => undefined,
   } as never);
   app.decorate("gatewayConfig", {
@@ -186,6 +216,44 @@ describe("auth routes", () => {
       requestId: "request-device-1",
       status: "approved",
       deviceToken: "device-bearer",
+    });
+  });
+
+  it("lists approved device grants", async () => {
+    app = await buildApp("token");
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/devices?view=all",
+      headers: {
+        Authorization: "Bearer test-token",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      items: [
+        {
+          grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+          deviceLabel: "LAN laptop",
+        },
+      ],
+    });
+  });
+
+  it("revokes an approved device grant", async () => {
+    app = await buildApp("token");
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/devices/ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f/revoke",
+      headers: {
+        Authorization: "Bearer test-token",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      grant: {
+        grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+        revokedAt: "2026-03-10T12:10:00.000Z",
+      },
     });
   });
 });

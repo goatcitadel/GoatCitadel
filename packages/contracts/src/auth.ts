@@ -33,3 +33,26 @@ export interface DeviceAccessRequestStatusResponse {
   deviceTokenExpiresAt?: string;
   message: string;
 }
+
+export interface DeviceAccessGrantRecord {
+  grantId: string;
+  requestId: string;
+  actorId: string;
+  deviceLabel: string;
+  deviceType: DeviceAccessRequestDeviceType;
+  platform?: string;
+  grantedBy: string;
+  createdAt: string;
+  expiresAt?: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface DeviceAccessGrantListResponse {
+  items: DeviceAccessGrantRecord[];
+}
+
+export interface DeviceAccessGrantRevokeResponse {
+  grant: DeviceAccessGrantRecord;
+}

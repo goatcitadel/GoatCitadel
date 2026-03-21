@@ -8,7 +8,10 @@ const listQuerySchema = z.object({
 
 const streamQuerySchema = z.object({
   replay: z.coerce.number().int().nonnegative().max(500).default(50),
+  afterCursor: z.string().optional(),
 });
+
+const STREAM_REPLAY_LIMIT = 500;
 
 export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/events", async (request, reply) => {
@@ -17,10 +20,25 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
+    const requestedSequenceCursor = parseSequenceCursor(parsed.data.cursor);
+    const bounds = fastify.gateway.getRealtimeEventSequenceBounds();
+    if (
+      requestedSequenceCursor !== undefined
+      && bounds.oldestSequence !== undefined
+      && requestedSequenceCursor < bounds.oldestSequence
+    ) {
+      return reply.code(409).send({
+        error: "replay_gap",
+        requestedCursor: String(requestedSequenceCursor),
+        oldestCursor: String(bounds.oldestSequence),
+        newestCursor: bounds.newestSequence !== undefined ? String(bounds.newestSequence) : undefined,
+      });
+    }
+
     const items = fastify.gateway.listRealtimeEvents(parsed.data.limit, parsed.data.cursor);
     const last = items[items.length - 1];
     const nextCursor = items.length === parsed.data.limit && last
-      ? `${last.timestamp}|${last.eventId}`
+      ? String(last.sequence)
       : undefined;
     return reply.send({ items, nextCursor });
   });
@@ -48,18 +66,47 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     raw.flushHeaders?.();
     raw.write(": connected\n\n");
 
-    const send = (payload: unknown) => {
+    const send = (payload: unknown, eventId?: number) => {
+      if (typeof eventId === "number" && Number.isFinite(eventId)) {
+        raw.write(`id: ${eventId}\n`);
+      }
       raw.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
-    const replay = fastify.gateway.listRealtimeEvents(parsed.data.replay).reverse();
+    const sendNamedEvent = (eventName: string, payload: unknown) => {
+      raw.write(`event: ${eventName}\n`);
+      raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    const requestedCursor = parseSequenceCursor(parsed.data.afterCursor)
+      ?? parseSequenceCursor(readLastEventId(request.headers["last-event-id"]));
+    const bounds = fastify.gateway.getRealtimeEventSequenceBounds();
+    if (
+      requestedCursor !== undefined
+      && bounds.oldestSequence !== undefined
+      && requestedCursor < bounds.oldestSequence
+    ) {
+      sendNamedEvent("replay-gap", {
+        error: "replay_gap",
+        requestedCursor,
+        oldestCursor: bounds.oldestSequence,
+        newestCursor: bounds.newestSequence,
+      });
+      raw.end();
+      reply.hijack();
+      return;
+    }
+
+    const replay = requestedCursor !== undefined
+      ? fastify.gateway.listRealtimeEventsAfterSequence(requestedCursor, STREAM_REPLAY_LIMIT)
+      : fastify.gateway.listRealtimeEvents(parsed.data.replay).reverse();
     for (const event of replay) {
-      send(event);
+      send(event, event.sequence);
     }
 
     const unsubscribe = fastify.gateway.subscribeRealtime((event) => {
       try {
-        send(event);
+        send(event, event.sequence);
       } catch {
         cleanup();
       }
@@ -93,3 +140,18 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     reply.hijack();
   });
 };
+
+function parseSequenceCursor(cursor?: string): number | undefined {
+  if (!cursor || !/^\d+$/.test(cursor.trim())) {
+    return undefined;
+  }
+  const value = Number.parseInt(cursor.trim(), 10);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function readLastEventId(value: string | string[] | undefined): string | undefined {
+  if (!value || Array.isArray(value)) {
+    return undefined;
+  }
+  return value;
+}

@@ -282,6 +282,16 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "assembly_of_minds_schema",
     up: createAssemblyOfMindsSchema,
   },
+  {
+    version: 36,
+    name: "realtime_event_sequence_cursor",
+    up: createRealtimeEventSequenceCursorSchema,
+  },
+  {
+    version: 37,
+    name: "phase2_approval_runtime_schema",
+    up: createPhase2ApprovalRuntimeSchema,
+  },
 ];
 
 function createBaseSchema(db: DatabaseSync): void {
@@ -2383,6 +2393,40 @@ function createAuthDeviceAccessSchema(db: DatabaseSync): void {
   `);
 }
 
+function createPhase2ApprovalRuntimeSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS approval_wait_runs (
+      approval_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      FOREIGN KEY(approval_id) REFERENCES approvals(approval_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_approval_wait_runs_run_id
+      ON approval_wait_runs(run_id);
+
+    CREATE TABLE IF NOT EXISTS remote_action_tokens (
+      token_id TEXT PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE,
+      action_type TEXT NOT NULL,
+      approval_id TEXT,
+      connector_id TEXT NOT NULL,
+      mutation_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending',
+      consumed_at TEXT,
+      consumed_by TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_remote_action_tokens_connector_state
+      ON remote_action_tokens(connector_id, state, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_remote_action_tokens_expires_at
+      ON remote_action_tokens(expires_at);
+  `);
+}
+
 function createAssemblyOfMindsSchema(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS assembly_runs (
@@ -2472,6 +2516,34 @@ function createAssemblyOfMindsSchema(db: DatabaseSync): void {
       ON assembly_reputation(overall DESC, sample_count DESC, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_assembly_reputation_provider_model
       ON assembly_reputation(provider_id, model_id, updated_at DESC);
+  `);
+}
+
+function createRealtimeEventSequenceCursorSchema(db: DatabaseSync): void {
+  const tableExists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get("realtime_events") as { name: string } | undefined;
+  if (!tableExists) {
+    return;
+  }
+  addColumnIfMissingIfTableExists(db, "realtime_events", "sequence", "INTEGER");
+  db.exec(`
+    WITH ordered_events AS (
+      SELECT
+        event_id,
+        ROW_NUMBER() OVER (ORDER BY created_at ASC, event_id ASC) AS next_sequence
+      FROM realtime_events
+    )
+    UPDATE realtime_events
+    SET sequence = (
+      SELECT next_sequence
+      FROM ordered_events
+      WHERE ordered_events.event_id = realtime_events.event_id
+    )
+    WHERE sequence IS NULL;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_realtime_events_sequence
+      ON realtime_events(sequence DESC);
   `);
 }
 

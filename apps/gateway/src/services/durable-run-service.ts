@@ -424,6 +424,7 @@ export class DurableRunService {
       runId: row.run_id,
       deadLetterId: entryId,
     });
+    this.requestRunProcessing(row.run_id);
     return next;
   }
 
@@ -541,21 +542,25 @@ export class DurableRunService {
   }
 
   private claimNextQueuedRun(): DurableRunRecord | undefined {
-    const row = this.ctx.gatewaySql.prepare(`
+    const rows = this.ctx.gatewaySql.prepare(`
       SELECT run_id
       FROM durable_runs
       WHERE status = 'queued'
       ORDER BY created_at ASC
-      LIMIT 1
-    `).get() as { run_id: string } | undefined;
-    if (!row) {
+    `).all() as Array<{ run_id: string }>;
+    if (rows.length === 0) {
       return undefined;
     }
     const now = new Date().toISOString();
+    const row = rows.find((candidate) => !this.hasFutureRetryGate(candidate.run_id, now));
+    if (!row) {
+      return undefined;
+    }
+    const current = this.ctx.storage.durableRuns.getRun(row.run_id);
     const run = this.ctx.storage.durableRuns.updateRun({
       runId: row.run_id,
       status: "running",
-      startedAt: this.ctx.storage.durableRuns.getRun(row.run_id).startedAt ?? now,
+      startedAt: current.startedAt ?? now,
       finishedAt: undefined,
       lastError: undefined,
       updatedAt: now,
@@ -579,6 +584,19 @@ export class DurableRunService {
       workflowKey: run.workflowKey,
     });
     return run;
+  }
+
+  private hasFutureRetryGate(runId: string, nowIso: string): boolean {
+    const latestRetry = this.ctx.storage.durableRuns.listRetries(runId, 100).at(-1);
+    if (!latestRetry?.nextRetryAt) {
+      return false;
+    }
+    const nextRetryAt = Date.parse(latestRetry.nextRetryAt);
+    const now = Date.parse(nowIso);
+    if (!Number.isFinite(nextRetryAt) || !Number.isFinite(now)) {
+      return false;
+    }
+    return nextRetryAt > now;
   }
 
   private async failWorkflowRun(run: DurableRunRecord, message: string): Promise<void> {
