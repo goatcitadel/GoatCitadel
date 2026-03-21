@@ -355,7 +355,7 @@ describe("prompt-pack helpers", () => {
       memoryMode: "off",
       orchestrationEnabled: true,
       orchestrationVisibility: "explicit",
-      orchestrationParallelism: "parallel",
+      orchestrationParallelism: "sequential",
     });
 
     const codeProfile = resolvePromptPackExecutionProfile({
@@ -407,7 +407,7 @@ describe("prompt-pack helpers", () => {
       mode: "cowork",
       orchestrationEnabled: false,
       orchestrationVisibility: "explicit",
-      orchestrationParallelism: "parallel",
+      orchestrationParallelism: "sequential",
       toolAutonomy: "safe_auto",
     });
   });
@@ -434,9 +434,24 @@ describe("prompt-pack helpers", () => {
       "file.find",
       "code.search",
       "code.search_files",
-      "shell.exec",
       "tests.run",
       "lint.run",
+    ]);
+
+    expect(buildPromptPackSessionToolAllowlist(
+      codeProfile,
+      "Run pnpm test and capture the command output before summarizing the repo state.",
+    )).toEqual([
+      "fs.read",
+      "fs.list",
+      "fs.stat",
+      "file.read_range",
+      "file.find",
+      "code.search",
+      "code.search_files",
+      "tests.run",
+      "lint.run",
+      "shell.exec",
     ]);
 
     const coworkProfile = resolvePromptPackExecutionProfile({
@@ -556,6 +571,26 @@ describe("prompt-pack helpers", () => {
     expect(explicitToolsInput.prompt).toContain("Surface tool-backed evidence in the answer.");
     expect(explicitToolsInput.prompt).toContain("A prose-only answer without the required tool evidence is non-compliant.");
     expect(explicitToolsInput.prompt).toContain("If local file paths are listed, inspect those paths before answering.");
+
+    const explicitCodeProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-code-explicit-contract",
+        packId: "pack-1",
+        code: "TEST-CONTRACT-04",
+        title: "Explicit Code Contract",
+        prompt: "Read all source files in fixtures/prompt-pack-workspace/ using file tools, then produce an audit report.",
+        orderIndex: 3,
+        mode: "code",
+        toolTier: "explicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    const explicitCodeInput = buildPromptPackPromptInput(
+      "Read all source files in fixtures/prompt-pack-workspace/ using file tools, then produce an audit report.",
+      explicitCodeProfile,
+    );
+    expect(explicitCodeInput.prompt).toContain("Prefer file/code tools for read-only inspection or audits.");
+    expect(explicitCodeInput.prompt).toContain("Do not use `shell.exec` unless the prompt explicitly requires command execution or a shell-only check.");
   });
 
   it("does not append generic constraints boilerplate to non-empty prompt-pack answers", () => {
@@ -1057,6 +1092,27 @@ describe("prompt-pack helpers", () => {
     expect(codes).toContain("TEST-D36");
     expect(codes).toContain("TEST-W34");
     expect(codes[codes.length - 1]).toBe("TEST-W34");
+  });
+
+  it("parses dotted manual test codes so they survive import refreshes", () => {
+    const markdown = [
+      "## 2.6 Baseline sanity check",
+      "Validate the baseline behavior.",
+      "",
+      "## 2.7 Streaming refresh check",
+      "Verify the list updates after the first run.",
+      "",
+      "[2.8] Follow-up regression",
+      "Confirm the previous fix still holds.",
+    ].join("\n");
+
+    const tests = parsePromptPackTests(markdown);
+
+    expect(tests.map((test) => test.code)).toEqual(["2.6", "2.7", "2.8"]);
+    expect(tests[1]).toMatchObject({
+      code: "2.7",
+      title: "Streaming refresh check",
+    });
   });
 });
 

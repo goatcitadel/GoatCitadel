@@ -111,7 +111,6 @@ export class EventIngestService {
         timestamp: now,
       });
 
-      const transcriptOffset = await this.storage.transcripts.append(transcriptEvent);
       this.storage.chatMessages.upsert(toChatMessageRecord(transcriptEvent));
 
       this.storage.sessions.applyUsage({
@@ -141,6 +140,7 @@ export class EventIngestService {
         now,
       );
       this.storage.db.exec("COMMIT");
+      const transcriptOffset = await appendTranscriptEventBestEffort(this.storage, transcriptEvent);
       return {
         accepted: true,
         deduped: false,
@@ -186,4 +186,20 @@ function toChatMessageRecord(event: TranscriptEvent): ChatMessageRecord {
     parts: Array.isArray(message?.parts) ? message.parts : undefined,
     attachments: Array.isArray(message?.attachments) ? message.attachments as ChatMessageRecord["attachments"] : undefined,
   };
+}
+
+async function appendTranscriptEventBestEffort(
+  storage: Storage,
+  event: TranscriptEvent,
+): Promise<number> {
+  try {
+    return await storage.transcripts.append(event);
+  } catch (error) {
+    console.warn("[goatcitadel] transcript append failed after event commit", {
+      sessionId: event.sessionId,
+      eventId: event.eventId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 0;
+  }
 }

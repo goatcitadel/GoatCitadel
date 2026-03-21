@@ -210,4 +210,45 @@ describe("orchestration engine", () => {
     expect(result.finalOutput).toContain("could not complete the orchestrated workflow");
     expect(result.finalOutput).toContain("Planner");
   });
+
+  it("fails downstream synthesis and review roles when no upstream handoff completed", async () => {
+    const createChatCompletion = vi
+      .fn()
+      .mockRejectedValue(new Error("provider unavailable"));
+
+    const result = await executeOrchestrationPlan({
+      task: createTask(),
+      plan: createPlan(),
+      callbacks: {
+        createChatCompletion,
+      },
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+    expect(result.stepResults).toHaveLength(4);
+    expect(result.stepResults[0]).toMatchObject({
+      role: "researcher",
+      status: "failed",
+      error: "provider unavailable",
+    });
+    expect(result.stepResults[1]).toMatchObject({
+      role: "researcher",
+      status: "failed",
+      error: "provider unavailable",
+    });
+    expect(result.stepResults[2]).toMatchObject({
+      role: "synthesizer",
+      status: "failed",
+      summary: "Synthesizer blocked",
+      error: "No completed upstream handoffs were available for synthesizer.",
+    });
+    expect(result.stepResults[3]).toMatchObject({
+      role: "critic",
+      status: "failed",
+      summary: "Critic blocked",
+      error: "No completed upstream handoffs were available for critic.",
+    });
+    expect(result.finalOutput).toContain("Synthesizer");
+    expect(result.finalOutput).toContain("Critic");
+  });
 });

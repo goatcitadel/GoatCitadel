@@ -6330,4 +6330,307 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("Approval required by policy.");
     expect(result.turnTrace.toolRuns.some((run) => run.toolName === "shell.exec" && run.status === "approval_required")).toBe(true);
   });
+
+  it("salvages Prompt Lab explicit-tools turns after approval-gated browser state tools", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "",
+      "## User Task",
+      "Use browser.context.configure against https://example.com and report the block or result in Researcher, QA, and Synthesis sections.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-browser-context-configure-1",
+                  type: "function",
+                  function: {
+                    name: "browser_context_configure",
+                    arguments: JSON.stringify({
+                      viewport: { width: 1280, height: 720 },
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "## Researcher",
+                "- `browser.context.configure` returned approval-required instead of executing.",
+                "",
+                "## QA",
+                "- This tool path is blocked pending approval and was not verified.",
+                "",
+                "## Synthesis",
+                "- Browser-state configuration is currently approval-gated in Prompt Lab.",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "approval_required",
+        policyReason: "approval_required",
+        auditEventId: "audit-browser-context-configure-1",
+        approvalId: "approval-browser-context-configure-1",
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.context.configure"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-explicit-browser-approval-salvage-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-explicit-browser-approval-salvage-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.assistantContent).toContain("approval-gated");
+    expect(result.assistantContent).not.toContain("Approval required by policy.");
+    expect(result.turnTrace.toolRuns.some((run) =>
+      run.status === "approval_required" && run.toolName.includes("browser"))).toBe(true);
+  });
+
+  it("treats underscore-named required Prompt Lab tools as satisfied after approval-gated attempts", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required named tools: `shell.exec`, `shell.exec_background`, `git.exec`",
+      "",
+      "## User Task",
+      "Run the required command tools once and report any approval blocks.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-shell-exec-1",
+                  type: "function",
+                  function: {
+                    name: "shell_exec",
+                    arguments: JSON.stringify({
+                      command: "cat package.json | jq .name",
+                      cwd: "fixtures/prompt-pack-workspace",
+                    }),
+                  },
+                },
+                {
+                  id: "call-shell-exec-background-1",
+                  type: "function",
+                  function: {
+                    name: "shell_exec_background",
+                    arguments: JSON.stringify({
+                      command: "sleep 1",
+                      cwd: "fixtures/prompt-pack-workspace",
+                    }),
+                  },
+                },
+                {
+                  id: "call-git-exec-1",
+                  type: "function",
+                  function: {
+                    name: "git_exec",
+                    arguments: JSON.stringify({ command: "status --short" }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "All three required tools were blocked by approval policy before execution.",
+                "",
+                "- `shell.exec`: approval required",
+                "- `shell.exec_background`: approval required",
+                "- `git.exec`: approval required",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "approval_required",
+        policyReason: "approval_required",
+        auditEventId: "audit-shell-exec-approval-1",
+        approvalId: "approval-shell-exec-1",
+      })
+      .mockResolvedValueOnce({
+        outcome: "approval_required",
+        policyReason: "approval_required",
+        auditEventId: "audit-shell-exec-background-approval-1",
+        approvalId: "approval-shell-exec-background-1",
+      })
+      .mockResolvedValueOnce({
+        outcome: "approval_required",
+        policyReason: "approval_required",
+        auditEventId: "audit-git-exec-approval-1",
+        approvalId: "approval-git-exec-1",
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["shell.exec", "shell.exec_background", "git.exec"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-explicit-required-tool-normalization-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-explicit-required-tool-normalization-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.failure).toBeUndefined();
+    expect(result.assistantContent).toContain("blocked by approval policy");
+    expect(result.assistantContent).not.toContain("I couldn't verify that with the required tools");
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+    expect(invokeTool).toHaveBeenCalledTimes(3);
+    expect(result.turnTrace.toolRuns.filter((run) => run.status === "approval_required")).toHaveLength(3);
+  });
+
+  it("raises the tool-run cap for Prompt Lab explicit-tools turns", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "",
+      "## User Task",
+      "Call the provided tools in sequence, then summarize the evidence.",
+    ].join("\n");
+    const toolCalls = Array.from({ length: 9 }, (_, index) => ({
+      id: `call-time-now-${index + 1}`,
+      type: "function" as const,
+      function: {
+        name: "time_now",
+        arguments: JSON.stringify({}),
+      },
+    }));
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: toolCalls,
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "All requested tool calls completed.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockImplementation(async () => ({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: randomUUID(),
+      result: {
+        iso: "2026-03-20T00:00:00.000Z",
+      },
+    }));
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["time.now"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-explicit-budget-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-explicit-budget-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.failure).toBeUndefined();
+    expect(result.assistantContent).toContain("All requested tool calls completed.");
+    expect(result.turnTrace.toolRuns).toHaveLength(9);
+    expect(invokeTool).toHaveBeenCalledTimes(9);
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+  });
 });

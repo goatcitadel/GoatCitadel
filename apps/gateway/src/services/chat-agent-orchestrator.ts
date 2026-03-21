@@ -343,6 +343,7 @@ export class ChatAgentOrchestrator {
       webMode: input.webMode,
       thinkingLevel: input.thinkingLevel,
       liveDataIntent: intents.webLookup,
+      promptLabExplicitTools: promptLabContract.explicitTools,
     });
     let effectiveTurnBudgetMs = executionBudget.turnBudgetMs;
     let effectiveCompletionTimeoutMs = executionBudget.completionTimeoutMs;
@@ -1119,7 +1120,7 @@ export class ChatAgentOrchestrator {
 
           const toolFailureGuidance = softFailApprovalRequiredTool
             ? executed.record.failureGuidance
-              ?? "Approval-gated shell execution is unavailable for this evaluation. Continue with the completed file/code evidence and state any remaining unknowns explicitly."
+              ?? `Approval-gated tool execution is unavailable for this evaluation (\`${executed.record.toolName}\`). Do not retry the same gated tool call; continue with the completed evidence and state any remaining unknowns explicitly.`
             : executed.record.failureGuidance;
           const toolResultPayload = {
             ...(executed.record.result ?? {
@@ -1138,7 +1139,7 @@ export class ChatAgentOrchestrator {
           if (softFailApprovalRequiredTool) {
             conversationMessages.push({
               role: "system",
-              content: "Prompt Lab compliance note: do not request `shell.exec` again for this turn. Continue from the completed file/code evidence and make any remaining uncertainty explicit.",
+              content: `Prompt Lab compliance note: do not request \`${executed.record.toolName}\` again for this turn after an approval-required result. Continue from the completed evidence and make any remaining uncertainty explicit.`,
             } as ChatCompletionMessage);
           }
 
@@ -3814,7 +3815,7 @@ function shouldSoftFailApprovalRequiredTool(input: {
   };
   toolRuns: ChatToolRunRecord[];
 }): boolean {
-  if (!isPromptLabHarnessContent(input.prompt) || input.promptLabContract.explicitTools || input.mode !== "code") {
+  if (!isPromptLabHarnessContent(input.prompt)) {
     return false;
   }
   return true;
@@ -5487,7 +5488,8 @@ function listMissingPromptLabRequiredToolEvidence(
   const missing: string[] = [];
 
   for (const toolName of contract.requiredNamedTools) {
-    if (!usedToolNames.has(toolName)) {
+    const normalizedToolName = normalizeToolNameForComparison(toolName) ?? toolName;
+    if (!usedToolNames.has(normalizedToolName)) {
       missing.push(`named tool \`${toolName}\``);
     }
   }
@@ -5535,7 +5537,10 @@ function canSatisfyPromptLabRequiredToolEvidence(
   if (!contract.explicitTools) {
     return false;
   }
-  if (contract.requiredNamedTools.some((toolName) => !availableTools.has(toolName))) {
+  const availableToolNames = new Set(
+    [...availableTools.keys()].map((toolName) => normalizeToolNameForComparison(toolName) ?? toolName),
+  );
+  if (contract.requiredNamedTools.some((toolName) => !availableToolNames.has(normalizeToolNameForComparison(toolName) ?? toolName))) {
     return false;
   }
   for (const family of contract.requiredToolFamilies) {
@@ -6043,11 +6048,12 @@ export function defaultThinkingTokens(level: ChatThinkingLevel): number | undefi
 function resolveChatExecutionBudget(
   input: Pick<ChatAgentTurnInput, "webMode" | "thinkingLevel"> & {
     liveDataIntent?: boolean;
+    promptLabExplicitTools?: boolean;
   },
 ): ChatExecutionBudget {
   const defaultMaxTokens = defaultThinkingTokens(input.thinkingLevel);
   if (input.webMode === "deep") {
-    return {
+    return applyPromptLabExplicitToolBudget({
       turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
       completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
       maxToolLoops: MAX_TOOL_LOOPS,
@@ -6056,10 +6062,10 @@ function resolveChatExecutionBudget(
       maxTokens: Math.max(defaultMaxTokens ?? 900, 1200),
       minSynthesisReserveMs: 15000,
       expensiveToolMinimumRemainingMs: 30000,
-    };
+    }, input.promptLabExplicitTools);
   }
   if (input.webMode === "quick") {
-    return {
+    return applyPromptLabExplicitToolBudget({
       turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
       completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
       maxToolLoops: 2,
@@ -6068,10 +6074,10 @@ function resolveChatExecutionBudget(
       maxTokens: Math.min(defaultMaxTokens ?? 600, 600),
       minSynthesisReserveMs: 6000,
       expensiveToolMinimumRemainingMs: 12000,
-    };
+    }, input.promptLabExplicitTools);
   }
   if (input.webMode === "off") {
-    return {
+    return applyPromptLabExplicitToolBudget({
       turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
       completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
       maxToolLoops: 2,
@@ -6080,10 +6086,10 @@ function resolveChatExecutionBudget(
       maxTokens: Math.min(defaultMaxTokens ?? 700, 800),
       minSynthesisReserveMs: 7000,
       expensiveToolMinimumRemainingMs: 14000,
-    };
+    }, input.promptLabExplicitTools);
   }
   if (input.liveDataIntent) {
-    return {
+    return applyPromptLabExplicitToolBudget({
       turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
       completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
       maxToolLoops: 5,
@@ -6092,9 +6098,9 @@ function resolveChatExecutionBudget(
       maxTokens: Math.min(defaultMaxTokens ?? 900, 1100),
       minSynthesisReserveMs: 12000,
       expensiveToolMinimumRemainingMs: 28000,
-    };
+    }, input.promptLabExplicitTools);
   }
-  return {
+  return applyPromptLabExplicitToolBudget({
     turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
     completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
     maxToolLoops: 4,
@@ -6103,6 +6109,20 @@ function resolveChatExecutionBudget(
     maxTokens: Math.min(defaultMaxTokens ?? 900, 1100),
     minSynthesisReserveMs: 10000,
     expensiveToolMinimumRemainingMs: 20000,
+  }, input.promptLabExplicitTools);
+}
+
+function applyPromptLabExplicitToolBudget(
+  budget: ChatExecutionBudget,
+  promptLabExplicitTools?: boolean,
+): ChatExecutionBudget {
+  if (!promptLabExplicitTools) {
+    return budget;
+  }
+  return {
+    ...budget,
+    maxToolLoops: Math.max(budget.maxToolLoops, MAX_TOOL_LOOPS),
+    maxToolRunsPerTurn: Math.max(budget.maxToolRunsPerTurn, MAX_TOOL_RUNS_PER_TURN),
   };
 }
 

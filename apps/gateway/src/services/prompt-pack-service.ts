@@ -131,7 +131,6 @@ const PROMPT_PACK_FILE_TOOL_NAMES = [
 
 const PROMPT_PACK_CODE_TOOL_NAMES = [
   ...PROMPT_PACK_FILE_TOOL_NAMES,
-  "shell.exec",
   "tests.run",
   "lint.run",
 ] as const;
@@ -1987,6 +1986,13 @@ export function normalizePromptTestCode(value: string): string {
   if (normalized === "ALL") {
     return "all";
   }
+  const dottedMatch = normalized.match(/^(\d+(?:\.\d+)+)$/);
+  if (dottedMatch) {
+    return dottedMatch[1]!
+      .split(".")
+      .map((segment) => String(Number.parseInt(segment, 10)))
+      .join(".");
+  }
   const match = normalized.match(/TEST-([A-Z]?\d{1,3})/);
   if (!match) {
     return normalized;
@@ -2006,6 +2012,7 @@ export function parsePromptPackTests(content: string): Array<{
   mode?: string;
   toolTier?: string;
 }> {
+  const TEST_CODE_PATTERN = "(?:TEST-[A-Z]?\\d{1,3}|\\d+(?:\\.\\d+)+)";
   const lines = content.replace(/\r\n/g, "\n").split("\n");
   const entries: Array<{ code: string; title: string; prompt: string; orderIndex: number; mode?: string; toolTier?: string }> = [];
   let active: { code: string; title: string; lines: string[] } | undefined;
@@ -2072,10 +2079,11 @@ export function parsePromptPackTests(content: string): Array<{
       continue;
     }
 
-    const testBracket = line.match(/^\[(TEST-[A-Z]?\d{1,3})\]\s*(.*)$/i);
-    const testHeading = line.match(/^#{1,6}\s*(TEST-[A-Z]?\d{1,3})\s*[:\-]?\s*(.*)$/i);
-    const testPlain = line.match(/^(TEST-[A-Z]?\d{1,3})\s*[:\-]\s*(.*)$/i);
-    const matched = testBracket ?? testHeading ?? testPlain;
+    const testBracket = line.match(new RegExp(`^\\[(${TEST_CODE_PATTERN})\\]\\s*(.*)$`, "i"));
+    const testHeadingPlain = line.match(new RegExp(`^#{1,6}\\s*(${TEST_CODE_PATTERN})\\s+(.+)$`, "i"));
+    const testHeading = line.match(new RegExp(`^#{1,6}\\s*(${TEST_CODE_PATTERN})\\s*[:\\-]\\s*(.*)$`, "i"));
+    const testPlain = line.match(new RegExp(`^(${TEST_CODE_PATTERN})\\s*[:\\-]\\s*(.*)$`, "i"));
+    const matched = testBracket ?? testHeadingPlain ?? testHeading ?? testPlain;
     if (matched) {
       flush();
       const code = normalizePromptTestCode(matched[1] ?? "");
@@ -2279,7 +2287,10 @@ export function buildPromptPackSessionPrefsOverride(
       ? false
       : profile.mode === "cowork" || (profile.mode === "code" && profile.toolTier !== "no-tools"),
     orchestrationVisibility: profile.mode === "chat" ? undefined : "explicit",
-    orchestrationParallelism: profile.mode === "cowork" ? "parallel" : "sequential",
+    // Prompt Lab values deterministic runs over parallel stage fan-out. Keeping
+    // harness orchestration sequential avoids SQLite/trace write contention
+    // between sibling worker turns while preserving the visible role handoff.
+    orchestrationParallelism: "sequential",
   };
 }
 
@@ -2307,6 +2318,9 @@ export function buildPromptPackSessionToolAllowlist(
     for (const toolName of PROMPT_PACK_CODE_TOOL_NAMES) {
       tools.add(toolName);
     }
+    if (promptPackNeedsShellExec(prompt, directives)) {
+      tools.add("shell.exec");
+    }
   } else if (directives.prefersFileTools) {
     for (const toolName of PROMPT_PACK_FILE_TOOL_NAMES) {
       tools.add(toolName);
@@ -2320,6 +2334,22 @@ export function buildPromptPackSessionToolAllowlist(
 
 function isPromptPackReadTool(toolName: string): boolean {
   return PROMPT_PACK_FILE_TOOL_NAMES.includes(toolName as (typeof PROMPT_PACK_FILE_TOOL_NAMES)[number]);
+}
+
+function promptPackNeedsShellExec(
+  prompt: string,
+  directives: PromptPackToolDirectives,
+): boolean {
+  if (directives.namedTools.includes("shell.exec") || directives.namedTools.includes("shell.exec_background")) {
+    return true;
+  }
+  const lower = prompt.toLowerCase();
+  return (
+    /\b(shell|terminal)\s+(command|commands?)\b/.test(lower)
+    || /\b(run|execute|invoke|launch|start)\b[^.\n]{0,80}\b(command|commands|script|scripts|shell|terminal)\b/.test(lower)
+    || /\b(run|execute|invoke|launch|start)\b[^.\n]{0,80}\b(npm|pnpm|yarn|bun|node|python|pytest|cargo|docker|gradle|mvn|make|go test)\b/.test(lower)
+    || /\binstall\b[^.\n]{0,80}\b(package|packages|dependency|dependencies|deps)\b/.test(lower)
+  );
 }
 
 export function buildPromptPackPromptInput(
@@ -2372,6 +2402,9 @@ export function buildPromptPackPromptInput(
   if (profile.toolTier === "explicit-tools") {
     harnessLines.push("- This is an explicit-tools evaluation. Use the tools requested in the prompt.");
     harnessLines.push("- Before drafting findings or recommendations, execute the required tool calls or explicitly state which required tool path was unavailable.");
+    if (profile.mode === "code") {
+      harnessLines.push("- Prefer file/code tools for read-only inspection or audits. Do not use `shell.exec` unless the prompt explicitly requires command execution or a shell-only check.");
+    }
     if (directives.namedTools.length > 0) {
       harnessLines.push(`- Required named tools: ${directives.namedTools.map((toolName) => `\`${toolName}\``).join(", ")}`);
     }

@@ -73,6 +73,29 @@ function isTerminalStage(stage: number, finalStage: number): boolean {
   return stage === finalStage;
 }
 
+function getMissingHandoffFailure(
+  role: OrchestrationRole,
+  priorSteps: OrchestrationStepExecutionResult[],
+): { summary: string; error: string; failureGuidance: string } | undefined {
+  const requiresCompletedHandoff = role === "synthesizer"
+    || role === "critic"
+    || role === "reviewer"
+    || role === "qa-validator";
+  if (!requiresCompletedHandoff) {
+    return undefined;
+  }
+  const hasCompletedOutput = priorSteps.some((step) => step.status === "completed" && step.output?.trim());
+  if (hasCompletedOutput) {
+    return undefined;
+  }
+  const roleTitle = toTitleCase(role);
+  return {
+    summary: `${roleTitle} blocked`,
+    error: `No completed upstream handoffs were available for ${role}.`,
+    failureGuidance: "Retry or repair an upstream step before asking a downstream synthesis/review role to continue.",
+  };
+}
+
 async function executeStep(input: {
   task: OrchestrationTaskInput;
   plan: OrchestrationPlan;
@@ -82,6 +105,28 @@ async function executeStep(input: {
   callbacks: OrchestrationExecutionCallbacks;
 }): Promise<OrchestrationStepExecutionResult> {
   const startedAt = new Date().toISOString();
+  const missingHandoffFailure = getMissingHandoffFailure(input.step.role, input.priorSteps);
+  if (missingHandoffFailure) {
+    const finishedAt = new Date().toISOString();
+    return {
+      stepId: input.step.stepId,
+      role: input.step.role,
+      index: input.stepIndex,
+      specialistCandidateId: input.step.specialistCandidate?.candidateId,
+      specialistTitle: input.step.specialistCandidate?.title,
+      specialistRole: input.step.specialistCandidate?.role,
+      providerId: input.step.providerId,
+      model: input.step.model,
+      startedAt,
+      finishedAt,
+      durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
+      status: "failed",
+      summary: missingHandoffFailure.summary,
+      error: missingHandoffFailure.error,
+      failureGuidance: missingHandoffFailure.failureGuidance,
+      citations: [],
+    };
+  }
   if (input.step.delegatedRole && input.callbacks.executeDelegatedStep) {
     return input.callbacks.executeDelegatedStep({
       task: input.task,
@@ -226,15 +271,15 @@ function buildRoleInstruction(mode: ChatMode, role: OrchestrationRole, workflowT
       case "worker":
         return "Act as a worker. Execute the assigned portion directly and return actionable output.";
       case "synthesizer":
-        return "Act as a synthesizer. Merge previous outputs into one cohesive response, preserving nuance and uncertainty.";
+        return "Act as a synthesizer. Merge previous outputs into one cohesive response, preserving nuance and uncertainty. If upstream handoffs are missing, failed, or unsupported, explicitly say the workflow is blocked instead of inventing synthesis.";
       case "critic":
-        return "Act as a critic. Identify weaknesses, gaps, contradictions, and missing evidence.";
+        return "Act as a critic. Identify weaknesses, gaps, contradictions, and missing evidence. If there is no substantive upstream output to critique, say the workflow is blocked instead of inventing missing context.";
       case "coder":
         return "Act as a coder. Prefer concrete patch strategy, implementation detail, and edge-case awareness.";
       case "reviewer":
-        return "Act as a reviewer. Focus on correctness risks, regressions, and unsupported claims.";
+        return "Act as a reviewer. Focus on correctness risks, regressions, and unsupported claims. If there is no completed upstream implementation or plan to review, say the workflow is blocked.";
       case "qa-validator":
-        return "Act as a QA validator. Focus on validation strategy, tests, failure modes, and release confidence.";
+        return "Act as a QA validator. Focus on validation strategy, tests, failure modes, and release confidence. If the upstream implementation did not complete, say validation is blocked.";
     }
   })();
   return [
