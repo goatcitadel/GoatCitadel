@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ToolInvokeRequest } from "@goatcitadel/contracts";
-import { resolveToolRequestPaths } from "./tool-path-resolution.js";
+import { resolveProjectRootForToolContext, resolveToolRequestPaths } from "./tool-path-resolution.js";
 
 const tempRoots: string[] = [];
 
@@ -12,6 +12,18 @@ afterEach(async () => {
 });
 
 describe("resolveToolRequestPaths", () => {
+  it("maps the prompt-pack repo sentinel back to the repository root", async () => {
+    const { workspaceRoot, repoRoot } = await createWorkspaceFixture();
+
+    const projectRoot = resolveProjectRootForToolContext({
+      workspaceRoot,
+      repoRoot,
+      projectWorkspacePath: "__prompt_pack_repo__",
+    });
+
+    expect(projectRoot).toBe(repoRoot);
+  });
+
   it("keeps workspace-relative prompt-pack paths anchored to the workspace root", async () => {
     const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
     const request: ToolInvokeRequest = {
@@ -171,12 +183,13 @@ describe("resolveToolRequestPaths", () => {
   });
 });
 
-async function createWorkspaceFixture(): Promise<{ workspaceRoot: string; projectRoot: string }> {
+async function createWorkspaceFixture(): Promise<{ repoRoot: string; workspaceRoot: string; projectRoot: string }> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "goat-tool-paths-"));
   tempRoots.push(root);
-  const workspaceRoot = path.join(root, "workspace");
+  const repoRoot = root;
+  const workspaceRoot = path.join(repoRoot, "workspace");
   const projectRoot = path.join(workspaceRoot, "fixtures", "prompt-pack-workspace");
   await fs.mkdir(path.join(projectRoot, "src"), { recursive: true });
   await fs.writeFile(path.join(projectRoot, "src", "utils.ts"), "export const slugify = () => '';\n", "utf8");
-  return { workspaceRoot, projectRoot };
+  return { repoRoot, workspaceRoot, projectRoot };
 }

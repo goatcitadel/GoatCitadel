@@ -8,6 +8,8 @@ export interface ToolPathResolutionContext {
   projectWorkspacePath?: string;
 }
 
+const PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH = "__prompt_pack_repo__";
+
 type PathResolutionKind = "read" | "write" | "cwd";
 
 interface ToolPathSpec {
@@ -78,6 +80,21 @@ export function resolveToolRequestPaths(
     ...request,
     args: nextArgs,
   };
+}
+
+export function resolveProjectRootForToolContext(input: {
+  workspaceRoot: string;
+  repoRoot: string;
+  projectWorkspacePath?: string;
+}): string | undefined {
+  const projectWorkspacePath = input.projectWorkspacePath?.trim();
+  if (!projectWorkspacePath) {
+    return undefined;
+  }
+  if (projectWorkspacePath === PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH) {
+    return path.resolve(input.repoRoot);
+  }
+  return path.resolve(input.workspaceRoot, projectWorkspacePath);
 }
 
 function resolveRelativeToolPath(

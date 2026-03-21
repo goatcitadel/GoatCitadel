@@ -377,7 +377,7 @@ import {
 import { verifyBackupAtPath } from "./gateway/backup-verify.js";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
 import { buildDelegatedSessionToolGrantCopies } from "./delegated-session-tool-grants.js";
-import { resolveToolRequestPaths } from "./tool-path-resolution.js";
+import { resolveProjectRootForToolContext, resolveToolRequestPaths } from "./tool-path-resolution.js";
 import type { ServiceContext } from "./service-context.js";
 import { ChatProjectService } from "./chat-project-service.js";
 import { DurableRunService } from "./durable-run-service.js";
@@ -7362,7 +7362,11 @@ export class GatewayService {
     const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
     const projectId = this.storage.chatSessionProjects.get(request.sessionId)?.projectId;
     const project = projectId ? this.storage.chatProjects.get(projectId) : undefined;
-    const projectRoot = project ? path.resolve(workspaceRoot, project.workspacePath) : undefined;
+    const projectRoot = resolveProjectRootForToolContext({
+      workspaceRoot,
+      repoRoot: this.config.rootDir,
+      projectWorkspacePath: project?.workspacePath,
+    });
     return resolveToolRequestPaths(request, {
       workspaceRoot,
       projectRoot,

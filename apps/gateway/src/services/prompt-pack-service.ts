@@ -30,6 +30,7 @@ import type {
   PromptPackScoreRecord,
   PromptPackTestRecord,
   PromptPackToolTier,
+  ToolGrantConstraints,
   ReplayRegressionResult,
   ReplayRegressionRun,
 } from "@goatcitadel/contracts";
@@ -53,6 +54,9 @@ const DEFAULT_PROMPT_PACK_EXPORT_DIR = "artifacts/prompt-lab";
 const PROMPT_PACK_PROJECT_NAME = "Prompt Lab Workspace";
 const PROMPT_PACK_PROJECT_DESCRIPTION = "Auto-created project binding for prompt-pack code evaluations.";
 const PROMPT_PACK_PROJECT_WORKSPACE_PATH = "fixtures/prompt-pack-workspace";
+const PROMPT_PACK_REPO_PROJECT_NAME = "Prompt Lab Repo";
+const PROMPT_PACK_REPO_PROJECT_DESCRIPTION = "Auto-created project binding for prompt-pack repo evaluations.";
+const PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH = "__prompt_pack_repo__";
 
 // ── row types ────────────────────────────────────────────────────────
 interface PromptPackBenchmarkRunRow {
@@ -124,6 +128,24 @@ interface PromptPackToolDirectives {
   prefersWebTools: boolean;
   prefersMemoryTools: boolean;
 }
+
+interface PromptPackProjectBindingConfig {
+  name: string;
+  description: string;
+  workspacePath: string;
+}
+
+const PROMPT_PACK_FIXTURE_PROJECT_BINDING: PromptPackProjectBindingConfig = {
+  name: PROMPT_PACK_PROJECT_NAME,
+  description: PROMPT_PACK_PROJECT_DESCRIPTION,
+  workspacePath: PROMPT_PACK_PROJECT_WORKSPACE_PATH,
+};
+
+const PROMPT_PACK_REPO_PROJECT_BINDING: PromptPackProjectBindingConfig = {
+  name: PROMPT_PACK_REPO_PROJECT_NAME,
+  description: PROMPT_PACK_REPO_PROJECT_DESCRIPTION,
+  workspacePath: PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH,
+};
 
 // Keep in sync with LOCAL_PATH_TOOL_NAMES in chat-agent-orchestrator.ts
 const PROMPT_PACK_FILE_TOOL_NAMES = [
@@ -275,16 +297,17 @@ export class PromptPackService {
       );
     }
     const promptInput = buildPromptPackPromptInput(resolvedPrompt.prompt, executionProfile);
+    const projectBinding = resolvePromptPackProjectBinding(executionProfile, resolvedPrompt.prompt);
     const runId = randomUUID();
     const sessionId = input?.sessionId ?? this.deps.createChatSession({
       title: `[${test.code}] ${test.title}`.slice(0, 200),
       workspaceId: this.ctx.normalizeWorkspaceId(undefined),
-      projectId: chatModeRequiresProjectBinding(executionProfile.mode)
-        ? this.ensurePromptPackProjectBinding()
+      projectId: projectBinding
+        ? this.ensurePromptPackProjectBindingFor(projectBinding)
         : undefined,
       mode: executionProfile.mode,
     }).sessionId;
-    this.ensurePromptPackSessionToolGrants(sessionId, executionProfile, resolvedPrompt.prompt);
+    this.ensurePromptPackSessionToolGrants(sessionId, executionProfile, resolvedPrompt.prompt, projectBinding);
 
     this.ctx.storage.promptPackRuns.create({
       runId,
@@ -1369,29 +1392,40 @@ export class PromptPackService {
   }
 
   private ensurePromptPackProjectBinding(): string {
-    this.ensurePromptPackWorkspaceMirror();
+    return this.ensurePromptPackProjectBindingFor(PROMPT_PACK_FIXTURE_PROJECT_BINDING);
+  }
+
+  private ensurePromptPackProjectBindingFor(binding: PromptPackProjectBindingConfig): string {
+    if (binding.workspacePath === PROMPT_PACK_PROJECT_WORKSPACE_PATH) {
+      this.ensurePromptPackWorkspaceMirror();
+    }
     const workspaceId = this.ctx.normalizeWorkspaceId(undefined);
     const existingProject = findPromptPackProjectBinding(
       this.ctx.storage.chatProjects.list("all", 500, workspaceId),
+      binding.workspacePath,
     );
     if (existingProject) {
       if (existingProject.lifecycleStatus === "archived") {
         this.ctx.storage.chatProjects.restore(existingProject.projectId);
       }
-      if (existingProject.workspacePath !== PROMPT_PACK_PROJECT_WORKSPACE_PATH) {
+      if (
+        existingProject.workspacePath !== binding.workspacePath
+        || existingProject.name !== binding.name
+        || existingProject.description !== binding.description
+      ) {
         this.ctx.storage.chatProjects.update(existingProject.projectId, {
-          name: PROMPT_PACK_PROJECT_NAME,
-          description: PROMPT_PACK_PROJECT_DESCRIPTION,
-          workspacePath: PROMPT_PACK_PROJECT_WORKSPACE_PATH,
+          name: binding.name,
+          description: binding.description,
+          workspacePath: binding.workspacePath,
         });
       }
       return existingProject.projectId;
     }
     return this.ctx.storage.chatProjects.create({
       workspaceId,
-      name: PROMPT_PACK_PROJECT_NAME,
-      description: PROMPT_PACK_PROJECT_DESCRIPTION,
-      workspacePath: PROMPT_PACK_PROJECT_WORKSPACE_PATH,
+      name: binding.name,
+      description: binding.description,
+      workspacePath: binding.workspacePath,
     }).projectId;
   }
 
@@ -1419,11 +1453,17 @@ export class PromptPackService {
     sessionId: string,
     profile: PromptPackExecutionProfile,
     prompt: string,
+    projectBinding?: PromptPackProjectBindingConfig,
   ): void {
     const toolNames = buildPromptPackSessionToolAllowlist(profile, prompt);
     if (toolNames.length === 0) {
       return;
     }
+    const readConstraints = buildPromptPackSessionReadGrantConstraints({
+      prompt,
+      rootDir: this.ctx.config.rootDir,
+      projectWorkspacePath: projectBinding?.workspacePath,
+    });
     const now = new Date().toISOString();
     const expiresAt = new Date(Date.now() + (2 * 60 * 60 * 1000)).toISOString();
     const activeAllowGrants = this.ctx.storage.toolGrants
@@ -1441,12 +1481,16 @@ export class PromptPackService {
       if (activeAllowPatterns.has(toolName)) {
         continue;
       }
+      const constraints = isPromptPackReadTool(toolName)
+        ? readConstraints
+        : undefined;
       this.ctx.storage.toolGrants.create({
         toolPattern: toolName,
         decision: "allow",
         scope: "session",
         scopeRef: sessionId,
         grantType: "ttl",
+        constraints,
         expiresAt,
         createdBy: "system-prompt-pack-bootstrap",
       }, now);
@@ -1845,16 +1889,46 @@ function detectPromptRequestedRoles(prompt: string): string[] {
 function roleSectionPresent(response: string, role: string): boolean {
   const normalized = response.toLowerCase();
   const patterns: Record<string, RegExp> = {
-    product: /(?:^|\n)\s*(?:#+\s*)?product(?: goat)?\b|prd/i,
-    architect: /(?:^|\n)\s*(?:#+\s*)?architect(?: goat)?\b|architecture/i,
-    coder: /(?:^|\n)\s*(?:#+\s*)?coder(?: goat)?\b|implementation|task list/i,
-    qa: /(?:^|\n)\s*(?:#+\s*)?qa(?: goat)?\b|test plan|regression/i,
-    ops: /(?:^|\n)\s*(?:#+\s*)?ops(?: goat)?\b|rollout|deployment/i,
-    researcher: /(?:^|\n)\s*(?:#+\s*)?researcher(?: goat)?\b|sources|confidence/i,
-    "personal assistant": /(?:^|\n)\s*(?:#+\s*)?personal assistant\b/i,
+    product: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?product(?: goat)?(?:\*\*|__)?\b|prd/i,
+    architect: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?architect(?: goat)?(?:\*\*|__)?\b|architecture/i,
+    coder: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?coder(?: goat)?(?:\*\*|__)?\b|implementation|task list/i,
+    qa: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?qa(?: goat)?(?:\*\*|__)?\b|test plan|regression/i,
+    ops: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?ops(?: goat)?(?:\*\*|__)?\b|rollout|deployment/i,
+    researcher: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?researcher(?: goat)?(?:\*\*|__)?\b|sources|confidence/i,
+    "personal assistant": /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?personal assistant(?:\*\*|__)?\b/i,
   };
   const matcher = patterns[role];
   return matcher ? matcher.test(normalized) : false;
+}
+
+function escapePromptPackRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function responseContainsPromptPackSection(response: string, label: string): boolean {
+  const trimmed = label.trim().replace(/[`"]/g, "");
+  if (!trimmed) {
+    return false;
+  }
+  const pattern = escapePromptPackRegex(trimmed)
+    .replace(/\\\//g, "[\\\\/]")
+    .replace(/\\-/g, "[-–—]")
+    .replace(/\s+/g, "\\s+");
+  return new RegExp(`(?:^|\\n)\\s*(?:#+\\s*)?(?:\\*\\*|__)?${pattern}(?:\\*\\*|__)?\\b`, "i").test(response);
+}
+
+function responseMentionsPromptPackPerspective(response: string, label: string): boolean {
+  const normalizedResponse = response.toLowerCase();
+  const normalizedLabel = label.toLowerCase().trim();
+  if (!normalizedLabel) {
+    return false;
+  }
+  const compactLabel = normalizedLabel
+    .replace(/\b(impact|implications|tradeoffs?|lens|lenses|perspective|perspectives)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalizedResponse.includes(normalizedLabel)
+    || (compactLabel.length > 0 && normalizedResponse.includes(compactLabel));
 }
 
 function detectPresentRoleSections(response: string): string[] {
@@ -1863,7 +1937,7 @@ function detectPresentRoleSections(response: string): string[] {
 }
 
 function hasPromptPackSynthesisSection(response: string): boolean {
-  return /(?:^|\n)\s*(?:#+\s*)?(?:synthesis|recommendation|final answer|conclusion|bottom line)\b/i.test(response);
+  return /(?:^|\n)\s*(?:#+\s*)?(?:synthesis|synthesized recommendation|controller synthesis|recommendation|final recommendation|final answer|conclusion|bottom line)\b/i.test(response);
 }
 
 function extractPromptPackObservedFileEvidence(toolRuns: ChatTurnTraceRecord["toolRuns"]): string[] {
@@ -2014,17 +2088,12 @@ export function finalizePromptPackResponseText(input: {
   responseText: string;
   trace?: ChatTurnTraceRecord;
 }): string {
-  const withRoles = ensurePromptPackRoleSections({
-    prompt: input.prompt,
-    responseText: (input.responseText ?? "").trim(),
-    toolRuns: input.trace?.toolRuns,
-  });
-  const constraintsBlock = buildPromptPackConstraintsBlock(input.trace?.toolRuns);
-  const normalized = withRoles.trim();
-  if (normalized.length > 0 || !constraintsBlock) {
+  const normalized = (input.responseText ?? "").trim();
+  if (normalized.length > 0) {
     return normalized;
   }
-  return constraintsBlock.trim();
+  const constraintsBlock = buildPromptPackConstraintsBlock(input.trace?.toolRuns);
+  return constraintsBlock?.trim() ?? "";
 }
 
 export function normalizePromptTestCode(value: string): string {
@@ -2307,7 +2376,7 @@ export function buildPromptPackSessionPrefsOverride(
   prompt = "",
 ): ChatSessionPrefsPatch {
   const directives = detectPromptPackToolDirectives(prompt);
-  const disableModeOrchestration = profile.toolTier === "explicit-tools";
+  const disableModeOrchestration = shouldDisablePromptPackModeOrchestration(profile, prompt);
   const webMode = (
     profile.toolTier === "explicit-tools"
     && (directives.namedTools.length > 0 || directives.prefersFileTools || directives.prefersWebTools || directives.prefersMemoryTools)
@@ -2340,15 +2409,43 @@ export function buildPromptPackSessionPrefsOverride(
   };
 }
 
-export function findPromptPackProjectBinding(projects: ChatProjectRecord[]): ChatProjectRecord | undefined {
-  return projects.find((project) => project.workspacePath === PROMPT_PACK_PROJECT_WORKSPACE_PATH)
-    ?? projects.find((project) => (
-      project.name === PROMPT_PACK_PROJECT_NAME
+export function resolvePromptPackProjectBinding(
+  profile: PromptPackExecutionProfile,
+  prompt = "",
+): PromptPackProjectBindingConfig | undefined {
+  if (!chatModeRequiresProjectBinding(profile.mode)) {
+    return undefined;
+  }
+  if (prompt.toLowerCase().includes(PROMPT_PACK_PROJECT_WORKSPACE_PATH.toLowerCase())) {
+    return PROMPT_PACK_FIXTURE_PROJECT_BINDING;
+  }
+  return PROMPT_PACK_REPO_PROJECT_BINDING;
+}
+
+export function findPromptPackProjectBinding(
+  projects: ChatProjectRecord[],
+  preferredWorkspacePath = PROMPT_PACK_PROJECT_WORKSPACE_PATH,
+): ChatProjectRecord | undefined {
+  const preferredByPath = projects.find((project) => project.workspacePath === preferredWorkspacePath);
+  if (preferredByPath) {
+    return preferredByPath;
+  }
+  if (preferredWorkspacePath === PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH) {
+    return projects.find((project) => (
+      project.name === PROMPT_PACK_REPO_PROJECT_NAME
       || (
-        project.workspacePath === "."
-        && project.description === PROMPT_PACK_PROJECT_DESCRIPTION
+        project.workspacePath === PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH
+        && project.description === PROMPT_PACK_REPO_PROJECT_DESCRIPTION
       )
     ));
+  }
+  return projects.find((project) => (
+    project.name === PROMPT_PACK_PROJECT_NAME
+    || (
+      project.workspacePath === PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH
+      && project.description === PROMPT_PACK_PROJECT_DESCRIPTION
+    )
+  ));
 }
 
 export function buildPromptPackSessionToolAllowlist(
@@ -2382,6 +2479,66 @@ function isPromptPackReadTool(toolName: string): boolean {
   return PROMPT_PACK_FILE_TOOL_NAMES.includes(toolName as (typeof PROMPT_PACK_FILE_TOOL_NAMES)[number]);
 }
 
+export function buildPromptPackSessionReadGrantConstraints(input: {
+  prompt: string;
+  rootDir: string;
+  projectWorkspacePath?: string;
+}): ToolGrantConstraints | undefined {
+  const allowedPaths = buildPromptPackSessionAllowedPaths(input);
+  if (allowedPaths.length === 0) {
+    return undefined;
+  }
+  return { allowedPaths };
+}
+
+export function buildPromptPackSessionAllowedPaths(input: {
+  prompt: string;
+  rootDir: string;
+  projectWorkspacePath?: string;
+}): string[] {
+  const allowedPaths = new Set<string>();
+  if (input.projectWorkspacePath) {
+    addPromptPackAllowedPath(allowedPaths, path.resolve(input.rootDir, input.projectWorkspacePath), false);
+  }
+  for (const candidate of extractPromptPackPathHints(input.prompt)) {
+    const isAbsolutePath = path.isAbsolute(candidate) || /^[A-Za-z]:[\\/]/.test(candidate);
+    const resolvedPath = isAbsolutePath
+      ? path.resolve(candidate)
+      : path.resolve(input.rootDir, candidate);
+    addPromptPackAllowedPath(allowedPaths, resolvedPath, true);
+  }
+  return [...allowedPaths];
+}
+
+function extractPromptPackPathHints(prompt: string): string[] {
+  const matches = new Set<string>();
+  const captureMatches = (pattern: RegExp) => {
+    for (const match of prompt.matchAll(pattern)) {
+      const candidate = match[1]?.trim().replace(/[.,:;]+$/, "");
+      if (candidate) {
+        matches.add(candidate.replaceAll("\\", "/"));
+      }
+    }
+  };
+  captureMatches(/([A-Za-z]:[\\/][^\s`"',)]+)/g);
+  captureMatches(/(?:^|[\s`"'(])((?:\.{1,2}\/)?(?:fixtures\/prompt-pack-workspace|apps\/|packages\/|docs\/|workspace\/|config\/|scripts\/|artifacts\/)[^\s`"',)]*)/g);
+  captureMatches(/(?:^|[\s`"'(])((?:goatcitadel_prompt_pack(?:_[A-Za-z0-9._-]+)?\.md|AGENTS\.md|\.gitignore|pnpm-workspace\.yaml|package\.json))(?:$|[\s`"',)])/g);
+  return [...matches];
+}
+
+function addPromptPackAllowedPath(target: Set<string>, candidate: string, includeParentForFile: boolean): void {
+  const normalizedCandidate = path.resolve(candidate);
+  target.add(normalizedCandidate);
+  if (!includeParentForFile) {
+    return;
+  }
+  const basename = path.basename(normalizedCandidate);
+  const looksLikeFile = basename.startsWith(".") || path.extname(basename).length > 0;
+  if (looksLikeFile) {
+    target.add(path.dirname(normalizedCandidate));
+  }
+}
+
 function promptPackNeedsShellExec(
   prompt: string,
   directives: PromptPackToolDirectives,
@@ -2406,6 +2563,9 @@ export function buildPromptPackPromptInput(
   directives: PromptPackToolDirectives;
 } {
   const directives = detectPromptPackToolDirectives(prompt);
+  const orderedSections = extractPromptPackOrderedSections(prompt);
+  const perspectiveLabels = extractPromptPackPerspectiveLabels(prompt);
+  const controllerOwnedDelivery = promptRequiresControllerOwnedDelivery(prompt);
   const shouldWrapPrompt = profile.mode !== "chat"
     || profile.toolTier === "explicit-tools";
   if (!shouldWrapPrompt) {
@@ -2433,8 +2593,30 @@ export function buildPromptPackPromptInput(
 
   if (profile.mode === "cowork") {
     harnessLines.push("- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.");
-    harnessLines.push("- For non-trivial tasks, use at least two role-labeled sections chosen from Product, Researcher, Architect, Coder, QA, or Ops, then end with a synthesis.");
-    harnessLines.push("- Keep each role section compact and decision-oriented.");
+    if (orderedSections.length > 0) {
+      harnessLines.push(`- Output exactly these top-level sections in this order: ${orderedSections.map((section) => `\`${section}\``).join(", ")}.`);
+      harnessLines.push("- Do not add extra headings before, between, or after those sections.");
+      harnessLines.push("- Keep each requested section compact, evidence-backed, and decision-oriented.");
+    } else {
+      harnessLines.push("- For non-trivial tasks, use at least two role-labeled sections chosen from Product, Researcher, Architect, Coder, QA, or Ops, then end with a synthesis.");
+      harnessLines.push("- Keep each role section compact and decision-oriented.");
+    }
+    if (perspectiveLabels.length > 0) {
+      harnessLines.push(`- Cover exactly these named perspectives/lenses: ${perspectiveLabels.map((label) => `\`${label}\``).join(", ")}.`);
+      harnessLines.push("- Do not rename those perspectives to generic stand-ins such as Critic, Product Goat, or Architect Goat.");
+      harnessLines.push("- Use each named perspective/lens verbatim as its own compact subsection before the final recommendation.");
+    }
+    if (controllerOwnedDelivery) {
+      harnessLines.push("- Keep the final answer controller-owned. Do not expose raw specialist chatter, role transcripts, or synthetic handoff scaffolds.");
+      harnessLines.push("- If the prompt still requires perspectives or lenses, name what each one contributed inside the controller-owned answer.");
+    }
+    if (/create a 6-month roadmap/i.test(prompt)) {
+      harnessLines.push("- Deliver the roadmap itself with phases, dependencies, staffing assumptions, and risk gates.");
+      harnessLines.push("- Do not critique or review an imagined draft instead of producing the roadmap.");
+    }
+    if (/one synthesized recommendation|one operator-ready recommendation/i.test(prompt)) {
+      harnessLines.push("- End with exactly one synthesized recommendation that integrates all required perspectives.");
+    }
   }
 
   if (profile.mode === "code") {
@@ -2462,8 +2644,19 @@ export function buildPromptPackPromptInput(
     harnessLines.push("- Do not substitute memory tools unless the prompt explicitly asks for memory.");
     harnessLines.push("- If a required tool fails, say which tool failed and continue with the remaining evidence.");
     if (directives.prefersFileTools) {
+      harnessLines.push("- Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.");
+      harnessLines.push("- Use those tools before concluding that local file access is unavailable.");
       harnessLines.push("- If local file paths are listed, inspect those paths before answering.");
       harnessLines.push("- Do not claim a local file was read unless a file/code tool actually executed.");
+    }
+    if (directives.prefersWebTools) {
+      harnessLines.push("- Available web tools in this run include `browser.search`, `browser.navigate`, `browser.extract`, and any named `browser.interact` / `http.post` calls requested by the prompt.");
+    }
+    if (directives.namedTools.includes("browser.interact")) {
+      harnessLines.push("- For `browser.interact`, send an explicit `steps` array. A missing `steps` field is a malformed call.");
+    }
+    if (directives.namedTools.includes("http.post")) {
+      harnessLines.push("- If `http.post` is required, include the observed response status/body facts in the answer instead of describing a hypothetical POST.");
     }
   }
 
@@ -2488,6 +2681,85 @@ function detectPromptPackToolDirectives(prompt: string): PromptPackToolDirective
     prefersWebTools,
     prefersMemoryTools,
   };
+}
+
+function shouldDisablePromptPackModeOrchestration(
+  profile: PromptPackExecutionProfile,
+  prompt: string,
+): boolean {
+  if (profile.toolTier === "explicit-tools") {
+    return true;
+  }
+  if (profile.mode !== "cowork" || profile.toolTier !== "no-tools") {
+    return false;
+  }
+  return (
+    promptRequiresControllerOwnedDelivery(prompt)
+    || extractPromptPackPerspectiveLabels(prompt).length > 1
+    || /create a \d+-month roadmap/i.test(prompt)
+    || /\boperator-ready recommendation\b/i.test(prompt)
+  );
+}
+
+function extractPromptPackOrderedSections(prompt: string): string[] {
+  const marker = prompt.match(/output exactly these sections in this order:\s*([\s\S]+)/i);
+  if (!marker) {
+    return [];
+  }
+  const lines = marker[1]!.split(/\r?\n/);
+  const sections: string[] = [];
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      if (sections.length > 0) {
+        break;
+      }
+      continue;
+    }
+    if (/^rules?:/i.test(trimmed)) {
+      break;
+    }
+    const bulletMatch = trimmed.match(/^[-*]\s+`?([^`]+?)`?\s*$/);
+    if (!bulletMatch) {
+      if (sections.length > 0) {
+        break;
+      }
+      continue;
+    }
+    sections.push(bulletMatch[1]!.trim());
+  }
+  return sections;
+}
+
+function extractPromptPackPerspectiveLabels(prompt: string): string[] {
+  const labels = new Set<string>();
+  const addMatch = (pattern: RegExp): void => {
+    const match = prompt.match(pattern);
+    if (!match?.[1]) {
+      return;
+    }
+    for (const label of splitPromptPackLabelList(match[1])) {
+      labels.add(label);
+    }
+  };
+
+  addMatch(/perspectives:\s*([^.]+)\./i);
+  addMatch(/break the work into\s*([^.]+?)\s+lenses?/i);
+  addMatch(/weigh\s+([^.]+?)\./i);
+
+  return [...labels];
+}
+
+function splitPromptPackLabelList(rawValue: string): string[] {
+  return rawValue
+    .replace(/[`"]/g, "")
+    .split(/\s*,\s*|\s+and\s+/i)
+    .map((part) => part.trim().replace(/^and\s+/i, ""))
+    .filter((part) => part.length > 0);
+}
+
+function promptRequiresControllerOwnedDelivery(prompt: string): boolean {
+  return /\bonly the controller should speak in the final answer\b|\bwithout dumping raw sub-agent chatter\b|\bwithout raw sub-agent chatter\b/i.test(prompt);
 }
 
 export function resolvePromptPackJudgeTemperature(providerId?: string, model?: string): number {
@@ -2713,6 +2985,15 @@ export function evaluatePromptPackRuleScores(input: {
   const promptLabCodeContract = input.profile.mode === "code";
   const presentRoles = detectPresentRoleSections(responseRaw);
   const synthesisSectionPresent = hasPromptPackSynthesisSection(responseRaw);
+  const orderedSections = extractPromptPackOrderedSections(promptRaw);
+  const requiredPerspectiveLabels = extractPromptPackPerspectiveLabels(promptRaw);
+  const controllerOwnedDelivery = promptRequiresControllerOwnedDelivery(promptRaw);
+  const hasOrderedSections = orderedSections.length > 0
+    && orderedSections.every((label) => responseContainsPromptPackSection(responseRaw, label));
+  const perspectiveCoverageSatisfied = requiredPerspectiveLabels.length > 0
+    && requiredPerspectiveLabels.every((label) => responseMentionsPromptPackPerspective(responseRaw, label));
+  const controllerOwnedStructurePresent = /(?:^|\n)\s*(?:#+\s*)?(?:perspective summary|status snapshot)\b/i.test(responseRaw);
+  const perspectiveSummaryPresent = /(?:^|\n)\s*(?:#+\s*)?perspective summary\b/i.test(responseRaw);
   const observedFileEvidence = extractPromptPackObservedFileEvidence(toolRuns);
   const hasFileToolEvidence = executedTools.some((item) => isPromptPackFileEvidenceTool(item.toolName));
   const mentionsObservedFiles = responseMentionsObservedFileEvidence(responseRaw, observedFileEvidence);
@@ -2756,7 +3037,17 @@ export function evaluatePromptPackRuleScores(input: {
     signals.push(appearsMultiAgent ? "violated_single_agent_instruction" : "respected_single_agent_instruction");
   }
   if (promptLabCoworkContract) {
-    const coworkContractSatisfied = presentRoles.length >= 2 && synthesisSectionPresent;
+    const controllerOwnedContractSatisfied = controllerOwnedDelivery
+      && synthesisSectionPresent
+      && (perspectiveCoverageSatisfied || controllerOwnedStructurePresent);
+    const namedPerspectiveContractSatisfied = (requiredPerspectiveLabels.length > 1 || perspectiveSummaryPresent)
+      && (perspectiveCoverageSatisfied || perspectiveSummaryPresent)
+      && synthesisSectionPresent;
+    const coworkContractSatisfied = orderedSections.length > 0
+      ? hasOrderedSections
+      : (controllerOwnedDelivery || requiredPerspectiveLabels.length > 1)
+        ? (controllerOwnedContractSatisfied || namedPerspectiveContractSatisfied)
+        : presentRoles.length >= 2 && synthesisSectionPresent;
     if (coworkContractSatisfied) {
       handoffScore = 2;
       routingScore = 2;
@@ -2765,7 +3056,11 @@ export function evaluatePromptPackRuleScores(input: {
       handoffScore = 0;
       routingScore = Math.min(routingScore, 1) as 0 | 1 | 2;
       signals.push("cowork_role_contract_missing_sections");
-      if (presentRoles.length < 2) {
+      if (orderedSections.length > 0 && !hasOrderedSections) {
+        signals.push("cowork_missing_ordered_sections");
+      } else if ((controllerOwnedDelivery || requiredPerspectiveLabels.length > 1) && !perspectiveCoverageSatisfied) {
+        signals.push("cowork_missing_named_perspectives");
+      } else if (presentRoles.length < 2) {
         signals.push("cowork_missing_role_sections");
       }
       if (!synthesisSectionPresent) {
@@ -3245,7 +3540,6 @@ function detectPromptPackIncompleteOutput(response: string): boolean {
     || /\bdid not finish cleanly\b/.test(response)
     || /\bcould not confidently produce the full requested\b/.test(response)
     || /\bcould not complete\b/.test(response)
-    || /\bincomplete\b/.test(response)
     || /\bbest next move: retry\b/.test(response)
     || /\brecovered from tool output\b/.test(response)
   );

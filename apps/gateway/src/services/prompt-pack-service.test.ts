@@ -7,6 +7,7 @@ import type {
   PromptPackTestRecord,
 } from "@goatcitadel/contracts";
 import {
+  buildPromptPackSessionAllowedPaths,
   buildPromptPackSessionToolAllowlist,
   findPromptPackProjectBinding,
   finalizePromptPackResponseText,
@@ -24,6 +25,7 @@ import {
   resolvePromptPackJudgeTemperature,
   resolvePromptPackJudgeServiceTier,
   resolvePromptPackExecutionProfile,
+  resolvePromptPackProjectBinding,
 } from "./prompt-pack-service.js";
 
 describe("prompt-pack helpers", () => {
@@ -50,6 +52,32 @@ describe("prompt-pack helpers", () => {
     expect(findPromptPackProjectBinding([legacyProject, currentProject])).toMatchObject({
       projectId: "current-project",
     });
+  });
+
+  it("resolves repo-root project bindings for repo-native code prompts", () => {
+    const codeProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-code-binding",
+        packId: "pack-1",
+        code: "TEST-BIND-01",
+        title: "Repo Binding",
+        prompt: "Based on the current GoatCitadel repo, inspect apps/gateway/src/services/prompt-pack-service.ts.",
+        orderIndex: 0,
+        mode: "code",
+        toolTier: "implicit-tools",
+        createdAt: "2026-03-21T00:00:00.000Z",
+      },
+    });
+
+    expect(resolvePromptPackProjectBinding(
+      codeProfile,
+      "Based on the current GoatCitadel repo, inspect apps/gateway/src/services/prompt-pack-service.ts.",
+    )?.workspacePath).toBe("__prompt_pack_repo__");
+
+    expect(resolvePromptPackProjectBinding(
+      codeProfile,
+      "Read fixtures/prompt-pack-workspace/package.json using file/code tools.",
+    )?.workspacePath).toBe("fixtures/prompt-pack-workspace");
   });
 
   it("resolves no-tools profiles and honors mode presets", () => {
@@ -424,6 +452,13 @@ describe("prompt-pack helpers", () => {
       orchestrationParallelism: "sequential",
     });
 
+    expect(buildPromptPackSessionPrefsOverride(
+      noToolsCoworkProfile,
+      "Analyze the decision from 3 perspectives: CTO, VP Sales, and Developer Relations. End with one synthesized recommendation.",
+    )).toMatchObject({
+      orchestrationEnabled: false,
+    });
+
     const codeProfile = resolvePromptPackExecutionProfile({
       test: {
         testId: "test-code-2",
@@ -575,6 +610,32 @@ describe("prompt-pack helpers", () => {
     expect(buildPromptPackSessionToolAllowlist(noToolsProfile, "Use browser.search if needed.")).toEqual([]);
   });
 
+  it("builds path-scoped read grants for prompt-pack sessions", () => {
+    const rootDir = "F:/code/personal-ai";
+    expect(buildPromptPackSessionAllowedPaths({
+      prompt: "Based on the current GoatCitadel repo, inspect apps/gateway/src/services/prompt-pack-service.ts.",
+      rootDir,
+      projectWorkspacePath: ".",
+    })).toEqual(expect.arrayContaining([
+      "F:\\code\\personal-ai",
+      "F:\\code\\personal-ai\\apps\\gateway\\src\\services\\prompt-pack-service.ts",
+      "F:\\code\\personal-ai\\apps\\gateway\\src\\services",
+    ]));
+
+    expect(buildPromptPackSessionAllowedPaths({
+      prompt: [
+        "Read these files using file/code tools:",
+        "- `F:/code/sql-teacher/lib/db/sandbox.ts`",
+        "- `F:/code/sql-teacher/lib/db/security.ts`",
+      ].join("\n"),
+      rootDir,
+    })).toEqual(expect.arrayContaining([
+      "F:\\code\\sql-teacher\\lib\\db\\sandbox.ts",
+      "F:\\code\\sql-teacher\\lib\\db",
+      "F:\\code\\sql-teacher\\lib\\db\\security.ts",
+    ]));
+  });
+
   it("wraps cowork, code, and explicit-tools prompts with prompt-lab contracts", () => {
     const coworkProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -657,6 +718,43 @@ describe("prompt-pack helpers", () => {
     );
     expect(explicitCodeInput.prompt).toContain("Prefer file/code tools for read-only inspection or audits.");
     expect(explicitCodeInput.prompt).toContain("Do not use `shell.exec` unless the prompt explicitly requires command execution or a shell-only check.");
+    expect(explicitCodeInput.prompt).toContain("Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.");
+
+    const exactSectionCoworkProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-contract",
+        packId: "pack-1",
+        code: "TEST-CONTRACT-05",
+        title: "Cowork Contract",
+        prompt: [
+          "Assess whether to adopt event sourcing for a billing system.",
+          "Weigh architecture impact, finance/compliance implications, and incident-response tradeoffs.",
+          "Only the controller should speak in the final answer.",
+          "Output exactly these sections in this order:",
+          "- Status Snapshot",
+          "- Final Recommendation",
+        ].join("\n"),
+        orderIndex: 4,
+        mode: "cowork",
+        toolTier: "explicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    const exactSectionCoworkInput = buildPromptPackPromptInput([
+      "Assess whether to adopt event sourcing for a billing system.",
+      "Weigh architecture impact, finance/compliance implications, and incident-response tradeoffs.",
+      "Only the controller should speak in the final answer.",
+      "Output exactly these sections in this order:",
+      "- Status Snapshot",
+      "- Final Recommendation",
+      "",
+      "Use browser.interact and http.post if needed.",
+    ].join("\n"), exactSectionCoworkProfile);
+    expect(exactSectionCoworkInput.prompt).toContain("Output exactly these top-level sections in this order: `Status Snapshot`, `Final Recommendation`.");
+    expect(exactSectionCoworkInput.prompt).toContain("Cover exactly these named perspectives/lenses: `architecture impact`, `finance/compliance implications`, `incident-response tradeoffs`.");
+    expect(exactSectionCoworkInput.prompt).toContain("Use each named perspective/lens verbatim as its own compact subsection before the final recommendation.");
+    expect(exactSectionCoworkInput.prompt).toContain("Keep the final answer controller-owned.");
+    expect(exactSectionCoworkInput.prompt).toContain("For `browser.interact`, send an explicit `steps` array.");
   });
 
   it("does not append generic constraints boilerplate to non-empty prompt-pack answers", () => {
@@ -696,7 +794,7 @@ describe("prompt-pack helpers", () => {
     expect(response).not.toContain("## Constraints");
   });
 
-  it("adds cowork scaffold sections when the prompt-lab contract is missing roles or synthesis", () => {
+  it("does not append synthetic cowork scaffold sections when the answer is non-empty", () => {
     const response = finalizePromptPackResponseText({
       prompt: [
         "## Prompt Lab Run Contract",
@@ -725,9 +823,7 @@ describe("prompt-pack helpers", () => {
       },
     });
 
-    expect(response).toContain("## Role Handoff Scaffold");
-    expect(response).toContain("### Architect Goat");
-    expect(response).toContain("### Synthesis");
+    expect(response).toBe("### Product\n- Goal: Ship the migration safely.");
   });
 
   it("does not append cowork scaffold sections to prompt-pack fallback responses", () => {
@@ -1108,6 +1204,159 @@ describe("prompt-pack helpers", () => {
     expect(evaluation.signals).toContain("cowork_role_contract_missing_sections");
     expect(evaluation.signals).toContain("cowork_missing_role_sections");
     expect(evaluation.signals).toContain("cowork_missing_synthesis_section");
+  });
+
+  it("accepts ordered cowork sections when the prompt defines an exact section contract", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-cowork-ordered-sections",
+      packId: "pack-1",
+      code: "TEST-W18",
+      title: "Cowork ordered sections",
+      prompt: [
+        "Roles in order: `Researcher`, `Architect`, `QA`.",
+        "Output exactly these sections in this order:",
+        "- Researcher",
+        "- Architect",
+        "- QA",
+        "- Synthesis",
+      ].join("\n"),
+      orderIndex: 0,
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        runId: "run-cowork-ordered-sections",
+        packId: "pack-1",
+        testId: test.testId,
+        sessionId: "sess-1",
+        status: "completed",
+        mode: "cowork",
+        toolTier: "explicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "extended",
+        responseText: [
+          "**Researcher**",
+          "- Evidence: grounded.",
+          "",
+          "**Architect**",
+          "- View: sufficient.",
+          "",
+          "**QA**",
+          "- Risk: bounded.",
+          "",
+          "**Synthesis**",
+          "- Recommendation: proceed.",
+        ].join("\n"),
+        trace: {
+          turnId: "turn-1",
+          sessionId: "sess-1",
+          userMessageId: "user-1",
+          branchKind: "append",
+          status: "completed",
+          mode: "cowork",
+          webMode: "auto",
+          memoryMode: "auto",
+          thinkingLevel: "extended",
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+          toolRuns: [
+            {
+              toolRunId: "tool-1",
+              turnId: "turn-1",
+              sessionId: "sess-1",
+              toolName: "browser.search",
+              status: "executed",
+              startedAt: "2026-03-14T00:00:00.000Z",
+              finishedAt: "2026-03-14T00:00:01.000Z",
+            },
+          ],
+          citations: [],
+          routing: {},
+        },
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.scores.handoffScore).toBe(2);
+    expect(evaluation.scores.routingScore).toBe(2);
+    expect(evaluation.signals).toContain("cowork_role_contract_satisfied");
+    expect(evaluation.signals).not.toContain("cowork_role_contract_missing_sections");
+  });
+
+  it("accepts controller-owned cowork delivery when named perspectives are covered", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-cowork-controller-owned",
+      packId: "pack-1",
+      code: "TEST-W19",
+      title: "Cowork controller owned",
+      prompt: [
+        "Analyze the decision from 3 perspectives: CTO, VP Sales, and Developer Relations.",
+        "Only the controller should speak in the final answer.",
+        "End with one synthesized recommendation.",
+      ].join(" "),
+      orderIndex: 0,
+      mode: "cowork",
+      toolTier: "no-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        runId: "run-cowork-controller-owned",
+        packId: "pack-1",
+        testId: test.testId,
+        sessionId: "sess-1",
+        status: "completed",
+        mode: "cowork",
+        toolTier: "no-tools",
+        toolAutonomy: "manual",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "extended",
+        responseText: [
+          "## Status Snapshot",
+          "- Architecture Impact: manageable with guardrails.",
+          "- Finance/Compliance: enterprise differentiation stays intact.",
+          "- Incident-Response: rollout needs staged controls.",
+          "",
+          "## Final Recommendation",
+          "Proceed with a staged release and explicit guardrails.",
+        ].join("\n"),
+        trace: {
+          turnId: "turn-1",
+          sessionId: "sess-1",
+          userMessageId: "user-1",
+          branchKind: "append",
+          status: "completed",
+          mode: "cowork",
+          webMode: "off",
+          memoryMode: "off",
+          thinkingLevel: "extended",
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+          toolRuns: [],
+          citations: [],
+          routing: {},
+        },
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.scores.handoffScore).toBe(2);
+    expect(evaluation.scores.routingScore).toBe(2);
+    expect(evaluation.signals).toContain("cowork_role_contract_satisfied");
+    expect(evaluation.signals).not.toContain("cowork_missing_named_perspectives");
   });
 
   it("chooses previous or timestamp baselines from scored history", () => {
