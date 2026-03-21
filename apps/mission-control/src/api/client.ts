@@ -967,6 +967,7 @@ export interface RuntimeSettingsResponse {
   workspaceDir: string;
   writeJailRoots: string[];
   readOnlyRoots: string[];
+  readAccessMode?: "roots_only" | "approval_required" | "full_disk";
   networkAllowlist: string[];
   approvalExplainer: {
     enabled: boolean;
@@ -3275,6 +3276,7 @@ export async function patchSettings(input: {
   deploymentProfile?: "local_dev" | "trusted_local" | "remote_hardened";
   defaultToolProfile?: string;
   budgetMode?: "saver" | "balanced" | "power";
+  readAccessMode?: "roots_only" | "approval_required" | "full_disk";
   networkAllowlist?: string[];
   auth?: AuthSettingsUpdateInput;
   llm?: {

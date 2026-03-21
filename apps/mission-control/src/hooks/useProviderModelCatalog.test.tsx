@@ -19,7 +19,7 @@ vi.mock("./useRefreshSubscription", () => ({
   useRefreshSubscription: vi.fn(),
 }));
 
-import { resetProviderModelCatalogCacheForTests, useProviderModelCatalog } from "./useProviderModelCatalog";
+import { previewProviderModels, resetProviderModelCatalogCacheForTests, useProviderModelCatalog } from "./useProviderModelCatalog";
 
 const baseConfig: RuntimeSettingsResponse["llm"] = {
   activeProviderId: "openai",
@@ -53,6 +53,24 @@ const baseConfig: RuntimeSettingsResponse["llm"] = {
       apiKeySource: "env",
       hasKeychainSecret: false,
       apiKeyRef: "GLM_API_KEY",
+      capabilities: {
+        vision: true,
+        audio: false,
+        video: false,
+        toolCalling: true,
+        jsonMode: true,
+      },
+    },
+    {
+      providerId: "google",
+      label: "Google (compatible endpoint)",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      apiStyle: "openai-chat-completions",
+      defaultModel: "models/gemini-2.5-flash",
+      hasApiKey: false,
+      apiKeySource: "none",
+      hasKeychainSecret: false,
+      apiKeyRef: "GOOGLE_API_KEY",
       capabilities: {
         vision: true,
         audio: false,
@@ -116,6 +134,12 @@ describe("useProviderModelCatalog", () => {
       "glm-5-flash",
       "glm-5-turbo",
     ]);
+    expect(latest?.providers.find((provider) => provider.providerId === "google")?.models).toEqual([
+      "models/gemini-2.5-flash",
+      "models/gemini-2.5-flash-lite",
+      "models/gemini-2.5-pro",
+      "models/gemini-flash-latest",
+    ]);
   });
 
   it("loads selected provider models lazily and reuses cached results", async () => {
@@ -165,5 +189,54 @@ describe("useProviderModelCatalog", () => {
 
     expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(1);
     expect(latest?.getCachedModels("glm")).toEqual([]);
+  });
+
+  it("merges known Google fallback models into preview results", async () => {
+    apiMocks.previewLlmModels.mockResolvedValue({
+      items: [{ id: "models/gemini-2.5-flash" }],
+      source: "fallback",
+      warning: "preview unavailable",
+    });
+
+    await expect(previewProviderModels({
+      providerId: "google",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      fallbackModel: "models/gemini-2.5-flash",
+    })).resolves.toEqual({
+      items: [
+        "models/gemini-2.5-flash",
+        "models/gemini-2.5-flash-lite",
+        "models/gemini-2.5-pro",
+        "models/gemini-flash-latest",
+      ],
+      source: "fallback",
+      warning: "preview unavailable",
+    });
+  });
+
+  it("merges known MiniMax fallback models into preview results", async () => {
+    apiMocks.previewLlmModels.mockResolvedValue({
+      items: [{ id: "MiniMax-M2.7" }],
+      source: "fallback",
+      warning: "preview unavailable",
+    });
+
+    await expect(previewProviderModels({
+      providerId: "minimax",
+      baseUrl: "https://api.minimax.io/v1",
+      fallbackModel: "MiniMax-M2.7",
+    })).resolves.toEqual({
+      items: [
+        "MiniMax-M2.7",
+        "MiniMax-M2.7-highspeed",
+        "MiniMax-M2.5",
+        "MiniMax-M2.5-highspeed",
+        "MiniMax-M2.1",
+        "MiniMax-M2.1-highspeed",
+        "MiniMax-M2",
+      ],
+      source: "fallback",
+      warning: "preview unavailable",
+    });
   });
 });

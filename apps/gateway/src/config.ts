@@ -589,7 +589,7 @@ function defaultLlmConfig(): string {
         label: "MiniMax (compatible endpoint)",
         baseUrl: "https://api.minimax.io/v1",
         apiStyle: "openai-chat-completions",
-        defaultModel: "MiniMax-M2.5",
+        defaultModel: "MiniMax-M2.7",
         apiKeyEnv: "MINIMAX_API_KEY",
       },
       {

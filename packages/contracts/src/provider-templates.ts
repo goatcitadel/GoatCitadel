@@ -24,12 +24,27 @@ export const providerTemplates = [
     label: "Google (compatible endpoint)",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     defaultModel: "models/gemini-2.5-flash",
+    knownModels: [
+      "models/gemini-2.5-flash",
+      "models/gemini-2.5-flash-lite",
+      "models/gemini-2.5-pro",
+      "models/gemini-flash-latest",
+    ],
   },
   {
     providerId: "minimax",
     label: "MiniMax (compatible endpoint)",
     baseUrl: "https://api.minimax.io/v1",
-    defaultModel: "MiniMax-M2.5",
+    defaultModel: "MiniMax-M2.7",
+    knownModels: [
+      "MiniMax-M2.7",
+      "MiniMax-M2.7-highspeed",
+      "MiniMax-M2.5",
+      "MiniMax-M2.5-highspeed",
+      "MiniMax-M2.1",
+      "MiniMax-M2.1-highspeed",
+      "MiniMax-M2",
+    ],
   },
   {
     providerId: "vercel",

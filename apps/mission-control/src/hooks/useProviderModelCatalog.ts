@@ -105,9 +105,11 @@ export async function previewProviderModels(input: {
   }, {
     signal: options?.signal,
   });
+  const template = findProviderTemplate(input.providerId);
   return {
     items: dedupeProviderModels([
       input.fallbackModel,
+      ...(template?.knownModels ?? []),
       ...response.items.map((item) => item.id),
     ]),
     source: response.source,

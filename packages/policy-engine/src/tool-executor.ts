@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
+import type { ToolGrantRecord, ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { assertReadPathAllowed, assertWritePathInJail } from "./sandbox/path-jail.js";
@@ -78,23 +78,23 @@ export async function executeTool(
     case "bankr.write":
       return bankrPrompt(request, storage, "write");
     case "fs.read":
-      return fsRead(request.args, config);
+      return fsRead(request, config, storage);
     case "file.read_range":
-      return fileReadRange(request.args, config);
+      return fileReadRange(request, config, storage);
     case "file.find":
-      return fileFind(request.args, config);
+      return fileFind(request, config, storage);
     case "code.search":
-      return codeSearch(request.args, config);
+      return codeSearch(request, config, storage);
     case "code.search_files":
-      return codeSearchFiles(request.args, config);
+      return codeSearchFiles(request, config, storage);
     case "fs.write":
       return fsWrite(request.args, config);
     case "fs.list":
-      return fsList(request.args, config);
+      return fsList(request, config, storage);
     case "fs.stat":
-      return fsStat(request.args, config);
+      return fsStat(request, config, storage);
     case "fs.copy":
-      return fsCopy(request.args, config);
+      return fsCopy(request, config, storage);
     case "fs.move":
       return fsMove(request.args, config);
     case "fs.delete":
@@ -104,9 +104,9 @@ export async function executeTool(
     case "http.post":
       return httpPost(request.args, config, request.signal);
     case "shell.exec":
-      return shellExec(request.args, config, request.consentContext?.reason);
+      return shellExec(request, config, storage);
     case "shell.exec_background":
-      return shellExecBackground(request.args, config, request.consentContext?.reason);
+      return shellExecBackground(request, config, storage);
     case "git.status":
       return gitStatus();
     case "git.diff":
@@ -124,11 +124,11 @@ export async function executeTool(
     case "git.worktree.remove":
       return gitWorktreeRemove(request.args, config);
     case "tests.run":
-      return runRestricted("test", request.args, config);
+      return runRestricted("test", request, config, storage);
     case "lint.run":
-      return runRestricted("lint", request.args, config);
+      return runRestricted("lint", request, config, storage);
     case "build.run":
-      return runRestricted("build", request.args, config);
+      return runRestricted("build", request, config, storage);
     case "memory.read":
       return memoryRead(request.args, storage);
     case "memory.write":
@@ -140,7 +140,7 @@ export async function executeTool(
     case "citations.build":
       return citationsBuild(request.args);
     case "docs.ingest":
-      return docsIngest(request.args, config, storage);
+      return docsIngest(request, config, storage);
     case "embeddings.index":
       return embeddingsIndex(request.args, storage);
     case "embeddings.query":
@@ -375,16 +375,18 @@ async function hasBankrCli(): Promise<boolean> {
   }
 }
 
-async function fsRead(args: Record<string, unknown>, config: ToolPolicyConfig) {
+async function fsRead(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
+  const args = request.args;
   const p = required(args.path, "path");
-  assertReadPathAllowed(p, config.sandbox.writeJailRoots, config.sandbox.readOnlyRoots);
+  assertReadPathAllowedForRequest(p, request, config, storage);
   const content = await fs.readFile(path.resolve(p), "utf8");
   return { path: path.resolve(p), bytes: content.length, content };
 }
 
-async function fileReadRange(args: Record<string, unknown>, config: ToolPolicyConfig) {
+async function fileReadRange(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
+  const args = request.args;
   const p = required(args.path, "path");
-  assertReadPathAllowed(p, config.sandbox.writeJailRoots, config.sandbox.readOnlyRoots);
+  assertReadPathAllowedForRequest(p, request, config, storage);
   const full = path.resolve(p);
   const content = await fs.readFile(full, "utf8");
   const lines = content.split(/\r?\n/);
@@ -400,30 +402,37 @@ async function fileReadRange(args: Record<string, unknown>, config: ToolPolicyCo
   };
 }
 
-async function fileFind(args: Record<string, unknown>, config: ToolPolicyConfig) {
+async function fileFind(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
+  const args = request.args;
   return searchFileContents({
+    request,
     rootPath: required(args.path, "path"),
     pattern: required(args.pattern, "pattern"),
     caseSensitive: asBoolean(args.caseSensitive, false),
     limit: clampInt(args.limit, 25, 1, 200),
     config,
+    storage,
   });
 }
 
-async function codeSearch(args: Record<string, unknown>, config: ToolPolicyConfig) {
+async function codeSearch(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
+  const args = request.args;
   return searchFileContents({
+    request,
     rootPath: required(args.path, "path"),
     pattern: required(args.query, "query"),
     caseSensitive: asBoolean(args.caseSensitive, false),
     limit: clampInt(args.limit, 25, 1, 200),
     config,
+    storage,
     codeOnly: true,
   });
 }
 
-async function codeSearchFiles(args: Record<string, unknown>, config: ToolPolicyConfig) {
+async function codeSearchFiles(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
+  const args = request.args;
   const rootPath = required(args.path, "path");
-  assertReadPathAllowed(rootPath, config.sandbox.writeJailRoots, config.sandbox.readOnlyRoots);
+  assertReadPathAllowedForRequest(rootPath, request, config, storage);
   const fullRoot = path.resolve(rootPath);
   const query = required(args.query, "query");
   const caseSensitive = asBoolean(args.caseSensitive, false);
@@ -488,9 +497,10 @@ async function fsWrite(args: Record<string, unknown>, config: ToolPolicyConfig) 
   return { path: full, bytesWritten: content.length };
 }
 
-async function fsList(args: Record<string, unknown>, config: ToolPolicyConfig) {
+async function fsList(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
+  const args = request.args;
   const p = asString(args.path) ?? ".";
-  assertReadPathAllowed(p, config.sandbox.writeJailRoots, config.sandbox.readOnlyRoots);
+  assertReadPathAllowedForRequest(p, request, config, storage);
   const full = path.resolve(p);
   const items = await fs.readdir(full, { withFileTypes: true });
   return {
@@ -502,9 +512,10 @@ async function fsList(args: Record<string, unknown>, config: ToolPolicyConfig) {
   };
 }
 
-async function fsStat(args: Record<string, unknown>, config: ToolPolicyConfig) {
+async function fsStat(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
+  const args = request.args;
   const p = required(args.path, "path");
-  assertReadPathAllowed(p, config.sandbox.writeJailRoots, config.sandbox.readOnlyRoots);
+  assertReadPathAllowedForRequest(p, request, config, storage);
   const full = path.resolve(p);
   const stat = await fs.stat(full);
   return {
@@ -516,10 +527,11 @@ async function fsStat(args: Record<string, unknown>, config: ToolPolicyConfig) {
   };
 }
 
-async function fsCopy(args: Record<string, unknown>, config: ToolPolicyConfig) {
+async function fsCopy(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
+  const args = request.args;
   const from = required(args.from, "from");
   const to = required(args.to, "to");
-  assertReadPathAllowed(from, config.sandbox.writeJailRoots, config.sandbox.readOnlyRoots);
+  assertReadPathAllowedForRequest(from, request, config, storage);
   assertWritePathInJail(to, config.sandbox.writeJailRoots);
   const fullTo = path.resolve(to);
   await fs.mkdir(path.dirname(fullTo), { recursive: true });
@@ -580,14 +592,15 @@ async function httpPost(args: Record<string, unknown>, config: ToolPolicyConfig,
 }
 
 async function shellExec(
-  args: Record<string, unknown>,
+  request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  consentReason?: string,
+  storage: Storage,
 ) {
+  const args = request.args;
   const command = required(args.command, "command");
-  const cwd = resolveOptionalCwd(args.cwd, config);
+  const cwd = resolveOptionalCwd(args.cwd, request, config, storage);
   const shellRisk = classifyShellRisk(command, config.sandbox.riskyShellPatterns);
-  const approvalBypass = typeof consentReason === "string" && consentReason.startsWith("approval:");
+  const approvalBypass = typeof request.consentContext?.reason === "string" && request.consentContext.reason.startsWith("approval:");
   if (shellRisk.risky && config.sandbox.requireApprovalForRiskyShell && !approvalBypass) {
     throw new Error(
       `Risky shell command requires approval (matched pattern: ${shellRisk.matchedPattern ?? "unknown"})`,
@@ -629,14 +642,15 @@ async function shellExec(
 }
 
 async function shellExecBackground(
-  args: Record<string, unknown>,
+  request: ToolInvokeRequest,
   config: ToolPolicyConfig,
-  consentReason?: string,
+  storage: Storage,
 ) {
+  const args = request.args;
   const command = required(args.command, "command");
-  const cwd = resolveOptionalCwd(args.cwd, config);
+  const cwd = resolveOptionalCwd(args.cwd, request, config, storage);
   const shellRisk = classifyShellRisk(command, config.sandbox.riskyShellPatterns);
-  const approvalBypass = typeof consentReason === "string" && consentReason.startsWith("approval:");
+  const approvalBypass = typeof request.consentContext?.reason === "string" && request.consentContext.reason.startsWith("approval:");
   if (shellRisk.risky && config.sandbox.requireApprovalForRiskyShell && !approvalBypass) {
     throw new Error(
       `Risky shell command requires approval (matched pattern: ${shellRisk.matchedPattern ?? "unknown"})`,
@@ -725,12 +739,14 @@ async function gitWorktreeRemove(args: Record<string, unknown>, config: ToolPoli
 
 async function runRestricted(
   kind: "test" | "lint" | "build",
-  args: Record<string, unknown>,
+  request: ToolInvokeRequest,
   config: ToolPolicyConfig,
+  storage: Storage,
 ) {
+  const args = request.args;
   const manager = asString(args.manager) ?? "pnpm";
   const filter = asString(args.filter);
-  const cwd = resolveOptionalCwd(args.cwd, config);
+  const cwd = resolveOptionalCwd(args.cwd, request, config, storage);
   if (filter && !/^[a-zA-Z0-9@/_\-.]+$/.test(filter)) {
     throw new Error(`Invalid filter: ${filter}`);
   }
@@ -915,13 +931,14 @@ function citationsBuild(args: Record<string, unknown>) {
   };
 }
 
-async function docsIngest(args: Record<string, unknown>, config: ToolPolicyConfig, storage: Storage) {
+async function docsIngest(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
+  const args = request.args;
   const sourceType = required(args.sourceType, "sourceType");
   const source = required(args.source, "source");
   const namespace = required(args.namespace, "namespace");
   let text = "";
   if (sourceType === "file") {
-    assertReadPathAllowed(source, config.sandbox.writeJailRoots, config.sandbox.readOnlyRoots);
+    assertReadPathAllowedForRequest(source, request, config, storage);
     text = await fs.readFile(path.resolve(source), "utf8");
   } else if (sourceType === "url") {
     const res = await fetchAllowlisted(source, { method: "GET" }, config.sandbox.networkAllowlist);
@@ -1663,12 +1680,17 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
-function resolveOptionalCwd(value: unknown, config: ToolPolicyConfig): string | undefined {
+function resolveOptionalCwd(
+  value: unknown,
+  request: ToolInvokeRequest,
+  config: ToolPolicyConfig,
+  storage: Storage,
+): string | undefined {
   const cwd = asString(value);
   if (!cwd) {
     return undefined;
   }
-  assertReadPathAllowed(cwd, config.sandbox.writeJailRoots, config.sandbox.readOnlyRoots);
+  assertReadPathAllowedForRequest(cwd, request, config, storage);
   return path.resolve(cwd);
 }
 
@@ -1747,14 +1769,16 @@ function parseExecFileCommand(command: string): { file: string; args: string[] }
 }
 
 async function searchFileContents(input: {
+  request: ToolInvokeRequest;
   rootPath: string;
   pattern: string;
   caseSensitive: boolean;
   limit: number;
   config: ToolPolicyConfig;
+  storage: Storage;
   codeOnly?: boolean;
 }): Promise<Record<string, unknown>> {
-  assertReadPathAllowed(input.rootPath, input.config.sandbox.writeJailRoots, input.config.sandbox.readOnlyRoots);
+  assertReadPathAllowedForRequest(input.rootPath, input.request, input.config, input.storage);
   const fullRoot = path.resolve(input.rootPath);
   const normalizedPattern = input.caseSensitive ? input.pattern : input.pattern.toLowerCase();
   const matches: Array<{
@@ -1816,6 +1840,118 @@ async function searchFileContents(input: {
     count: matches.length,
     matches,
   };
+}
+
+function assertReadPathAllowedForRequest(
+  targetPath: string,
+  request: ToolInvokeRequest,
+  config: ToolPolicyConfig,
+  storage?: Storage,
+): void {
+  if (canBypassReadPath(targetPath, request, config, storage)) {
+    return;
+  }
+  assertReadPathAllowed(targetPath, config.sandbox.writeJailRoots, config.sandbox.readOnlyRoots);
+}
+
+function canBypassReadPath(
+  targetPath: string,
+  request: ToolInvokeRequest,
+  config: ToolPolicyConfig,
+  storage?: Storage,
+): boolean {
+  if (config.sandbox.readAccessMode === "full_disk") {
+    return true;
+  }
+  if (typeof request.consentContext?.reason === "string" && request.consentContext.reason.startsWith("approval:")) {
+    return true;
+  }
+  const grants = resolveMatchingAllowGrants(request, storage);
+  if (grants.length === 0) {
+    return false;
+  }
+  const resolvedPath = path.resolve(targetPath);
+  return grants.some((grant) => {
+    const allowedPaths = grant.constraints?.allowedPaths;
+    if (!allowedPaths || allowedPaths.length === 0) {
+      return false;
+    }
+    return isPathWithinAnyGrantRoot(resolvedPath, allowedPaths);
+  });
+}
+
+function resolveMatchingAllowGrants(request: ToolInvokeRequest, storage?: Storage): ToolGrantRecord[] {
+  const grantRepo = storage?.toolGrants;
+  if (!grantRepo?.list) {
+    return [];
+  }
+  const grants: ToolGrantRecord[] = [];
+  for (const candidate of buildGrantScopeCandidates(request)) {
+    const scoped = grantRepo.list(candidate.scope, candidate.scopeRef, 500)
+      .filter((grant) => isGrantActive(grant))
+      .filter((grant) => grant.decision === "allow")
+      .filter((grant) => matchesGrantToolPattern(grant.toolPattern, request.toolName));
+    grants.push(...scoped);
+  }
+  return grants;
+}
+
+function buildGrantScopeCandidates(
+  request: ToolInvokeRequest,
+): Array<{ scope: "task" | "agent" | "session" | "global"; scopeRef: string }> {
+  const out: Array<{ scope: "task" | "agent" | "session" | "global"; scopeRef: string }> = [];
+  if (request.taskId) {
+    out.push({ scope: "task", scopeRef: request.taskId });
+  }
+  out.push({ scope: "agent", scopeRef: request.agentId });
+  out.push({ scope: "session", scopeRef: request.sessionId });
+  out.push({ scope: "global", scopeRef: "global" });
+  return out;
+}
+
+function matchesGrantToolPattern(pattern: string, toolName: string): boolean {
+  const trimmed = pattern.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed === "*") {
+    return true;
+  }
+  if (!trimmed.includes("*")) {
+    return trimmed === toolName;
+  }
+  const escaped = trimmed
+    .replace(/[|\\{}()[\]^$+?.]/g, "\\$&")
+    .replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`).test(toolName);
+}
+
+function isGrantActive(grant: ToolGrantRecord): boolean {
+  if (grant.revokedAt) {
+    return false;
+  }
+  if (grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now()) {
+    return false;
+  }
+  if (typeof grant.usesRemaining === "number" && grant.usesRemaining <= 0) {
+    return false;
+  }
+  return true;
+}
+
+function isPathWithinAnyGrantRoot(candidate: string, roots: string[]): boolean {
+  const resolvedCandidate = normalizePathForGrantMatch(candidate);
+  return roots.some((root) => {
+    if (root.trim() === "*") {
+      return true;
+    }
+    const resolvedRoot = normalizePathForGrantMatch(root);
+    return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}/`);
+  });
+}
+
+function normalizePathForGrantMatch(candidate: string): string {
+  return path.resolve(candidate).replace(/\\/g, "/").toLowerCase();
 }
 
 function shouldSkipSearchEntry(name: string): boolean {

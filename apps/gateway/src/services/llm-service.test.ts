@@ -434,7 +434,7 @@ describe("LlmService", () => {
           label: "MiniMax",
           baseUrl: "https://api.minimax.chat/v1",
           apiStyle: "openai-chat-completions",
-          defaultModel: "MiniMax-M2.5",
+          defaultModel: "MiniMax-M2.7",
         },
         {
           providerId: "moonshot",
@@ -559,7 +559,7 @@ describe("LlmService", () => {
         baseUrl: "https://api.minimax.io/v1",
       })).resolves.toMatchObject({
         source: "fallback",
-        items: [{ id: "MiniMax-M2.5" }],
+        items: [{ id: "MiniMax-M2.7" }],
       });
     } finally {
       globalThis.fetch = originalFetch;

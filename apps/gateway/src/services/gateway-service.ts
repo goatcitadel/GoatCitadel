@@ -62,6 +62,7 @@ import type {
   BackupVerifyResponse,
   AuthRuntimeSettings,
   AuthSettingsUpdateInput,
+  FilesystemReadAccessMode,
   DeviceAccessRequestCreateInput,
   DeviceAccessRequestCreateResponse,
   DeviceAccessRequestStatus,
@@ -465,6 +466,7 @@ export interface RuntimeSettings {
   workspaceDir: string;
   writeJailRoots: string[];
   readOnlyRoots: string[];
+  readAccessMode: FilesystemReadAccessMode;
   networkAllowlist: string[];
   approvalExplainer: {
     enabled: boolean;
@@ -8288,6 +8290,7 @@ export class GatewayService {
       workspaceDir: this.config.assistant.workspaceDir,
       writeJailRoots: this.config.toolPolicy.sandbox.writeJailRoots,
       readOnlyRoots: this.config.toolPolicy.sandbox.readOnlyRoots,
+      readAccessMode: this.config.toolPolicy.sandbox.readAccessMode ?? "roots_only",
       networkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
       approvalExplainer: this.config.assistant.approvalExplainer,
       memory: {
@@ -8443,6 +8446,7 @@ export class GatewayService {
     deploymentProfile?: DeploymentProfile;
     defaultToolProfile?: string;
     budgetMode?: "saver" | "balanced" | "power";
+    readAccessMode?: FilesystemReadAccessMode;
     networkAllowlist?: string[];
     auth?: AuthSettingsUpdateInput;
     llm?: {
@@ -8509,6 +8513,11 @@ export class GatewayService {
     if (input.budgetMode) {
       this.config.budgets.mode = input.budgetMode;
       persistBudgets = true;
+    }
+
+    if (input.readAccessMode) {
+      this.config.toolPolicy.sandbox.readAccessMode = input.readAccessMode;
+      persistToolPolicy = true;
     }
 
     if (input.networkAllowlist) {

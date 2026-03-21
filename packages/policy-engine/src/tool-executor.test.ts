@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
@@ -138,6 +140,74 @@ describe("executeTool", () => {
       lineCount: 2,
       content: "beta\ngamma",
     });
+  });
+
+  it("allows outside-root file reads when a matching grant allows wildcard paths", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const filePath = path.join(os.tmpdir(), `tool-executor-outside-${randomUUID()}.ts`);
+    await fs.writeFile(filePath, ["one", "two", "three"].join("\n"), "utf8");
+
+    const storageWithGrant = {
+      toolGrants: {
+        list: vi.fn(() => [
+          {
+            grantId: "grant-1",
+            toolPattern: "file.read_range",
+            decision: "allow",
+            scope: "session",
+            scopeRef: "sess-grant",
+            grantType: "persistent",
+            constraints: { allowedPaths: ["*"] },
+            createdBy: "test",
+            createdAt: new Date().toISOString(),
+          },
+        ]),
+      },
+    } as unknown as Storage;
+
+    try {
+      const result = await executeTool({
+        toolName: "file.read_range",
+        args: { path: filePath, startLine: 1, endLine: 2 },
+        agentId: "agent",
+        sessionId: "sess-grant",
+      }, policyConfig, storageWithGrant);
+
+      expect(result).toMatchObject({
+        path: filePath,
+        startLine: 1,
+        endLine: 2,
+        content: "one\ntwo",
+      });
+    } finally {
+      await fs.rm(filePath, { force: true });
+    }
+  });
+
+  it("allows outside-root file reads when approval context is provided", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const filePath = path.join(os.tmpdir(), `tool-executor-approved-${randomUUID()}.ts`);
+    await fs.writeFile(filePath, ["alpha", "beta"].join("\n"), "utf8");
+
+    try {
+      const result = await executeTool({
+        toolName: "file.read_range",
+        args: { path: filePath, startLine: 1, endLine: 2 },
+        agentId: "agent",
+        sessionId: "sess-approved-read",
+        consentContext: {
+          source: "ui",
+          reason: "approval:apr_read_123",
+        },
+      }, policyConfig, storageStub);
+
+      expect(result).toMatchObject({
+        path: filePath,
+        content: "alpha\nbeta",
+      });
+    } finally {
+      await fs.rm(filePath, { force: true });
+    }
   });
 
   it("searches code content with code.search", async () => {

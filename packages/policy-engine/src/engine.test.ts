@@ -58,3 +58,59 @@ describe("ToolPolicyEngine bankr migration gating", () => {
     expect(catalog.some((tool) => tool.toolName.startsWith("bankr."))).toBe(false);
   });
 });
+
+describe("ToolPolicyEngine outside-root read access", () => {
+  it("requires approval when readAccessMode is approval_required and a file is outside trusted roots", () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine({
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        readAccessMode: "approval_required",
+      },
+    }, storage);
+    const evaluation = engine.evaluateAccess({
+      toolName: "file.read_range",
+      args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+      agentId: "agent",
+      sessionId: "session",
+    });
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.requiresApproval).toBe(true);
+    expect(evaluation.reasonCodes).toContain("outside_roots_read_requires_approval");
+  });
+
+  it("allows outside-root reads when a scoped grant includes a wildcard allowed path", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-1",
+        toolPattern: "file.read_range",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: {
+          allowedPaths: ["*"],
+        },
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    const engine = new ToolPolicyEngine({
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        readAccessMode: "approval_required",
+      },
+    }, storage);
+    const evaluation = engine.evaluateAccess({
+      toolName: "file.read_range",
+      args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+      agentId: "agent",
+      sessionId: "session",
+    });
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.requiresApproval).toBe(false);
+  });
+});

@@ -19,6 +19,7 @@ export const ToolPolicyConfigSchema = z
       .object({
         writeJailRoots: z.array(z.string()),
         readOnlyRoots: z.array(z.string()),
+        readAccessMode: z.enum(["roots_only", "approval_required", "full_disk"]).default("roots_only"),
         networkAllowlist: z.array(z.string()).default([]),
         riskyShellPatterns: z.array(z.string()).default([]),
         requireApprovalForRiskyShell: z.boolean().default(true),

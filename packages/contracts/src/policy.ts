@@ -7,6 +7,11 @@ export type ToolProfile =
   | "chat-agent"
   | "danger";
 
+export type FilesystemReadAccessMode =
+  | "roots_only"
+  | "approval_required"
+  | "full_disk";
+
 export interface ToolPolicyConfig {
   profiles: Record<string, string[]>;
   tools: { profile: ToolProfile; allow: string[]; deny: string[] };
@@ -14,6 +19,7 @@ export interface ToolPolicyConfig {
   sandbox: {
     writeJailRoots: string[];
     readOnlyRoots: string[];
+    readAccessMode?: FilesystemReadAccessMode;
     networkAllowlist: string[];
     riskyShellPatterns: string[];
     requireApprovalForRiskyShell: boolean;

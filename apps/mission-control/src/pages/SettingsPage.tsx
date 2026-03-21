@@ -50,6 +50,12 @@ const TOOL_PROFILE_OPTIONS: SelectOption[] = [
   { value: "danger", label: "danger (high risk)" },
 ];
 
+const READ_ACCESS_MODE_OPTIONS: SelectOption[] = [
+  { value: "roots_only", label: "trusted roots only" },
+  { value: "approval_required", label: "ask before outside-root reads" },
+  { value: "full_disk", label: "full disk read access" },
+];
+
 const ALLOWLIST_PRESETS: Array<{ id: string; label: string; hosts: string[] }> = [
   { id: "strict", label: "Strict (no outbound hosts)", hosts: [] },
   { id: "local", label: "Local models only", hosts: ["127.0.0.1", "localhost"] },
@@ -142,6 +148,7 @@ export function SettingsPage() {
   const [deploymentProfile, setDeploymentProfile] = useState<"local_dev" | "trusted_local" | "remote_hardened">("local_dev");
   const [profile, setProfile] = useState("");
   const [budgetMode, setBudgetMode] = useState<"saver" | "balanced" | "power">("balanced");
+  const [readAccessMode, setReadAccessMode] = useState<"roots_only" | "approval_required" | "full_disk">("roots_only");
   const [networkAllowlistText, setNetworkAllowlistText] = useState("");
 
   const [activeProviderId, setActiveProviderId] = useState("");
@@ -279,6 +286,7 @@ export function SettingsPage() {
         setDeploymentProfile(res.deploymentProfile);
         setProfile(res.defaultToolProfile);
         setBudgetMode((res.budgetMode as "saver" | "balanced" | "power") || "balanced");
+        setReadAccessMode(res.readAccessMode ?? "roots_only");
         setNetworkAllowlistText(res.networkAllowlist.join("\n"));
         setAllowlistPreset(matchAllowlistPreset(res.networkAllowlist));
         setAuthMode(res.auth.mode);
@@ -367,6 +375,7 @@ export function SettingsPage() {
       { field: "deploymentProfile", from: settings.deploymentProfile, to: deploymentProfile },
       { field: "defaultToolProfile", from: settings.defaultToolProfile, to: profile },
       { field: "budgetMode", from: settings.budgetMode, to: budgetMode },
+      { field: "readAccessMode", from: settings.readAccessMode ?? "roots_only", to: readAccessMode },
       { field: "networkAllowlist", from: settings.networkAllowlist.join("\n"), to: networkAllowlistText },
       { field: "authMode", from: settings.auth.mode, to: authMode },
       { field: "providerBaseUrl", from: settings.llm.providers.find((p) => p.providerId === providerId)?.baseUrl ?? "", to: providerBaseUrl },
@@ -413,7 +422,7 @@ export function SettingsPage() {
       }
       riskAbortRef.current?.abort();
     };
-  }, [settings, deploymentProfile, profile, budgetMode, networkAllowlistText, authMode, providerId, providerBaseUrl]);
+  }, [settings, deploymentProfile, profile, budgetMode, readAccessMode, networkAllowlistText, authMode, providerId, providerBaseUrl]);
 
   useEffect(() => {
     providerSecretAbortRef.current?.abort();
@@ -453,6 +462,7 @@ export function SettingsPage() {
         deploymentProfile,
         defaultToolProfile: profile,
         budgetMode,
+        readAccessMode,
         networkAllowlist: allowlist,
       });
       setSettings(next);
@@ -1312,6 +1322,18 @@ export function SettingsPage() {
         </div>
         <details className="advanced-panel">
           <summary>Advanced runtime options</summary>
+          <div className="controls-row">
+            <label htmlFor="readAccessMode">Filesystem Read Access</label>
+            <GCSelect
+              id="readAccessMode"
+              value={readAccessMode}
+              onChange={(value) => setReadAccessMode(value as "roots_only" | "approval_required" | "full_disk")}
+              options={READ_ACCESS_MODE_OPTIONS}
+            />
+          </div>
+          <FieldHelp>
+            `trusted roots only` keeps reads inside the configured workspace and skills roots. `ask before outside-root reads` turns out-of-root local file reads into approval prompts in chat. `full disk read access` skips those prompts. Prompt Lab still bootstraps its own read grants for evaluation runs.
+          </FieldHelp>
           <div className="controls-row">
             <label htmlFor="allowlistPreset">Allowlist Preset <HelpHint label="Network allowlist help" text="This controls outbound hosts GoatCitadel is allowed to contact. It is not your machine's LAN IP. Use local hosts for local models, and provider domains such as api.z.ai for cloud models." /></label>
             <GCSelect

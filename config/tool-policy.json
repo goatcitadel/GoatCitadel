@@ -69,6 +69,7 @@
     "readOnlyRoots": [
       "./skills"
     ],
+    "readAccessMode": "approval_required",
     "networkAllowlist": [],
     "riskyShellPatterns": [
       "rm",

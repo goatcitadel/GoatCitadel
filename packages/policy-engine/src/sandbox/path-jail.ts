@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
+export interface ReadPathAccessDecision {
+  resolvedPath: string;
+  withinRoots: boolean;
+}
+
 export function assertWritePathInJail(targetPath: string, writeJailRoots: string[]): void {
   const resolvedTarget = resolvePathViaExistingAncestor(targetPath);
   assertWithinRoots(resolvedTarget, writeJailRoots, "write jail");
@@ -11,8 +16,10 @@ export function assertReadPathAllowed(
   writeJailRoots: string[],
   readOnlyRoots: string[],
 ): void {
-  const resolvedTarget = resolvePathViaExistingAncestor(targetPath);
-  assertWithinRoots(resolvedTarget, [...writeJailRoots, ...readOnlyRoots], "read allowlist");
+  const access = resolveReadPathAccess(targetPath, writeJailRoots, readOnlyRoots);
+  if (!access.withinRoots) {
+    throw new Error(`Path is outside read allowlist: ${access.resolvedPath}`);
+  }
 }
 
 export function assertExistingPathRealpathAllowed(
@@ -24,13 +31,29 @@ export function assertExistingPathRealpathAllowed(
   assertWithinRoots(resolvedTarget, [...writeJailRoots, ...readOnlyRoots], "read allowlist");
 }
 
+export function resolveReadPathAccess(
+  targetPath: string,
+  writeJailRoots: string[],
+  readOnlyRoots: string[],
+): ReadPathAccessDecision {
+  const resolvedPath = resolvePathViaExistingAncestor(targetPath);
+  return {
+    resolvedPath,
+    withinRoots: isWithinAnyRoot(resolvedPath, [...writeJailRoots, ...readOnlyRoots]),
+  };
+}
+
 function isWithin(root: string, target: string): boolean {
   const rel = path.relative(root, target);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+function isWithinAnyRoot(target: string, roots: string[]): boolean {
+  return roots.some((root) => isWithin(path.resolve(root), target));
+}
+
 function assertWithinRoots(target: string, roots: string[], scope: string): void {
-  const allowed = roots.some((root) => isWithin(path.resolve(root), target));
+  const allowed = isWithinAnyRoot(target, roots);
   if (!allowed) {
     throw new Error(`Path is outside ${scope}: ${target}`);
   }

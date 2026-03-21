@@ -1,4 +1,5 @@
 import type {
+  FilesystemReadAccessMode,
   ToolAccessEvaluateRequest,
   ToolAccessEvaluateResponse,
   ToolGrantCreateInput,
@@ -13,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { ApprovalGate } from "./approval-gate.js";
 import { resolveEffectivePolicy } from "./policy-resolver.js";
 import { createDefaultToolRegistry, type ToolDefinition, type ToolRegistry } from "./tool-registry.js";
-import { assertReadPathAllowed, assertWritePathInJail } from "./sandbox/path-jail.js";
+import { assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
 import { assertHostAllowed } from "./sandbox/network-guard.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { executeTool } from "./tool-executor.js";
@@ -325,11 +326,6 @@ export class ToolPolicyEngine {
       return deny(riskLevel, "unknown_tool", `unknown tool ${request.toolName}`);
     }
 
-    const structuralError = this.validateStructuralSafety(request);
-    if (structuralError) {
-      return deny(riskLevel, "structural_safety_block", structuralError);
-    }
-
     const grantDecision = this.resolveGrantDecision(request);
     if (grantDecision?.decision === "deny") {
       return {
@@ -340,6 +336,13 @@ export class ToolPolicyEngine {
         riskLevel,
         policyReason: "tool denied by scoped grant",
       };
+    }
+
+    const allowGrant = grantDecision?.decision === "allow" ? grantDecision.grant : undefined;
+
+    const structuralError = this.validateStructuralSafety(request, allowGrant);
+    if (structuralError) {
+      return deny(riskLevel, "structural_safety_block", structuralError);
     }
 
     if (riskLevel !== "safe") {
@@ -367,6 +370,7 @@ export class ToolPolicyEngine {
     }
 
     let requiresApproval = Boolean(toolDef?.requiresApproval);
+    const outsideRootsReadRequiresApproval = this.requiresApprovalForOutsideRootsRead(request, allowGrant);
 
     if (
       riskLevel === "danger"
@@ -383,12 +387,19 @@ export class ToolPolicyEngine {
     if (shellRisk?.risky) {
       requiresApproval = true;
     }
+    if (outsideRootsReadRequiresApproval) {
+      requiresApproval = true;
+    }
 
     const reasonCodes = ["allowed"];
     let policyReason = requiresApproval ? "approval required by risk gate" : "allowed";
     if (shellRisk?.risky) {
       reasonCodes.push("shell_risky_requires_approval");
       policyReason = `risky shell command matched policy pattern "${shellRisk.matchedPattern}"`;
+    }
+    if (outsideRootsReadRequiresApproval) {
+      reasonCodes.push("outside_roots_read_requires_approval");
+      policyReason = "file access outside trusted roots requires approval";
     }
 
     return {
@@ -535,21 +546,19 @@ export class ToolPolicyEngine {
     ) === 0;
   }
 
-  private validateStructuralSafety(request: ToolAccessEvaluateRequest): string | undefined {
+  private validateStructuralSafety(
+    request: ToolAccessEvaluateRequest,
+    allowGrant?: ToolGrantRecord,
+  ): string | undefined {
     try {
-      if (request.toolName === "fs.read") {
-        const target = String(request.args?.path ?? "");
-        assertReadPathAllowed(target, this.config.sandbox.writeJailRoots, this.config.sandbox.readOnlyRoots);
+      const readPathError = this.validateReadPaths(request, allowGrant);
+      if (readPathError) {
+        return readPathError;
       }
 
       if (request.toolName === "fs.write" || request.toolName === "fs.move" || request.toolName === "fs.delete" || request.toolName === "artifacts.create") {
         const pathValue = String(request.args?.path ?? request.args?.to ?? request.args?.from ?? "");
         assertWritePathInJail(pathValue, this.config.sandbox.writeJailRoots);
-      }
-
-      if (request.toolName === "docs.ingest" && request.args?.sourceType === "file") {
-        const source = String(request.args?.source ?? "");
-        assertReadPathAllowed(source, this.config.sandbox.writeJailRoots, this.config.sandbox.readOnlyRoots);
       }
 
       if (request.toolName.startsWith("http.") || request.toolName === "webhook.send") {
@@ -582,6 +591,77 @@ export class ToolPolicyEngine {
     }
 
     return undefined;
+  }
+
+  private validateReadPaths(
+    request: ToolAccessEvaluateRequest,
+    allowGrant?: ToolGrantRecord,
+  ): string | undefined {
+    const readAccessMode = this.getReadAccessMode();
+    for (const target of extractReadPathCandidates(request)) {
+      const access = resolveReadPathAccess(
+        target,
+        this.config.sandbox.writeJailRoots,
+        this.config.sandbox.readOnlyRoots,
+      );
+      if (access.withinRoots) {
+        continue;
+      }
+      if (readAccessMode === "full_disk") {
+        continue;
+      }
+      if (this.hasApprovalBypass(request)) {
+        continue;
+      }
+      if (this.grantAllowsReadPath(allowGrant, access.resolvedPath)) {
+        continue;
+      }
+      if (readAccessMode === "approval_required") {
+        continue;
+      }
+      return `Path is outside read allowlist: ${access.resolvedPath}`;
+    }
+    return undefined;
+  }
+
+  private requiresApprovalForOutsideRootsRead(
+    request: ToolAccessEvaluateRequest,
+    allowGrant?: ToolGrantRecord,
+  ): boolean {
+    if (this.getReadAccessMode() !== "approval_required") {
+      return false;
+    }
+    if (this.hasApprovalBypass(request)) {
+      return false;
+    }
+    for (const target of extractReadPathCandidates(request)) {
+      const access = resolveReadPathAccess(
+        target,
+        this.config.sandbox.writeJailRoots,
+        this.config.sandbox.readOnlyRoots,
+      );
+      if (!access.withinRoots && !this.grantAllowsReadPath(allowGrant, access.resolvedPath)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private hasApprovalBypass(request: ToolAccessEvaluateRequest): boolean {
+    const reason = (request as ToolInvokeRequest).consentContext?.reason;
+    return typeof reason === "string" && reason.startsWith("approval:");
+  }
+
+  private grantAllowsReadPath(grant: ToolGrantRecord | undefined, resolvedPath: string): boolean {
+    const allowedPaths = grant?.constraints?.allowedPaths;
+    if (!allowedPaths || allowedPaths.length === 0) {
+      return false;
+    }
+    return isPathWithinAnyRoot(resolvedPath, allowedPaths);
+  }
+
+  private getReadAccessMode(): FilesystemReadAccessMode {
+    return this.config.sandbox.readAccessMode ?? "roots_only";
   }
 
   private buildApprovalPreview(request: ToolInvokeRequest): Record<string, unknown> {
@@ -801,6 +881,31 @@ function extractPathCandidates(args?: Record<string, unknown>): string[] {
     .filter(Boolean);
 }
 
+function extractReadPathCandidates(request: ToolAccessEvaluateRequest): string[] {
+  const args = request.args;
+  if (!args) {
+    return [];
+  }
+  if (
+    request.toolName === "fs.read"
+    || request.toolName === "file.read_range"
+    || request.toolName === "file.find"
+    || request.toolName === "code.search"
+    || request.toolName === "code.search_files"
+    || request.toolName === "fs.list"
+    || request.toolName === "fs.stat"
+  ) {
+    return typeof args.path === "string" ? [args.path] : [];
+  }
+  if (request.toolName === "fs.copy") {
+    return typeof args.from === "string" ? [args.from] : [];
+  }
+  if (request.toolName === "docs.ingest" && args.sourceType === "file") {
+    return typeof args.source === "string" ? [args.source] : [];
+  }
+  return [];
+}
+
 function matchesHostAllowlist(host: string, patterns: string[]): boolean {
   const normalizedHost = host.toLowerCase();
   return patterns.some((pattern) => {
@@ -823,6 +928,9 @@ function isPathWithinAnyRoot(candidate: string, roots: string[]): boolean {
   try {
     const resolvedCandidate = normalizePathForMatch(candidate);
     for (const root of roots) {
+      if (root.trim() === "*") {
+        return true;
+      }
       const resolvedRoot = normalizePathForMatch(root);
       if (resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}/`)) {
         return true;

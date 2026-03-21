@@ -16,6 +16,7 @@ describe("ToolPolicyConfigSchema", () => {
       sandbox: {
         writeJailRoots: ["./workspace"],
         readOnlyRoots: ["./skills"],
+        readAccessMode: "approval_required",
         networkAllowlist: [],
         riskyShellPatterns: ["rm"],
         requireApprovalForRiskyShell: true,
@@ -23,6 +24,7 @@ describe("ToolPolicyConfigSchema", () => {
     };
     const result = ToolPolicyConfigSchema.parse(input);
     expect(result.tools.profile).toBe("chat-agent");
+    expect(result.sandbox.readAccessMode).toBe("approval_required");
   });
 
   it("rejects when sandbox.writeJailRoots is not an array", () => {
@@ -58,6 +60,17 @@ describe("ToolPolicyConfigSchema", () => {
     };
     const result = ToolPolicyConfigSchema.parse(input);
     expect((result as Record<string, unknown>).futureField).toBe(true);
+  });
+
+  it("defaults readAccessMode when omitted", () => {
+    const input = {
+      profiles: {},
+      tools: { profile: "standard", allow: [], deny: [] },
+      agents: {},
+      sandbox: { writeJailRoots: [], readOnlyRoots: [] },
+    };
+    const result = ToolPolicyConfigSchema.parse(input);
+    expect(result.sandbox.readAccessMode).toBe("roots_only");
   });
 });
 
