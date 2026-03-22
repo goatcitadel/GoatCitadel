@@ -110,7 +110,6 @@ import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
 import { HelpHint } from "../components/HelpHint";
 import { InlineApprovalPrompt } from "../components/InlineApprovalPrompt";
-import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
@@ -2152,13 +2151,13 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
   if (loading) {
     return (
       <section className="chat-v11">
-      <PageHeader
-        eyebrow="Work Surface"
-        title={pageCopy.chat.title}
-        subtitle={pageCopy.chat.subtitle}
-        hint="Mission sessions, external writeback sessions, trace visibility, and inline approvals live together here."
-        className="page-header-command chat-v11-header"
-      />
+        <PageHeader
+          eyebrow="Daily operator surface"
+          title={pageCopy.chat.title}
+          subtitle={pageCopy.chat.subtitle}
+          hint="Mission sessions, external writeback sessions, trace visibility, and inline approvals live together here."
+          className="page-header-command chat-v11-header"
+        />
         <CardSkeleton lines={8} />
       </section>
     );
@@ -2167,10 +2166,10 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
   return (
     <section className="chat-v11">
       <PageHeader
-        eyebrow="Work Surface"
+        eyebrow="Daily operator surface"
         title={pageCopy.chat.title}
         subtitle={pageCopy.chat.subtitle}
-        hint="Start a chat quickly, keep session context visible, and use the inspector when you want trace, suggestions, and learned memory."
+        hint="Start a session quickly, keep context visible, and only open deeper trace or memory detail when you need it."
         className="page-header-command chat-v11-header"
         actions={(
           <div className="chat-v11-page-actions">
@@ -2188,15 +2187,12 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
           </div>
         )}
       />
-      <PageGuideCard
-        pageId="chat"
-        what={pageCopy.chat.guide?.what ?? ""}
-        when={pageCopy.chat.guide?.when ?? ""}
-        actions={pageCopy.chat.guide?.actions ?? []}
-        terms={pageCopy.chat.guide?.terms}
-        defaultExpanded={false}
-        preferenceVersion="v3"
-      />
+      <div className="chat-v11-launch-brief">
+        <p>
+          <strong>Use Chat for speed.</strong> Start in Chat for direct conversation, switch to Cowork when the task
+          needs visible orchestration, and use Code when the work needs implementation discipline.
+        </p>
+      </div>
       {error ? <p className="error">{error}</p> : null}
       {isRefreshing ? <p className="status-banner">Refreshing chat context...</p> : null}
 

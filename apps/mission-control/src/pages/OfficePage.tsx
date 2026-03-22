@@ -276,9 +276,10 @@ const OfficeCanvasScene = lazy(async () => {
 
 interface OfficePageProps {
   variant?: OfficePageVariant;
+  onOpenLab?: () => void;
 }
 
-export function OfficePage({ variant = "stable" }: OfficePageProps) {
+export function OfficePage({ variant = "stable", onOpenLab }: OfficePageProps) {
   const variantConfig = OFFICE_PAGE_VARIANTS[variant];
   const [directory, setDirectory] = useState<AgentDirectoryRecord[]>([]);
   const [operators, setOperators] = useState<OperatorsResponse["items"]>([]);
@@ -1007,6 +1008,14 @@ export function OfficePage({ variant = "stable" }: OfficePageProps) {
         className="page-header-citadel"
         actions={(
           <div className="office-page-actions">
+            <div className="office-surface-switch" role="tablist" aria-label="Office surface views">
+              <button type="button" className="active" aria-pressed="true">
+                Immersive
+              </button>
+              <button type="button" onClick={onOpenLab} aria-pressed="false">
+                Pixel Lab
+              </button>
+            </div>
             <StatusChip tone={streamHealthy ? "live" : "warning"}>
               Stream {streamHealthy ? "live" : "resyncing"}
             </StatusChip>

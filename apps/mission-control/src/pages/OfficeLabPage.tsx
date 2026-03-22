@@ -53,7 +53,11 @@ const ROOM_META: Record<OfficeZoneId, { eyebrow: string; summary: string; suppor
   operations: { eyebrow: "Pantry + Ops", summary: "Runtime support and quiet coordination live in the back lane.", support: "Relay counter", cls: "office-lab-room-operations" },
 };
 
-export function OfficeLabPage() {
+interface OfficeLabPageProps {
+  onOpenImmersive?: () => void;
+}
+
+export function OfficeLabPage({ onOpenImmersive }: OfficeLabPageProps) {
   const [agents, setAgents] = useState<AgentDirectoryRecord[]>([]);
   const [operators, setOperators] = useState<OperatorSummary[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
@@ -217,6 +221,14 @@ export function OfficeLabPage() {
         className="page-header-citadel"
         actions={(
           <div className="workflow-summary-strip">
+            <div className="office-surface-switch" role="tablist" aria-label="Office surface views">
+              <button type="button" onClick={onOpenImmersive} aria-pressed="false">
+                Immersive
+              </button>
+              <button type="button" className="active" aria-pressed="true">
+                Pixel Lab
+              </button>
+            </div>
             <StatusChip tone={streamState === "open" ? "live" : streamState === "error" ? "warning" : "muted"}>{streamState === "open" ? "Live link" : streamState === "error" ? "Stream degraded" : "Stream idle"}</StatusChip>
             <StatusChip tone={pendingApprovals.length > 0 ? "critical" : "muted"}>{pendingApprovals.length} pending</StatusChip>
             <StatusChip tone={totalActiveAgents > 0 ? "live" : "muted"}>{totalActiveAgents} active</StatusChip>

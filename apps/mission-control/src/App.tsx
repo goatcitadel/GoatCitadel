@@ -18,7 +18,6 @@ import { HelpHint } from "./components/HelpHint";
 import { NotificationStack, type NotificationItem, upsertNotificationItem } from "./components/NotificationStack";
 import { RemoteApprovalActionModal, type RemoteApprovalActionPrompt } from "./components/RemoteApprovalActionModal";
 import { ClockBadge } from "./components/ClockBadge";
-import { ShellActionGroup } from "./components/ShellActionGroup";
 import { StatusChip } from "./components/StatusChip";
 import { appCopy } from "./content/copy";
 import { emitRefresh, type RefreshTopic } from "./state/refresh-bus";
@@ -146,9 +145,106 @@ const allTabs: Tab[] = [
 
 const navItems: Array<{ id: Tab; label: string; code: string }> = appCopy.navItems;
 
-const navSections: Array<{ label: string; items: Tab[] }> = appCopy.navSections;
-
 const nextStepByTab: Record<Tab, string> = appCopy.nextStepByTab;
+
+type PrimaryNavId = "home" | "work" | "observe" | "configure";
+
+interface SecondaryNavSection {
+  label: string;
+  hint: string;
+  items: Tab[];
+  simpleItems?: Tab[];
+}
+
+interface PrimaryNavMode {
+  id: PrimaryNavId;
+  label: string;
+  code: string;
+  description: string;
+  defaultTab: Tab;
+  sections: SecondaryNavSection[];
+}
+
+const primaryNavModes: PrimaryNavMode[] = [
+  {
+    id: "home",
+    label: "Home",
+    code: "HM",
+    description: "Start here for health, blockers, and where to intervene next.",
+    defaultTab: "dashboard",
+    sections: [
+      {
+        label: "Overview",
+        hint: "Daily command readouts and onboarding posture.",
+        items: ["dashboard", "onboarding"],
+        simpleItems: ["dashboard", "onboarding"],
+      },
+    ],
+  },
+  {
+    id: "work",
+    label: "Work",
+    code: "WK",
+    description: "Daily operator surfaces, queue management, and hands-on execution.",
+    defaultTab: "chat",
+    sections: [
+      {
+        label: "Daily loop",
+        hint: "The shortest path through chat, queue, and approvals.",
+        items: ["chat", "tasks", "approvals", "sessions", "office"],
+        simpleItems: ["chat", "tasks", "approvals", "office"],
+      },
+      {
+        label: "Builders",
+        hint: "Deeper orchestration and quality work when the task needs it.",
+        items: ["agents", "assembly", "promptLab", "improvement", "officeLab"],
+        simpleItems: ["agents"],
+      },
+    ],
+  },
+  {
+    id: "observe",
+    label: "Observe",
+    code: "OB",
+    description: "Operational visibility, traces, files, and runtime posture.",
+    defaultTab: "activity",
+    sections: [
+      {
+        label: "Signals",
+        hint: "Watch the machine and the workload move in real time.",
+        items: ["activity", "system", "costs", "cron"],
+        simpleItems: ["activity", "system", "costs"],
+      },
+      {
+        label: "Inspect",
+        hint: "Deeper state, storage, and multi-runtime health.",
+        items: ["memory", "files", "mesh", "npu"],
+        simpleItems: ["memory", "files"],
+      },
+    ],
+  },
+  {
+    id: "configure",
+    label: "Settings",
+    code: "CFG",
+    description: "Models, integrations, policies, workspace controls, and optional extensions.",
+    defaultTab: "settings",
+    sections: [
+      {
+        label: "Core setup",
+        hint: "Where provider, integration, and permission decisions should live.",
+        items: ["settings", "integrations", "tools", "workspaces"],
+        simpleItems: ["settings", "integrations"],
+      },
+      {
+        label: "Advanced",
+        hint: "Extend the platform without giving every admin page top-level weight.",
+        items: ["skills", "mcp", "addons"],
+        simpleItems: [],
+      },
+    ],
+  },
+];
 
 const refreshTopicRules: Array<{ topic: RefreshTopic; keywords: string[] }> = [
   { topic: "dashboard", keywords: ["dashboard", "operator", "summit", "cron", "memory", "settings", "system", "onboarding", "llm"] },
@@ -198,6 +294,19 @@ function isTab(value: string | null): value is Tab {
   return allTabs.some((tab) => tab === value);
 }
 
+function resolvePrimaryNav(tab: Tab): PrimaryNavId {
+  if (tab === "dashboard" || tab === "onboarding") {
+    return "home";
+  }
+  if (["chat", "tasks", "approvals", "sessions", "office", "officeLab", "agents", "assembly", "promptLab", "improvement"].includes(tab)) {
+    return "work";
+  }
+  if (["activity", "system", "files", "memory", "costs", "cron", "mesh", "npu"].includes(tab)) {
+    return "observe";
+  }
+  return "configure";
+}
+
 function readTabFromLocation(): Tab {
   if (typeof window === "undefined") {
     return "dashboard";
@@ -224,83 +333,52 @@ const SidebarStatusFooter = memo(function SidebarStatusFooter({
   onboardingComplete,
   uiMode,
   setUiMode,
-  showTechnicalDetails,
-  setShowTechnicalDetails,
 }: {
   streamState: EventStreamConnectionState;
   onboardingComplete: boolean | null;
   uiMode: "simple" | "advanced";
   setUiMode: (mode: "simple" | "advanced") => void;
-  showTechnicalDetails: boolean;
-  setShowTechnicalDetails: (enabled: boolean) => void;
 }) {
   const streamStatus = useEventStreamStatus();
 
   return (
     <footer className="sidebar-footer">
-      <div className="sidebar-footer-grid">
-        <div className="sidebar-footer-item">
+      <div className="sidebar-health-card">
+        <div className="sidebar-health-row">
           <span className="sidebar-footer-label">{appCopy.sidebar.stream}</span>
           <StatusChip tone={streamStatus.state === "open" ? "live" : streamStatus.state === "error" ? "critical" : "warning"}>
             {streamState}
           </StatusChip>
         </div>
-        <div className="sidebar-footer-item">
-          <span className="sidebar-footer-label">{appCopy.sidebar.onboarding}</span>
-          <span className="sidebar-footer-value">
-            {onboardingComplete === null
-              ? appCopy.sidebar.unknown
-              : onboardingComplete
-                ? appCopy.sidebar.complete
-                : appCopy.sidebar.required}
-          </span>
-        </div>
-        <div className="sidebar-footer-item">
-          <span className="sidebar-footer-label">{appCopy.sidebar.reconnects}</span>
-          <span className="sidebar-footer-value">{streamStatus.reconnectAttempts}</span>
-        </div>
-        <div className="sidebar-footer-item">
-          <span className="sidebar-footer-label">{appCopy.sidebar.lastEvent}</span>
-          <span className="sidebar-footer-value">
-            {streamStatus.lastEventAt
-              ? new Date(streamStatus.lastEventAt).toLocaleTimeString()
-              : appCopy.sidebar.notAvailable}
-          </span>
-        </div>
+        <p className="sidebar-health-note">
+          {onboardingComplete === null
+            ? "Workspace readiness is still loading."
+            : onboardingComplete
+              ? "Operator surfaces are ready."
+              : "Launch Wizard still needs attention."}
+        </p>
       </div>
-      <div className="sidebar-systems">
-        <div className="sidebar-system-block">
-          <span className="sidebar-footer-label">Experience</span>
-          <div className="ui-experience-switch sidebar-experience-switch">
-            <button
-              type="button"
-              className={uiMode === "simple" ? "active" : ""}
-              onClick={() => setUiMode("simple")}
-            >
-              Beginner
-            </button>
-            <button
-              type="button"
-              className={uiMode === "advanced" ? "active" : ""}
-              onClick={() => setUiMode("advanced")}
-            >
-              Advanced
-            </button>
-          </div>
-          <span className="sidebar-footer-value sidebar-system-note">
-            {uiMode === "simple" ? "Guided defaults" : "Full controls"}
-          </span>
+      <div className="sidebar-system-block">
+        <span className="sidebar-footer-label">Experience</span>
+        <div className="ui-experience-switch sidebar-experience-switch">
+          <button
+            type="button"
+            className={uiMode === "simple" ? "active" : ""}
+            onClick={() => setUiMode("simple")}
+          >
+            Beginner
+          </button>
+          <button
+            type="button"
+            className={uiMode === "advanced" ? "active" : ""}
+            onClick={() => setUiMode("advanced")}
+          >
+            Advanced
+          </button>
         </div>
-        <div className="sidebar-system-block">
-          <span className="sidebar-footer-label">Citadel systems</span>
-          <label className="ui-technical-toggle sidebar-technical-toggle">
-            <GCSwitch
-              checked={showTechnicalDetails}
-              onCheckedChange={setShowTechnicalDetails}
-              label="Technical details"
-            />
-          </label>
-        </div>
+        <span className="sidebar-footer-value sidebar-system-note">
+          {uiMode === "simple" ? "Reduced chrome, clearer defaults" : "Expanded controls and deeper views"}
+        </span>
       </div>
       <div className="sidebar-footer-meta">
         <span>{appCopy.sidebar.mode}: {appCopy.sidebar.localMode}</span>
@@ -336,6 +414,7 @@ export function App() {
   const [deviceAccessResolveBusy, setDeviceAccessResolveBusy] = useState(false);
   const [remoteApprovalPrompts, setRemoteApprovalPrompts] = useState<RemoteApprovalActionPrompt[]>([]);
   const [remoteApprovalResolveBusy, setRemoteApprovalResolveBusy] = useState(false);
+  const [activePrimaryNav, setActivePrimaryNav] = useState<PrimaryNavId>(() => resolvePrimaryNav(readTabFromLocation()));
   const [gatewayAccess, setGatewayAccess] = useState<GatewayAccessViewState>({
     status: "checking",
     message: "Verifying gateway reachability and access policy.",
@@ -642,6 +721,33 @@ export function App() {
 
   const navById = useMemo(() => new Map(navItems.map((item) => [item.id, item])), []);
   const activeNav = navById.get(tab);
+  const activePrimaryMode = useMemo<PrimaryNavMode>(() => (
+    primaryNavModes.find((mode) => mode.id === activePrimaryNav) ?? primaryNavModes[0]!
+  ), [activePrimaryNav]);
+  const approvalSurfaceCount = deviceAccessPrompts.length + remoteApprovalPrompts.length;
+
+  useEffect(() => {
+    setActivePrimaryNav(resolvePrimaryNav(tab));
+  }, [tab]);
+
+  const secondaryNavSections = useMemo(() => {
+    return activePrimaryMode.sections
+      .map((section) => {
+        const preferredItems = uiMode === "simple"
+          ? (section.simpleItems ?? section.items)
+          : section.items;
+        const items = [...preferredItems];
+        if (section.items.includes(tab) && !items.includes(tab)) {
+          items.push(tab);
+        }
+        return {
+          ...section,
+          items: items.filter((item, index, all) => all.indexOf(item) === index),
+        };
+      })
+      .filter((section) => section.items.length > 0);
+  }, [activePrimaryMode.sections, tab, uiMode]);
+
   const commandItems = useMemo(
     () => [
       ...navItems.map((item) => ({
@@ -721,10 +827,10 @@ export function App() {
       return <AgentsPage />;
     }
     if (tab === "office") {
-      return <OfficePage />;
+      return <OfficePage onOpenLab={() => setTab("officeLab")} />;
     }
     if (tab === "officeLab") {
-      return <OfficeLabPage />;
+      return <OfficeLabPage onOpenImmersive={() => setTab("office")} />;
     }
     if (tab === "activity") {
       return <ActivityPage />;
@@ -825,115 +931,165 @@ export function App() {
             <p className="sidebar-subtitle">{appCopy.brandSubtitle}</p>
           </div>
         </div>
-        <button type="button" className="sidebar-command-trigger" onClick={() => setPaletteOpen(true)}>
-          {appCopy.quickActionsButton}
-        </button>
-        <nav className="sidebar-nav">
-          {navSections.map((section) => (
-            <div key={section.label} className="sidebar-section">
-              <div className="sidebar-section-head">
-                <p>{section.label}</p>
+        <div className="sidebar-primary-nav" role="tablist" aria-label="Mission Control sections">
+          {primaryNavModes.map((mode) => {
+            const isActive = activePrimaryMode.id === mode.id;
+            return (
+              <button
+                type="button"
+                key={mode.id}
+                className={`sidebar-primary-pill${isActive ? " active" : ""}`}
+                onClick={() => {
+                  setActivePrimaryNav(mode.id);
+                  if (resolvePrimaryNav(tab) !== mode.id) {
+                    setTab(mode.defaultTab);
+                  }
+                }}
+              >
+                <span className="nav-code">{mode.code}</span>
+                <span className="nav-label">{mode.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="sidebar-secondary-shell">
+          <div className="sidebar-context-copy">
+            <p className="sidebar-context-kicker">{activePrimaryMode.label}</p>
+            <h2>{activePrimaryMode.description}</h2>
+          </div>
+          <nav className="sidebar-nav">
+            {secondaryNavSections.map((section) => (
+              <div key={section.label} className="sidebar-section">
+                <div className="sidebar-section-head">
+                  <p>{section.label}</p>
+                  <span>{section.hint}</span>
+                </div>
+                {section.items.map((tabId) => {
+                  const item = navById.get(tabId);
+                  if (!item) {
+                    return null;
+                  }
+                  const isOfficeAlias = tabId === "office" && (tab === "office" || tab === "officeLab");
+                  return (
+                    <button
+                      type="button"
+                      key={item.id}
+                      onClick={() => setTab(item.id)}
+                      className={tab === item.id || isOfficeAlias ? "active" : ""}
+                    >
+                      <span className="nav-code">{item.code}</span>
+                      <span className="nav-label">{item.label}</span>
+                    </button>
+                  );
+                })}
               </div>
-              {section.items.map((tabId) => {
-                const item = navById.get(tabId);
-                if (!item) {
-                  return null;
-                }
-                return (
-                  <button type="button"
-                    key={item.id}
-                    onClick={() => setTab(item.id)}
-                    className={tab === item.id ? "active" : ""}
-                  >
-                    <span className="nav-code">{item.code}</span>
-                    <span className="nav-label">{item.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ))}
-        </nav>
+            ))}
+          </nav>
+          <div className="sidebar-context-note">
+            <p className="sidebar-footer-label">{appCopy.nextStepTitle}</p>
+            <p>{nextStepByTab[tab]}</p>
+          </div>
+        </div>
         <SidebarStatusFooter
           streamState={streamState}
           onboardingComplete={onboardingComplete}
           uiMode={uiMode}
           setUiMode={setUiMode}
-          showTechnicalDetails={showTechnicalDetails}
-          setShowTechnicalDetails={setShowTechnicalDetails}
         />
       </aside>
       <main className="content shell-content">
         <header className="app-topbar shell-topbar">
           <div className="shell-topbar-copy">
             <div className="shell-topbar-title-row">
-              <p className="shell-topbar-kicker">Citadel systems</p>
-              <h3>Command Deck</h3>
+              <p className="shell-topbar-kicker">AI operations command center</p>
+              <h3>GoatCitadel</h3>
             </div>
             <p className="office-subtitle shell-topbar-subtitle">
               <strong>{activeNav?.label ?? "Mission Control"}</strong>
+              <span className="shell-topbar-separator" aria-hidden="true">/</span>
+              <span>Command Deck</span>
             </p>
           </div>
           <div className="app-topbar-actions">
             <div className="shell-topbar-actions-left">
               <button type="button" className="shell-quick-action shell-command-trigger-topbar" onClick={() => setPaletteOpen(true)}>
-                Command Palette
+                {appCopy.quickActionsButton}
               </button>
               <GlobalFreshnessPill streamState={streamState} />
             </div>
             <div className="shell-topbar-actions-right">
-              <ShellActionGroup className="shell-toggle-group">
-                <span className="shell-action-label">Density</span>
-                <div className="ui-experience-switch ui-density-switch">
-                  <button type="button" className={density === "comfortable" ? "active" : ""} onClick={() => setDensity("comfortable")}>
-                    Comfortable
-                  </button>
-                  <button type="button" className={density === "default" ? "active" : ""} onClick={() => setDensity("default")}>
-                    Default
-                  </button>
-                  <button type="button" className={density === "compact" ? "active" : ""} onClick={() => setDensity("compact")}>
-                    Compact
-                  </button>
-                </div>
-              </ShellActionGroup>
-              <ShellActionGroup className="shell-toggle-group">
-                <span className="shell-action-label">Effects</span>
-                <div className="ui-experience-switch ui-density-switch">
-                  <button type="button" className={effectsMode === "auto" ? "active" : ""} onClick={() => setEffectsMode("auto")}>
-                    Auto
-                  </button>
-                  <button type="button" className={effectsMode === "full" ? "active" : ""} onClick={() => setEffectsMode("full")}>
-                    Full
-                  </button>
-                  <button type="button" className={effectsMode === "reduced" ? "active" : ""} onClick={() => setEffectsMode("reduced")}>
-                    Reduced
-                  </button>
-                </div>
-              </ShellActionGroup>
-              <ShellActionGroup>
-                <label className="ui-technical-toggle shell-workspace-picker">
-                  <span className="shell-action-label">Workspace</span>
-                  <GCSelect
-                    value={activeWorkspaceId}
-                    onChange={setActiveWorkspaceId}
-                    options={[...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceId }]
-                      .filter((item, index, arr) => arr.findIndex((other) => other.workspaceId === item.workspaceId) === index)
-                      .map((item) => ({ value: item.workspaceId, label: item.name }))}
+              <label className="ui-technical-toggle shell-workspace-picker">
+                <span className="shell-action-label">Workspace</span>
+                <GCSelect
+                  value={activeWorkspaceId}
+                  onChange={setActiveWorkspaceId}
+                  options={[...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceId }]
+                    .filter((item, index, arr) => arr.findIndex((other) => other.workspaceId === item.workspaceId) === index)
+                    .map((item) => ({ value: item.workspaceId, label: item.name }))}
+                />
+              </label>
+              <button
+                type="button"
+                className="shell-status-link"
+                onClick={() => setTab("approvals")}
+              >
+                <StatusChip tone={approvalSurfaceCount > 0 ? "warning" : "success"}>
+                  {approvalSurfaceCount > 0 ? `${approvalSurfaceCount} approvals` : "Approvals clear"}
+                </StatusChip>
+              </button>
+              <details className="shell-preferences">
+                <summary>Preferences</summary>
+                <div className="shell-preferences-panel">
+                  <div className="shell-preferences-group">
+                    <span className="shell-action-label">Density</span>
+                    <div className="ui-experience-switch ui-density-switch">
+                      <button type="button" className={density === "comfortable" ? "active" : ""} onClick={() => setDensity("comfortable")}>
+                        Comfortable
+                      </button>
+                      <button type="button" className={density === "default" ? "active" : ""} onClick={() => setDensity("default")}>
+                        Default
+                      </button>
+                      <button type="button" className={density === "compact" ? "active" : ""} onClick={() => setDensity("compact")}>
+                        Compact
+                      </button>
+                    </div>
+                  </div>
+                  <div className="shell-preferences-group">
+                    <span className="shell-action-label">Effects</span>
+                    <div className="ui-experience-switch ui-density-switch">
+                      <button type="button" className={effectsMode === "auto" ? "active" : ""} onClick={() => setEffectsMode("auto")}>
+                        Auto
+                      </button>
+                      <button type="button" className={effectsMode === "full" ? "active" : ""} onClick={() => setEffectsMode("full")}>
+                        Full
+                      </button>
+                      <button type="button" className={effectsMode === "reduced" ? "active" : ""} onClick={() => setEffectsMode("reduced")}>
+                        Reduced
+                      </button>
+                    </div>
+                  </div>
+                  <div className="shell-preferences-group shell-preferences-switches">
+                    <GCSwitch
+                      checked={showTechnicalDetails}
+                      onCheckedChange={setShowTechnicalDetails}
+                      label="Technical details"
+                    />
+                  </div>
+                  <HelpHint
+                    label="Command deck guidance"
+                    text={nextStepByTab[tab]}
                   />
-                </label>
-              </ShellActionGroup>
-              <HelpHint
-                label="Command deck guidance"
-                text={nextStepByTab[tab]}
-              />
-              {isDevDiagnosticsEnabled() ? (
-                <button
-                  type="button"
-                  className="shell-quick-action shell-command-trigger-topbar"
-                  onClick={() => setDiagnosticsOpen((current) => !current)}
-                >
-                  Diagnostics
-                </button>
-              ) : null}
+                  {isDevDiagnosticsEnabled() ? (
+                    <button
+                      type="button"
+                      className="shell-quick-action shell-preferences-diagnostics"
+                      onClick={() => setDiagnosticsOpen((current) => !current)}
+                    >
+                      {diagnosticsOpen ? "Hide diagnostics" : "Diagnostics"}
+                    </button>
+                  ) : null}
+                </div>
+              </details>
             </div>
           </div>
         </header>

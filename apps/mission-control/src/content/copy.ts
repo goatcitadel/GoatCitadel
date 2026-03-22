@@ -59,7 +59,7 @@ export const globalCopy: GlobalCopy = {
 export const appCopy = {
   brandTitle: "GoatCitadel",
   brandSubtitle: "Your AI operations home base",
-  quickActionsButton: "Quick Actions (Ctrl/Cmd+K)",
+  quickActionsButton: "Command Palette",
   nextStepTitle: "Start Here",
   streamBanner: "Live updates are {state}. GoatCitadel will reconnect automatically.",
   sidebar: {
@@ -75,33 +75,33 @@ export const appCopy = {
     notAvailable: "n/a",
   },
   navItems: [
-    { id: "addons", label: "Add-ons (Optional Extras)", code: "ADD" },
-    { id: "onboarding", label: "Launch Wizard (Onboarding)", code: "NEW" },
-    { id: "dashboard", label: "Summit (Overview)", code: "SUM" },
-    { id: "system", label: "Engine (System)", code: "ENG" },
-    { id: "files", label: "Trail Files (Workspace Files)", code: "FS" },
-    { id: "memory", label: "Memory Pasture (Agent Memory)", code: "MEM" },
-    { id: "agents", label: "Goat Crew (Agents)", code: "HERD" },
-    { id: "office", label: "Herd HQ (Office)", code: "HQ" },
-    { id: "officeLab", label: "Citadel Lab (Pixel Office)", code: "OFL" },
-    { id: "activity", label: "Pulse (Activity)", code: "ACT" },
-    { id: "cron", label: "Bell Tower (Scheduler)", code: "CRN" },
-    { id: "sessions", label: "Runs (Sessions)", code: "SES" },
-    { id: "chat", label: "Chat Workspace (Conversations)", code: "CHT" },
-    { id: "assembly", label: "Assembly (Operate)", code: "AOM" },
-    { id: "promptLab", label: "Prompt Lab (Prompt Tests)", code: "LAB" },
-    { id: "improvement", label: "Improvement (Self-Audit)", code: "IMP" },
-    { id: "skills", label: "Playbook (Skills)", code: "SKL" },
-    { id: "costs", label: "Feed Ledger (Costs)", code: "USD" },
-    { id: "settings", label: "Forge (Settings)", code: "CFG" },
-    { id: "workspaces", label: "Workspaces (Project Spaces)", code: "WSP" },
-    { id: "tools", label: "Tool Access (Permissions)", code: "TLS" },
-    { id: "approvals", label: "Gatehouse (Approvals)", code: "APR" },
-    { id: "tasks", label: "Trailboard (Tasks)", code: "TSK" },
-    { id: "integrations", label: "Connections (Integrations)", code: "CNX" },
-    { id: "mcp", label: "MCP Servers (Tool Gateways)", code: "MCP" },
-    { id: "mesh", label: "Mesh (Multi-Device)", code: "MSH" },
-    { id: "npu", label: "NPU Runtime (Voice/Local AI)", code: "NPU" },
+    { id: "addons", label: "Add-ons", code: "ADD" },
+    { id: "onboarding", label: "Launch Wizard", code: "NEW" },
+    { id: "dashboard", label: "Dashboard", code: "SUM" },
+    { id: "system", label: "System", code: "ENG" },
+    { id: "files", label: "Files", code: "FS" },
+    { id: "memory", label: "Memory", code: "MEM" },
+    { id: "agents", label: "Agents", code: "AGT" },
+    { id: "office", label: "Office", code: "OFC" },
+    { id: "officeLab", label: "Office Lab", code: "LAB" },
+    { id: "activity", label: "Activity", code: "ACT" },
+    { id: "cron", label: "Scheduler", code: "CRN" },
+    { id: "sessions", label: "Runs", code: "SES" },
+    { id: "chat", label: "Chat", code: "CHT" },
+    { id: "assembly", label: "Assembly", code: "AOM" },
+    { id: "promptLab", label: "Prompt Lab", code: "PLB" },
+    { id: "improvement", label: "Improvement", code: "IMP" },
+    { id: "skills", label: "Skills", code: "SKL" },
+    { id: "costs", label: "Costs", code: "USD" },
+    { id: "settings", label: "Settings", code: "CFG" },
+    { id: "workspaces", label: "Workspace Control", code: "WSP" },
+    { id: "tools", label: "Tool Access", code: "TLS" },
+    { id: "approvals", label: "Approvals", code: "APR" },
+    { id: "tasks", label: "Work Queue", code: "WRK" },
+    { id: "integrations", label: "Integrations", code: "CNX" },
+    { id: "mcp", label: "MCP Servers", code: "MCP" },
+    { id: "mesh", label: "Mesh", code: "MSH" },
+    { id: "npu", label: "Local Runtime", code: "NPU" },
   ] satisfies NavItemCopy[],
   navSections: [
     { label: "Setup", items: ["onboarding", "settings", "workspaces", "integrations", "tools", "addons"] },
@@ -142,7 +142,7 @@ export const appCopy = {
 
 export const pageCopy: Record<PageId, PageCopy> = {
   dashboard: {
-    title: "Summit",
+    title: "Dashboard",
     subtitle: "A quick snapshot of system health, workload, and spend.",
     guide: {
       what: "Summit helps you quickly see what needs your attention.",
@@ -176,7 +176,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   system: {
-    title: "Engine",
+    title: "System",
     subtitle: "Machine and runtime health for this GoatCitadel node.",
     guide: {
       what: "Shows machine and process vitals so you can spot bottlenecks quickly.",
@@ -189,7 +189,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   files: {
-    title: "Trail Files",
+    title: "Files",
     subtitle: "Create and edit workspace files inside safe write limits.",
     guide: {
       what: "Trail Files is your safe workspace editor for notes, docs, reports, and other artifacts.",
@@ -209,7 +209,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   memory: {
-    title: "Memory Pasture",
+    title: "Memory",
     subtitle: "See what memory exists and how it is being used in replies.",
     guide: {
       what: "Shows what memory is available and how QMD context is being generated.",
@@ -228,7 +228,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   agents: {
-    title: "Goat Crew",
+    title: "Agents",
     subtitle: "Manage built-in and custom agent roles for your workflows.",
     guide: {
       what: "This is your persistent agent roster for long-lived roles and responsibilities.",
@@ -245,7 +245,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   office: {
-    title: "Herd HQ",
+    title: "Office",
     subtitle: "Live floor view of what your agents are doing right now.",
     guide: {
       what: "Visual operations room for real-time agent activity and triage.",
@@ -275,7 +275,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   activity: {
-    title: "Pulse",
+    title: "Activity",
     subtitle: "Live event stream across gateway, tools, approvals, and workflows.",
     guide: {
       what: "Shows live events so you can verify system behavior while actions run.",
@@ -288,7 +288,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   cron: {
-    title: "Bell Tower",
+    title: "Scheduler",
     subtitle: "Create, edit, run, and monitor recurring automation jobs.",
     guide: {
       what: "Manage scheduled jobs end-to-end, including run controls and job details.",
@@ -318,7 +318,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   chat: {
-    title: "Chat Workspace",
+    title: "Chat",
     subtitle: "Your everyday chat hub for projects, files, and agent help.",
     guide: {
       what: "This is your daily chat surface for both mission and external sessions.",
@@ -391,7 +391,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   skills: {
-    title: "Playbook",
+    title: "Skills",
     subtitle: "Choose which skills are active, guarded (sleep), or fully off.",
     guide: {
       what: "Manage runtime skill posture so activation stays useful without burning tokens.",
@@ -412,7 +412,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   costs: {
-    title: "Feed Ledger",
+    title: "Costs",
     subtitle: "Track token usage and cost so runs stay predictable.",
     guide: {
       what: "Tracks token and dollar usage by day, session, agent, or task.",
@@ -426,7 +426,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   settings: {
-    title: "Forge",
+    title: "Settings",
     subtitle: "Set up auth, safety defaults, budgets, and model providers.",
     guide: {
       what: "Forge controls how GoatCitadel runs, what it can access, and which models it uses.",
@@ -481,7 +481,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   approvals: {
-    title: "Gatehouse",
+    title: "Approvals",
     subtitle: "Review and approve risky actions before they run.",
     guide: {
       what: "Review, approve, or reject actions that require explicit operator confirmation.",
@@ -497,7 +497,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   tasks: {
-    title: "Trailboard",
+    title: "Work Queue",
     subtitle: "Track tasks, activity, deliverables, and linked subagent sessions.",
     guide: {
       what: "Task hub for planning, execution tracking, and output management.",
@@ -513,7 +513,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   integrations: {
-    title: "Connections",
+    title: "Integrations",
     subtitle: "Set up and control external services GoatCitadel can use.",
     guide: {
       what: "Connections store service credentials/settings, then let other workflows safely use them.",

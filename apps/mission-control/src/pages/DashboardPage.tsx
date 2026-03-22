@@ -171,36 +171,52 @@ export function DashboardPage({
     actionLabel: string;
   }>;
 
+  const heroPrimaryAction = state.pendingApprovals > 0
+    ? { label: "Review approvals", action: () => onNavigate?.("approvals") }
+    : operators.items.some((operator) => operator.activeSessions > 0)
+      ? { label: "Inspect active runs", action: () => onNavigate?.("sessions") }
+      : { label: "Open chat workspace", action: () => onNavigate?.("chat") };
+
+  const heroSecondaryAction = state.activeSubagents > 0
+    ? { label: "Enter Herd HQ", action: () => onNavigate?.("office") }
+    : { label: "Tune the Forge", action: () => onNavigate?.("settings") };
+
+  const schedulerDisabledCount = cron.items.filter((job) => !job.enabled).length;
+  const activeOperatorSessions = operators.items.reduce((sum, operator) => sum + operator.activeSessions, 0);
+  const memoryArtifactCount = memoryFiles.length;
+
   return (
     <section className="dashboard-page">
-      <PageHeader
-        eyebrow="Mission Control"
-        title={pageCopy.dashboard.title}
-        subtitle={pageCopy.dashboard.subtitle}
-        hint="Start here when you need a fast read on health, workload, and what needs operator attention next."
-        className="page-header-command dashboard-header"
-        actions={
+      <section className="dashboard-hero" aria-label="Summit overview hero">
+        <div className="dashboard-hero-copy">
+          <div className="dashboard-hero-heading">
+            <p className="dashboard-hero-kicker">{pageCopy.dashboard.title}</p>
+            <p className="dashboard-hero-brand">GoatCitadel</p>
+            <h1>Command Deck for the herd, the work, and the calls that still need you.</h1>
+          </div>
+          <p className="dashboard-hero-summary">
+            Summit keeps the first glance focused on workload, system posture, and the moments where human judgment
+            still matters. No dashboard soup. Just the state of the herd and the next move.
+          </p>
           <DataToolbar
+            className="dashboard-hero-actions"
             primary={
               <div className="actions">
-                <button type="button" onClick={() => onNavigate?.("approvals")}>Review Approvals</button>
-                <button type="button" onClick={() => onNavigate?.("chat")}>Open Chat Workspace</button>
-                <button type="button" onClick={() => onNavigate?.("office")}>Open Herd HQ</button>
+                <button type="button" className="dashboard-hero-primary" onClick={heroPrimaryAction.action}>
+                  {heroPrimaryAction.label}
+                </button>
+                <button type="button" className="dashboard-hero-secondary" onClick={heroSecondaryAction.action}>
+                  {heroSecondaryAction.label}
+                </button>
               </div>
             }
           />
-        }
-      />
-      <PageGuideCard
-        pageId="dashboard"
-        what={pageCopy.dashboard.guide?.what ?? ""}
-        when={pageCopy.dashboard.guide?.when ?? ""}
-        actions={pageCopy.dashboard.guide?.actions ?? []}
-        terms={pageCopy.dashboard.guide?.terms}
-      />
+        </div>
+      </section>
+
       {error ? <p className="error">{error}</p> : null}
 
-      <div className="dashboard-kpi-grid">
+      <div className="dashboard-kpi-grid dashboard-kpi-grid-summit">
         <StatCard
           label="Pending approvals"
           value={state.pendingApprovals}
@@ -227,8 +243,8 @@ export function DashboardPage({
 
       <div className="dashboard-main-grid">
         <Panel
-          title="What needs attention"
-          subtitle="Operator-first triage so you know what to do next without scrolling."
+          title="Intervene early"
+          subtitle="The few things worth acting on before you dive into the rest of the stack."
           className="dashboard-urgent-panel"
         >
           {urgentItems.length === 0 ? (
@@ -248,8 +264,8 @@ export function DashboardPage({
           )}
         </Panel>
         <Panel
-          title="Quick actions"
-          subtitle="Jump straight into the most common operator tasks."
+          title="Keep the herd moving"
+          subtitle="High-signal entry points for the next operator loop."
           className="dashboard-quick-actions-panel"
         >
           <div className="dashboard-action-grid">
@@ -282,16 +298,21 @@ export function DashboardPage({
               <p className="dashboard-vitals-label">Process RSS</p>
               <p className="dashboard-vitals-value">{formatBytes(vitals.processRssBytes)}</p>
             </div>
+            <div>
+              <p className="dashboard-vitals-label">Memory artifacts</p>
+              <p className="dashboard-vitals-value">{memoryArtifactCount}</p>
+              <FieldHelp>Recent workspace memory files visible to this node.</FieldHelp>
+            </div>
           </div>
         </Panel>
-        <Panel title="Trailboard status counts" subtitle="Current task pressure by status bucket.">
+        <Panel title="Trailboard pressure" subtitle="Current task pressure by status bucket.">
           <ul className="compact-list">
             {state.taskStatusCounts.map((row) => (
               <li key={row.status}>{row.status}: {row.count}</li>
             ))}
           </ul>
         </Panel>
-        <Panel title="Bell Tower jobs" subtitle="Scheduler posture and whether routine automation is healthy.">
+        <Panel title="Bell Tower posture" subtitle="Scheduler posture and whether routine automation is healthy.">
           <ul className="compact-list">
             {cron.items.map((job) => (
               <li key={job.jobId}>
@@ -303,7 +324,7 @@ export function DashboardPage({
       </div>
 
       <div className="dashboard-secondary-grid">
-        <Panel title="Operators" subtitle="Who is currently running work and how busy they are.">
+        <Panel title="Operators" subtitle={`${activeOperatorSessions} active sessions are in motion across the herd.`}>
           <ul className="compact-list">
             {operators.items.map((operator) => (
               <li key={operator.operatorId}>
@@ -312,16 +333,35 @@ export function DashboardPage({
             ))}
           </ul>
         </Panel>
-        <Panel title="Memory files" subtitle="Recent workspace memory artifacts visible to the node.">
-          <ul className="compact-list">
-            {memoryFiles.map((file) => (
-              <li key={file.relativePath}>
-                {file.relativePath} ({formatBytes(file.size)})
-              </li>
-            ))}
-          </ul>
+        <Panel
+          title="Command notes"
+          subtitle="A fast human-readable summary of the machine state behind Summit."
+          className="dashboard-command-notes"
+        >
+          <div className="dashboard-command-note-list">
+            <p>
+              <strong>{state.pendingApprovals}</strong> approvals need operator judgment before risky work can continue.
+            </p>
+            <p>
+              <strong>{schedulerDisabledCount}</strong> Bell Tower jobs are currently disabled.
+            </p>
+            <p>
+              <strong>{formatBytes(vitals.processRssBytes)}</strong> of resident memory is tied up in the active gateway process.
+            </p>
+            <p>
+              <strong>{memoryArtifactCount}</strong> recent memory artifacts are visible for context recovery and replay.
+            </p>
+          </div>
         </Panel>
       </div>
+
+      <PageGuideCard
+        pageId="dashboard"
+        what={pageCopy.dashboard.guide?.what ?? ""}
+        when={pageCopy.dashboard.guide?.when ?? ""}
+        actions={pageCopy.dashboard.guide?.actions ?? []}
+        terms={pageCopy.dashboard.guide?.terms}
+      />
     </section>
   );
 }
