@@ -1130,7 +1130,7 @@ async function executeCommsTool(
     case "line":
       return lineSend(connectionConfig, args, allowlist, target, renderedMessage);
     case "mattermost":
-      return mattermostSend(connectionConfig, args, allowlist, target, renderedMessage);
+      return mattermostSend(connectionConfig, args, allowlist, target, message, attachments);
     case "nextcloud-talk":
       return nextcloudTalkSend(connectionConfig, args, allowlist, target, renderedMessage);
     case "imessage":
@@ -1140,7 +1140,7 @@ async function executeCommsTool(
     case "telegram":
       return telegramSend(connectionConfig, args, allowlist, target, message, attachments);
     case "matrix":
-      return matrixSend(connectionConfig, args, allowlist, target, renderedMessage);
+      return matrixSend(connectionConfig, args, allowlist, target, message, attachments);
     case "teams":
       return teamsSend(connectionConfig, args, allowlist, renderedMessage);
     case "google-chat":
@@ -1882,12 +1882,97 @@ async function telegramSendAttachment(
   return providerMessageIdFromValue(result.message_id) ?? `telegram-${Date.now()}`;
 }
 
+async function matrixSendRoomEvent(
+  homeserverUrl: string,
+  accessToken: string,
+  roomId: string,
+  content: Record<string, unknown>,
+  allowlist: string[],
+): Promise<string> {
+  const txnId = randomUUID();
+  const res = await fetchAllowlisted(
+    `${homeserverUrl.replace(/\/+$/, "")}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(content),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`matrix.send failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  const body = parseJsonRecord(bodyText);
+  return asString(body.event_id) ?? `matrix-${Date.now()}`;
+}
+
+async function matrixSendAttachment(
+  homeserverUrl: string,
+  accessToken: string,
+  roomId: string,
+  attachment: ChannelAttachment,
+  index: number,
+  allowlist: string[],
+): Promise<string> {
+  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Matrix");
+  const fileName = resolveChannelAttachmentName(attachment, index);
+  const uploadUrl = new URL(`${homeserverUrl.replace(/\/+$/, "")}/_matrix/media/v3/upload`);
+  uploadUrl.searchParams.set("filename", fileName);
+  const uploadRes = await fetchAllowlisted(
+    uploadUrl.toString(),
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        ...(attachmentData.contentType ? { "Content-Type": attachmentData.contentType } : {}),
+      },
+      body: new Uint8Array(attachmentData.bytes),
+    },
+    allowlist,
+  );
+  const uploadBodyText = await uploadRes.response.text();
+  if (!uploadRes.response.ok) {
+    throw new Error(`matrix.send failed (${uploadRes.response.status})${uploadBodyText ? `: ${uploadBodyText}` : ""}`);
+  }
+  const uploadBody = parseJsonRecord(uploadBodyText);
+  const contentUri = required(uploadBody.content_uri, "Matrix uploaded content URI");
+  const content: Record<string, unknown> = {
+    msgtype: resolveMatrixAttachmentMessageType(attachmentData.contentType),
+    body: fileName,
+    url: contentUri,
+    info: {
+      mimetype: attachmentData.contentType,
+      size: attachmentData.bytes.length,
+    },
+  };
+  return matrixSendRoomEvent(homeserverUrl, accessToken, roomId, content, allowlist);
+}
+
+function resolveMatrixAttachmentMessageType(contentType: string | undefined): string {
+  const normalized = contentType?.trim().toLowerCase();
+  if (normalized?.startsWith("image/")) {
+    return "m.image";
+  }
+  if (normalized?.startsWith("video/")) {
+    return "m.video";
+  }
+  if (normalized?.startsWith("audio/")) {
+    return "m.audio";
+  }
+  return "m.file";
+}
+
 async function matrixSend(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
   message: string,
+  attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "matrix");
   const homeserverUrl = asString(config.homeserverUrl) ?? "https://matrix-client.matrix.org";
@@ -1900,28 +1985,43 @@ async function matrixSend(
   if (!roomId) {
     throw new Error("Missing Matrix room target");
   }
-  const txnId = randomUUID();
-  const res = await fetchAllowlisted(
-    `${homeserverUrl.replace(/\/+$/, "")}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+  if (attachments.length === 0) {
+    return matrixSendRoomEvent(
+      homeserverUrl,
+      accessToken,
+      roomId,
+      {
         msgtype: "m.text",
         body: message,
-      }),
-    },
-    allowlist,
-  );
-  const bodyText = await res.response.text();
-  if (!res.response.ok) {
-    throw new Error(`matrix.send failed (${res.response.status})`);
+      },
+      allowlist,
+    );
   }
-  const body = parseJsonRecord(bodyText);
-  return asString(body.event_id) ?? `matrix-${Date.now()}`;
+
+  let lastEventId: string | undefined;
+  if (message.trim()) {
+    lastEventId = await matrixSendRoomEvent(
+      homeserverUrl,
+      accessToken,
+      roomId,
+      {
+        msgtype: "m.text",
+        body: message,
+      },
+      allowlist,
+    );
+  }
+  for (const [index, attachment] of attachments.entries()) {
+    lastEventId = await matrixSendAttachment(
+      homeserverUrl,
+      accessToken,
+      roomId,
+      attachment,
+      index,
+      allowlist,
+    );
+  }
+  return lastEventId ?? `matrix-${Date.now()}`;
 }
 
 async function matrixReact(
@@ -2151,6 +2251,7 @@ async function mattermostSend(
   allowlist: string[],
   target: string,
   message: string,
+  attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const serverUrl = asString(config.serverUrl) ?? asString(config.baseUrl);
   const botToken = secretFrom(config, "botToken", "botTokenEnv")
@@ -2185,6 +2286,22 @@ async function mattermostSend(
     allowlist,
   );
 
+  let fileIds: string[] | undefined;
+  if (attachments.length > 0) {
+    fileIds = [];
+    for (const [index, attachment] of attachments.entries()) {
+      const fileId = await mattermostUploadAttachment(
+        serverUrl,
+        botToken,
+        channelId,
+        attachment,
+        index,
+        allowlist,
+      );
+      fileIds.push(fileId);
+    }
+  }
+
   const post = await mattermostApiRequest<Record<string, unknown>>(
     serverUrl,
     botToken,
@@ -2195,6 +2312,7 @@ async function mattermostSend(
       body: JSON.stringify({
         channel_id: channelId,
         message,
+        ...(fileIds && fileIds.length > 0 ? { file_ids: fileIds } : {}),
       }),
     },
   );
@@ -3873,6 +3991,48 @@ async function mattermostApiRequest<T>(
     return undefined as T;
   }
   return JSON.parse(bodyText) as T;
+}
+
+async function mattermostUploadAttachment(
+  serverUrl: string,
+  botToken: string,
+  channelId: string,
+  attachment: ChannelAttachment,
+  index: number,
+  allowlist: string[],
+): Promise<string> {
+  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Mattermost");
+  const fileName = resolveChannelAttachmentName(attachment, index);
+  const blobBytes = new Uint8Array(attachmentData.bytes.length);
+  blobBytes.set(attachmentData.bytes);
+  const formData = new FormData();
+  formData.set("channel_id", channelId);
+  formData.append(
+    "files",
+    new Blob([blobBytes], attachmentData.contentType ? { type: attachmentData.contentType } : undefined),
+    fileName,
+  );
+  const headers = new Headers();
+  headers.set("Authorization", `Bearer ${botToken}`);
+  const res = await fetchAllowlisted(
+    `${serverUrl.replace(/\/+$/, "")}/api/v4/files`,
+    {
+      method: "POST",
+      headers,
+      body: formData,
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`mattermost.send failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  const body = parseJsonRecord(bodyText);
+  const fileInfos = Array.isArray(body.file_infos)
+    ? body.file_infos.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    : [];
+  const firstFile = fileInfos[0];
+  return required(firstFile?.id, "Mattermost uploaded file id");
 }
 
 async function signalRpcRequest<T>(

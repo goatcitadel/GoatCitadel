@@ -137,10 +137,10 @@ describe("integration-catalog", () => {
     expect(telegram.capabilities).toEqual(expect.arrayContaining(["attachments", "unsend"]));
 
     const matrix = requireCatalogEntry("channel.matrix");
-    expect(matrix.capabilities).toEqual(expect.arrayContaining(["reactions", "unsend"]));
+    expect(matrix.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
 
     const mattermost = requireCatalogEntry("channel.mattermost");
-    expect(mattermost.capabilities).toEqual(expect.arrayContaining(["reactions", "unsend"]));
+    expect(mattermost.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
 
     const zalouser = requireCatalogEntry("channel.zalouser");
     expect(zalouser.capabilities).toEqual(expect.arrayContaining(["attachments", "direct"]));

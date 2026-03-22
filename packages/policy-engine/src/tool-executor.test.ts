@@ -975,6 +975,111 @@ describe("executeTool", () => {
     });
   });
 
+  it("uploads Mattermost attachments before creating the post", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.MATTERMOST_BOT_TOKEN = "mm-token";
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v4/users/me")) {
+        return new Response(JSON.stringify({ id: "botuserid01234567890123456" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/v4/teams/name/goatcitadel")) {
+        return new Response(JSON.stringify({ id: "teamid12345678901234567890" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/v4/teams/teamid12345678901234567890/channels/name/town-square")) {
+        return new Response(JSON.stringify({ id: "channelid12345678901234567" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/v4/files")) {
+        return new Response(JSON.stringify({ file_infos: [{ id: "file-123" }] }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/v4/posts")) {
+        return new Response(JSON.stringify({ id: "post-attachment-123" }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-mm",
+          key: "mattermost",
+          config: {
+            serverUrl: "https://chat.example.com",
+            botTokenEnv: "MATTERMOST_BOT_TOKEN",
+            defaultChannel: "town-square",
+            defaultTeam: "goatcitadel",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-mm-attachment",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-mm",
+        message: "Deployment evidence attached.",
+        attachments: [
+          {
+            title: "evidence.txt",
+            mimeType: "text/plain",
+            dataBase64: Buffer.from("mattermost-bytes").toString("base64"),
+          },
+        ],
+      },
+      agentId: "operator",
+      sessionId: "sess-mm-attachment",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["chat.example.com"],
+      },
+    }, commsStorage);
+
+    const uploadCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/v4/files")) as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    expect(uploadCall?.[1]?.body).toBeInstanceOf(FormData);
+    const uploadBody = uploadCall?.[1]?.body as FormData;
+    expect(uploadBody.get("channel_id")).toBe("channelid12345678901234567");
+    const uploadedFile = uploadBody.get("files");
+    expect(uploadedFile).toBeInstanceOf(File);
+    expect((uploadedFile as File).name).toBe("evidence.txt");
+
+    const postCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/v4/posts")) as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    expect(String(postCall?.[1]?.body ?? "")).toContain("\"file_ids\":[\"file-123\"]");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "post-attachment-123",
+    });
+  });
+
   it("sends channel messages through LINE bot adapters using shared target keys", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.LINE_CHANNEL_ACCESS_TOKEN = "line-token";
@@ -1904,6 +2009,97 @@ describe("executeTool", () => {
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "77",
+    });
+  });
+
+  it("uploads Matrix attachments and emits attachment events", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.MATRIX_ACCESS_TOKEN = "matrix-token";
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/_matrix/media/v3/upload")) {
+        return new Response(JSON.stringify({ content_uri: "mxc://matrix.example.com/media-123" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/_matrix/client/v3/rooms/!room%3Aexample.com/send/m.room.message/")) {
+        return new Response(JSON.stringify({ event_id: "$matrix-file-1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-matrix",
+          key: "matrix",
+          config: {
+            homeserverUrl: "https://matrix.example.com",
+            accessTokenEnv: "MATRIX_ACCESS_TOKEN",
+            defaultRoomId: "!room:example.com",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-matrix-file",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-matrix",
+        message: "",
+        attachments: [
+          {
+            title: "diagram.png",
+            mimeType: "image/png",
+            dataBase64: Buffer.from("matrix-image-bytes").toString("base64"),
+          },
+        ],
+      },
+      agentId: "operator",
+      sessionId: "sess-matrix-file",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["matrix.example.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://matrix.example.com/_matrix/media/v3/upload?filename=diagram.png",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/_matrix/client/v3/rooms/!room%3Aexample.com/send/m.room.message/"),
+      expect.objectContaining({ method: "PUT" }),
+    );
+    const eventCall = fetchMock.mock.calls[1] as [string, RequestInit?] | undefined;
+    const eventBody = String((eventCall?.[1]?.body) ?? "");
+    expect(eventBody).toContain("\"msgtype\":\"m.image\"");
+    expect(eventBody).toContain("\"body\":\"diagram.png\"");
+    expect(eventBody).toContain("\"url\":\"mxc://matrix.example.com/media-123\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "$matrix-file-1",
     });
   });
 

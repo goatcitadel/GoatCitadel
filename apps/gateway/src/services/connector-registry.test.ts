@@ -129,6 +129,17 @@ describe("buildGatewayConnectorRecords", () => {
       mcpServers: [],
       mcpTools: [],
     });
+    const matrixRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "matrix", {
+          homeserverUrl: "https://matrix.example.com",
+          accessTokenEnv: "MATRIX_ACCESS_TOKEN",
+          defaultRoomId: "!room:example.com",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
 
     const imessage = imessageRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(imessage?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
@@ -160,6 +171,9 @@ describe("buildGatewayConnectorRecords", () => {
     expect(discordWebhook?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
       "Webhook-only Discord connections can unsend webhook-authored messages, but cannot add reactions.",
     ]));
+
+    const matrix = matrixRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(matrix?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
   });
 
   it("publishes setup diagnostics for incomplete channel bridge configs", () => {

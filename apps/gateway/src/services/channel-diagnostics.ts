@@ -66,8 +66,10 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   },
   matrix: {
     supportedDeliveryActions: ["channel.send", "channel.react", "channel.unsend"],
+    supportedAttachmentSources: ["url", "inline"],
     supportNotes: [
       "Matrix unsend uses event redaction and depends on room permissions for the bot user.",
+      "Matrix rich sends upload media to the homeserver and emit attachment events per file.",
     ],
     requiredAnyOf: [["homeserverUrl"], ["accessTokenEnv", "accessToken"]],
   },
@@ -89,8 +91,10 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   },
   mattermost: {
     supportedDeliveryActions: ["channel.send", "channel.react", "channel.unsend"],
+    supportedAttachmentSources: ["url", "inline"],
     supportNotes: [
       "Mattermost unsend deletes the original post and typically applies only to posts the bot can remove.",
+      "Mattermost rich sends upload files to the resolved channel before creating the post.",
     ],
     requiredAnyOf: [["serverUrl"], ["botTokenEnv", "botToken"]],
   },
