@@ -180,6 +180,7 @@ export async function executeTool(
     case "telegram.send":
     case "teams.send":
     case "whatsapp.send":
+    case "whatsapp.react":
     case "zalo.send":
     case "zalouser.send":
       return commsInvoke(request.toolName, request.args, config, storage);
@@ -1125,7 +1126,7 @@ async function executeCommsTool(
   const renderedMessage = renderChannelMessage(message, attachments);
   switch (channelKey) {
     case "slack":
-      return slackSend(connectionConfig, args, allowlist, target, renderedMessage);
+      return slackSend(connectionConfig, args, allowlist, target, message, attachments);
     case "discord":
       return discordSend(connectionConfig, args, allowlist, target, message, attachments);
     case "line":
@@ -1195,6 +1196,8 @@ async function commsReact(
       return mattermostReact(connectionConfig, args, allowlist, target);
     case "telegram":
       return telegramReact(connectionConfig, args, allowlist, target);
+    case "whatsapp":
+      return whatsappReact(connectionConfig, args, allowlist, target);
     case "imessage":
       return imessageReact(connectionConfig, args, allowlist, target);
     default:
@@ -1330,16 +1333,27 @@ async function slackSend(
   allowlist: string[],
   target: string,
   message: string,
+  attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "slack");
+  const urlAttachments = attachments.filter((attachment) => Boolean(attachment.url));
+  const inlineAttachments = attachments.filter((attachment) => Boolean(attachment.dataBase64));
+  const renderedMessage = renderChannelMessage(message, urlAttachments);
+  const blocks = buildSlackMessageBlocks(message, urlAttachments);
   const webhookUrl = secretFrom(config, "webhookUrl", "webhookUrlEnv");
   if (webhookUrl) {
+    if (inlineAttachments.length > 0) {
+      throw new Error("Slack webhook connections do not support inline attachments; use a bot token connection instead");
+    }
     const res = await fetchAllowlisted(
       webhookUrl,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: message }),
+        body: JSON.stringify({
+          text: renderedMessage,
+          ...(blocks ? { blocks } : {}),
+        }),
       },
       allowlist,
     );
@@ -1359,28 +1373,51 @@ async function slackSend(
   if (!channel) {
     throw new Error("Missing Slack channel target");
   }
-  const res = await fetchAllowlisted(
-    "https://slack.com/api/chat.postMessage",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json; charset=utf-8",
+  let parentTs: string | undefined;
+  let uploadChannelId = channel;
+  if (message.trim() || urlAttachments.length > 0) {
+    const res = await fetchAllowlisted(
+      "https://slack.com/api/chat.postMessage",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({
+          channel,
+          text: renderedMessage,
+          ...(blocks ? { blocks } : {}),
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+        }),
       },
-      body: JSON.stringify({
-        channel,
-        text: message,
-        ...(threadTs ? { thread_ts: threadTs } : {}),
-      }),
-    },
-    allowlist,
-  );
-  const bodyText = await res.response.text();
-  const body = parseJsonRecord(bodyText);
-  if (!res.response.ok || body.ok === false) {
-    throw new Error(`slack.send failed (${res.response.status})${body.error ? `: ${body.error}` : ""}`);
+      allowlist,
+    );
+    const bodyText = await res.response.text();
+    const body = parseJsonRecord(bodyText);
+    if (!res.response.ok || body.ok === false) {
+      throw new Error(`slack.send failed (${res.response.status})${body.error ? `: ${body.error}` : ""}`);
+    }
+    parentTs = asString(body.ts) ?? parentTs;
+    uploadChannelId = asString(body.channel) ?? uploadChannelId;
   }
-  return asString(body.ts) ?? `slack-${Date.now()}`;
+
+  if (inlineAttachments.length > 0 && !isSlackConversationId(uploadChannelId)) {
+    throw new Error("Slack inline attachment uploads require a channel ID target or a text/url message that can resolve one");
+  }
+  let uploadedFileId: string | undefined;
+  for (const [index, attachment] of inlineAttachments.entries()) {
+    uploadedFileId = await slackUploadAttachment(
+      token,
+      uploadChannelId,
+      attachment,
+      index,
+      allowlist,
+      threadTs ?? parentTs,
+    );
+  }
+
+  return parentTs ?? uploadedFileId ?? `slack-${Date.now()}`;
 }
 
 async function slackReact(
@@ -1659,6 +1696,51 @@ function buildDiscordEmbeds(attachments: ChannelAttachment[]): Array<Record<stri
       }
       return embed;
     });
+}
+
+function buildSlackMessageBlocks(
+  message: string,
+  attachments: ChannelAttachment[],
+): Array<Record<string, unknown>> | undefined {
+  const blocks: Array<Record<string, unknown>> = [];
+  if (message.trim()) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: message,
+      },
+    });
+  }
+
+  for (const [index, attachment] of attachments.entries()) {
+    const url = attachment.url?.trim();
+    if (!url) {
+      continue;
+    }
+    const title = attachment.title?.trim() || resolveChannelAttachmentName(attachment, index);
+    if (isImageChannelAttachment(attachment)) {
+      const imageBlock: Record<string, unknown> = {
+        type: "image",
+        image_url: url,
+        alt_text: title || "attachment",
+      };
+      if (title) {
+        imageBlock.title = { type: "plain_text", text: title };
+      }
+      blocks.push(imageBlock);
+      continue;
+    }
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: title && title !== url ? `*<${url}|${title}>*` : `<${url}>`,
+      },
+    });
+  }
+
+  return blocks.length > 0 ? blocks : undefined;
 }
 
 async function lineSend(
@@ -2300,6 +2382,52 @@ async function whatsappSend(
   return providerMessageId;
 }
 
+async function whatsappReact(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const phoneNumberId = asString(config.phoneNumberId) ?? asString(config.senderId);
+  const resolvedTarget = normalizeWhatsAppTarget(
+    asString(args.target) ?? normalizeChannelTarget(target, "whatsapp") ?? resolveDefaultChannelTarget("whatsapp", config),
+  );
+  const messageId = required(asString(args.messageId), "WhatsApp messageId");
+  const reaction = required(asString(args.reaction), "WhatsApp reaction").trim();
+  const baseUrl = normalizeWhatsAppBaseUrl(asString(config.baseUrl), asString(config.apiVersion));
+  if (!accessToken) {
+    throw new Error("Missing WhatsApp access token");
+  }
+  if (!phoneNumberId) {
+    throw new Error("Missing WhatsApp phone number id");
+  }
+  if (!resolvedTarget) {
+    throw new Error("Missing WhatsApp target");
+  }
+  if (isWhatsAppGroupTarget(resolvedTarget)) {
+    throw new Error("WhatsApp Cloud API sender only supports direct recipients, not group JIDs");
+  }
+
+  return whatsappSendPayload(
+    baseUrl,
+    phoneNumberId,
+    accessToken,
+    {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: normalizeWhatsAppRecipient(resolvedTarget),
+      type: "reaction",
+      reaction: {
+        message_id: messageId,
+        emoji: reaction,
+      },
+    },
+    allowlist,
+  );
+}
+
 async function mattermostSend(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -2802,6 +2930,10 @@ function encodeDiscordEmoji(value: string): string {
 
 function normalizeSlackReaction(value: unknown): string {
   return normalizeColonWrappedReaction(required(value, "Slack reaction"));
+}
+
+function isSlackConversationId(value: string): boolean {
+  return /^[CDGU][A-Z0-9]+$/i.test(value.trim());
 }
 
 function normalizeColonWrappedReaction(value: string): string {
@@ -4115,6 +4247,80 @@ async function mattermostUploadAttachment(
     : [];
   const firstFile = fileInfos[0];
   return required(firstFile?.id, "Mattermost uploaded file id");
+}
+
+async function slackUploadAttachment(
+  token: string,
+  channel: string,
+  attachment: ChannelAttachment,
+  index: number,
+  allowlist: string[],
+  threadTs?: string,
+): Promise<string> {
+  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Slack");
+  const fileName = resolveChannelAttachmentName(attachment, index);
+  const metadataRes = await fetchAllowlisted(
+    "https://slack.com/api/files.getUploadURLExternal",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        filename: fileName,
+        length: attachmentData.bytes.length,
+      }),
+    },
+    allowlist,
+  );
+  const metadataBodyText = await metadataRes.response.text();
+  const metadataBody = parseJsonRecord(metadataBodyText);
+  if (!metadataRes.response.ok || metadataBody.ok === false) {
+    throw new Error(`slack.send failed (${metadataRes.response.status})${metadataBody.error ? `: ${metadataBody.error}` : ""}`);
+  }
+  const uploadUrl = required(metadataBody.upload_url, "Slack upload URL");
+  const fileId = required(metadataBody.file_id, "Slack file id");
+
+  const uploadRes = await fetchAllowlisted(
+    uploadUrl,
+    {
+      method: "POST",
+      headers: attachmentData.contentType ? { "Content-Type": attachmentData.contentType } : undefined,
+      body: new Uint8Array(attachmentData.bytes),
+    },
+    allowlist,
+  );
+  const uploadBodyText = await uploadRes.response.text();
+  if (!uploadRes.response.ok) {
+    throw new Error(`slack.send failed (${uploadRes.response.status})${uploadBodyText ? `: ${uploadBodyText}` : ""}`);
+  }
+
+  const completeRes = await fetchAllowlisted(
+    "https://slack.com/api/files.completeUploadExternal",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        files: [{
+          id: fileId,
+          title: attachment.title?.trim() || fileName,
+        }],
+        channel_id: channel,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      }),
+    },
+    allowlist,
+  );
+  const completeBodyText = await completeRes.response.text();
+  const completeBody = parseJsonRecord(completeBodyText);
+  if (!completeRes.response.ok || completeBody.ok === false) {
+    throw new Error(`slack.send failed (${completeRes.response.status})${completeBody.error ? `: ${completeBody.error}` : ""}`);
+  }
+  return fileId;
 }
 
 async function whatsappSendPayload(

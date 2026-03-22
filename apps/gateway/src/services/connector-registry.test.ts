@@ -181,6 +181,7 @@ describe("buildGatewayConnectorRecords", () => {
       "channel.react",
       "channel.unsend",
     ]);
+    expect(slack?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
 
     const discordWebhook = discordWebhookRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(discordWebhook?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
@@ -204,6 +205,10 @@ describe("buildGatewayConnectorRecords", () => {
     ]);
 
     const whatsapp = whatsappRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(whatsapp?.metadata?.supportedDeliveryActions).toEqual([
+      "channel.send",
+      "channel.react",
+    ]);
     expect(whatsapp?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
     expect(whatsapp?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
       "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",

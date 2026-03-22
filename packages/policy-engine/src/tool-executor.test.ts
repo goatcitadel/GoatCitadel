@@ -817,6 +817,107 @@ describe("executeTool", () => {
     });
   });
 
+  it("uploads inline Slack attachments through the external upload flow", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url === "https://slack.com/api/chat.postMessage") {
+        return new Response(JSON.stringify({
+          ok: true,
+          ts: "1712345678.000200",
+          channel: "C123UPLOAD",
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "https://slack.com/api/files.getUploadURLExternal") {
+        return new Response(JSON.stringify({
+          ok: true,
+          upload_url: "https://files.slack.com/upload/v1/test-upload",
+          file_id: "F123UPLOAD",
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "https://files.slack.com/upload/v1/test-upload") {
+        return new Response("", { status: 200 });
+      }
+      if (url === "https://slack.com/api/files.completeUploadExternal") {
+        return new Response(JSON.stringify({
+          ok: true,
+          files: [{ id: "F123UPLOAD", title: "evidence.txt" }],
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-slack-inline",
+          key: "slack",
+          config: {
+            botTokenEnv: "SLACK_BOT_TOKEN",
+            defaultChannel: "#build-alerts",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-slack-inline",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-slack-inline",
+        message: "Evidence attached.",
+        attachments: [{
+          title: "evidence.txt",
+          mimeType: "text/plain",
+          dataBase64: Buffer.from("slack-inline-evidence", "utf8").toString("base64"),
+        }],
+      },
+      agentId: "operator",
+      sessionId: "sess-slack-inline",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["slack.com", "*.slack.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    const uploadMetaCall = fetchMock.mock.calls[1] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    expect(String(uploadMetaCall?.[1]?.body ?? "")).toContain("\"filename\":\"evidence.txt\"");
+    expect(String(uploadMetaCall?.[1]?.body ?? "")).toContain("\"length\":21");
+
+    const completeCall = fetchMock.mock.calls[3] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    expect(String(completeCall?.[1]?.body ?? "")).toContain("\"channel_id\":\"C123UPLOAD\"");
+    expect(String(completeCall?.[1]?.body ?? "")).toContain("\"thread_ts\":\"1712345678.000200\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "1712345678.000200",
+    });
+  });
+
   it("sends channel messages through Teams webhook adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const fetchMock = vi.fn(async () => new Response("1", { status: 200 }));
@@ -2682,6 +2783,78 @@ describe("executeTool", () => {
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "wamid.inline.123",
+    });
+  });
+
+  it("adds WhatsApp reactions through the Cloud API", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.WHATSAPP_ACCESS_TOKEN = "wa-token";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      messaging_product: "whatsapp",
+      messages: [{ id: "wamid.react.123" }],
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-whatsapp-react",
+          key: "whatsapp",
+          config: {
+            accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
+            phoneNumberId: "123456789012345",
+            defaultTarget: "+15551234567",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-whatsapp-react",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.react",
+      args: {
+        connectionId: "conn-whatsapp-react",
+        messageId: "wamid.original.1",
+        reaction: "👍",
+      },
+      agentId: "operator",
+      sessionId: "sess-whatsapp-react",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["graph.facebook.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://graph.facebook.com/v23.0/123456789012345/messages",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const whatsappCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const whatsappBody = ((whatsappCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(whatsappBody ?? "")).toContain("\"type\":\"reaction\"");
+    expect(String(whatsappBody ?? "")).toContain("\"message_id\":\"wamid.original.1\"");
+    expect(String(whatsappBody ?? "")).toContain("\"emoji\":\"👍\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "wamid.react.123",
     });
   });
 

@@ -967,6 +967,14 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "comms",
   },
   {
+    name: "whatsapp.react",
+    category: "comms",
+    riskLevel: "caution",
+    requiresApproval: false,
+    description: "Add a reaction through the WhatsApp Cloud API.",
+    pack: "comms",
+  },
+  {
     name: "slack.send",
     category: "comms",
     riskLevel: "caution",

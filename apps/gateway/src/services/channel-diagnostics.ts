@@ -9,6 +9,7 @@ type ChannelRule = {
   supportedDeliveryActions?: string[];
   resolveSupportedDeliveryActions?: (config: Record<string, unknown>) => string[];
   supportedAttachmentSources?: string[];
+  resolveSupportedAttachmentSources?: (config: Record<string, unknown>) => string[];
   supportNotes?: string[];
   resolveSupportNotes?: (config: Record<string, unknown>) => string[];
   requiredAnyOf?: string[][];
@@ -20,13 +21,18 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
         ? ["channel.send", "channel.react", "channel.unsend"]
         : ["channel.send"],
+    resolveSupportedAttachmentSources: (config) =>
+      hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
+        ? ["url", "inline"]
+        : ["url"],
     resolveSupportNotes: (config) =>
       hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
         ? [
           "Interactive actions use the Slack Web API and require the bot to have the needed chat and reactions scopes.",
+          "Slack bot-token connections support URL-backed attachment previews and uploaded inline files when the app has files:write and can reach Slack upload hosts.",
         ]
         : [
-          "Webhook-only Slack connections support send only. Reactions and unsend require a bot token.",
+          "Webhook-only Slack connections support send only plus URL-backed attachment previews. Reactions, unsend, and inline file uploads require a bot token.",
         ],
     requiredAnyOf: [["botTokenEnv", "botToken", "webhookUrl", "url"]],
   },
@@ -82,10 +88,11 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["webhookUrl", "url"]],
   },
   whatsapp: {
-    supportedDeliveryActions: ["channel.send"],
+    supportedDeliveryActions: ["channel.send", "channel.react"],
     supportedAttachmentSources: ["url", "inline"],
     supportNotes: [
       "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",
+      "WhatsApp reactions are sent through the Cloud API, but unsend/delete is still not wired in this bridge.",
     ],
     requiredAnyOf: [["phoneNumberId"], ["accessTokenEnv", "accessToken", "tokenEnv", "token"]],
   },
@@ -146,7 +153,9 @@ export function describeChannelFeatureMetadata(
     supportedDeliveryActions: [
       ...(rule.resolveSupportedDeliveryActions?.(config) ?? rule.supportedDeliveryActions ?? ["channel.send"]),
     ],
-    supportedAttachmentSources: [...(rule.supportedAttachmentSources ?? [])],
+    supportedAttachmentSources: [
+      ...(rule.resolveSupportedAttachmentSources?.(config) ?? rule.supportedAttachmentSources ?? []),
+    ],
     supportNotes: [...(rule.resolveSupportNotes?.(config) ?? rule.supportNotes ?? [])],
     setupDiagnostics,
   };
