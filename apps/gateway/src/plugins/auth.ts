@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { SseTokenIssueResponse } from "@goatcitadel/contracts";
 import { enterRequestAttribution } from "../../../../packages/storage/src/request-attribution.js";
+import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.js";
 import fp from "fastify-plugin";
 
 declare module "fastify" {
@@ -61,6 +62,10 @@ export const authPlugin = fp(async (fastify) => {
       return;
     }
     if (request.url.startsWith("/api/v1/auth/device-requests")) {
+      return;
+    }
+    if (isNextcloudTalkWebhookPath(request.url)) {
+      setAuthActor(request, "nextcloud-talk:webhook", "none");
       return;
     }
 

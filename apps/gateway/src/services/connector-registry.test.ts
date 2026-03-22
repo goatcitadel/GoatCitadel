@@ -37,6 +37,228 @@ describe("buildGatewayConnectorRecords", () => {
     expect(connector?.metadata?.approvalDeliveryReady).toBe(false);
   });
 
+  it("extracts approval delivery targets from additional channel-specific config keys", () => {
+    const cases = [
+      {
+        key: "signal",
+        config: { defaultRecipient: "+15551234567" },
+        expectedTarget: "+15551234567",
+      },
+      {
+        key: "imessage",
+        config: { defaultHandle: "+15557654321" },
+        expectedTarget: "+15557654321",
+      },
+      {
+        key: "nextcloud-talk",
+        config: { defaultConversationId: "room-42" },
+        expectedTarget: "room-42",
+      },
+      {
+        key: "line",
+        config: { defaultUserId: "U1234567890" },
+        expectedTarget: "U1234567890",
+      },
+      {
+        key: "zalo",
+        config: { defaultRecipientId: "zalo-user-123" },
+        expectedTarget: "zalo-user-123",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const records = buildGatewayConnectorRecords({
+        integrationConnections: [
+          createIntegrationConnection("channel", testCase.key, testCase.config),
+        ],
+        mcpServers: [],
+        mcpTools: [],
+      });
+
+      const connector = records.find((item) => item.connectorId === "integration:conn-1");
+      expect(connector?.metadata?.approvalDeliveryTarget).toBe(testCase.expectedTarget);
+      expect(connector?.metadata?.approvalDeliveryReady).toBe(true);
+    }
+  });
+
+  it("publishes channel-specific guidance for missing approval delivery targets", () => {
+    const records = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "imessage"),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+
+    const connector = records.find((item) => item.connectorId === "integration:conn-1");
+    expect(connector?.metadata?.approvalDeliveryTarget).toBeUndefined();
+    expect(connector?.metadata?.approvalDeliveryReason).toBe(
+      "Set config.defaultHandle or config.defaultTarget to enable approval delivery.",
+    );
+  });
+
+  it("advertises richer channel actions and diagnostics only when the configured bridge mode supports them", () => {
+    const imessageRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "imessage", {
+          bridgeUrl: "http://127.0.0.1:1234",
+          passwordEnv: "IMESSAGE_PASSWORD",
+          defaultHandle: "imessage:+15551234567",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+    const slackRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "slack", {
+          defaultChannel: "#ops",
+          botTokenEnv: "SLACK_BOT_TOKEN",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+    const discordWebhookRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "discord", {
+          defaultChannelId: "1234567890",
+          webhookUrl: "https://discord.com/api/webhooks/123/test",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+    const googleChatRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "google-chat", {
+          webhookUrl: "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=test&token=test",
+          defaultThreadKey: "ops-thread",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+    const matrixRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "matrix", {
+          homeserverUrl: "https://matrix.example.com",
+          accessTokenEnv: "MATRIX_ACCESS_TOKEN",
+          defaultRoomId: "!room:example.com",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+    const teamsRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "teams", {
+          webhookUrl: "https://outlook.office.com/webhook/example",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+    const telegramRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "telegram", {
+          botTokenEnv: "TELEGRAM_BOT_TOKEN",
+          defaultChatId: "-1001234567890",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+    const whatsappRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "whatsapp", {
+          phoneNumberId: "123456789012345",
+          accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
+          defaultTarget: "+15551234567",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+
+    const imessage = imessageRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(imessage?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
+    expect(imessage?.metadata?.supportedDeliveryActions).toEqual([
+      "channel.send",
+      "channel.react",
+      "channel.unsend",
+    ]);
+    expect(imessage?.metadata?.setupReady).toBe(true);
+    expect(imessage?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
+      "Reactions and unsend require BlueBubbles Private API support.",
+    ]));
+
+    const slack = slackRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(slack?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
+    expect(slack?.metadata?.supportedDeliveryActions).toEqual([
+      "channel.send",
+      "channel.react",
+      "channel.unsend",
+    ]);
+    expect(slack?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
+
+    const discordWebhook = discordWebhookRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(discordWebhook?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
+    expect(discordWebhook?.metadata?.supportedDeliveryActions).toEqual([
+      "channel.send",
+      "channel.unsend",
+    ]);
+    expect(discordWebhook?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
+    expect(discordWebhook?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
+      "Webhook-only Discord connections can unsend webhook-authored messages, but cannot add reactions.",
+    ]));
+
+    const googleChat = googleChatRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(googleChat?.metadata?.supportedAttachmentSources).toEqual(["url"]);
+
+    const matrix = matrixRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(matrix?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
+
+    const teams = teamsRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(teams?.metadata?.supportedAttachmentSources).toEqual(["url"]);
+
+    const telegram = telegramRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(telegram?.metadata?.supportedDeliveryActions).toEqual([
+      "channel.send",
+      "channel.react",
+      "channel.unsend",
+    ]);
+
+    const whatsapp = whatsappRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(whatsapp?.metadata?.supportedDeliveryActions).toEqual([
+      "channel.send",
+      "channel.react",
+    ]);
+    expect(whatsapp?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
+    expect(whatsapp?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
+      "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",
+    ]));
+  });
+
+  it("publishes setup diagnostics for incomplete channel bridge configs", () => {
+    const records = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "imessage", {
+          defaultHandle: "imessage:+15551234567",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+
+    const connector = records.find((item) => item.connectorId === "integration:conn-1");
+    expect(connector?.metadata?.setupReady).toBe(false);
+    expect(connector?.metadata?.setupDiagnostics).toEqual(expect.arrayContaining([
+      "Missing one of: config.bridgeUrl, config.baseUrl, config.serverUrl.",
+      "Missing one of: config.passwordEnv, config.password, config.apiPasswordEnv, config.apiPassword.",
+    ]));
+  });
+
   it("publishes the MCP approval delivery tool contract in connector metadata when the tool exists", () => {
     const records = buildGatewayConnectorRecords({
       integrationConnections: [],

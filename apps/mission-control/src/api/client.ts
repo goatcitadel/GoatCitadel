@@ -17,7 +17,9 @@ import type {
   AssemblyRunDetailResponse,
   AssemblyRunRecord,
   ChangeRiskEvaluationResponse,
+  ChannelReactInput,
   ChannelSendInput,
+  ChannelUnsendInput,
   ChatAttachmentRecord,
   ChatMode,
   ChatAttachmentPreviewResponse,
@@ -122,6 +124,7 @@ import type {
   ReplayRegressionRun,
   ReplayRegressionResult,
   CapabilityTrendSeries,
+  CapabilityGapEventRecord,
   ProactivePolicy,
   ProactiveRunRecord,
   LearnedMemoryConflictRecord,
@@ -144,6 +147,7 @@ import type {
   ObsidianIntegrationConfig,
   ObsidianIntegrationStatus,
   WeeklyImprovementReportRecord,
+  RepairCandidateRecord,
   GuidanceBundleRecord,
   GuidanceDocType,
   GuidanceDocumentRecord,
@@ -2176,6 +2180,31 @@ export async function fetchImprovementReplayRuns(limit = 40): Promise<{ items: D
   );
 }
 
+export async function fetchCapabilityGapEvents(limit = 100): Promise<{ items: CapabilityGapEventRecord[] }> {
+  return request<{ items: CapabilityGapEventRecord[] }>(
+    `/api/v1/improvement/capability-gaps?limit=${Math.max(1, Math.min(limit, 500))}`,
+  );
+}
+
+export async function fetchRepairCandidates(limit = 60): Promise<{ items: RepairCandidateRecord[] }> {
+  return request<{ items: RepairCandidateRecord[] }>(
+    `/api/v1/improvement/repair-candidates?limit=${Math.max(1, Math.min(limit, 300))}`,
+  );
+}
+
+export async function updateRepairCandidateValidation(
+  candidateId: string,
+  input: {
+    status: RepairCandidateRecord["validationStatus"];
+    summary?: string;
+  },
+): Promise<RepairCandidateRecord> {
+  return request<RepairCandidateRecord>(`/api/v1/improvement/repair-candidates/${encodeURIComponent(candidateId)}/validation`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function fetchImprovementReplayRun(runId: string): Promise<{
   run: DecisionReplayRunRecord;
   items: DecisionReplayItemRecord[];
@@ -2196,6 +2225,8 @@ export async function draftReplayOverride(
   runId: string,
   input: {
     overrides: ReplayOverrideDraft["overrides"];
+    capabilityGapEventId?: string;
+    repairCandidateId?: string;
   },
 ): Promise<ReplayOverrideDraft> {
   return request<ReplayOverrideDraft>(`/api/v1/replay/runs/${encodeURIComponent(runId)}/draft`, {
@@ -2208,6 +2239,8 @@ export async function executeReplayOverride(
   runId: string,
   input: {
     overrides: ReplayOverrideDraft["overrides"];
+    capabilityGapEventId?: string;
+    repairCandidateId?: string;
   },
 ): Promise<ReplayOverrideDraft> {
   return request<ReplayOverrideDraft>(`/api/v1/replay/runs/${encodeURIComponent(runId)}/execute`, {
@@ -2601,6 +2634,20 @@ export async function invokeTool(input: {
 
 export async function commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>> {
   return request<ToolInvokeResult | Record<string, unknown>>("/api/v1/comms/send", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+  return request<ToolInvokeResult | Record<string, unknown>>("/api/v1/comms/react", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function commsUnsend(input: ChannelUnsendInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+  return request<ToolInvokeResult | Record<string, unknown>>("/api/v1/comms/unsend", {
     method: "POST",
     body: JSON.stringify(input),
   });

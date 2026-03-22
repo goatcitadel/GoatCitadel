@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  commsReact,
   commsSend,
+  commsUnsend,
   createIntegrationConnection,
   disableIntegrationPlugin,
   deleteIntegrationConnection,
@@ -9,6 +11,7 @@ import {
   fetchIntegrationCatalog,
   fetchIntegrationConnections,
   fetchConnectorRecords,
+  fetchSettings,
   fetchIntegrationFormSchema,
   fetchIntegrationPlugins,
   fetchObsidianIntegrationStatus,
@@ -17,15 +20,17 @@ import {
   fetchIntegrationConnectionDiagnostics,
   searchObsidianNotes,
   testObsidianIntegration,
+  uploadChatAttachment,
   captureObsidianInboxEntry,
   updateIntegrationConnection,
   type IntegrationCatalogEntry,
   type IntegrationConnection,
   type ObsidianIntegrationStatus,
 } from "../api/client";
-import type { ConnectorRecord } from "@goatcitadel/contracts";
+import type { ChannelAttachmentInput, ChatAttachmentRecord, ConnectorRecord } from "@goatcitadel/contracts";
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { DataToolbar } from "../components/DataToolbar";
+import { FieldHelp } from "../components/FieldHelp";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
@@ -72,6 +77,8 @@ const KIND_DESCRIPTIONS: Record<Exclude<IntegrationKind, "all">, string> = {
   platform: "Connects platform-level services and APIs.",
 };
 
+const INTEGRATIONS_UPLOAD_SESSION_ID = "session:operator:integrations";
+
 export function IntegrationsPage() {
   const [catalog, setCatalog] = useState<IntegrationCatalogEntry[]>([]);
   const [connections, setConnections] = useState<IntegrationConnection[]>([]);
@@ -112,13 +119,27 @@ export function IntegrationsPage() {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [connectorDiagnosticsEnabled, setConnectorDiagnosticsEnabled] = useState(false);
   const [diagnosticsByConnectionId, setDiagnosticsByConnectionId] = useState<Record<string, Awaited<ReturnType<typeof fetchIntegrationConnectionDiagnostics>>>>({});
   const [selectedDiagnosticConnectionId, setSelectedDiagnosticConnectionId] = useState<string | null>(null);
   const [selectedChannelConnectionId, setSelectedChannelConnectionId] = useState("");
   const [channelTestTarget, setChannelTestTarget] = useState("");
   const [channelTestMessage, setChannelTestMessage] = useState("Operator test message from GoatCitadel Mission Control.");
+  const [channelAttachmentUrls, setChannelAttachmentUrls] = useState("");
+  const [channelAttachmentIdsText, setChannelAttachmentIdsText] = useState("");
+  const [uploadedChannelAttachments, setUploadedChannelAttachments] = useState<ChatAttachmentRecord[]>([]);
+  const [channelReplyToMessageId, setChannelReplyToMessageId] = useState("");
+  const [channelReplyToPartIndex, setChannelReplyToPartIndex] = useState("");
+  const [channelEffectId, setChannelEffectId] = useState("");
+  const [channelSubject, setChannelSubject] = useState("");
   const [channelTestResult, setChannelTestResult] = useState<string | null>(null);
   const [channelTestBusy, setChannelTestBusy] = useState(false);
+  const [channelUploadBusy, setChannelUploadBusy] = useState(false);
+  const [channelActionBusy, setChannelActionBusy] = useState<"react" | "unsend" | null>(null);
+  const [channelActionResult, setChannelActionResult] = useState<string | null>(null);
+  const [channelReactionMessageId, setChannelReactionMessageId] = useState("");
+  const [channelReactionEmoji, setChannelReactionEmoji] = useState("\ud83d\udc4d");
+  const [channelUnsendMessageId, setChannelUnsendMessageId] = useState("");
   const requestSeq = useRef(0);
   const createAction = useAction();
   const deleteAction = useAction();
@@ -138,8 +159,9 @@ export function IntegrationsPage() {
       fetchConnectorRecords("integration_connection"),
       fetchIntegrationPlugins(),
       fetchObsidianIntegrationStatus(),
+      fetchSettings(),
     ])
-      .then(([catalogRes, connectionRes, connectorRes, pluginRes, obsidianRes]) => {
+      .then(([catalogRes, connectionRes, connectorRes, pluginRes, obsidianRes, settings]) => {
         if (requestId !== requestSeq.current) {
           return;
         }
@@ -153,6 +175,7 @@ export function IntegrationsPage() {
         setObsidianVaultPath(obsidianRes.vaultPath);
         setObsidianMode(obsidianRes.mode);
         setObsidianAllowedSubpaths(obsidianRes.allowedSubpaths.join(", "));
+        setConnectorDiagnosticsEnabled(settings.features.connectorDiagnosticsV1Enabled);
 
         const hasCurrentSelection = selectedCatalogId
           ? nextCatalog.some((entry) => entry.catalogId === selectedCatalogId)
@@ -232,6 +255,7 @@ export function IntegrationsPage() {
     () => catalog.find((entry) => entry.catalogId === selectedCatalogId),
     [catalog, selectedCatalogId],
   );
+  const selectedCatalogIsRunnable = selectedCatalog?.maturity !== "planned";
 
   const catalogOptions = useMemo(
     () => catalog.map((entry) => ({
@@ -284,6 +308,10 @@ export function IntegrationsPage() {
   const selectedChannelConnection = useMemo(
     () => channelConnections.find((connection) => connection.connectionId === selectedChannelConnectionId) ?? null,
     [channelConnections, selectedChannelConnectionId],
+  );
+  const selectedChannelConnector = useMemo(
+    () => (selectedChannelConnection ? connectorBySourceId.get(selectedChannelConnection.connectionId) : undefined),
+    [connectorBySourceId, selectedChannelConnection],
   );
 
   const effectiveConfig = useMemo(() => {
@@ -355,6 +383,7 @@ export function IntegrationsPage() {
     }
     setChannelTestTarget(guessDefaultChannelTarget(selectedChannelConnection));
     setChannelTestResult(null);
+    setChannelActionResult(null);
   }, [selectedChannelConnection]);
 
   const onCreate = async () => {
@@ -364,6 +393,10 @@ export function IntegrationsPage() {
     }
     if (!selectedCatalogId) {
       setError("Select a catalog entry first.");
+      return;
+    }
+    if (selectedCatalog?.maturity === "planned") {
+      setError("This catalog entry is roadmap-only right now. Pick a runnable integration before creating a connection.");
       return;
     }
     let parsedConfig: Record<string, unknown>;
@@ -417,6 +450,10 @@ export function IntegrationsPage() {
   };
 
   const onRunDiagnostics = async (connectionId: string) => {
+    if (!connectorDiagnosticsEnabled) {
+      setError("Connector diagnostics are disabled in this runtime.");
+      return;
+    }
     setPluginBusyId(`diag:${connectionId}`);
     try {
       const report = await fetchIntegrationConnectionDiagnostics(connectionId);
@@ -502,10 +539,26 @@ export function IntegrationsPage() {
     setChannelTestBusy(true);
     setChannelTestResult(null);
     try {
+      const attachments = parseAttachmentUrlInputs(channelAttachmentUrls);
+      const uploadedAttachmentIds = parseAttachmentIdInputs(channelAttachmentIdsText);
+      for (const attachment of uploadedChannelAttachments) {
+        if (!uploadedAttachmentIds.includes(attachment.attachmentId)) {
+          uploadedAttachmentIds.push(attachment.attachmentId);
+        }
+      }
+      const replyToPartIndex = channelReplyToPartIndex.trim()
+        ? Number.parseInt(channelReplyToPartIndex.trim(), 10)
+        : undefined;
       const result = await commsSend({
         connectionId: selectedChannelConnection.connectionId,
         target,
         message,
+        attachments,
+        attachmentIds: uploadedAttachmentIds.length > 0 ? uploadedAttachmentIds : undefined,
+        replyToMessageId: channelReplyToMessageId.trim() || undefined,
+        replyToPartIndex: Number.isFinite(replyToPartIndex) ? replyToPartIndex : undefined,
+        effectId: channelEffectId.trim() || undefined,
+        subject: channelSubject.trim() || undefined,
       });
       const statusText = typeof result === "object" && result && "status" in result
         ? String((result as { status?: unknown }).status ?? "sent")
@@ -523,6 +576,116 @@ export function IntegrationsPage() {
       setError((err as Error).message);
     } finally {
       setChannelTestBusy(false);
+    }
+  };
+
+  const onReactChannelTest = async () => {
+    if (!selectedChannelConnection || !selectedChannelConnector) {
+      setError("Choose a channel connection first.");
+      return;
+    }
+    if (!connectorSupportsDeliveryAction(selectedChannelConnector, "channel.react")) {
+      setError("This channel connection does not support reactions.");
+      return;
+    }
+    const messageId = channelReactionMessageId.trim();
+    const emoji = channelReactionEmoji.trim();
+    const target = channelTestTarget.trim();
+    if (!messageId) {
+      setError("Enter a provider message id to react to.");
+      return;
+    }
+    if (!emoji) {
+      setError("Enter a reaction emoji.");
+      return;
+    }
+    if (!target && requiresExplicitChannelTarget(selectedChannelConnection)) {
+      setError("Enter a destination target or configure a default one.");
+      return;
+    }
+    setChannelActionBusy("react");
+    setChannelActionResult(null);
+    try {
+      const result = await commsReact({
+        connectionId: selectedChannelConnection.connectionId,
+        target,
+        messageId,
+        reaction: emoji,
+      });
+      const statusText = typeof result === "object" && result && "status" in result
+        ? String((result as { status?: unknown }).status ?? "reacted")
+        : "reacted";
+      setChannelActionResult(`Reaction request completed with status ${statusText}.`);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setChannelActionBusy(null);
+    }
+  };
+
+  const onUploadChannelAttachments = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) {
+      return;
+    }
+    setChannelUploadBusy(true);
+    try {
+      const uploaded: ChatAttachmentRecord[] = [];
+      for (const file of Array.from(fileList)) {
+        uploaded.push(await uploadChatAttachment({
+          sessionId: INTEGRATIONS_UPLOAD_SESSION_ID,
+          file,
+        }));
+      }
+      setUploadedChannelAttachments((current) => dedupeUploadedAttachments([...current, ...uploaded]));
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setChannelUploadBusy(false);
+    }
+  };
+
+  const onRemoveUploadedChannelAttachment = (attachmentId: string) => {
+    setUploadedChannelAttachments((current) => current.filter((item) => item.attachmentId !== attachmentId));
+  };
+
+  const onUnsendChannelTest = async () => {
+    if (!selectedChannelConnection || !selectedChannelConnector) {
+      setError("Choose a channel connection first.");
+      return;
+    }
+    if (!connectorSupportsDeliveryAction(selectedChannelConnector, "channel.unsend")) {
+      setError("This channel connection does not support unsend.");
+      return;
+    }
+    const messageId = channelUnsendMessageId.trim();
+    const target = channelTestTarget.trim();
+    if (!messageId) {
+      setError("Enter a provider message id to unsend.");
+      return;
+    }
+    if (!target && requiresExplicitChannelTarget(selectedChannelConnection)) {
+      setError("Enter a destination target or configure a default one.");
+      return;
+    }
+    setChannelActionBusy("unsend");
+    setChannelActionResult(null);
+    try {
+      const result = await commsUnsend({
+        connectionId: selectedChannelConnection.connectionId,
+        target,
+        messageId,
+      });
+      const statusText = typeof result === "object" && result && "status" in result
+        ? String((result as { status?: unknown }).status ?? "unsent")
+        : "unsent";
+      setChannelActionResult(`Unsend request completed with status ${statusText}.`);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setChannelActionBusy(null);
     }
   };
 
@@ -929,6 +1092,11 @@ export function IntegrationsPage() {
                   Kind: {formatKind(selectedCatalog.kind)}
                 </p>
                 <p className="office-subtitle">{describeMaturity(selectedCatalog.maturity)}</p>
+                {selectedCatalog.maturity === "planned" ? (
+                  <FieldHelp>
+                    This catalog entry is roadmap-only. It stays visible for planning, but GoatCitadel cannot create a runnable connection from it in the current runtime.
+                  </FieldHelp>
+                ) : null}
                 {selectedCatalog.docsUrl ? (
                   <p className="office-subtitle">
                     <a href={selectedCatalog.docsUrl} target="_blank" rel="noreferrer">Open integration docs</a>
@@ -969,7 +1137,11 @@ export function IntegrationsPage() {
                 />
               </>
             )}
-            <button type="button" onClick={() => void onCreate()} disabled={blockCreate || createAction.pending}>
+            <button
+              type="button"
+              onClick={() => void onCreate()}
+              disabled={blockCreate || createAction.pending || !selectedCatalogIsRunnable}
+            >
               {createAction.pending ? "Saving..." : "Save Connection"}
             </button>
           </>
@@ -1037,13 +1209,17 @@ export function IntegrationsPage() {
                   <button type="button" onClick={() => void onToggle(connection)}>
                     {connection.enabled ? "Pause" : "Enable"}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void onRunDiagnostics(connection.connectionId)}
-                    disabled={pluginBusyId === `diag:${connection.connectionId}`}
-                  >
-                    {pluginBusyId === `diag:${connection.connectionId}` ? "Running..." : "Diagnose"}
-                  </button>
+                  {connectorDiagnosticsEnabled ? (
+                    <button
+                      type="button"
+                      onClick={() => void onRunDiagnostics(connection.connectionId)}
+                      disabled={pluginBusyId === `diag:${connection.connectionId}`}
+                    >
+                      {pluginBusyId === `diag:${connection.connectionId}` ? "Running..." : "Diagnose"}
+                    </button>
+                  ) : (
+                    <span className="table-subtext">Diagnostics disabled</span>
+                  )}
                   <button type="button"
                     className="danger"
                     onClick={() => setDeleteTarget(connection)}
@@ -1056,7 +1232,7 @@ export function IntegrationsPage() {
             ))}
           </tbody>
         </table>
-        {selectedDiagnosticConnectionId && selectedDiagnostics ? (
+        {connectorDiagnosticsEnabled && selectedDiagnosticConnectionId && selectedDiagnostics ? (
           <details open style={{ marginTop: 12 }}>
             <summary>
               Diagnostics for {connections.find((item) => item.connectionId === selectedDiagnosticConnectionId)?.label ?? selectedDiagnosticConnectionId}
@@ -1082,6 +1258,11 @@ export function IntegrationsPage() {
               </p>
             ) : null}
           </details>
+        ) : null}
+        {!connectorDiagnosticsEnabled ? (
+          <FieldHelp>
+            Connector diagnostics are disabled in this runtime. Status and configuration still render, but active diagnosis runs are intentionally hidden until the feature is enabled.
+          </FieldHelp>
         ) : null}
       </Panel>
 
@@ -1116,13 +1297,49 @@ export function IntegrationsPage() {
               </button>
             </div>
             {selectedChannelConnection ? (
-              <p className="office-subtitle">
-                Adapter: {selectedChannelConnection.key}
-                {" · "}
-                Status: {selectedChannelConnection.status}
-                {" · "}
-                Suggested default target: {guessDefaultChannelTarget(selectedChannelConnection) || "none configured"}
-              </p>
+              <>
+                <p className="office-subtitle">
+                  Adapter: {selectedChannelConnection.key}
+                  {" · "}
+                  Status: {selectedChannelConnection.status}
+                  {" · "}
+                  Suggested default target: {guessDefaultChannelTarget(selectedChannelConnection) || "none configured"}
+                </p>
+                {selectedChannelConnector ? (
+                  <div className="card" style={{ marginBottom: 12 }}>
+                    <p>
+                      <strong>Connector readiness</strong>
+                      {" · "}
+                      {connectorSetupReady(selectedChannelConnector) ? "ready" : "needs attention"}
+                    </p>
+                    <p className="office-subtitle">
+                      Supported actions: {formatConnectorList(getConnectorSupportedDeliveryActions(selectedChannelConnector))}
+                      {" | "}
+                      Attachment sources: {formatConnectorList(getConnectorSupportedAttachmentSources(selectedChannelConnector))}
+                    </p>
+                    {getConnectorSupportNotes(selectedChannelConnector).length > 0 ? (
+                      <>
+                        <p className="office-subtitle"><strong>Support notes</strong></p>
+                        <ul className="improvement-simple-list">
+                          {getConnectorSupportNotes(selectedChannelConnector).map((note) => (
+                            <li key={note}>{note}</li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+                    {getConnectorSetupDiagnostics(selectedChannelConnector).length > 0 ? (
+                      <>
+                        <p className="office-subtitle"><strong>Setup diagnostics</strong></p>
+                        <ul className="improvement-simple-list">
+                          {getConnectorSetupDiagnostics(selectedChannelConnector).map((diagnostic) => (
+                            <li key={diagnostic}>{diagnostic}</li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+              </>
             ) : null}
             <label htmlFor="channelTestMessage">Message</label>
             <textarea
@@ -1132,7 +1349,147 @@ export function IntegrationsPage() {
               value={channelTestMessage}
               onChange={(event) => setChannelTestMessage(event.target.value)}
             />
+            <div className="controls-row" style={{ marginTop: 12 }}>
+              <label htmlFor="channelSubject">Subject</label>
+              <input
+                id="channelSubject"
+                value={channelSubject}
+                onChange={(event) => setChannelSubject(event.target.value)}
+                placeholder="Optional subject (provider-specific)"
+              />
+              <label htmlFor="channelEffectId">Effect</label>
+              <input
+                id="channelEffectId"
+                value={channelEffectId}
+                onChange={(event) => setChannelEffectId(event.target.value)}
+                placeholder="Optional effect id"
+              />
+            </div>
+            <div className="controls-row">
+              <label htmlFor="channelReplyToMessageId">Reply to message id</label>
+              <input
+                id="channelReplyToMessageId"
+                value={channelReplyToMessageId}
+                onChange={(event) => setChannelReplyToMessageId(event.target.value)}
+                placeholder="Optional provider message id"
+              />
+              <label htmlFor="channelReplyToPartIndex">Reply part index</label>
+              <input
+                id="channelReplyToPartIndex"
+                value={channelReplyToPartIndex}
+                onChange={(event) => setChannelReplyToPartIndex(event.target.value)}
+                placeholder="0"
+              />
+            </div>
+            <label htmlFor="channelAttachmentUrls">Attachment URLs</label>
+            <textarea
+              id="channelAttachmentUrls"
+              rows={3}
+              className="full-textarea"
+              value={channelAttachmentUrls}
+              onChange={(event) => setChannelAttachmentUrls(event.target.value)}
+              placeholder="One attachment URL per line"
+            />
+            <label htmlFor="channelAttachmentIdsText">Uploaded attachment ids</label>
+            <textarea
+              id="channelAttachmentIdsText"
+              rows={2}
+              className="full-textarea"
+              value={channelAttachmentIdsText}
+              onChange={(event) => setChannelAttachmentIdsText(event.target.value)}
+              placeholder="Optional attachment ids, one per line"
+            />
+            <div className="controls-row">
+              <label htmlFor="channelAttachmentUpload">Upload attachment</label>
+              <input
+                id="channelAttachmentUpload"
+                type="file"
+                multiple
+                onChange={(event) => {
+                  void onUploadChannelAttachments(event.target.files);
+                  event.currentTarget.value = "";
+                }}
+                disabled={channelUploadBusy}
+              />
+              <span className="table-subtext">
+                {channelUploadBusy ? "Uploading..." : "Uploads are stored as chat attachments and forwarded by id."}
+              </span>
+            </div>
+            {uploadedChannelAttachments.length > 0 ? (
+              <ul className="improvement-simple-list">
+                {uploadedChannelAttachments.map((attachment) => (
+                  <li key={attachment.attachmentId}>
+                    <strong>{attachment.fileName}</strong>
+                    {" · "}
+                    <code>{attachment.attachmentId}</code>
+                    {" · "}
+                    {attachment.mimeType}
+                    {" "}
+                    <button type="button" onClick={() => onRemoveUploadedChannelAttachment(attachment.attachmentId)}>
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
             {channelTestResult ? <p className="office-subtitle">{channelTestResult}</p> : null}
+            {selectedChannelConnector ? (
+              <div className="card" style={{ marginTop: 12 }}>
+                <p><strong>Interactive action bench</strong></p>
+                <p className="office-subtitle">
+                  Use provider message ids from a successful send or channel logs. Controls stay disabled unless the selected connector advertises that action.
+                </p>
+                <p className="table-subtext">
+                  Reaction format varies by provider: Slack and Mattermost expect emoji names, Discord and Matrix accept raw emoji, and iMessage uses BlueBubbles reaction keywords such as `love`.
+                </p>
+                <div className="controls-row">
+                  <label htmlFor="channelReactionMessageId">React message id</label>
+                  <input
+                    id="channelReactionMessageId"
+                    value={channelReactionMessageId}
+                    onChange={(event) => setChannelReactionMessageId(event.target.value)}
+                    placeholder="provider message id"
+                  />
+                  <label htmlFor="channelReactionEmoji">Reaction</label>
+                  <input
+                    id="channelReactionEmoji"
+                    value={channelReactionEmoji}
+                    onChange={(event) => setChannelReactionEmoji(event.target.value)}
+                    placeholder="emoji"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void onReactChannelTest()}
+                    disabled={channelActionBusy !== null || !connectorSupportsDeliveryAction(selectedChannelConnector, "channel.react")}
+                  >
+                    {channelActionBusy === "react" ? "Reacting..." : "Send reaction"}
+                  </button>
+                </div>
+                <div className="controls-row">
+                  <label htmlFor="channelUnsendMessageId">Unsend message id</label>
+                  <input
+                    id="channelUnsendMessageId"
+                    value={channelUnsendMessageId}
+                    onChange={(event) => setChannelUnsendMessageId(event.target.value)}
+                    placeholder="provider message id"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void onUnsendChannelTest()}
+                    disabled={channelActionBusy !== null || !connectorSupportsDeliveryAction(selectedChannelConnector, "channel.unsend")}
+                  >
+                    {channelActionBusy === "unsend" ? "Unsending..." : "Unsend message"}
+                  </button>
+                </div>
+                {!connectorSupportsDeliveryAction(selectedChannelConnector, "channel.react")
+                  && !connectorSupportsDeliveryAction(selectedChannelConnector, "channel.unsend") ? (
+                  <p className="table-subtext">
+                    This connector is send-only right now. The backend will keep rejecting interactive actions until the underlying provider bridge supports them.
+                  </p>
+                ) : null}
+                {channelActionResult ? <p className="office-subtitle">{channelActionResult}</p> : null}
+              </div>
+            ) : null}
           </>
         )}
       </Panel>
@@ -1382,7 +1739,13 @@ function guessDefaultChannelTarget(connection: IntegrationConnection): string {
     config.defaultChannelId,
     config.defaultChatId,
     config.defaultRoomId,
+    config.defaultConversationId,
     config.defaultThreadKey,
+    config.defaultRecipient,
+    config.defaultHandle,
+    config.defaultRecipientId,
+    config.defaultUserId,
+    config.defaultGroupId,
     config.defaultTarget,
     config.target,
   ];
@@ -1396,6 +1759,79 @@ function guessDefaultChannelTarget(connection: IntegrationConnection): string {
 
 function requiresExplicitChannelTarget(connection: IntegrationConnection): boolean {
   return !["teams", "google-chat"].includes(connection.key);
+}
+
+export function getConnectorMetadataStringList(connector: ConnectorRecord | undefined, key: string): string[] {
+  const rawValue = connector?.metadata?.[key];
+  if (!Array.isArray(rawValue)) {
+    return [];
+  }
+  return rawValue.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+export function getConnectorSupportedDeliveryActions(connector: ConnectorRecord | undefined): string[] {
+  return getConnectorMetadataStringList(connector, "supportedDeliveryActions");
+}
+
+export function getConnectorSupportedAttachmentSources(connector: ConnectorRecord | undefined): string[] {
+  return getConnectorMetadataStringList(connector, "supportedAttachmentSources");
+}
+
+export function getConnectorSupportNotes(connector: ConnectorRecord | undefined): string[] {
+  return getConnectorMetadataStringList(connector, "channelSupportNotes");
+}
+
+export function getConnectorSetupDiagnostics(connector: ConnectorRecord | undefined): string[] {
+  return getConnectorMetadataStringList(connector, "setupDiagnostics");
+}
+
+export function connectorSupportsDeliveryAction(connector: ConnectorRecord | undefined, action: string): boolean {
+  return getConnectorSupportedDeliveryActions(connector).includes(action);
+}
+
+export function connectorSetupReady(connector: ConnectorRecord | undefined): boolean {
+  const explicit = connector?.metadata?.setupReady;
+  if (typeof explicit === "boolean") {
+    return explicit;
+  }
+  return getConnectorSetupDiagnostics(connector).length === 0;
+}
+
+function formatConnectorList(values: string[]): string {
+  return values.length > 0 ? values.join(", ") : "none advertised";
+}
+
+export function parseAttachmentUrlInputs(value: string): ChannelAttachmentInput[] {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((url) => ({ url }));
+}
+
+export function parseAttachmentIdInputs(value: string): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const item of value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean)) {
+    if (!seen.has(item)) {
+      seen.add(item);
+      ordered.push(item);
+    }
+  }
+  return ordered;
+}
+
+function dedupeUploadedAttachments(items: ChatAttachmentRecord[]): ChatAttachmentRecord[] {
+  const seen = new Set<string>();
+  const ordered: ChatAttachmentRecord[] = [];
+  for (const item of items) {
+    if (seen.has(item.attachmentId)) {
+      continue;
+    }
+    seen.add(item.attachmentId);
+    ordered.push(item);
+  }
+  return ordered;
 }
 
 function renderConnectorApprovalDeliverySummary(
@@ -1412,12 +1848,19 @@ function renderConnectorApprovalDeliverySummary(
     ? connector.metadata.approvalDeliveryReason
     : undefined;
   const ready = connector?.capabilities.some((item) => item.id === "approvals" && item.enabled) ?? false;
+  const supportedActions = getConnectorSupportedDeliveryActions(connector);
+  const setupState = connectorSetupReady(connector) ? "setup ready" : "setup attention";
 
   return (
     <>
       {ready ? "ready" : "not ready"}
       <div className="table-subtext">
         {mode ? `${mode}${target ? ` -> ${target}` : ""}` : "no delivery mode"}
+      </div>
+      <div className="table-subtext">
+        {supportedActions.length > 0 ? `actions: ${supportedActions.join(", ")}` : "actions: channel.send"}
+        {" · "}
+        {setupState}
       </div>
       <div className="table-subtext">
         {reason ?? "No approval delivery reason available."}

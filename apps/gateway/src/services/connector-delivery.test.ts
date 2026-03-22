@@ -17,6 +17,8 @@ describe("dispatchConnectorDelivery", () => {
       policyReason: "allowed",
       result: { deliveryId: "delivery-1", status: "sent" },
     }));
+    const commsReact = vi.fn();
+    const commsUnsend = vi.fn();
     const invokeMcpTool = vi.fn(async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
       ok: true,
       output: {},
@@ -31,6 +33,8 @@ describe("dispatchConnectorDelivery", () => {
       }),
       {
         commsSend,
+        commsReact,
+        commsUnsend,
         invokeMcpTool,
         publishRealtime,
       },
@@ -52,8 +56,99 @@ describe("dispatchConnectorDelivery", () => {
     });
   });
 
+  it("normalizes Discord connector targets before dispatch", async () => {
+    const commsSend = vi.fn(async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
+      outcome: "executed",
+      auditEventId: "audit-1",
+      policyReason: "allowed",
+      result: { deliveryId: "delivery-1", status: "sent" },
+    }));
+
+    await dispatchConnectorDelivery(
+      createConnector("integration_connection", "integration:discord-1", "discord-1", ["outbound_messages"], {
+        key: "discord",
+      }),
+      createPayload("channel.send", {
+        target: "<#1234567890>",
+        message: "hello from durable delivery",
+      }),
+      {
+        commsSend,
+        commsReact: vi.fn(),
+        commsUnsend: vi.fn(),
+        invokeMcpTool: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+    );
+
+    expect(commsSend).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: "discord-1",
+      target: "channel:1234567890",
+    }));
+  });
+
+  it("normalizes WhatsApp direct targets before dispatch", async () => {
+    const commsSend = vi.fn(async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
+      outcome: "executed",
+      auditEventId: "audit-1",
+      policyReason: "allowed",
+      result: { deliveryId: "delivery-1", status: "sent" },
+    }));
+
+    await dispatchConnectorDelivery(
+      createConnector("integration_connection", "integration:whatsapp-1", "whatsapp-1", ["outbound_messages"], {
+        key: "whatsapp",
+      }),
+      createPayload("channel.send", {
+        target: "whatsapp:15551234567@s.whatsapp.net",
+        message: "hello from durable delivery",
+      }),
+      {
+        commsSend,
+        commsReact: vi.fn(),
+        commsUnsend: vi.fn(),
+        invokeMcpTool: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+    );
+
+    expect(commsSend).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: "whatsapp-1",
+      target: "+15551234567",
+    }));
+  });
+
+  it("rejects invalid WhatsApp JID-shaped targets", async () => {
+    const commsSend = vi.fn(async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
+      outcome: "executed",
+      auditEventId: "audit-1",
+      policyReason: "allowed",
+      result: { deliveryId: "delivery-1", status: "sent" },
+    }));
+
+    await expect(() =>
+      dispatchConnectorDelivery(
+        createConnector("integration_connection", "integration:whatsapp-1", "whatsapp-1", ["outbound_messages"], {
+          key: "whatsapp",
+        }),
+        createPayload("channel.send", {
+          target: "group:120363123456789@g.us",
+          message: "blocked",
+        }),
+        {
+          commsSend,
+          commsReact: vi.fn(),
+          commsUnsend: vi.fn(),
+          invokeMcpTool: vi.fn(),
+          publishRealtime: vi.fn(),
+        },
+      )).rejects.toThrow("payload.target must be a WhatsApp E.164 number");
+  });
+
   it("invokes MCP tools through MCP connectors", async () => {
     const commsSend = vi.fn(async (_input: ChannelSendInput) => ({}));
+    const commsReact = vi.fn(async () => ({}));
+    const commsUnsend = vi.fn(async () => ({}));
     const invokeMcpTool = vi.fn(async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
       ok: true,
       output: { toolResult: "ok" },
@@ -69,6 +164,8 @@ describe("dispatchConnectorDelivery", () => {
       }),
       {
         commsSend,
+        commsReact,
+        commsUnsend,
         invokeMcpTool,
         publishRealtime,
       },
@@ -91,6 +188,8 @@ describe("dispatchConnectorDelivery", () => {
 
   it("emits realtime events for browser connectors", async () => {
     const commsSend = vi.fn(async (_input: ChannelSendInput) => ({}));
+    const commsReact = vi.fn(async () => ({}));
+    const commsUnsend = vi.fn(async () => ({}));
     const invokeMcpTool = vi.fn(async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
       ok: true,
       output: {},
@@ -106,6 +205,8 @@ describe("dispatchConnectorDelivery", () => {
       }),
       {
         commsSend,
+        commsReact,
+        commsUnsend,
         invokeMcpTool,
         publishRealtime,
       },
@@ -124,6 +225,8 @@ describe("dispatchConnectorDelivery", () => {
 
   it("rejects action and capability mismatches", async () => {
     const commsSend = vi.fn(async (_input: ChannelSendInput) => ({}));
+    const commsReact = vi.fn(async () => ({}));
+    const commsUnsend = vi.fn(async () => ({}));
     const invokeMcpTool = vi.fn(async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
       ok: true,
       output: {},
@@ -139,10 +242,88 @@ describe("dispatchConnectorDelivery", () => {
         }),
         {
           commsSend,
+          commsReact,
+          commsUnsend,
           invokeMcpTool,
           publishRealtime,
         },
       )).rejects.toThrow("capability outbound_messages is unavailable");
+  });
+
+  it("routes interactive channel reactions through integration connectors", async () => {
+    const commsReact = vi.fn(async () => ({
+      outcome: "executed",
+      auditEventId: "audit-react",
+      policyReason: "allowed",
+      result: { deliveryId: "delivery-react", status: "sent" },
+    } satisfies ToolInvokeResult));
+
+    const result = await dispatchConnectorDelivery(
+      createConnector("integration_connection", "integration:imessage-1", "imessage-1", ["interactive_actions"], {
+        key: "imessage",
+      }),
+      createPayload("channel.react", {
+        target: "imessage:+15551234567",
+        messageId: "msg-123",
+        reaction: "love",
+        partIndex: 1,
+      }),
+      {
+        commsSend: vi.fn(),
+        commsReact,
+        commsUnsend: vi.fn(),
+        invokeMcpTool: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+    );
+
+    expect(commsReact).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: "imessage-1",
+      target: "imessage:+15551234567",
+      messageId: "msg-123",
+      reaction: "love",
+      partIndex: 1,
+    }));
+    expect(result).toMatchObject({
+      capabilityId: "interactive_actions",
+      dispatchKind: "integration_channel_action",
+    });
+  });
+
+  it("routes interactive channel unsend requests through integration connectors", async () => {
+    const commsUnsend = vi.fn(async () => ({
+      outcome: "executed",
+      auditEventId: "audit-unsend",
+      policyReason: "allowed",
+      result: { deliveryId: "delivery-unsend", status: "sent" },
+    } satisfies ToolInvokeResult));
+
+    const result = await dispatchConnectorDelivery(
+      createConnector("integration_connection", "integration:imessage-1", "imessage-1", ["interactive_actions"], {
+        key: "imessage",
+      }),
+      createPayload("channel.unsend", {
+        messageId: "msg-456",
+        partIndex: 0,
+      }),
+      {
+        commsSend: vi.fn(),
+        commsReact: vi.fn(),
+        commsUnsend,
+        invokeMcpTool: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+    );
+
+    expect(commsUnsend).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: "imessage-1",
+      messageId: "msg-456",
+      partIndex: 0,
+    }));
+    expect(result).toMatchObject({
+      capabilityId: "interactive_actions",
+      dispatchKind: "integration_channel_action",
+    });
   });
 });
 
@@ -151,6 +332,7 @@ function createConnector(
   connectorId: string,
   sourceId: string,
   enabledCapabilityIds: Array<ConnectorRecord["capabilities"][number]["id"]>,
+  metadata: ConnectorRecord["metadata"] = {},
 ): ConnectorRecord {
   return {
     connectorId,
@@ -163,7 +345,7 @@ function createConnector(
       enabled: true,
       version: "v1",
     })),
-    metadata: {},
+    metadata,
   };
 }
 

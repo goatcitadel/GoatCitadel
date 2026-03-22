@@ -1,12 +1,43 @@
+export interface ChannelAttachmentInput {
+  url?: string;
+  title?: string;
+  mimeType?: string;
+  dataBase64?: string;
+  attachmentId?: string;
+}
+
 export interface ChannelSendInput {
   connectionId: string;
   target: string;
   message: string;
-  attachments?: Array<{
-    url?: string;
-    title?: string;
-    mimeType?: string;
-  }>;
+  attachments?: ChannelAttachmentInput[];
+  attachmentIds?: string[];
+  replyToMessageId?: string;
+  replyToPartIndex?: number;
+  effectId?: string;
+  subject?: string;
+  sessionId?: string;
+  agentId?: string;
+  taskId?: string;
+}
+
+export interface ChannelReactInput {
+  connectionId: string;
+  messageId: string;
+  reaction: string;
+  target?: string;
+  partIndex?: number;
+  messageText?: string;
+  sessionId?: string;
+  agentId?: string;
+  taskId?: string;
+}
+
+export interface ChannelUnsendInput {
+  connectionId: string;
+  messageId: string;
+  target?: string;
+  partIndex?: number;
   sessionId?: string;
   agentId?: string;
   taskId?: string;

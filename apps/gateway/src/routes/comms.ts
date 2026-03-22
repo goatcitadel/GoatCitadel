@@ -1,15 +1,56 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
+const channelAttachmentSchema = z.object({
+  url: z.string().url().optional(),
+  title: z.string().optional(),
+  mimeType: z.string().optional(),
+  dataBase64: z.string().min(1).optional(),
+  attachmentId: z.string().uuid().optional(),
+});
+
 const channelSendSchema = z.object({
   connectionId: z.string().uuid(),
   target: z.string().min(1),
-  message: z.string().min(1),
-  attachments: z.array(z.object({
-    url: z.string().url().optional(),
-    title: z.string().optional(),
-    mimeType: z.string().optional(),
-  })).optional(),
+  message: z.string().default(""),
+  attachments: z.array(channelAttachmentSchema).optional(),
+  attachmentIds: z.array(z.string().uuid()).optional(),
+  replyToMessageId: z.string().min(1).optional(),
+  replyToPartIndex: z.number().int().min(0).optional(),
+  effectId: z.string().min(1).optional(),
+  subject: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
+  agentId: z.string().min(1).optional(),
+  taskId: z.string().min(1).optional(),
+}).superRefine((value, ctx) => {
+  const hasMessage = value.message.trim().length > 0;
+  const hasAttachments = (value.attachments?.length ?? 0) > 0 || (value.attachmentIds?.length ?? 0) > 0;
+  if (!hasMessage && !hasAttachments) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["message"],
+      message: "message or at least one attachment is required",
+    });
+  }
+});
+
+const channelReactSchema = z.object({
+  connectionId: z.string().uuid(),
+  messageId: z.string().min(1),
+  reaction: z.string().min(1),
+  target: z.string().min(1).optional(),
+  partIndex: z.number().int().min(0).optional(),
+  messageText: z.string().optional(),
+  sessionId: z.string().min(1).optional(),
+  agentId: z.string().min(1).optional(),
+  taskId: z.string().min(1).optional(),
+});
+
+const channelUnsendSchema = z.object({
+  connectionId: z.string().uuid(),
+  messageId: z.string().min(1),
+  target: z.string().min(1).optional(),
+  partIndex: z.number().int().min(0).optional(),
   sessionId: z.string().min(1).optional(),
   agentId: z.string().min(1).optional(),
   taskId: z.string().min(1).optional(),
@@ -69,6 +110,22 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send(await fastify.gateway.commsSend(parsed.data));
+  });
+
+  fastify.post("/api/v1/comms/react", async (request, reply) => {
+    const parsed = channelReactSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(await fastify.gateway.commsReact(parsed.data));
+  });
+
+  fastify.post("/api/v1/comms/unsend", async (request, reply) => {
+    const parsed = channelUnsendSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(await fastify.gateway.commsUnsend(parsed.data));
   });
 
   fastify.post("/api/v1/comms/gmail/read", async (request, reply) => {

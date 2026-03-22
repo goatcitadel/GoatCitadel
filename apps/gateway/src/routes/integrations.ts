@@ -1,5 +1,11 @@
+import { Readable } from "node:stream";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import {
+  deriveNextcloudTalkWebhookIdempotencyKey,
+  normalizeNextcloudTalkWebhookPayload,
+  verifyNextcloudTalkSignature,
+} from "../services/nextcloud-talk-webhook.js";
 
 const kindEnum = z.enum(["channel", "model_provider", "productivity", "automation", "platform"]);
 const CHANNEL_INBOUND_MAX_BYTES = 256 * 1024;
@@ -106,6 +112,10 @@ const obsidianInboxCaptureSchema = z.object({
   notes: z.string().optional(),
 });
 
+type NextcloudTalkWebhookRequest = {
+  nextcloudTalkRawBody?: Buffer;
+};
+
 export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/integrations/catalog", async (request, reply) => {
     const parsed = catalogQuerySchema.safeParse(request.query);
@@ -208,6 +218,134 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       } catch (error) {
         return reply.code(400).send({ error: (error as Error).message });
       }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/integrations/connections/:connectionId/nextcloud-talk/webhook",
+    {
+      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
+      preParsing: async (request, _reply, payload) => {
+        const rawBody = await readPayloadBuffer(payload);
+        (request as typeof request & NextcloudTalkWebhookRequest).nextcloudTalkRawBody = rawBody;
+        return Readable.from(rawBody);
+      },
+    },
+    async (request, reply) => {
+      const contentLength = parseContentLength(request.headers["content-length"]);
+      if (contentLength !== undefined && contentLength > CHANNEL_INBOUND_MAX_BYTES) {
+        return reply.code(413).send({
+          error: `Inbound channel payload too large. Max ${CHANNEL_INBOUND_MAX_BYTES} bytes.`,
+        });
+      }
+
+      const params = connectionParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
+
+      let connection;
+      try {
+        connection = fastify.gateway.getIntegrationConnection(params.data.connectionId);
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
+      }
+      if (connection.key !== "nextcloud-talk") {
+        return reply.code(400).send({ error: "Integration connection is not a Nextcloud Talk connector" });
+      }
+
+      const rawBody = (request as typeof request & NextcloudTalkWebhookRequest).nextcloudTalkRawBody;
+      if (!rawBody) {
+        return reply.code(400).send({ error: "Missing Nextcloud Talk raw request body" });
+      }
+
+      const secret = resolveNextcloudTalkSecret(connection.config);
+      if (!secret) {
+        return reply.code(400).send({ error: "Nextcloud Talk connection is missing a token/secret" });
+      }
+
+      const randomHeader = readHeaderValue(request.headers["x-nextcloud-talk-random"]);
+      const signatureHeader = readHeaderValue(request.headers["x-nextcloud-talk-signature"]);
+      const backendHeader = readHeaderValue(request.headers["x-nextcloud-talk-backend"]);
+      if (!verifyNextcloudTalkSignature(randomHeader, signatureHeader, rawBody, secret)) {
+        return reply.code(401).send({ error: "Invalid Nextcloud Talk webhook signature" });
+      }
+
+      const normalized = normalizeNextcloudTalkWebhookPayload({
+        connectionId: params.data.connectionId,
+        payload: request.body,
+        backendUrl: backendHeader,
+      });
+      if (normalized.kind === "ignore") {
+        return reply.send({
+          accepted: true,
+          ignored: true,
+          eventType: normalized.eventType,
+          reason: normalized.reason,
+        });
+      }
+
+      if (normalized.kind === "activity") {
+        fastify.gateway.recordDevDiagnostic({
+          level: "info",
+          category: "channels",
+          event: "nextcloud-talk.webhook.activity",
+          message: `Processed Nextcloud Talk ${normalized.eventType} webhook`,
+          context: {
+            connectionId: params.data.connectionId,
+            eventType: normalized.eventType,
+            room: normalized.room,
+            actorId: normalized.actorId,
+            backendUrl: normalized.backendUrl,
+            ...normalized.metadata,
+          },
+        });
+        return reply.send({
+          accepted: true,
+          handled: true,
+          eventType: normalized.eventType,
+        });
+      }
+
+      const idempotencyKey = deriveNextcloudTalkWebhookIdempotencyKey(params.data.connectionId, rawBody);
+      const ingestResult = await fastify.gateway.ingestChannelMessage("nextcloud-talk", idempotencyKey, {
+        eventId: normalized.eventId,
+        account: normalized.account,
+        room: normalized.room,
+        actorId: normalized.actorId,
+        actorType: normalized.actorType,
+        content: normalized.content,
+        displayName: normalized.displayName,
+        metadata: {
+          backendUrl: normalized.backendUrl,
+          ...normalized.metadata,
+        },
+      });
+      fastify.gateway.setChatSessionBinding({
+        sessionId: ingestResult.session.sessionId,
+        transport: "integration",
+        connectionId: params.data.connectionId,
+        target: normalized.room,
+        writable: true,
+      });
+
+      let responseTurnId: string | undefined;
+      if (!ingestResult.deduped) {
+        const response = await fastify.gateway.respondToExistingChatMessage(
+          ingestResult.session.sessionId,
+          normalized.eventId,
+        );
+        responseTurnId = response.turnId;
+      }
+
+      return reply.send({
+        accepted: true,
+        deduped: ingestResult.deduped,
+        replied: !ingestResult.deduped,
+        sessionId: ingestResult.session.sessionId,
+        turnId: responseTurnId,
+        eventType: normalized.eventType,
+      });
     },
   );
 
@@ -333,7 +471,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.runIntegrationConnectionDiagnostics(params.data.connectionId));
+      return reply.send(await fastify.gateway.runIntegrationConnectionDiagnostics(params.data.connectionId));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown integration connection");
@@ -351,4 +489,39 @@ function parseContentLength(value: string | string[] | undefined): number | unde
     return undefined;
   }
   return parsed;
+}
+
+async function readPayloadBuffer(payload: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of payload) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+function readHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (!value || Array.isArray(value)) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveNextcloudTalkSecret(config: Record<string, unknown>): string | undefined {
+  return readConfigSecret(config, "token", "tokenEnv")
+    ?? readConfigSecret(config, "botSecret", "botSecretEnv")
+    ?? readConfigSecret(config, "secret", "secretEnv");
+}
+
+function readConfigSecret(config: Record<string, unknown>, key: string, envKey: string): string | undefined {
+  const direct = config[key];
+  if (typeof direct === "string" && direct.trim().length > 0) {
+    return direct.trim();
+  }
+  const envName = config[envKey];
+  if (typeof envName !== "string" || envName.trim().length === 0) {
+    return undefined;
+  }
+  const resolved = process.env[envName.trim()];
+  return resolved?.trim() ? resolved.trim() : undefined;
 }
