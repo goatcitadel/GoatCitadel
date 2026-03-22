@@ -478,7 +478,7 @@ export interface ChatCapabilityUpgradeSuggestion {
   sourceProvider?: SkillSourceProvider | "mcp_template";
   sourceRef?: string;
   riskLevel?: "low" | "medium" | "high";
-  recommendedAction: "enable_skill" | "install_skill_disabled" | "add_mcp_template" | "switch_tool_profile";
+  recommendedAction: "enable_skill" | "install_skill_disabled" | "install_skill_enable" | "add_mcp_template" | "switch_tool_profile";
   candidateId?: string;
   requiresUserApproval: true;
 }

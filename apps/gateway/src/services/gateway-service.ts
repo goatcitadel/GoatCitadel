@@ -6167,6 +6167,7 @@ export class GatewayService {
         listSkills: () => this.listSkills(),
         resolveSkillActivation: (request) => this.resolveSkillActivation(request),
         listSkillSources: (query, limit) => this.listSkillSources(query, limit),
+        lookupSkillSources: (queryOrUrl, limit) => this.lookupSkillSources(queryOrUrl, limit),
         listMcpTemplates: () => this.listMcpTemplates(),
         listMcpTemplateDiscovery: () => {
           try {

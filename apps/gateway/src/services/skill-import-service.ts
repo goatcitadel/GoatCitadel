@@ -44,6 +44,14 @@ interface SkillInstallInput extends SkillImportInput {
   confirmHighRisk?: boolean;
 }
 
+const HOSTED_SKILL_BUNDLE_FILES = [
+  { remoteName: "skill.md", localName: "SKILL.md", required: true },
+  { remoteName: "heartbeat.md", localName: "HEARTBEAT.md", required: false },
+  { remoteName: "messaging.md", localName: "MESSAGING.md", required: false },
+  { remoteName: "rules.md", localName: "RULES.md", required: false },
+  { remoteName: "skill.json", localName: "skill.json", required: false },
+] as const;
+
 const FALLBACK_SOURCE_ITEMS: SkillSourceResultRecord[] = [
   {
     sourceProvider: "agentskill",
@@ -586,6 +594,39 @@ export class SkillImportService {
       };
     }
 
+    if (sourceType === "remote_bundle") {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-skill-remote-"));
+      const bundleDir = path.join(tempRoot, "bundle");
+      await fs.mkdir(bundleDir, { recursive: true });
+      try {
+        await materializeHostedSkillBundle(sourceRef, bundleDir);
+      } catch (error) {
+        await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      }
+      return {
+        sourceDir: bundleDir,
+        skillDir: bundleDir,
+        skillFilePath: path.join(bundleDir, "SKILL.md"),
+        candidate: {
+          sourceProvider,
+          sourceType,
+          sourceRef,
+          sourceUrl: sourceRef,
+          canonicalKey: buildCanonicalKey({
+            sourceProvider,
+            sourceType,
+            sourceRef,
+            sourceUrl: sourceRef,
+          }),
+          skillRootPath: bundleDir,
+        },
+        cleanup: async () => {
+          await fs.rm(tempRoot, { recursive: true, force: true });
+        },
+      };
+    }
+
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-skill-git-"));
     const cloneDir = path.join(tempRoot, "repo");
     try {
@@ -843,6 +884,32 @@ async function resolveDirectSourceReference(query: string): Promise<{
     };
   }
 
+  if (isHostedSkillBundleUrl(trimmed)) {
+    const provider = inferSourceProvider(trimmed);
+    return {
+      parsedSource: {
+        sourceProvider: provider,
+        sourceKind: "reference",
+        sourceUrl: trimmed,
+        upstreamUrl: trimmed,
+        installability: "direct",
+      },
+      item: {
+        sourceProvider: provider,
+        sourceUrl: trimmed,
+        upstreamUrl: trimmed,
+        name: humanizeSkillName(trimmed),
+        description: "Direct hosted SKILL.md bundle.",
+        tags: ["skill", "hosted", "bundle"],
+        sourceKind: "reference",
+        installability: "direct",
+        installHint: "GoatCitadel can import this hosted skill bundle directly.",
+        matchReason: "Direct source match",
+        matchedTerms: [trimmed],
+      },
+    };
+  }
+
   if (isMarketplaceListingUrl(trimmed)) {
     const provider = inferSourceProvider(trimmed);
     const providerLabel = getProviderLabel(provider);
@@ -932,6 +999,9 @@ function inferSourceType(sourceRef: string, explicit?: SkillImportSourceType): S
     return explicit;
   }
   const trimmed = sourceRef.trim();
+  if (isHostedSkillBundleUrl(trimmed)) {
+    return "remote_bundle";
+  }
   if (/^https?:\/\//i.test(trimmed) || /^git@/i.test(trimmed)) {
     return "git_url";
   }
@@ -960,6 +1030,9 @@ function inferSourceProvider(sourceRef: string, explicit?: SkillSourceProvider):
   }
   if (lowered.includes("github.com") || lowered.startsWith("git@")) {
     return "github";
+  }
+  if (/^https?:\/\//i.test(lowered)) {
+    return "external";
   }
   return "local";
 }
@@ -1210,8 +1283,59 @@ function isGitHubUrl(value: string): boolean {
   return /github\.com\//i.test(value) || /^git@github\.com:/i.test(value);
 }
 
+function isHostedSkillBundleUrl(value: string): boolean {
+  return /^https?:\/\/.+\/skill\.md(?:[?#].*)?$/i.test(value.trim());
+}
+
 function isMarketplaceListingUrl(value: string): boolean {
   return /https?:\/\/(?:www\.)?(?:skillsmp\.com|agentskill\.sh|clawhub\.ai)\//i.test(value);
+}
+
+async function materializeHostedSkillBundle(sourceUrl: string, targetDir: string): Promise<void> {
+  const bundleUrl = new URL(sourceUrl);
+  const baseUrl = new URL(".", bundleUrl);
+  let primaryFetched = false;
+
+  for (const file of HOSTED_SKILL_BUNDLE_FILES) {
+    const fileUrl = new URL(file.remoteName, baseUrl);
+    try {
+      const response = await fetchWithTimeout(fileUrl.toString());
+      if (!response.ok) {
+        if (file.required) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        continue;
+      }
+      const content = await response.text();
+      await fs.writeFile(path.join(targetDir, file.localName), content, "utf8");
+      if (file.required) {
+        primaryFetched = true;
+      }
+    } catch (error) {
+      if (file.required) {
+        throw new Error(`Failed to fetch hosted skill bundle from ${fileUrl.toString()}: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  if (!primaryFetched) {
+    throw new Error(`Hosted skill bundle is missing required SKILL.md content: ${sourceUrl}`);
+  }
+}
+
+async function fetchWithTimeout(url: string): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 9000);
+  try {
+    return await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "user-agent": "GoatCitadel/0.1",
+      },
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function getProviderLabel(provider: SkillSourceProvider): string {

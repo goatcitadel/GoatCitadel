@@ -141,7 +141,7 @@ export interface BankrActionAuditRecord {
 
 export type SkillSourceProvider = "agentskill" | "skillsmp" | "clawhub" | "github" | "local" | "external";
 
-export type SkillImportSourceType = "local_path" | "local_zip" | "git_url";
+export type SkillImportSourceType = "local_path" | "local_zip" | "git_url" | "remote_bundle";
 export type SkillSourceKind = "marketplace_listing" | "upstream_repo" | "reference" | "local";
 export type SkillSourceInstallability = "direct" | "review_only" | "not_installable";
 

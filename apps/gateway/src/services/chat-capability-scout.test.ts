@@ -4,6 +4,7 @@ import type {
   McpServerTemplateRecord,
   McpTemplateDiscoveryResult,
   SkillListItem,
+  SkillSourceLookupResponse,
   SkillSourceListResponse,
   ToolCatalogEntry,
 } from "@goatcitadel/contracts";
@@ -96,6 +97,12 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
           providers: [],
           items: [],
         })),
+        lookupSkillSources: vi.fn(async (): Promise<SkillSourceLookupResponse> => ({
+          query: "gmail helper",
+          generatedAt: new Date().toISOString(),
+          providers: [],
+          items: [],
+        })),
         listMcpTemplates: vi.fn((): Array<McpServerTemplateRecord & { installed: boolean }> => []),
         listMcpTemplateDiscovery: vi.fn((): McpTemplateDiscoveryResult[] => []),
       },
@@ -143,6 +150,12 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
             trustScore: 0.7,
             combinedScore: 8.2,
           }],
+        })),
+        lookupSkillSources: vi.fn(async (): Promise<SkillSourceLookupResponse> => ({
+          query: "https://www.example.com/skill.md",
+          generatedAt: new Date().toISOString(),
+          providers: [],
+          items: [],
         })),
         listMcpTemplates: vi.fn((): Array<McpServerTemplateRecord & { installed: boolean }> => [{
           templateId: "github-http",
@@ -200,6 +213,12 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
           providers: [],
           items: [],
         })),
+        lookupSkillSources: vi.fn(async (): Promise<SkillSourceLookupResponse> => ({
+          query: "short story lighthouse",
+          generatedAt: new Date().toISOString(),
+          providers: [],
+          items: [],
+        })),
         listMcpTemplates: vi.fn((): Array<McpServerTemplateRecord & { installed: boolean }> => []),
         listMcpTemplateDiscovery: vi.fn((): McpTemplateDiscoveryResult[] => []),
       },
@@ -231,6 +250,9 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
         listSkillSources: vi.fn(async (): Promise<SkillSourceListResponse> => {
           throw new Error("skill-source-unavailable");
         }),
+        lookupSkillSources: vi.fn(async (): Promise<SkillSourceLookupResponse> => {
+          throw new Error("skill-source-unavailable");
+        }),
         listMcpTemplates: vi.fn((): Array<McpServerTemplateRecord & { installed: boolean }> => []),
         listMcpTemplateDiscovery: vi.fn((): McpTemplateDiscoveryResult[] => {
           throw new Error("mcp-discovery-unavailable");
@@ -250,5 +272,61 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
       "[chat-capability-scout] mcp template discovery failed",
       expect.any(Error),
     );
+  });
+
+  it("prefers install-and-enable for direct hosted skill bundle URLs", async () => {
+    const suggestions = await scoutCapabilityUpgradeSuggestions({
+      content: "Read https://www.moltbook.com/skill.md and follow the instructions to join Moltbook",
+      assistantText: "I can't do that yet because the capability is not installed.",
+      sessionId: "session-1",
+      trace: createTrace(),
+      deps: {
+        listToolCatalog: createToolCatalog,
+        evaluateToolAccess: vi.fn(() => ({
+          toolName: "browser.search",
+          allowed: true,
+          matchedGrantId: undefined,
+          reasonCodes: [],
+          requiresApproval: false,
+          riskLevel: "safe" as const,
+        })),
+        listSkills: vi.fn(() => []),
+        resolveSkillActivation: vi.fn(() => ({ suppressed: [] })),
+        listSkillSources: vi.fn(async (): Promise<SkillSourceListResponse> => ({
+          generatedAt: new Date().toISOString(),
+          providers: [],
+          items: [],
+        })),
+        lookupSkillSources: vi.fn(async (): Promise<SkillSourceLookupResponse> => ({
+          query: "https://www.moltbook.com/skill.md",
+          generatedAt: new Date().toISOString(),
+          providers: [],
+          items: [{
+            sourceProvider: "external",
+            sourceUrl: "https://www.moltbook.com/skill.md",
+            upstreamUrl: "https://www.moltbook.com/skill.md",
+            name: "Moltbook",
+            description: "Hosted skill bundle for joining Moltbook.",
+            tags: ["moltbook", "skill", "hosted"],
+            canonicalKey: "www.moltbook.com/skill.md",
+            alternateProviders: [],
+            qualityScore: 0.8,
+            freshnessScore: 0.8,
+            trustScore: 0.7,
+            combinedScore: 8.1,
+            installability: "direct",
+          }],
+        })),
+        listMcpTemplates: vi.fn((): Array<McpServerTemplateRecord & { installed: boolean }> => []),
+        listMcpTemplateDiscovery: vi.fn((): McpTemplateDiscoveryResult[] => []),
+      },
+    });
+
+    expect(suggestions[0]).toMatchObject({
+      kind: "skill_import",
+      title: "Install and enable skill: Moltbook",
+      recommendedAction: "install_skill_enable",
+      sourceRef: "https://www.moltbook.com/skill.md",
+    });
   });
 });

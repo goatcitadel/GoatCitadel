@@ -1499,6 +1499,28 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
     )));
   }, []);
 
+  const resumeCapabilitySuggestionTurn = useCallback(async () => {
+    if (!selectedTurn?.turnId) {
+      pushLocalNotice("Capability upgraded, but there is no failed turn selected to resume yet.", "warning");
+      return;
+    }
+    const nextItem: OutboundQueueItem = {
+      id: `queue-${Date.now()}`,
+      action: "retry",
+      sessionId: selectedSessionId ?? undefined,
+      targetTurnId: selectedTurn.turnId,
+      content: "",
+      attachments: [],
+      createdAt: new Date().toISOString(),
+    };
+    if (!tryBeginOutboundExecution()) {
+      setQueuedOutbound((current) => [...current, nextItem]);
+      pushLocalNotice("Capability upgraded. The original request has been queued to resume automatically.");
+      return;
+    }
+    await executeOutboundItemRef.current(nextItem);
+  }, [pushLocalNotice, selectedSessionId, selectedTurn?.turnId, tryBeginOutboundExecution]);
+
   const handleCapabilitySuggestionAction = useCallback(async (suggestion: ChatCapabilityUpgradeSuggestion) => {
     try {
       setError(null);
@@ -1514,9 +1536,10 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
           state: "enabled",
           note: "Enabled from chat capability suggestion.",
         });
-        pushLocalNotice(`Enabled skill ${updated.skillId}. You can retry the request now.`, "success");
+        pushLocalNotice(`Enabled skill ${updated.skillId}. Resuming the original request now.`, "success");
         setInstalledSkills(await fetchSkills().then((result) => result.items));
         dismissCapabilitySuggestion(suggestion);
+        await resumeCapabilitySuggestionTurn();
         return;
       }
 
@@ -1546,6 +1569,37 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
         setInstalledSkills(await fetchSkills().then((result) => result.items));
         dismissCapabilitySuggestion(suggestion);
         window.location.hash = "skills";
+        return;
+      }
+
+      if (suggestion.recommendedAction === "install_skill_enable") {
+        if (!suggestion.sourceRef) {
+          throw new Error("This suggestion is missing the import source.");
+        }
+        const confirmed = window.confirm(
+          `${suggestion.title}\n\nApprove GoatCitadel to install and enable this hosted skill now?`,
+        );
+        if (!confirmed) {
+          return;
+        }
+        const installed = await installSkillImport({
+          sourceRef: suggestion.sourceRef,
+          sourceProvider: suggestion.sourceProvider && suggestion.sourceProvider !== "mcp_template"
+            ? suggestion.sourceProvider
+            : undefined,
+          confirmHighRisk: suggestion.riskLevel === "high",
+        });
+        if (!installed.installedSkillId) {
+          throw new Error("The skill installed, but GoatCitadel could not resolve its installed skill identifier.");
+        }
+        await updateSkillState(installed.installedSkillId, {
+          state: "enabled",
+          note: "Enabled immediately from chat capability suggestion.",
+        });
+        pushLocalNotice(`Installed and enabled ${installed.installedSkillId}. Resuming the original request now.`, "success");
+        setInstalledSkills(await fetchSkills().then((result) => result.items));
+        dismissCapabilitySuggestion(suggestion);
+        await resumeCapabilitySuggestionTurn();
         return;
       }
 
@@ -1598,7 +1652,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
     } catch (err) {
       setError((err as Error).message);
     }
-  }, [dismissCapabilitySuggestion, pushLocalNotice]);
+  }, [dismissCapabilitySuggestion, pushLocalNotice, resumeCapabilitySuggestionTurn]);
 
   const handleCommandExecution = useCallback(async (sessionId: string, commandText: string) => {
     const result = await parseChatCommand(sessionId, commandText);
@@ -2661,6 +2715,9 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
                               ) : null}
                               {suggestion.recommendedAction === "install_skill_disabled" ? (
                                 <button type="button" onClick={() => void handleCapabilitySuggestionAction(suggestion)}>Install disabled</button>
+                              ) : null}
+                              {suggestion.recommendedAction === "install_skill_enable" ? (
+                                <button type="button" onClick={() => void handleCapabilitySuggestionAction(suggestion)}>Approve and install</button>
                               ) : null}
                               {suggestion.recommendedAction === "add_mcp_template" ? (
                                 <button type="button" onClick={() => void handleCapabilitySuggestionAction(suggestion)}>Add MCP template</button>

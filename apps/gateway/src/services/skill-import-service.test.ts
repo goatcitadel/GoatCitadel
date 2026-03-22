@@ -127,6 +127,23 @@ describe("SkillImportService lookup", () => {
     });
   });
 
+  it("treats hosted skill.md URLs as direct installable bundles", async () => {
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const result = await service.lookupSources("https://www.moltbook.com/skill.md", 5);
+
+    expect(result.parsedSource).toMatchObject({
+      sourceProvider: "external",
+      sourceKind: "reference",
+      installability: "direct",
+      sourceUrl: "https://www.moltbook.com/skill.md",
+    });
+    expect(result.bestMatch).toMatchObject({
+      sourceProvider: "external",
+      installability: "direct",
+      matchReason: "Direct source match",
+    });
+  });
+
   it("ranks Chrome Devtools MCP first for a 'chrome' query", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => {
       return new Response("<html><body></body></html>", { status: 200 });
@@ -242,5 +259,39 @@ describe("SkillImportService validation", () => {
       expect.stringContaining("Security scan skipped large files"),
       expect.stringContaining("bundle.js"),
     ]));
+  });
+
+  it("validates hosted skill bundles fetched from a raw skill.md URL", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "https://www.moltbook.com/skill.md") {
+        return new Response([
+          "---",
+          "name: Moltbook",
+          "description: Hosted skill bundle for joining and using Moltbook safely.",
+          "---",
+          "",
+          "Follow the hosted instructions and store credentials locally.",
+          "",
+        ].join("\n"), { status: 200 });
+      }
+      if (url === "https://www.moltbook.com/skill.json") {
+        return new Response('{"name":"moltbook"}', { status: 200 });
+      }
+      return new Response("", { status: 404 });
+    }));
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const result = await service.validateImport({
+      sourceRef: "https://www.moltbook.com/skill.md",
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.candidate).toMatchObject({
+      sourceProvider: "external",
+      sourceType: "remote_bundle",
+      sourceRef: "https://www.moltbook.com/skill.md",
+    });
+    expect(result.inferredSkillName).toBe("Moltbook");
   });
 });

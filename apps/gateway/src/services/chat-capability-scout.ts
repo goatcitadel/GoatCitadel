@@ -4,6 +4,7 @@ import type {
   McpServerTemplateRecord,
   McpTemplateDiscoveryResult,
   SkillListItem,
+  SkillSourceLookupResponse,
   SkillResolveInput,
   SkillSourceListResponse,
   ToolAccessEvaluateRequest,
@@ -24,6 +25,7 @@ interface CapabilityScoutDeps {
     }>;
   };
   listSkillSources(query?: string, limit?: number): Promise<SkillSourceListResponse>;
+  lookupSkillSources(queryOrUrl: string, limit?: number): Promise<SkillSourceLookupResponse>;
   listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }>;
   listMcpTemplateDiscovery(): McpTemplateDiscoveryResult[];
 }
@@ -131,26 +133,36 @@ export async function scoutCapabilityUpgradeSuggestions(
     });
   }
 
+  const directSourceUrl = extractDirectSourceUrl(input.content);
   const searchQuery = buildCapabilitySearchQuery(input.content);
-  if (searchQuery) {
+  if (directSourceUrl || searchQuery) {
     try {
-      const sourceResults = await input.deps.listSkillSources(searchQuery, 6);
+      const sourceResults = directSourceUrl
+        ? await input.deps.lookupSkillSources(directSourceUrl, 3)
+        : await input.deps.listSkillSources(searchQuery, 6);
       for (const item of sourceResults.items) {
         const score = scoreMatch(input.content, `${item.name} ${item.description} ${item.tags.join(" ")}`) + (item.combinedScore / 10);
         if (score < 0.4) {
           continue;
         }
+        const recommendedAction = directSourceUrl && item.installability === "direct"
+          ? "install_skill_enable"
+          : "install_skill_disabled";
         ranked.push({
           score,
           suggestion: {
             kind: "skill_import",
-            title: `Install skill: ${item.name}`,
+            title: recommendedAction === "install_skill_enable"
+              ? `Install and enable skill: ${item.name}`
+              : `Install skill: ${item.name}`,
             summary: item.description,
-            reason: "No active installed capability matched cleanly, but a curated skill source looks relevant.",
+            reason: recommendedAction === "install_skill_enable"
+              ? "The request already points to a direct hosted skill source GoatCitadel can import and activate."
+              : "No active installed capability matched cleanly, but a curated skill source looks relevant.",
             sourceProvider: item.sourceProvider === "local" ? undefined : item.sourceProvider,
             sourceRef: item.repositoryUrl ?? item.sourceUrl,
             riskLevel: item.sourceProvider === "github" ? "medium" : "low",
-            recommendedAction: "install_skill_disabled",
+            recommendedAction,
             candidateId: item.canonicalKey,
             requiresUserApproval: true,
           },
@@ -239,6 +251,14 @@ function buildCapabilitySearchQuery(content: string): string | undefined {
     return undefined;
   }
   return tokens.join(" ");
+}
+
+function extractDirectSourceUrl(content: string): string | undefined {
+  const match = content.match(/https?:\/\/\S+/i);
+  if (!match) {
+    return undefined;
+  }
+  return match[0].replace(/[),.;!?]+$/, "");
 }
 
 function tokenize(input: string): string[] {
