@@ -4,6 +4,23 @@ import type {
   IntegrationFieldSchema,
 } from "@goatcitadel/contracts";
 
+const CORE_CHANNEL_KEYS = new Set([
+  "discord",
+  "slack",
+  "telegram",
+  "whatsapp",
+  "matrix",
+  "google-chat",
+  "mattermost",
+  "signal",
+  "imessage",
+  "nextcloud-talk",
+  "line",
+  "zalo",
+  "zalouser",
+  "webchat",
+]);
+
 const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.discord": {
     catalogId: "channel.discord",
@@ -125,6 +142,188 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       bool("enabled", "Enabled", true),
     ],
   },
+  "channel.whatsapp": {
+    catalogId: "channel.whatsapp",
+    title: "WhatsApp Connection",
+    description: "Connect a WhatsApp Cloud API sender identity and default direct recipient target.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "WhatsApp" }),
+      text("accessTokenEnv", "Access Token ENV Var", {
+        placeholder: "WHATSAPP_ACCESS_TOKEN",
+        secretRef: true,
+      }),
+      text("phoneNumberId", "Phone Number ID", {
+        placeholder: "123456789012345",
+        required: true,
+      }),
+      text("defaultTarget", "Default Recipient", {
+        placeholder: "+15551234567",
+        required: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "channel.signal": {
+    catalogId: "channel.signal",
+    title: "Signal Connection",
+    description: "Configure a Signal JSON-RPC bridge, account, and default recipient for outbound sends.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Signal" }),
+      url("baseUrl", "Bridge URL", {
+        placeholder: "http://127.0.0.1:8080",
+        required: true,
+      }),
+      text("accountId", "Account ID", {
+        placeholder: "+15551234567",
+        advanced: true,
+      }),
+      text("defaultRecipient", "Default Recipient", {
+        placeholder: "+15551234567 or group identifier",
+        required: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "channel.mattermost": {
+    catalogId: "channel.mattermost",
+    title: "Mattermost Connection",
+    description: "Connect a Mattermost bot token and default channel target.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Mattermost" }),
+      url("serverUrl", "Server URL", {
+        placeholder: "https://chat.example.com",
+        required: true,
+      }),
+      text("botTokenEnv", "Bot Token ENV Var", {
+        placeholder: "MATTERMOST_BOT_TOKEN",
+        required: true,
+        secretRef: true,
+      }),
+      text("defaultChannel", "Default Channel", {
+        placeholder: "town-square or channel-id",
+        required: true,
+      }),
+      text("defaultTeam", "Default Team", {
+        placeholder: "goatcitadel",
+        advanced: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "channel.imessage": {
+    catalogId: "channel.imessage",
+    title: "iMessage Connection",
+    description: "Configure a BlueBubbles-compatible iMessage bridge, password, and default target.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "iMessage" }),
+      url("bridgeUrl", "Bridge URL", {
+        placeholder: "http://127.0.0.1:3001",
+        required: true,
+      }),
+      text("passwordEnv", "Bridge Password ENV Var", {
+        placeholder: "IMESSAGE_PASSWORD",
+        required: true,
+        secretRef: true,
+      }),
+      text("defaultHandle", "Default Handle", {
+        placeholder: "imessage:+15551234567 or chat_guid:iMessage;-;+15551234567",
+        required: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "channel.nextcloud-talk": {
+    catalogId: "channel.nextcloud-talk",
+    title: "Nextcloud Talk Connection",
+    description: "Connect a Nextcloud Talk bot token and default room target.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Nextcloud Talk" }),
+      url("baseUrl", "Base URL", {
+        placeholder: "https://cloud.example.com",
+        required: true,
+      }),
+      text("tokenEnv", "Token ENV Var", {
+        placeholder: "NEXTCLOUD_TALK_TOKEN",
+        required: true,
+        secretRef: true,
+      }),
+      text("defaultRoomId", "Default Room ID", {
+        placeholder: "room-id",
+        required: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "channel.line": {
+    catalogId: "channel.line",
+    title: "LINE Connection",
+    description: "Connect a LINE bot token and default user, group, or room target.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "LINE" }),
+      text("channelAccessTokenEnv", "Channel Access Token ENV Var", {
+        placeholder: "LINE_CHANNEL_ACCESS_TOKEN",
+        required: true,
+        secretRef: true,
+      }),
+      text("defaultTarget", "Default Target", {
+        placeholder: "userId, groupId, or roomId",
+        required: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "channel.zalo": {
+    catalogId: "channel.zalo",
+    title: "Zalo OA Connection",
+    description: "Configure a Zalo Official Account token and default recipient target.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Zalo OA" }),
+      text("accessTokenEnv", "Access Token ENV Var", {
+        placeholder: "ZALO_ACCESS_TOKEN",
+        required: true,
+        secretRef: true,
+      }),
+      text("defaultRecipientId", "Default Recipient ID", {
+        placeholder: "zalo-user-id",
+        required: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "channel.zalouser": {
+    catalogId: "channel.zalouser",
+    title: "Zalo Personal Connection",
+    description: "Configure a zca serve bridge for a personal Zalo session and default recipient target.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Zalo Personal" }),
+      url("baseUrl", "Bridge URL", {
+        placeholder: "http://127.0.0.1:56789",
+        required: true,
+      }),
+      text("authTokenEnv", "Bearer Token ENV Var", {
+        placeholder: "ZALOUSER_AUTH_TOKEN",
+        secretRef: true,
+        advanced: true,
+      }),
+      text("profile", "Profile", {
+        placeholder: "work",
+        advanced: true,
+      }),
+      text("defaultTarget", "Default Recipient", {
+        placeholder: "user:u-123456789 or group:g-987654321",
+        required: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
   "automation.webhooks": {
     catalogId: "automation.webhooks",
     title: "Webhook Connection",
@@ -133,6 +332,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
     fields: [
       text("label", "Connection Label", { defaultValue: "Webhook" }),
       url("baseUrl", "Webhook Base URL", {
+        secretRef: true,
         required: true,
         placeholder: "https://example.com/webhooks",
       }),
@@ -184,16 +384,19 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   entry("channel", "tui", "Terminal/TUI", "Interactive terminal channel for local operations.", "native", ["local"], ["chat", "commands"]),
   entry("channel", "webchat", "Webchat", "Embedded web chat endpoint for browser clients.", "native", ["token", "basic"], ["chat", "sessions"]),
   entry("channel", "discord", "Discord", "Discord bot/webhook bridge.", "beta", ["oauth", "bot-token"], ["chat", "threads"]),
-  entry("channel", "signal", "Signal", "Signal messenger bridge.", "planned", ["device-link"], ["chat"]),
-  entry("channel", "whatsapp", "WhatsApp", "WhatsApp business bridge.", "planned", ["oauth", "token"], ["chat", "media"]),
+  entry("channel", "signal", "Signal", "Signal messenger bridge.", "planned", ["device-link"], ["chat", "groups"]),
+  entry("channel", "whatsapp", "WhatsApp", "WhatsApp business bridge.", "planned", ["oauth", "token"], ["chat", "direct"]),
   entry("channel", "telegram", "Telegram", "Telegram bot integration.", "beta", ["bot-token"], ["chat", "threads"]),
   entry("channel", "slack", "Slack", "Slack app/bot integration.", "beta", ["oauth"], ["chat", "threads", "mentions"]),
-  entry("channel", "google-chat", "Google Chat", "Google Chat app and webhook integration.", "beta", ["oauth", "token"], ["chat", "spaces", "threads"]),
-  entry("channel", "mattermost", "Mattermost", "Mattermost bot/webhook integration.", "planned", ["token"], ["chat", "channels", "threads"]),
-  entry("channel", "imessage", "iMessage", "iMessage bridge (platform dependent).", "planned", ["local-agent"], ["chat", "attachments"]),
-  entry("channel", "teams", "Microsoft Teams", "Teams bot/webhook integration.", "beta", ["oauth", "webhook"], ["chat", "threads"]),
+  entry("channel", "google-chat", "Google Chat", "Google Chat app and webhook integration.", "beta", ["oauth", "token"], ["chat", "spaces", "threads"], { pluginId: "googlechat" }),
+  entry("channel", "mattermost", "Mattermost", "Mattermost bot/webhook integration.", "planned", ["token"], ["chat", "channels", "direct"]),
+  entry("channel", "imessage", "iMessage", "iMessage bridge (platform dependent).", "planned", ["local-agent"], ["chat", "attachments", "reactions", "unsend", "replies"]),
+  entry("channel", "teams", "Microsoft Teams", "Teams bot/webhook integration.", "beta", ["oauth", "webhook"], ["chat", "threads"], { pluginId: "msteams" }),
   entry("channel", "nextcloud-talk", "Nextcloud Talk", "Nextcloud Talk channel bridge.", "planned", ["token"], ["chat", "rooms"]),
   entry("channel", "matrix", "Matrix", "Matrix room bot integration.", "beta", ["access-token"], ["chat", "rooms"]),
+  entry("channel", "line", "LINE", "LINE Messaging API integration.", "planned", ["token"], ["chat", "groups", "rooms", "direct"]),
+  entry("channel", "zalo", "Zalo OA", "Zalo Official Account integration.", "planned", ["token"], ["chat", "official-account"]),
+  entry("channel", "zalouser", "Zalo User", "Zalo user-session bridge integration.", "planned", ["token"], ["chat", "attachments", "direct"]),
 
   // Model providers
   entry("model_provider", "openai", "OpenAI", "Direct OpenAI provider support.", "native", ["api-key"], ["chat-completions"]),
@@ -249,6 +452,25 @@ export function getIntegrationFormSchema(catalogId: string): IntegrationFormSche
   return INTEGRATION_CATALOG.find((entry) => entry.catalogId === catalogId)?.formSchema;
 }
 
+export function resolveIntegrationCatalogMaturity(
+  entry: IntegrationCatalogEntry,
+  pluginIds: ReadonlySet<string>,
+): IntegrationCatalogEntry["maturity"] {
+  const pluginId = (entry.pluginId ?? entry.key).trim().toLowerCase();
+  if (entry.kind === "channel") {
+    if (CORE_CHANNEL_KEYS.has(entry.key)) {
+      return entry.maturity === "planned" ? "native" : entry.maturity;
+    }
+    if (entry.maturity === "planned") {
+      return pluginIds.has(pluginId) ? "plugin" : "disabled";
+    }
+  }
+  if (entry.maturity === "planned" && pluginIds.has(pluginId)) {
+    return "plugin";
+  }
+  return entry.maturity;
+}
+
 function entry(
   kind: IntegrationCatalogEntry["kind"],
   key: string,
@@ -257,6 +479,9 @@ function entry(
   maturity: IntegrationCatalogEntry["maturity"],
   authMethods: string[],
   capabilities: string[],
+  options: {
+    pluginId?: string;
+  } = {},
 ): IntegrationCatalogEntry {
   const catalogId = `${kind}.${key}`;
   return {
@@ -268,6 +493,7 @@ function entry(
     maturity,
     authMethods,
     capabilities,
+    pluginId: options.pluginId,
     formSchema: FORM_SCHEMA_OVERRIDES[catalogId] ?? buildDefaultFormSchema(catalogId, label, kind, key),
   };
 }

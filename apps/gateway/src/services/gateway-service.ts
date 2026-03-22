@@ -79,7 +79,9 @@ import type {
   CreateAssemblyRunInput,
   CalendarCreateEventInput,
   CalendarListQuery,
+  ChannelReactInput,
   ChannelSendInput,
+  ChannelUnsendInput,
   ChannelInboundMessageInput,
   ChatAttachmentRecord,
   ChatAttachmentMediaType,
@@ -118,6 +120,7 @@ import type {
   ChatStreamChunkDraft,
   ChatThreadResponse,
   ChatThinkingLevel,
+  CapabilityGapEventRecord,
   ChatToolRunRecord,
   ChatTurnBranchKind,
   ChatTurnFailureRecord,
@@ -274,6 +277,8 @@ import type {
   ReplayOverrideDraft,
   ReplayOverrideStep,
   ReplayDiffSummary,
+  RepairCandidateRecord,
+  RepairValidationStatus,
   MemoryItemRecord,
   MemoryLifecyclePatch,
   MemoryChangeEvent,
@@ -298,6 +303,7 @@ import { LlmService } from "./llm-service.js";
 import { AssemblyService } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { scoutCapabilityUpgradeSuggestions } from "./chat-capability-scout.js";
+import { classifyCapabilityGapFromTrace } from "./capability-gap-classifier.js";
 import {
   collectMcpBrowserFallbackTargets,
   discoverMcpTools,
@@ -336,7 +342,12 @@ import type {
   OrchestrationRouterInput,
   OrchestrationStepExecutionResult,
 } from "../orchestration/types.js";
-import { getIntegrationFormSchema, INTEGRATION_CATALOG } from "./integration-catalog.js";
+import {
+  getIntegrationFormSchema,
+  INTEGRATION_CATALOG,
+  resolveIntegrationCatalogMaturity,
+} from "./integration-catalog.js";
+import { resolveChannelConfigTarget } from "./channel-config.js";
 import { MemoryContextService } from "./memory-context-service.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
@@ -385,10 +396,12 @@ import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { PromptPackService, normalizePromptTestCode, clampPromptScore } from "./prompt-pack-service.js";
 import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
+import { ReplayExecutionSkippedError } from "./replay-execution.js";
 import { evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
+import { resolveChannelSendAttachments } from "./channel-attachment-payload.js";
 import {
   MCP_APPROVAL_DELIVERY_TOOL_NAME,
   MCP_APPROVAL_INBOX_URL,
@@ -800,17 +813,6 @@ const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     enabledByDefault: false,
   },
 ];
-const CORE_CHANNEL_KEYS = new Set([
-  "discord",
-  "slack",
-  "telegram",
-  "whatsapp",
-  "matrix",
-  "google-chat",
-  "mattermost",
-  "webchat",
-]);
-
 const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
   "browser.search",
   "browser.navigate",
@@ -858,6 +860,7 @@ const PIPELINE_TEMPLATES: Record<string, string[]> = {
   release: ["qa", "ops", "product"],
 };
 const DEFAULT_WORKSPACE_ID = "default";
+const REPLAY_SCRATCH_SESSION_TITLE_PREFIX = "[Replay scratch]";
 const GUIDANCE_DOC_FILE_MAP: Record<GuidanceDocType, string> = {
   goatcitadel: "GOATCITADEL.md",
   agents: "AGENTS.md",
@@ -1265,6 +1268,7 @@ export class GatewayService {
       createChatCompletion: (request) => this.createChatCompletion(request),
       getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
+      retryChatTurn: (sessionId, turnId, overrides) => this.retryChatTurnInScratchSession(sessionId, turnId, overrides),
       backgroundTasks: this.backgroundTasks,
       get closing() { return self.closing; },
     });
@@ -2651,6 +2655,9 @@ export class GatewayService {
       trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
     },
   ): void {
+    if (this.isReplayScratchSession(sessionId)) {
+      return;
+    }
     return this.chatLearnedMemoryService.extractAndPersistLearnedMemory(sessionId, content, source);
   }
 
@@ -4015,6 +4022,21 @@ export class GatewayService {
     return this.improvementService.listDecisionReplayRuns(limit);
   }
 
+  public listCapabilityGapEvents(limit = 100): CapabilityGapEventRecord[] {
+    return this.improvementService.listCapabilityGapEvents(limit);
+  }
+
+  public listRepairCandidates(limit = 60): RepairCandidateRecord[] {
+    return this.improvementService.listRepairCandidates(limit);
+  }
+
+  public updateRepairCandidateValidation(
+    candidateId: string,
+    input: { status: RepairValidationStatus; summary?: string },
+  ): RepairCandidateRecord {
+    return this.improvementService.updateRepairCandidateValidation(candidateId, input);
+  }
+
   public getDurableDiagnostics(): DurableDiagnosticsResponse {
     return this.durableRunService.getDurableDiagnostics();
   }
@@ -4112,15 +4134,17 @@ export class GatewayService {
   public createReplayOverrideDraft(
     sourceRunId: string,
     overrides: ReplayOverrideStep[] = [],
+    links: { capabilityGapEventId?: string; repairCandidateId?: string } = {},
   ): ReplayOverrideDraft {
-    return this.improvementService.createReplayOverrideDraft(sourceRunId, overrides);
+    return this.improvementService.createReplayOverrideDraft(sourceRunId, overrides, links);
   }
 
-  public executeReplayOverride(
+  public async executeReplayOverride(
     sourceRunId: string,
     overrides: ReplayOverrideStep[] = [],
-  ): ReplayOverrideDraft {
-    return this.improvementService.executeReplayOverride(sourceRunId, overrides);
+    links: { capabilityGapEventId?: string; repairCandidateId?: string } = {},
+  ): Promise<ReplayOverrideDraft> {
+    return this.improvementService.executeReplayOverride(sourceRunId, overrides, links);
   }
 
   public getReplayDiffSummary(replayRunId: string): ReplayDiffSummary {
@@ -5465,14 +5489,43 @@ export class GatewayService {
           },
           citations: dedupeChatCitations(streamCitations),
         });
+        const approvalTraceBase: ChatTurnTraceRecord = {
+          ...traceWithMeta,
+          toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
+        };
+        const capabilityUpgradeSuggestions = await this.collectCapabilityUpgradeSuggestions({
+          sessionId,
+          content: prepared.content,
+          assistantText: finalText,
+          trace: approvalTraceBase,
+        });
+        const approvalTrace = capabilityUpgradeSuggestions.length > 0
+          ? {
+            ...this.storage.chatTurnTraces.patch(turnId, {
+              capabilityUpgradeSuggestions,
+            }),
+            toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
+          }
+          : approvalTraceBase;
+        if (capabilityUpgradeSuggestions.length > 0) {
+          yield {
+            type: "capability_upgrade_suggestion",
+            sessionId,
+            turnId,
+            capabilityUpgradeSuggestions,
+          };
+        }
+        this.recordCapabilityGapFromTrace({
+          sessionId,
+          turnId,
+          content: prepared.content,
+          trace: approvalTrace,
+        });
         yield {
           type: "trace_update",
           sessionId,
           turnId,
-          trace: {
-            ...traceWithMeta,
-            toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
-          },
+          trace: approvalTrace,
         };
         return;
       }
@@ -5554,6 +5607,12 @@ export class GatewayService {
             };
           }
         }
+        this.recordCapabilityGapFromTrace({
+          sessionId,
+          turnId,
+          content: prepared.content,
+          trace: hydratedTrace,
+        });
         yield {
           type: "trace_update",
           sessionId,
@@ -5767,7 +5826,7 @@ export class GatewayService {
         const persistedTurnFailure = turnResult.turnTrace.failure
           ?? inferDegradedAssistantTurnFailure(turnResult.assistantContent);
         if (turnResult.requiresApproval || turnResult.turnTrace.status === "cancelled") {
-          const traceWithMeta = this.storage.chatTurnTraces.patch(turnId, {
+          let traceWithMeta: ChatTurnTraceRecord = this.storage.chatTurnTraces.patch(turnId, {
             retrieval: prepared.retrievalTrace,
             reflection: reflectionTrace,
             proactive: {
@@ -5782,6 +5841,30 @@ export class GatewayService {
             },
             citations: dedupedTurnCitations,
             failure: persistedTurnFailure,
+          });
+          const capabilityUpgradeSuggestions = await this.collectCapabilityUpgradeSuggestions({
+            sessionId,
+            content: prepared.content,
+            assistantText: turnResult.assistantContent,
+            trace: {
+              ...traceWithMeta,
+              toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
+            },
+          });
+          if (capabilityUpgradeSuggestions.length > 0) {
+            traceWithMeta = this.storage.chatTurnTraces.patch(turnId, {
+              capabilityUpgradeSuggestions,
+            });
+          }
+          this.recordCapabilityGapFromTrace({
+            sessionId,
+            turnId,
+            content: prepared.content,
+            trace: {
+              ...traceWithMeta,
+              citations: dedupedTurnCitations,
+              toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
+            },
           });
           if (turnResult.turnTrace.status !== "cancelled") {
             this.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
@@ -5884,6 +5967,12 @@ export class GatewayService {
             toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
           };
         }
+        this.recordCapabilityGapFromTrace({
+          sessionId,
+          turnId,
+          content: prepared.content,
+          trace: hydratedTrace,
+        });
 
         this.extractAndPersistLearnedMemory(sessionId, prepared.content, {
           role: "user",
@@ -5903,7 +5992,7 @@ export class GatewayService {
           activeLeafTurnId: turnId,
         });
         const delegationDetection = detectDelegationRoles(prepared.content);
-        if (prepared.prefs.planningMode !== "advisory" && delegationDetection.length > 1) {
+        if (!this.isReplayScratchSession(sessionId) && prepared.prefs.planningMode !== "advisory" && delegationDetection.length > 1) {
           await this.triggerChatSessionProactive(sessionId, {
             source: "chat",
             reason: "Detected multi-role phrasing; generated delegation suggestion.",
@@ -6014,6 +6103,192 @@ export class GatewayService {
       }
       return this.consumePreparedAgentChatTurn(sessionId, request, prepared, "chat_thread_turn_retried");
     });
+  }
+
+  private async retryChatTurnInScratchSession(
+    sourceSessionId: string,
+    sourceTurnId: string,
+    overrides: Partial<ChatSendMessageRequest> = {},
+  ): Promise<ChatSendMessageResponse> {
+    const sourceBinding = this.storage.chatSessionBindings.get(sourceSessionId);
+    if (sourceBinding?.transport && sourceBinding.transport !== "llm") {
+      throw new ReplayExecutionSkippedError(
+        "GoatCitadel skipped actual replay because the source session uses integration transport and retrying it would trigger external side effects.",
+        {
+          transport: sourceBinding.transport,
+          sessionId: sourceSessionId,
+          turnId: sourceTurnId,
+        },
+      );
+    }
+    const scratch = await this.createReplayScratchSession(sourceSessionId, sourceTurnId);
+    try {
+      return await this.retryChatTurn(scratch.sessionId, scratch.sourceTurnId, overrides);
+    } finally {
+      try {
+        this.archiveChatSession(scratch.sessionId);
+      } catch (error) {
+        console.warn("[goatcitadel] failed to archive replay scratch session", {
+          sourceSessionId,
+          sourceTurnId,
+          scratchSessionId: scratch.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  private async createReplayScratchSession(
+    sourceSessionId: string,
+    sourceTurnId: string,
+  ): Promise<{ sessionId: string; sourceTurnId: string }> {
+    const sourceSession = this.requireChatSession(sourceSessionId);
+    const sourceMeta = this.storage.chatSessionMeta.ensure(
+      sourceSessionId,
+      undefined,
+      sourceSession.workspaceId ?? DEFAULT_WORKSPACE_ID,
+    );
+    const sourcePrefs = this.storage.chatSessionPrefs.ensure(sourceSessionId);
+    const sourceAutonomy = this.storage.sessionAutonomyPrefs.ensure(sourceSessionId);
+    const sourceProjectId = this.storage.chatSessionProjects.get(sourceSessionId)?.projectId;
+    const sourceState = await this.loadChatTurnSessionState(sourceSessionId);
+    const scratchSession = this.createChatSession({
+      workspaceId: this.normalizeWorkspaceId(sourceMeta.workspaceId),
+      projectId: sourceProjectId,
+      mode: sourcePrefs.mode,
+      title: `${REPLAY_SCRATCH_SESSION_TITLE_PREFIX} ${sourceSession.title?.trim() || sourceTurnId.slice(0, 8)}`,
+    });
+
+    this.storage.chatSessionPrefs.patch(scratchSession.sessionId, {
+      mode: sourcePrefs.mode,
+      planningMode: sourcePrefs.planningMode,
+      providerId: sourcePrefs.providerId,
+      model: sourcePrefs.model,
+      webMode: sourcePrefs.webMode,
+      memoryMode: sourcePrefs.memoryMode,
+      thinkingLevel: sourcePrefs.thinkingLevel,
+      toolAutonomy: sourcePrefs.toolAutonomy,
+      visionFallbackModel: sourcePrefs.visionFallbackModel,
+      orchestrationEnabled: sourcePrefs.orchestrationEnabled,
+      orchestrationIntensity: sourcePrefs.orchestrationIntensity,
+      orchestrationVisibility: sourcePrefs.orchestrationVisibility,
+      orchestrationProviderPreference: sourcePrefs.orchestrationProviderPreference,
+      orchestrationReviewDepth: sourcePrefs.orchestrationReviewDepth,
+      orchestrationParallelism: sourcePrefs.orchestrationParallelism,
+      codeAutoApply: sourcePrefs.codeAutoApply,
+    });
+    this.storage.sessionAutonomyPrefs.patch(scratchSession.sessionId, {
+      proactiveMode: sourceAutonomy.proactiveMode,
+      maxActionsPerHour: sourceAutonomy.maxActionsPerHour,
+      maxActionsPerTurn: sourceAutonomy.maxActionsPerTurn,
+      cooldownSeconds: sourceAutonomy.cooldownSeconds,
+      retrievalMode: sourceAutonomy.retrievalMode,
+      reflectionMode: sourceAutonomy.reflectionMode,
+    });
+    this.inheritDelegatedSessionToolGrants(sourceSessionId, scratchSession.sessionId);
+
+    const cloned = this.cloneChatTurnPathIntoSession({
+      sourceSessionId,
+      sourceTurnId,
+      targetSessionId: scratchSession.sessionId,
+      sourceState,
+    });
+    this.storage.chatSessionBranchState.setActiveLeaf(scratchSession.sessionId, cloned.sourceTurnId);
+    return {
+      sessionId: scratchSession.sessionId,
+      sourceTurnId: cloned.sourceTurnId,
+    };
+  }
+
+  private cloneChatTurnPathIntoSession(input: {
+    sourceSessionId: string;
+    sourceTurnId: string;
+    targetSessionId: string;
+    sourceState: Awaited<ReturnType<GatewayService["loadChatTurnSessionState"]>>;
+  }): { sourceTurnId: string } {
+    const pathTurnIds = buildSelectedPathTurnIds(input.sourceState.turnLineageById, input.sourceTurnId);
+    if (pathTurnIds.length === 0) {
+      throw new Error(`Chat turn ${input.sourceTurnId} not found in session ${input.sourceSessionId}`);
+    }
+
+    const turnIdMap = new Map<string, string>();
+    const messageCopies: ChatMessageRecord[] = [];
+    const traceCopies: Array<Parameters<Storage["chatTurnTraces"]["create"]>[0]> = [];
+
+    for (const pathTurnId of pathTurnIds) {
+      const trace = input.sourceState.tracesById.get(pathTurnId);
+      if (!trace) {
+        throw new Error(`Chat turn ${pathTurnId} not found in source session ${input.sourceSessionId}`);
+      }
+      const userMessage = input.sourceState.messagesById.get(trace.userMessageId);
+      if (!userMessage) {
+        throw new Error(`User message ${trace.userMessageId} not found for turn ${pathTurnId}`);
+      }
+
+      const clonedTurnId = randomUUID();
+      const clonedUserMessageId = randomUUID();
+      let clonedAssistantMessageId: string | undefined;
+      turnIdMap.set(pathTurnId, clonedTurnId);
+      messageCopies.push({
+        ...userMessage,
+        messageId: clonedUserMessageId,
+        sessionId: input.targetSessionId,
+      });
+
+      if (trace.assistantMessageId) {
+        const assistantMessage = input.sourceState.messagesById.get(trace.assistantMessageId);
+        if (assistantMessage) {
+          clonedAssistantMessageId = `assistant-${randomUUID()}`;
+          messageCopies.push({
+            ...assistantMessage,
+            messageId: clonedAssistantMessageId,
+            sessionId: input.targetSessionId,
+          });
+        }
+      }
+
+      traceCopies.push({
+        turnId: clonedTurnId,
+        sessionId: input.targetSessionId,
+        userMessageId: clonedUserMessageId,
+        parentTurnId: trace.parentTurnId ? turnIdMap.get(trace.parentTurnId) : undefined,
+        branchKind: trace.branchKind,
+        sourceTurnId: trace.sourceTurnId ? turnIdMap.get(trace.sourceTurnId) : undefined,
+        assistantMessageId: clonedAssistantMessageId,
+        status: trace.status,
+        mode: trace.mode,
+        model: trace.model,
+        webMode: trace.webMode,
+        memoryMode: trace.memoryMode,
+        thinkingLevel: trace.thinkingLevel,
+        effectiveToolAutonomy: trace.effectiveToolAutonomy,
+        routing: trace.routing,
+        retrieval: trace.retrieval,
+        reflection: trace.reflection,
+        proactive: trace.proactive,
+        completion: trace.completion,
+        durable: trace.durable,
+        orchestration: trace.orchestration,
+        guidance: trace.guidance,
+        citations: trace.citations,
+        capabilityUpgradeSuggestions: trace.capabilityUpgradeSuggestions,
+        specialistCandidateSuggestions: trace.specialistCandidateSuggestions,
+        failure: trace.failure,
+        startedAt: trace.startedAt,
+        finishedAt: trace.finishedAt,
+      });
+    }
+
+    this.storage.chatMessages.upsertMany(messageCopies);
+    for (const traceCopy of traceCopies) {
+      this.storage.chatTurnTraces.create(traceCopy);
+    }
+
+    const clonedSourceTurnId = turnIdMap.get(input.sourceTurnId);
+    if (!clonedSourceTurnId) {
+      throw new Error(`Failed to clone replay source turn ${input.sourceTurnId}`);
+    }
+    return { sourceTurnId: clonedSourceTurnId };
   }
 
   public async *retryChatTurnStream(
@@ -6178,6 +6453,54 @@ export class GatewayService {
         },
       },
     });
+  }
+
+  private recordCapabilityGapFromTrace(input: {
+    sessionId: string;
+    turnId: string;
+    content: string;
+    trace: ChatTurnTraceRecord;
+  }): void {
+    if (this.isReplayScratchSession(input.sessionId)) {
+      return;
+    }
+    const suggestions = input.trace.capabilityUpgradeSuggestions ?? [];
+    const toolRun = [...input.trace.toolRuns]
+      .reverse()
+      .find((item) => item.status === "blocked" || item.status === "approval_required" || item.status === "failed");
+    const requestedTool = toolRun?.toolName;
+    const failureClass = input.trace.failure?.failureClass;
+    const classified = classifyCapabilityGapFromTrace({
+      trace: input.trace,
+      suggestions,
+    });
+
+    if (!classified) {
+      return;
+    }
+
+    try {
+      this.improvementService.recordCapabilityGapEvent({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        causeClass: classified.causeClass,
+        failureClass,
+        promptExcerpt: truncateSummaryLine(input.content, 240),
+        promptRef: input.turnId,
+        requestedTool,
+        toolFamily: requestedTool?.split(".")[0],
+        toolProfile: this.config.assistant.defaultToolProfile || this.config.toolPolicy.tools.profile,
+        policyReason: toolRun?.error ?? input.trace.failure?.message,
+        providerId: input.trace.routing.effectiveProviderId ?? input.trace.routing.primaryProviderId,
+        model: input.trace.model ?? input.trace.routing.effectiveModel,
+        configArea: classified.configArea,
+        suggestedRepairClass: classified.suggestedRepairClass,
+        confidence: classified.confidence,
+        recoveryOptions: classified.recoveryOptions,
+      });
+    } catch (error) {
+      console.warn("[goatcitadel] failed to record capability gap", error);
+    }
   }
 
   private async consumePreparedAgentChatTurn(
@@ -6757,6 +7080,8 @@ export class GatewayService {
     }
     const dispatch = await dispatchConnectorDelivery(connector, payload, {
       commsSend: (input) => this.commsSend(input),
+      commsReact: (input) => this.commsReact(input),
+      commsUnsend: (input) => this.commsUnsend(input),
       invokeMcpTool: (input) => this.invokeMcpTool(input),
       publishRealtime: (eventType, source, eventPayload) => this.publishRealtime(eventType, source, eventPayload),
     });
@@ -9650,22 +9975,15 @@ export class GatewayService {
   }
 
   public listIntegrationCatalog(kind?: IntegrationKind): IntegrationCatalogEntry[] {
-    const pluginIds = new Set(this.readIntegrationPlugins().map((item) => item.pluginId));
+    const pluginIds = new Set(
+      this.readIntegrationPlugins()
+        .map((item) => item.pluginId.trim().toLowerCase())
+        .filter((item) => item.length > 0),
+    );
     const mapped = INTEGRATION_CATALOG.map((entry) => {
-      let maturity = entry.maturity;
-      if (entry.kind === "channel") {
-        if (CORE_CHANNEL_KEYS.has(entry.key)) {
-          maturity = entry.maturity === "planned" ? "native" : entry.maturity;
-        } else if (entry.maturity === "planned") {
-          maturity = pluginIds.size > 0 ? "plugin" : "disabled";
-        }
-      }
-      if (entry.maturity === "planned" && pluginIds.has(entry.key)) {
-        maturity = "plugin";
-      }
       return {
         ...entry,
-        maturity,
+        maturity: resolveIntegrationCatalogMaturity(entry, pluginIds),
       };
     });
     if (!kind) {
@@ -9748,6 +10066,7 @@ export class GatewayService {
       kind: catalog.kind,
       key: catalog.key,
       label: input.label?.trim() || catalog.label,
+      pluginId: input.pluginId ?? catalog.pluginId,
     });
 
     this.publishRealtime("system", "integrations", {
@@ -10852,6 +11171,12 @@ export class GatewayService {
   }
 
   public async commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+    const attachments = await resolveChannelSendAttachments({
+      attachments: input.attachments,
+      attachmentIds: input.attachmentIds,
+    }, {
+      readChatAttachmentContent: (attachmentId) => this.readChatAttachmentContent(attachmentId),
+    });
     return this.invokeAndUnwrap(
       {
         toolName: "channel.send",
@@ -10859,13 +11184,55 @@ export class GatewayService {
           connectionId: input.connectionId,
           target: input.target,
           message: input.message,
-          attachments: input.attachments,
+          attachments,
+          replyToMessageGuid: input.replyToMessageId,
+          replyToPartIndex: input.replyToPartIndex,
+          effectId: input.effectId,
+          subject: input.subject,
         },
         sessionId: input.sessionId ?? "session:operator:comms",
         agentId: input.agentId ?? "operator",
         taskId: input.taskId,
       },
       "comms_send",
+    );
+  }
+
+  public async commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+    return this.invokeAndUnwrap(
+      {
+        toolName: "channel.react",
+        args: {
+          connectionId: input.connectionId,
+          target: input.target,
+          messageId: input.messageId,
+          reaction: input.reaction,
+          partIndex: input.partIndex,
+          messageText: input.messageText,
+        },
+        sessionId: input.sessionId ?? "session:operator:comms",
+        agentId: input.agentId ?? "operator",
+        taskId: input.taskId,
+      },
+      "comms_react",
+    );
+  }
+
+  public async commsUnsend(input: ChannelUnsendInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+    return this.invokeAndUnwrap(
+      {
+        toolName: "channel.unsend",
+        args: {
+          connectionId: input.connectionId,
+          target: input.target,
+          messageId: input.messageId,
+          partIndex: input.partIndex,
+        },
+        sessionId: input.sessionId ?? "session:operator:comms",
+        agentId: input.agentId ?? "operator",
+        taskId: input.taskId,
+      },
+      "comms_unsend",
     );
   }
 
@@ -12151,7 +12518,7 @@ export class GatewayService {
               : "Slack bot token or webhook is missing.",
           });
           checkUrl("url", "Slack webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), false);
-          requireText("target", "Default Slack channel", this.readConnectionConfigValue(config, "defaultChannel"), "warn");
+          requireText("target", "Default Slack channel", resolveChannelConfigTarget(connection.key, config), "warn");
           break;
         case "discord":
           checks.push({
@@ -12168,11 +12535,11 @@ export class GatewayService {
               : "Discord bot token or webhook is missing.",
           });
           checkUrl("url", "Discord webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), false);
-          requireText("target", "Default Discord channel", this.readConnectionConfigValue(config, "defaultChannelId"), "warn");
+          requireText("target", "Default Discord channel", resolveChannelConfigTarget(connection.key, config), "warn");
           break;
         case "telegram":
           requireSecretRef("auth", "Telegram bot token", "botToken", "botTokenEnv");
-          requireText("target", "Default Telegram chat", this.readConnectionConfigValue(config, "defaultChatId"), "warn");
+          requireText("target", "Default Telegram chat", resolveChannelConfigTarget(connection.key, config), "warn");
           checks.push({
             key: "url",
             status: this.isHostAllowlisted("api.telegram.org") ? "pass" : "warn",
@@ -12184,17 +12551,87 @@ export class GatewayService {
         case "matrix":
           requireSecretRef("auth", "Matrix access token", "accessToken", "accessTokenEnv");
           checkUrl("url", "Matrix homeserver URL", this.readConnectionConfigValue(config, "homeserverUrl"), true);
-          requireText("target", "Default Matrix room", this.readConnectionConfigValue(config, "defaultRoomId"), "warn");
+          requireText("target", "Default Matrix room", resolveChannelConfigTarget(connection.key, config), "warn");
           break;
         case "google-chat":
           checkUrl("url", "Google Chat webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), true);
-          requireText("target", "Default Google Chat thread key", this.readConnectionConfigValue(config, "defaultThreadKey"), "warn");
+          requireText("target", "Default Google Chat thread key", resolveChannelConfigTarget(connection.key, config), "warn");
           break;
         case "teams":
           checkUrl("url", "Teams webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), true);
           break;
+        case "whatsapp":
+          requireSecretRef("auth", "WhatsApp access token", "accessToken", "accessTokenEnv");
+          requireText("sender", "WhatsApp phone number id", this.readConnectionConfigValue(config, "phoneNumberId"), "warn");
+          requireText("target", "Default WhatsApp recipient", resolveChannelConfigTarget(connection.key, config), "warn");
+          break;
+        case "signal":
+          checkUrl(
+            "url",
+            "Signal bridge URL",
+            this.readConnectionConfigValue(config, "baseUrl")
+              ?? this.readConnectionConfigValue(config, "bridgeUrl"),
+            true,
+          );
+          requireText("target", "Default Signal recipient", resolveChannelConfigTarget(connection.key, config), "warn");
+          break;
+        case "mattermost":
+          checkUrl("url", "Mattermost server URL", this.readConnectionConfigValue(config, "serverUrl"), true);
+          requireSecretRef("auth", "Mattermost bot token", "botToken", "botTokenEnv");
+          requireText("target", "Default Mattermost channel", resolveChannelConfigTarget(connection.key, config), "warn");
+          break;
+        case "imessage":
+          checkUrl(
+            "url",
+            "iMessage bridge URL",
+            this.readConnectionConfigValue(config, "bridgeUrl") ?? this.readConnectionConfigValue(config, "baseUrl"),
+            true,
+          );
+          requireSecretRef("auth", "iMessage bridge password", "password", "passwordEnv");
+          requireText("target", "Default iMessage handle", resolveChannelConfigTarget(connection.key, config), "warn");
+          break;
+        case "nextcloud-talk":
+          checkUrl("url", "Nextcloud base URL", this.readConnectionConfigValue(config, "baseUrl"), true);
+          requireSecretRef("auth", "Nextcloud Talk token", "token", "tokenEnv");
+          requireText("target", "Default Nextcloud Talk room", resolveChannelConfigTarget(connection.key, config), "warn");
+          break;
+        case "line":
+          requireSecretRef("auth", "LINE channel access token", "channelAccessToken", "channelAccessTokenEnv");
+          requireText("target", "Default LINE target", resolveChannelConfigTarget(connection.key, config), "warn");
+          break;
+        case "zalo":
+          requireSecretRef("auth", "Zalo access token", "accessToken", "accessTokenEnv");
+          requireText("target", "Default Zalo recipient", resolveChannelConfigTarget(connection.key, config), "warn");
+          break;
+        case "zalouser": {
+          const baseUrl = this.readConnectionConfigValue(config, "baseUrl")
+            ?? this.readConnectionConfigValue(config, "bridgeUrl")
+            ?? this.readConnectionConfigValue(config, "serverUrl");
+          checkUrl("url", "Zalo User bridge URL", baseUrl, true);
+          const hasAuth = Boolean(
+            this.readConnectionConfigValue(config, "authToken")
+              || this.hasConnectionEnvValue(config, "authTokenEnv")
+              || this.readConnectionConfigValue(config, "authorization")
+              || this.hasConnectionEnvValue(config, "authorizationEnv")
+              || this.readConnectionConfigValue(config, "basicAuth")
+              || this.hasConnectionEnvValue(config, "basicAuthEnv")
+              || this.readConnectionConfigValue(config, "accessToken")
+              || this.hasConnectionEnvValue(config, "accessTokenEnv"),
+          );
+          checks.push({
+            key: "auth",
+            status: this.isConnectionValueLocalUrl(baseUrl) || hasAuth ? "pass" : "warn",
+            message: this.isConnectionValueLocalUrl(baseUrl)
+              ? "Local zca bridge does not require authentication."
+              : hasAuth
+                ? "Zalo User bridge authentication is configured."
+                : "Bridge authentication is not configured.",
+          });
+          requireText("target", "Default Zalo User recipient", resolveChannelConfigTarget(connection.key, config), "warn");
+          break;
+        }
         default:
-          requireText("target", "Default target", this.readConnectionConfigValue(config, "target") ?? this.readConnectionConfigValue(config, "defaultTarget"), "warn");
+          requireText("target", "Default target", resolveChannelConfigTarget(connection.key, config), "warn");
           requireSecretRef("auth", "Channel token", "token", "tokenEnv");
           break;
       }
@@ -13344,6 +13781,11 @@ export class GatewayService {
     const meta = this.storage.chatSessionMeta.get(sessionId)
       ?? this.storage.chatSessionMeta.ensure(sessionId, undefined, project?.workspaceId ?? DEFAULT_WORKSPACE_ID);
     return toChatSessionRecord(session, meta, project);
+  }
+
+  private isReplayScratchSession(sessionId: string): boolean {
+    const title = this.storage.chatSessionMeta.get(sessionId)?.title?.trim();
+    return Boolean(title && title.startsWith(REPLAY_SCRATCH_SESSION_TITLE_PREFIX));
   }
 
   private routeFromSession(session: SessionMeta): {

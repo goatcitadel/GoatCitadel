@@ -8,6 +8,8 @@ import type {
   McpServerRecord,
 } from "@goatcitadel/contracts";
 import { MCP_APPROVAL_DELIVERY_TOOL_NAME } from "./mcp-approval-inbox.js";
+import { resolveChannelConfigTarget } from "./channel-config.js";
+import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
 
 const CONNECTOR_CAPABILITY_VERSION = "v1";
 
@@ -62,6 +64,9 @@ function createMissionControlBrowserConnectorRecord(): ConnectorRecord {
 
 function toIntegrationConnectorRecord(connection: IntegrationConnection): ConnectorRecord {
   const isChannel = connection.kind === "channel";
+  const channelFeatures = isChannel
+    ? describeChannelFeatureMetadata(connection.key, connection.config)
+    : undefined;
   const status = !connection.enabled
     ? "disabled"
     : connection.lastError
@@ -81,7 +86,10 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
       createCapability("health_checks"),
       createCapability("inbound_messages", isChannel),
       createCapability("outbound_messages", isChannel),
-      createCapability("interactive_actions", isChannel),
+      createCapability(
+        "interactive_actions",
+        isChannel && (channelFeatures?.supportedDeliveryActions.some((action) => action !== "channel.send") ?? false),
+      ),
       createCapability("approvals", approvalDeliveryReady),
     ],
     metadata: {
@@ -94,6 +102,11 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
       approvalDeliveryReady,
       approvalDeliveryReason: describeIntegrationApprovalDelivery(connection, approvalDeliveryTarget),
       approvalDeliveryTarget,
+      supportedDeliveryActions: channelFeatures?.supportedDeliveryActions,
+      supportedAttachmentSources: channelFeatures?.supportedAttachmentSources,
+      channelSupportNotes: channelFeatures?.supportNotes,
+      setupDiagnostics: channelFeatures?.setupDiagnostics,
+      setupReady: (channelFeatures?.setupDiagnostics.length ?? 0) === 0,
     },
     lastSeenAt: connection.lastSyncAt,
     lastError: connection.lastError,
@@ -143,26 +156,7 @@ function resolveIntegrationApprovalDeliveryTarget(connection: IntegrationConnect
   if (connection.kind !== "channel") {
     return undefined;
   }
-  const config = connection.config;
-  switch (connection.key) {
-    case "slack":
-      return readConfigString(config, "defaultChannel");
-    case "discord":
-      return readConfigString(config, "defaultChannelId");
-    case "telegram":
-      return readConfigString(config, "defaultChatId");
-    case "matrix":
-      return readConfigString(config, "defaultRoomId");
-    case "google-chat":
-      return readConfigString(config, "defaultThreadKey");
-    default:
-      return readConfigString(config, "target") ?? readConfigString(config, "defaultTarget");
-  }
-}
-
-function readConfigString(config: Record<string, unknown>, key: string): string | undefined {
-  const value = config[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return resolveChannelConfigTarget(connection.key, connection.config);
 }
 
 function describeIntegrationApprovalDelivery(
@@ -192,6 +186,21 @@ function describeIntegrationApprovalDelivery(
       return "Set config.defaultRoomId to enable approval delivery.";
     case "google-chat":
       return "Set config.defaultThreadKey to enable approval delivery.";
+    case "whatsapp":
+      return "Set config.defaultTarget or config.defaultRecipient to enable approval delivery.";
+    case "signal":
+      return "Set config.defaultRecipient or config.defaultTarget to enable approval delivery.";
+    case "imessage":
+      return "Set config.defaultHandle or config.defaultTarget to enable approval delivery.";
+    case "mattermost":
+      return "Set config.defaultChannel or config.defaultTarget to enable approval delivery.";
+    case "nextcloud-talk":
+      return "Set config.defaultRoomId or config.defaultConversationId to enable approval delivery.";
+    case "line":
+      return "Set config.defaultTarget (or config.defaultUserId / config.defaultGroupId / config.defaultRoomId) to enable approval delivery.";
+    case "zalo":
+    case "zalouser":
+      return "Set config.defaultRecipientId or config.defaultTarget to enable approval delivery.";
     default:
       return "Set config.target or config.defaultTarget to enable approval delivery.";
   }

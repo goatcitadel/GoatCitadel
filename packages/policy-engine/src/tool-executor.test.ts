@@ -62,7 +62,14 @@ describe("executeTool", () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
+    delete process.env.IMESSAGE_PASSWORD;
+    delete process.env.LINE_CHANNEL_ACCESS_TOKEN;
+    delete process.env.MATTERMOST_BOT_TOKEN;
+    delete process.env.NEXTCLOUD_TALK_TOKEN;
     delete process.env.SLACK_BOT_TOKEN;
+    delete process.env.WHATSAPP_ACCESS_TOKEN;
+    delete process.env.ZALO_ACCESS_TOKEN;
+    delete process.env.ZALOUSER_AUTH_TOKEN;
     await fs.rm(testWorkspaceRoot, { recursive: true, force: true });
   });
 
@@ -724,6 +731,1241 @@ describe("executeTool", () => {
     expect(String(teamsCall[1]?.body ?? "")).toContain("AdaptiveCard");
     expect(result).toMatchObject({
       status: "sent",
+    });
+  });
+
+  it("sends channel messages through Mattermost bot adapters", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.MATTERMOST_BOT_TOKEN = "mm-token";
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v4/users/me")) {
+        return new Response(JSON.stringify({ id: "botuserid01234567890123456" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/v4/teams/name/goatcitadel")) {
+        return new Response(JSON.stringify({ id: "teamid12345678901234567890" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/v4/teams/teamid12345678901234567890/channels/name/town-square")) {
+        return new Response(JSON.stringify({ id: "channelid12345678901234567" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/v4/posts")) {
+        return new Response(JSON.stringify({ id: "post-123" }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const queuedSpy = vi.fn((input: Record<string, unknown>) => ({
+      deliveryId: "delivery-mm",
+      status: "queued",
+      channelKey: input.channelKey,
+      target: input.target,
+      createdAt: "2026-03-18T00:00:00.000Z",
+      updatedAt: "2026-03-18T00:00:00.000Z",
+    }));
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-mm",
+          key: "mattermost",
+          config: {
+            serverUrl: "https://chat.example.com",
+            botTokenEnv: "MATTERMOST_BOT_TOKEN",
+            defaultChannel: "town-square",
+            defaultTeam: "goatcitadel",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: queuedSpy,
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-mm",
+        message: "Deploy finished.",
+      },
+      agentId: "operator",
+      sessionId: "sess-mm",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["chat.example.com"],
+      },
+    }, commsStorage);
+
+    expect(queuedSpy).toHaveBeenCalledWith(expect.objectContaining({
+      target: "town-square",
+    }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://chat.example.com/api/v4/posts",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.any(Headers),
+      }),
+    );
+    const postCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/v4/posts"));
+    const postCallArgs = postCall as unknown[] | undefined;
+    const postBody = (postCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(postBody ?? "")).toContain("\"channel_id\":\"channelid12345678901234567\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "post-123",
+    });
+  });
+
+  it("sends channel messages through LINE bot adapters using shared target keys", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.LINE_CHANNEL_ACCESS_TOKEN = "line-token";
+    const fetchMock = vi.fn(async () => new Response("", {
+      status: 200,
+      headers: { "x-line-request-id": "line-request-123" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const queuedSpy = vi.fn((input: Record<string, unknown>) => ({
+      deliveryId: "delivery-line",
+      status: "queued",
+      channelKey: input.channelKey,
+      target: input.target,
+      createdAt: "2026-03-18T00:00:00.000Z",
+      updatedAt: "2026-03-18T00:00:00.000Z",
+    }));
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-line",
+          key: "line",
+          config: {
+            channelAccessTokenEnv: "LINE_CHANNEL_ACCESS_TOKEN",
+            defaultGroupId: "line:group:C1234567890abcdef1234567890abcd",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: queuedSpy,
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-line",
+        message: "Weekly digest is ready.",
+      },
+      agentId: "operator",
+      sessionId: "sess-line",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["api.line.me"],
+      },
+    }, commsStorage);
+
+    expect(queuedSpy).toHaveBeenCalledWith(expect.objectContaining({
+      target: "line:group:C1234567890abcdef1234567890abcd",
+    }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.line.me/v2/bot/message/push",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const lineCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const lineBody = (lineCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(lineBody ?? "")).toContain("\"to\":\"C1234567890abcdef1234567890abcd\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "line-request-123",
+    });
+  });
+
+  it("sends channel messages through Nextcloud Talk bot adapters", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.NEXTCLOUD_TALK_TOKEN = "nextcloud-secret";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ocs: { data: { id: 9988 } },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-nextcloud",
+          key: "nextcloud-talk",
+          config: {
+            baseUrl: "https://cloud.example.com",
+            tokenEnv: "NEXTCLOUD_TALK_TOKEN",
+            defaultConversationId: "nc:room:room-token-123",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-nextcloud",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-nextcloud",
+        message: "Room update complete.",
+      },
+      agentId: "operator",
+      sessionId: "sess-nextcloud",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["cloud.example.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/room-token-123/message",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const nextcloudCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const nextcloudInit = nextcloudCallArgs?.[1] as (RequestInit & { body?: BodyInit | null; headers?: HeadersInit }) | undefined;
+    expect(String(nextcloudInit?.body ?? "")).toContain("\"message\":\"Room update complete.\"");
+    const nextcloudHeaders = new Headers(nextcloudInit?.headers);
+    expect(nextcloudHeaders.get("OCS-APIRequest")).toBe("true");
+    expect(nextcloudHeaders.get("X-Nextcloud-Talk-Bot-Random")).toBeTruthy();
+    expect(nextcloudHeaders.get("X-Nextcloud-Talk-Bot-Signature")).toBeTruthy();
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "9988",
+    });
+  });
+
+  it("sends channel messages through Signal bridge adapters", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      jsonrpc: "2.0",
+      result: { timestamp: 1712345678901 },
+      id: "rpc-1",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-signal",
+          key: "signal",
+          config: {
+            baseUrl: "https://signal.example.com",
+            accountId: "+15557654321",
+            defaultRecipient: "signal:group:group-123",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-signal",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-signal",
+        message: "Bridge delivery complete.",
+      },
+      agentId: "operator",
+      sessionId: "sess-signal",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["signal.example.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://signal.example.com/api/v1/rpc",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const signalCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const signalBody = ((signalCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(signalBody ?? "")).toContain("\"method\":\"send\"");
+    expect(String(signalBody ?? "")).toContain("\"message\":\"Bridge delivery complete.\"");
+    expect(String(signalBody ?? "")).toContain("\"groupId\":\"group-123\"");
+    expect(String(signalBody ?? "")).toContain("\"account\":\"+15557654321\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "1712345678901",
+    });
+  });
+
+  it("sends channel messages through iMessage BlueBubbles adapters", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.IMESSAGE_PASSWORD = "bb-password";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [
+          {
+            guid: "iMessage;-;+15551234567",
+            participants: [{ address: "+15551234567" }],
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          guid: "bb-msg-123",
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-imessage",
+          key: "imessage",
+          config: {
+            bridgeUrl: "http://127.0.0.1:1234",
+            passwordEnv: "IMESSAGE_PASSWORD",
+            defaultHandle: "imessage:+15551234567",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-imessage",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-imessage",
+        message: "Blue bubble delivered.",
+      },
+      agentId: "operator",
+      sessionId: "sess-imessage",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["127.0.0.1"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:1234/api/v1/chat/query?password=bb-password",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:1234/api/v1/message/text?password=bb-password",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const sendCallArgs = fetchMock.mock.calls[1] as unknown[] | undefined;
+    const sendBody = ((sendCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(sendBody ?? "")).toContain("\"chatGuid\":\"iMessage;-;+15551234567\"");
+    expect(String(sendBody ?? "")).toContain("\"message\":\"Blue bubble delivered.\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "bb-msg-123",
+    });
+  });
+
+  it("sends iMessage attachments through BlueBubbles multipart delivery", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.IMESSAGE_PASSWORD = "bb-password";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [
+          {
+            guid: "iMessage;-;+15551234567",
+            participants: [{ address: "+15551234567" }],
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response("image-bytes", {
+        status: 200,
+        headers: { "Content-Type": "image/png" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          hash: "uploaded-hash-1",
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          guid: "bb-msg-attachment-123",
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-imessage",
+          key: "imessage",
+          config: {
+            bridgeUrl: "http://127.0.0.1:1234",
+            passwordEnv: "IMESSAGE_PASSWORD",
+            defaultHandle: "imessage:+15551234567",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-imessage-attachment",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-imessage",
+        message: "See attached.",
+        attachments: [
+          {
+            url: "https://files.example.com/reports/goat.png",
+            mimeType: "image/png",
+          },
+        ],
+      },
+      agentId: "operator",
+      sessionId: "sess-imessage-attachment",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["127.0.0.1", "files.example.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:1234/api/v1/chat/query?password=bb-password",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://files.example.com/reports/goat.png",
+      expect.objectContaining({
+        method: "GET",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://127.0.0.1:1234/api/v1/attachment/upload?password=bb-password",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const uploadCallArgs = fetchMock.mock.calls[2] as unknown[] | undefined;
+    const uploadBody = ((uploadCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(uploadBody).toBeInstanceOf(FormData);
+    const uploadedAttachment = (uploadBody as FormData).get("attachment");
+    expect(uploadedAttachment).toBeTruthy();
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "http://127.0.0.1:1234/api/v1/message/multipart?password=bb-password",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const multipartCallArgs = fetchMock.mock.calls[3] as unknown[] | undefined;
+    const multipartBody = ((multipartCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(multipartBody ?? "")).toContain("\"chatGuid\":\"iMessage;-;+15551234567\"");
+    expect(String(multipartBody ?? "")).toContain("\"text\":\"See attached.\"");
+    expect(String(multipartBody ?? "")).toContain("\"attachment\":\"uploaded-hash-1\"");
+    expect(String(multipartBody ?? "")).toContain("\"name\":\"goat.png\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "bb-msg-attachment-123",
+    });
+  });
+
+  it("uploads inline iMessage attachment payloads without fetching remote URLs", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.IMESSAGE_PASSWORD = "bb-password";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [
+          {
+            guid: "iMessage;-;+15551234567",
+            participants: [{ address: "+15551234567" }],
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          hash: "uploaded-inline-hash",
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          guid: "bb-msg-inline-attachment-123",
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-imessage",
+          key: "imessage",
+          config: {
+            bridgeUrl: "http://127.0.0.1:1234",
+            passwordEnv: "IMESSAGE_PASSWORD",
+            defaultHandle: "imessage:+15551234567",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-imessage-inline-attachment",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-imessage",
+        message: "",
+        attachments: [
+          {
+            title: "inline.png",
+            mimeType: "image/png",
+            dataBase64: Buffer.from("png-bytes").toString("base64"),
+          },
+        ],
+      },
+      agentId: "operator",
+      sessionId: "sess-imessage-inline-attachment",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["127.0.0.1"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:1234/api/v1/chat/query?password=bb-password",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:1234/api/v1/attachment/upload?password=bb-password",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://127.0.0.1:1234/api/v1/message/multipart?password=bb-password",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "bb-msg-inline-attachment-123",
+    });
+  });
+
+  it("reacts to iMessage messages through BlueBubbles adapters", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.IMESSAGE_PASSWORD = "bb-password";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [
+          {
+            guid: "iMessage;-;+15551234567",
+            participants: [{ address: "+15551234567" }],
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          guid: "bb-react-123",
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-imessage",
+          key: "imessage",
+          config: {
+            bridgeUrl: "http://127.0.0.1:1234",
+            passwordEnv: "IMESSAGE_PASSWORD",
+            defaultHandle: "imessage:+15551234567",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-imessage-react",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.react",
+      args: {
+        connectionId: "conn-imessage",
+        messageId: "msg-123",
+        reaction: "love",
+        partIndex: 1,
+      },
+      agentId: "operator",
+      sessionId: "sess-imessage-react",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["127.0.0.1"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:1234/api/v1/message/react?password=bb-password",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const reactCallArgs = fetchMock.mock.calls[1] as unknown[] | undefined;
+    const reactBody = ((reactCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(reactBody ?? "")).toContain("\"selectedMessageGuid\":\"msg-123\"");
+    expect(String(reactBody ?? "")).toContain("\"reaction\":\"love\"");
+    expect(String(reactBody ?? "")).toContain("\"partIndex\":1");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "bb-react-123",
+    });
+  });
+
+  it("unsends iMessage messages through BlueBubbles adapters", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.IMESSAGE_PASSWORD = "bb-password";
+    const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-imessage",
+          key: "imessage",
+          config: {
+            bridgeUrl: "http://127.0.0.1:1234",
+            passwordEnv: "IMESSAGE_PASSWORD",
+            defaultHandle: "imessage:+15551234567",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-imessage-unsend",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.unsend",
+      args: {
+        connectionId: "conn-imessage",
+        messageId: "msg-guid-456",
+        partIndex: 0,
+      },
+      agentId: "operator",
+      sessionId: "sess-imessage-unsend",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["127.0.0.1"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:1234/api/v1/message/msg-guid-456/unsend?password=bb-password",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const unsendCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const unsendBody = ((unsendCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(unsendBody ?? "")).toContain("\"partIndex\":0");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "msg-guid-456",
+    });
+  });
+
+  it("creates a new iMessage chat before sending attachments to a handle target", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.IMESSAGE_PASSWORD = "bb-password";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          guid: "bb-created-chat-msg",
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [
+          {
+            guid: "iMessage;-;+15551234567",
+            participants: [{ address: "+15551234567" }],
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response("image-bytes", {
+        status: 200,
+        headers: { "Content-Type": "image/png" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          hash: "uploaded-hash-new-chat",
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          guid: "bb-msg-new-chat-attachment",
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-imessage-new-chat",
+          key: "imessage",
+          config: {
+            bridgeUrl: "http://127.0.0.1:1234",
+            passwordEnv: "IMESSAGE_PASSWORD",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-imessage-new-chat",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-imessage-new-chat",
+        target: "imessage:+15551234567",
+        attachments: [
+          {
+            url: "https://files.example.com/reports/goat.png",
+            mimeType: "image/png",
+          },
+        ],
+      },
+      agentId: "operator",
+      sessionId: "sess-imessage-new-chat",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["127.0.0.1", "files.example.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:1234/api/v1/chat/query?password=bb-password",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:1234/api/v1/chat/new?password=bb-password",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const createChatCallArgs = fetchMock.mock.calls[1] as unknown[] | undefined;
+    const createChatBody = ((createChatCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(createChatBody ?? "")).toContain("\"addresses\":[\"+15551234567\"]");
+    expect(String(createChatBody ?? "")).not.toContain("\"message\":");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://127.0.0.1:1234/api/v1/chat/query?password=bb-password",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "https://files.example.com/reports/goat.png",
+      expect.objectContaining({
+        method: "GET",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "http://127.0.0.1:1234/api/v1/attachment/upload?password=bb-password",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
+      "http://127.0.0.1:1234/api/v1/message/multipart?password=bb-password",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const multipartCallArgs = fetchMock.mock.calls[5] as unknown[] | undefined;
+    const multipartBody = ((multipartCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(multipartBody ?? "")).toContain("\"attachment\":\"uploaded-hash-new-chat\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "bb-msg-new-chat-attachment",
+    });
+  });
+
+  it("sends channel messages through WhatsApp Cloud API adapters", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.WHATSAPP_ACCESS_TOKEN = "wa-token";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      messaging_product: "whatsapp",
+      messages: [{ id: "wamid.12345" }],
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-whatsapp",
+          key: "whatsapp",
+          config: {
+            accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
+            phoneNumberId: "123456789012345",
+            defaultTarget: "+15551234567",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-whatsapp",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-whatsapp",
+        message: "Cloud delivery complete.",
+      },
+      agentId: "operator",
+      sessionId: "sess-whatsapp",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["graph.facebook.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://graph.facebook.com/v23.0/123456789012345/messages",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const whatsappCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const whatsappBody = ((whatsappCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(whatsappBody ?? "")).toContain("\"messaging_product\":\"whatsapp\"");
+    expect(String(whatsappBody ?? "")).toContain("\"to\":\"15551234567\"");
+    expect(String(whatsappBody ?? "")).toContain("\"body\":\"Cloud delivery complete.\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "wamid.12345",
+    });
+  });
+
+  it("sends channel messages through Zalo Personal zca bridge adapters", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.ZALOUSER_AUTH_TOKEN = "zlu-token";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      messageId: "zlu-msg-123",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-zalouser",
+          key: "zalouser",
+          config: {
+            baseUrl: "http://127.0.0.1:56789",
+            authTokenEnv: "ZALOUSER_AUTH_TOKEN",
+            profile: "work",
+            defaultTarget: "group:g-987654321",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-zalouser",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-zalouser",
+        message: "Zalo personal delivery complete.",
+      },
+      agentId: "operator",
+      sessionId: "sess-zalouser",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["127.0.0.1"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:56789/api/work/messages/text",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer zlu-token",
+        }),
+      }),
+    );
+    const zaloUserCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const zaloUserBody = ((zaloUserCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(zaloUserBody ?? "")).toContain("\"threadId\":\"g-987654321\"");
+    expect(String(zaloUserBody ?? "")).toContain("\"isGroup\":true");
+    expect(String(zaloUserBody ?? "")).toContain("\"message\":\"Zalo personal delivery complete.\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "zlu-msg-123",
+    });
+  });
+
+  it("routes Zalo Personal image attachments to the zca media endpoint", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.ZALOUSER_AUTH_TOKEN = "zlu-token";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      messageId: "zlu-media-123",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-zalouser-media",
+          key: "zalouser",
+          config: {
+            baseUrl: "http://127.0.0.1:56789",
+            authTokenEnv: "ZALOUSER_AUTH_TOKEN",
+            profile: "work",
+            defaultTarget: "user:u-123456789",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-zalouser-media",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-zalouser-media",
+        message: "Photo attached.",
+        attachments: [
+          {
+            url: "https://example.com/photo.png",
+            title: "Screenshot",
+            mimeType: "image/png",
+          },
+        ],
+      },
+      agentId: "operator",
+      sessionId: "sess-zalouser-media",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["127.0.0.1", "example.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:56789/api/work/messages/image",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer zlu-token",
+        }),
+      }),
+    );
+    const mediaCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const mediaBody = ((mediaCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(mediaBody ?? "")).toContain("\"threadId\":\"u-123456789\"");
+    expect(String(mediaBody ?? "")).toContain("\"isGroup\":false");
+    expect(String(mediaBody ?? "")).toContain("\"url\":\"https://example.com/photo.png\"");
+    expect(String(mediaBody ?? "")).toContain("\"message\":\"Photo attached.\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "zlu-media-123",
+    });
+  });
+
+  it("sends channel messages through Zalo bot adapters", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.ZALO_ACCESS_TOKEN = "zalo-token";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      result: { message_id: "zalo-msg-1" },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-zalo",
+          key: "zalo",
+          config: {
+            accessTokenEnv: "ZALO_ACCESS_TOKEN",
+            defaultRecipientId: "zalo:group:chat-123",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-zalo",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-zalo",
+        message: "Broadcast ready.",
+      },
+      agentId: "operator",
+      sessionId: "sess-zalo",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["bot-api.zaloplatforms.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://bot-api.zaloplatforms.com/botzalo-token/sendMessage",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const zaloCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const zaloBody = ((zaloCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(zaloBody ?? "")).toContain("\"chat_id\":\"chat-123\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "zalo-msg-1",
     });
   });
 });

@@ -37,6 +37,125 @@ describe("buildGatewayConnectorRecords", () => {
     expect(connector?.metadata?.approvalDeliveryReady).toBe(false);
   });
 
+  it("extracts approval delivery targets from additional channel-specific config keys", () => {
+    const cases = [
+      {
+        key: "signal",
+        config: { defaultRecipient: "+15551234567" },
+        expectedTarget: "+15551234567",
+      },
+      {
+        key: "imessage",
+        config: { defaultHandle: "+15557654321" },
+        expectedTarget: "+15557654321",
+      },
+      {
+        key: "nextcloud-talk",
+        config: { defaultConversationId: "room-42" },
+        expectedTarget: "room-42",
+      },
+      {
+        key: "line",
+        config: { defaultUserId: "U1234567890" },
+        expectedTarget: "U1234567890",
+      },
+      {
+        key: "zalo",
+        config: { defaultRecipientId: "zalo-user-123" },
+        expectedTarget: "zalo-user-123",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const records = buildGatewayConnectorRecords({
+        integrationConnections: [
+          createIntegrationConnection("channel", testCase.key, testCase.config),
+        ],
+        mcpServers: [],
+        mcpTools: [],
+      });
+
+      const connector = records.find((item) => item.connectorId === "integration:conn-1");
+      expect(connector?.metadata?.approvalDeliveryTarget).toBe(testCase.expectedTarget);
+      expect(connector?.metadata?.approvalDeliveryReady).toBe(true);
+    }
+  });
+
+  it("publishes channel-specific guidance for missing approval delivery targets", () => {
+    const records = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "imessage"),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+
+    const connector = records.find((item) => item.connectorId === "integration:conn-1");
+    expect(connector?.metadata?.approvalDeliveryTarget).toBeUndefined();
+    expect(connector?.metadata?.approvalDeliveryReason).toBe(
+      "Set config.defaultHandle or config.defaultTarget to enable approval delivery.",
+    );
+  });
+
+  it("advertises richer channel actions and diagnostics only when the bridge supports them", () => {
+    const imessageRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "imessage", {
+          bridgeUrl: "http://127.0.0.1:1234",
+          passwordEnv: "IMESSAGE_PASSWORD",
+          defaultHandle: "imessage:+15551234567",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+    const slackRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "slack", {
+          defaultChannel: "#ops",
+          botTokenEnv: "SLACK_BOT_TOKEN",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+
+    const imessage = imessageRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(imessage?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
+    expect(imessage?.metadata?.supportedDeliveryActions).toEqual([
+      "channel.send",
+      "channel.react",
+      "channel.unsend",
+    ]);
+    expect(imessage?.metadata?.setupReady).toBe(true);
+    expect(imessage?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
+      "Reactions and unsend require BlueBubbles Private API support.",
+    ]));
+
+    const slack = slackRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(slack?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(false);
+    expect(slack?.metadata?.supportedDeliveryActions).toEqual(["channel.send"]);
+  });
+
+  it("publishes setup diagnostics for incomplete channel bridge configs", () => {
+    const records = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "imessage", {
+          defaultHandle: "imessage:+15551234567",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+
+    const connector = records.find((item) => item.connectorId === "integration:conn-1");
+    expect(connector?.metadata?.setupReady).toBe(false);
+    expect(connector?.metadata?.setupDiagnostics).toEqual(expect.arrayContaining([
+      "Missing one of: config.bridgeUrl, config.baseUrl, config.serverUrl.",
+      "Missing one of: config.passwordEnv, config.password, config.apiPasswordEnv, config.apiPassword.",
+    ]));
+  });
+
   it("publishes the MCP approval delivery tool contract in connector metadata when the tool exists", () => {
     const records = buildGatewayConnectorRecords({
       integrationConnections: [],

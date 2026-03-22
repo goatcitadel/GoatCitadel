@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type { ToolGrantRecord, ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
@@ -149,13 +149,25 @@ export async function executeTool(
     case "artifacts.create":
       return artifactsCreate(request.args, config);
     case "channel.send":
+    case "channel.react":
+    case "channel.unsend":
     case "webhook.send":
     case "gmail.read":
     case "gmail.send":
     case "calendar.list":
     case "calendar.create_event":
     case "discord.send":
+    case "line.send":
+    case "mattermost.send":
+    case "nextcloud-talk.send":
+    case "imessage.send":
+    case "imessage.react":
+    case "imessage.unsend":
+    case "signal.send":
     case "slack.send":
+    case "whatsapp.send":
+    case "zalo.send":
+    case "zalouser.send":
       return commsInvoke(request.toolName, request.args, config, storage);
     default:
       throw new Error(`Unsupported tool executor: ${request.toolName}`);
@@ -1055,7 +1067,7 @@ async function commsInvoke(
       storage.commsDeliveries.markSent(queued.deliveryId, "calendar-list");
       return { ...queued, status: "sent", providerMessageId: "calendar-list", records };
     }
-    const providerMessageId = await commsSend(
+    const providerMessageId = await executeCommsTool(
       toolName,
       connection.key,
       connection.config,
@@ -1073,7 +1085,7 @@ async function commsInvoke(
   }
 }
 
-async function commsSend(
+async function executeCommsTool(
   toolName: string,
   connectionKey: string,
   connectionConfig: Record<string, unknown>,
@@ -1088,13 +1100,30 @@ async function commsSend(
   if (toolName === "calendar.create_event") {
     return calendarCreate(connectionConfig, args, allowlist);
   }
+  if (toolName.endsWith(".react") || toolName === "channel.react") {
+    return commsReact(toolName, connectionKey, connectionConfig, args, allowlist, target);
+  }
+  if (toolName.endsWith(".unsend") || toolName === "channel.unsend") {
+    return commsUnsend(toolName, connectionKey, connectionConfig, args, allowlist, target);
+  }
   const channelKey = resolveChannelKey(toolName, connectionKey);
-  const renderedMessage = renderChannelMessage(message, args.attachments);
+  const attachments = normalizeChannelAttachments(args.attachments);
+  const renderedMessage = renderChannelMessage(message, attachments);
   switch (channelKey) {
     case "slack":
       return slackSend(connectionConfig, args, allowlist, target, renderedMessage);
     case "discord":
       return discordSend(connectionConfig, args, allowlist, target, renderedMessage);
+    case "line":
+      return lineSend(connectionConfig, args, allowlist, target, renderedMessage);
+    case "mattermost":
+      return mattermostSend(connectionConfig, args, allowlist, target, renderedMessage);
+    case "nextcloud-talk":
+      return nextcloudTalkSend(connectionConfig, args, allowlist, target, renderedMessage);
+    case "imessage":
+      return imessageSend(connectionConfig, args, allowlist, target, message, attachments);
+    case "signal":
+      return signalSend(connectionConfig, args, allowlist, target, renderedMessage);
     case "telegram":
       return telegramSend(connectionConfig, args, allowlist, target, renderedMessage);
     case "matrix":
@@ -1103,6 +1132,12 @@ async function commsSend(
       return teamsSend(connectionConfig, args, allowlist, renderedMessage);
     case "google-chat":
       return googleChatSend(connectionConfig, args, allowlist, target, renderedMessage);
+    case "whatsapp":
+      return whatsappSend(connectionConfig, args, allowlist, target, renderedMessage);
+    case "zalo":
+      return zaloSend(connectionConfig, args, allowlist, target, renderedMessage);
+    case "zalouser":
+      return zalouserSend(connectionConfig, args, allowlist, target, message, attachments);
     default:
       break;
   }
@@ -1126,12 +1161,58 @@ async function commsSend(
   return `${toolName}-${Date.now()}`;
 }
 
+async function commsReact(
+  toolName: string,
+  connectionKey: string,
+  connectionConfig: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const channelKey = resolveChannelKey(toolName, connectionKey);
+  switch (channelKey) {
+    case "imessage":
+      return imessageReact(connectionConfig, args, allowlist, target);
+    default:
+      throw new Error(`${toolName} is not supported for ${channelKey}`);
+  }
+}
+
+async function commsUnsend(
+  toolName: string,
+  connectionKey: string,
+  connectionConfig: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const channelKey = resolveChannelKey(toolName, connectionKey);
+  switch (channelKey) {
+    case "imessage":
+      return imessageUnsend(connectionConfig, args, allowlist, target);
+    default:
+      throw new Error(`${toolName} is not supported for ${channelKey}`);
+  }
+}
+
 function resolveChannelKey(toolName: string, connectionKey: string): string {
   if (toolName === "channel.send") {
     return connectionKey;
   }
   if (toolName.endsWith(".send")) {
     return toolName.slice(0, -".send".length);
+  }
+  if (toolName === "channel.react") {
+    return connectionKey;
+  }
+  if (toolName.endsWith(".react")) {
+    return toolName.slice(0, -".react".length);
+  }
+  if (toolName === "channel.unsend") {
+    return connectionKey;
+  }
+  if (toolName.endsWith(".unsend")) {
+    return toolName.slice(0, -".unsend".length);
   }
   return connectionKey;
 }
@@ -1140,35 +1221,27 @@ function resolveDefaultChannelTarget(
   connectionKey: string,
   config: Record<string, unknown>,
 ): string | undefined {
-  switch (connectionKey) {
-    case "slack":
-      return asString(config.defaultChannel);
-    case "discord":
-      return asString(config.defaultChannelId);
-    case "telegram":
-      return asString(config.defaultChatId);
-    case "matrix":
-      return asString(config.defaultRoomId);
-    case "google-chat":
-      return asString(config.defaultThreadKey);
-    default:
-      return asString(config.target) ?? asString(config.defaultTarget);
+  const keys = CHANNEL_TARGET_KEYS[connectionKey] ?? ["target", "defaultTarget"];
+  for (const key of keys) {
+    const value = asString(config[key]);
+    if (value) {
+      return value;
+    }
   }
+  return undefined;
 }
 
 function renderChannelMessage(
   message: string,
   attachmentsRaw: unknown,
 ): string {
-  const attachments = Array.isArray(attachmentsRaw)
-    ? attachmentsRaw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
-    : [];
+  const attachments = normalizeChannelAttachments(attachmentsRaw);
   if (attachments.length === 0) {
     return message;
   }
   const lines = attachments.map((attachment) => {
-    const title = asString(attachment.title);
-    const url = asString(attachment.url);
+    const title = attachment.title;
+    const url = attachment.url;
     if (title && url) {
       return `- ${title}: ${url}`;
     }
@@ -1178,12 +1251,43 @@ function renderChannelMessage(
     if (title) {
       return `- ${title}`;
     }
+    if (attachment.attachmentId) {
+      return `- attachment ${attachment.attachmentId}`;
+    }
+    if (attachment.dataBase64) {
+      return "- inline attachment";
+    }
     return null;
   }).filter((line): line is string => Boolean(line));
   if (lines.length === 0) {
     return message;
   }
   return `${message}\n\nAttachments:\n${lines.join("\n")}`;
+}
+
+type ChannelAttachment = {
+  url?: string;
+  title?: string;
+  mimeType?: string;
+  dataBase64?: string;
+  attachmentId?: string;
+};
+
+function normalizeChannelAttachments(attachmentsRaw: unknown): ChannelAttachment[] {
+  if (!Array.isArray(attachmentsRaw)) {
+    return [];
+  }
+  return attachmentsRaw
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .map((attachment) => ({
+      url: asString(attachment.url),
+      title: asString(attachment.title),
+      mimeType: asString(attachment.mimeType),
+      dataBase64: asString(attachment.dataBase64),
+      attachmentId: asString(attachment.attachmentId),
+    }))
+    .filter((attachment) =>
+      Boolean(attachment.url || attachment.title || attachment.mimeType || attachment.dataBase64 || attachment.attachmentId));
 }
 
 async function slackSend(
@@ -1297,6 +1401,58 @@ async function discordSend(
   }
   const body = parseJsonRecord(bodyText);
   return asString(body.id) ?? `discord-${Date.now()}`;
+}
+
+async function lineSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+): Promise<string> {
+  const resolvedTarget = normalizeLineTarget(
+    asString(args.target) ?? normalizeChannelTarget(target, "line") ?? resolveDefaultChannelTarget("line", config),
+  );
+  const channelAccessToken = secretFrom(config, "channelAccessToken", "channelAccessTokenEnv")
+    ?? secretFrom(config, "accessToken", "accessTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  if (!channelAccessToken) {
+    throw new Error("Missing LINE channel access token");
+  }
+  if (!resolvedTarget) {
+    throw new Error("Missing LINE target");
+  }
+
+  const chunks = chunkText(message, 5000, 0, 20);
+  if (chunks.length === 0) {
+    throw new Error("Missing LINE message");
+  }
+
+  let requestId: string | undefined;
+  for (let index = 0; index < chunks.length; index += 5) {
+    const messages = chunks.slice(index, index + 5).map((text) => ({ type: "text", text }));
+    const res = await fetchAllowlisted(
+      "https://api.line.me/v2/bot/message/push",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${channelAccessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          to: resolvedTarget,
+          messages,
+        }),
+      },
+      allowlist,
+    );
+    if (!res.response.ok) {
+      throw new Error(`line.send failed (${res.response.status})`);
+    }
+    requestId = res.response.headers.get("x-line-request-id") ?? requestId;
+  }
+
+  return requestId ?? `line-${Date.now()}`;
 }
 
 async function telegramSend(
@@ -1460,6 +1616,459 @@ async function googleChatSend(
   return asString(body.name) ?? `google-chat-${Date.now()}`;
 }
 
+async function whatsappSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+): Promise<string> {
+  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const phoneNumberId = asString(config.phoneNumberId) ?? asString(config.senderId);
+  const resolvedTarget = normalizeWhatsAppTarget(
+    asString(args.target) ?? normalizeChannelTarget(target, "whatsapp") ?? resolveDefaultChannelTarget("whatsapp", config),
+  );
+  const outboundMessage = required(message, "WhatsApp message");
+  const baseUrl = normalizeWhatsAppBaseUrl(asString(config.baseUrl), asString(config.apiVersion));
+  if (!accessToken) {
+    throw new Error("Missing WhatsApp access token");
+  }
+  if (!phoneNumberId) {
+    throw new Error("Missing WhatsApp phone number id");
+  }
+  if (!resolvedTarget) {
+    throw new Error("Missing WhatsApp target");
+  }
+  if (isWhatsAppGroupTarget(resolvedTarget)) {
+    throw new Error("WhatsApp Cloud API sender only supports direct recipients, not group JIDs");
+  }
+
+  const res = await fetchAllowlisted(
+    `${baseUrl}/${encodeURIComponent(phoneNumberId)}/messages`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: normalizeWhatsAppRecipient(resolvedTarget),
+        type: "text",
+        text: { body: outboundMessage },
+      }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const body = parseJsonRecord(bodyText);
+  if (!res.response.ok || Object.keys(record(body.error)).length > 0) {
+    const errorBody = record(body.error);
+    const detail = asString(errorBody.message) ?? bodyText.trim();
+    throw new Error(`whatsapp.send failed (${res.response.status})${detail ? `: ${detail}` : ""}`);
+  }
+  const messages = Array.isArray(body.messages)
+    ? body.messages.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    : [];
+  return asString(messages[0]?.id) ?? `whatsapp-${Date.now()}`;
+}
+
+async function mattermostSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+): Promise<string> {
+  const serverUrl = asString(config.serverUrl) ?? asString(config.baseUrl);
+  const botToken = secretFrom(config, "botToken", "botTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const resolvedTarget = asString(args.target)
+    ?? normalizeChannelTarget(target, "mattermost")
+    ?? resolveDefaultChannelTarget("mattermost", config);
+  if (!serverUrl) {
+    throw new Error("Missing Mattermost server URL");
+  }
+  if (!botToken) {
+    throw new Error("Missing Mattermost bot token");
+  }
+  if (!resolvedTarget) {
+    throw new Error("Missing Mattermost target");
+  }
+
+  const parsedTarget = parseMattermostTarget(resolvedTarget);
+  const botUser = await mattermostApiRequest<Record<string, unknown>>(
+    serverUrl,
+    botToken,
+    "/users/me",
+    allowlist,
+  );
+  const botUserId = required(botUser.id, "Mattermost bot user id");
+  const channelId = await resolveMattermostChannelId(
+    serverUrl,
+    botToken,
+    parsedTarget,
+    botUserId,
+    asString(args.team) ?? asString(config.defaultTeam),
+    allowlist,
+  );
+
+  const post = await mattermostApiRequest<Record<string, unknown>>(
+    serverUrl,
+    botToken,
+    "/posts",
+    allowlist,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        channel_id: channelId,
+        message,
+      }),
+    },
+  );
+  return asString(post.id) ?? `mattermost-${Date.now()}`;
+}
+
+async function signalSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+): Promise<string> {
+  const baseUrl = normalizeSignalBaseUrl(asString(config.baseUrl) ?? asString(config.bridgeUrl));
+  const account = asString(args.account)
+    ?? asString(args.accountId)
+    ?? asString(config.account)
+    ?? asString(config.accountId);
+  const resolvedTarget = normalizeSignalTarget(
+    asString(args.target) ?? normalizeChannelTarget(target, "signal") ?? resolveDefaultChannelTarget("signal", config),
+  );
+  const outboundMessage = required(message, "Signal message");
+  if (!baseUrl) {
+    throw new Error("Missing Signal base URL");
+  }
+  if (!resolvedTarget) {
+    throw new Error("Missing Signal target");
+  }
+
+  const params: Record<string, unknown> = {
+    message: outboundMessage,
+    ...buildSignalTargetParams(resolvedTarget),
+  };
+  if (account) {
+    params.account = account;
+  }
+
+  const result = await signalRpcRequest<Record<string, unknown>>(baseUrl, "send", params, allowlist);
+  return result.timestamp != null ? String(result.timestamp) : `signal-${Date.now()}`;
+}
+
+async function imessageSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+  attachments: ChannelAttachment[] = [],
+): Promise<string> {
+  const baseUrl = normalizeBlueBubblesBaseUrl(
+    asString(config.bridgeUrl) ?? asString(config.baseUrl) ?? asString(config.serverUrl),
+  );
+  const password = secretFrom(config, "password", "passwordEnv")
+    ?? secretFrom(config, "apiPassword", "apiPasswordEnv");
+  const resolvedTarget = asString(args.target)
+    ?? normalizeChannelTarget(target, "imessage")
+    ?? resolveDefaultChannelTarget("imessage", config);
+  if (!baseUrl) {
+    throw new Error("Missing iMessage bridge URL");
+  }
+  if (!password) {
+    throw new Error("Missing iMessage bridge password");
+  }
+  if (!resolvedTarget) {
+    throw new Error("Missing iMessage target");
+  }
+
+  const parsedTarget = parseBlueBubblesTarget(resolvedTarget);
+  const richAttachments = attachments.filter((attachment) => Boolean(attachment.url || attachment.dataBase64));
+  const inlineOnlyAttachments = attachments.filter((attachment) => !attachment.url);
+  const inlineMessage = renderChannelMessage(message, inlineOnlyAttachments);
+  let chatGuid = await resolveBlueBubblesChatGuid(baseUrl, password, parsedTarget, allowlist);
+  if (!chatGuid) {
+    if (parsedTarget.kind === "handle") {
+      if (richAttachments.length > 0) {
+        await blueBubblesCreateChat(baseUrl, password, parsedTarget.address, undefined, allowlist);
+        chatGuid = await resolveBlueBubblesChatGuid(baseUrl, password, parsedTarget, allowlist);
+        if (!chatGuid) {
+          throw new Error("BlueBubbles send failed: created chat could not be resolved for attachment send");
+        }
+      } else {
+        return blueBubblesCreateChat(
+          baseUrl,
+          password,
+          parsedTarget.address,
+          required(inlineMessage, "iMessage message"),
+          allowlist,
+        );
+      }
+    }
+  }
+
+  if (!chatGuid) {
+    throw new Error("BlueBubbles send failed: chatGuid not found for target");
+  }
+
+  const replyToMessageGuid = asString(args.replyToMessageGuid) ?? asString(args.replyTo);
+  const replyToPartIndex = parseIntegerLike(args.replyToPartIndex ?? args.partIndex);
+  const effectId = asString(args.effectId) ?? asString(args.effect);
+  const subject = asString(args.subject);
+
+  if (richAttachments.length === 0) {
+    return blueBubblesSendText(baseUrl, password, {
+      chatGuid,
+      message: required(inlineMessage, "iMessage message"),
+      replyToMessageGuid,
+      replyToPartIndex,
+      effectId,
+    }, allowlist);
+  }
+
+  const uploadedAttachments: BlueBubblesMultipartAttachmentPart[] = [];
+  for (let index = 0; index < richAttachments.length; index += 1) {
+    const attachment = richAttachments[index];
+    if (!attachment) {
+      continue;
+    }
+    uploadedAttachments.push(await blueBubblesUploadAttachment(
+      baseUrl,
+      password,
+      attachment,
+      allowlist,
+      index,
+    ));
+  }
+
+  return blueBubblesSendMultipart(baseUrl, password, {
+    chatGuid,
+    message: inlineMessage.trim() ? inlineMessage : undefined,
+    attachments: uploadedAttachments,
+    replyToMessageGuid,
+    replyToPartIndex,
+    effectId,
+    subject,
+  }, allowlist);
+}
+
+async function imessageReact(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const context = resolveBlueBubblesContext(config, args, target, "Missing iMessage target");
+  const parsedTarget = parseBlueBubblesTarget(context.resolvedTarget);
+  const chatGuid = await resolveBlueBubblesChatGuid(context.baseUrl, context.password, parsedTarget, allowlist);
+  if (!chatGuid) {
+    throw new Error("BlueBubbles react failed: chatGuid not found for target");
+  }
+  const messageId = asString(args.messageId) ?? asString(args.messageGuid) ?? asString(args.selectedMessageGuid);
+  const reaction = asString(args.reaction);
+  const partIndex = parseIntegerLike(args.partIndex);
+  return blueBubblesSendReaction(context.baseUrl, context.password, {
+    chatGuid,
+    messageId: required(messageId, "iMessage messageId"),
+    reaction: required(reaction, "iMessage reaction"),
+    partIndex,
+    messageText: asString(args.messageText) ?? asString(args.selectedMessageText),
+  }, allowlist);
+}
+
+async function imessageUnsend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const context = resolveBlueBubblesContext(config, args, target, "");
+  return blueBubblesUnsendMessage(context.baseUrl, context.password, {
+    messageId: required(asString(args.messageId) ?? asString(args.messageGuid), "iMessage messageId"),
+    partIndex: parseIntegerLike(args.partIndex),
+  }, allowlist);
+}
+
+async function nextcloudTalkSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+): Promise<string> {
+  const baseUrl = asString(config.baseUrl);
+  const secret = secretFrom(config, "token", "tokenEnv")
+    ?? secretFrom(config, "botSecret", "botSecretEnv")
+    ?? secretFrom(config, "secret", "secretEnv");
+  const roomToken = normalizeNextcloudTalkTarget(
+    asString(args.target)
+      ?? normalizeChannelTarget(target, "nextcloud-talk")
+      ?? resolveDefaultChannelTarget("nextcloud-talk", config),
+  );
+  const replyTo = asString(args.replyTo);
+  const outboundMessage = required(message, "Nextcloud Talk message");
+  if (!baseUrl) {
+    throw new Error("Missing Nextcloud Talk base URL");
+  }
+  if (!secret) {
+    throw new Error("Missing Nextcloud Talk token");
+  }
+  if (!roomToken) {
+    throw new Error("Missing Nextcloud Talk target");
+  }
+
+  const payload: Record<string, unknown> = { message: outboundMessage };
+  if (replyTo) {
+    payload.replyTo = replyTo;
+  }
+  const random = randomBytes(32).toString("hex");
+  const signature = createHmac("sha256", secret)
+    .update(random + outboundMessage)
+    .digest("hex");
+  const res = await fetchAllowlisted(
+    `${baseUrl.replace(/\/+$/, "")}/ocs/v2.php/apps/spreed/api/v1/bot/${encodeURIComponent(roomToken)}/message`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "OCS-APIRequest": "true",
+        "X-Nextcloud-Talk-Bot-Random": random,
+        "X-Nextcloud-Talk-Bot-Signature": signature,
+      },
+      body: JSON.stringify(payload),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`nextcloud-talk.send failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  const body = parseJsonRecord(bodyText);
+  const ocs = record(body.ocs);
+  const data = record(ocs.data);
+  return data.id != null ? String(data.id) : `nextcloud-talk-${Date.now()}`;
+}
+
+async function zaloSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+): Promise<string> {
+  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const chatId = normalizeZaloTarget(
+    asString(args.target) ?? normalizeChannelTarget(target, "zalo") ?? resolveDefaultChannelTarget("zalo", config),
+  );
+  const outboundMessage = required(message, "Zalo message");
+  if (!accessToken) {
+    throw new Error("Missing Zalo access token");
+  }
+  if (!chatId) {
+    throw new Error("Missing Zalo target");
+  }
+
+  const chunks = chunkText(outboundMessage, 2000, 0, 20);
+  if (chunks.length === 0) {
+    throw new Error("Missing Zalo message");
+  }
+
+  let messageId: string | undefined;
+  for (const chunk of chunks) {
+    const res = await fetchAllowlisted(
+      `https://bot-api.zaloplatforms.com/bot${accessToken}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: chunk,
+        }),
+      },
+      allowlist,
+    );
+    const bodyText = await res.response.text();
+    const body = parseJsonRecord(bodyText);
+    if (!res.response.ok || body.ok === false) {
+      const description = asString(body.description);
+      throw new Error(`zalo.send failed (${res.response.status})${description ? `: ${description}` : ""}`);
+    }
+    const result = record(body.result);
+    messageId = asString(result.message_id) ?? messageId;
+  }
+
+  return messageId ?? `zalo-${Date.now()}`;
+}
+
+async function zalouserSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+  attachments: ChannelAttachment[] = [],
+): Promise<string> {
+  const baseUrl = normalizeZcaBaseUrl(
+    asString(config.baseUrl) ?? asString(config.bridgeUrl) ?? asString(config.serverUrl),
+  );
+  const profile = asString(args.profile)
+    ?? asString(config.profile)
+    ?? asString(config.accountId)
+    ?? asString(config.account);
+  const resolvedTarget = asString(args.target)
+    ?? normalizeChannelTarget(target, "zalouser")
+    ?? resolveDefaultChannelTarget("zalouser", config);
+  const authorization = resolveZcaAuthorizationHeader(config);
+  const outboundMessage = required(message, "Zalo User message");
+  if (!baseUrl) {
+    throw new Error("Missing Zalo User bridge URL");
+  }
+  if (!resolvedTarget) {
+    throw new Error("Missing Zalo User target");
+  }
+
+  const parsedTarget = parseZalouserTarget(resolvedTarget);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (authorization) {
+    headers.Authorization = authorization;
+  }
+  const profilePrefix = profile ? `/api/${encodeURIComponent(profile)}` : "/api";
+  const richAttachments = attachments.filter((attachment) => Boolean(attachment.url));
+  const inlineOnlyAttachments = attachments.filter((attachment) => !attachment.url);
+  const inlineMessage = renderChannelMessage(outboundMessage, inlineOnlyAttachments);
+
+  if (richAttachments.length === 0) {
+    return zcaSendText(baseUrl, profilePrefix, headers, parsedTarget, inlineMessage, allowlist);
+  }
+
+  let lastMessageId: string | undefined;
+  let caption: string | undefined = inlineMessage.trim() ? inlineMessage : undefined;
+  for (const attachment of richAttachments) {
+    lastMessageId = await zcaSendAttachment(
+      baseUrl,
+      profilePrefix,
+      headers,
+      parsedTarget,
+      attachment,
+      caption,
+      allowlist,
+    );
+    caption = undefined;
+  }
+  return lastMessageId ?? `zalouser-${Date.now()}`;
+}
+
 function parseJsonRecord(bodyText: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(bodyText) as unknown;
@@ -1475,6 +2084,1268 @@ function normalizeChannelTarget(target: string | undefined, channelKey: string):
   }
   return target;
 }
+
+const CHANNEL_TARGET_KEYS: Record<string, string[]> = {
+  slack: ["defaultChannel", "defaultTarget", "target"],
+  discord: ["defaultChannelId", "defaultTarget", "target"],
+  telegram: ["defaultChatId", "defaultTarget", "target"],
+  matrix: ["defaultRoomId", "defaultTarget", "target"],
+  "google-chat": ["defaultThreadKey", "defaultTarget", "target"],
+  whatsapp: ["defaultTarget", "defaultRecipient", "target"],
+  signal: ["defaultRecipient", "defaultTarget", "target"],
+  imessage: ["defaultHandle", "defaultTarget", "target"],
+  mattermost: ["defaultChannel", "defaultTarget", "target"],
+  "nextcloud-talk": ["defaultRoomId", "defaultConversationId", "defaultTarget", "target"],
+  line: ["defaultTarget", "defaultUserId", "defaultGroupId", "defaultRoomId", "target"],
+  zalo: ["defaultRecipientId", "defaultTarget", "target"],
+  zalouser: ["defaultRecipientId", "defaultTarget", "target"],
+};
+
+type MattermostTarget =
+  | { kind: "channel"; id: string }
+  | { kind: "channel-name"; name: string }
+  | { kind: "user"; id?: string; username?: string };
+
+type BlueBubblesTarget =
+  | { kind: "chat_id"; chatId: number }
+  | { kind: "chat_guid"; chatGuid: string }
+  | { kind: "chat_identifier"; chatIdentifier: string }
+  | { kind: "handle"; address: string; service: "imessage" | "sms" | "auto" };
+
+type ZalouserTarget = {
+  threadId: string;
+  isGroup: boolean;
+};
+
+function normalizeLineTarget(target: string | undefined): string | undefined {
+  const trimmed = asString(target);
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.replace(/^line:(?:user|group|room):/i, "").replace(/^line:/i, "").trim();
+}
+
+function normalizeWhatsAppBaseUrl(baseUrl: string | undefined, apiVersion: string | undefined): string {
+  const trimmedBaseUrl = asString(baseUrl)?.trim();
+  if (trimmedBaseUrl) {
+    return trimmedBaseUrl.replace(/\/+$/, "");
+  }
+  const normalizedVersion = asString(apiVersion)?.trim() ?? "v23.0";
+  return `https://graph.facebook.com/${normalizedVersion.replace(/^\/+/, "").replace(/\/+$/, "")}`;
+}
+
+function normalizeSignalBaseUrl(baseUrl: string | undefined): string | undefined {
+  const trimmed = asString(baseUrl)?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed.replace(/\/+$/, "");
+  }
+  return `http://${trimmed}`.replace(/\/+$/, "");
+}
+
+function normalizeBlueBubblesBaseUrl(baseUrl: string | undefined): string | undefined {
+  const trimmed = asString(baseUrl)?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed.replace(/\/+$/, "");
+  }
+  return `http://${trimmed}`.replace(/\/+$/, "");
+}
+
+function normalizeSignalTarget(target: string | undefined): string | undefined {
+  const trimmed = asString(target);
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.replace(/^signal:/i, "").trim();
+}
+
+function normalizeZcaBaseUrl(baseUrl: string | undefined): string | undefined {
+  const trimmed = asString(baseUrl)?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed.replace(/\/+$/, "");
+  }
+  return `http://${trimmed}`.replace(/\/+$/, "");
+}
+
+function normalizeWhatsAppTarget(target: string | undefined): string | undefined {
+  const trimmed = asString(target);
+  if (!trimmed) {
+    return undefined;
+  }
+  let candidate = trimmed;
+  for (;;) {
+    const next = candidate.replace(/^whatsapp:/i, "").trim();
+    if (next === candidate) {
+      break;
+    }
+    candidate = next;
+  }
+  if (!candidate) {
+    return undefined;
+  }
+  const lower = candidate.toLowerCase();
+  if (lower.endsWith("@g.us")) {
+    const localPart = candidate.slice(0, candidate.length - "@g.us".length);
+    return /^[0-9]+(?:-[0-9]+)*$/u.test(localPart) ? `${localPart}@g.us` : undefined;
+  }
+  const userMatch = candidate.match(/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i)
+    ?? candidate.match(/^(\d+)@lid$/i);
+  if (userMatch) {
+    return `+${userMatch[1]}`;
+  }
+  if (candidate.includes("@")) {
+    return undefined;
+  }
+  const digits = candidate.replace(/[^\d]/g, "");
+  return digits.length >= 2 ? `+${digits}` : undefined;
+}
+
+function isWhatsAppGroupTarget(target: string): boolean {
+  return target.toLowerCase().endsWith("@g.us");
+}
+
+function normalizeWhatsAppRecipient(target: string): string {
+  return target.replace(/[^\d]/g, "");
+}
+
+function normalizeNextcloudTalkTarget(target: string | undefined): string | undefined {
+  const trimmed = asString(target);
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed
+    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+    .replace(/^room:/i, "")
+    .trim();
+}
+
+function normalizeZaloTarget(target: string | undefined): string | undefined {
+  const trimmed = asString(target);
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed
+    .replace(/^(zalo|zl):/i, "")
+    .replace(/^group:/i, "")
+    .trim();
+}
+
+function stripZalouserTargetPrefix(target: string): string {
+  return target.trim().replace(/^(zalouser|zlu):/i, "").trim();
+}
+
+function normalizeZalouserTarget(target: string | undefined): string | undefined {
+  const trimmed = asString(target);
+  if (!trimmed) {
+    return undefined;
+  }
+  const stripped = stripZalouserTargetPrefix(trimmed);
+  if (!stripped) {
+    return undefined;
+  }
+  const lowered = stripped.toLowerCase();
+  if (lowered.startsWith("group:")) {
+    const groupId = stripped.slice("group:".length).trim();
+    return groupId ? `group:${groupId}` : undefined;
+  }
+  if (lowered.startsWith("g:")) {
+    const groupId = stripped.slice("g:".length).trim();
+    return groupId ? `group:${groupId}` : undefined;
+  }
+  if (lowered.startsWith("user:")) {
+    const userId = stripped.slice("user:".length).trim();
+    return userId ? `user:${userId}` : undefined;
+  }
+  if (lowered.startsWith("dm:")) {
+    const userId = stripped.slice("dm:".length).trim();
+    return userId ? `user:${userId}` : undefined;
+  }
+  if (lowered.startsWith("u:")) {
+    const userId = stripped.slice("u:".length).trim();
+    return userId ? `user:${userId}` : undefined;
+  }
+  if (/^g-\S+$/i.test(stripped)) {
+    return `group:${stripped}`;
+  }
+  if (/^u-\S+$/i.test(stripped)) {
+    return `user:${stripped}`;
+  }
+  return stripped;
+}
+
+function buildSignalTargetParams(target: string): Record<string, unknown> {
+  const trimmed = required(target, "Signal target");
+  const lowered = trimmed.toLowerCase();
+  if (lowered.startsWith("group:")) {
+    return { groupId: required(trimmed.slice("group:".length), "Signal group id") };
+  }
+  if (lowered.startsWith("username:")) {
+    return { username: [required(trimmed.slice("username:".length), "Signal username")] };
+  }
+  if (lowered.startsWith("u:")) {
+    return { username: [required(trimmed.slice("u:".length), "Signal username")] };
+  }
+  return { recipient: [trimmed] };
+}
+
+function parseZalouserTarget(target: string): ZalouserTarget {
+  const normalized = normalizeZalouserTarget(target);
+  if (!normalized) {
+    throw new Error("Zalo User target is required");
+  }
+  const lowered = normalized.toLowerCase();
+  if (lowered.startsWith("group:")) {
+    const threadId = required(normalized.slice("group:".length).trim(), "Zalo User group id");
+    return { threadId, isGroup: true };
+  }
+  if (lowered.startsWith("user:")) {
+    const threadId = required(normalized.slice("user:".length).trim(), "Zalo User user id");
+    return { threadId, isGroup: false };
+  }
+  return { threadId: normalized, isGroup: false };
+}
+
+function resolveZcaAuthorizationHeader(config: Record<string, unknown>): string | undefined {
+  const explicit = secretFrom(config, "authorization", "authorizationEnv")?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const bearer = secretFrom(config, "authToken", "authTokenEnv")
+    ?? secretFrom(config, "accessToken", "accessTokenEnv");
+  if (bearer) {
+    return `Bearer ${bearer}`;
+  }
+  const basic = secretFrom(config, "basicAuth", "basicAuthEnv")?.trim();
+  if (basic) {
+    return /^Basic\s+/i.test(basic) ? basic : `Basic ${Buffer.from(basic, "utf8").toString("base64")}`;
+  }
+  return undefined;
+}
+
+function extractZcaMessageId(payload: Record<string, unknown>): string | undefined {
+  const roots: Record<string, unknown>[] = [payload];
+  for (const nested of [payload.data, payload.result, payload.message]) {
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      roots.push(nested as Record<string, unknown>);
+    }
+  }
+  for (const root of roots) {
+    for (const candidate of [root.messageId, root.message_id, root.msgId, root.msg_id, root.id]) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        return candidate.trim();
+      }
+      if (typeof candidate === "number" && Number.isFinite(candidate)) {
+        return String(candidate);
+      }
+    }
+  }
+  return undefined;
+}
+
+async function zcaSendText(
+  baseUrl: string,
+  profilePrefix: string,
+  headers: Record<string, string>,
+  target: ZalouserTarget,
+  message: string,
+  allowlist: string[],
+): Promise<string> {
+  const res = await fetchAllowlisted(
+    `${baseUrl}${profilePrefix}/messages/text`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        threadId: target.threadId,
+        message,
+        isGroup: target.isGroup,
+      }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const body = parseJsonRecord(bodyText);
+  if (!res.response.ok) {
+    const detail = asString(body.error) ?? asString(record(body.error).message) ?? bodyText.trim();
+    throw new Error(`zalouser.send failed (${res.response.status})${detail ? `: ${detail}` : ""}`);
+  }
+  return extractZcaMessageId(body) ?? `zalouser-${Date.now()}`;
+}
+
+async function zcaSendAttachment(
+  baseUrl: string,
+  profilePrefix: string,
+  headers: Record<string, string>,
+  target: ZalouserTarget,
+  attachment: ChannelAttachment,
+  caption: string | undefined,
+  allowlist: string[],
+): Promise<string> {
+  const url = required(attachment.url, "Zalo User attachment URL");
+  const endpoint = classifyZcaAttachmentEndpoint(attachment);
+  const res = await fetchAllowlisted(
+    `${baseUrl}${profilePrefix}/messages/${endpoint}`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        threadId: target.threadId,
+        url,
+        message: caption,
+        caption,
+        isGroup: target.isGroup,
+      }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const body = parseJsonRecord(bodyText);
+  if (!res.response.ok) {
+    const detail = asString(body.error) ?? asString(record(body.error).message) ?? bodyText.trim();
+    throw new Error(`zalouser.send failed (${res.response.status})${detail ? `: ${detail}` : ""}`);
+  }
+  return extractZcaMessageId(body) ?? `zalouser-${Date.now()}`;
+}
+
+function classifyZcaAttachmentEndpoint(attachment: ChannelAttachment): "image" | "video" | "voice" | "link" {
+  const mimeType = attachment.mimeType?.trim().toLowerCase();
+  if (mimeType?.startsWith("image/")) {
+    return "image";
+  }
+  if (mimeType?.startsWith("video/")) {
+    return "video";
+  }
+  if (mimeType?.startsWith("audio/")) {
+    return "voice";
+  }
+  const url = attachment.url?.trim().toLowerCase() ?? "";
+  const pathname = url ? new URL(url).pathname.toLowerCase() : "";
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(pathname)) {
+    return "image";
+  }
+  if (/\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(pathname)) {
+    return "video";
+  }
+  if (/\.(mp3|wav|ogg|oga|opus|m4a|aac|flac)$/i.test(pathname)) {
+    return "voice";
+  }
+  return "link";
+}
+
+function normalizeBlueBubblesHandle(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const lowered = trimmed.toLowerCase();
+  if (lowered.startsWith("imessage:")) {
+    return normalizeBlueBubblesHandle(trimmed.slice("imessage:".length));
+  }
+  if (lowered.startsWith("sms:")) {
+    return normalizeBlueBubblesHandle(trimmed.slice("sms:".length));
+  }
+  if (lowered.startsWith("auto:")) {
+    return normalizeBlueBubblesHandle(trimmed.slice("auto:".length));
+  }
+  if (trimmed.includes("@")) {
+    return trimmed.toLowerCase();
+  }
+  return trimmed.replace(/\s+/g, "");
+}
+
+function stripBlueBubblesPrefix(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (!trimmed.toLowerCase().startsWith("bluebubbles:")) {
+    return trimmed;
+  }
+  return trimmed.slice("bluebubbles:".length).trim();
+}
+
+function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
+  const trimmed = stripBlueBubblesPrefix(required(raw, "iMessage target"));
+  const lowered = trimmed.toLowerCase();
+  const servicePrefixes = [
+    { prefix: "imessage:", service: "imessage" as const },
+    { prefix: "sms:", service: "sms" as const },
+    { prefix: "auto:", service: "auto" as const },
+  ];
+  for (const { prefix, service } of servicePrefixes) {
+    if (lowered.startsWith(prefix)) {
+      const remainder = trimmed.slice(prefix.length).trim();
+      const remainderLower = remainder.toLowerCase();
+      if (
+        /^(chat_id|chatid|chat|chat_guid|chatguid|guid|chat_identifier|chatidentifier|chatident|group):/.test(
+          remainderLower,
+        )
+      ) {
+        return parseBlueBubblesTarget(remainder);
+      }
+      return {
+        kind: "handle",
+        address: required(normalizeBlueBubblesHandle(remainder), "iMessage handle"),
+        service,
+      };
+    }
+  }
+
+  if (/^(chat_id:|chatid:|chat:)/i.test(trimmed)) {
+    const value = trimmed.replace(/^(chat_id:|chatid:|chat:)/i, "").trim();
+    const chatId = Number.parseInt(value, 10);
+    if (!Number.isFinite(chatId)) {
+      throw new Error("Invalid BlueBubbles chat_id target");
+    }
+    return { kind: "chat_id", chatId };
+  }
+  if (/^(chat_guid:|chatguid:|guid:)/i.test(trimmed)) {
+    return {
+      kind: "chat_guid",
+      chatGuid: required(trimmed.replace(/^(chat_guid:|chatguid:|guid:)/i, "").trim(), "BlueBubbles chat guid"),
+    };
+  }
+  if (/^(chat_identifier:|chatidentifier:|chatident:)/i.test(trimmed)) {
+    return {
+      kind: "chat_identifier",
+      chatIdentifier: required(
+        trimmed.replace(/^(chat_identifier:|chatidentifier:|chatident:)/i, "").trim(),
+        "BlueBubbles chat identifier",
+      ),
+    };
+  }
+  if (/^group:/i.test(trimmed)) {
+    const groupValue = trimmed.slice("group:".length).trim();
+    const chatId = Number.parseInt(groupValue, 10);
+    if (Number.isFinite(chatId)) {
+      return { kind: "chat_id", chatId };
+    }
+    return { kind: "chat_guid", chatGuid: required(groupValue, "BlueBubbles group target") };
+  }
+  if (/^[^;]+;[+-];.+$/u.test(trimmed)) {
+    return { kind: "chat_guid", chatGuid: trimmed };
+  }
+  if (/^chat\d+$/i.test(trimmed) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed) || /^[0-9a-f]{24,64}$/i.test(trimmed)) {
+    return { kind: "chat_identifier", chatIdentifier: trimmed };
+  }
+  return {
+    kind: "handle",
+    address: required(normalizeBlueBubblesHandle(trimmed), "iMessage handle"),
+    service: "auto",
+  };
+}
+
+function buildBlueBubblesApiUrl(baseUrl: string, path: string, password: string): string {
+  const url = new URL(path, `${baseUrl.replace(/\/+$/, "")}/`);
+  url.searchParams.set("password", password);
+  return url.toString();
+}
+
+function extractHandleFromChatGuid(chatGuid: string): string | null {
+  const parts = chatGuid.split(";");
+  if (parts.length === 3 && parts[1] === "-") {
+    const handle = parts[2]?.trim();
+    return handle ? normalizeBlueBubblesHandle(handle) : null;
+  }
+  return null;
+}
+
+function extractBlueBubblesChatGuid(chat: Record<string, unknown>): string | null {
+  const candidates = [
+    chat.chatGuid,
+    chat.guid,
+    chat.chat_guid,
+    chat.identifier,
+    chat.chatIdentifier,
+    chat.chat_identifier,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+function extractBlueBubblesChatId(chat: Record<string, unknown>): number | null {
+  for (const candidate of [chat.chatId, chat.id, chat.chat_id]) {
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function extractBlueBubblesChatIdentifierFromGuid(chatGuid: string): string | null {
+  const parts = chatGuid.split(";");
+  if (parts.length < 3) {
+    return null;
+  }
+  const identifier = parts[2]?.trim();
+  return identifier || null;
+}
+
+function extractBlueBubblesParticipantAddresses(chat: Record<string, unknown>): string[] {
+  const rawParticipants = Array.isArray(chat.participants)
+    ? chat.participants
+    : Array.isArray(chat.handles)
+      ? chat.handles
+      : Array.isArray(chat.participantHandles)
+        ? chat.participantHandles
+        : [];
+  const results: string[] = [];
+  for (const entry of rawParticipants) {
+    if (typeof entry === "string" && entry.trim()) {
+      results.push(entry.trim());
+      continue;
+    }
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const recordEntry = entry as Record<string, unknown>;
+    for (const candidate of [recordEntry.address, recordEntry.handle, recordEntry.id, recordEntry.identifier]) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        results.push(candidate.trim());
+        break;
+      }
+    }
+  }
+  return results;
+}
+
+async function queryBlueBubblesChats(
+  baseUrl: string,
+  password: string,
+  offset: number,
+  limit: number,
+  allowlist: string[],
+): Promise<Record<string, unknown>[]> {
+  const res = await fetchAllowlisted(
+    buildBlueBubblesApiUrl(baseUrl, "/api/v1/chat/query", password),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        limit,
+        offset,
+        with: ["participants"],
+      }),
+    },
+    allowlist,
+  );
+  if (!res.response.ok) {
+    return [];
+  }
+  const body = parseJsonRecord(await res.response.text());
+  return Array.isArray(body.data)
+    ? body.data.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    : [];
+}
+
+async function resolveBlueBubblesChatGuid(
+  baseUrl: string,
+  password: string,
+  target: BlueBubblesTarget,
+  allowlist: string[],
+): Promise<string | null> {
+  if (target.kind === "chat_guid") {
+    return target.chatGuid;
+  }
+
+  const normalizedHandle = target.kind === "handle" ? normalizeBlueBubblesHandle(target.address) : "";
+  let participantMatch: string | null = null;
+  for (let offset = 0; offset < 5000; offset += 500) {
+    const chats = await queryBlueBubblesChats(baseUrl, password, offset, 500, allowlist);
+    if (chats.length === 0) {
+      break;
+    }
+    for (const chat of chats) {
+      if (target.kind === "chat_id") {
+        const chatId = extractBlueBubblesChatId(chat);
+        if (chatId != null && chatId === target.chatId) {
+          return extractBlueBubblesChatGuid(chat);
+        }
+      }
+      if (target.kind === "chat_identifier") {
+        const guid = extractBlueBubblesChatGuid(chat);
+        if (guid === target.chatIdentifier) {
+          return guid;
+        }
+        const guidIdentifier = guid ? extractBlueBubblesChatIdentifierFromGuid(guid) : null;
+        if (guidIdentifier && guidIdentifier === target.chatIdentifier) {
+          return guid;
+        }
+        const directIdentifier = asString(chat.identifier)
+          ?? asString(chat.chatIdentifier)
+          ?? asString(chat.chat_identifier);
+        if (directIdentifier && directIdentifier === target.chatIdentifier) {
+          return guid ?? directIdentifier;
+        }
+      }
+      if (normalizedHandle) {
+        const guid = extractBlueBubblesChatGuid(chat);
+        const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
+        if (directHandle && directHandle === normalizedHandle) {
+          return guid;
+        }
+        if (!participantMatch && guid && guid.includes(";-;")) {
+          const participants = extractBlueBubblesParticipantAddresses(chat).map((entry) =>
+            normalizeBlueBubblesHandle(entry)
+          );
+          if (participants.includes(normalizedHandle)) {
+            participantMatch = guid;
+          }
+        }
+      }
+    }
+  }
+  return participantMatch;
+}
+
+function extractBlueBubblesMessageId(payload: unknown): string {
+  if (!payload || typeof payload !== "object") {
+    return "unknown";
+  }
+  const roots = [payload];
+  const rootRecord = payload as Record<string, unknown>;
+  for (const nested of [rootRecord.data, rootRecord.result, rootRecord.payload, rootRecord.message]) {
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      roots.push(nested);
+    }
+  }
+  if (Array.isArray(rootRecord.data) && rootRecord.data[0] && typeof rootRecord.data[0] === "object") {
+    roots.push(rootRecord.data[0]);
+  }
+  for (const root of roots) {
+    const candidateRecord = root as Record<string, unknown>;
+    for (const candidate of [
+      candidateRecord.message_id,
+      candidateRecord.messageId,
+      candidateRecord.messageGuid,
+      candidateRecord.message_guid,
+      candidateRecord.guid,
+      candidateRecord.id,
+      candidateRecord.uuid,
+    ]) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        return candidate.trim();
+      }
+      if (typeof candidate === "number" && Number.isFinite(candidate)) {
+        return String(candidate);
+      }
+    }
+  }
+  return "unknown";
+}
+
+function resolveBlueBubblesContext(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  target: string,
+  missingTargetMessage: string,
+): {
+  baseUrl: string;
+  password: string;
+  resolvedTarget: string;
+} {
+  const baseUrl = normalizeBlueBubblesBaseUrl(
+    asString(config.bridgeUrl) ?? asString(config.baseUrl) ?? asString(config.serverUrl),
+  );
+  const password = secretFrom(config, "password", "passwordEnv")
+    ?? secretFrom(config, "apiPassword", "apiPasswordEnv");
+  const resolvedTarget = asString(args.target)
+    ?? normalizeChannelTarget(target, "imessage")
+    ?? resolveDefaultChannelTarget("imessage", config);
+  if (!baseUrl) {
+    throw new Error("Missing iMessage bridge URL");
+  }
+  if (!password) {
+    throw new Error("Missing iMessage bridge password");
+  }
+  if (!resolvedTarget && missingTargetMessage) {
+    throw new Error(missingTargetMessage);
+  }
+  return {
+    baseUrl,
+    password,
+    resolvedTarget: resolvedTarget ?? "",
+  };
+}
+
+async function blueBubblesCreateChat(
+  baseUrl: string,
+  password: string,
+  address: string,
+  message: string | undefined,
+  allowlist: string[],
+): Promise<string> {
+  const requestBody: Record<string, unknown> = {
+    addresses: [address],
+  };
+  const trimmedMessage = message?.trim();
+  if (trimmedMessage) {
+    requestBody.message = trimmedMessage;
+    requestBody.tempGuid = `temp-${randomUUID()}`;
+  }
+  const res = await fetchAllowlisted(
+    buildBlueBubblesApiUrl(baseUrl, "/api/v1/chat/new", password),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`BlueBubbles create chat failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  const parsed = bodyText ? JSON.parse(bodyText) as unknown : undefined;
+  return extractBlueBubblesMessageId(parsed);
+}
+
+async function blueBubblesSendText(
+  baseUrl: string,
+  password: string,
+  payload: {
+    chatGuid: string;
+    message: string;
+    replyToMessageGuid?: string;
+    replyToPartIndex?: number;
+    effectId?: string;
+  },
+  allowlist: string[],
+): Promise<string> {
+  const requestBody: Record<string, unknown> = {
+    chatGuid: payload.chatGuid,
+    tempGuid: randomUUID(),
+    message: payload.message,
+  };
+  if (payload.replyToMessageGuid || payload.effectId) {
+    requestBody.method = "private-api";
+  }
+  if (payload.replyToMessageGuid) {
+    requestBody.selectedMessageGuid = payload.replyToMessageGuid;
+    requestBody.partIndex = payload.replyToPartIndex ?? 0;
+  }
+  if (payload.effectId) {
+    requestBody.effectId = payload.effectId;
+  }
+
+  const res = await fetchAllowlisted(
+    buildBlueBubblesApiUrl(baseUrl, "/api/v1/message/text", password),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`BlueBubbles send failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  const parsed = bodyText ? JSON.parse(bodyText) as unknown : undefined;
+  return extractBlueBubblesMessageId(parsed);
+}
+
+async function blueBubblesSendReaction(
+  baseUrl: string,
+  password: string,
+  payload: {
+    chatGuid: string;
+    messageId: string;
+    reaction: string;
+    partIndex?: number;
+    messageText?: string;
+  },
+  allowlist: string[],
+): Promise<string> {
+  const requestBody: Record<string, unknown> = {
+    chatGuid: payload.chatGuid,
+    selectedMessageGuid: payload.messageId,
+    reaction: payload.reaction,
+  };
+  if (payload.partIndex != null) {
+    requestBody.partIndex = payload.partIndex;
+  }
+  if (payload.messageText) {
+    requestBody.selectedMessageText = payload.messageText;
+  }
+  const res = await fetchAllowlisted(
+    buildBlueBubblesApiUrl(baseUrl, "/api/v1/message/react", password),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`BlueBubbles react failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  const parsed = bodyText ? JSON.parse(bodyText) as unknown : undefined;
+  const providerMessageId = extractBlueBubblesMessageId(parsed);
+  return providerMessageId === "unknown" ? payload.messageId : providerMessageId;
+}
+
+async function blueBubblesUnsendMessage(
+  baseUrl: string,
+  password: string,
+  payload: {
+    messageId: string;
+    partIndex?: number;
+  },
+  allowlist: string[],
+): Promise<string> {
+  const requestBody: Record<string, unknown> = {};
+  if (payload.partIndex != null) {
+    requestBody.partIndex = payload.partIndex;
+  }
+  const encodedMessageId = payload.messageId.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+  const res = await fetchAllowlisted(
+    buildBlueBubblesApiUrl(baseUrl, `/api/v1/message/${encodedMessageId}/unsend`, password),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`BlueBubbles unsend failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  const parsed = bodyText ? JSON.parse(bodyText) as unknown : undefined;
+  const providerMessageId = bodyText ? extractBlueBubblesMessageId(parsed) : "unknown";
+  return providerMessageId === "unknown" ? payload.messageId : providerMessageId;
+}
+
+type BlueBubblesMultipartAttachmentPart = {
+  hash: string;
+  name: string;
+};
+
+async function blueBubblesUploadAttachment(
+  baseUrl: string,
+  password: string,
+  attachment: ChannelAttachment,
+  allowlist: string[],
+  index: number,
+): Promise<BlueBubblesMultipartAttachmentPart> {
+  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "BlueBubbles");
+  const fileName = resolveChannelAttachmentName(attachment, index);
+  const blobBytes = new Uint8Array(attachmentData.bytes.length);
+  blobBytes.set(attachmentData.bytes);
+  const formData = new FormData();
+  formData.append(
+    "attachment",
+    new Blob([blobBytes], attachmentData.contentType ? { type: attachmentData.contentType } : undefined),
+    fileName,
+  );
+
+  const uploadRes = await fetchAllowlisted(
+    buildBlueBubblesApiUrl(baseUrl, "/api/v1/attachment/upload", password),
+    {
+      method: "POST",
+      body: formData,
+    },
+    allowlist,
+  );
+  const bodyText = await uploadRes.response.text();
+  if (!uploadRes.response.ok) {
+    throw new Error(
+      `BlueBubbles attachment upload failed (${uploadRes.response.status})${bodyText ? `: ${bodyText}` : ""}`,
+    );
+  }
+  const parsed = bodyText ? JSON.parse(bodyText) as unknown : undefined;
+  const hash = extractBlueBubblesAttachmentHash(parsed);
+  if (!hash) {
+    throw new Error("BlueBubbles attachment upload failed: missing attachment hash");
+  }
+  return { hash, name: fileName };
+}
+
+async function resolveChannelAttachmentBytes(
+  attachment: ChannelAttachment,
+  allowlist: string[],
+  providerLabel: string,
+): Promise<{
+  bytes: Buffer;
+  contentType?: string;
+}> {
+  if (attachment.dataBase64) {
+    return {
+      bytes: Buffer.from(attachment.dataBase64, "base64"),
+      contentType: attachment.mimeType,
+    };
+  }
+  const sourceUrl = required(attachment.url, `${providerLabel} attachment URL`);
+  const attachmentRes = await fetchAllowlisted(sourceUrl, { method: "GET" }, allowlist);
+  if (!attachmentRes.response.ok) {
+    throw new Error(`${providerLabel} attachment fetch failed (${attachmentRes.response.status})`);
+  }
+  return {
+    bytes: Buffer.from(await attachmentRes.response.arrayBuffer()),
+    contentType: attachmentRes.response.headers.get("content-type") ?? attachment.mimeType ?? undefined,
+  };
+}
+
+async function blueBubblesSendMultipart(
+  baseUrl: string,
+  password: string,
+  payload: {
+    chatGuid: string;
+    message?: string;
+    attachments: BlueBubblesMultipartAttachmentPart[];
+    replyToMessageGuid?: string;
+    replyToPartIndex?: number;
+    effectId?: string;
+    subject?: string;
+  },
+  allowlist: string[],
+): Promise<string> {
+  const parts: Array<Record<string, unknown>> = [];
+  let partIndex = 0;
+  if (payload.message?.trim()) {
+    parts.push({ partIndex, text: payload.message });
+    partIndex += 1;
+  }
+  for (const attachment of payload.attachments) {
+    parts.push({
+      partIndex,
+      attachment: attachment.hash,
+      name: attachment.name,
+    });
+    partIndex += 1;
+  }
+  if (parts.length === 0) {
+    throw new Error("BlueBubbles multipart send requires at least one text or attachment part");
+  }
+
+  const requestBody: Record<string, unknown> = {
+    chatGuid: payload.chatGuid,
+    parts,
+  };
+  if (payload.replyToMessageGuid) {
+    requestBody.selectedMessageGuid = payload.replyToMessageGuid;
+    requestBody.partIndex = payload.replyToPartIndex ?? 0;
+  }
+  if (payload.effectId) {
+    requestBody.effectId = payload.effectId;
+  }
+  if (payload.subject) {
+    requestBody.subject = payload.subject;
+  }
+
+  const res = await fetchAllowlisted(
+    buildBlueBubblesApiUrl(baseUrl, "/api/v1/message/multipart", password),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`BlueBubbles multipart send failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  const parsed = bodyText ? JSON.parse(bodyText) as unknown : undefined;
+  return extractBlueBubblesMessageId(parsed);
+}
+
+function extractBlueBubblesAttachmentHash(payload: unknown): string | null {
+  const body = record(payload);
+  const directData = record(body.data);
+  for (const candidate of [
+    directData.hash,
+    directData.id,
+    body.hash,
+    body.id,
+  ]) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+function resolveChannelAttachmentName(attachment: ChannelAttachment, index: number): string {
+  const explicitTitle = asString(attachment.title)?.trim();
+  if (explicitTitle) {
+    return explicitTitle;
+  }
+
+  const attachmentUrl = asString(attachment.url);
+  if (attachmentUrl) {
+    try {
+      const pathname = new URL(attachmentUrl).pathname;
+      const basename = pathname.split("/").pop()?.trim();
+      if (basename) {
+        return decodeURIComponent(basename);
+      }
+    } catch {
+      // Ignore URL parsing failures and fall back to a generated name.
+    }
+  }
+
+  const ext = inferAttachmentExtension(attachment.mimeType);
+  return `attachment-${index + 1}${ext}`;
+}
+
+function inferAttachmentExtension(mimeType: string | undefined): string {
+  const normalized = mimeType?.trim().toLowerCase();
+  if (!normalized || !normalized.includes("/")) {
+    return "";
+  }
+  const subtype = normalized.split("/", 2)[1]?.split(";", 1)[0]?.trim();
+  if (!subtype) {
+    return "";
+  }
+  if (subtype === "jpeg") {
+    return ".jpg";
+  }
+  return `.${subtype.replace(/[^a-z0-9.+-]/g, "")}`;
+}
+
+function parseIntegerLike(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseMattermostTarget(target: string): MattermostTarget {
+  const trimmed = required(target, "Mattermost target");
+  const lowered = trimmed.toLowerCase();
+  if (lowered.startsWith("channel:")) {
+    const channelTarget = required(trimmed.slice("channel:".length), "Mattermost channel target");
+    if (channelTarget.startsWith("#")) {
+      return { kind: "channel-name", name: required(channelTarget.slice(1), "Mattermost channel name") };
+    }
+    return looksLikeMattermostId(channelTarget)
+      ? { kind: "channel", id: channelTarget }
+      : { kind: "channel-name", name: channelTarget };
+  }
+  if (lowered.startsWith("user:")) {
+    return { kind: "user", id: required(trimmed.slice("user:".length), "Mattermost user id") };
+  }
+  if (lowered.startsWith("mattermost:")) {
+    return { kind: "user", id: required(trimmed.slice("mattermost:".length), "Mattermost user id") };
+  }
+  if (trimmed.startsWith("@")) {
+    return { kind: "user", username: required(trimmed.slice(1), "Mattermost username") };
+  }
+  if (trimmed.startsWith("#")) {
+    return { kind: "channel-name", name: required(trimmed.slice(1), "Mattermost channel name") };
+  }
+  return looksLikeMattermostId(trimmed)
+    ? { kind: "channel", id: trimmed }
+    : { kind: "channel-name", name: trimmed };
+}
+
+function looksLikeMattermostId(value: string): boolean {
+  return /^[a-z0-9]{26}$/i.test(value.trim());
+}
+
+async function resolveMattermostChannelId(
+  serverUrl: string,
+  botToken: string,
+  target: MattermostTarget,
+  botUserId: string,
+  defaultTeam: string | undefined,
+  allowlist: string[],
+): Promise<string> {
+  if (target.kind === "channel") {
+    return target.id;
+  }
+  if (target.kind === "user") {
+    const userId = target.id || await resolveMattermostUserId(serverUrl, botToken, target.username, allowlist);
+    const channel = await mattermostApiRequest<Record<string, unknown>>(
+      serverUrl,
+      botToken,
+      "/channels/direct",
+      allowlist,
+      {
+        method: "POST",
+        body: JSON.stringify([botUserId, userId]),
+      },
+    );
+    return required(channel.id, "Mattermost DM channel id");
+  }
+
+  const teamIds = defaultTeam
+    ? [await resolveMattermostTeamId(serverUrl, botToken, defaultTeam, allowlist)]
+    : await resolveMattermostTeamIds(serverUrl, botToken, botUserId, allowlist);
+
+  for (const teamId of teamIds) {
+    try {
+      const channel = await mattermostApiRequest<Record<string, unknown>>(
+        serverUrl,
+        botToken,
+        `/teams/${encodeURIComponent(teamId)}/channels/name/${encodeURIComponent(target.name)}`,
+        allowlist,
+      );
+      return required(channel.id, "Mattermost channel id");
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("(404)")) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (teamIds.length === 0) {
+    throw new Error("Mattermost bot is not a member of any team");
+  }
+
+  throw new Error(`Mattermost channel "#${target.name}" not found`);
+}
+
+async function resolveMattermostUserId(
+  serverUrl: string,
+  botToken: string,
+  username: string | undefined,
+  allowlist: string[],
+): Promise<string> {
+  const user = await mattermostApiRequest<Record<string, unknown>>(
+    serverUrl,
+    botToken,
+    `/users/username/${encodeURIComponent(required(username, "Mattermost username"))}`,
+    allowlist,
+  );
+  return required(user.id, "Mattermost user id");
+}
+
+async function resolveMattermostTeamId(
+  serverUrl: string,
+  botToken: string,
+  teamName: string,
+  allowlist: string[],
+): Promise<string> {
+  const team = await mattermostApiRequest<Record<string, unknown>>(
+    serverUrl,
+    botToken,
+    `/teams/name/${encodeURIComponent(teamName)}`,
+    allowlist,
+  );
+  return required(team.id, "Mattermost team id");
+}
+
+async function resolveMattermostTeamIds(
+  serverUrl: string,
+  botToken: string,
+  botUserId: string,
+  allowlist: string[],
+): Promise<string[]> {
+  const teams = await mattermostApiRequest<Array<Record<string, unknown>>>(
+    serverUrl,
+    botToken,
+    `/users/${encodeURIComponent(botUserId)}/teams`,
+    allowlist,
+  );
+  return teams
+    .map((team) => asString(team.id))
+    .filter((teamId): teamId is string => Boolean(teamId));
+}
+
+async function mattermostApiRequest<T>(
+  serverUrl: string,
+  botToken: string,
+  apiPath: string,
+  allowlist: string[],
+  init: RequestInit = {},
+): Promise<T> {
+  const url = `${serverUrl.replace(/\/+$/, "")}/api/v4${apiPath}`;
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${botToken}`);
+  if (typeof init.body === "string" && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const res = await fetchAllowlisted(
+    url,
+    {
+      ...init,
+      headers,
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    const detail = bodyText.trim();
+    throw new Error(`mattermost.send failed (${res.response.status})${detail ? `: ${detail}` : ""}`);
+  }
+  if (!bodyText) {
+    return undefined as T;
+  }
+  return JSON.parse(bodyText) as T;
+}
+
+async function signalRpcRequest<T>(
+  baseUrl: string,
+  method: string,
+  params: Record<string, unknown>,
+  allowlist: string[],
+): Promise<T> {
+  const res = await fetchAllowlisted(
+    `${baseUrl}/api/v1/rpc`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method,
+        params,
+        id: randomUUID(),
+      }),
+    },
+    allowlist,
+  );
+  if (res.response.status === 201) {
+    return undefined as T;
+  }
+  const bodyText = await res.response.text();
+  if (!bodyText) {
+    throw new Error(`Signal RPC empty response (status ${res.response.status})`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch (error) {
+    throw new Error(`Signal RPC returned malformed JSON (status ${res.response.status})`, { cause: error });
+  }
+
+  const body = record(parsed);
+  const errorBody = record(body.error);
+  if (Object.keys(errorBody).length > 0) {
+    const code = errorBody.code != null ? String(errorBody.code) : "unknown";
+    const message = asString(errorBody.message) ?? "Signal RPC error";
+    throw new Error(`Signal RPC ${code}: ${message}`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(body, "result")) {
+    throw new Error(`Signal RPC returned invalid response envelope (status ${res.response.status})`);
+  }
+  if (!res.response.ok) {
+    throw new Error(`signal.send failed (${res.response.status})`);
+  }
+  return body.result as T;
+}
+
 
 async function gmailRead(config: Record<string, unknown>, args: Record<string, unknown>, allowlist: string[]) {
   const token = secretFrom(config, "accessToken", "accessTokenEnv");
