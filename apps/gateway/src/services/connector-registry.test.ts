@@ -129,12 +129,31 @@ describe("buildGatewayConnectorRecords", () => {
       mcpServers: [],
       mcpTools: [],
     });
+    const googleChatRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "google-chat", {
+          webhookUrl: "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=test&token=test",
+          defaultThreadKey: "ops-thread",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
     const matrixRecords = buildGatewayConnectorRecords({
       integrationConnections: [
         createIntegrationConnection("channel", "matrix", {
           homeserverUrl: "https://matrix.example.com",
           accessTokenEnv: "MATRIX_ACCESS_TOKEN",
           defaultRoomId: "!room:example.com",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+    const teamsRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "teams", {
+          webhookUrl: "https://outlook.office.com/webhook/example",
         }),
       ],
       mcpServers: [],
@@ -194,8 +213,14 @@ describe("buildGatewayConnectorRecords", () => {
       "Webhook-only Discord connections can unsend webhook-authored messages, but cannot add reactions.",
     ]));
 
+    const googleChat = googleChatRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(googleChat?.metadata?.supportedAttachmentSources).toEqual(["url"]);
+
     const matrix = matrixRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(matrix?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
+
+    const teams = teamsRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(teams?.metadata?.supportedAttachmentSources).toEqual(["url"]);
 
     const telegram = telegramRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(telegram?.metadata?.supportedDeliveryActions).toEqual([

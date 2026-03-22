@@ -1144,9 +1144,9 @@ async function executeCommsTool(
     case "matrix":
       return matrixSend(connectionConfig, args, allowlist, target, message, attachments);
     case "teams":
-      return teamsSend(connectionConfig, args, allowlist, renderedMessage);
+      return teamsSend(connectionConfig, args, allowlist, message, attachments);
     case "google-chat":
-      return googleChatSend(connectionConfig, args, allowlist, target, renderedMessage);
+      return googleChatSend(connectionConfig, args, allowlist, target, message, attachments);
     case "whatsapp":
       return whatsappSend(connectionConfig, args, allowlist, target, message, attachments);
     case "zalo":
@@ -1743,6 +1743,125 @@ function buildSlackMessageBlocks(
   return blocks.length > 0 ? blocks : undefined;
 }
 
+function buildTeamsWebhookPayload(
+  title: string,
+  message: string,
+  attachments: ChannelAttachment[],
+): Record<string, unknown> {
+  const unsupportedInline = attachments.some((attachment) => Boolean(attachment.dataBase64));
+  if (unsupportedInline) {
+    throw new Error("Teams webhook connections only support URL-backed attachments");
+  }
+
+  const body: Array<Record<string, unknown>> = [
+    { type: "TextBlock", text: title, weight: "Bolder", wrap: true },
+  ];
+  if (message.trim()) {
+    body.push({ type: "TextBlock", text: message, wrap: true });
+  }
+
+  for (const [index, attachment] of attachments.entries()) {
+    const url = attachment.url?.trim();
+    if (!url) {
+      continue;
+    }
+    const label = attachment.title?.trim() || resolveChannelAttachmentName(attachment, index);
+    if (isImageChannelAttachment(attachment)) {
+      body.push({
+        type: "Image",
+        url,
+        altText: label,
+        size: "Medium",
+      });
+      continue;
+    }
+    body.push({
+      type: "TextBlock",
+      text: `[${label}](${url})`,
+      wrap: true,
+    });
+  }
+
+  return {
+    type: "message",
+    attachments: [
+      {
+        contentType: "application/vnd.microsoft.card.adaptive",
+        contentUrl: null,
+        content: {
+          type: "AdaptiveCard",
+          version: "1.4",
+          body,
+        },
+      },
+    ],
+  };
+}
+
+function buildGoogleChatWebhookPayload(
+  message: string,
+  attachments: ChannelAttachment[],
+): Record<string, unknown> {
+  const unsupportedInline = attachments.some((attachment) => Boolean(attachment.dataBase64));
+  if (unsupportedInline) {
+    throw new Error("Google Chat webhook connections only support URL-backed attachments");
+  }
+  const widgets: Array<Record<string, unknown>> = [];
+  if (message.trim()) {
+    widgets.push({
+      textParagraph: { text: message },
+    });
+  }
+  for (const [index, attachment] of attachments.entries()) {
+    const url = attachment.url?.trim();
+    if (!url) {
+      continue;
+    }
+    const label = attachment.title?.trim() || resolveChannelAttachmentName(attachment, index);
+    if (isImageChannelAttachment(attachment)) {
+      widgets.push({
+        image: {
+          imageUrl: url,
+          altText: label,
+        },
+      });
+      continue;
+    }
+    widgets.push({
+      buttonList: {
+        buttons: [
+          {
+            text: label,
+            onClick: {
+              openLink: { url },
+            },
+          },
+        ],
+      },
+    });
+  }
+
+  if (widgets.length === 0) {
+    return { text: message };
+  }
+
+  return {
+    text: message || "Attachment update",
+    cardsV2: [
+      {
+        cardId: "goatcitadel-delivery",
+        card: {
+          sections: [
+            {
+              widgets,
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
 async function lineSend(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -2235,6 +2354,7 @@ async function teamsSend(
   args: Record<string, unknown>,
   allowlist: string[],
   message: string,
+  attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const webhookUrl = asString(args.url)
     ?? secretFrom(config, "webhookUrl", "webhookUrlEnv")
@@ -2243,28 +2363,13 @@ async function teamsSend(
     throw new Error("Missing Teams webhook URL");
   }
   const title = asString(config.cardTitle) ?? "GoatCitadel";
+  const payload = buildTeamsWebhookPayload(title, message, attachments);
   const res = await fetchAllowlisted(
     webhookUrl,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "message",
-        attachments: [
-          {
-            contentType: "application/vnd.microsoft.card.adaptive",
-            contentUrl: null,
-            content: {
-              type: "AdaptiveCard",
-              version: "1.4",
-              body: [
-                { type: "TextBlock", text: title, weight: "Bolder", wrap: true },
-                { type: "TextBlock", text: message, wrap: true },
-              ],
-            },
-          },
-        ],
-      }),
+      body: JSON.stringify(payload),
     },
     allowlist,
   );
@@ -2280,6 +2385,7 @@ async function googleChatSend(
   allowlist: string[],
   target: string,
   message: string,
+  attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "google-chat");
   const webhookUrl = asString(args.url)
@@ -2298,7 +2404,7 @@ async function googleChatSend(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: message }),
+      body: JSON.stringify(buildGoogleChatWebhookPayload(message, attachments)),
     },
     allowlist,
   );

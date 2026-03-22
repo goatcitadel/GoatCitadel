@@ -978,6 +978,130 @@ describe("executeTool", () => {
     });
   });
 
+  it("sends Teams webhook attachments as adaptive card content", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async () => new Response("1", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-teams-rich",
+          key: "teams",
+          config: {
+            webhookUrl: "https://outlook.office.com/webhook/example-rich",
+            cardTitle: "GoatCitadel Test",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-teams-rich",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-teams-rich",
+        message: "Nightly validation passed.",
+        attachments: [
+          { title: "Graph", url: "https://example.com/graph.png", mimeType: "image/png" },
+          { title: "Runbook", url: "https://example.com/runbook", mimeType: "text/html" },
+        ],
+      },
+      agentId: "operator",
+      sessionId: "sess-teams-rich",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["outlook.office.com"],
+      },
+    }, commsStorage);
+
+    const teamsCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    const teamsBody = String(teamsCall?.[1]?.body ?? "");
+    expect(teamsBody).toContain("\"type\":\"Image\"");
+    expect(teamsBody).toContain("https://example.com/graph.png");
+    expect(teamsBody).toContain("[Runbook](https://example.com/runbook)");
+  });
+
+  it("sends Google Chat webhook attachments as rich cards", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      name: "spaces/AAAA/messages/123",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-google-chat",
+          key: "google-chat",
+          config: {
+            webhookUrl: "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=test&token=test",
+            defaultThreadKey: "ops-thread",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-google-chat",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-google-chat",
+        message: "Artifact summary attached.",
+        attachments: [
+          { title: "Screenshot", url: "https://example.com/screenshot.png", mimeType: "image/png" },
+          { title: "Runbook", url: "https://example.com/runbook", mimeType: "text/html" },
+        ],
+      },
+      agentId: "operator",
+      sessionId: "sess-google-chat",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["chat.googleapis.com"],
+      },
+    }, commsStorage);
+
+    const googleChatCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    expect(googleChatCall?.[0]).toContain("threadKey=ops-thread");
+    const googleChatBody = String(googleChatCall?.[1]?.body ?? "");
+    expect(googleChatBody).toContain("\"cardsV2\"");
+    expect(googleChatBody).toContain("\"imageUrl\":\"https://example.com/screenshot.png\"");
+    expect(googleChatBody).toContain("\"text\":\"Runbook\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "spaces/AAAA/messages/123",
+    });
+  });
+
   it("sends channel messages through Mattermost bot adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.MATTERMOST_BOT_TOKEN = "mm-token";

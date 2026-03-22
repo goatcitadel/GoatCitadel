@@ -133,6 +133,9 @@ describe("integration-catalog", () => {
     const discord = requireCatalogEntry("channel.discord");
     expect(discord.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
 
+    const googleChat = requireCatalogEntry("channel.google-chat");
+    expect(googleChat.capabilities).toEqual(expect.arrayContaining(["attachments", "threads"]));
+
     const telegram = requireCatalogEntry("channel.telegram");
     expect(telegram.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
 
@@ -141,6 +144,9 @@ describe("integration-catalog", () => {
 
     const mattermost = requireCatalogEntry("channel.mattermost");
     expect(mattermost.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
+
+    const teams = requireCatalogEntry("channel.teams");
+    expect(teams.capabilities).toEqual(expect.arrayContaining(["attachments", "threads"]));
 
     const whatsapp = requireCatalogEntry("channel.whatsapp");
     expect(whatsapp.capabilities).toEqual(expect.arrayContaining(["attachments", "direct", "reactions"]));

@@ -81,10 +81,18 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   },
   "google-chat": {
     supportedDeliveryActions: ["channel.send"],
+    supportedAttachmentSources: ["url"],
+    supportNotes: [
+      "Google Chat webhook sends support URL-backed rich cards for image and link attachments.",
+    ],
     requiredAnyOf: [["webhookUrl", "url"]],
   },
   teams: {
     supportedDeliveryActions: ["channel.send"],
+    supportedAttachmentSources: ["url"],
+    supportNotes: [
+      "Teams webhook sends support URL-backed adaptive card attachments for images and links.",
+    ],
     requiredAnyOf: [["webhookUrl", "url"]],
   },
   whatsapp: {
