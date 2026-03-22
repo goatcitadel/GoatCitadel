@@ -181,6 +181,36 @@ describe("resolveToolRequestPaths", () => {
     expect(resolvedShell.args.cwd).toBe(projectRoot);
     expect(resolvedTests.args.cwd).toBe(projectRoot);
   });
+
+  it("injects the assigned project root as default path for fs.list and fs.stat", async () => {
+    const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
+    const listRequest: ToolInvokeRequest = {
+      toolName: "fs.list",
+      args: {},
+      agentId: "agent",
+      sessionId: "session",
+    };
+    const statRequest: ToolInvokeRequest = {
+      toolName: "fs.stat",
+      args: {},
+      agentId: "agent",
+      sessionId: "session",
+    };
+
+    const resolvedList = resolveToolRequestPaths(listRequest, {
+      workspaceRoot,
+      projectRoot,
+      projectWorkspacePath: "fixtures/prompt-pack-workspace",
+    });
+    const resolvedStat = resolveToolRequestPaths(statRequest, {
+      workspaceRoot,
+      projectRoot,
+      projectWorkspacePath: "fixtures/prompt-pack-workspace",
+    });
+
+    expect(resolvedList.args.path).toBe(projectRoot);
+    expect(resolvedStat.args.path).toBe(projectRoot);
+  });
 });
 
 async function createWorkspaceFixture(): Promise<{ repoRoot: string; workspaceRoot: string; projectRoot: string }> {

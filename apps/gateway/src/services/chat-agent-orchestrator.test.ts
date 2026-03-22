@@ -5687,6 +5687,119 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("I couldn't finish that cleanly because");
   });
 
+  it("preserves file-read dependency evidence in the final synthesis prompt", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-file-index",
+                  type: "function",
+                  function: {
+                    name: "file_read_range",
+                    arguments: JSON.stringify({
+                      path: "fixtures/prompt-pack-workspace/src/index.ts",
+                      startLine: 1,
+                      endLine: 80,
+                    }),
+                  },
+                },
+                {
+                  id: "call-file-package",
+                  type: "function",
+                  function: {
+                    name: "file_read_range",
+                    arguments: JSON.stringify({
+                      path: "fixtures/prompt-pack-workspace/package.json",
+                      startLine: 1,
+                      endLine: 80,
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: "" } }],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: "Dependency audit complete." } }],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-dependency-index-1",
+        result: {
+          path: "fixtures/prompt-pack-workspace/src/index.ts",
+          content: [
+            "import express from \"express\";",
+            "import { createId, formatTimestamp, clampValue } from \"./utils.js\";",
+          ].join("\n"),
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-dependency-package-1",
+        result: {
+          path: "fixtures/prompt-pack-workspace/package.json",
+          content: [
+            "{",
+            "  \"dependencies\": {",
+            "    \"express\": \"^4.21.0\"",
+            "  }",
+            "}",
+          ].join("\n"),
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-dependency-audit-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-dependency-audit-1",
+      content: "Read fixtures/prompt-pack-workspace/src/index.ts and fixtures/prompt-pack-workspace/package.json using file tools. List all imports used by the server entry file and report any missing or suspicious dependencies.",
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: "Read fixtures/prompt-pack-workspace/src/index.ts and fixtures/prompt-pack-workspace/package.json using file tools. List all imports used by the server entry file and report any missing or suspicious dependencies.",
+        },
+      ],
+    });
+
+    const synthesisCallArgs = createChatCompletion.mock.calls.at(-1) as unknown as [{ messages?: Array<{ content?: unknown }> }] | undefined;
+    const synthesisCall = synthesisCallArgs?.[0];
+    const synthesisPrompt = String(synthesisCall?.messages?.[1]?.content ?? "");
+    expect(synthesisPrompt).toContain("import express from \"express\";");
+    expect(synthesisPrompt).toContain("\"dependencies\": {");
+    expect(synthesisPrompt).toContain("\"express\": \"^4.21.0\"");
+  });
+
   it("prefetches explicit Prompt Lab file evidence before accepting a prose-only completion", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",

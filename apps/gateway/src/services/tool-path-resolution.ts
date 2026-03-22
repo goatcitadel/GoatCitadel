@@ -25,8 +25,8 @@ const TOOL_PATH_SPECS: Record<string, ToolPathSpec[]> = {
   "code.search": [{ key: "path", kind: "read" }],
   "code.search_files": [{ key: "path", kind: "read" }],
   "fs.write": [{ key: "path", kind: "write" }],
-  "fs.list": [{ key: "path", kind: "read" }],
-  "fs.stat": [{ key: "path", kind: "read" }],
+  "fs.list": [{ key: "path", kind: "read", injectDefault: true }],
+  "fs.stat": [{ key: "path", kind: "read", injectDefault: true }],
   "fs.copy": [
     { key: "from", kind: "read" },
     { key: "to", kind: "write" },

@@ -36,6 +36,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { chatModeRequiresProjectBinding, getChatModePreset } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
+import { resolveProjectRootForToolContext } from "./tool-path-resolution.js";
 
 // ── constants ────────────────────────────────────────────────────────
 const PROMPT_PACK_PASS_THRESHOLD = 7;
@@ -1462,6 +1463,7 @@ export class PromptPackService {
     const readConstraints = buildPromptPackSessionReadGrantConstraints({
       prompt,
       rootDir: this.ctx.config.rootDir,
+      workspaceRoot: path.resolve(this.ctx.config.rootDir, this.ctx.config.assistant.workspaceDir),
       projectWorkspacePath: projectBinding?.workspacePath,
     });
     const now = new Date().toISOString();
@@ -2376,7 +2378,7 @@ export function buildPromptPackSessionPrefsOverride(
   prompt = "",
 ): ChatSessionPrefsPatch {
   const directives = detectPromptPackToolDirectives(prompt);
-  const disableModeOrchestration = shouldDisablePromptPackModeOrchestration(profile, prompt);
+  void shouldDisablePromptPackModeOrchestration(profile, prompt);
   const webMode = (
     profile.toolTier === "explicit-tools"
     && (directives.namedTools.length > 0 || directives.prefersFileTools || directives.prefersWebTools || directives.prefersMemoryTools)
@@ -2395,12 +2397,11 @@ export function buildPromptPackSessionPrefsOverride(
     webMode,
     memoryMode,
     thinkingLevel: profile.thinkingLevel,
-    // Prompt Lab explicit-tools runs must stay on the single-agent path so the
-    // harness contract, exact file-path requirements, and tool-evidence
-    // enforcement are preserved for the answering turn.
-    orchestrationEnabled: disableModeOrchestration
-      ? false
-      : profile.mode === "cowork" || (profile.mode === "code" && profile.toolTier !== "no-tools"),
+    // Prompt Lab runs are more reliable when the answering turn owns the full
+    // contract. Keep non-chat evaluations on the single-agent path so the
+    // harness, exact sections, and evidence requirements are not diffused
+    // across internal worker chatter.
+    orchestrationEnabled: false,
     orchestrationVisibility: profile.mode === "chat" ? undefined : "explicit",
     // Prompt Lab values deterministic runs over parallel stage fan-out. Keeping
     // harness orchestration sequential avoids SQLite/trace write contention
@@ -2482,6 +2483,7 @@ function isPromptPackReadTool(toolName: string): boolean {
 export function buildPromptPackSessionReadGrantConstraints(input: {
   prompt: string;
   rootDir: string;
+  workspaceRoot: string;
   projectWorkspacePath?: string;
 }): ToolGrantConstraints | undefined {
   const allowedPaths = buildPromptPackSessionAllowedPaths(input);
@@ -2494,18 +2496,33 @@ export function buildPromptPackSessionReadGrantConstraints(input: {
 export function buildPromptPackSessionAllowedPaths(input: {
   prompt: string;
   rootDir: string;
+  workspaceRoot: string;
   projectWorkspacePath?: string;
 }): string[] {
   const allowedPaths = new Set<string>();
+  const projectRoot = input.projectWorkspacePath
+    ? (resolveProjectRootForToolContext({
+      workspaceRoot: input.workspaceRoot,
+      repoRoot: input.rootDir,
+      projectWorkspacePath: input.projectWorkspacePath,
+    }) ?? input.workspaceRoot)
+    : undefined;
   if (input.projectWorkspacePath) {
-    addPromptPackAllowedPath(allowedPaths, path.resolve(input.rootDir, input.projectWorkspacePath), false);
+    addPromptPackAllowedPath(
+      allowedPaths,
+      projectRoot ?? input.workspaceRoot,
+      false,
+    );
   }
   for (const candidate of extractPromptPackPathHints(input.prompt)) {
-    const isAbsolutePath = path.isAbsolute(candidate) || /^[A-Za-z]:[\\/]/.test(candidate);
-    const resolvedPath = isAbsolutePath
-      ? path.resolve(candidate)
-      : path.resolve(input.rootDir, candidate);
-    addPromptPackAllowedPath(allowedPaths, resolvedPath, true);
+    for (const resolvedPath of resolvePromptPackAllowedCandidates({
+      candidate,
+      workspaceRoot: input.workspaceRoot,
+      projectRoot,
+      projectWorkspacePath: input.projectWorkspacePath,
+    })) {
+      addPromptPackAllowedPath(allowedPaths, resolvedPath, true);
+    }
   }
   return [...allowedPaths];
 }
@@ -2524,6 +2541,50 @@ function extractPromptPackPathHints(prompt: string): string[] {
   captureMatches(/(?:^|[\s`"'(])((?:\.{1,2}\/)?(?:fixtures\/prompt-pack-workspace|apps\/|packages\/|docs\/|workspace\/|config\/|scripts\/|artifacts\/)[^\s`"',)]*)/g);
   captureMatches(/(?:^|[\s`"'(])((?:goatcitadel_prompt_pack(?:_[A-Za-z0-9._-]+)?\.md|AGENTS\.md|\.gitignore|pnpm-workspace\.yaml|package\.json))(?:$|[\s`"',)])/g);
   return [...matches];
+}
+
+function resolvePromptPackAllowedCandidates(input: {
+  candidate: string;
+  workspaceRoot: string;
+  projectRoot?: string;
+  projectWorkspacePath?: string;
+}): string[] {
+  if (path.isAbsolute(input.candidate) || /^[A-Za-z]:[\\/]/.test(input.candidate)) {
+    return [path.resolve(input.candidate)];
+  }
+
+  const candidates = new Set<string>([
+    path.resolve(input.workspaceRoot, input.candidate),
+  ]);
+
+  if (input.projectRoot) {
+    const projectRelative = normalizePromptPackProjectRelativeInput(
+      input.candidate,
+      input.projectWorkspacePath,
+    );
+    candidates.add(path.resolve(input.projectRoot, projectRelative));
+  }
+
+  return [...candidates];
+}
+
+function normalizePromptPackProjectRelativeInput(rawPath: string, projectWorkspacePath?: string): string {
+  if (!projectWorkspacePath) {
+    return rawPath;
+  }
+  const normalizedRawPath = rawPath.replaceAll("\\", "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
+  const normalizedProjectPath = projectWorkspacePath.replaceAll("\\", "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
+  const projectBaseName = normalizedProjectPath.split("/").at(-1);
+  if (!projectBaseName) {
+    return rawPath;
+  }
+  if (normalizedRawPath === projectBaseName) {
+    return ".";
+  }
+  if (normalizedRawPath.startsWith(`${projectBaseName}/`)) {
+    return normalizedRawPath.slice(projectBaseName.length + 1);
+  }
+  return rawPath;
 }
 
 function addPromptPackAllowedPath(target: Set<string>, candidate: string, includeParentForFile: boolean): void {
@@ -2566,6 +2627,7 @@ export function buildPromptPackPromptInput(
   const orderedSections = extractPromptPackOrderedSections(prompt);
   const perspectiveLabels = extractPromptPackPerspectiveLabels(prompt);
   const controllerOwnedDelivery = promptRequiresControllerOwnedDelivery(prompt);
+  const pathHints = extractPromptPackPathHints(prompt);
   const shouldWrapPrompt = profile.mode !== "chat"
     || profile.toolTier === "explicit-tools";
   if (!shouldWrapPrompt) {
@@ -2593,6 +2655,7 @@ export function buildPromptPackPromptInput(
 
   if (profile.mode === "cowork") {
     harnessLines.push("- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.");
+    harnessLines.push("- Answer the user's task directly. Do not grade, critique, review, or revise an imagined draft unless the prompt explicitly asks for review feedback.");
     if (orderedSections.length > 0) {
       harnessLines.push(`- Output exactly these top-level sections in this order: ${orderedSections.map((section) => `\`${section}\``).join(", ")}.`);
       harnessLines.push("- Do not add extra headings before, between, or after those sections.");
@@ -2621,8 +2684,11 @@ export function buildPromptPackPromptInput(
 
   if (profile.mode === "code") {
     harnessLines.push("- This is a Code evaluation. Stay project-bound, concrete, and evidence-backed.");
+    harnessLines.push("- Answer the requested audit, plan, or fix directly. Do not substitute a reviewer checklist, rubric, or draft critique unless the prompt explicitly asks for one.");
     harnessLines.push("- If you read files or inspect code, name the exact file paths and the specific symbols, imports, scripts, or config values you observed.");
     harnessLines.push("- Do not claim validation or execution unless you include the exact command/check and the result.");
+    harnessLines.push("- Do not name scripts, frameworks, folders, or commands by convention alone. If repo inspection did not confirm them, say that plainly instead of guessing.");
+    harnessLines.push("- Do not claim commands such as `pnpm outdated`, `npm test`, `vitest`, `jest`, `tsc`, `lint`, or `build` ran unless a shell/build/test/lint tool actually executed and returned results.");
     harnessLines.push("- For non-trivial tasks, structure the answer as Findings or Plan, Changes, Validation, and Risks.");
     harnessLines.push("- If exact line numbers are requested, provide them only when tool output directly supports them.");
   }
@@ -2648,6 +2714,10 @@ export function buildPromptPackPromptInput(
       harnessLines.push("- Use those tools before concluding that local file access is unavailable.");
       harnessLines.push("- If local file paths are listed, inspect those paths before answering.");
       harnessLines.push("- Do not claim a local file was read unless a file/code tool actually executed.");
+      if (pathHints.length > 0) {
+        const boundedScope = pathHints.slice(0, 6).map((value) => `\`${value}\``).join(", ");
+        harnessLines.push(`- Keep file/code reads inside the prompt-listed scope unless another path is explicitly required: ${boundedScope}.`);
+      }
     }
     if (directives.prefersWebTools) {
       harnessLines.push("- Available web tools in this run include `browser.search`, `browser.navigate`, `browser.extract`, and any named `browser.interact` / `http.post` calls requested by the prompt.");
@@ -2669,9 +2739,9 @@ export function buildPromptPackPromptInput(
 function detectPromptPackToolDirectives(prompt: string): PromptPackToolDirectives {
   const lower = prompt.toLowerCase();
   const namedTools = PROMPT_PACK_EXPLICIT_TOOL_NAMES.filter((toolName) => lower.includes(toolName));
-  const prefersFileTools = /\b(use|using|with)\s+(?:file|filesystem|code|file\/code)\s+tools\b/.test(lower)
-    || /\b(use|using|with)\s+file\s+or\s+code\s+tools\b/.test(lower)
-    || /\bread\b[\s\S]{0,80}\busing file tools\b/.test(lower);
+  const prefersFileTools = /\b(use|using|with)\s+(?:only\s+|just\s+|strictly\s+)?(?:file|filesystem|code|file\/code)\s+tools\b/.test(lower)
+    || /\b(use|using|with)\s+(?:only\s+|just\s+|strictly\s+)?file\s+or\s+code\s+tools\b/.test(lower)
+    || /\bread\b[\s\S]{0,80}\busing\s+(?:only\s+|just\s+|strictly\s+)?(?:file|file\/code)\s+tools\b/.test(lower);
   const prefersWebTools = namedTools.some((toolName) => toolName.startsWith("browser.") || toolName.startsWith("http."));
   const prefersMemoryTools = namedTools.some((toolName) => toolName.startsWith("memory."));
 
@@ -2687,18 +2757,8 @@ function shouldDisablePromptPackModeOrchestration(
   profile: PromptPackExecutionProfile,
   prompt: string,
 ): boolean {
-  if (profile.toolTier === "explicit-tools") {
-    return true;
-  }
-  if (profile.mode !== "cowork" || profile.toolTier !== "no-tools") {
-    return false;
-  }
-  return (
-    promptRequiresControllerOwnedDelivery(prompt)
-    || extractPromptPackPerspectiveLabels(prompt).length > 1
-    || /create a \d+-month roadmap/i.test(prompt)
-    || /\boperator-ready recommendation\b/i.test(prompt)
-  );
+  void prompt;
+  return profile.mode !== "chat";
 }
 
 function extractPromptPackOrderedSections(prompt: string): string[] {

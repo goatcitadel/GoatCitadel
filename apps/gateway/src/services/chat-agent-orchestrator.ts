@@ -6756,6 +6756,10 @@ function summarizeToolRunForSynthesis(run: ChatToolRunRecord, userPrompt?: strin
     run.error ? `error: ${run.error}` : undefined,
     run.failureGuidance ? `guidance: ${run.failureGuidance}` : undefined,
   ].filter(Boolean);
+  const fileReadSummary = summarizeFileReadToolRunForSynthesis(run);
+  if (fileReadSummary) {
+    return `${baseParts.join(" ")} ${fileReadSummary}`;
+  }
   if (run.result && typeof run.result === "object") {
     if (run.toolName === "browser.search") {
       const searchLeads = recoverSearchSnippetEvidence([run])
@@ -6780,6 +6784,29 @@ function summarizeToolRunForSynthesis(run: ChatToolRunRecord, userPrompt?: strin
     return `${baseParts.join(" ")} result: ${truncateJson(run.result, 280)}`;
   }
   return baseParts.join(" ");
+}
+
+function summarizeFileReadToolRunForSynthesis(run: ChatToolRunRecord): string | undefined {
+  if (
+    run.toolName !== "file.read_range"
+    && run.toolName !== "fs.read"
+  ) {
+    return undefined;
+  }
+  if (!run.result || typeof run.result !== "object") {
+    return undefined;
+  }
+  const result = run.result as Record<string, unknown>;
+  const pathValue = typeof result.path === "string" ? result.path : undefined;
+  const contentValue = typeof result.content === "string" ? result.content.trim() : "";
+  if (!contentValue) {
+    return undefined;
+  }
+  const contentSummary = truncatePlainText(contentValue, 700);
+  return [
+    pathValue ? `file: ${pathValue}` : undefined,
+    `content: ${contentSummary}`,
+  ].filter(Boolean).join(" ");
 }
 
 function formatRecoveredSearchLead(item: { title: string | null; url: string }): string {

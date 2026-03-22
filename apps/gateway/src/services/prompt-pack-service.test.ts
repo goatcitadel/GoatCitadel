@@ -447,7 +447,7 @@ describe("prompt-pack helpers", () => {
       toolAutonomy: "manual",
       webMode: "off",
       memoryMode: "off",
-      orchestrationEnabled: true,
+      orchestrationEnabled: false,
       orchestrationVisibility: "explicit",
       orchestrationParallelism: "sequential",
     });
@@ -608,14 +608,29 @@ describe("prompt-pack helpers", () => {
       },
     });
     expect(buildPromptPackSessionToolAllowlist(noToolsProfile, "Use browser.search if needed.")).toEqual([]);
+
+    expect(buildPromptPackSessionToolAllowlist(
+      coworkProfile,
+      "Use only file/code tools on fixtures/prompt-pack-workspace and produce an audit.",
+    )).toEqual(expect.arrayContaining([
+      "fs.read",
+      "fs.list",
+      "fs.stat",
+      "file.read_range",
+      "file.find",
+      "code.search",
+      "code.search_files",
+    ]));
   });
 
   it("builds path-scoped read grants for prompt-pack sessions", () => {
     const rootDir = "F:/code/personal-ai";
+    const workspaceRoot = "F:/code/personal-ai/workspace";
     expect(buildPromptPackSessionAllowedPaths({
       prompt: "Based on the current GoatCitadel repo, inspect apps/gateway/src/services/prompt-pack-service.ts.",
       rootDir,
-      projectWorkspacePath: ".",
+      workspaceRoot,
+      projectWorkspacePath: "__prompt_pack_repo__",
     })).toEqual(expect.arrayContaining([
       "F:\\code\\personal-ai",
       "F:\\code\\personal-ai\\apps\\gateway\\src\\services\\prompt-pack-service.ts",
@@ -629,10 +644,21 @@ describe("prompt-pack helpers", () => {
         "- `F:/code/sql-teacher/lib/db/security.ts`",
       ].join("\n"),
       rootDir,
+      workspaceRoot,
     })).toEqual(expect.arrayContaining([
       "F:\\code\\sql-teacher\\lib\\db\\sandbox.ts",
       "F:\\code\\sql-teacher\\lib\\db",
       "F:\\code\\sql-teacher\\lib\\db\\security.ts",
+    ]));
+
+    expect(buildPromptPackSessionAllowedPaths({
+      prompt: "Use only file/code tools on fixtures/prompt-pack-workspace to inspect package.json.",
+      rootDir,
+      workspaceRoot,
+      projectWorkspacePath: "fixtures/prompt-pack-workspace",
+    })).toEqual(expect.arrayContaining([
+      "F:\\code\\personal-ai\\workspace\\fixtures\\prompt-pack-workspace",
+      "F:\\code\\personal-ai\\workspace\\fixtures\\prompt-pack-workspace\\fixtures\\prompt-pack-workspace",
     ]));
   });
 
@@ -655,6 +681,7 @@ describe("prompt-pack helpers", () => {
     expect(coworkInput.prompt).toContain("This is a Cowork evaluation");
     expect(coworkInput.prompt).toContain("use at least two role-labeled sections");
     expect(coworkInput.prompt).toContain("end with a synthesis");
+    expect(coworkInput.prompt).toContain("Do not grade, critique, review, or revise an imagined draft");
 
     const codeProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -673,6 +700,8 @@ describe("prompt-pack helpers", () => {
     expect(codeInput.prompt).toContain("This is a Code evaluation");
     expect(codeInput.prompt).toContain("name the exact file paths");
     expect(codeInput.prompt).toContain("Do not claim validation or execution unless you include the exact command/check and the result.");
+    expect(codeInput.prompt).toContain("Do not name scripts, frameworks, folders, or commands by convention alone.");
+    expect(codeInput.prompt).toContain("Do not claim commands such as `pnpm outdated`");
 
     const explicitToolsProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -719,6 +748,7 @@ describe("prompt-pack helpers", () => {
     expect(explicitCodeInput.prompt).toContain("Prefer file/code tools for read-only inspection or audits.");
     expect(explicitCodeInput.prompt).toContain("Do not use `shell.exec` unless the prompt explicitly requires command execution or a shell-only check.");
     expect(explicitCodeInput.prompt).toContain("Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.");
+    expect(explicitCodeInput.prompt).toContain("Keep file/code reads inside the prompt-listed scope unless another path is explicitly required");
 
     const exactSectionCoworkProfile = resolvePromptPackExecutionProfile({
       test: {
