@@ -127,7 +127,11 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["bridgeUrl", "baseUrl", "serverUrl"], ["passwordEnv", "password", "apiPasswordEnv", "apiPassword"]],
   },
   "nextcloud-talk": {
-    supportedDeliveryActions: ["channel.send"],
+    supportedDeliveryActions: ["channel.send", "channel.react"],
+    supportNotes: [
+      "Nextcloud Talk bot connections support inbound webhooks, outbound replies, and bot reactions through the documented bot API.",
+      "Attachments and unsend remain unsupported in this adapter.",
+    ],
     requiredAnyOf: [["baseUrl"], ["tokenEnv", "token", "botSecretEnv", "botSecret", "secretEnv", "secret"]],
   },
   line: {

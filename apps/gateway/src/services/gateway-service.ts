@@ -1918,6 +1918,58 @@ export class GatewayService {
     return binding;
   }
 
+  public async respondToExistingChatMessage(
+    sessionId: string,
+    userMessageId: string,
+    input: Partial<ChatSendMessageRequest> = {},
+  ): Promise<ChatSendMessageResponse> {
+    return this.withChatTurnWriteLease(sessionId, "integration-reply", async () => {
+      await this.ensureChatMessageProjection(sessionId);
+      const userMessage = this.storage.chatMessages.get(userMessageId);
+      if (!userMessage || userMessage.sessionId !== sessionId || userMessage.role !== "user") {
+        throw new Error("existing user message was not found in the requested session");
+      }
+      const binding = this.storage.chatSessionBindings.get(sessionId);
+      if (!binding || binding.transport !== "integration" || !binding.connectionId || !binding.target) {
+        throw new Error("session is not bound to a writable integration target");
+      }
+      if (!binding.writable) {
+        throw new Error("session binding is not writable");
+      }
+
+      const request: ChatSendMessageRequest = {
+        content: userMessage.content,
+        ...input,
+      };
+      const prepared = await this.prepareAgentChatTurn(sessionId, request, {
+        branchKind: "append",
+        existingUserMessage: userMessage,
+        ingestUserMessage: false,
+      });
+      const response = await this.consumePreparedAgentChatTurn(
+        sessionId,
+        request,
+        prepared,
+        "chat_thread_turn_appended",
+      );
+      const assistantContent = response.assistantMessage?.content?.trim();
+      if (assistantContent) {
+        await this.commsSend({
+          connectionId: binding.connectionId,
+          target: binding.target,
+          message: assistantContent,
+          replyToMessageId: prepared.userEventId,
+          sessionId,
+          agentId: "assistant",
+        });
+      }
+      return {
+        ...response,
+        transport: "integration",
+      };
+    });
+  }
+
   public async listChatMessages(sessionId: string, limit = 200, cursor?: string): Promise<ChatMessageRecord[]> {
     this.getSession(sessionId);
     const safeLimit = Math.max(1, Math.min(limit, 1000));
@@ -10016,6 +10068,10 @@ export class GatewayService {
     return this.storage.integrationConnections.list(kind, limit);
   }
 
+  public getIntegrationConnection(connectionId: string): IntegrationConnection {
+    return this.storage.integrationConnections.get(connectionId);
+  }
+
   public async runIntegrationConnectionDiagnostics(connectionId: string): Promise<ConnectorDiagnosticReport> {
     this.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
     const connection = this.storage.integrationConnections.get(connectionId);
@@ -11187,6 +11243,8 @@ export class GatewayService {
           target: input.target,
           message: input.message,
           attachments,
+          replyTo: input.replyToMessageId,
+          replyToMessageId: input.replyToMessageId,
           replyToMessageGuid: input.replyToMessageId,
           replyToPartIndex: input.replyToPartIndex,
           effectId: input.effectId,

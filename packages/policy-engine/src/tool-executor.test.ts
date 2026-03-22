@@ -1447,6 +1447,193 @@ describe("executeTool", () => {
     });
   });
 
+  it("forwards Nextcloud Talk reply targets for quoted replies", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.NEXTCLOUD_TALK_TOKEN = "nextcloud-secret";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ocs: { data: { id: 9988 } },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-nextcloud",
+          key: "nextcloud-talk",
+          config: {
+            baseUrl: "https://cloud.example.com",
+            tokenEnv: "NEXTCLOUD_TALK_TOKEN",
+            defaultConversationId: "room-token-123",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-nextcloud",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-nextcloud",
+        message: "Quoted follow-up",
+        replyTo: "1567",
+      },
+      agentId: "operator",
+      sessionId: "sess-nextcloud",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["cloud.example.com"],
+      },
+    }, commsStorage);
+
+    const nextcloudCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const nextcloudInit = nextcloudCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined;
+    expect(String(nextcloudInit?.body ?? "")).toContain("\"replyTo\":\"1567\"");
+  });
+
+  it("rejects Nextcloud Talk attachments because the adapter is send-only", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.NEXTCLOUD_TALK_TOKEN = "nextcloud-secret";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-nextcloud",
+          key: "nextcloud-talk",
+          config: {
+            baseUrl: "https://cloud.example.com",
+            tokenEnv: "NEXTCLOUD_TALK_TOKEN",
+            defaultConversationId: "room-token-123",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-nextcloud",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-nextcloud",
+        message: "Attachment check",
+        attachments: [{ url: "https://example.com/photo.png" }],
+      },
+      agentId: "operator",
+      sessionId: "sess-nextcloud",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["cloud.example.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: "failed",
+      error: "Nextcloud Talk does not support attachments in this adapter",
+    });
+  });
+
+  it("adds reactions through Nextcloud Talk bot adapters", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.NEXTCLOUD_TALK_TOKEN = "nextcloud-secret";
+    const fetchMock = vi.fn(async () => new Response("", {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-nextcloud",
+          key: "nextcloud-talk",
+          config: {
+            baseUrl: "https://cloud.example.com",
+            tokenEnv: "NEXTCLOUD_TALK_TOKEN",
+            defaultConversationId: "room-token-123",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-nextcloud-react",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.react",
+      args: {
+        connectionId: "conn-nextcloud",
+        target: "room-token-123",
+        messageId: "1567",
+        reaction: "😆",
+      },
+      agentId: "operator",
+      sessionId: "sess-nextcloud",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["cloud.example.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/room-token-123/reaction/1567",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const nextcloudCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const nextcloudInit = nextcloudCallArgs?.[1] as (RequestInit & { body?: BodyInit | null; headers?: HeadersInit }) | undefined;
+    expect(String(nextcloudInit?.body ?? "")).toContain("\"reaction\":\"😆\"");
+    const nextcloudHeaders = new Headers(nextcloudInit?.headers);
+    expect(nextcloudHeaders.get("OCS-APIRequest")).toBe("true");
+    expect(nextcloudHeaders.get("X-Nextcloud-Talk-Bot-Random")).toBeTruthy();
+    expect(nextcloudHeaders.get("X-Nextcloud-Talk-Bot-Signature")).toBeTruthy();
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "1567",
+    });
+  });
+
   it("sends channel messages through Signal bridge adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({

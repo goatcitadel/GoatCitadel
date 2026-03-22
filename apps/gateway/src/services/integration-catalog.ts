@@ -239,22 +239,25 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.nextcloud-talk": {
     catalogId: "channel.nextcloud-talk",
     title: "Nextcloud Talk Connection",
-    description: "Connect a Nextcloud Talk bot token and default room target.",
+    description: "Connect a Nextcloud Talk bot token for inbound webhooks, outbound replies, and reactions.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "Nextcloud Talk" }),
       url("baseUrl", "Base URL", {
         placeholder: "https://cloud.example.com",
         required: true,
+        description: "Public HTTPS origin for your Nextcloud Talk instance. Register GoatCitadel's webhook path under this reverse-proxied domain.",
       }),
       text("tokenEnv", "Token ENV Var", {
         placeholder: "NEXTCLOUD_TALK_TOKEN",
         required: true,
         secretRef: true,
+        description: "Shared secret used for both webhook verification and outbound bot requests.",
       }),
       text("defaultRoomId", "Default Room ID", {
         placeholder: "room-id",
         required: true,
+        description: "Fallback room for manual sends and approval delivery. Regular inbound replies use the originating conversation automatically.",
       }),
       bool("enabled", "Enabled", true),
     ],
@@ -392,7 +395,7 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   entry("channel", "mattermost", "Mattermost", "Mattermost bot/webhook integration.", "planned", ["token"], ["chat", "channels", "direct", "attachments", "reactions", "unsend"]),
   entry("channel", "imessage", "iMessage", "iMessage bridge (platform dependent).", "planned", ["local-agent"], ["chat", "attachments", "reactions", "unsend", "replies"]),
   entry("channel", "teams", "Microsoft Teams", "Teams bot/webhook integration.", "beta", ["oauth", "webhook"], ["chat", "threads", "attachments"], { pluginId: "msteams" }),
-  entry("channel", "nextcloud-talk", "Nextcloud Talk", "Nextcloud Talk channel bridge.", "planned", ["token"], ["chat", "rooms"]),
+  entry("channel", "nextcloud-talk", "Nextcloud Talk", "Nextcloud Talk bot bridge with signed webhooks and reactions.", "native", ["token"], ["chat", "rooms", "webhooks", "reactions"]),
   entry("channel", "matrix", "Matrix", "Matrix room bot integration.", "beta", ["access-token"], ["chat", "rooms", "attachments", "reactions", "unsend"]),
   entry("channel", "line", "LINE", "LINE Messaging API integration.", "planned", ["token"], ["chat", "groups", "rooms", "direct"]),
   entry("channel", "zalo", "Zalo OA", "Zalo Official Account integration.", "planned", ["token"], ["chat", "official-account"]),

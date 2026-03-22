@@ -935,6 +935,14 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "comms",
   },
   {
+    name: "nextcloud-talk.react",
+    category: "comms",
+    riskLevel: "caution",
+    requiresApproval: false,
+    description: "Add a reaction to a Nextcloud Talk message through the bot integration.",
+    pack: "comms",
+  },
+  {
     name: "telegram.send",
     category: "comms",
     riskLevel: "caution",

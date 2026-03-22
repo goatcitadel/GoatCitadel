@@ -166,6 +166,7 @@ export async function executeTool(
     case "mattermost.react":
     case "mattermost.unsend":
     case "nextcloud-talk.send":
+    case "nextcloud-talk.react":
     case "imessage.send":
     case "imessage.react":
     case "imessage.unsend":
@@ -1134,7 +1135,7 @@ async function executeCommsTool(
     case "mattermost":
       return mattermostSend(connectionConfig, args, allowlist, target, message, attachments);
     case "nextcloud-talk":
-      return nextcloudTalkSend(connectionConfig, args, allowlist, target, renderedMessage);
+      return nextcloudTalkSend(connectionConfig, args, allowlist, target, message, attachments);
     case "imessage":
       return imessageSend(connectionConfig, args, allowlist, target, message, attachments);
     case "signal":
@@ -1194,6 +1195,8 @@ async function commsReact(
       return matrixReact(connectionConfig, args, allowlist, target);
     case "mattermost":
       return mattermostReact(connectionConfig, args, allowlist, target);
+    case "nextcloud-talk":
+      return nextcloudTalkReact(connectionConfig, args, allowlist, target);
     case "telegram":
       return telegramReact(connectionConfig, args, allowlist, target);
     case "whatsapp":
@@ -2851,6 +2854,7 @@ async function nextcloudTalkSend(
   allowlist: string[],
   target: string,
   message: string,
+  attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const baseUrl = asString(config.baseUrl);
   const secret = secretFrom(config, "token", "tokenEnv")
@@ -2871,6 +2875,9 @@ async function nextcloudTalkSend(
   }
   if (!roomToken) {
     throw new Error("Missing Nextcloud Talk target");
+  }
+  if (attachments.length > 0) {
+    throw new Error("Nextcloud Talk does not support attachments in this adapter");
   }
 
   const payload: Record<string, unknown> = { message: outboundMessage };
@@ -2903,6 +2910,60 @@ async function nextcloudTalkSend(
   const ocs = record(body.ocs);
   const data = record(ocs.data);
   return data.id != null ? String(data.id) : `nextcloud-talk-${Date.now()}`;
+}
+
+async function nextcloudTalkReact(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const baseUrl = asString(config.baseUrl);
+  const secret = secretFrom(config, "token", "tokenEnv")
+    ?? secretFrom(config, "botSecret", "botSecretEnv")
+    ?? secretFrom(config, "secret", "secretEnv");
+  const roomToken = normalizeNextcloudTalkTarget(
+    asString(args.target)
+      ?? normalizeChannelTarget(target, "nextcloud-talk")
+      ?? resolveDefaultChannelTarget("nextcloud-talk", config),
+  );
+  const messageId = required(asString(args.messageId), "Nextcloud Talk messageId");
+  const reaction = required(asString(args.reaction), "Nextcloud Talk reaction");
+  if (!baseUrl) {
+    throw new Error("Missing Nextcloud Talk base URL");
+  }
+  if (!secret) {
+    throw new Error("Missing Nextcloud Talk token");
+  }
+  if (!roomToken) {
+    throw new Error("Missing Nextcloud Talk target");
+  }
+
+  const payload = { reaction };
+  const bodyText = JSON.stringify(payload);
+  const random = randomBytes(32).toString("hex");
+  const signature = createHmac("sha256", secret)
+    .update(random + bodyText)
+    .digest("hex");
+  const res = await fetchAllowlisted(
+    `${baseUrl.replace(/\/+$/, "")}/ocs/v2.php/apps/spreed/api/v1/bot/${encodeURIComponent(roomToken)}/reaction/${encodeURIComponent(messageId)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "OCS-APIRequest": "true",
+        "X-Nextcloud-Talk-Bot-Random": random,
+        "X-Nextcloud-Talk-Bot-Signature": signature,
+      },
+      body: bodyText,
+    },
+    allowlist,
+  );
+  const responseText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`nextcloud-talk.react failed (${res.response.status})${responseText ? `: ${responseText}` : ""}`);
+  }
+  return messageId;
 }
 
 async function zaloSend(
