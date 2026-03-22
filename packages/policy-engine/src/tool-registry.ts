@@ -943,6 +943,14 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "comms",
   },
   {
+    name: "telegram.react",
+    category: "comms",
+    riskLevel: "caution",
+    requiresApproval: false,
+    description: "Add a reaction to a Telegram message through the Telegram Bot API.",
+    pack: "comms",
+  },
+  {
     name: "signal.send",
     category: "comms",
     riskLevel: "caution",

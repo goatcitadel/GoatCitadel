@@ -56,10 +56,10 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["botTokenEnv", "botToken", "webhookUrl", "url"]],
   },
   telegram: {
-    supportedDeliveryActions: ["channel.send", "channel.unsend"],
+    supportedDeliveryActions: ["channel.send", "channel.react", "channel.unsend"],
     supportedAttachmentSources: ["url", "inline"],
     supportNotes: [
-      "Telegram bot connections can delete sent messages, but reaction support is not wired in this bridge yet.",
+      "Telegram bot connections can add reactions and delete sent messages when the bot has access to the target chat.",
       "Telegram rich sends use photo/document delivery and apply the message body as the first caption when it fits provider limits.",
     ],
     requiredAnyOf: [["botTokenEnv", "botToken", "tokenEnv", "token"]],

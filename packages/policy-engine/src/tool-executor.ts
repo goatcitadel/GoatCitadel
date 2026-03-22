@@ -174,6 +174,7 @@ export async function executeTool(
     case "slack.react":
     case "slack.unsend":
     case "telegram.unsend":
+    case "telegram.react":
     case "matrix.react":
     case "matrix.unsend":
     case "telegram.send":
@@ -1192,6 +1193,8 @@ async function commsReact(
       return matrixReact(connectionConfig, args, allowlist, target);
     case "mattermost":
       return mattermostReact(connectionConfig, args, allowlist, target);
+    case "telegram":
+      return telegramReact(connectionConfig, args, allowlist, target);
     case "imessage":
       return imessageReact(connectionConfig, args, allowlist, target);
     default:
@@ -1786,6 +1789,45 @@ async function telegramUnsend(
   const body = parseJsonRecord(bodyText);
   if (!res.response.ok || body.ok === false) {
     throw new Error(`telegram.unsend failed (${res.response.status})${body.description ? `: ${body.description}` : ""}`);
+  }
+  return messageId;
+}
+
+async function telegramReact(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const token = secretFrom(config, "botToken", "botTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const chatId = asString(args.target) ?? normalizeChannelTarget(target, "telegram") ?? asString(config.defaultChatId);
+  const messageId = required(args.messageId, "Telegram messageId");
+  const reaction = required(args.reaction, "Telegram reaction").trim();
+  if (!token) {
+    throw new Error("Missing Telegram bot token");
+  }
+  if (!chatId) {
+    throw new Error("Missing Telegram chat target");
+  }
+  const res = await fetchAllowlisted(
+    `https://api.telegram.org/bot${token}/setMessageReaction`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: Number.parseInt(messageId, 10),
+        reaction: [{ type: "emoji", emoji: reaction }],
+        is_big: args.isBig === true ? true : undefined,
+      }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const body = parseJsonRecord(bodyText);
+  if (!res.response.ok || body.ok === false) {
+    throw new Error(`telegram.react failed (${res.response.status})${body.description ? `: ${body.description}` : ""}`);
   }
   return messageId;
 }

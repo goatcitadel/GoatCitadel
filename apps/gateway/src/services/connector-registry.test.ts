@@ -140,6 +140,16 @@ describe("buildGatewayConnectorRecords", () => {
       mcpServers: [],
       mcpTools: [],
     });
+    const telegramRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "telegram", {
+          botTokenEnv: "TELEGRAM_BOT_TOKEN",
+          defaultChatId: "-1001234567890",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
     const whatsappRecords = buildGatewayConnectorRecords({
       integrationConnections: [
         createIntegrationConnection("channel", "whatsapp", {
@@ -185,6 +195,13 @@ describe("buildGatewayConnectorRecords", () => {
 
     const matrix = matrixRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(matrix?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
+
+    const telegram = telegramRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(telegram?.metadata?.supportedDeliveryActions).toEqual([
+      "channel.send",
+      "channel.react",
+      "channel.unsend",
+    ]);
 
     const whatsapp = whatsappRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(whatsapp?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);

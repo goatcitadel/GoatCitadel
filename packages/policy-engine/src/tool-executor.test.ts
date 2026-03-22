@@ -2012,6 +2012,70 @@ describe("executeTool", () => {
     });
   });
 
+  it("adds Telegram reactions through the bot API", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.TELEGRAM_BOT_TOKEN = "tg-token";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, result: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-telegram-react",
+          key: "telegram",
+          config: {
+            botTokenEnv: "TELEGRAM_BOT_TOKEN",
+            defaultChatId: "-1001234567890",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-telegram-react",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.react",
+      args: {
+        connectionId: "conn-telegram-react",
+        messageId: "987654321",
+        reaction: "👍",
+      },
+      agentId: "operator",
+      sessionId: "sess-telegram-react",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["api.telegram.org"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.telegram.org/bottg-token/setMessageReaction",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const telegramCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    expect(String(telegramCall?.[1]?.body ?? "")).toContain("\"message_id\":987654321");
+    expect(String(telegramCall?.[1]?.body ?? "")).toContain("\"emoji\":\"👍\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "987654321",
+    });
+  });
+
   it("uploads Matrix attachments and emits attachment events", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.MATRIX_ACCESS_TOKEN = "matrix-token";
