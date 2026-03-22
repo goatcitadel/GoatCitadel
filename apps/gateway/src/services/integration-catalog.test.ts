@@ -131,10 +131,10 @@ describe("integration-catalog", () => {
     expect(slack.capabilities).toEqual(expect.arrayContaining(["reactions", "unsend"]));
 
     const discord = requireCatalogEntry("channel.discord");
-    expect(discord.capabilities).toEqual(expect.arrayContaining(["reactions", "unsend"]));
+    expect(discord.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
 
     const telegram = requireCatalogEntry("channel.telegram");
-    expect(telegram.capabilities).toEqual(expect.arrayContaining(["unsend"]));
+    expect(telegram.capabilities).toEqual(expect.arrayContaining(["attachments", "unsend"]));
 
     const matrix = requireCatalogEntry("channel.matrix");
     expect(matrix.capabilities).toEqual(expect.arrayContaining(["reactions", "unsend"]));

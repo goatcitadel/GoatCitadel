@@ -31,6 +31,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["botTokenEnv", "botToken", "webhookUrl", "url"]],
   },
   discord: {
+    supportedAttachmentSources: ["url", "inline"],
     resolveSupportedDeliveryActions: (config) => {
       if (hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])) {
         return ["channel.send", "channel.react", "channel.unsend"];
@@ -44,18 +45,22 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
         ? [
           "Bot-token Discord connections support reactions and deleting messages in channels the bot can manage.",
+          "Discord rich sends support uploaded inline files and URL-backed embeds.",
         ]
         : hasAnyConfigured(config, ["webhookUrl", "url"])
           ? [
             "Webhook-only Discord connections can unsend webhook-authored messages, but cannot add reactions.",
+            "Webhook-mode Discord sends support uploaded inline files and URL-backed embeds.",
           ]
           : [],
     requiredAnyOf: [["botTokenEnv", "botToken", "webhookUrl", "url"]],
   },
   telegram: {
     supportedDeliveryActions: ["channel.send", "channel.unsend"],
+    supportedAttachmentSources: ["url", "inline"],
     supportNotes: [
       "Telegram bot connections can delete sent messages, but reaction support is not wired in this bridge yet.",
+      "Telegram rich sends use photo/document delivery and apply the message body as the first caption when it fits provider limits.",
     ],
     requiredAnyOf: [["botTokenEnv", "botToken", "tokenEnv", "token"]],
   },

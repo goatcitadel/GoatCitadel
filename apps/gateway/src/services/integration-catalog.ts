@@ -383,10 +383,10 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   // Channels
   entry("channel", "tui", "Terminal/TUI", "Interactive terminal channel for local operations.", "native", ["local"], ["chat", "commands"]),
   entry("channel", "webchat", "Webchat", "Embedded web chat endpoint for browser clients.", "native", ["token", "basic"], ["chat", "sessions"]),
-  entry("channel", "discord", "Discord", "Discord bot/webhook bridge.", "beta", ["oauth", "bot-token"], ["chat", "threads", "reactions", "unsend"]),
+  entry("channel", "discord", "Discord", "Discord bot/webhook bridge.", "beta", ["oauth", "bot-token"], ["chat", "threads", "attachments", "reactions", "unsend"]),
   entry("channel", "signal", "Signal", "Signal messenger bridge.", "planned", ["device-link"], ["chat", "groups"]),
   entry("channel", "whatsapp", "WhatsApp", "WhatsApp business bridge.", "planned", ["oauth", "token"], ["chat", "direct"]),
-  entry("channel", "telegram", "Telegram", "Telegram bot integration.", "beta", ["bot-token"], ["chat", "threads", "unsend"]),
+  entry("channel", "telegram", "Telegram", "Telegram bot integration.", "beta", ["bot-token"], ["chat", "threads", "attachments", "unsend"]),
   entry("channel", "slack", "Slack", "Slack app/bot integration.", "beta", ["oauth"], ["chat", "threads", "mentions", "reactions", "unsend"]),
   entry("channel", "google-chat", "Google Chat", "Google Chat app and webhook integration.", "beta", ["oauth", "token"], ["chat", "spaces", "threads"], { pluginId: "googlechat" }),
   entry("channel", "mattermost", "Mattermost", "Mattermost bot/webhook integration.", "planned", ["token"], ["chat", "channels", "direct", "reactions", "unsend"]),

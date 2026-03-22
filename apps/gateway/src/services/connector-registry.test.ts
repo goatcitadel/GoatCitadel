@@ -156,6 +156,7 @@ describe("buildGatewayConnectorRecords", () => {
       "channel.send",
       "channel.unsend",
     ]);
+    expect(discordWebhook?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
     expect(discordWebhook?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
       "Webhook-only Discord connections can unsend webhook-authored messages, but cannot add reactions.",
     ]));

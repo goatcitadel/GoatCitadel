@@ -674,6 +674,149 @@ describe("executeTool", () => {
     });
   });
 
+  it("sends Discord webhook messages with inline uploads and URL embeds", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      id: "discord-msg-123",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-discord",
+          key: "discord",
+          config: {
+            webhookUrl: "https://discord.com/api/webhooks/123/abc",
+            defaultChannelId: "1234567890",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-discord-send",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-discord",
+        message: "Deployment artifacts attached.",
+        attachments: [
+          { title: "Screenshot", url: "https://example.com/screenshot.png", mimeType: "image/png" },
+          { title: "build.log", mimeType: "text/plain", dataBase64: Buffer.from("log-bytes").toString("base64") },
+        ],
+      },
+      agentId: "operator",
+      sessionId: "sess-discord-send",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["discord.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://discord.com/api/webhooks/123/abc?wait=true",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const discordCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    expect(discordCall?.[1]?.body).toBeInstanceOf(FormData);
+    const formData = discordCall?.[1]?.body as FormData;
+    expect(String(formData.get("payload_json") ?? "")).toContain("\"content\":\"Deployment artifacts attached.\"");
+    expect(String(formData.get("payload_json") ?? "")).toContain("https://example.com/screenshot.png");
+    const uploadedFile = formData.get("files[0]");
+    expect(uploadedFile).toBeInstanceOf(File);
+    expect((uploadedFile as File).name).toBe("build.log");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "discord-msg-123",
+    });
+  });
+
+  it("sends Telegram URL image attachments through sendPhoto with a caption", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.TELEGRAM_BOT_TOKEN = "tg-token";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      result: { message_id: 321 },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-telegram",
+          key: "telegram",
+          config: {
+            botTokenEnv: "TELEGRAM_BOT_TOKEN",
+            defaultChatId: "-1001234567890",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-telegram-send",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-telegram",
+        message: "Screenshot attached.",
+        attachments: [
+          { title: "graph.png", url: "https://example.com/graph.png", mimeType: "image/png" },
+        ],
+      },
+      agentId: "operator",
+      sessionId: "sess-telegram-send",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["api.telegram.org"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.telegram.org/bottg-token/sendPhoto",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const telegramCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    expect(String(telegramCall?.[1]?.body ?? "")).toContain("\"chat_id\":\"-1001234567890\"");
+    expect(String(telegramCall?.[1]?.body ?? "")).toContain("\"photo\":\"https://example.com/graph.png\"");
+    expect(String(telegramCall?.[1]?.body ?? "")).toContain("\"caption\":\"Screenshot attached.\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "321",
+    });
+  });
+
   it("sends channel messages through Teams webhook adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const fetchMock = vi.fn(async () => new Response("1", { status: 200 }));

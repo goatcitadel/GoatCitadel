@@ -1126,7 +1126,7 @@ async function executeCommsTool(
     case "slack":
       return slackSend(connectionConfig, args, allowlist, target, renderedMessage);
     case "discord":
-      return discordSend(connectionConfig, args, allowlist, target, renderedMessage);
+      return discordSend(connectionConfig, args, allowlist, target, message, attachments);
     case "line":
       return lineSend(connectionConfig, args, allowlist, target, renderedMessage);
     case "mattermost":
@@ -1138,7 +1138,7 @@ async function executeCommsTool(
     case "signal":
       return signalSend(connectionConfig, args, allowlist, target, renderedMessage);
     case "telegram":
-      return telegramSend(connectionConfig, args, allowlist, target, renderedMessage);
+      return telegramSend(connectionConfig, args, allowlist, target, message, attachments);
     case "matrix":
       return matrixSend(connectionConfig, args, allowlist, target, renderedMessage);
     case "teams":
@@ -1466,16 +1466,18 @@ async function discordSend(
   allowlist: string[],
   target: string,
   message: string,
+  attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "discord");
   const webhookUrl = secretFrom(config, "webhookUrl", "webhookUrlEnv");
+  const discordRequest = await buildDiscordMessageRequest(message, attachments, allowlist);
   if (webhookUrl) {
     const res = await fetchAllowlisted(
       appendDiscordWebhookQuery(webhookUrl, "wait", "true"),
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: message }),
+        headers: discordRequest.headers,
+        body: discordRequest.body,
       },
       allowlist,
     );
@@ -1501,9 +1503,9 @@ async function discordSend(
       method: "POST",
       headers: {
         Authorization: `Bot ${token}`,
-        "Content-Type": "application/json",
+        ...(discordRequest.headers ?? {}),
       },
-      body: JSON.stringify({ content: message }),
+      body: discordRequest.body,
     },
     allowlist,
   );
@@ -1596,6 +1598,66 @@ async function discordUnsend(
   return messageId;
 }
 
+async function buildDiscordMessageRequest(
+  message: string,
+  attachments: ChannelAttachment[],
+  allowlist: string[],
+): Promise<{ headers?: Record<string, string>; body: BodyInit }> {
+  const embeds = buildDiscordEmbeds(attachments);
+  const uploadableAttachments = attachments.filter((attachment) => Boolean(attachment.dataBase64));
+  const payload: Record<string, unknown> = {};
+  if (message.trim()) {
+    payload.content = message;
+  }
+  if (embeds.length > 0) {
+    payload.embeds = embeds;
+  }
+  if (uploadableAttachments.length === 0) {
+    return {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    };
+  }
+
+  const formData = new FormData();
+  formData.append("payload_json", JSON.stringify(payload));
+  for (const [index, attachment] of uploadableAttachments.entries()) {
+    const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Discord");
+    const fileName = resolveChannelAttachmentName(attachment, index);
+    const blobBytes = new Uint8Array(attachmentData.bytes.length);
+    blobBytes.set(attachmentData.bytes);
+    formData.append(
+      `files[${index}]`,
+      new Blob([blobBytes], attachmentData.contentType ? { type: attachmentData.contentType } : undefined),
+      fileName,
+    );
+  }
+  return { body: formData };
+}
+
+function buildDiscordEmbeds(attachments: ChannelAttachment[]): Array<Record<string, unknown>> {
+  return attachments
+    .filter((attachment) => Boolean(attachment.url))
+    .slice(0, 10)
+    .map((attachment) => {
+      const url = required(attachment.url, "Discord embed attachment URL");
+      const embed: Record<string, unknown> = {};
+      const title = asString(attachment.title);
+      if (title) {
+        embed.title = title;
+      }
+      if (title || !isImageChannelAttachment(attachment)) {
+        embed.url = url;
+      }
+      if (isImageChannelAttachment(attachment)) {
+        embed.image = { url };
+      } else {
+        embed.description = url;
+      }
+      return embed;
+    });
+}
+
 async function lineSend(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -1654,6 +1716,7 @@ async function telegramSend(
   allowlist: string[],
   target: string,
   message: string,
+  attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "telegram");
   const token = secretFrom(config, "botToken", "botTokenEnv")
@@ -1665,26 +1728,30 @@ async function telegramSend(
   if (!chatId) {
     throw new Error("Missing Telegram chat target");
   }
-  const res = await fetchAllowlisted(
-    `https://api.telegram.org/bot${token}/sendMessage`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: message,
-        parse_mode: asString(config.parseMode) ?? undefined,
-      }),
-    },
-    allowlist,
-  );
-  const bodyText = await res.response.text();
-  const body = parseJsonRecord(bodyText);
-  if (!res.response.ok || body.ok === false) {
-    throw new Error(`telegram.send failed (${res.response.status})${body.description ? `: ${body.description}` : ""}`);
+
+  if (attachments.length === 0) {
+    return telegramSendText(config, allowlist, token, chatId, message);
   }
-  const result = record(body.result);
-  return asString(result.message_id) ?? `telegram-${Date.now()}`;
+
+  let lastMessageId: string | undefined;
+  let caption = message.trim() || undefined;
+  if (caption && caption.length > 1024) {
+    lastMessageId = await telegramSendText(config, allowlist, token, chatId, message);
+    caption = undefined;
+  }
+  for (const [index, attachment] of attachments.entries()) {
+    lastMessageId = await telegramSendAttachment(
+      config,
+      allowlist,
+      token,
+      chatId,
+      attachment,
+      index,
+      caption,
+    );
+    caption = undefined;
+  }
+  return lastMessageId ?? `telegram-${Date.now()}`;
 }
 
 async function telegramUnsend(
@@ -1721,6 +1788,98 @@ async function telegramUnsend(
     throw new Error(`telegram.unsend failed (${res.response.status})${body.description ? `: ${body.description}` : ""}`);
   }
   return messageId;
+}
+
+async function telegramSendText(
+  config: Record<string, unknown>,
+  allowlist: string[],
+  token: string,
+  chatId: string,
+  message: string,
+): Promise<string> {
+  const res = await fetchAllowlisted(
+    `https://api.telegram.org/bot${token}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+        parse_mode: asString(config.parseMode) ?? undefined,
+      }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const body = parseJsonRecord(bodyText);
+  if (!res.response.ok || body.ok === false) {
+    throw new Error(`telegram.send failed (${res.response.status})${body.description ? `: ${body.description}` : ""}`);
+  }
+  const result = record(body.result);
+  return providerMessageIdFromValue(result.message_id) ?? `telegram-${Date.now()}`;
+}
+
+async function telegramSendAttachment(
+  config: Record<string, unknown>,
+  allowlist: string[],
+  token: string,
+  chatId: string,
+  attachment: ChannelAttachment,
+  index: number,
+  caption: string | undefined,
+): Promise<string> {
+  const parseMode = asString(config.parseMode) ?? undefined;
+  const isImage = isImageChannelAttachment(attachment);
+  const method = isImage ? "sendPhoto" : "sendDocument";
+  const field = isImage ? "photo" : "document";
+  let body: BodyInit;
+  let headers: Record<string, string> | undefined;
+
+  if (attachment.dataBase64) {
+    const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Telegram");
+    const fileName = resolveChannelAttachmentName(attachment, index);
+    const blobBytes = new Uint8Array(attachmentData.bytes.length);
+    blobBytes.set(attachmentData.bytes);
+    const formData = new FormData();
+    formData.set("chat_id", chatId);
+    formData.set(
+      field,
+      new Blob([blobBytes], attachmentData.contentType ? { type: attachmentData.contentType } : undefined),
+      fileName,
+    );
+    if (caption) {
+      formData.set("caption", caption);
+    }
+    if (parseMode) {
+      formData.set("parse_mode", parseMode);
+    }
+    body = formData;
+  } else {
+    body = JSON.stringify({
+      chat_id: chatId,
+      [field]: required(attachment.url, "Telegram attachment URL"),
+      caption,
+      parse_mode: parseMode,
+    });
+    headers = { "Content-Type": "application/json" };
+  }
+
+  const res = await fetchAllowlisted(
+    `https://api.telegram.org/bot${token}/${method}`,
+    {
+      method: "POST",
+      headers,
+      body,
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const payload = parseJsonRecord(bodyText);
+  if (!res.response.ok || payload.ok === false) {
+    throw new Error(`telegram.send failed (${res.response.status})${payload.description ? `: ${payload.description}` : ""}`);
+  }
+  const result = record(payload.result);
+  return providerMessageIdFromValue(result.message_id) ?? `telegram-${Date.now()}`;
 }
 
 async function matrixSend(
@@ -2475,6 +2634,16 @@ function normalizeSlackReaction(value: unknown): string {
 function normalizeColonWrappedReaction(value: string): string {
   const trimmed = value.trim();
   return trimmed.replace(/^:/, "").replace(/:$/, "");
+}
+
+function providerMessageIdFromValue(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return undefined;
 }
 
 function normalizeChannelTarget(target: string | undefined, channelKey: string): string | undefined {
@@ -3500,6 +3669,18 @@ function resolveChannelAttachmentName(attachment: ChannelAttachment, index: numb
 
   const ext = inferAttachmentExtension(attachment.mimeType);
   return `attachment-${index + 1}${ext}`;
+}
+
+function isImageChannelAttachment(attachment: ChannelAttachment): boolean {
+  const mimeType = attachment.mimeType?.trim().toLowerCase();
+  if (mimeType?.startsWith("image/")) {
+    return true;
+  }
+  const candidate = asString(attachment.title) ?? asString(attachment.url);
+  if (!candidate) {
+    return false;
+  }
+  return /\.(avif|bmp|gif|heic|heif|jpe?g|png|svg|webp)(?:$|[?#])/i.test(candidate);
 }
 
 function inferAttachmentExtension(mimeType: string | undefined): string {
