@@ -2450,6 +2450,177 @@ describe("executeTool", () => {
     });
   });
 
+  it("sends WhatsApp URL attachments as rich media messages", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.WHATSAPP_ACCESS_TOKEN = "wa-token";
+    let messageCounter = 0;
+    const fetchMock = vi.fn(async () => {
+      messageCounter += 1;
+      return new Response(JSON.stringify({
+        messaging_product: "whatsapp",
+        messages: [{ id: `wamid.rich.${messageCounter}` }],
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-whatsapp-rich",
+          key: "whatsapp",
+          config: {
+            accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
+            phoneNumberId: "123456789012345",
+            defaultTarget: "+15551234567",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-whatsapp-rich",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-whatsapp-rich",
+        message: "Cloud delivery with image.",
+        attachments: [{
+          url: "https://cdn.example.com/test-image.png",
+          title: "test-image.png",
+          mimeType: "image/png",
+        }],
+      },
+      agentId: "operator",
+      sessionId: "sess-whatsapp-rich",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["graph.facebook.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const attachmentCall = fetchMock.mock.calls[1] as unknown[] | undefined;
+    const attachmentBody = ((attachmentCall?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(attachmentBody ?? "")).toContain("\"type\":\"image\"");
+    expect(String(attachmentBody ?? "")).toContain("\"link\":\"https://cdn.example.com/test-image.png\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "wamid.rich.2",
+    });
+  });
+
+  it("uploads inline WhatsApp attachments before sending them", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.WHATSAPP_ACCESS_TOKEN = "wa-token";
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/media")) {
+        return new Response(JSON.stringify({
+          id: "media-inline-123",
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/messages")) {
+        return new Response(JSON.stringify({
+          messaging_product: "whatsapp",
+          messages: [{ id: "wamid.inline.123" }],
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-whatsapp-inline",
+          key: "whatsapp",
+          config: {
+            accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
+            phoneNumberId: "123456789012345",
+            defaultTarget: "+15551234567",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-whatsapp-inline",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-whatsapp-inline",
+        attachments: [{
+          title: "receipt.pdf",
+          mimeType: "application/pdf",
+          dataBase64: Buffer.from("inline-whatsapp-file").toString("base64"),
+        }],
+      },
+      agentId: "operator",
+      sessionId: "sess-whatsapp-inline",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["graph.facebook.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://graph.facebook.com/v23.0/123456789012345/media",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://graph.facebook.com/v23.0/123456789012345/messages",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    const messageCall = fetchMock.mock.calls[1] as unknown[] | undefined;
+    const messageBody = ((messageCall?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    expect(String(messageBody ?? "")).toContain("\"type\":\"document\"");
+    expect(String(messageBody ?? "")).toContain("\"id\":\"media-inline-123\"");
+    expect(String(messageBody ?? "")).toContain("\"filename\":\"receipt.pdf\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "wamid.inline.123",
+    });
+  });
+
   it("sends channel messages through Zalo Personal zca bridge adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.ZALOUSER_AUTH_TOKEN = "zlu-token";

@@ -140,6 +140,17 @@ describe("buildGatewayConnectorRecords", () => {
       mcpServers: [],
       mcpTools: [],
     });
+    const whatsappRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "whatsapp", {
+          phoneNumberId: "123456789012345",
+          accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
+          defaultTarget: "+15551234567",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
 
     const imessage = imessageRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(imessage?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
@@ -174,6 +185,12 @@ describe("buildGatewayConnectorRecords", () => {
 
     const matrix = matrixRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(matrix?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
+
+    const whatsapp = whatsappRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(whatsapp?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
+    expect(whatsapp?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
+      "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",
+    ]));
   });
 
   it("publishes setup diagnostics for incomplete channel bridge configs", () => {

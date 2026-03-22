@@ -142,6 +142,9 @@ describe("integration-catalog", () => {
     const mattermost = requireCatalogEntry("channel.mattermost");
     expect(mattermost.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
 
+    const whatsapp = requireCatalogEntry("channel.whatsapp");
+    expect(whatsapp.capabilities).toEqual(expect.arrayContaining(["attachments", "direct"]));
+
     const zalouser = requireCatalogEntry("channel.zalouser");
     expect(zalouser.capabilities).toEqual(expect.arrayContaining(["attachments", "direct"]));
   });

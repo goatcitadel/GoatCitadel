@@ -83,6 +83,10 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   },
   whatsapp: {
     supportedDeliveryActions: ["channel.send"],
+    supportedAttachmentSources: ["url", "inline"],
+    supportNotes: [
+      "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",
+    ],
     requiredAnyOf: [["phoneNumberId"], ["accessTokenEnv", "accessToken", "tokenEnv", "token"]],
   },
   signal: {

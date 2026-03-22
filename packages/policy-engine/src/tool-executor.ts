@@ -1146,7 +1146,7 @@ async function executeCommsTool(
     case "google-chat":
       return googleChatSend(connectionConfig, args, allowlist, target, renderedMessage);
     case "whatsapp":
-      return whatsappSend(connectionConfig, args, allowlist, target, renderedMessage);
+      return whatsappSend(connectionConfig, args, allowlist, target, message, attachments);
     case "zalo":
       return zaloSend(connectionConfig, args, allowlist, target, renderedMessage);
     case "zalouser":
@@ -2192,6 +2192,7 @@ async function whatsappSend(
   allowlist: string[],
   target: string,
   message: string,
+  attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
     ?? secretFrom(config, "token", "tokenEnv");
@@ -2199,7 +2200,6 @@ async function whatsappSend(
   const resolvedTarget = normalizeWhatsAppTarget(
     asString(args.target) ?? normalizeChannelTarget(target, "whatsapp") ?? resolveDefaultChannelTarget("whatsapp", config),
   );
-  const outboundMessage = required(message, "WhatsApp message");
   const baseUrl = normalizeWhatsAppBaseUrl(asString(config.baseUrl), asString(config.apiVersion));
   if (!accessToken) {
     throw new Error("Missing WhatsApp access token");
@@ -2214,35 +2214,48 @@ async function whatsappSend(
     throw new Error("WhatsApp Cloud API sender only supports direct recipients, not group JIDs");
   }
 
-  const res = await fetchAllowlisted(
-    `${baseUrl}/${encodeURIComponent(phoneNumberId)}/messages`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+  const richAttachments = attachments.filter((attachment) => Boolean(attachment.url || attachment.dataBase64));
+  const inlineOnlyAttachments = attachments.filter((attachment) => !attachment.url && !attachment.dataBase64);
+  const outboundMessage = renderChannelMessage(message, inlineOnlyAttachments);
+  const recipient = normalizeWhatsAppRecipient(resolvedTarget);
+
+  let providerMessageId: string | undefined;
+  if (outboundMessage.trim()) {
+    providerMessageId = await whatsappSendPayload(
+      baseUrl,
+      phoneNumberId,
+      accessToken,
+      {
         messaging_product: "whatsapp",
         recipient_type: "individual",
-        to: normalizeWhatsAppRecipient(resolvedTarget),
+        to: recipient,
         type: "text",
         text: { body: outboundMessage },
-      }),
-    },
-    allowlist,
-  );
-  const bodyText = await res.response.text();
-  const body = parseJsonRecord(bodyText);
-  if (!res.response.ok || Object.keys(record(body.error)).length > 0) {
-    const errorBody = record(body.error);
-    const detail = asString(errorBody.message) ?? bodyText.trim();
-    throw new Error(`whatsapp.send failed (${res.response.status})${detail ? `: ${detail}` : ""}`);
+      },
+      allowlist,
+    );
   }
-  const messages = Array.isArray(body.messages)
-    ? body.messages.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
-    : [];
-  return asString(messages[0]?.id) ?? `whatsapp-${Date.now()}`;
+
+  for (let index = 0; index < richAttachments.length; index += 1) {
+    const attachment = richAttachments[index];
+    if (!attachment) {
+      continue;
+    }
+    providerMessageId = await whatsappSendAttachment(
+      baseUrl,
+      phoneNumberId,
+      accessToken,
+      recipient,
+      attachment,
+      index,
+      allowlist,
+    );
+  }
+
+  if (!providerMessageId) {
+    throw new Error("WhatsApp send requires a message or attachment");
+  }
+  return providerMessageId;
 }
 
 async function mattermostSend(
@@ -2900,6 +2913,33 @@ function isWhatsAppGroupTarget(target: string): boolean {
 
 function normalizeWhatsAppRecipient(target: string): string {
   return target.replace(/[^\d]/g, "");
+}
+
+function resolveWhatsAppAttachmentType(
+  attachment: ChannelAttachment,
+): "audio" | "document" | "image" | "video" {
+  const mimeType = attachment.mimeType?.trim().toLowerCase();
+  if (mimeType?.startsWith("image/")) {
+    return "image";
+  }
+  if (mimeType?.startsWith("video/")) {
+    return "video";
+  }
+  if (mimeType?.startsWith("audio/")) {
+    return "audio";
+  }
+
+  const candidate = `${asString(attachment.title) ?? ""} ${asString(attachment.url) ?? ""}`.toLowerCase();
+  if (/\.(avif|bmp|gif|heic|heif|jpe?g|png|svg|webp)(?:$|[?#\s])/i.test(candidate)) {
+    return "image";
+  }
+  if (/\.(mov|mp4|m4v|mkv|webm)(?:$|[?#\s])/i.test(candidate)) {
+    return "video";
+  }
+  if (/\.(aac|m4a|mp3|oga|ogg|wav)(?:$|[?#\s])/i.test(candidate)) {
+    return "audio";
+  }
+  return "document";
 }
 
 function normalizeNextcloudTalkTarget(target: string | undefined): string | undefined {
@@ -4033,6 +4073,122 @@ async function mattermostUploadAttachment(
     : [];
   const firstFile = fileInfos[0];
   return required(firstFile?.id, "Mattermost uploaded file id");
+}
+
+async function whatsappSendPayload(
+  baseUrl: string,
+  phoneNumberId: string,
+  accessToken: string,
+  payload: Record<string, unknown>,
+  allowlist: string[],
+): Promise<string> {
+  const res = await fetchAllowlisted(
+    `${baseUrl}/${encodeURIComponent(phoneNumberId)}/messages`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const body = parseJsonRecord(bodyText);
+  if (!res.response.ok || Object.keys(record(body.error)).length > 0) {
+    const errorBody = record(body.error);
+    const detail = asString(errorBody.message) ?? bodyText.trim();
+    throw new Error(`whatsapp.send failed (${res.response.status})${detail ? `: ${detail}` : ""}`);
+  }
+  const messages = Array.isArray(body.messages)
+    ? body.messages.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    : [];
+  return asString(messages[0]?.id) ?? `whatsapp-${Date.now()}`;
+}
+
+async function whatsappSendAttachment(
+  baseUrl: string,
+  phoneNumberId: string,
+  accessToken: string,
+  recipient: string,
+  attachment: ChannelAttachment,
+  index: number,
+  allowlist: string[],
+): Promise<string> {
+  const type = resolveWhatsAppAttachmentType(attachment);
+  const attachmentField: Record<string, unknown> = {};
+  if (attachment.dataBase64) {
+    attachmentField.id = await whatsappUploadAttachment(
+      baseUrl,
+      phoneNumberId,
+      accessToken,
+      attachment,
+      index,
+      allowlist,
+    );
+  } else {
+    attachmentField.link = required(attachment.url, "WhatsApp attachment URL");
+  }
+  if (type === "document") {
+    attachmentField.filename = resolveChannelAttachmentName(attachment, index);
+  }
+  return whatsappSendPayload(
+    baseUrl,
+    phoneNumberId,
+    accessToken,
+    {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: recipient,
+      type,
+      [type]: attachmentField,
+    },
+    allowlist,
+  );
+}
+
+async function whatsappUploadAttachment(
+  baseUrl: string,
+  phoneNumberId: string,
+  accessToken: string,
+  attachment: ChannelAttachment,
+  index: number,
+  allowlist: string[],
+): Promise<string> {
+  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "WhatsApp");
+  const fileName = resolveChannelAttachmentName(attachment, index);
+  const blobBytes = new Uint8Array(attachmentData.bytes.length);
+  blobBytes.set(attachmentData.bytes);
+  const formData = new FormData();
+  formData.set("messaging_product", "whatsapp");
+  if (attachmentData.contentType) {
+    formData.set("type", attachmentData.contentType);
+  }
+  formData.append(
+    "file",
+    new Blob([blobBytes], attachmentData.contentType ? { type: attachmentData.contentType } : undefined),
+    fileName,
+  );
+  const headers = new Headers();
+  headers.set("Authorization", `Bearer ${accessToken}`);
+  const res = await fetchAllowlisted(
+    `${baseUrl}/${encodeURIComponent(phoneNumberId)}/media`,
+    {
+      method: "POST",
+      headers,
+      body: formData,
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const body = parseJsonRecord(bodyText);
+  if (!res.response.ok || Object.keys(record(body.error)).length > 0) {
+    const errorBody = record(body.error);
+    const detail = asString(errorBody.message) ?? bodyText.trim();
+    throw new Error(`whatsapp.send failed (${res.response.status})${detail ? `: ${detail}` : ""}`);
+  }
+  return required(body.id, "WhatsApp uploaded media id");
 }
 
 async function signalRpcRequest<T>(
