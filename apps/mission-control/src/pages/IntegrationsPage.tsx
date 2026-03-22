@@ -20,13 +20,14 @@ import {
   fetchIntegrationConnectionDiagnostics,
   searchObsidianNotes,
   testObsidianIntegration,
+  uploadChatAttachment,
   captureObsidianInboxEntry,
   updateIntegrationConnection,
   type IntegrationCatalogEntry,
   type IntegrationConnection,
   type ObsidianIntegrationStatus,
 } from "../api/client";
-import type { ConnectorRecord } from "@goatcitadel/contracts";
+import type { ChannelAttachmentInput, ChatAttachmentRecord, ConnectorRecord } from "@goatcitadel/contracts";
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
@@ -76,6 +77,8 @@ const KIND_DESCRIPTIONS: Record<Exclude<IntegrationKind, "all">, string> = {
   platform: "Connects platform-level services and APIs.",
 };
 
+const INTEGRATIONS_UPLOAD_SESSION_ID = "session:operator:integrations";
+
 export function IntegrationsPage() {
   const [catalog, setCatalog] = useState<IntegrationCatalogEntry[]>([]);
   const [connections, setConnections] = useState<IntegrationConnection[]>([]);
@@ -122,8 +125,16 @@ export function IntegrationsPage() {
   const [selectedChannelConnectionId, setSelectedChannelConnectionId] = useState("");
   const [channelTestTarget, setChannelTestTarget] = useState("");
   const [channelTestMessage, setChannelTestMessage] = useState("Operator test message from GoatCitadel Mission Control.");
+  const [channelAttachmentUrls, setChannelAttachmentUrls] = useState("");
+  const [channelAttachmentIdsText, setChannelAttachmentIdsText] = useState("");
+  const [uploadedChannelAttachments, setUploadedChannelAttachments] = useState<ChatAttachmentRecord[]>([]);
+  const [channelReplyToMessageId, setChannelReplyToMessageId] = useState("");
+  const [channelReplyToPartIndex, setChannelReplyToPartIndex] = useState("");
+  const [channelEffectId, setChannelEffectId] = useState("");
+  const [channelSubject, setChannelSubject] = useState("");
   const [channelTestResult, setChannelTestResult] = useState<string | null>(null);
   const [channelTestBusy, setChannelTestBusy] = useState(false);
+  const [channelUploadBusy, setChannelUploadBusy] = useState(false);
   const [channelActionBusy, setChannelActionBusy] = useState<"react" | "unsend" | null>(null);
   const [channelActionResult, setChannelActionResult] = useState<string | null>(null);
   const [channelReactionMessageId, setChannelReactionMessageId] = useState("");
@@ -528,10 +539,26 @@ export function IntegrationsPage() {
     setChannelTestBusy(true);
     setChannelTestResult(null);
     try {
+      const attachments = parseAttachmentUrlInputs(channelAttachmentUrls);
+      const uploadedAttachmentIds = parseAttachmentIdInputs(channelAttachmentIdsText);
+      for (const attachment of uploadedChannelAttachments) {
+        if (!uploadedAttachmentIds.includes(attachment.attachmentId)) {
+          uploadedAttachmentIds.push(attachment.attachmentId);
+        }
+      }
+      const replyToPartIndex = channelReplyToPartIndex.trim()
+        ? Number.parseInt(channelReplyToPartIndex.trim(), 10)
+        : undefined;
       const result = await commsSend({
         connectionId: selectedChannelConnection.connectionId,
         target,
         message,
+        attachments,
+        attachmentIds: uploadedAttachmentIds.length > 0 ? uploadedAttachmentIds : undefined,
+        replyToMessageId: channelReplyToMessageId.trim() || undefined,
+        replyToPartIndex: Number.isFinite(replyToPartIndex) ? replyToPartIndex : undefined,
+        effectId: channelEffectId.trim() || undefined,
+        subject: channelSubject.trim() || undefined,
       });
       const statusText = typeof result === "object" && result && "status" in result
         ? String((result as { status?: unknown }).status ?? "sent")
@@ -595,6 +622,32 @@ export function IntegrationsPage() {
     } finally {
       setChannelActionBusy(null);
     }
+  };
+
+  const onUploadChannelAttachments = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) {
+      return;
+    }
+    setChannelUploadBusy(true);
+    try {
+      const uploaded: ChatAttachmentRecord[] = [];
+      for (const file of Array.from(fileList)) {
+        uploaded.push(await uploadChatAttachment({
+          sessionId: INTEGRATIONS_UPLOAD_SESSION_ID,
+          file,
+        }));
+      }
+      setUploadedChannelAttachments((current) => dedupeUploadedAttachments([...current, ...uploaded]));
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setChannelUploadBusy(false);
+    }
+  };
+
+  const onRemoveUploadedChannelAttachment = (attachmentId: string) => {
+    setUploadedChannelAttachments((current) => current.filter((item) => item.attachmentId !== attachmentId));
   };
 
   const onUnsendChannelTest = async () => {
@@ -1296,12 +1349,98 @@ export function IntegrationsPage() {
               value={channelTestMessage}
               onChange={(event) => setChannelTestMessage(event.target.value)}
             />
+            <div className="controls-row" style={{ marginTop: 12 }}>
+              <label htmlFor="channelSubject">Subject</label>
+              <input
+                id="channelSubject"
+                value={channelSubject}
+                onChange={(event) => setChannelSubject(event.target.value)}
+                placeholder="Optional subject (provider-specific)"
+              />
+              <label htmlFor="channelEffectId">Effect</label>
+              <input
+                id="channelEffectId"
+                value={channelEffectId}
+                onChange={(event) => setChannelEffectId(event.target.value)}
+                placeholder="Optional effect id"
+              />
+            </div>
+            <div className="controls-row">
+              <label htmlFor="channelReplyToMessageId">Reply to message id</label>
+              <input
+                id="channelReplyToMessageId"
+                value={channelReplyToMessageId}
+                onChange={(event) => setChannelReplyToMessageId(event.target.value)}
+                placeholder="Optional provider message id"
+              />
+              <label htmlFor="channelReplyToPartIndex">Reply part index</label>
+              <input
+                id="channelReplyToPartIndex"
+                value={channelReplyToPartIndex}
+                onChange={(event) => setChannelReplyToPartIndex(event.target.value)}
+                placeholder="0"
+              />
+            </div>
+            <label htmlFor="channelAttachmentUrls">Attachment URLs</label>
+            <textarea
+              id="channelAttachmentUrls"
+              rows={3}
+              className="full-textarea"
+              value={channelAttachmentUrls}
+              onChange={(event) => setChannelAttachmentUrls(event.target.value)}
+              placeholder="One attachment URL per line"
+            />
+            <label htmlFor="channelAttachmentIdsText">Uploaded attachment ids</label>
+            <textarea
+              id="channelAttachmentIdsText"
+              rows={2}
+              className="full-textarea"
+              value={channelAttachmentIdsText}
+              onChange={(event) => setChannelAttachmentIdsText(event.target.value)}
+              placeholder="Optional attachment ids, one per line"
+            />
+            <div className="controls-row">
+              <label htmlFor="channelAttachmentUpload">Upload attachment</label>
+              <input
+                id="channelAttachmentUpload"
+                type="file"
+                multiple
+                onChange={(event) => {
+                  void onUploadChannelAttachments(event.target.files);
+                  event.currentTarget.value = "";
+                }}
+                disabled={channelUploadBusy}
+              />
+              <span className="table-subtext">
+                {channelUploadBusy ? "Uploading..." : "Uploads are stored as chat attachments and forwarded by id."}
+              </span>
+            </div>
+            {uploadedChannelAttachments.length > 0 ? (
+              <ul className="improvement-simple-list">
+                {uploadedChannelAttachments.map((attachment) => (
+                  <li key={attachment.attachmentId}>
+                    <strong>{attachment.fileName}</strong>
+                    {" · "}
+                    <code>{attachment.attachmentId}</code>
+                    {" · "}
+                    {attachment.mimeType}
+                    {" "}
+                    <button type="button" onClick={() => onRemoveUploadedChannelAttachment(attachment.attachmentId)}>
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
             {channelTestResult ? <p className="office-subtitle">{channelTestResult}</p> : null}
             {selectedChannelConnector ? (
               <div className="card" style={{ marginTop: 12 }}>
                 <p><strong>Interactive action bench</strong></p>
                 <p className="office-subtitle">
                   Use provider message ids from a successful send or channel logs. Controls stay disabled unless the selected connector advertises that action.
+                </p>
+                <p className="table-subtext">
+                  Reaction format varies by provider: Slack and Mattermost expect emoji names, Discord and Matrix accept raw emoji, and iMessage uses BlueBubbles reaction keywords such as `love`.
                 </p>
                 <div className="controls-row">
                   <label htmlFor="channelReactionMessageId">React message id</label>
@@ -1660,6 +1799,39 @@ export function connectorSetupReady(connector: ConnectorRecord | undefined): boo
 
 function formatConnectorList(values: string[]): string {
   return values.length > 0 ? values.join(", ") : "none advertised";
+}
+
+export function parseAttachmentUrlInputs(value: string): ChannelAttachmentInput[] {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((url) => ({ url }));
+}
+
+export function parseAttachmentIdInputs(value: string): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const item of value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean)) {
+    if (!seen.has(item)) {
+      seen.add(item);
+      ordered.push(item);
+    }
+  }
+  return ordered;
+}
+
+function dedupeUploadedAttachments(items: ChatAttachmentRecord[]): ChatAttachmentRecord[] {
+  const seen = new Set<string>();
+  const ordered: ChatAttachmentRecord[] = [];
+  for (const item of items) {
+    if (seen.has(item.attachmentId)) {
+      continue;
+    }
+    seen.add(item.attachmentId);
+    ordered.push(item);
+  }
+  return ordered;
 }
 
 function renderConnectorApprovalDeliverySummary(

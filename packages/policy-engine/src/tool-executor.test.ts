@@ -1522,6 +1522,372 @@ describe("executeTool", () => {
     });
   });
 
+  it("reacts to Slack messages through bot-token connectors", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-slack",
+          key: "slack",
+          config: {
+            botTokenEnv: "SLACK_BOT_TOKEN",
+            defaultChannel: "C123",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-slack-react",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.react",
+      args: {
+        connectionId: "conn-slack",
+        messageId: "1711111111.000100",
+        reaction: ":thumbsup:",
+      },
+      agentId: "operator",
+      sessionId: "sess-slack-react",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["slack.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://slack.com/api/reactions.add",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const slackCall = fetchMock.mock.calls[0] as [string, RequestInit?] | undefined;
+    const slackBody = String((slackCall?.[1]?.body) ?? "");
+    expect(slackBody).toContain("\"channel\":\"C123\"");
+    expect(slackBody).toContain("\"timestamp\":\"1711111111.000100\"");
+    expect(slackBody).toContain("\"name\":\"thumbsup\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "1711111111.000100",
+    });
+  });
+
+  it("unsends Slack messages through bot-token connectors", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-slack",
+          key: "slack",
+          config: {
+            botTokenEnv: "SLACK_BOT_TOKEN",
+            defaultChannel: "C123",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-slack-unsend",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.unsend",
+      args: {
+        connectionId: "conn-slack",
+        messageId: "1711111111.000100",
+      },
+      agentId: "operator",
+      sessionId: "sess-slack-unsend",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["slack.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://slack.com/api/chat.delete",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "1711111111.000100",
+    });
+  });
+
+  it("unsends Discord webhook-authored messages through webhook connectors", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-discord",
+          key: "discord",
+          config: {
+            webhookUrl: "https://discord.com/api/webhooks/123/abc",
+            defaultChannelId: "1234567890",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-discord-unsend",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.unsend",
+      args: {
+        connectionId: "conn-discord",
+        messageId: "msg-999",
+      },
+      agentId: "operator",
+      sessionId: "sess-discord-unsend",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["discord.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://discord.com/api/webhooks/123/abc/messages/msg-999",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "msg-999",
+    });
+  });
+
+  it("unsends Telegram bot messages", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.TELEGRAM_BOT_TOKEN = "tg-token";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, result: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-telegram",
+          key: "telegram",
+          config: {
+            botTokenEnv: "TELEGRAM_BOT_TOKEN",
+            defaultChatId: "123456",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-telegram-unsend",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.unsend",
+      args: {
+        connectionId: "conn-telegram",
+        messageId: "77",
+      },
+      agentId: "operator",
+      sessionId: "sess-telegram-unsend",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["api.telegram.org"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.telegram.org/bottg-token/deleteMessage",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "77",
+    });
+  });
+
+  it("reacts to Matrix events", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.MATRIX_ACCESS_TOKEN = "matrix-token";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ event_id: "$reaction-1" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-matrix",
+          key: "matrix",
+          config: {
+            homeserverUrl: "https://matrix.example.com",
+            accessTokenEnv: "MATRIX_ACCESS_TOKEN",
+            defaultRoomId: "!room:example.com",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-matrix-react",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.react",
+      args: {
+        connectionId: "conn-matrix",
+        messageId: "$event-123",
+        reaction: "👍",
+      },
+      agentId: "operator",
+      sessionId: "sess-matrix-react",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["matrix.example.com"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/_matrix/client/v3/rooms/!room%3Aexample.com/send/m.reaction/"),
+      expect.objectContaining({ method: "PUT" }),
+    );
+    const matrixCall = fetchMock.mock.calls[0] as [string, RequestInit?] | undefined;
+    const matrixBody = String((matrixCall?.[1]?.body) ?? "");
+    expect(matrixBody).toContain("\"event_id\":\"$event-123\"");
+    expect(matrixBody).toContain("\"key\":\"👍\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "$reaction-1",
+    });
+  });
+
+  it("unsends Mattermost posts", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.MATTERMOST_BOT_TOKEN = "mm-token";
+    const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-mattermost",
+          key: "mattermost",
+          config: {
+            serverUrl: "http://127.0.0.1:8065",
+            botTokenEnv: "MATTERMOST_BOT_TOKEN",
+            defaultChannel: "town-square",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-mattermost-unsend",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.unsend",
+      args: {
+        connectionId: "conn-mattermost",
+        messageId: "post-123",
+      },
+      agentId: "operator",
+      sessionId: "sess-mattermost-unsend",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["127.0.0.1"],
+      },
+    }, commsStorage);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8065/api/v4/posts/post-123",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "post-123",
+    });
+  });
+
   it("creates a new iMessage chat before sending attachments to a handle target", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.IMESSAGE_PASSWORD = "bb-password";

@@ -6,27 +6,64 @@ export interface ChannelFeatureMetadata {
 }
 
 type ChannelRule = {
-  supportedDeliveryActions: string[];
+  supportedDeliveryActions?: string[];
+  resolveSupportedDeliveryActions?: (config: Record<string, unknown>) => string[];
   supportedAttachmentSources?: string[];
   supportNotes?: string[];
+  resolveSupportNotes?: (config: Record<string, unknown>) => string[];
   requiredAnyOf?: string[][];
 };
 
 const CHANNEL_RULES: Record<string, ChannelRule> = {
   slack: {
-    supportedDeliveryActions: ["channel.send"],
+    resolveSupportedDeliveryActions: (config) =>
+      hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
+        ? ["channel.send", "channel.react", "channel.unsend"]
+        : ["channel.send"],
+    resolveSupportNotes: (config) =>
+      hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
+        ? [
+          "Interactive actions use the Slack Web API and require the bot to have the needed chat and reactions scopes.",
+        ]
+        : [
+          "Webhook-only Slack connections support send only. Reactions and unsend require a bot token.",
+        ],
     requiredAnyOf: [["botTokenEnv", "botToken", "webhookUrl", "url"]],
   },
   discord: {
-    supportedDeliveryActions: ["channel.send"],
+    resolveSupportedDeliveryActions: (config) => {
+      if (hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])) {
+        return ["channel.send", "channel.react", "channel.unsend"];
+      }
+      if (hasAnyConfigured(config, ["webhookUrl", "url"])) {
+        return ["channel.send", "channel.unsend"];
+      }
+      return ["channel.send"];
+    },
+    resolveSupportNotes: (config) =>
+      hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
+        ? [
+          "Bot-token Discord connections support reactions and deleting messages in channels the bot can manage.",
+        ]
+        : hasAnyConfigured(config, ["webhookUrl", "url"])
+          ? [
+            "Webhook-only Discord connections can unsend webhook-authored messages, but cannot add reactions.",
+          ]
+          : [],
     requiredAnyOf: [["botTokenEnv", "botToken", "webhookUrl", "url"]],
   },
   telegram: {
-    supportedDeliveryActions: ["channel.send"],
+    supportedDeliveryActions: ["channel.send", "channel.unsend"],
+    supportNotes: [
+      "Telegram bot connections can delete sent messages, but reaction support is not wired in this bridge yet.",
+    ],
     requiredAnyOf: [["botTokenEnv", "botToken", "tokenEnv", "token"]],
   },
   matrix: {
-    supportedDeliveryActions: ["channel.send"],
+    supportedDeliveryActions: ["channel.send", "channel.react", "channel.unsend"],
+    supportNotes: [
+      "Matrix unsend uses event redaction and depends on room permissions for the bot user.",
+    ],
     requiredAnyOf: [["homeserverUrl"], ["accessTokenEnv", "accessToken"]],
   },
   "google-chat": {
@@ -46,7 +83,10 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["baseUrl", "bridgeUrl"]],
   },
   mattermost: {
-    supportedDeliveryActions: ["channel.send"],
+    supportedDeliveryActions: ["channel.send", "channel.react", "channel.unsend"],
+    supportNotes: [
+      "Mattermost unsend deletes the original post and typically applies only to posts the bot can remove.",
+    ],
     requiredAnyOf: [["serverUrl"], ["botTokenEnv", "botToken"]],
   },
   imessage: {
@@ -90,9 +130,11 @@ export function describeChannelFeatureMetadata(
   };
   const setupDiagnostics = buildSetupDiagnostics(rule, config);
   return {
-    supportedDeliveryActions: [...rule.supportedDeliveryActions],
+    supportedDeliveryActions: [
+      ...(rule.resolveSupportedDeliveryActions?.(config) ?? rule.supportedDeliveryActions ?? ["channel.send"]),
+    ],
     supportedAttachmentSources: [...(rule.supportedAttachmentSources ?? [])],
-    supportNotes: [...(rule.supportNotes ?? [])],
+    supportNotes: [...(rule.resolveSupportNotes?.(config) ?? rule.supportNotes ?? [])],
     setupDiagnostics,
   };
 }
@@ -111,4 +153,8 @@ function buildSetupDiagnostics(rule: ChannelRule, config: Record<string, unknown
 function readConfigString(config: Record<string, unknown>, key: string): string | undefined {
   const value = config[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function hasAnyConfigured(config: Record<string, unknown>, keys: string[]): boolean {
+  return keys.some((key) => Boolean(readConfigString(config, key)));
 }

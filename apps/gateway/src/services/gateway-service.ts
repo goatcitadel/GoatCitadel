@@ -348,6 +348,7 @@ import {
   resolveIntegrationCatalogMaturity,
 } from "./integration-catalog.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
+import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
 import { MemoryContextService } from "./memory-context-service.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
@@ -10015,7 +10016,7 @@ export class GatewayService {
     return this.storage.integrationConnections.list(kind, limit);
   }
 
-  public runIntegrationConnectionDiagnostics(connectionId: string): ConnectorDiagnosticReport {
+  public async runIntegrationConnectionDiagnostics(connectionId: string): Promise<ConnectorDiagnosticReport> {
     this.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
     const connection = this.storage.integrationConnections.get(connectionId);
     if (!connection) {
@@ -10038,6 +10039,7 @@ export class GatewayService {
       message: connection.lastError ? `Last error: ${connection.lastError}` : "No recent errors recorded.",
     });
     checks.push(...this.buildIntegrationConnectionChecks(connection));
+    checks.push(...await this.runIntegrationConnectionLiveChecks(connection));
     const report: ConnectorDiagnosticReport = {
       connectorType: "integration_connection",
       connectorId: connection.connectionId,
@@ -12452,6 +12454,9 @@ export class GatewayService {
   ): ConnectorDiagnosticReport["checks"] {
     const checks: ConnectorDiagnosticReport["checks"] = [];
     const config = connection.config;
+    const channelFeatures = connection.kind === "channel"
+      ? describeChannelFeatureMetadata(connection.key, config)
+      : undefined;
     const requireSecretRef = (
       key: string,
       label: string,
@@ -12502,6 +12507,18 @@ export class GatewayService {
     };
 
     if (connection.kind === "channel") {
+      checks.push({
+        key: "actions",
+        status: "pass",
+        message: `Supported delivery actions: ${(channelFeatures?.supportedDeliveryActions ?? ["channel.send"]).join(", ")}.`,
+      });
+      checks.push({
+        key: "attachments",
+        status: (channelFeatures?.supportedAttachmentSources.length ?? 0) > 0 ? "pass" : "warn",
+        message: (channelFeatures?.supportedAttachmentSources.length ?? 0) > 0
+          ? `Supported attachment sources: ${channelFeatures?.supportedAttachmentSources.join(", ")}.`
+          : "No rich attachment source is advertised for this connector.",
+      });
       switch (connection.key) {
         case "slack":
           checks.push({
@@ -12660,6 +12677,179 @@ export class GatewayService {
     return checks;
   }
 
+  private async runIntegrationConnectionLiveChecks(
+    connection: IntegrationConnection,
+  ): Promise<ConnectorDiagnosticReport["checks"]> {
+    if (connection.kind !== "channel") {
+      return [];
+    }
+    const config = connection.config;
+    switch (connection.key) {
+      case "slack": {
+        const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
+          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+        if (!token) {
+          return [{
+            key: "auth_live",
+            status: this.readConnectionConfigValue(config, "webhookUrl") ? "warn" : "fail",
+            message: this.readConnectionConfigValue(config, "webhookUrl")
+              ? "Webhook-mode Slack connections cannot be probed non-destructively without a bot token."
+              : "Slack live auth probe skipped because no bot token is configured.",
+          }];
+        }
+        return [await this.runLiveProbeCheck("auth_live", "Slack auth probe", async () => {
+          const response = await this.fetchWithDiagnosticsTimeout("https://slack.com/api/auth.test", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+          const payload = await this.readJsonRecord(response);
+          if (!response.ok || payload.ok === false) {
+            throw new Error(this.readProbeDetail(payload) ?? `HTTP ${response.status}`);
+          }
+        })];
+      }
+      case "discord": {
+        const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
+          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+        if (!token) {
+          return [{
+            key: "auth_live",
+            status: this.readConnectionConfigValue(config, "webhookUrl") ? "warn" : "fail",
+            message: this.readConnectionConfigValue(config, "webhookUrl")
+              ? "Webhook-mode Discord connections cannot be fully probed for reactions without a bot token."
+              : "Discord live auth probe skipped because no bot token is configured.",
+          }];
+        }
+        return [await this.runLiveProbeCheck("auth_live", "Discord auth probe", async () => {
+          const response = await this.fetchWithDiagnosticsTimeout("https://discord.com/api/v10/users/@me", {
+            headers: {
+              Authorization: `Bot ${token}`,
+            },
+          });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+        })];
+      }
+      case "telegram": {
+        const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
+          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+        if (!token) {
+          return [];
+        }
+        return [await this.runLiveProbeCheck("auth_live", "Telegram auth probe", async () => {
+          const response = await this.fetchWithDiagnosticsTimeout(`https://api.telegram.org/bot${token}/getMe`);
+          const payload = await this.readJsonRecord(response);
+          if (!response.ok || payload.ok === false) {
+            throw new Error(this.readProbeDetail(payload) ?? `HTTP ${response.status}`);
+          }
+        })];
+      }
+      case "matrix": {
+        const token = this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv")
+          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+        const homeserverUrl = this.readConnectionConfigValue(config, "homeserverUrl");
+        if (!token || !homeserverUrl) {
+          return [];
+        }
+        return [await this.runLiveProbeCheck("auth_live", "Matrix auth probe", async () => {
+          const response = await this.fetchWithDiagnosticsTimeout(
+            `${homeserverUrl.replace(/\/+$/, "")}/_matrix/client/v3/account/whoami`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            },
+          );
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+        })];
+      }
+      case "mattermost": {
+        const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
+          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+        const serverUrl = this.readConnectionConfigValue(config, "serverUrl")
+          ?? this.readConnectionConfigValue(config, "baseUrl");
+        if (!token || !serverUrl) {
+          return [];
+        }
+        return [await this.runLiveProbeCheck("auth_live", "Mattermost auth probe", async () => {
+          const response = await this.fetchWithDiagnosticsTimeout(
+            `${serverUrl.replace(/\/+$/, "")}/api/v4/users/me`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            },
+          );
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+        })];
+      }
+      default:
+        return [];
+    }
+  }
+
+  private async runLiveProbeCheck(
+    key: string,
+    label: string,
+    probe: () => Promise<void>,
+  ): Promise<ConnectorDiagnosticReport["checks"][number]> {
+    try {
+      await probe();
+      return {
+        key,
+        status: "pass",
+        message: `${label} succeeded.`,
+      };
+    } catch (error) {
+      return {
+        key,
+        status: "warn",
+        message: `${label} failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  private async fetchWithDiagnosticsTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      return await fetch(url, {
+        ...init,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async readJsonRecord(response: Response): Promise<Record<string, unknown>> {
+    const text = await response.text();
+    if (!text.trim()) {
+      return {};
+    }
+    try {
+      return JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+
+  private readProbeDetail(payload: Record<string, unknown>): string | undefined {
+    for (const candidate of [payload.error, payload.description, payload.message]) {
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
+    return undefined;
+  }
+
   private readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined {
     const value = config[key];
     if (typeof value !== "string") {
@@ -12667,6 +12857,15 @@ export class GatewayService {
     }
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  private resolveConnectionSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined {
+    const direct = this.readConnectionConfigValue(config, directKey);
+    if (direct) {
+      return direct;
+    }
+    const envName = this.readConnectionConfigValue(config, envKey);
+    return envName ? process.env[envName] : undefined;
   }
 
   private hasConnectionEnvValue(config: Record<string, unknown>, key: string): boolean {

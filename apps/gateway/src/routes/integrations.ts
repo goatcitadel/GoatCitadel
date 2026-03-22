@@ -333,7 +333,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.runIntegrationConnectionDiagnostics(params.data.connectionId));
+      return reply.send(await fastify.gateway.runIntegrationConnectionDiagnostics(params.data.connectionId));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown integration connection");

@@ -157,14 +157,27 @@ export async function executeTool(
     case "calendar.list":
     case "calendar.create_event":
     case "discord.send":
+    case "discord.react":
+    case "discord.unsend":
+    case "google-chat.send":
     case "line.send":
+    case "matrix.send":
     case "mattermost.send":
+    case "mattermost.react":
+    case "mattermost.unsend":
     case "nextcloud-talk.send":
     case "imessage.send":
     case "imessage.react":
     case "imessage.unsend":
     case "signal.send":
     case "slack.send":
+    case "slack.react":
+    case "slack.unsend":
+    case "telegram.unsend":
+    case "matrix.react":
+    case "matrix.unsend":
+    case "telegram.send":
+    case "teams.send":
     case "whatsapp.send":
     case "zalo.send":
     case "zalouser.send":
@@ -1171,6 +1184,14 @@ async function commsReact(
 ): Promise<string> {
   const channelKey = resolveChannelKey(toolName, connectionKey);
   switch (channelKey) {
+    case "slack":
+      return slackReact(connectionConfig, args, allowlist, target);
+    case "discord":
+      return discordReact(connectionConfig, args, allowlist, target);
+    case "matrix":
+      return matrixReact(connectionConfig, args, allowlist, target);
+    case "mattermost":
+      return mattermostReact(connectionConfig, args, allowlist, target);
     case "imessage":
       return imessageReact(connectionConfig, args, allowlist, target);
     default:
@@ -1188,6 +1209,16 @@ async function commsUnsend(
 ): Promise<string> {
   const channelKey = resolveChannelKey(toolName, connectionKey);
   switch (channelKey) {
+    case "slack":
+      return slackUnsend(connectionConfig, args, allowlist, target);
+    case "discord":
+      return discordUnsend(connectionConfig, args, allowlist, target);
+    case "telegram":
+      return telegramUnsend(connectionConfig, args, allowlist, target);
+    case "matrix":
+      return matrixUnsend(connectionConfig, args, allowlist, target);
+    case "mattermost":
+      return mattermostUnsend(connectionConfig, args, allowlist, target);
     case "imessage":
       return imessageUnsend(connectionConfig, args, allowlist, target);
     default:
@@ -1349,6 +1380,86 @@ async function slackSend(
   return asString(body.ts) ?? `slack-${Date.now()}`;
 }
 
+async function slackReact(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const token = secretFrom(config, "botToken", "botTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const channel = asString(args.target) ?? normalizeChannelTarget(target, "slack") ?? asString(config.defaultChannel);
+  const timestamp = required(args.messageId, "Slack messageId");
+  const reaction = normalizeSlackReaction(args.reaction);
+  if (!token) {
+    throw new Error("Missing Slack bot token");
+  }
+  if (!channel) {
+    throw new Error("Missing Slack channel target");
+  }
+  const res = await fetchAllowlisted(
+    "https://slack.com/api/reactions.add",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel,
+        timestamp,
+        name: reaction,
+      }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const body = parseJsonRecord(bodyText);
+  if (!res.response.ok || body.ok === false) {
+    throw new Error(`slack.react failed (${res.response.status})${body.error ? `: ${body.error}` : ""}`);
+  }
+  return timestamp;
+}
+
+async function slackUnsend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const token = secretFrom(config, "botToken", "botTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const channel = asString(args.target) ?? normalizeChannelTarget(target, "slack") ?? asString(config.defaultChannel);
+  const timestamp = required(args.messageId, "Slack messageId");
+  if (!token) {
+    throw new Error("Missing Slack bot token");
+  }
+  if (!channel) {
+    throw new Error("Missing Slack channel target");
+  }
+  const res = await fetchAllowlisted(
+    "https://slack.com/api/chat.delete",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel,
+        ts: timestamp,
+      }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const body = parseJsonRecord(bodyText);
+  if (!res.response.ok || body.ok === false) {
+    throw new Error(`slack.unsend failed (${res.response.status})${body.error ? `: ${body.error}` : ""}`);
+  }
+  return timestamp;
+}
+
 async function discordSend(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -1360,7 +1471,7 @@ async function discordSend(
   const webhookUrl = secretFrom(config, "webhookUrl", "webhookUrlEnv");
   if (webhookUrl) {
     const res = await fetchAllowlisted(
-      webhookUrl,
+      appendDiscordWebhookQuery(webhookUrl, "wait", "true"),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1371,7 +1482,8 @@ async function discordSend(
     if (!res.response.ok) {
       throw new Error(`discord.send failed (${res.response.status})`);
     }
-    return `discord-webhook-${Date.now()}`;
+    const body = parseJsonRecord(await res.response.text());
+    return asString(body.id) ?? `discord-webhook-${Date.now()}`;
   }
 
   const token = secretFrom(config, "botToken", "botTokenEnv")
@@ -1401,6 +1513,87 @@ async function discordSend(
   }
   const body = parseJsonRecord(bodyText);
   return asString(body.id) ?? `discord-${Date.now()}`;
+}
+
+async function discordReact(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const token = secretFrom(config, "botToken", "botTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const channelId = asString(args.target) ?? normalizeChannelTarget(target, "discord") ?? asString(config.defaultChannelId);
+  const messageId = required(args.messageId, "Discord messageId");
+  const emoji = required(args.reaction, "Discord reaction");
+  if (!token) {
+    throw new Error("Missing Discord bot token");
+  }
+  if (!channelId) {
+    throw new Error("Missing Discord channel target");
+  }
+  const res = await fetchAllowlisted(
+    `https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/reactions/${encodeDiscordEmoji(emoji)}/@me`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bot ${token}`,
+      },
+    },
+    allowlist,
+  );
+  if (!res.response.ok) {
+    const bodyText = await res.response.text();
+    throw new Error(`discord.react failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  return messageId;
+}
+
+async function discordUnsend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const messageId = required(args.messageId, "Discord messageId");
+  const token = secretFrom(config, "botToken", "botTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const webhookUrl = secretFrom(config, "webhookUrl", "webhookUrlEnv");
+  if (token) {
+    const channelId = asString(args.target) ?? normalizeChannelTarget(target, "discord") ?? asString(config.defaultChannelId);
+    if (!channelId) {
+      throw new Error("Missing Discord channel target");
+    }
+    const res = await fetchAllowlisted(
+      `https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bot ${token}`,
+        },
+      },
+      allowlist,
+    );
+    if (!res.response.ok) {
+      const bodyText = await res.response.text();
+      throw new Error(`discord.unsend failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+    }
+    return messageId;
+  }
+  if (!webhookUrl) {
+    throw new Error("Missing Discord bot token or webhook URL");
+  }
+  const deleteUrl = `${appendDiscordWebhookQuery(webhookUrl.replace(/\/+$/, ""), "wait", "true").replace(/\?wait=true$/, "")}/messages/${encodeURIComponent(messageId)}`;
+  const res = await fetchAllowlisted(
+    deleteUrl,
+    { method: "DELETE" },
+    allowlist,
+  );
+  if (!res.response.ok) {
+    const bodyText = await res.response.text();
+    throw new Error(`discord.unsend failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  return messageId;
 }
 
 async function lineSend(
@@ -1494,6 +1687,42 @@ async function telegramSend(
   return asString(result.message_id) ?? `telegram-${Date.now()}`;
 }
 
+async function telegramUnsend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const token = secretFrom(config, "botToken", "botTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const chatId = asString(args.target) ?? normalizeChannelTarget(target, "telegram") ?? asString(config.defaultChatId);
+  const messageId = required(args.messageId, "Telegram messageId");
+  if (!token) {
+    throw new Error("Missing Telegram bot token");
+  }
+  if (!chatId) {
+    throw new Error("Missing Telegram chat target");
+  }
+  const res = await fetchAllowlisted(
+    `https://api.telegram.org/bot${token}/deleteMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: Number.parseInt(messageId, 10),
+      }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  const body = parseJsonRecord(bodyText);
+  if (!res.response.ok || body.ok === false) {
+    throw new Error(`telegram.unsend failed (${res.response.status})${body.description ? `: ${body.description}` : ""}`);
+  }
+  return messageId;
+}
+
 async function matrixSend(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -1534,6 +1763,88 @@ async function matrixSend(
   }
   const body = parseJsonRecord(bodyText);
   return asString(body.event_id) ?? `matrix-${Date.now()}`;
+}
+
+async function matrixReact(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const homeserverUrl = asString(config.homeserverUrl) ?? "https://matrix-client.matrix.org";
+  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const roomId = asString(args.target) ?? normalizeChannelTarget(target, "matrix") ?? asString(config.defaultRoomId);
+  const eventId = required(args.messageId, "Matrix messageId");
+  const reaction = required(args.reaction, "Matrix reaction");
+  if (!accessToken) {
+    throw new Error("Missing Matrix access token");
+  }
+  if (!roomId) {
+    throw new Error("Missing Matrix room target");
+  }
+  const txnId = randomUUID();
+  const res = await fetchAllowlisted(
+    `${homeserverUrl.replace(/\/+$/, "")}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.reaction/${txnId}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        "m.relates_to": {
+          rel_type: "m.annotation",
+          event_id: eventId,
+          key: reaction,
+        },
+      }),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`matrix.react failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  const body = parseJsonRecord(bodyText);
+  return asString(body.event_id) ?? `matrix-reaction-${Date.now()}`;
+}
+
+async function matrixUnsend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+): Promise<string> {
+  const homeserverUrl = asString(config.homeserverUrl) ?? "https://matrix-client.matrix.org";
+  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const roomId = asString(args.target) ?? normalizeChannelTarget(target, "matrix") ?? asString(config.defaultRoomId);
+  const eventId = required(args.messageId, "Matrix messageId");
+  if (!accessToken) {
+    throw new Error("Missing Matrix access token");
+  }
+  if (!roomId) {
+    throw new Error("Missing Matrix room target");
+  }
+  const txnId = randomUUID();
+  const res = await fetchAllowlisted(
+    `${homeserverUrl.replace(/\/+$/, "")}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/redact/${encodeURIComponent(eventId)}/${txnId}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+    },
+    allowlist,
+  );
+  const bodyText = await res.response.text();
+  if (!res.response.ok) {
+    throw new Error(`matrix.unsend failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+  }
+  return eventId;
 }
 
 async function teamsSend(
@@ -1729,6 +2040,75 @@ async function mattermostSend(
     },
   );
   return asString(post.id) ?? `mattermost-${Date.now()}`;
+}
+
+async function mattermostReact(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  _target: string,
+): Promise<string> {
+  const serverUrl = asString(config.serverUrl) ?? asString(config.baseUrl);
+  const botToken = secretFrom(config, "botToken", "botTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const postId = required(args.messageId, "Mattermost messageId");
+  const reaction = normalizeColonWrappedReaction(required(args.reaction, "Mattermost reaction"));
+  if (!serverUrl) {
+    throw new Error("Missing Mattermost server URL");
+  }
+  if (!botToken) {
+    throw new Error("Missing Mattermost bot token");
+  }
+  const botUser = await mattermostApiRequest<Record<string, unknown>>(
+    serverUrl,
+    botToken,
+    "/users/me",
+    allowlist,
+  );
+  const botUserId = required(botUser.id, "Mattermost bot user id");
+  await mattermostApiRequest<Record<string, unknown>>(
+    serverUrl,
+    botToken,
+    "/reactions",
+    allowlist,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        user_id: botUserId,
+        post_id: postId,
+        emoji_name: reaction,
+      }),
+    },
+  );
+  return postId;
+}
+
+async function mattermostUnsend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  _target: string,
+): Promise<string> {
+  const serverUrl = asString(config.serverUrl) ?? asString(config.baseUrl);
+  const botToken = secretFrom(config, "botToken", "botTokenEnv")
+    ?? secretFrom(config, "token", "tokenEnv");
+  const postId = required(args.messageId, "Mattermost messageId");
+  if (!serverUrl) {
+    throw new Error("Missing Mattermost server URL");
+  }
+  if (!botToken) {
+    throw new Error("Missing Mattermost bot token");
+  }
+  await mattermostApiRequest<void>(
+    serverUrl,
+    botToken,
+    `/posts/${encodeURIComponent(postId)}`,
+    allowlist,
+    {
+      method: "DELETE",
+    },
+  );
+  return postId;
 }
 
 async function signalSend(
@@ -2076,6 +2456,25 @@ function parseJsonRecord(bodyText: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function appendDiscordWebhookQuery(webhookUrl: string, key: string, value: string): string {
+  const url = new URL(webhookUrl);
+  url.searchParams.set(key, value);
+  return url.toString();
+}
+
+function encodeDiscordEmoji(value: string): string {
+  return encodeURIComponent(value.trim());
+}
+
+function normalizeSlackReaction(value: unknown): string {
+  return normalizeColonWrappedReaction(required(value, "Slack reaction"));
+}
+
+function normalizeColonWrappedReaction(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.replace(/^:/, "").replace(/:$/, "");
 }
 
 function normalizeChannelTarget(target: string | undefined, channelKey: string): string | undefined {

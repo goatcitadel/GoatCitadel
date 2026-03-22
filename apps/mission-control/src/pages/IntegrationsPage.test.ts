@@ -7,6 +7,8 @@ import {
   getConnectorSupportedAttachmentSources,
   getConnectorSupportedDeliveryActions,
   getConnectorSupportNotes,
+  parseAttachmentIdInputs,
+  parseAttachmentUrlInputs,
 } from "./IntegrationsPage";
 
 function makeConnector(metadata: Record<string, unknown>): ConnectorRecord {
@@ -59,5 +61,13 @@ describe("integration connector metadata helpers", () => {
     expect(getConnectorSetupDiagnostics(connector)).toEqual(["Missing config.bridgeUrl."]);
     expect(connectorSupportsDeliveryAction(connector, "channel.react")).toBe(false);
     expect(connectorSetupReady(connector)).toBe(false);
+  });
+
+  it("parses attachment URL and id inputs into normalized send payload fields", () => {
+    expect(parseAttachmentUrlInputs("https://example.com/a.png\n\n https://example.com/b.pdf ")).toEqual([
+      { url: "https://example.com/a.png" },
+      { url: "https://example.com/b.pdf" },
+    ]);
+    expect(parseAttachmentIdInputs("att-1\natt-2\natt-1\n")).toEqual(["att-1", "att-2"]);
   });
 });

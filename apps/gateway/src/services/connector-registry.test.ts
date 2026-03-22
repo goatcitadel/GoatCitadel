@@ -97,7 +97,7 @@ describe("buildGatewayConnectorRecords", () => {
     );
   });
 
-  it("advertises richer channel actions and diagnostics only when the bridge supports them", () => {
+  it("advertises richer channel actions and diagnostics only when the configured bridge mode supports them", () => {
     const imessageRecords = buildGatewayConnectorRecords({
       integrationConnections: [
         createIntegrationConnection("channel", "imessage", {
@@ -119,6 +119,16 @@ describe("buildGatewayConnectorRecords", () => {
       mcpServers: [],
       mcpTools: [],
     });
+    const discordWebhookRecords = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "discord", {
+          defaultChannelId: "1234567890",
+          webhookUrl: "https://discord.com/api/webhooks/123/test",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
 
     const imessage = imessageRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(imessage?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
@@ -133,8 +143,22 @@ describe("buildGatewayConnectorRecords", () => {
     ]));
 
     const slack = slackRecords.find((item) => item.connectorId === "integration:conn-1");
-    expect(slack?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(false);
-    expect(slack?.metadata?.supportedDeliveryActions).toEqual(["channel.send"]);
+    expect(slack?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
+    expect(slack?.metadata?.supportedDeliveryActions).toEqual([
+      "channel.send",
+      "channel.react",
+      "channel.unsend",
+    ]);
+
+    const discordWebhook = discordWebhookRecords.find((item) => item.connectorId === "integration:conn-1");
+    expect(discordWebhook?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
+    expect(discordWebhook?.metadata?.supportedDeliveryActions).toEqual([
+      "channel.send",
+      "channel.unsend",
+    ]);
+    expect(discordWebhook?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
+      "Webhook-only Discord connections can unsend webhook-authored messages, but cannot add reactions.",
+    ]));
   });
 
   it("publishes setup diagnostics for incomplete channel bridge configs", () => {
