@@ -399,11 +399,10 @@ export function SkillsPage() {
 
       <Panel
         title="What are skills?"
-        subtitle="Reusable instruction packs that teach GoatCitadel how to perform specific jobs and workflows."
+        subtitle="Reusable instruction packs for specific jobs and workflows."
       >
         <p className="table-subtext">
-          Skills are reusable instruction packs that teach GoatCitadel how to do specific jobs.
-          You can keep a skill off, keep it guarded (sleep), or turn it on.
+          Skills teach GoatCitadel how to do repeatable jobs. Keep them off, guarded, or fully enabled.
         </p>
         <ul>
           <li><strong>enabled</strong>: skill can be selected automatically.</li>

@@ -186,7 +186,7 @@ export function GatewayAccessGate({
   };
 
   return (
-    <section className="gateway-access-shell" aria-live="polite">
+    <section className="gateway-access-shell theme-citadel-light" aria-live="polite">
       <div className="panel panel-pad-spacious panel-accent gateway-access-card">
         <div className="gateway-access-header">
           <div className="gateway-access-copy">

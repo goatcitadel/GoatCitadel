@@ -47,11 +47,18 @@ export function GCModal({
           {description ? <Dialog.Description className="gc-modal-description">{description}</Dialog.Description> : null}
           {children ? <div className="gc-modal-body">{children}</div> : null}
           <div className="gc-modal-actions">
-            <button type="button" disabled={dismissDisabled} onClick={() => onOpenChange(false)}>{cancelLabel}</button>
+            <button
+              type="button"
+              className="gc-action-button gc-action-tertiary"
+              disabled={dismissDisabled}
+              onClick={() => onOpenChange(false)}
+            >
+              {cancelLabel}
+            </button>
             {onConfirm ? (
               <button
                 type="button"
-                className={danger ? "danger" : ""}
+                className={`gc-action-button ${danger ? "gc-action-danger" : "gc-action-primary"}`}
                 disabled={confirmPending || confirmDisabled}
                 onClick={() => void onConfirm()}
               >

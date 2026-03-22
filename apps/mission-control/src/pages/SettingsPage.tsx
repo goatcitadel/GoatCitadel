@@ -950,7 +950,7 @@ export function SettingsPage() {
         eyebrow="Configuration"
         title={pageCopy.settings.title}
         subtitle={pageCopy.settings.subtitle}
-        hint="Use Forge to tune providers, safety defaults, and runtime behavior without leaving Mission Control."
+        hint="Tune providers, access, and runtime defaults without leaving Mission Control."
         className="page-header-command settings-header"
       />
       <PageGuideCard
@@ -974,7 +974,7 @@ export function SettingsPage() {
         <aside className="panel panel-soft panel-pad-default settings-v2-nav">
           <div className="settings-v2-nav-head">
             <h3>Forge Sections</h3>
-            <FieldHelp>Jump straight to the part of Forge you need. This keeps long configuration work chunked instead of forcing one giant scroll.</FieldHelp>
+            <FieldHelp>Jump straight to the section you need instead of working through one long scroll.</FieldHelp>
           </div>
           <div className="settings-v2-nav-list">
             {SETTINGS_SECTIONS.map((section) => (
@@ -990,7 +990,7 @@ export function SettingsPage() {
           <section id="settings-overview" className="settings-v2-section">
             <Panel
               title="Current Forge Posture"
-              subtitle="Quick context before you touch access, runtime, or provider settings."
+              subtitle="Current environment, defaults, and safety posture."
               tone="soft"
             >
               <div className="settings-v2-summary">
@@ -1031,8 +1031,8 @@ export function SettingsPage() {
           <section id="settings-access" className="settings-v2-section">
             <Panel
               className="settings-v2-panel"
-              title="Gateway Access Control"
-              subtitle="Use auth modes for local and online hosting. By default, credentials stay session-only and clear when you close the browser."
+              title="Gateway Access"
+              subtitle="Set auth and storage defaults for local or remote use."
             >
               <FieldHelp>Keep this section conservative for public or remote installs. Session-only storage is the safer default; persistent storage is a convenience tradeoff.</FieldHelp>
               <div className="controls-row">

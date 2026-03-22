@@ -50,6 +50,13 @@ function NotificationStackInner({ items, onDismiss }: NotificationStackProps) {
     return null;
   }
 
+  const toneLabels: Record<NotificationItem["tone"], string> = {
+    info: "Info",
+    success: "Success",
+    warning: "Warning",
+    error: "Error",
+  };
+
   return (
     <div className="notification-stack">
       {items.map((item) => (
@@ -62,7 +69,7 @@ function NotificationStackInner({ items, onDismiss }: NotificationStackProps) {
         >
           <div className="notification-copy">
             <p className="notification-tone">
-              {item.tone}
+              {toneLabels[item.tone]}
               {item.count && item.count > 1 ? <span className="notification-count">x{item.count}</span> : null}
             </p>
             <p>{item.message}</p>

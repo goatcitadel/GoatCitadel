@@ -496,7 +496,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
         eyebrow="Execution"
         title={pageCopy.tasks.title}
         subtitle={pageCopy.tasks.subtitle}
-        hint="Trailboard keeps queue state, durable recovery, deliverables, and linked subagent sessions together so work does not fragment across tabs."
+        hint="Manage queue state, recovery, deliverables, and delegated sessions from one task surface."
         actions={(
           <div className="workflow-summary-strip">
             <StatusChip tone="live">{tasks.length} visible tasks</StatusChip>
@@ -547,7 +547,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
       <div className="split-grid">
         <Panel
           title="Task Queue"
-          subtitle="Move between active, trash, and full views before drilling into the selected task."
+          subtitle="Switch views, then inspect the selected task."
         >
           <table>
             <thead>
@@ -626,7 +626,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
               <p className="office-subtitle">
                 Use this when a long-running workflow is paused or waiting. Resume continues from the exact checkpoint.
               </p>
-              <FieldHelp>Load the durable run before resuming or waking it so you can see the blocked step and the last checkpoint state first.</FieldHelp>
+              <FieldHelp>Load the run first so you can see the blocked step before resuming or waking it.</FieldHelp>
               <div className="controls-row">
                 <label htmlFor="taskDurableRunId">Run ID</label>
                 <input
@@ -699,7 +699,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
 
               <h4>Activities</h4>
               {loadingDetails ? <p className="office-subtitle">Refreshing task details...</p> : null}
-              <FieldHelp>Activities are the lightweight human-readable log of task progress, blockers, and status changes.</FieldHelp>
+              <FieldHelp>Use activities for short operator-visible progress notes.</FieldHelp>
               <div className="controls-row">
                 <SelectOrCustom
                   value={activityMessage}
@@ -723,7 +723,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
               {activities.length === 0 ? <p className="office-subtitle">No activities yet.</p> : null}
 
               <h4>Deliverables</h4>
-              <FieldHelp>Attach the concrete outputs of the task here so review and handoff stay connected to the work item.</FieldHelp>
+              <FieldHelp>Attach concrete outputs here so review stays tied to the task.</FieldHelp>
               <div className="controls-row">
                 <SelectOrCustom
                   value={deliverableTitle}
@@ -754,7 +754,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
               {deliverables.length === 0 ? <p className="office-subtitle">No deliverables yet.</p> : null}
 
               <h4>Goat Subagent Sessions</h4>
-              <FieldHelp>Link subagent sessions when the task is being worked through one or more delegated agent conversations.</FieldHelp>
+              <FieldHelp>Link delegated sessions here when the task is split across agents.</FieldHelp>
               <div className="controls-row">
                 <SelectOrCustom
                   value={subagentSessionId}

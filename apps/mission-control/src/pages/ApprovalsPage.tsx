@@ -219,7 +219,7 @@ export function ApprovalsPage() {
         eyebrow="Governance"
         title={pageCopy.approvals.title}
         subtitle={pageCopy.approvals.subtitle}
-        hint="Each approval keeps the action preview, explainer context, replay trail, and checkpoint resume path in one place."
+        hint="Review risky actions, explanation status, and checkpoint recovery in one queue."
         className="page-header-citadel approvals-header"
         actions={approvalsHeaderActions}
       />
@@ -236,11 +236,11 @@ export function ApprovalsPage() {
       {data.items.length === 0 ? (
         <Panel
           title="No Pending Approvals"
-          subtitle="When risky actions require a human decision, they appear here with replay context and durable resume controls."
+          subtitle="Risky actions land here when they need a human decision."
           tone="soft"
           className="approval-empty-panel"
         >
-          <p className="office-subtitle">Nothing is waiting for review right now.</p>
+          <p className="office-subtitle">No approvals are waiting for review.</p>
         </Panel>
       ) : null}
       {data.items.map((approval) => {
@@ -259,15 +259,6 @@ export function ApprovalsPage() {
               : approval.explanationStatus === "failed"
                 ? "Explanation failed"
                 : "Not requested";
-
-        const explanationColor =
-          approval.explanationStatus === "pending"
-            ? "#ffb87a"
-            : approval.explanationStatus === "completed"
-              ? "#8ee4a1"
-              : approval.explanationStatus === "failed"
-                ? "#ff8c8c"
-                : "#c4885b";
 
         return (
           <Panel

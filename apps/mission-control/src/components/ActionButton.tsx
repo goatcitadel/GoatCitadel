@@ -7,7 +7,9 @@ interface ActionButtonProps {
   pending?: boolean;
   disabled?: boolean;
   danger?: boolean;
+  variant?: "primary" | "secondary" | "tertiary" | "danger";
   type?: "button" | "submit";
+  className?: string;
 }
 
 export function ActionButton({
@@ -17,12 +19,15 @@ export function ActionButton({
   pending = false,
   disabled = false,
   danger = false,
+  variant = "secondary",
   type = "button",
+  className,
 }: ActionButtonProps) {
+  const resolvedVariant = danger ? "danger" : variant;
   return (
     <button
       type={type}
-      className={danger ? "danger" : ""}
+      className={`gc-action-button gc-action-${resolvedVariant}${resolvedVariant === "danger" ? " danger" : ""}${className ? ` ${className}` : ""}`}
       disabled={disabled || pending}
       onClick={() => void onClick()}
     >

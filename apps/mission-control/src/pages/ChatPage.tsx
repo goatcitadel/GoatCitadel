@@ -2220,10 +2220,10 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
   return (
     <section className="chat-v11">
       <PageHeader
-        eyebrow="Daily operator surface"
+        eyebrow="Mission Control"
         title={pageCopy.chat.title}
         subtitle={pageCopy.chat.subtitle}
-        hint="Start a session quickly, keep context visible, and only open deeper trace or memory detail when you need it."
+        hint="Stay in the main thread by default. Open trace, memory, and approvals only when you need them."
         className="page-header-command chat-v11-header"
         actions={(
           <div className="chat-v11-page-actions">
@@ -2236,17 +2236,11 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
             {selectedTurn ? <StatusChip tone="muted">{selectedTurn.trace.status}</StatusChip> : null}
             <HelpHint
               label="Chat workspace help"
-              text="Use slash commands for quick control, switch mode and model from the toolbar, and keep the inspector open when you want trace, suggestions, or learned memory details."
+              text="Use slash commands for quick control, switch mode and model from the toolbar, and open the inspector only when you need deeper trace or memory detail."
             />
           </div>
         )}
       />
-      <div className="chat-v11-launch-brief">
-        <p>
-          <strong>Use Chat for speed.</strong> Start in Chat for direct conversation, switch to Cowork when the task
-          needs visible orchestration, and use Code when the work needs implementation discipline.
-        </p>
-      </div>
       {error ? <p className="error">{error}</p> : null}
       {isRefreshing ? <p className="status-banner">Refreshing chat context...</p> : null}
 
@@ -2259,6 +2253,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
                   <ActionButton
                     key={mode}
                     label={`New ${CHAT_MODE_PRESETS[mode].label}`}
+                    variant={mode === "chat" ? "primary" : mode === "cowork" ? "secondary" : "tertiary"}
                     pending={creatingSessionMode === mode}
                     disabled={sending || Boolean(creatingSessionMode)}
                     onClick={() => handleCreateSession(mode)}
@@ -2275,16 +2270,13 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
             </div>
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a chat..." />
           </div>
-          <p className="chat-v11-muted">
-            Chat is fastest. Cowork keeps multi-step work visible. Code is for project-bound implementation and review.
-          </p>
-          <FieldHelp>Mission chats are local GoatCitadel sessions. External chats are routed sessions that can write back only when a binding is configured.</FieldHelp>
+          <FieldHelp>Mission chats stay local. External chats can write back only when a binding is configured.</FieldHelp>
           {showProjectCreate ? (
             <div className="chat-v11-project-create">
               <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="New project name" />
               <input value={projectPath} onChange={(event) => setProjectPath(event.target.value)} placeholder="Project path (optional)" />
               <p className="chat-v11-muted">
-                Project creation is optional. Leave the workspace on <strong>Main</strong> and start with <strong>Chat</strong> for quick work, or pick <strong>Code</strong> when you are ready to bind implementation to a project.
+                Project creation is optional. Stay in <strong>Chat</strong> for quick work, or use <strong>Code</strong> when you are ready to bind implementation to a project.
               </p>
               <button type="button" onClick={async () => {
                 const name = projectName.trim();
@@ -2430,7 +2422,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
                 <Panel
                   className="chat-v11-topbar-panel"
                   padding="compact"
-                  title="Conversation controls"
+                  title="Session controls"
                   subtitle={activeModePreset.summary}
                 >
                   <ChatPlanningPill planningMode={planningMode} effectiveToolAutonomy={effectiveToolAutonomy} />

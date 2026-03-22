@@ -44,19 +44,26 @@ export function ConfirmModal({
       }}
     >
       <div
-        className="modal-card"
+        className="modal-card confirm-modal"
         role="dialog"
         aria-modal="true"
         aria-label={title}
         onClick={(event) => event.stopPropagation()}
       >
-        <h3>{title}</h3>
-        <p>{message}</p>
-        <div className="actions">
-          <button type="button" disabled={cancelDisabled || pending} onClick={onCancel}>{cancelLabel}</button>
+        <h3 className="confirm-modal-title">{title}</h3>
+        <p className="confirm-modal-message">{message}</p>
+        <div className="actions confirm-modal-actions">
           <button
             type="button"
-            className={danger ? "danger" : ""}
+            className="gc-action-button gc-action-tertiary"
+            disabled={cancelDisabled || pending}
+            onClick={onCancel}
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            className={`gc-action-button ${danger ? "gc-action-danger" : "gc-action-primary"}`}
             disabled={confirmDisabled || pending}
             onClick={onConfirm}
           >

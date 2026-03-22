@@ -263,7 +263,7 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
         eyebrow="Knowledge"
         title={pageCopy.memory.title}
         subtitle={pageCopy.memory.subtitle}
-        hint="Review what GoatCitadel is storing, where it lives in the workspace, and which learned items are currently allowed to influence future turns."
+        hint="Review what GoatCitadel stores, where it lives, and which learned items can still influence future turns."
         actions={(
           <div className="workflow-summary-strip">
             <StatusChip tone="muted">{files.length} files</StatusChip>
@@ -289,7 +289,7 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
         ) : null}
         {error ? <p className="error">{error}</p> : null}
         <FieldHelp>
-          Use this page to inspect the workspace memory footprint, review distilled context packs, and manage learned memory items when you need explicit operator control.
+          Inspect the workspace memory footprint, recent context packs, and learned items when you need explicit operator control.
         </FieldHelp>
       </div>
 

@@ -793,7 +793,7 @@ export function IntegrationsPage() {
         eyebrow="Integrate"
         title={pageCopy.integrations.title}
         subtitle={pageCopy.integrations.subtitle}
-        hint="Catalog entries define what you can connect. Save the config, validate risk, then leave only the connections you actually want live."
+        hint="Connect only what you want live, validate risk before saving, and keep the catalog secondary."
         actions={integrationsHeaderActions}
       />
       <PageGuideCard
@@ -812,16 +812,13 @@ export function IntegrationsPage() {
 
       <Panel
         title="How Connections Work"
-        subtitle="Catalog entries define the shape of a connection. Connections store config and only activate when a page or workflow needs them."
+        subtitle="Catalog entries define the shape. Connections hold config and activate only when a page or workflow needs them."
       >
         <ol>
           <li>Pick a catalog entry to define what you are connecting.</li>
           <li>Fill guided fields (recommended), then save the connection.</li>
           <li>Leave it connected for live use, or pause it until needed.</li>
         </ol>
-        <p className="office-subtitle">
-          A connection stores settings and credentials. It only gets used when a workflow or page calls it.
-        </p>
         <div className="token-row">
           <span className="token-chip">Configured: {connectionSummary.total}</span>
           <span className="token-chip token-chip-active">Ready: {connectionSummary.connected}</span>
@@ -832,34 +829,11 @@ export function IntegrationsPage() {
       </Panel>
 
       <Panel
-        title="Recommended Local Knowledge Setup"
-        subtitle="If you already use Obsidian, the native path below is the right notes integration for GoatCitadel."
-      >
-        <p className="office-subtitle">
-          You asked for Obsidian rather than a generic notes service. GoatCitadel already has a built-in local
-          Obsidian integration, so you do not need an extra MCP server or a third-party connector just to work with
-          your vault.
-        </p>
-        <div className="token-row">
-          <span className="token-chip token-chip-active">Local vault</span>
-          <span className="token-chip">read_append or read_only</span>
-          <span className="token-chip">Inbox capture</span>
-          <span className="token-chip">No extra daemon</span>
-        </div>
-        <ol>
-          <li>Set the vault path below and keep the integration local-only.</li>
-          <li>Use read_append if you want capture/writeback, or read_only if you just want safe retrieval.</li>
-          <li>Use MCP for adjacent capabilities like GitHub, Stripe, or Microsoft Learn, not for replacing your local vault.</li>
-        </ol>
-      </Panel>
-
-      <Panel
         title="Obsidian (Preferred Local Notes Path)"
         subtitle="Use this when you want GoatCitadel to read and optionally append markdown in a local Obsidian vault."
       >
         <p className="office-subtitle">
-          Use this only if you want GoatCitadel to read and append markdown notes in your local Obsidian vault.
-          Leave disabled if you do not use Obsidian.
+          Use this for a local vault. Leave it disabled if you do not use Obsidian.
         </p>
         <ol>
           <li>Set the local vault path and save config.</li>

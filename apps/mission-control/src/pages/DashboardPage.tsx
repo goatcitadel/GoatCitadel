@@ -175,11 +175,11 @@ export function DashboardPage({
     ? { label: "Review approvals", action: () => onNavigate?.("approvals") }
     : operators.items.some((operator) => operator.activeSessions > 0)
       ? { label: "Inspect active runs", action: () => onNavigate?.("sessions") }
-      : { label: "Open chat workspace", action: () => onNavigate?.("chat") };
+      : { label: "Open chat", action: () => onNavigate?.("chat") };
 
   const heroSecondaryAction = state.activeSubagents > 0
-    ? { label: "Enter Herd HQ", action: () => onNavigate?.("office") }
-    : { label: "Tune the Forge", action: () => onNavigate?.("settings") };
+    ? { label: "Open Herd HQ", action: () => onNavigate?.("office") }
+    : { label: "Open settings", action: () => onNavigate?.("settings") };
 
   const schedulerDisabledCount = cron.items.filter((job) => !job.enabled).length;
   const activeOperatorSessions = operators.items.reduce((sum, operator) => sum + operator.activeSessions, 0);
@@ -191,12 +191,11 @@ export function DashboardPage({
         <div className="dashboard-hero-copy">
           <div className="dashboard-hero-heading">
             <p className="dashboard-hero-kicker">{pageCopy.dashboard.title}</p>
-            <p className="dashboard-hero-brand">GoatCitadel</p>
-            <h1>Command Deck for the herd, the work, and the calls that still need you.</h1>
+            <h1>Mission Control for the work that needs attention now.</h1>
           </div>
           <p className="dashboard-hero-summary">
-            Summit keeps the first glance focused on workload, system posture, and the moments where human judgment
-            still matters. No dashboard soup. Just the state of the herd and the next move.
+            See operator workload, system health, and human decisions at a glance. Start here, then move into the
+            next workflow without wading through dashboard noise.
           </p>
           <DataToolbar
             className="dashboard-hero-actions"
@@ -243,12 +242,12 @@ export function DashboardPage({
 
       <div className="dashboard-main-grid">
         <Panel
-          title="Intervene early"
-          subtitle="The few things worth acting on before you dive into the rest of the stack."
+          title="Needs attention"
+          subtitle="The few items worth reviewing before you dive deeper."
           className="dashboard-urgent-panel"
         >
           {urgentItems.length === 0 ? (
-            <FieldHelp>No urgent blockers detected. Use quick actions to move into the next workflow deliberately.</FieldHelp>
+            <FieldHelp>No urgent blockers detected. Use quick actions to move into the next workflow.</FieldHelp>
           ) : (
             <ul className="dashboard-priority-list">
               {urgentItems.map((item) => (
@@ -264,7 +263,7 @@ export function DashboardPage({
           )}
         </Panel>
         <Panel
-          title="Keep the herd moving"
+          title="Quick actions"
           subtitle="High-signal entry points for the next operator loop."
           className="dashboard-quick-actions-panel"
         >
@@ -281,7 +280,7 @@ export function DashboardPage({
 
       <div className="dashboard-secondary-grid">
         <Panel
-          title="Citadel vitals"
+          title="System vitals"
           subtitle={`${vitals.hostname} · ${vitals.platform} ${vitals.release}`}
         >
           <div className="dashboard-vitals-grid">
@@ -305,14 +304,14 @@ export function DashboardPage({
             </div>
           </div>
         </Panel>
-        <Panel title="Trailboard pressure" subtitle="Current task pressure by status bucket.">
+        <Panel title="Task load" subtitle="Current task pressure by status bucket.">
           <ul className="compact-list">
             {state.taskStatusCounts.map((row) => (
               <li key={row.status}>{row.status}: {row.count}</li>
             ))}
           </ul>
         </Panel>
-        <Panel title="Bell Tower posture" subtitle="Scheduler posture and whether routine automation is healthy.">
+        <Panel title="Scheduler" subtitle="Routine automation posture and whether jobs are healthy.">
           <ul className="compact-list">
             {cron.items.map((job) => (
               <li key={job.jobId}>
@@ -324,7 +323,7 @@ export function DashboardPage({
       </div>
 
       <div className="dashboard-secondary-grid">
-        <Panel title="Operators" subtitle={`${activeOperatorSessions} active sessions are in motion across the herd.`}>
+        <Panel title="Operators" subtitle={`${activeOperatorSessions} active sessions are currently in motion.`}>
           <ul className="compact-list">
             {operators.items.map((operator) => (
               <li key={operator.operatorId}>
@@ -334,8 +333,8 @@ export function DashboardPage({
           </ul>
         </Panel>
         <Panel
-          title="Command notes"
-          subtitle="A fast human-readable summary of the machine state behind Summit."
+          title="Operational summary"
+          subtitle="A short human-readable view of the current machine state."
           className="dashboard-command-notes"
         >
           <div className="dashboard-command-note-list">
