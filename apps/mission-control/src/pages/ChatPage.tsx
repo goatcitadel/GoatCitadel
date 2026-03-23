@@ -93,7 +93,6 @@ import { CardSkeleton } from "../components/CardSkeleton";
 import { ChatPlanningPill } from "../components/chat/ChatPlanningPill";
 import { ChatPendingApprovalPanel, type ChatPendingApprovalState } from "../components/chat/ChatPendingApprovalPanel";
 import { ChatQueueBar, type ChatQueueItemView } from "../components/chat/ChatQueueBar";
-import { ChatSessionRail } from "../components/chat/ChatSessionRail";
 import { SurfaceReconnectBanner } from "../components/chat/SurfaceReconnectBanner";
 import {
   isThreadMutatingStreamChunk,
@@ -406,7 +405,15 @@ function useDebouncedLocalStoragePersistence(key: string, value: string, delayMs
   }, []);
 }
 
-export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) {
+export function ChatPage({
+  workspaceId = "default",
+  surface,
+  lockSurface = false,
+}: {
+  workspaceId?: string;
+  surface?: ChatMode;
+  lockSurface?: boolean;
+}) {
   const [projects, setProjects] = useState<ChatProjectsResponse | null>(null);
   const [sessions, setSessions] = useState<ChatSessionsResponse | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("all");
@@ -475,6 +482,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
   const pushLocalNoticeRef = useRef<(message: string, tone?: ChatThreadNotice["tone"]) => void>(() => undefined);
   const loadSessionCoreStateRef = useRef<(sessionId: string, options?: { background?: boolean; includeThread?: boolean }) => Promise<void>>(async () => undefined);
   const tryBeginOutboundExecutionRef = useRef<() => boolean>(() => false);
+  const lastShellSurfaceSyncKeyRef = useRef<string | null>(null);
   const executeOutboundItemRef = useRef<(item: OutboundQueueItem) => Promise<void>>(async () => undefined);
   const {
     config: runtimeLlmConfig,
@@ -960,6 +968,10 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
     () => sessions?.items.find((item) => item.sessionId === selectedSessionId) ?? null,
     [selectedSessionId, sessions?.items],
   );
+  const selectedProject = useMemo(
+    () => (projects?.items ?? []).find((item) => item.projectId === selectedSession?.projectId) ?? null,
+    [projects?.items, selectedSession?.projectId],
+  );
 
   useEffect(() => {
     setSelectedTurnId((current) => {
@@ -1131,11 +1143,16 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
   useEffect(() => setCommandIndex(0), [draft]);
 
   const selectedSessionProjectValue = selectedSession?.projectId ?? "none";
-  const messageMode = prefs?.mode ?? "chat";
+  const messageMode = lockSurface && surface ? surface : (prefs?.mode ?? "chat");
   const activeModePreset = CHAT_MODE_PRESETS[messageMode];
   const isChatSurface = messageMode === "chat";
   const isCoworkSurface = messageMode === "cowork";
   const isCodeSurface = messageMode === "code";
+  const workspaceSummaryCards = useMemo(() => ([
+    { label: "Projects", value: String(projects?.items.length ?? 0) },
+    { label: "Mission", value: String(missionSessions.length) },
+    { label: "Queue", value: String(missionSessions.length + externalSessions.length) },
+  ]), [externalSessions.length, missionSessions.length, projects?.items.length]);
   const codeModeNeedsProjectBinding = isCodeSurface && !selectedSession?.projectId;
   const selectedProjectBindingCandidateId = selectedProjectId !== "all" && selectedProjectId !== "none"
     ? selectedProjectId
@@ -1185,6 +1202,32 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
   const showLearnedMemoryPanel = shouldShowLearnedMemoryPanel(messageMode, learnedMemory.length);
   const canSend = Boolean(draft.trim()) && !sending;
   const eventStreamStatus = useEventStreamStatus();
+
+  useEffect(() => {
+    if (!lockSurface || !surface || !selectedSessionId) {
+      lastShellSurfaceSyncKeyRef.current = null;
+      return;
+    }
+    if (prefs?.mode === surface) {
+      lastShellSurfaceSyncKeyRef.current = `${selectedSessionId}:${surface}`;
+      return;
+    }
+    const syncKey = `${selectedSessionId}:${surface}`;
+    if (lastShellSurfaceSyncKeyRef.current === syncKey) {
+      return;
+    }
+    lastShellSurfaceSyncKeyRef.current = syncKey;
+    lastLocalPrefMutationAtRef.current = Date.now();
+    void updateChatSessionPrefs(selectedSessionId, { mode: surface })
+      .then((updated) => {
+        setPrefs(updated);
+        setError(null);
+      })
+      .catch((err) => {
+        lastShellSurfaceSyncKeyRef.current = null;
+        setError((err as Error).message);
+      });
+  }, [lockSurface, prefs?.mode, selectedSessionId, surface]);
 
   const streamStatus: ChatStreamStatus = useMemo(() => {
     if (error) return "error";
@@ -1420,6 +1463,13 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
     selectedSession,
     sending,
   ]);
+
+  const primeComposer = useCallback((prompt: string) => {
+    setDraft((current) => current.trim() ? current : prompt);
+    window.setTimeout(() => {
+      composerRef.current?.focus();
+    }, 0);
+  }, []);
 
   const handleMemoryStatusUpdate = useCallback(async (
     itemId: string,
@@ -2218,7 +2268,9 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
         eyebrow="Mission Control"
         title={pageCopy.chat.title}
         subtitle={pageCopy.chat.subtitle}
-        hint="Stay in the main thread by default. Open trace, memory, and approvals only when you need them."
+        hint={lockSurface
+          ? `The shell owns ${activeModePreset.label}. Keep the thread central and use the right lane for deeper controls.`
+          : "Stay in the main thread by default. Open trace, memory, and approvals only when you need them."}
         className="page-header-command chat-v11-header"
         actions={(
           <div className="chat-v11-page-actions">
@@ -2241,8 +2293,6 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
 
       <div className="chat-v11-shell">
         <ChatSessionSidebar
-          sending={sending}
-          creatingSessionMode={creatingSessionMode}
           showProjectCreate={showProjectCreate}
           search={search}
           projectName={projectName}
@@ -2251,7 +2301,11 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
           missionSessions={missionSessions}
           externalSessions={externalSessions}
           selectedSessionId={selectedSessionId}
-          onCreateSession={handleCreateSession}
+          summaryTitle={selectedProject?.name ?? "Mission Control workspace"}
+          summaryCopy={selectedSession
+            ? `Active ${activeModePreset.label.toLowerCase()} session: ${selectedSession.title || visibleSessionLabelById.get(selectedSession.sessionId) || `Chat ${selectedSession.sessionId.slice(-6)}`}.`
+            : `Use the queue to reopen a session or start a new ${activeModePreset.label.toLowerCase()} run from the dock.`}
+          workspaceSummaryCards={workspaceSummaryCards}
           onToggleProjectCreate={() => setShowProjectCreate((current) => !current)}
           onSearchChange={setSearch}
           onProjectNameChange={setProjectName}
@@ -2404,7 +2458,9 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
                   <DataToolbar
                     primary={(
                       <>
-                        <ChatModeSwitch value={messageMode} disabled={!selectedSessionId || sending} onChange={(mode) => void handlePrefPatch({ mode })} />
+                        {!lockSurface ? (
+                          <ChatModeSwitch value={messageMode} disabled={!selectedSessionId || sending} onChange={(mode) => void handlePrefPatch({ mode })} />
+                        ) : null}
                         <ChatModelPicker
                           providers={providerOptions}
                           providerId={selectedProviderId}
@@ -2972,11 +3028,100 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
           ) : (
             <article className="card chat-v11-empty-shell">
               <h3>No chat selected</h3>
-              <p className="office-subtitle">Pick a session from the left, or start Chat, Cowork, or Code from the sidebar. You do not need to create a project first unless you want Code mode to execute against one.</p>
+              <p className="office-subtitle">Pick a session from the left, or start Chat, Cowork, or Code from the command dock. You do not need to create a project first unless you want Code mode to execute against one.</p>
             </article>
           )}
         </div>
       </div>
+      <footer className={`chat-v11-command-dock mode-${messageMode}`} aria-label={`${activeModePreset.label} command dock`}>
+        {isChatSurface ? (
+          <>
+            <ActionButton
+              label="New chat session"
+              variant="primary"
+              pending={creatingSessionMode === "chat"}
+              disabled={sending || Boolean(creatingSessionMode)}
+              onClick={() => handleCreateSession("chat")}
+            />
+            <ActionButton
+              label="Attach"
+              variant="secondary"
+              disabled={sending}
+              onClick={() => fileInputRef.current?.click()}
+            />
+            <ActionButton
+              label="Summarize"
+              variant="secondary"
+              disabled={sending}
+              onClick={() => primeComposer("Summarize the current thread, key decisions, and next steps.")}
+            />
+            <ActionButton
+              label={sending ? "Sending..." : "Send"}
+              variant="tertiary"
+              disabled={!canSend}
+              onClick={() => void handleSend()}
+            />
+          </>
+        ) : null}
+        {isCoworkSurface ? (
+          <>
+            <ActionButton
+              label="New cowork session"
+              variant="primary"
+              pending={creatingSessionMode === "cowork"}
+              disabled={sending || Boolean(creatingSessionMode)}
+              onClick={() => handleCreateSession("cowork")}
+            />
+            <ActionButton
+              label="Delegate"
+              variant="secondary"
+              disabled={!selectedSessionId || sending}
+              onClick={() => void handleSuggestDelegation()}
+            />
+            <ActionButton
+              label="Plan"
+              variant="secondary"
+              disabled={sending}
+              onClick={() => primeComposer("Create a step-by-step execution plan with checkpoints, owners, and failure modes for this objective: ")}
+            />
+            <ActionButton
+              label="Checkpoint"
+              variant="tertiary"
+              disabled={!selectedSessionId || sending}
+              onClick={() => void handleTriggerProactive()}
+            />
+          </>
+        ) : null}
+        {isCodeSurface ? (
+          <>
+            <ActionButton
+              label="New code session"
+              variant="primary"
+              pending={creatingSessionMode === "code"}
+              disabled={sending || Boolean(creatingSessionMode)}
+              onClick={() => handleCreateSession("code")}
+            />
+            <ActionButton
+              label="Delegate review"
+              variant="secondary"
+              disabled={!selectedSessionId || sending || codeModeNeedsProjectBinding}
+              onClick={() => void handleRunCodeDelegation("review")}
+            />
+            <ActionButton
+              label="Run tests"
+              variant="secondary"
+              disabled={!selectedSessionId || sending || codeModeNeedsProjectBinding}
+              onClick={() => void handleRunCodeDelegation("test")}
+            />
+            <ActionButton
+              label="Ship handoff"
+              variant="tertiary"
+              disabled={!selectedSessionId || sending || codeModeNeedsProjectBinding}
+              onClick={() => void handleRunCodeDelegation("ship")}
+            />
+          </>
+        ) : null}
+      </footer>
     </section>
   );
 }

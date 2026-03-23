@@ -1,11 +1,8 @@
-import { CHAT_MODE_PRESETS, type ChatMode, type ChatSessionRecord } from "@goatcitadel/contracts";
-import { ActionButton } from "../../components/ActionButton";
+import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import { FieldHelp } from "../../components/FieldHelp";
 import { ChatSessionRail } from "../../components/chat/ChatSessionRail";
 
 export function ChatSessionSidebar(props: {
-  sending: boolean;
-  creatingSessionMode: ChatMode | null;
   showProjectCreate: boolean;
   search: string;
   projectName: string;
@@ -14,7 +11,9 @@ export function ChatSessionSidebar(props: {
   missionSessions: Array<ChatSessionRecord & { projectName?: string | null }>;
   externalSessions: Array<ChatSessionRecord & { channel?: string | null; account?: string | null }>;
   selectedSessionId: string | null;
-  onCreateSession: (mode: ChatMode) => void;
+  summaryTitle: string;
+  summaryCopy: string;
+  workspaceSummaryCards: Array<{ label: string; value: string }>;
   onToggleProjectCreate: () => void;
   onSearchChange: (value: string) => void;
   onProjectNameChange: (value: string) => void;
@@ -25,8 +24,6 @@ export function ChatSessionSidebar(props: {
   renderSessionLabel: (sessionId: string) => string;
 }) {
   const {
-    sending,
-    creatingSessionMode,
     showProjectCreate,
     search,
     projectName,
@@ -35,7 +32,9 @@ export function ChatSessionSidebar(props: {
     missionSessions,
     externalSessions,
     selectedSessionId,
-    onCreateSession,
+    summaryTitle,
+    summaryCopy,
+    workspaceSummaryCards,
     onToggleProjectCreate,
     onSearchChange,
     onProjectNameChange,
@@ -48,20 +47,23 @@ export function ChatSessionSidebar(props: {
 
   return (
     <aside className="panel panel-soft panel-pad-default chat-v11-left">
+      <div className="chat-v11-workspace-summary">
+        <div className="chat-v11-workspace-copy">
+          <p className="chat-v11-workspace-kicker">Workspace</p>
+          <h3>{summaryTitle}</h3>
+          <p className="chat-v11-muted">{summaryCopy}</p>
+        </div>
+        <div className="chat-v11-summary-grid">
+          {workspaceSummaryCards.map((item) => (
+            <div key={item.label} className="chat-v11-summary-card">
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
+        </div>
+      </div>
       <div className="chat-v11-left-head">
         <div className="chat-v11-left-actions">
-          <div className="chat-v11-row-actions">
-            {(["chat", "cowork", "code"] as const).map((mode) => (
-              <ActionButton
-                key={mode}
-                label={`New ${CHAT_MODE_PRESETS[mode].label}`}
-                variant={mode === "chat" ? "primary" : mode === "cowork" ? "secondary" : "tertiary"}
-                pending={creatingSessionMode === mode}
-                disabled={sending || Boolean(creatingSessionMode)}
-                onClick={() => onCreateSession(mode)}
-              />
-            ))}
-          </div>
           <button
             type="button"
             className={`chat-v11-project-toggle${showProjectCreate ? " active" : ""}`}

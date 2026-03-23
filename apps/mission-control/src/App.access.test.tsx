@@ -15,6 +15,7 @@ const getGatewayApiBaseUrlMock = vi.fn();
 const persistGatewayAuthStateMock = vi.fn();
 const preflightGatewayAccessMock = vi.fn();
 const readStoredGatewayAuthStateMock = vi.fn();
+const chatPageMock = vi.fn();
 
 vi.mock("./api/shell-client", () => ({
   clearGatewayAuthState: clearGatewayAuthStateMock,
@@ -34,6 +35,13 @@ vi.mock("./api/shell-client", () => ({
 
 vi.mock("./pages/DashboardPage", () => ({
   DashboardPage: () => <div>dashboard-ready</div>,
+}));
+
+vi.mock("./pages/ChatPage", () => ({
+  ChatPage: (props: { workspaceId?: string; surface?: string; lockSurface?: boolean }) => {
+    chatPageMock(props);
+    return <div>{`chat-ready:${props.surface ?? "chat"}:${props.lockSurface ? "locked" : "open"}`}</div>;
+  },
 }));
 
 vi.mock("./components/DeviceAccessApprovalModal", () => ({
@@ -182,6 +190,97 @@ async function flush(): Promise<void> {
   });
 }
 
+function createReadyPreflightResult() {
+  return {
+    status: "ready" as const,
+    message: "Gateway reachability and access checks passed.",
+    healthDetail: "Gateway health check OK (200).",
+    onboardingState: {
+      completed: true,
+      checklist: [],
+      settings: {
+        environment: "coverage",
+        deploymentProfile: "local_dev",
+        defaultToolProfile: "standard",
+        budgetMode: "balanced",
+        workspaceDir: "workspace",
+        writeJailRoots: [],
+        readOnlyRoots: [],
+        networkAllowlist: [],
+        approvalExplainer: {
+          enabled: false,
+          mode: "async",
+          minRiskLevel: "danger",
+          timeoutMs: 1000,
+          maxPayloadChars: 1000,
+        },
+        memory: {
+          enabled: false,
+          qmd: {
+            enabled: false,
+            applyToChat: false,
+            applyToOrchestration: false,
+            minPromptChars: 0,
+            maxContextTokens: 0,
+            cacheTtlSeconds: 0,
+          },
+        },
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          tokenConfigured: true,
+          basicConfigured: false,
+        },
+        llm: {
+          activeProviderId: "glm",
+          activeModel: "glm-5",
+          providers: [],
+        },
+        mesh: {
+          enabled: false,
+          mode: "lan",
+          nodeId: "mesh-local",
+          mdns: false,
+          staticPeers: [],
+          requireMtls: true,
+          tailnetEnabled: false,
+        },
+        npu: {
+          enabled: false,
+          autoStart: false,
+          sidecarUrl: "http://127.0.0.1:11440",
+          status: {
+            processState: "stopped",
+            desiredState: "stopped",
+            healthy: false,
+            backend: "local",
+            sidecarUrl: "http://127.0.0.1:11440",
+            updatedAt: new Date().toISOString(),
+            capability: {
+              isWindowsArm64: false,
+              onnxRuntimeAvailable: false,
+              onnxRuntimeGenAiAvailable: false,
+              qnnExecutionProviderAvailable: false,
+              supported: false,
+              details: [],
+            },
+          },
+        },
+        features: {
+          durableKernelV1Enabled: false,
+          replayOverridesV1Enabled: false,
+          memoryLifecycleAdminV1Enabled: false,
+          connectorDiagnosticsV1Enabled: false,
+          computerUseGuardrailsV1Enabled: false,
+          bankrBuiltinEnabled: false,
+          cronReviewQueueV1Enabled: false,
+          replayRegressionV1Enabled: false,
+        },
+      },
+    },
+  };
+}
+
 describe("App gateway access gate", () => {
   beforeEach(() => {
     installMockWindow();
@@ -197,6 +296,7 @@ describe("App gateway access gate", () => {
     readStoredGatewayAuthStateMock.mockReturnValue(undefined);
     resolveApprovalMock.mockReset();
     resolveApprovalWithRemoteTokenMock.mockReset();
+    chatPageMock.mockReset();
   });
 
   afterEach(() => {
@@ -227,94 +327,7 @@ describe("App gateway access gate", () => {
 
   it("starts Mission Control normally after a ready preflight result", async () => {
     const { App } = await import("./App");
-    preflightGatewayAccessMock.mockResolvedValue({
-      status: "ready",
-      message: "Gateway reachability and access checks passed.",
-      healthDetail: "Gateway health check OK (200).",
-      onboardingState: {
-        completed: true,
-        checklist: [],
-        settings: {
-          environment: "coverage",
-          deploymentProfile: "local_dev",
-          defaultToolProfile: "standard",
-          budgetMode: "balanced",
-          workspaceDir: "workspace",
-          writeJailRoots: [],
-          readOnlyRoots: [],
-          networkAllowlist: [],
-          approvalExplainer: {
-            enabled: false,
-            mode: "async",
-            minRiskLevel: "danger",
-            timeoutMs: 1000,
-            maxPayloadChars: 1000,
-          },
-          memory: {
-            enabled: false,
-            qmd: {
-              enabled: false,
-              applyToChat: false,
-              applyToOrchestration: false,
-              minPromptChars: 0,
-              maxContextTokens: 0,
-              cacheTtlSeconds: 0,
-            },
-          },
-          auth: {
-            mode: "token",
-            allowLoopbackBypass: false,
-            tokenConfigured: true,
-            basicConfigured: false,
-          },
-          llm: {
-            activeProviderId: "glm",
-            activeModel: "glm-5",
-            providers: [],
-          },
-          mesh: {
-            enabled: false,
-            mode: "lan",
-            nodeId: "mesh-local",
-            mdns: false,
-            staticPeers: [],
-            requireMtls: true,
-            tailnetEnabled: false,
-          },
-          npu: {
-            enabled: false,
-            autoStart: false,
-            sidecarUrl: "http://127.0.0.1:11440",
-            status: {
-              processState: "stopped",
-              desiredState: "stopped",
-              healthy: false,
-              backend: "local",
-              sidecarUrl: "http://127.0.0.1:11440",
-              updatedAt: new Date().toISOString(),
-              capability: {
-                isWindowsArm64: false,
-                onnxRuntimeAvailable: false,
-                onnxRuntimeGenAiAvailable: false,
-                qnnExecutionProviderAvailable: false,
-                supported: false,
-                details: [],
-              },
-            },
-          },
-          features: {
-            durableKernelV1Enabled: false,
-            replayOverridesV1Enabled: false,
-            memoryLifecycleAdminV1Enabled: false,
-            connectorDiagnosticsV1Enabled: false,
-            computerUseGuardrailsV1Enabled: false,
-            bankrBuiltinEnabled: false,
-            cronReviewQueueV1Enabled: false,
-            replayRegressionV1Enabled: false,
-          },
-        },
-      },
-    });
+    preflightGatewayAccessMock.mockResolvedValue(createReadyPreflightResult());
 
     let renderer: ReactTestRenderer;
     await act(async () => {
@@ -325,6 +338,76 @@ describe("App gateway access gate", () => {
     const text = renderTreeText(renderer!);
     expect(text).toContain("dashboard-ready");
     expect(connectEventStreamMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("collapses overflow secondary navigation into a More affordance in advanced mode", async () => {
+    const { App } = await import("./App");
+    const { UiPreferencesProvider } = await import("./state/ui-preferences");
+    window.localStorage.setItem("goatcitadel.ui.mode.v1", "advanced");
+    window.location.search = "?tab=chat";
+    window.location.href = "http://localhost:5173/?tab=chat";
+    preflightGatewayAccessMock.mockResolvedValue(createReadyPreflightResult());
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <UiPreferencesProvider>
+          <App />
+        </UiPreferencesProvider>,
+      );
+    });
+    await flush();
+
+    const text = renderTreeText(renderer!);
+    expect(text).toContain("chat-ready:chat:locked");
+    expect(text).toContain("More");
+    expect(text).toContain("Cowork");
+    expect(text).toContain("Code");
+  });
+
+  it("reads the work surface from the URL and passes it to the shared Chat page", async () => {
+    const { App } = await import("./App");
+    window.location.search = "?tab=chat&surface=code";
+    window.location.href = "http://localhost:5173/?tab=chat&surface=code";
+    preflightGatewayAccessMock.mockResolvedValue(createReadyPreflightResult());
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<App />);
+    });
+    await flush();
+
+    const text = renderTreeText(renderer!);
+    expect(text).toContain("chat-ready:code:locked");
+    expect(chatPageMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      surface: "code",
+      lockSurface: true,
+    }));
+  });
+
+  it("routes into the shared Chat page when a surface tab is selected from another page", async () => {
+    const { App } = await import("./App");
+    window.location.search = "?tab=dashboard&surface=chat";
+    window.location.href = "http://localhost:5173/?tab=dashboard&surface=chat";
+    preflightGatewayAccessMock.mockResolvedValue(createReadyPreflightResult());
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<App />);
+    });
+    await flush();
+
+    const coworkButton = renderer!.root.findAll((node) => (
+      node.type === "button" && flattenNodeText(node.props.children).includes("Cowork")
+    ))[0];
+
+    await act(async () => {
+      coworkButton?.props.onClick();
+    });
+    await flush();
+
+    const text = renderTreeText(renderer!);
+    expect(text).toContain("chat-ready:cowork:locked");
   });
 
   it("enters a waiting state after requesting device approval from the access gate", async () => {

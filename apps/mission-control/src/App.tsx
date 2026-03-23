@@ -1,4 +1,5 @@
 import { memo, Suspense, lazy, useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
+import { CHAT_MODE_PRESETS } from "@goatcitadel/contracts";
 import {
   consumeGatewayAccessBootstrapFromLocation,
   connectEventStream,
@@ -16,6 +17,7 @@ import { GatewayAccessGate } from "./components/GatewayAccessGate";
 import { GlobalFreshnessPill } from "./components/GlobalFreshnessPill";
 import { HelpHint } from "./components/HelpHint";
 import { NotificationStack, type NotificationItem, upsertNotificationItem } from "./components/NotificationStack";
+import { PageErrorBoundary } from "./components/PageErrorBoundary";
 import { RemoteApprovalActionModal, type RemoteApprovalActionPrompt } from "./components/RemoteApprovalActionModal";
 import { ClockBadge } from "./components/ClockBadge";
 import { StatusChip } from "./components/StatusChip";
@@ -112,6 +114,8 @@ type Tab =
   | "mcp"
   | "mesh"
   | "npu";
+
+type WorkSurface = "chat" | "cowork" | "code";
 
 const allTabs: Tab[] = [
   "addons",
@@ -294,6 +298,10 @@ function isTab(value: string | null): value is Tab {
   return allTabs.some((tab) => tab === value);
 }
 
+function isWorkSurface(value: string | null): value is WorkSurface {
+  return value === "chat" || value === "cowork" || value === "code";
+}
+
 function resolvePrimaryNav(tab: Tab): PrimaryNavId {
   if (tab === "dashboard" || tab === "onboarding") {
     return "home";
@@ -326,6 +334,20 @@ function readTabFromLocation(): Tab {
   }
 
   return "dashboard";
+}
+
+function readWorkSurfaceFromLocation(): WorkSurface {
+  if (typeof window === "undefined") {
+    return "chat";
+  }
+
+  const url = new URL(window.location.href);
+  const querySurface = url.searchParams.get("surface");
+  if (isWorkSurface(querySurface)) {
+    return querySurface;
+  }
+
+  return "chat";
 }
 
 const SidebarStatusFooter = memo(function SidebarStatusFooter({
@@ -402,6 +424,7 @@ export function App() {
     setActiveWorkspaceId,
   } = useUiPreferences();
   const [tab, setTab] = useState<Tab>(() => readTabFromLocation());
+  const [workSurface, setWorkSurface] = useState<WorkSurface>(() => readWorkSurfaceFromLocation());
   const [streamState, setStreamState] = useState<EventStreamConnectionState>("closed");
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -689,6 +712,7 @@ export function App() {
     }
     const url = new URL(window.location.href);
     url.searchParams.set("tab", tab);
+    url.searchParams.set("surface", workSurface);
     window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
     setDevDiagnosticsCurrentRoute(`${url.pathname}${url.search}${url.hash}`);
     recordClientDiagnostic({
@@ -696,9 +720,9 @@ export function App() {
       category: "ui",
       event: "route.change",
       message: `Switched to ${tab}`,
-      context: { tab },
+      context: { tab, surface: workSurface },
     });
-  }, [tab]);
+  }, [tab, workSurface]);
 
   useEffect(() => {
     setDevDiagnosticsCurrentEffectsMode(effectiveEffectsMode);
@@ -725,23 +749,47 @@ export function App() {
   ), [tab]);
   const approvalSurfaceCount = deviceAccessPrompts.length + remoteApprovalPrompts.length;
 
-  const secondaryNavSections = useMemo(() => {
+  const commandDeckSections = useMemo(() => {
     return activePrimaryMode.sections
       .map((section) => {
-        const preferredItems = uiMode === "simple"
-          ? (section.simpleItems ?? section.items)
+        const preferredItems = section.simpleItems?.length
+          ? section.simpleItems
           : section.items;
-        const items = [...preferredItems];
-        if (section.items.includes(tab) && !items.includes(tab)) {
-          items.push(tab);
-        }
+        const items = preferredItems.filter((item, index, all) => all.indexOf(item) === index);
         return {
           ...section,
-          items: items.filter((item, index, all) => all.indexOf(item) === index),
+          items,
         };
       })
       .filter((section) => section.items.length > 0);
-  }, [activePrimaryMode.sections, tab, uiMode]);
+  }, [activePrimaryMode.sections]);
+
+  const commandDeckNav = useMemo(() => {
+    const budget = uiMode === "simple" ? 4 : 5;
+    const allPreferredItems = commandDeckSections.flatMap((section) => section.items);
+    const uniqueItems = allPreferredItems.filter((item, index, all) => all.indexOf(item) === index);
+    const visibleItems = uniqueItems.slice(0, budget);
+
+    if (!visibleItems.includes(tab)) {
+      if (visibleItems.length >= budget) {
+        visibleItems.pop();
+      }
+      visibleItems.push(tab);
+    }
+
+    const visibleSet = new Set(visibleItems);
+    const overflowSections = activePrimaryMode.sections
+      .map((section) => ({
+        ...section,
+        items: section.items.filter((item) => !visibleSet.has(item)),
+      }))
+      .filter((section) => section.items.length > 0);
+
+    return {
+      visibleItems,
+      overflowSections,
+    };
+  }, [activePrimaryMode.sections, commandDeckSections, tab, uiMode]);
 
   const commandItems = useMemo(
     () => [
@@ -786,6 +834,33 @@ export function App() {
         label: showTechnicalDetails ? "Hide technical details" : "Show technical details",
         keywords: ["technical", "details", "debug"],
         run: () => setShowTechnicalDetails(!showTechnicalDetails),
+      },
+      {
+        id: "surface:chat",
+        label: "Open Chat surface",
+        keywords: ["chat", "surface", "workspace"],
+        run: () => {
+          setWorkSurface("chat");
+          setTab("chat");
+        },
+      },
+      {
+        id: "surface:cowork",
+        label: "Open Cowork surface",
+        keywords: ["cowork", "surface", "workspace", "delegate"],
+        run: () => {
+          setWorkSurface("cowork");
+          setTab("chat");
+        },
+      },
+      {
+        id: "surface:code",
+        label: "Open Code surface",
+        keywords: ["code", "surface", "workspace", "implement"],
+        run: () => {
+          setWorkSurface("code");
+          setTab("chat");
+        },
       },
       ...(isDevDiagnosticsEnabled()
         ? [{
@@ -837,7 +912,7 @@ export function App() {
       return <SessionsPage />;
     }
     if (tab === "chat") {
-      return <ChatPage workspaceId={activeWorkspaceId} />;
+      return <ChatPage workspaceId={activeWorkspaceId} surface={workSurface} lockSurface />;
     }
     if (tab === "assembly") {
       return <AssemblyPage workspaceId={activeWorkspaceId} />;
@@ -897,81 +972,133 @@ export function App() {
     );
   }
 
+  const currentModeDestinations = commandDeckNav.visibleItems
+    .map((tabId) => navById.get(tabId))
+    .filter((item): item is NonNullable<typeof activeNav> => Boolean(item));
+
   return (
     <div
       data-effects-mode={effectsMode}
       data-effective-effects-mode={effectiveEffectsMode}
-      className={`layout-shell theme-citadel-light ui-mode-${uiMode} ui-density-${density} ui-effects-${effectiveEffectsMode}${showTechnicalDetails ? "" : " ui-hide-technical"}`}
+      className={`layout-shell layout-shell-command-deck theme-citadel-light ui-mode-${uiMode} ui-density-${density} ui-effects-${effectiveEffectsMode}${showTechnicalDetails ? "" : " ui-hide-technical"}`}
       data-density={density}
     >
-      <aside className="sidebar">
-        <div className="sidebar-brand">
-          {showBrandMark ? (
-            <img
-              src="/brand/goatcitadel-mark.png"
-              alt="GoatCitadel mark"
-              className="sidebar-brand-mark"
-              onError={() => setShowBrandMark(false)}
-            />
-          ) : null}
-          <div className="sidebar-brand-copy">
-            {showBrandWordmark ? (
+      <header className="command-deck-shell app-topbar shell-topbar">
+        <div className="command-deck-zone command-deck-zone-left">
+          <div className="command-deck-brand">
+            {showBrandMark ? (
               <img
-                src="/brand/goatcitadel-wordmark.png"
-                alt="GoatCitadel"
-                className="sidebar-brand-wordmark"
-                onError={() => setShowBrandWordmark(false)}
+                src="/brand/goatcitadel-mark.png"
+                alt="GoatCitadel mark"
+                className="sidebar-brand-mark command-deck-brand-mark"
+                onError={() => setShowBrandMark(false)}
               />
-            ) : <h1>{appCopy.brandTitle}</h1>}
-            <p className="sidebar-subtitle">{appCopy.brandSubtitle}</p>
+            ) : null}
+            <div className="command-deck-brand-copy">
+              {showBrandWordmark ? (
+                <img
+                  src="/brand/goatcitadel-wordmark.png"
+                  alt="GoatCitadel"
+                  className="sidebar-brand-wordmark command-deck-brand-wordmark"
+                  onError={() => setShowBrandWordmark(false)}
+                />
+              ) : <h1>{appCopy.brandTitle}</h1>}
+              <p className="command-deck-brand-kicker">{activePrimaryMode.label} command deck</p>
+            </div>
           </div>
+          <nav className="command-deck-nav" aria-label={`${activePrimaryMode.label} destinations`}>
+            {currentModeDestinations.map((item) => {
+              const isOfficeAlias = item.id === "office" && (tab === "office" || tab === "officeLab");
+              return (
+                <button
+                  type="button"
+                  key={item.id}
+                  className={`command-deck-pill${tab === item.id || isOfficeAlias ? " active" : ""}`}
+                  onClick={() => setTab(item.id)}
+                >
+                  <span className="nav-code">{item.code}</span>
+                  <span className="nav-label">{item.label}</span>
+                </button>
+              );
+            })}
+            <details className="command-deck-overflow">
+              <summary>More</summary>
+              <div className="command-deck-overflow-panel">
+                <div className="command-deck-overflow-block">
+                  <p className="command-deck-overflow-kicker">Spaces</p>
+                  <div className="command-deck-overflow-list command-deck-overflow-modes">
+                    {primaryNavModes.map((mode) => (
+                      <button
+                        type="button"
+                        key={mode.id}
+                        className={`command-deck-overflow-item${activePrimaryMode.id === mode.id ? " active" : ""}`}
+                        onClick={() => setTab(mode.defaultTab)}
+                      >
+                        <span className="nav-code">{mode.code}</span>
+                        <span className="nav-label">{mode.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {commandDeckNav.overflowSections.map((section) => (
+                  <div key={section.label} className="command-deck-overflow-block">
+                    <p className="command-deck-overflow-kicker">{section.label}</p>
+                    <span className="command-deck-overflow-hint">{section.hint}</span>
+                    <div className="command-deck-overflow-list">
+                      {section.items.map((tabId) => {
+                        const item = navById.get(tabId);
+                        if (!item) {
+                          return null;
+                        }
+                        const isOfficeAlias = item.id === "office" && (tab === "office" || tab === "officeLab");
+                        return (
+                          <button
+                            type="button"
+                            key={item.id}
+                            className={`command-deck-overflow-item${tab === item.id || isOfficeAlias ? " active" : ""}`}
+                            onClick={() => setTab(item.id)}
+                          >
+                            <span className="nav-code">{item.code}</span>
+                            <span className="nav-label">{item.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                <div className="command-deck-overflow-note">
+                  <strong>{appCopy.nextStepTitle}:</strong> {nextStepByTab[tab]}
+                </div>
+              </div>
+            </details>
+          </nav>
         </div>
-        <div className="sidebar-shell-caption">
-          <p className="sidebar-shell-kicker">Mission shell</p>
-          <p className="sidebar-shell-note">
-            Primary navigation stays pinned here.
-          </p>
-        </div>
-        <div className="sidebar-primary-nav" role="tablist" aria-label="Mission Control sections">
-          {primaryNavModes.map((mode) => {
-            const isActive = activePrimaryMode.id === mode.id;
-            return (
+        <div className="command-deck-zone command-deck-zone-center">
+          <div className="command-deck-surface-tabs" role="tablist" aria-label="Work surfaces">
+            {(["chat", "cowork", "code"] as const).map((surface) => (
               <button
                 type="button"
-                key={mode.id}
-                className={`sidebar-primary-pill${isActive ? " active" : ""}`}
+                key={surface}
+                role="tab"
+                aria-selected={tab === "chat" && workSurface === surface}
+                className={`command-deck-surface-tab${tab === "chat" && workSurface === surface ? " active" : ""}`}
                 onClick={() => {
-                  if (resolvePrimaryNav(tab) !== mode.id) {
-                    setTab(mode.defaultTab);
-                  }
+                  setWorkSurface(surface);
+                  setTab("chat");
                 }}
               >
-                <span className="nav-code">{mode.code}</span>
-                <span className="nav-label">{mode.label}</span>
+                {CHAT_MODE_PRESETS[surface].label}
               </button>
-            );
-          })}
-        </div>
-        <SidebarStatusFooter
-          streamState={streamState}
-          onboardingComplete={onboardingComplete}
-          uiMode={uiMode}
-          setUiMode={setUiMode}
-        />
-      </aside>
-      <main className="content shell-content">
-        <header className="app-topbar shell-topbar">
-          <div className="shell-topbar-copy">
-            <p className="shell-topbar-kicker">Mission Control</p>
-            <div className="shell-topbar-title-row">
-              <h3>{activeNav?.label ?? "Mission Control"}</h3>
-              <StatusChip tone={streamState === "open" ? "live" : streamState === "error" ? "critical" : "warning"}>
-                {activePrimaryMode.label}
-              </StatusChip>
-            </div>
-            <p className="office-subtitle shell-topbar-subtitle">{activePrimaryMode.description}</p>
+            ))}
           </div>
-          <div className="app-topbar-actions">
+          <p className="command-deck-surface-note">
+            {tab === "chat"
+              ? `${CHAT_MODE_PRESETS[workSurface].label} is active. ${CHAT_MODE_PRESETS[workSurface].summary}`
+              : "Jump directly into Chat, Cowork, or Code from anywhere in Mission Control."}
+          </p>
+        </div>
+        <div className="command-deck-zone command-deck-zone-right">
+          <div className="app-topbar-actions command-deck-utilities">
             <button type="button" className="shell-quick-action shell-command-trigger-topbar" onClick={() => setPaletteOpen(true)}>
               {appCopy.quickActionsButton}
             </button>
@@ -1049,53 +1176,23 @@ export function App() {
               </div>
             </details>
           </div>
-        </header>
-        <section className="shell-context-bar" aria-label={`${activePrimaryMode.label} destinations`}>
-          <div className="shell-context-lead">
-            <p className="shell-context-kicker">{activePrimaryMode.label}</p>
-            <p className="shell-context-next-step">
-              <strong>{appCopy.nextStepTitle}:</strong> {nextStepByTab[tab]}
-            </p>
-          </div>
-          <nav className="shell-context-nav">
-            {secondaryNavSections.map((section) => (
-              <div key={section.label} className="shell-context-group">
-                <div className="shell-context-group-head">
-                  <p>{section.label}</p>
-                  <span>{section.hint}</span>
-                </div>
-                <div className="shell-context-group-items">
-                  {section.items.map((tabId) => {
-                    const item = navById.get(tabId);
-                    if (!item) {
-                      return null;
-                    }
-                    const isOfficeAlias = tabId === "office" && (tab === "office" || tab === "officeLab");
-                    return (
-                      <button
-                        type="button"
-                        key={item.id}
-                        className={`shell-context-pill${tab === item.id || isOfficeAlias ? " active" : ""}`}
-                        onClick={() => setTab(item.id)}
-                      >
-                        <span className="nav-code">{item.code}</span>
-                        <span className="nav-label">{item.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </nav>
-        </section>
+        </div>
+      </header>
+      <main className="content shell-content shell-content-command-deck">
         {shellGatewayState.status === "degraded-live-updates" ? (
           <div className="status-banner warning">
             {shellGatewayState.summary} {shellGatewayState.nextStep}
           </div>
         ) : null}
-        <Suspense fallback={<PageLoadingFallback label={activeNav?.label ?? "Mission Control"} />}>
-          {content}
-        </Suspense>
+        <PageErrorBoundary
+          resetKey={tab}
+          pageLabel={activeNav?.label ?? "Mission Control"}
+          onReturnToChat={() => setTab("chat")}
+        >
+          <Suspense fallback={<PageLoadingFallback label={activeNav?.label ?? "Mission Control"} />}>
+            {content}
+          </Suspense>
+        </PageErrorBoundary>
       </main>
       {paletteOpen ? (
         <Suspense fallback={null}>
