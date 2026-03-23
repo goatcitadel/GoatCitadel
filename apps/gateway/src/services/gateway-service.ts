@@ -398,6 +398,15 @@ import { PromptPackService, normalizePromptTestCode, clampPromptScore } from "./
 import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
 import { ReplayExecutionSkippedError } from "./replay-execution.js";
+import { buildDelegationFailureGuidance, renderExecutionPlanAsMarkdown } from "./chat-orchestration-presenters.js";
+import {
+  DEFAULT_DELEGATION_ROLES,
+  detectDelegationRoles,
+  inferSpecialistBaseRole,
+  normalizeDelegationRoles,
+  resolveDelegationRoles,
+} from "./gateway-role-routing.js";
+import { parseLooseJsonRecord } from "./json-record-parser.js";
 import { evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
@@ -821,7 +830,6 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
   "http.get",
 ] as const;
 
-const DEFAULT_DELEGATION_ROLES = ["product", "architect", "coder", "qa", "ops"];
 const IMPROVEMENT_WEEKLY_TIME_ZONE = "America/Los_Angeles";
 const IMPROVEMENT_WEEKLY_SCHEDULE_LABEL = "0 2 * * 0 America/Los_Angeles";
 const PRIVATE_BETA_BACKUP_TIME_ZONE = "America/Los_Angeles";
@@ -2447,6 +2455,7 @@ export class GatewayService {
     options?: {
       sinceEventId?: string;
       liveTail?: boolean;
+      signal?: AbortSignal;
     },
   ): AsyncGenerator<ChatStreamChunk> {
     let afterSequence = 0;
@@ -2464,9 +2473,15 @@ export class GatewayService {
     }
 
     while (true) {
+      if (options?.signal?.aborted) {
+        return;
+      }
       const events = this.storage.chatStreamEvents.listByTurn(turnId, afterSequence, 200);
       if (events.length > 0) {
         for (const event of events) {
+          if (options?.signal?.aborted) {
+            return;
+          }
           afterSequence = event.sequence;
           yield event.payload as unknown as ChatStreamChunk;
           if ((event.payload as { type?: string }).type === "done") {
@@ -2481,7 +2496,7 @@ export class GatewayService {
       if (!options?.liveTail || ((!active || active.completed) && !durablePending)) {
         return;
       }
-      await wait(CHAT_STREAM_EVENT_POLL_INTERVAL_MS);
+      await waitForAbortableDelay(CHAT_STREAM_EVENT_POLL_INTERVAL_MS, options?.signal);
     }
   }
 
@@ -3865,8 +3880,7 @@ export class GatewayService {
     if (!objective) {
       throw new Error("No objective provided and no recent user request was found.");
     }
-    const detectedRoles = normalizeDelegationRoles(input.roles?.length ? input.roles : detectDelegationRoles(objective));
-    const roles = detectedRoles.length > 0 ? detectedRoles : DEFAULT_DELEGATION_ROLES.slice(0, 3);
+    const roles = resolveDelegationRoles(objective, input.roles, DEFAULT_DELEGATION_ROLES.slice(0, 3));
     const confidence = this.computeDelegationSuggestionConfidence(objective, roles);
     const suggestion: ChatDelegationSuggestionRecord = {
       suggestionId: randomUUID(),
@@ -4718,7 +4732,8 @@ export class GatewayService {
           },
         ],
       });
-      const payload = parseLooseJsonRecord(extractCompletionText(completion));
+      const completionText = extractCompletionText(completion);
+      const payload = parseLooseJsonRecord(completionText) ?? parseScoreRecordFromLooseText(completionText);
       const planned = payload
         ? coercePlannerExecutionPlanDraft(payload, templatePlan, {
           advisoryOnly,
@@ -4952,6 +4967,7 @@ export class GatewayService {
     const result = await executeOrchestrationPlan({
       task: orchestration.routerInput.task,
       plan: orchestration.orchestrationPlan,
+      concurrency: orchestration.routerInput.policy.maxParallelAgents,
       callbacks: {
         createChatCompletion: (request) => this.createChatCompletion({
           ...request,
@@ -6072,6 +6088,7 @@ export class GatewayService {
   public async *agentSendChatMessageStream(
     sessionId: string,
     input: ChatSendMessageRequest,
+    signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
     yield* this.withChatTurnWriteLeaseStream(sessionId, "agent-send/stream", () => {
       const self = this;
@@ -6111,11 +6128,17 @@ export class GatewayService {
           );
           return;
         }
-        self.launchPreparedAgentChatTurnStream(sessionId, input, prepared, "chat_thread_turn_appended");
-        yield* self.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true });
-      })();
-    });
-  }
+          self.launchPreparedAgentChatTurnStream(sessionId, input, prepared, "chat_thread_turn_appended");
+          try {
+            yield* self.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true, signal });
+          } finally {
+            if (signal?.aborted) {
+              await self.cancelChatTurn(sessionId, prepared.turnId, "client_disconnect");
+            }
+          }
+        })();
+      });
+    }
 
   public async retryChatTurn(
     sessionId: string,
@@ -6348,6 +6371,7 @@ export class GatewayService {
     sessionId: string,
     turnId: string,
     overrides: Partial<ChatSendMessageRequest> = {},
+    signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
     yield* this.withChatTurnWriteLeaseStream(sessionId, "retry-turn/stream", () => {
       const self = this;
@@ -6386,11 +6410,17 @@ export class GatewayService {
           );
           return;
         }
-        self.launchPreparedAgentChatTurnStream(sessionId, request, prepared, "chat_thread_turn_retried");
-        yield* self.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true });
-      })();
-    });
-  }
+          self.launchPreparedAgentChatTurnStream(sessionId, request, prepared, "chat_thread_turn_retried");
+          try {
+            yield* self.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true, signal });
+          } finally {
+            if (signal?.aborted) {
+              await self.cancelChatTurn(sessionId, prepared.turnId, "client_disconnect");
+            }
+          }
+        })();
+      });
+    }
 
   public async editChatTurn(
     sessionId: string,
@@ -6426,6 +6456,7 @@ export class GatewayService {
     sessionId: string,
     turnId: string,
     input: ChatSendMessageRequest,
+    signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
     yield* this.withChatTurnWriteLeaseStream(sessionId, "edit-turn/stream", () => {
       const self = this;
@@ -6453,11 +6484,17 @@ export class GatewayService {
           );
           return;
         }
-        self.launchPreparedAgentChatTurnStream(sessionId, request, prepared, "chat_thread_turn_edited");
-        yield* self.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true });
-      })();
-    });
-  }
+          self.launchPreparedAgentChatTurnStream(sessionId, request, prepared, "chat_thread_turn_edited");
+          try {
+            yield* self.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true, signal });
+          } finally {
+            if (signal?.aborted) {
+              await self.cancelChatTurn(sessionId, prepared.turnId, "client_disconnect");
+            }
+          }
+        })();
+      });
+    }
 
   public async cancelChatTurn(
     sessionId: string,
@@ -7210,10 +7247,12 @@ export class GatewayService {
     sessionId: string,
     turnId: string,
     sinceEventId?: string,
+    signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
     yield* this.streamPersistedChatTurnEvents(sessionId, turnId, {
       sinceEventId,
       liveTail: true,
+      signal,
     });
   }
 
@@ -7727,6 +7766,7 @@ export class GatewayService {
       outcome: result.outcome,
       policyReason: result.policyReason,
       approvalId: result.approvalId,
+      expiresAt: result.expiresAt,
       auditEventId: result.auditEventId,
     });
 
@@ -7814,6 +7854,7 @@ export class GatewayService {
       kind: approval.kind,
       riskLevel: approval.riskLevel,
       status: approval.status,
+      expiresAt: approval.expiresAt,
     });
 
     this.publishRealtime("approval_created", "approvals", {
@@ -7821,6 +7862,7 @@ export class GatewayService {
       kind: approval.kind,
       riskLevel: approval.riskLevel,
       status: approval.status,
+      expiresAt: approval.expiresAt,
     });
 
     this.ensureApprovalWaitDurableRun(approval);
@@ -15828,47 +15870,6 @@ function parsePipelineCommand(input: string): { template: string; roles: string[
     objective,
   };
 }
-
-
-function normalizeDelegationRoles(roles: string[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const role of roles) {
-    const normalized = role.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  if (out.length === 0) {
-    return [...DEFAULT_DELEGATION_ROLES];
-  }
-  return out;
-}
-
-function detectDelegationRoles(objective: string): string[] {
-  const normalized = objective.toLowerCase();
-  const roleHints: Array<{ role: string; patterns: RegExp[] }> = [
-    { role: "product", patterns: [/\bproduct\b/, /\bprd\b/, /\brequirements?\b/] },
-    { role: "architect", patterns: [/\barchitect\b/, /\bdesign\b/, /\barchitecture\b/] },
-    { role: "coder", patterns: [/\bcoder\b/, /\bdeveloper\b/, /\bimplementation\b/, /\bbuild\b/] },
-    { role: "qa", patterns: [/\bqa\b/, /\btest\b/, /\bvalidation\b/] },
-    { role: "ops", patterns: [/\bops\b/, /\bdeploy\b/, /\brollout\b/, /\brelease\b/] },
-    { role: "researcher", patterns: [/\bresearch\b/, /\banalyze\b/, /\bsources?\b/] },
-  ];
-  const roles = roleHints
-    .filter((hint) => hint.patterns.some((pattern) => pattern.test(normalized)))
-    .map((hint) => hint.role);
-  if (roles.length > 0) {
-    return roles;
-  }
-  if (/->|route this through|multi-agent|agents work together|handoff/.test(normalized)) {
-    return [...DEFAULT_DELEGATION_ROLES.slice(0, 3)];
-  }
-  return [];
-}
-
 function normalizeSpecialistToken(value: string): string {
   return value
     .trim()
@@ -15969,29 +15970,6 @@ function mergeSpecialistEvidence(
     }
   }
   return [...merged.values()].slice(0, 8);
-}
-
-function inferSpecialistBaseRole(role: string): OrchestrationRole {
-  const normalized = role.toLowerCase();
-  if (/\b(research|analyst|market|source|intel)\b/.test(normalized)) {
-    return "researcher";
-  }
-  if (/\b(qa|test|validator)\b/.test(normalized)) {
-    return "qa-validator";
-  }
-  if (/\b(review|critic|audit|security)\b/.test(normalized)) {
-    return "reviewer";
-  }
-  if (/\b(coder|developer|implement|engineer)\b/.test(normalized)) {
-    return "coder";
-  }
-  if (/\b(product|architect|planner|design)\b/.test(normalized)) {
-    return "planner";
-  }
-  if (/\b(ops|deploy|release|infra)\b/.test(normalized)) {
-    return "worker";
-  }
-  return "worker";
 }
 
 function inferSpecialistRoleFromCapability(capability: ChatCapabilityUpgradeSuggestion): string {
@@ -16358,40 +16336,6 @@ function buildDelegationUserPrompt(input: {
   ].join("\n\n");
 }
 
-function renderExecutionPlanAsMarkdown(input: {
-  mode: ChatMode;
-  objective: string;
-  summary: string;
-  steps: PreparedChatExecutionPlanResolution["executionPlanDraft"]["steps"];
-}): string {
-  const modeLabel = input.mode === "cowork"
-    ? "Cowork plan"
-    : input.mode === "code"
-      ? "Code plan"
-      : "Chat plan";
-  const stepLines = input.steps.map((step) => {
-    const parts = [
-      `${step.index + 1}. ${step.objective}`,
-      step.successCriteria ? `Success: ${step.successCriteria}` : undefined,
-      step.expectedOutput ? `Output: ${step.expectedOutput}` : undefined,
-      step.suggestedTools?.length ? `Suggested tools: ${step.suggestedTools.join(", ")}` : undefined,
-      step.dependsOnStepIds?.length ? `Depends on: ${step.dependsOnStepIds.join(", ")}` : undefined,
-      step.delegatedRole ? `Delegated role: ${step.delegatedRole}` : undefined,
-    ].filter(Boolean);
-    return parts.join("\n   ");
-  });
-  return [
-    `## ${modeLabel}`,
-    "",
-    `Objective: ${input.objective}`,
-    "",
-    input.summary,
-    "",
-    "Planned steps:",
-    ...stepLines,
-  ].join("\n");
-}
-
 function stringifyMessagesForTokenEstimate(messages: ChatCompletionRequest["messages"]): string {
   return messages
     .map((message) => {
@@ -16608,24 +16552,6 @@ function mergeExecutionPlanStepStatuses(
     };
   });
 }
-
-function buildDelegationFailureGuidance(error: string, role: string): string {
-  const normalized = error.toLowerCase();
-  if (/\bauth|login|token|credential|permission\b/.test(normalized)) {
-    return `${toTitleCase(role)} hit an auth or permission barrier. Reconnect the required account or switch to another source.`;
-  }
-  if (/\btimeout|timed out|deadline|aborted\b/.test(normalized)) {
-    return `${toTitleCase(role)} ran out of time. Retry with a narrower brief or fewer sources.`;
-  }
-  if (/\bblocked|deny|denied|approval|policy|jail\b/.test(normalized)) {
-    return `${toTitleCase(role)} hit a restricted action. Use a safer fallback path or request approval explicitly.`;
-  }
-  if (/\bnot found|404|missing\b/.test(normalized)) {
-    return `${toTitleCase(role)} could not find the expected input. Retry with a more explicit file, path, or source reference.`;
-  }
-  return `Retry the ${role} delegate with a narrower brief or a different tool/source strategy.`;
-}
-
 
 function sampleDecisionReplayCandidates(
   candidates: DecisionReplayCandidate[],
@@ -17176,60 +17102,6 @@ function clampProbability(value: unknown): number {
     }
   }
   return 0.5;
-}
-
-function parseLooseJsonRecord(raw: string): Record<string, unknown> | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const direct = tryParseJsonRecordCandidate(trimmed);
-  if (direct) return direct;
-  const codeFenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (codeFenceMatch?.[1]) {
-    const parsed = tryParseJsonRecordCandidate(codeFenceMatch[1].trim());
-    if (parsed) return parsed;
-  }
-  const openIndex = trimmed.indexOf("{");
-  const closeIndex = trimmed.lastIndexOf("}");
-  if (openIndex >= 0 && closeIndex > openIndex) {
-    const candidate = trimmed.slice(openIndex, closeIndex + 1);
-    const parsed = tryParseJsonRecordCandidate(candidate);
-    if (parsed) return parsed;
-  }
-  const parsedScores = parseScoreRecordFromLooseText(trimmed);
-  if (parsedScores) {
-    return parsedScores;
-  }
-  return undefined;
-}
-
-function tryParseJsonRecordCandidate(candidate: string): Record<string, unknown> | undefined {
-  const direct = safeJsonParse<Record<string, unknown> | undefined>(candidate, undefined);
-  if (direct && typeof direct === "object") {
-    return direct;
-  }
-  const repaired = normalizeJsonRecordCandidate(candidate);
-  if (!repaired || repaired === candidate) {
-    return undefined;
-  }
-  const parsed = safeJsonParse<Record<string, unknown> | undefined>(repaired, undefined);
-  if (parsed && typeof parsed === "object") {
-    return parsed;
-  }
-  return undefined;
-}
-
-function normalizeJsonRecordCandidate(value: string): string {
-  return value
-    .replace(/^\uFEFF/, "")
-    .replace(/[“”]/g, "\"")
-    .replace(/[‘’]/g, "'")
-    .replace(/([{,]\s*)'([^']+)'\s*:/g, "$1\"$2\":")
-    .replace(/:\s*'([^']*)'/g, ": \"$1\"")
-    .replace(/,\s*([}\]])/g, "$1")
-    .replace(/\\n/g, "\n")
-    .trim();
 }
 
 function parseScoreRecordFromLooseText(raw: string): Record<string, unknown> | undefined {
@@ -18033,6 +17905,27 @@ function inferToolArtifactExtension(contentType?: string): string {
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, Math.max(0, ms));
+  });
+}
+
+function waitForAbortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    return wait(ms);
+  }
+  if (signal.aborted) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, Math.max(0, ms));
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 

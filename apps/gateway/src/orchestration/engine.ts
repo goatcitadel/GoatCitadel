@@ -21,10 +21,13 @@ interface StepExecutionContext {
   priorSteps: OrchestrationStepExecutionResult[];
 }
 
+const DEFAULT_ORCHESTRATION_CONCURRENCY = 4;
+
 export async function executeOrchestrationPlan(input: {
   task: OrchestrationTaskInput;
   plan: OrchestrationPlan;
   callbacks: OrchestrationExecutionCallbacks;
+  concurrency?: number;
 }): Promise<OrchestrationExecutionResult> {
   const groupedStages = new Map<number, typeof input.plan.steps>();
   for (const step of input.plan.steps) {
@@ -35,17 +38,18 @@ export async function executeOrchestrationPlan(input: {
 
   const completedSteps: OrchestrationStepExecutionResult[] = [];
   const stageNumbers = [...groupedStages.keys()].sort((left, right) => left - right);
+  const concurrency = Math.max(1, input.concurrency ?? DEFAULT_ORCHESTRATION_CONCURRENCY);
 
   for (const stage of stageNumbers) {
     const steps = groupedStages.get(stage) ?? [];
-    const executions = await Promise.all(steps.map((step, index) => executeStep({
+    const executions = await mapWithConcurrency(steps, concurrency, (step, index) => executeStep({
       task: input.task,
       plan: input.plan,
       stepIndex: completedSteps.length + index,
       priorSteps: completedSteps,
       step,
       callbacks: input.callbacks,
-    })));
+    }));
     for (const execution of executions) {
       completedSteps.push(execution);
       await input.callbacks.onStepResult?.(execution, [...completedSteps]);
@@ -69,6 +73,33 @@ export async function executeOrchestrationPlan(input: {
     routeDecision: input.plan.routeDecision,
     stepResults: completedSteps,
   };
+}
+
+async function mapWithConcurrency<TItem, TResult>(
+  items: TItem[],
+  concurrency: number,
+  mapper: (item: TItem, index: number) => Promise<TResult>,
+): Promise<TResult[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const results = new Array<TResult>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  async function runWorker(): Promise<void> {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      if (currentIndex >= items.length) {
+        return;
+      }
+      results[currentIndex] = await mapper(items[currentIndex] as TItem, currentIndex);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
 }
 
 function isTerminalStage(stage: number, finalStage: number): boolean {

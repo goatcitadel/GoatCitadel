@@ -303,4 +303,39 @@ describe("orchestration engine", () => {
     expect(result.finalOutput).toContain("Critic");
     expect(result.finalOutput).toContain("Synthesizer");
   });
+
+  it("caps default stage concurrency at four steps when no override is provided", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const createChatCompletion = vi.fn(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      return createCompletion("bounded result");
+    });
+
+    await executeOrchestrationPlan({
+      task: createTask(),
+      plan: {
+        ...createPlan(),
+        steps: Array.from({ length: 6 }, (_, index) => ({
+          stepId: `step-${index + 1}`,
+          index,
+          role: "researcher" as const,
+          stage: 1,
+          objective: `Research pass ${index + 1}`,
+          parallelizable: true,
+          providerId: "openai",
+          model: "gpt-4.1-mini",
+        })),
+      },
+      callbacks: {
+        createChatCompletion,
+      },
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(6);
+    expect(maxActive).toBe(4);
+  });
 });

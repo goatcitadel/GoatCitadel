@@ -37,7 +37,6 @@ import {
   approveChatTool,
   archiveChatSession,
   assignChatSessionProject,
-  cancelChatTurn,
   createMcpServer,
   createChatProject,
   createChatSpecialistCandidate,
@@ -92,8 +91,10 @@ import {
 import { ActionButton } from "../components/ActionButton";
 import { CardSkeleton } from "../components/CardSkeleton";
 import { ChatPlanningPill } from "../components/chat/ChatPlanningPill";
+import { ChatPendingApprovalPanel, type ChatPendingApprovalState } from "../components/chat/ChatPendingApprovalPanel";
 import { ChatQueueBar, type ChatQueueItemView } from "../components/chat/ChatQueueBar";
 import { ChatSessionRail } from "../components/chat/ChatSessionRail";
+import { SurfaceReconnectBanner } from "../components/chat/SurfaceReconnectBanner";
 import {
   isThreadMutatingStreamChunk,
   type PendingStreamTurnSeed,
@@ -109,14 +110,23 @@ import { CoworkCanvasPanel } from "../components/CoworkCanvasPanel";
 import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
 import { HelpHint } from "../components/HelpHint";
-import { InlineApprovalPrompt } from "../components/InlineApprovalPrompt";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
 import { GCCombobox, GCSelect, GCSwitch } from "../components/ui";
+import { useEventStreamStatus } from "../hooks/useEventStreamStatus";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { pageCopy } from "../content/copy";
+import {
+  buildQueuedOutboundItemView,
+  resolveProviderSelectionPlan,
+  resolveStreamTurnOperation,
+} from "./chat/chat-page-helpers";
+import { ChatComposerShell } from "./chat/ChatComposerShell";
+import { ChatSessionSidebar } from "./chat/ChatSessionSidebar";
+import { ChatThreadShell } from "./chat/ChatThreadShell";
+import { useChatSurfaceOrchestration, type OutboundQueueItem } from "./chat/useChatSurfaceOrchestration";
 import {
   recordClientDiagnostic,
   setDevDiagnosticsActiveChatSession,
@@ -153,10 +163,15 @@ const CODE_DELEGATION_PRESETS = {
   },
 } as const;
 
-interface PendingApprovalState {
-  approvalId: string;
-  toolName?: string;
-  reason?: string;
+function isApprovalExpired(expiresAt?: string, nowMs = Date.now()): boolean {
+  if (!expiresAt) {
+    return false;
+  }
+  const expiresAtMs = Date.parse(expiresAt);
+  if (!Number.isFinite(expiresAtMs)) {
+    return false;
+  }
+  return expiresAtMs <= nowMs;
 }
 
 interface CommandCatalogItem {
@@ -186,17 +201,6 @@ interface FinalizedStreamMessageState {
   placeholderId: string;
   messageId?: string;
   content: string;
-}
-
-interface OutboundQueueItem {
-  id: string;
-  action: "send" | "edit" | "retry";
-  sessionId?: string;
-  targetTurnId?: string;
-  content: string;
-  attachments: ChatAttachmentRecord[];
-  createdAt: string;
-  paused?: boolean;
 }
 
 type SessionControlPending =
@@ -416,17 +420,14 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
   const [capabilitySuggestions, setCapabilitySuggestions] = useState<ChatCapabilityUpgradeSuggestion[]>([]);
   const [specialistSuggestions, setSpecialistSuggestions] = useState<ChatSpecialistCandidateSuggestionRecord[]>([]);
   const [specialistCandidates, setSpecialistCandidates] = useState<ChatSpecialistCandidateRecord[]>([]);
-  const [pendingApproval, setPendingApproval] = useState<PendingApprovalState | null>(null);
   const [proactiveStatus, setProactiveStatus] = useState<ProactivePolicy | null>(null);
   const [proactiveRuns, setProactiveRuns] = useState<ProactiveRunRecord[]>([]);
   const [learnedMemory, setLearnedMemory] = useState<LearnedMemoryItemRecord[]>([]);
   const [delegationSuggestion, setDelegationSuggestion] = useState<ChatDelegationSuggestionRecord | null>(null);
   const [localNotices, setLocalNotices] = useState<ChatThreadNotice[]>([]);
-  const [queuedOutbound, setQueuedOutbound] = useState<OutboundQueueItem[]>([]);
   const [installedSkills, setInstalledSkills] = useState<SkillListItem[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerRecord[]>([]);
   const [mcpTemplates, setMcpTemplates] = useState<Array<McpServerTemplateRecord & { installed: boolean }>>([]);
-  const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -437,6 +438,8 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
   const [creatingSessionMode, setCreatingSessionMode] = useState<ChatMode | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachmentRecord[]>([]);
+  const [pendingApproval, setPendingApproval] = useState<ChatPendingApprovalState | null>(null);
+  const [approvalPending, setApprovalPending] = useState(false);
   const [streamEnabled, setStreamEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     const raw = window.localStorage.getItem(STREAM_PREF_KEY);
@@ -450,7 +453,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
   const [integrationConnectionId, setIntegrationConnectionId] = useState("");
   const [integrationTarget, setIntegrationTarget] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
-  const [approvalPending, setApprovalPending] = useState(false);
+  const [loadingProviderId, setLoadingProviderId] = useState<string | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const [followThreadOutput, setFollowThreadOutput] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -469,12 +472,43 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
   const prefsRef = useRef<ChatSessionPrefsRecord | null>(null);
   const threadRef = useRef<ChatThreadResponse | null>(null);
   const activeStreamRef = useRef<ActiveChatStreamState | null>(null);
+  const pushLocalNoticeRef = useRef<(message: string, tone?: ChatThreadNotice["tone"]) => void>(() => undefined);
+  const loadSessionCoreStateRef = useRef<(sessionId: string, options?: { background?: boolean; includeThread?: boolean }) => Promise<void>>(async () => undefined);
+  const tryBeginOutboundExecutionRef = useRef<() => boolean>(() => false);
   const executeOutboundItemRef = useRef<(item: OutboundQueueItem) => Promise<void>>(async () => undefined);
   const {
     config: runtimeLlmConfig,
     providers: runtimeProviderCatalog,
     loadModelsForProvider,
   } = useProviderModelCatalog("chat");
+  const {
+    queuedOutbound,
+    setQueuedOutbound,
+    editingTurnId,
+    setEditingTurnId,
+    handleSend,
+    handleRetryTurn,
+    handleStopActiveTurn,
+    handleBeginEditTurn,
+    handleResumeQueue,
+    handleRemoveQueuedItem,
+  } = useChatSurfaceOrchestration({
+    draft,
+    pendingAttachments,
+    selectedSessionId,
+    thread,
+    sending,
+    composerRef,
+    activeStreamRef,
+    tryBeginOutboundExecutionRef,
+    executeOutboundItemRef,
+    pushLocalNoticeRef,
+    setDraft,
+    setPendingAttachments,
+    setError,
+    loadSessionCoreStateRef,
+    abortActiveChatStream,
+  });
 
   const loadSidebar = useCallback(async () => {
     recordClientDiagnostic({
@@ -533,6 +567,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
       timestamp: new Date().toISOString(),
     }, ...current].slice(0, 12));
   }, []);
+  pushLocalNoticeRef.current = pushLocalNotice;
 
   const commitThreadUpdate = useCallback((
     updater: ChatThreadResponse | null | ((current: ChatThreadResponse | null) => ChatThreadResponse | null),
@@ -614,6 +649,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
       }
     }
   }, [applyFetchedThread]);
+  loadSessionCoreStateRef.current = loadSessionCoreState;
 
   const scheduleStreamMessageReconciliation = useCallback((sessionId: string) => {
     if (streamReconcileTimeoutRef.current) {
@@ -637,6 +673,15 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
       }).catch((err: Error) => setError(err.message));
     }, 400);
   }, [loadSessionCoreState]);
+
+  const clearStreamLocalState = useCallback(() => {
+    setPendingApproval(null);
+    finalizedStreamMessageRef.current = null;
+    if (streamReconcileTimeoutRef.current) {
+      clearTimeout(streamReconcileTimeoutRef.current);
+      streamReconcileTimeoutRef.current = null;
+    }
+  }, []);
 
   const loadSessionSecondaryState = useCallback(async (
     sessionId: string,
@@ -783,6 +828,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
       setThread(null);
       setSelectedTurnId(null);
       setPrefs(null);
+      prefsRef.current = null;
       setBinding(null);
       setProactiveStatus(null);
       setProactiveRuns([]);
@@ -791,11 +837,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
       setDelegationSuggestion(null);
       setLocalNotices([]);
       setPendingAttachments([]);
-      finalizedStreamMessageRef.current = null;
-      if (streamReconcileTimeoutRef.current) {
-        clearTimeout(streamReconcileTimeoutRef.current);
-        streamReconcileTimeoutRef.current = null;
-      }
+      clearStreamLocalState();
       lastLoadedSessionIdRef.current = null;
       return;
     }
@@ -803,20 +845,18 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
       const hadActiveStream = activeStreamRef.current !== null;
       abortActiveChatStream(activeStreamRef.current);
       activeStreamRef.current = null;
+      prefsRef.current = null;
       if (hadActiveStream) {
         pushLocalNotice("Stream interrupted - switched sessions. The previous turn may still be processing on the server.", "warning");
       }
       setPendingAttachments([]);
       setThread(null);
       setSelectedTurnId(null);
+      setPrefs(null);
+      setBinding(null);
       setEditingTurnId(null);
       setLocalNotices([]);
-      setPendingApproval(null);
-      finalizedStreamMessageRef.current = null;
-      if (streamReconcileTimeoutRef.current) {
-        clearTimeout(streamReconcileTimeoutRef.current);
-        streamReconcileTimeoutRef.current = null;
-      }
+      clearStreamLocalState();
       lastLoadedSessionIdRef.current = selectedSessionId;
     }
     setDelegationSuggestion(null);
@@ -827,7 +867,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
       includeThread: true,
       deferSecondary: true,
     }).catch((err: Error) => setError(err.message));
-  }, [loadSessionState, selectedSessionId]);
+  }, [clearStreamLocalState, loadSessionState, selectedSessionId]);
 
   useEffect(() => {
     setFollowThreadOutput(true);
@@ -973,8 +1013,19 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
     return runtimeProviderCatalog.map((provider) => ({
       providerId: provider.providerId,
       label: provider.label,
+      defaultModel: provider.defaultModel,
+      disabled: Boolean(provider.apiKeyRef) && provider.hasApiKey === false,
+      availabilityLabel: provider.apiKeyRef && provider.hasApiKey === false
+        ? `${provider.label} (API key missing)`
+        : provider.label,
+      availabilityHint: provider.apiKeyRef && provider.hasApiKey === false
+        ? `${provider.label} is unavailable until ${provider.apiKeySource === "env"
+          ? `the ${provider.apiKeyRef} environment variable is set`
+          : "its API key is configured"}.`
+        : undefined,
       models: dedupeStrings([
         ...provider.models,
+        provider.defaultModel,
         provider.providerId === activeProviderId ? activeModel : undefined,
         prefs?.providerId === provider.providerId ? prefs.model : undefined,
       ]),
@@ -1133,6 +1184,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
   });
   const showLearnedMemoryPanel = shouldShowLearnedMemoryPanel(messageMode, learnedMemory.length);
   const canSend = Boolean(draft.trim()) && !sending;
+  const eventStreamStatus = useEventStreamStatus();
 
   const streamStatus: ChatStreamStatus = useMemo(() => {
     if (error) return "error";
@@ -1150,6 +1202,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
     setSending(true);
     return true;
   }, []);
+  tryBeginOutboundExecutionRef.current = tryBeginOutboundExecution;
 
   const finishOutboundExecution = useCallback(() => {
     sendingRef.current = false;
@@ -1750,10 +1803,11 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
           if (
             liveStream?.streamToken !== streamToken
             || liveStream.sessionId !== session!.sessionId
-            || selectedSessionIdRef.current !== session!.sessionId
+            || selectedSessionIdRef.current !== liveStream.sessionId
           ) {
             return;
           }
+          const activeSessionId = liveStream.sessionId;
           liveStream.lastEventId = chunk.eventId;
           if (chunk.runId) {
             liveStream.runId = chunk.runId;
@@ -1766,7 +1820,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
           }
           if (chunk.type === "message_done") {
             finalizedStreamMessageRef.current = {
-              sessionId: session!.sessionId,
+              sessionId: activeSessionId,
               placeholderId: chunk.messageId,
               messageId: chunk.messageId,
               content: chunk.content,
@@ -1786,6 +1840,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
               approvalId: chunk.approval.approvalId,
               toolName: chunk.approval.toolName,
               reason: chunk.approval.reason,
+              expiresAt: chunk.approval.expiresAt,
             });
           }
           if (chunk.type === "error") {
@@ -1795,7 +1850,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
               category: "chat",
               event: "stream.chunk_error",
               message: chunk.error || "Streaming request failed.",
-              sessionId: session!.sessionId,
+              sessionId: activeSessionId,
               turnId: chunk.turnId,
             });
           }
@@ -1807,7 +1862,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
             category: "chat",
             event: "thread.render_path",
             message: `Applying ${chunk.type} chunk to thread`,
-            sessionId: session!.sessionId,
+            sessionId: activeSessionId,
             turnId: chunk.turnId,
             context: {
               chunkType: chunk.type,
@@ -1817,14 +1872,19 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
             current,
             chunk,
             streamSeed,
-            session!.sessionId,
+            activeSessionId,
             prefsRef.current,
           ));
         };
         let resumeAttempts = 0;
         for (;;) {
           try {
-            if (resumeAttempts > 0) {
+            const streamOperation = resolveStreamTurnOperation({
+              action: item.action,
+              resumeAttempts,
+              targetTurnId: item.targetTurnId,
+            });
+            if (streamOperation === "resume") {
               const liveStream = activeStreamRef.current;
               if (!liveStream?.turnId) {
                 throw new Error("Streaming request failed before the turn could be resumed.");
@@ -1835,7 +1895,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
                 signal: controller.signal,
                 sinceEventId: liveStream.lastEventId,
               });
-            } else if (item.action === "retry" && item.targetTurnId) {
+            } else if (streamOperation === "retry" && item.targetTurnId) {
               await streamRetryChatTurn(session.sessionId, item.targetTurnId, {
                 providerId: currentPrefs?.providerId,
                 model: currentPrefs?.model,
@@ -1844,7 +1904,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
                 memoryMode: currentPrefs?.memoryMode,
                 thinkingLevel: currentPrefs?.thinkingLevel,
               }, onChunk, { signal: controller.signal });
-            } else if (item.action === "edit" && item.targetTurnId) {
+            } else if (streamOperation === "edit" && item.targetTurnId) {
               await streamEditChatTurn(session.sessionId, item.targetTurnId, {
                 content: trimmedContent,
                 attachments: attachmentIds,
@@ -1887,7 +1947,7 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
             resumeAttempts += 1;
           }
         }
-        scheduleStreamMessageReconciliation(session.sessionId);
+        scheduleStreamMessageReconciliation(activeStreamRef.current?.sessionId ?? session.sessionId);
       } else {
         const sent = item.action === "retry" && item.targetTurnId
           ? await retryChatTurn(session.sessionId, item.targetTurnId, {
@@ -1994,87 +2054,11 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
     scheduleStreamMessageReconciliation,
     streamEnabled,
   ]);
-
-  useEffect(() => {
-    executeOutboundItemRef.current = executeOutboundItem;
-  }, [executeOutboundItem]);
-
-  const handleSend = useCallback(async () => {
-    const content = draft.trim();
-    if (!content) return;
-    const nextItem: OutboundQueueItem = {
-      id: `queue-${Date.now()}`,
-      action: editingTurnId ? "edit" : "send",
-      sessionId: selectedSessionId ?? undefined,
-      targetTurnId: editingTurnId ?? undefined,
-      content,
-      attachments: pendingAttachments,
-      createdAt: new Date().toISOString(),
-    };
-    setDraft("");
-    setPendingAttachments([]);
+  executeOutboundItemRef.current = executeOutboundItem;
+  const handleSendAction = useCallback(async () => {
     setPendingApproval(null);
-    if (!tryBeginOutboundExecution()) {
-      setQueuedOutbound((current) => [...current, nextItem]);
-      pushLocalNotice(`${editingTurnId ? "Edit" : "Message"} queued while the current turn finishes.`);
-      return;
-    }
-    await executeOutboundItem(nextItem);
-  }, [draft, editingTurnId, executeOutboundItem, pendingAttachments, pushLocalNotice, selectedSessionId, tryBeginOutboundExecution]);
-
-  const handleRetryTurn = useCallback(async (turnId: string) => {
-    const nextItem: OutboundQueueItem = {
-      id: `queue-${Date.now()}`,
-      action: "retry",
-      sessionId: selectedSessionId ?? undefined,
-      targetTurnId: turnId,
-      content: "",
-      attachments: [],
-      createdAt: new Date().toISOString(),
-    };
-    if (!tryBeginOutboundExecution()) {
-      setQueuedOutbound((current) => [...current, nextItem]);
-      pushLocalNotice("Retry queued while the current turn finishes.");
-      return;
-    }
-    await executeOutboundItem(nextItem);
-  }, [executeOutboundItem, pushLocalNotice, selectedSessionId, tryBeginOutboundExecution]);
-
-  const handleStopActiveTurn = useCallback(async () => {
-    if (!selectedSession) {
-      return;
-    }
-    const activeStream = activeStreamRef.current;
-    if (!activeStream) {
-      return;
-    }
-    try {
-      if (activeStream.turnId) {
-        await cancelChatTurn(selectedSession.sessionId, activeStream.turnId, "mission-control");
-        pushLocalNotice(`Stopped turn ${activeStream.turnId.slice(-6)}.`, "warning");
-        void loadSessionCoreState(selectedSession.sessionId, {
-          background: true,
-          includeThread: true,
-        }).catch(() => undefined);
-      } else {
-        pushLocalNotice("Stopped the local connection before the turn id was assigned.", "warning");
-      }
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      abortActiveChatStream(activeStream);
-    }
-  }, [loadSessionCoreState, pushLocalNotice, selectedSession]);
-
-  const handleBeginEditTurn = useCallback((turnId: string) => {
-    const turn = thread?.turns.find((item) => item.turnId === turnId);
-    if (!turn) {
-      return;
-    }
-    setEditingTurnId(turnId);
-    setDraft(turn.userMessage.content);
-    composerRef.current?.focus();
-  }, [thread]);
+    await handleSend();
+  }, [handleSend]);
 
   const handleSelectBranchTurn = useCallback(async (turnId: string) => {
     if (!selectedSessionId) {
@@ -2097,47 +2081,6 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
     }
   }, [commitThreadUpdate, selectedSessionId]);
 
-  const handleResumeQueue = useCallback(() => {
-    recordClientDiagnostic({
-      level: "info",
-      category: "chat",
-      event: "queue.resume",
-      message: "Resuming queued outbound chat items",
-      sessionId: selectedSessionId ?? undefined,
-      context: {
-        queuedCount: queuedOutbound.length,
-      },
-    });
-    setQueuedOutbound((current) => current.map((item) => ({ ...item, paused: false })));
-  }, [queuedOutbound.length, selectedSessionId]);
-
-  const handleRemoveQueuedItem = useCallback((id: string) => {
-    recordClientDiagnostic({
-      level: "info",
-      category: "chat",
-      event: "queue.remove",
-      message: "Removed queued outbound chat item",
-      sessionId: selectedSessionId ?? undefined,
-      context: { id },
-    });
-    setQueuedOutbound((current) => current.filter((item) => item.id !== id));
-  }, [selectedSessionId]);
-
-  useEffect(() => {
-    if (sendingRef.current || sending) {
-      return;
-    }
-    const nextItem = queuedOutbound.find((item) => !item.paused);
-    if (!nextItem) {
-      return;
-    }
-    if (!tryBeginOutboundExecution()) {
-      return;
-    }
-    setQueuedOutbound((current) => current.filter((item) => item.id !== nextItem.id));
-    void executeOutboundItemRef.current(nextItem);
-  }, [queuedOutbound, sending, tryBeginOutboundExecution]);
-
   const handleComposerKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (commandSuggestions.length > 0) {
       if (event.key === "ArrowDown") {
@@ -2159,12 +2102,16 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      void handleSend();
+      void handleSendAction();
     }
-  }, [applyDraftCommand, commandIndex, commandSuggestions, handleSend]);
+  }, [applyDraftCommand, commandIndex, commandSuggestions, handleSendAction]);
 
   const handleApprovePending = useCallback(async () => {
     if (!selectedSession || !pendingApproval) return;
+    if (isApprovalExpired(pendingApproval.expiresAt)) {
+      pushLocalNotice("Approval expired. Rerun the action to request a fresh approval.", "warning");
+      return;
+    }
     setApprovalPending(true);
     try {
       await approveChatTool(selectedSession.sessionId, pendingApproval.approvalId);
@@ -2179,6 +2126,10 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
 
   const handleDenyPending = useCallback(async () => {
     if (!selectedSession || !pendingApproval) return;
+    if (isApprovalExpired(pendingApproval.expiresAt)) {
+      pushLocalNotice("Approval expired. Rerun the action to request a fresh approval.", "warning");
+      return;
+    }
     setApprovalPending(true);
     try {
       await denyChatTool(selectedSession.sessionId, pendingApproval.approvalId);
@@ -2191,6 +2142,14 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
     }
   }, [pendingApproval, pushLocalNotice, selectedSession]);
 
+  const handleRefreshSurface = useCallback(async () => {
+    setError(null);
+    await loadSidebar();
+    if (selectedSession) {
+      await loadSessionCoreState(selectedSession.sessionId);
+    }
+  }, [loadSessionCoreState, loadSidebar, selectedSession]);
+
   const handlePrefPatch = useCallback(async (patch: ChatSessionPrefsPatch) => {
     if (!selectedSession) return;
     lastLocalPrefMutationAtRef.current = Date.now();
@@ -2201,6 +2160,42 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
       setError((err as Error).message);
     }
   }, [selectedSession]);
+
+  const handleProviderChange = useCallback(async (providerId: string) => {
+    if (!selectedSessionId) {
+      return;
+    }
+    const provider = providerOptions.find((item) => item.providerId === providerId);
+    const initialPlan = resolveProviderSelectionPlan({
+      provider,
+      loadedModels: [],
+    });
+    if (!provider) {
+      return;
+    }
+    if (initialPlan.blockedMessage) {
+      pushLocalNotice(initialPlan.blockedMessage, "warning");
+      return;
+    }
+    setLoadingProviderId(providerId);
+    setError(null);
+    try {
+      const loadedModels = await loadModelsForProvider(providerId);
+      const plan = resolveProviderSelectionPlan({
+        provider,
+        loadedModels,
+      });
+      if (!plan.nextModel) {
+        pushLocalNotice(plan.missingModelMessage ?? `No models are available for ${provider.label} yet. Check the provider configuration and retry.`, "warning");
+        return;
+      }
+      await handlePrefPatch({ providerId, model: plan.nextModel });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoadingProviderId((current) => (current === providerId ? null : current));
+    }
+  }, [handlePrefPatch, loadModelsForProvider, providerOptions, pushLocalNotice, selectedSessionId]);
 
   if (loading) {
     return (
@@ -2245,176 +2240,121 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
       {isRefreshing ? <p className="status-banner">Refreshing chat context...</p> : null}
 
       <div className="chat-v11-shell">
-        <aside className="panel panel-soft panel-pad-default chat-v11-left">
-          <div className="chat-v11-left-head">
-            <div className="chat-v11-left-actions">
-              <div className="chat-v11-row-actions">
-                {(["chat", "cowork", "code"] as const).map((mode) => (
-                  <ActionButton
-                    key={mode}
-                    label={`New ${CHAT_MODE_PRESETS[mode].label}`}
-                    variant={mode === "chat" ? "primary" : mode === "cowork" ? "secondary" : "tertiary"}
-                    pending={creatingSessionMode === mode}
-                    disabled={sending || Boolean(creatingSessionMode)}
-                    onClick={() => handleCreateSession(mode)}
-                  />
-                ))}
-              </div>
-              <button
-                type="button"
-                className={`chat-v11-project-toggle${showProjectCreate ? " active" : ""}`}
-                onClick={() => setShowProjectCreate((current) => !current)}
-              >
-                {showProjectCreate ? "Hide project form" : "New project"}
-              </button>
-            </div>
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a chat..." />
-          </div>
-          <FieldHelp>Mission chats stay local. External chats can write back only when a binding is configured.</FieldHelp>
-          {showProjectCreate ? (
-            <div className="chat-v11-project-create">
-              <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="New project name" />
-              <input value={projectPath} onChange={(event) => setProjectPath(event.target.value)} placeholder="Project path (optional)" />
-              <p className="chat-v11-muted">
-                Project creation is optional. Stay in <strong>Chat</strong> for quick work, or use <strong>Code</strong> when you are ready to bind implementation to a project.
-              </p>
-              <button type="button" onClick={async () => {
-                const name = projectName.trim();
-                if (!name) return;
-                setSending(true);
-                try {
-                  const created = await createChatProject({
-                    workspaceId,
-                    name,
-                    workspacePath: projectPath.trim() || "chat/default",
-                  });
-                  setProjectName("");
-                  setShowProjectCreate(false);
-                  setSelectedProjectId(created.projectId);
-                  await loadSidebar();
-                } catch (err) {
-                  setError((err as Error).message);
-                } finally {
-                  setSending(false);
-                }
-              }}>Create project</button>
-            </div>
-          ) : null}
-          <div className="chat-v11-filter-row">
-            <button type="button" className={selectedProjectId === "all" ? "active" : ""} onClick={() => setSelectedProjectId("all")}>All projects</button>
-            <button type="button" className={selectedProjectId === "none" ? "active" : ""} onClick={() => setSelectedProjectId("none")}>Unassigned</button>
-          </div>
-          <ChatSessionRail
-            missionSessions={missionSessions}
-            externalSessions={externalSessions}
-            selectedSessionId={selectedSessionId}
-            onSelectSession={setSelectedSessionId}
-            renderSessionLabel={(sessionId) => visibleSessionLabelById.get(sessionId) ?? `Chat ${sessionId.slice(-6)}`}
-          />
-        </aside>
+        <ChatSessionSidebar
+          sending={sending}
+          creatingSessionMode={creatingSessionMode}
+          showProjectCreate={showProjectCreate}
+          search={search}
+          projectName={projectName}
+          projectPath={projectPath}
+          selectedProjectId={selectedProjectId}
+          missionSessions={missionSessions}
+          externalSessions={externalSessions}
+          selectedSessionId={selectedSessionId}
+          onCreateSession={handleCreateSession}
+          onToggleProjectCreate={() => setShowProjectCreate((current) => !current)}
+          onSearchChange={setSearch}
+          onProjectNameChange={setProjectName}
+          onProjectPathChange={setProjectPath}
+          onCreateProject={() => {
+            const name = projectName.trim();
+            if (!name) {
+              return;
+            }
+            setSending(true);
+            void createChatProject({
+              workspaceId,
+              name,
+              workspacePath: projectPath.trim() || "chat/default",
+            })
+              .then(async (created) => {
+                setProjectName("");
+                setShowProjectCreate(false);
+                setSelectedProjectId(created.projectId);
+                await loadSidebar();
+              })
+              .catch((err) => setError((err as Error).message))
+              .finally(() => setSending(false));
+          }}
+          onSelectProjectId={setSelectedProjectId}
+          onSelectSession={setSelectedSessionId}
+          renderSessionLabel={(sessionId) => visibleSessionLabelById.get(sessionId) ?? `Chat ${sessionId.slice(-6)}`}
+        />
 
         <div className="chat-v11-main">
           {selectedSession ? (
             <div className="chat-v11-conversation-shell">
               <div className={`chat-v11-main-grid ${messageMode === "cowork" ? "with-cowork" : ""}`}>
                 <article className={`card chat-v11-thread mode-${messageMode}`}>
-                  <div className="chat-v11-thread-scroll">
-                    <ChatThreadView
-                      loading={messagesLoading}
-                      thread={thread}
-                      selectedTurnId={selectedTurnId}
-                      notices={localNotices}
-                      followOutput={followThreadOutput}
-                      streamStatus={streamStatus}
-                      queuedCount={queuedOutbound.length}
-                      streamError={error}
-                      onBottomStateChange={setFollowThreadOutput}
-                      onSelectTurn={setSelectedTurnId}
-                      onSwitchBranch={(turnId) => void handleSelectBranchTurn(turnId)}
-                      onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
-                      onEditTurn={handleBeginEditTurn}
-                    />
-                  </div>
+                  <ChatThreadShell
+                    loading={messagesLoading}
+                    thread={thread}
+                    selectedTurnId={selectedTurnId}
+                    notices={localNotices}
+                    followOutput={followThreadOutput}
+                    streamStatus={streamStatus}
+                    queuedCount={queuedOutbound.length}
+                    streamError={error}
+                    pendingApproval={pendingApproval}
+                    approvalPending={approvalPending}
+                    eventStreamStatus={eventStreamStatus}
+                    onBottomStateChange={setFollowThreadOutput}
+                    onSelectTurn={setSelectedTurnId}
+                    onSwitchBranch={(turnId) => void handleSelectBranchTurn(turnId)}
+                    onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
+                    onEditTurn={handleBeginEditTurn}
+                    onApprovePending={() => void handleApprovePending()}
+                    onDenyPending={() => void handleDenyPending()}
+                    onRefresh={() => void handleRefreshSurface()}
+                  />
 
-                  {pendingApproval ? <InlineApprovalPrompt approvalId={pendingApproval.approvalId} toolName={pendingApproval.toolName} reason={pendingApproval.reason} pending={approvalPending} onApprove={() => void handleApprovePending()} onDeny={() => void handleDenyPending()} /> : null}
-
-                  <div className={`chat-v11-composer ${isDragActive ? "drop-active" : ""}`} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
-                    {isDragActive ? <div className="chat-drop-overlay">Drop files to attach</div> : null}
-                    <ChatQueueBar
-                      items={queuedOutbound.map((item): ChatQueueItemView => ({
-                        id: item.id,
-                        action: item.action,
-                        label: item.content.trim() ? item.content.trim().slice(0, 96) : `Turn ${item.targetTurnId?.slice(-6) ?? "queued"}`,
-                        createdAt: item.createdAt,
-                        paused: item.paused,
-                      }))}
-                      onResumeAll={handleResumeQueue}
-                      onRemove={handleRemoveQueuedItem}
-                    />
-                    {editingTurnId ? (
-                      <div className="chat-v11-composer-banner">
-                        Editing branch from turn {editingTurnId.slice(-6)}.
-                        <button type="button" onClick={() => setEditingTurnId(null)}>Cancel edit</button>
-                      </div>
-                    ) : null}
-                    {planningMode === "advisory" ? (
-                      <div className="chat-v11-composer-banner planning">
-                        Planning mode is on. GoatCitadel will respond with a plan/spec instead of executing tool work automatically.
-                        {effectiveToolAutonomy === "manual" ? " Manual tool execution is enforced for this turn." : ""}
-                      </div>
-                    ) : null}
-                    {selectedTurnRecovery && selectedTurn && selectedTurn.trace.status !== "waiting_for_approval" ? (
-                      <div className="chat-v11-composer-banner recovery">
-                        Next step: <strong>{selectedTurnRecovery.label}.</strong> {selectedTurnRecovery.summary}
-                        {selectedTurnRecovery.action === "retry" || selectedTurnRecovery.action === "retry_narrower" ? (
-                          <button type="button" disabled={sending} onClick={() => void handleRetryTurn(selectedTurn.turnId)}>
-                            Retry turn
-                          </button>
-                        ) : null}
-                        {selectedTurnRecovery.action === "switch_to_deep_mode" && (prefs?.webMode ?? "auto") !== "deep" ? (
-                          <button type="button" disabled={!selectedSessionId || sending} onClick={() => void handlePrefPatch({ webMode: "deep" })}>
-                            Set Deep mode
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    <textarea ref={composerRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} onPaste={handleComposerPaste} placeholder="Ask GoatCitadel anything... Try /help" rows={4} />
-                    {commandSuggestions.length > 0 ? (
-                      <div className="chat-v11-command-popover" role="listbox" aria-label="Slash command suggestions">
-                        {commandSuggestions.map((item, index) => (
-                          <button key={item.key} type="button" className={index === commandIndex ? "active" : ""} onClick={() => applyDraftCommand(item.applyValue)}>
-                            <strong>{item.command}</strong>
-                            <span>{item.description}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                    {pendingAttachments.length > 0 ? (
-                      <div className="chat-v11-pending-attachments">
-                        {pendingAttachments.map((item) => (
-                          <button key={item.attachmentId} type="button" className="chat-attachment-chip" onClick={() => setPendingAttachments((current) => current.filter((entry) => entry.attachmentId !== item.attachmentId))}>{item.fileName} ×</button>
-                        ))}
-                      </div>
-                    ) : null}
-                    <div className="chat-v11-composer-actions">
-                      <ChatComposerPlusMenu disabled={sending} onAttachFiles={() => fileInputRef.current?.click()} onRunQuickResearch={() => { void handleRunQuickResearch(); }} />
-                      <input ref={fileInputRef} type="file" multiple className="chat-v11-hidden-file" onChange={(event) => {
-                        const files = event.target.files;
-                        if (!files || files.length === 0) return;
-                        void uploadAttachments(Array.from(files));
-                      }} />
-                      <p>Tip: drag files here, paste screenshots, press Enter to send, or queue the next prompt while a turn is still streaming.</p>
-                      {sending && activeStreamRef.current ? (
-                        <button type="button" onClick={() => void handleStopActiveTurn()}>
-                          {activeStreamRef.current.turnId ? "Stop turn" : "Stop stream"}
-                        </button>
-                      ) : (
-                        <button type="button" disabled={!canSend} onClick={() => void handleSend()}>
-                          {sending ? "Sending..." : editingTurnId ? "Edit and resend" : "Send message"}
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                  <ChatComposerShell
+                    isDragActive={isDragActive}
+                    queueItems={queuedOutbound.map((item): ChatQueueItemView => buildQueuedOutboundItemView(item))}
+                    editingTurnId={editingTurnId}
+                    planningMode={planningMode}
+                    effectiveToolAutonomy={effectiveToolAutonomy}
+                    error={error}
+                    draft={draft}
+                    commandSuggestions={commandSuggestions}
+                    commandIndex={commandIndex}
+                    pendingAttachments={pendingAttachments}
+                    selectedTurnRecovery={selectedTurnRecovery}
+                    selectedTurn={selectedTurn}
+                    selectedSessionId={selectedSessionId}
+                    currentWebMode={prefs?.webMode ?? "auto"}
+                    sending={sending}
+                    canSend={canSend}
+                    hasActiveStream={Boolean(activeStreamRef.current)}
+                    activeStreamTurnAssigned={Boolean(activeStreamRef.current?.turnId)}
+                    composerRef={composerRef}
+                    fileInputRef={fileInputRef}
+                    onDragEnter={handleDragEnter}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    onResumeAll={handleResumeQueue}
+                    onRemoveQueuedItem={handleRemoveQueuedItem}
+                    onCancelEdit={() => setEditingTurnId(null)}
+                    onDismissError={() => setError(null)}
+                    onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
+                    onSetDeepMode={() => void handlePrefPatch({ webMode: "deep" })}
+                    onDraftChange={setDraft}
+                    onComposerKeyDown={handleComposerKeyDown}
+                    onComposerPaste={handleComposerPaste}
+                    onApplyDraftCommand={applyDraftCommand}
+                    onRemoveAttachment={(attachmentId) => setPendingAttachments((current) => current.filter((entry) => entry.attachmentId !== attachmentId))}
+                    onAttachFiles={() => fileInputRef.current?.click()}
+                    onUploadFiles={(files) => {
+                      if (!files || files.length === 0) {
+                        return;
+                      }
+                      void uploadAttachments(Array.from(files));
+                    }}
+                    onRunQuickResearch={() => { void handleRunQuickResearch(); }}
+                    onStopActiveTurn={() => void handleStopActiveTurn()}
+                    onSend={() => void handleSendAction()}
+                  />
                 </article>
                 {isCoworkSurface ? <CoworkCanvasPanel items={coworkItems} orchestration={latestOrchestration} /> : null}
               </div>
@@ -2469,11 +2409,11 @@ export function ChatPage({ workspaceId = "default" }: { workspaceId?: string }) 
                           providers={providerOptions}
                           providerId={selectedProviderId}
                           model={prefs?.model ?? runtimeLlmConfig?.activeModel ?? settings?.llm.activeModel}
-                          disabled={!selectedSessionId || sending}
+                          pendingProviderId={loadingProviderId}
+                          modelLoading={loadingProviderId !== null}
+                          disabled={!selectedSessionId || sending || loadingProviderId !== null}
                           onChangeProvider={(providerId) => {
-                            const provider = providerOptions.find((item) => item.providerId === providerId);
-                            void loadModelsForProvider(providerId);
-                            void handlePrefPatch({ providerId, model: provider?.models[0] });
+                            void handleProviderChange(providerId);
                           }}
                           onChangeModel={(model) => void handlePrefPatch({ model })}
                         />

@@ -26,6 +26,12 @@ const API_BASE = import.meta.env.VITE_GATEWAY_URL ?? inferDefaultGatewayBaseUrl(
 const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
 const EVENT_CURSOR_STORAGE_KEY = "goatcitadel.events.cursor.v1";
+const SAFE_RETRY_METHODS = new Set(["GET", "HEAD"]);
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const RETRYABLE_HTTP_STATUS_CODES = new Set([408, 429, 502, 503, 504]);
+const SAFE_REQUEST_RETRY_DELAYS_MS = [250];
+const BROWSER_MUTATION_INTENT_HEADER = "x-goatcitadel-browser-intent";
+const BROWSER_MUTATION_INTENT_VALUE = "mutation";
 
 export interface GatewayAuthState {
   mode?: "none" | "token" | "basic";
@@ -463,18 +469,40 @@ function isPrivateOrCarrierGradeIpv4(host: string): boolean {
   return a === 100 && b >= 64 && b <= 127;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const authHeaders = readGatewayAuthHeaders(path);
-  const method = init?.method ?? "GET";
-  const correlationId = createCorrelationId();
-  const headers = {
+function normalizeHttpMethod(method?: string): string {
+  return (method ?? "GET").toUpperCase();
+}
+
+function buildGatewayHeaders(path: string, method: string, correlationId: string, extraHeaders?: HeadersInit): HeadersInit {
+  return {
     "Content-Type": "application/json",
     ...(method !== "GET" ? { "Idempotency-Key": crypto.randomUUID() } : {}),
-    ...authHeaders,
+    ...(MUTATING_METHODS.has(method) ? { [BROWSER_MUTATION_INTENT_HEADER]: BROWSER_MUTATION_INTENT_VALUE } : {}),
+    ...readGatewayAuthHeaders(path),
     "x-goatcitadel-correlation-id": correlationId,
     "x-goatcitadel-origin-surface": inferOriginSurface(path),
-    ...(init?.headers ?? {}),
+    ...(extraHeaders ?? {}),
   };
+}
+
+function shouldRetrySafeRequest(method: string, error?: ApiRequestError): boolean {
+  if (!SAFE_RETRY_METHODS.has(method) || !error) {
+    return false;
+  }
+  if (error.kind === "network") {
+    return true;
+  }
+  return error.status !== undefined && RETRYABLE_HTTP_STATUS_CODES.has(error.status);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = normalizeHttpMethod(init?.method);
+  const correlationId = createCorrelationId();
+  const headers = buildGatewayHeaders(path, method, correlationId, init?.headers);
   recordClientDiagnostic({
     level: "info",
     category: "api",
@@ -483,79 +511,123 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     correlationId,
     route: path,
   });
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE}${path}`, {
-      headers: {
-        ...headers,
-      },
-      ...init,
-    });
-  } catch (error) {
-    setDevDiagnosticsGatewayReachable(false);
-    setDevDiagnosticsLastRequestError(`${method} ${path}: network error`);
-    recordClientDiagnostic({
-      level: "error",
-      category: "api",
-      event: "request.network_error",
-      message: `${method} ${path} failed before a response was received`,
-      correlationId,
-      route: path,
-      context: {
-        error: (error as Error).message,
-      },
-    });
-    throw new ApiRequestError(`Network error ${method} ${path}: ${(error as Error).message}`, {
-      kind: "network",
-      method,
-      path,
-      cause: error,
-    });
-  }
-  const responseCorrelationId = response.headers.get("x-goatcitadel-correlation-id") ?? correlationId;
-  setDevDiagnosticsActiveCorrelationId(responseCorrelationId);
-  setDevDiagnosticsGatewayReachable(true);
+  const maxAttempts = SAFE_RETRY_METHODS.has(method) ? SAFE_REQUEST_RETRY_DELAYS_MS.length + 1 : 1;
+  let lastError: ApiRequestError | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(`${API_BASE}${path}`, {
+        headers: {
+          ...headers,
+        },
+        ...init,
+        method,
+      });
+      const responseCorrelationId = response.headers.get("x-goatcitadel-correlation-id") ?? correlationId;
+      setDevDiagnosticsActiveCorrelationId(responseCorrelationId);
+      setDevDiagnosticsGatewayReachable(true);
 
-  if (!response.ok) {
-    const text = await response.text();
-    const parsed = parseApiError(text);
-    setDevDiagnosticsLastRequestError(`${method} ${path}: ${response.status}`);
-    recordClientDiagnostic({
-      level: "error",
-      category: "api",
-      event: "request.error",
-      message: `${method} ${path} failed (${response.status})`,
-      correlationId: responseCorrelationId,
-      route: path,
-      context: {
-        status: response.status,
-        body: text.slice(0, 600),
-      },
-    });
-    throw new ApiRequestError(`API error ${response.status}: ${text}`, {
-      kind: "http",
-      method,
-      path,
-      status: response.status,
-      body: parsed.body,
-      bodyText: text,
-      authMode: parsed.authMode,
-    });
+      if (!response.ok) {
+        const text = await response.text();
+        const parsed = parseApiError(text);
+        lastError = new ApiRequestError(`API error ${response.status}: ${text}`, {
+          kind: "http",
+          method,
+          path,
+          status: response.status,
+          body: parsed.body,
+          bodyText: text,
+          authMode: parsed.authMode,
+        });
+        if (shouldRetrySafeRequest(method, lastError) && attempt < maxAttempts - 1) {
+          recordClientDiagnostic({
+            level: "warn",
+            category: "api",
+            event: "request.retry",
+            message: `${method} ${path} retrying after transient response`,
+            correlationId: responseCorrelationId,
+            route: path,
+            context: {
+              attempt: attempt + 1,
+              status: response.status,
+            },
+          });
+          await sleep(SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ?? SAFE_REQUEST_RETRY_DELAYS_MS[SAFE_REQUEST_RETRY_DELAYS_MS.length - 1] ?? 250);
+          continue;
+        }
+        setDevDiagnosticsLastRequestError(`${method} ${path}: ${response.status}`);
+        recordClientDiagnostic({
+          level: "error",
+          category: "api",
+          event: "request.error",
+          message: `${method} ${path} failed (${response.status})`,
+          correlationId: responseCorrelationId,
+          route: path,
+          context: {
+            status: response.status,
+            body: text.slice(0, 600),
+          },
+        });
+        throw lastError;
+      }
+
+      setDevDiagnosticsLastRequestError(undefined);
+      recordClientDiagnostic({
+        level: "info",
+        category: "api",
+        event: "request.finish",
+        message: `${method} ${path} completed`,
+        correlationId: responseCorrelationId,
+        route: path,
+        context: {
+          status: response.status,
+        },
+      });
+      return unwrapApiResponse<T>(await response.json());
+    } catch (error) {
+      lastError = error instanceof ApiRequestError
+        ? error
+        : new ApiRequestError(`Network error ${method} ${path}: ${(error as Error).message}`, {
+          kind: "network",
+          method,
+          path,
+          cause: error,
+        });
+      if (shouldRetrySafeRequest(method, lastError) && attempt < maxAttempts - 1) {
+        recordClientDiagnostic({
+          level: "warn",
+          category: "api",
+          event: "request.retry",
+          message: `${method} ${path} retrying after network failure`,
+          correlationId,
+          route: path,
+          context: {
+            attempt: attempt + 1,
+            error: lastError.message,
+          },
+        });
+        await sleep(SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ?? SAFE_REQUEST_RETRY_DELAYS_MS[SAFE_REQUEST_RETRY_DELAYS_MS.length - 1] ?? 250);
+        continue;
+      }
+      if (lastError.kind === "network") {
+        setDevDiagnosticsGatewayReachable(false);
+        setDevDiagnosticsLastRequestError(`${method} ${path}: network error`);
+        recordClientDiagnostic({
+          level: "error",
+          category: "api",
+          event: "request.network_error",
+          message: `${method} ${path} failed before a response was received`,
+          correlationId,
+          route: path,
+          context: {
+            error: lastError.message,
+          },
+        });
+      }
+      throw lastError;
+    }
   }
 
-  setDevDiagnosticsLastRequestError(undefined);
-  recordClientDiagnostic({
-    level: "info",
-    category: "api",
-    event: "request.finish",
-    message: `${method} ${path} completed`,
-    correlationId: responseCorrelationId,
-    route: path,
-    context: {
-      status: response.status,
-    },
-  });
-  return unwrapApiResponse<T>(await response.json());
+  throw lastError ?? new Error(`Unreachable request state for ${method} ${path}`);
 }
 
 function readGatewayAuthHeaders(_path: string): Record<string, string> {

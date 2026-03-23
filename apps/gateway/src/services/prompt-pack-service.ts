@@ -36,6 +36,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { chatModeRequiresProjectBinding, getChatModePreset } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
+import { parseLooseJsonRecord } from "./json-record-parser.js";
 import { resolveProjectRootForToolContext } from "./tool-path-resolution.js";
 
 // ── constants ────────────────────────────────────────────────────────
@@ -3514,45 +3515,6 @@ function extractCompletionText(response: ChatCompletionResponse): string {
       .trim();
   }
   return "";
-}
-
-function parseLooseJsonRecord(raw: string): Record<string, unknown> | undefined {
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(raw.trim());
-    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    // fall through
-  }
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenced?.[1]) {
-    try {
-      const parsed = JSON.parse(fenced[1].trim());
-      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      // fall through
-    }
-  }
-  const braceStart = raw.indexOf("{");
-  const braceEnd = raw.lastIndexOf("}");
-  if (braceStart >= 0 && braceEnd > braceStart) {
-    try {
-      const candidate = raw.slice(braceStart, braceEnd + 1);
-      const parsed = JSON.parse(candidate);
-      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      // fall through
-    }
-  }
-  return undefined;
 }
 
 function parsePromptJudgeScoreRecord(raw: string): Record<string, unknown> | undefined {
