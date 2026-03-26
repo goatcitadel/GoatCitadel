@@ -2,23 +2,23 @@
   "name": "@goatcitadel/storage",
   "version": "0.6.0-beta.2",
   "type": "module",
-  "main": "./dist/storage/src/index.js",
-  "types": "./dist/storage/src/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/storage/src/index.d.ts",
-      "default": "./dist/storage/src/index.js"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     }
   },
   "dependencies": {
     "@goatcitadel/contracts": "workspace:*"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
     "test": "tsx --test src/*.test.ts",
     "test:coverage": "c8 --report-dir=coverage --reporter=json --reporter=text-summary tsx --test src/*.test.ts",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -b tsconfig.json"
   }
 }
 

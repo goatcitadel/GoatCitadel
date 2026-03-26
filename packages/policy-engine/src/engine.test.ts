@@ -5,6 +5,25 @@ import { ToolPolicyEngine } from "./engine.js";
 
 function createStorageStub(): Storage {
   return {
+    approvals: {
+      create: vi.fn((input) => ({
+        approvalId: "approval-1",
+        kind: input.kind,
+        riskLevel: input.riskLevel,
+        status: "pending",
+        payload: input.payload,
+        preview: input.preview,
+        createdAt: "2026-03-22T12:00:00.000Z",
+        expiresAt: input.expiresAt ?? undefined,
+        explanationStatus: "not_requested",
+      })),
+    },
+    approvalEvents: {
+      append: vi.fn(),
+    },
+    audit: {
+      append: vi.fn(async () => undefined),
+    },
     toolAccessDecisions: {
       record: vi.fn(),
       countToolCallsInLastHourInScope: vi.fn(() => 0),
@@ -14,7 +33,13 @@ function createStorageStub(): Storage {
       list: vi.fn(() => []),
     },
     pendingApprovalActions: {
+      upsertPending: vi.fn(),
       find: vi.fn(() => undefined),
+    },
+    db: {
+      prepare: vi.fn(() => ({
+        run: vi.fn(),
+      })),
     },
   } as unknown as Storage;
 }
@@ -65,6 +90,36 @@ describe("ToolPolicyEngine bankr migration gating", () => {
 });
 
 describe("ToolPolicyEngine outside-root read access", () => {
+  it("persists a default approval expiry when a tool action is gated", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T12:00:00.000Z"));
+    try {
+      const storage = createStorageStub();
+      const engine = new ToolPolicyEngine({
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          readAccessMode: "approval_required",
+        },
+      }, storage);
+
+      const result = await engine.invoke({
+        toolName: "file.read_range",
+        args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+        agentId: "agent",
+        sessionId: "session",
+      });
+
+      expect(result.outcome).toBe("approval_required");
+      expect(result.expiresAt).toBe("2026-03-22T12:15:00.000Z");
+      expect(vi.mocked(storage.approvals.create)).toHaveBeenCalledWith(expect.objectContaining({
+        expiresAt: "2026-03-22T12:15:00.000Z",
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("requires approval when readAccessMode is approval_required and a file is outside trusted roots", () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine({
@@ -214,6 +269,49 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     });
     expect(evaluation.allowed).toBe(true);
     expect(evaluation.requiresApproval).toBe(true);
+  });
+
+  it("lets matching denies beat allows across scopes", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockImplementation((scope, scopeRef) => {
+      if (scope === "session" && scopeRef === "session-1") {
+        return [{
+          grantId: "grant-session-allow",
+          toolPattern: "shell.exec",
+          decision: "allow",
+          scope,
+          scopeRef,
+          grantType: "persistent",
+          createdBy: "test",
+          createdAt: new Date().toISOString(),
+        }];
+      }
+      if (scope === "task" && scopeRef === "task-1") {
+        return [{
+          grantId: "grant-task-deny",
+          toolPattern: "shell.exec",
+          decision: "deny",
+          scope,
+          scopeRef,
+          grantType: "persistent",
+          createdBy: "test",
+          createdAt: new Date().toISOString(),
+        }];
+      }
+      return [];
+    });
+
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hello" },
+      agentId: "agent",
+      sessionId: "session-1",
+      taskId: "task-1",
+    });
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toContain("grant_deny");
   });
 });
 

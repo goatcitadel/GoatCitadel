@@ -1,4 +1,4 @@
-import { memo, Suspense, lazy, useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
+import { memo, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { CHAT_MODE_PRESETS } from "@goatcitadel/contracts";
 import {
   consumeGatewayAccessBootstrapFromLocation,
@@ -430,6 +430,8 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [showBrandMark, setShowBrandMark] = useState(true);
   const [showBrandWordmark, setShowBrandWordmark] = useState(true);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [preferencesMenuOpen, setPreferencesMenuOpen] = useState(false);
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ workspaceId: string; name: string }>>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
@@ -443,6 +445,8 @@ export function App() {
   });
   const [gatewayAccessBusy, setGatewayAccessBusy] = useState(true);
   const [gatewayAccessRunId, setGatewayAccessRunId] = useState(0);
+  const moreMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const preferencesMenuRef = useRef<HTMLDetailsElement | null>(null);
   const effectiveEffectsMode = useMemo(() => resolveEffectiveEffectsMode(effectsMode), [effectsMode]);
   const shellGatewayState = useMemo(
     () => deriveShellGatewayAccessState(gatewayAccess, streamState),
@@ -475,6 +479,40 @@ export function App() {
 
   const activeDeviceAccessPrompt = deviceAccessPrompts[0];
   const activeRemoteApprovalPrompt = remoteApprovalPrompts[0];
+  const closeCommandDeckMenus = useCallback(() => {
+    setMoreMenuOpen(false);
+    setPreferencesMenuOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!moreMenuOpen && !preferencesMenuOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (moreMenuRef.current?.contains(target) || preferencesMenuRef.current?.contains(target)) {
+        return;
+      }
+      closeCommandDeckMenus();
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeCommandDeckMenus();
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [closeCommandDeckMenus, moreMenuOpen, preferencesMenuOpen]);
 
   const dismissDeviceAccessPrompt = useCallback((approvalId: string) => {
     setDeviceAccessPrompts((current) => current.filter((item) => item.approvalId !== approvalId));
@@ -682,12 +720,6 @@ export function App() {
           event: "state_change",
           message: `Realtime stream is now ${nextState}`,
         });
-        if (nextState === "error") {
-          pushNotification("warning", "Live updates degraded. GoatCitadel is reconnecting.", "stream-connection");
-        }
-        if (nextState === "open") {
-          pushNotification("success", "Live updates connected.", "stream-connection");
-        }
       },
       publishEventStreamStatus,
     );
@@ -797,43 +829,94 @@ export function App() {
         id: `tab:${item.id}`,
         label: `Go to ${item.label}`,
         keywords: [item.id, item.code],
-        run: () => setTab(item.id),
+        run: () => {
+          closeCommandDeckMenus();
+          setTab(item.id);
+        },
       })),
       {
         id: "mode:simple",
         label: "Switch to Beginner experience",
         keywords: ["beginner", "simple", "guided", "experience"],
-        run: () => setUiMode("simple"),
+        run: () => {
+          closeCommandDeckMenus();
+          setUiMode("simple");
+        },
       },
       {
         id: "mode:advanced",
         label: "Switch to Advanced experience",
         keywords: ["advanced", "full controls", "experience"],
-        run: () => setUiMode("advanced"),
+        run: () => {
+          closeCommandDeckMenus();
+          setUiMode("advanced");
+        },
       },
       {
         id: "density:compact",
         label: "Use Compact density",
         keywords: ["compact", "density", "layout"],
-        run: () => setDensity("compact"),
+        run: () => {
+          closeCommandDeckMenus();
+          setDensity("compact");
+        },
       },
       {
         id: "density:default",
         label: "Use Default density",
         keywords: ["default", "density", "layout"],
-        run: () => setDensity("default"),
+        run: () => {
+          closeCommandDeckMenus();
+          setDensity("default");
+        },
       },
       {
         id: "density:comfortable",
         label: "Use Comfortable density",
         keywords: ["comfortable", "density", "layout"],
-        run: () => setDensity("comfortable"),
+        run: () => {
+          closeCommandDeckMenus();
+          setDensity("comfortable");
+        },
       },
       {
         id: "details:toggle",
         label: showTechnicalDetails ? "Hide technical details" : "Show technical details",
         keywords: ["technical", "details", "debug"],
-        run: () => setShowTechnicalDetails(!showTechnicalDetails),
+        run: () => {
+          closeCommandDeckMenus();
+          setShowTechnicalDetails(!showTechnicalDetails);
+        },
+      },
+      {
+        id: "surface:chat",
+        label: "Open Chat surface",
+        keywords: ["chat", "surface", "workspace"],
+        run: () => {
+          closeCommandDeckMenus();
+          setWorkSurface("chat");
+          setTab("chat");
+        },
+      },
+      {
+        id: "surface:cowork",
+        label: "Open Cowork surface",
+        keywords: ["cowork", "surface", "workspace", "delegate"],
+        run: () => {
+          closeCommandDeckMenus();
+          setWorkSurface("cowork");
+          setTab("chat");
+        },
+      },
+      {
+        id: "surface:code",
+        label: "Open Code surface",
+        keywords: ["code", "surface", "workspace", "implement"],
+        run: () => {
+          closeCommandDeckMenus();
+          setWorkSurface("code");
+          setTab("chat");
+        },
       },
       {
         id: "surface:chat",
@@ -871,7 +954,7 @@ export function App() {
         }]
         : []),
     ],
-    [diagnosticsOpen, setDensity, setShowTechnicalDetails, setUiMode, showTechnicalDetails],
+    [closeCommandDeckMenus, diagnosticsOpen, setDensity, setShowTechnicalDetails, setUiMode, showTechnicalDetails],
   );
 
   const content = useMemo(() => {
@@ -959,7 +1042,7 @@ export function App() {
       return <NpuPage />;
     }
     return <IntegrationsPage />;
-  }, [activeWorkspaceId, tab, handleOnboardingCompleted, setActiveWorkspaceId]);
+  }, [activeWorkspaceId, tab, workSurface, handleOnboardingCompleted, setActiveWorkspaceId]);
 
   if (gatewayAccess.status !== "ready") {
     return (
@@ -985,200 +1068,314 @@ export function App() {
     >
       <header className="command-deck-shell app-topbar shell-topbar">
         <div className="command-deck-zone command-deck-zone-left">
-          <div className="command-deck-brand">
-            {showBrandMark ? (
-              <img
-                src="/brand/goatcitadel-mark.png"
-                alt="GoatCitadel mark"
-                className="sidebar-brand-mark command-deck-brand-mark"
-                onError={() => setShowBrandMark(false)}
-              />
-            ) : null}
-            <div className="command-deck-brand-copy">
-              {showBrandWordmark ? (
+          <div className="command-deck-brandbar">
+            <div className="command-deck-brand">
+              {showBrandMark ? (
                 <img
-                  src="/brand/goatcitadel-wordmark.png"
-                  alt="GoatCitadel"
-                  className="sidebar-brand-wordmark command-deck-brand-wordmark"
-                  onError={() => setShowBrandWordmark(false)}
+                  src="/brand/goatcitadel-mark.png"
+                  alt="GoatCitadel mark"
+                  className="sidebar-brand-mark command-deck-brand-mark"
+                  onError={() => setShowBrandMark(false)}
                 />
-              ) : <h1>{appCopy.brandTitle}</h1>}
-              <p className="command-deck-brand-kicker">{activePrimaryMode.label} command deck</p>
+              ) : null}
+              <div className="command-deck-brand-copy">
+                {showBrandWordmark ? (
+                  <img
+                    src="/brand/goatcitadel-wordmark.png"
+                    alt="GoatCitadel"
+                    className="sidebar-brand-wordmark command-deck-brand-wordmark"
+                    onError={() => setShowBrandWordmark(false)}
+                  />
+                ) : <h1>{appCopy.brandTitle}</h1>}
+                <p className="command-deck-brand-kicker">{activePrimaryMode.label} command deck</p>
+              </div>
             </div>
           </div>
-          <nav className="command-deck-nav" aria-label={`${activePrimaryMode.label} destinations`}>
-            {currentModeDestinations.map((item) => {
-              const isOfficeAlias = item.id === "office" && (tab === "office" || tab === "officeLab");
-              return (
-                <button
-                  type="button"
-                  key={item.id}
-                  className={`command-deck-pill${tab === item.id || isOfficeAlias ? " active" : ""}`}
-                  onClick={() => setTab(item.id)}
-                >
-                  <span className="nav-code">{item.code}</span>
-                  <span className="nav-label">{item.label}</span>
-                </button>
-              );
-            })}
-            <details className="command-deck-overflow">
-              <summary>More</summary>
-              <div className="command-deck-overflow-panel">
-                <div className="command-deck-overflow-block">
-                  <p className="command-deck-overflow-kicker">Spaces</p>
-                  <div className="command-deck-overflow-list command-deck-overflow-modes">
-                    {primaryNavModes.map((mode) => (
-                      <button
-                        type="button"
-                        key={mode.id}
-                        className={`command-deck-overflow-item${activePrimaryMode.id === mode.id ? " active" : ""}`}
-                        onClick={() => setTab(mode.defaultTab)}
-                      >
-                        <span className="nav-code">{mode.code}</span>
-                        <span className="nav-label">{mode.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                {commandDeckNav.overflowSections.map((section) => (
-                  <div key={section.label} className="command-deck-overflow-block">
-                    <p className="command-deck-overflow-kicker">{section.label}</p>
-                    <span className="command-deck-overflow-hint">{section.hint}</span>
-                    <div className="command-deck-overflow-list">
-                      {section.items.map((tabId) => {
-                        const item = navById.get(tabId);
-                        if (!item) {
-                          return null;
-                        }
-                        const isOfficeAlias = item.id === "office" && (tab === "office" || tab === "officeLab");
-                        return (
-                          <button
-                            type="button"
-                            key={item.id}
-                            className={`command-deck-overflow-item${tab === item.id || isOfficeAlias ? " active" : ""}`}
-                            onClick={() => setTab(item.id)}
-                          >
-                            <span className="nav-code">{item.code}</span>
-                            <span className="nav-label">{item.label}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-                <div className="command-deck-overflow-note">
-                  <strong>{appCopy.nextStepTitle}:</strong> {nextStepByTab[tab]}
-                </div>
-              </div>
-            </details>
-          </nav>
-        </div>
-        <div className="command-deck-zone command-deck-zone-center">
-          <div className="command-deck-surface-tabs" role="tablist" aria-label="Work surfaces">
-            {(["chat", "cowork", "code"] as const).map((surface) => (
-              <button
-                type="button"
-                key={surface}
-                role="tab"
-                aria-selected={tab === "chat" && workSurface === surface}
-                className={`command-deck-surface-tab${tab === "chat" && workSurface === surface ? " active" : ""}`}
-                onClick={() => {
-                  setWorkSurface(surface);
-                  setTab("chat");
-                }}
-              >
-                {CHAT_MODE_PRESETS[surface].label}
-              </button>
-            ))}
-          </div>
-          <p className="command-deck-surface-note">
-            {tab === "chat"
-              ? `${CHAT_MODE_PRESETS[workSurface].label} is active. ${CHAT_MODE_PRESETS[workSurface].summary}`
-              : "Jump directly into Chat, Cowork, or Code from anywhere in Mission Control."}
-          </p>
-        </div>
-        <div className="command-deck-zone command-deck-zone-right">
-          <div className="app-topbar-actions command-deck-utilities">
-            <button type="button" className="shell-quick-action shell-command-trigger-topbar" onClick={() => setPaletteOpen(true)}>
-              {appCopy.quickActionsButton}
-            </button>
-            <GlobalFreshnessPill streamState={streamState} />
-            <label className="ui-technical-toggle shell-workspace-picker">
-              <span className="shell-action-label">Workspace</span>
-              <GCSelect
-                value={activeWorkspaceId}
-                onChange={setActiveWorkspaceId}
-                options={[...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceId }]
-                  .filter((item, index, arr) => arr.findIndex((other) => other.workspaceId === item.workspaceId) === index)
-                  .map((item) => ({ value: item.workspaceId, label: item.name }))}
-              />
-            </label>
-            <button
-              type="button"
-              className="shell-status-link"
-              onClick={() => setTab("approvals")}
-            >
-              <StatusChip tone={approvalSurfaceCount > 0 ? "warning" : "success"}>
-                {approvalSurfaceCount > 0 ? `${approvalSurfaceCount} approvals` : "Approvals clear"}
-              </StatusChip>
-            </button>
-            <details className="shell-preferences">
-              <summary>Preferences</summary>
-              <div className="shell-preferences-panel">
-                <div className="shell-preferences-group">
-                  <span className="shell-action-label">Density</span>
-                  <div className="ui-experience-switch ui-density-switch">
-                    <button type="button" className={density === "comfortable" ? "active" : ""} onClick={() => setDensity("comfortable")}>
-                      Comfortable
-                    </button>
-                    <button type="button" className={density === "default" ? "active" : ""} onClick={() => setDensity("default")}>
-                      Default
-                    </button>
-                    <button type="button" className={density === "compact" ? "active" : ""} onClick={() => setDensity("compact")}>
-                      Compact
-                    </button>
-                  </div>
-                </div>
-                <div className="shell-preferences-group">
-                  <span className="shell-action-label">Effects</span>
-                  <div className="ui-experience-switch ui-density-switch">
-                    <button type="button" className={effectsMode === "auto" ? "active" : ""} onClick={() => setEffectsMode("auto")}>
-                      Auto
-                    </button>
-                    <button type="button" className={effectsMode === "full" ? "active" : ""} onClick={() => setEffectsMode("full")}>
-                      Full
-                    </button>
-                    <button type="button" className={effectsMode === "reduced" ? "active" : ""} onClick={() => setEffectsMode("reduced")}>
-                      Reduced
-                    </button>
-                  </div>
-                </div>
-                <div className="shell-preferences-group shell-preferences-switches">
-                  <GCSwitch
-                    checked={showTechnicalDetails}
-                    onCheckedChange={setShowTechnicalDetails}
-                    label="Technical details"
-                  />
-                </div>
-                <HelpHint
-                  label="Command deck guidance"
-                  text={nextStepByTab[tab]}
-                />
-                {isDevDiagnosticsEnabled() ? (
+          <div className="command-deck-navband">
+            <nav className="command-deck-nav" aria-label={`${activePrimaryMode.label} destinations`}>
+              {currentModeDestinations.map((item) => {
+                const isOfficeAlias = item.id === "office" && (tab === "office" || tab === "officeLab");
+                return (
                   <button
                     type="button"
-                    className="shell-quick-action shell-preferences-diagnostics"
-                    onClick={() => setDiagnosticsOpen((current) => !current)}
+                    key={item.id}
+                    className={`command-deck-pill${tab === item.id || isOfficeAlias ? " active" : ""}`}
+                    onClick={() => {
+                      closeCommandDeckMenus();
+                      setTab(item.id);
+                    }}
                   >
-                    {diagnosticsOpen ? "Hide diagnostics" : "Diagnostics"}
+                    <span className="nav-code">{item.code}</span>
+                    <span className="nav-label">{item.label}</span>
                   </button>
-                ) : null}
-              </div>
-            </details>
+                );
+              })}
+              <details ref={moreMenuRef} className="command-deck-overflow" open={moreMenuOpen}>
+                <summary
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setMoreMenuOpen((current) => {
+                      const next = !current;
+                      if (next) {
+                        setPreferencesMenuOpen(false);
+                      }
+                      return next;
+                    });
+                  }}
+                >
+                  More
+                </summary>
+                <div className="command-deck-overflow-panel">
+                  <div className="command-deck-overflow-block">
+                    <p className="command-deck-overflow-kicker">Spaces</p>
+                    <div className="command-deck-overflow-list command-deck-overflow-modes">
+                      {primaryNavModes.map((mode) => (
+                        <button
+                          type="button"
+                          key={mode.id}
+                          className={`command-deck-overflow-item${activePrimaryMode.id === mode.id ? " active" : ""}`}
+                          onClick={() => {
+                            closeCommandDeckMenus();
+                            setTab(mode.defaultTab);
+                          }}
+                        >
+                          <span className="nav-code">{mode.code}</span>
+                          <span className="nav-label">{mode.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {commandDeckNav.overflowSections.map((section) => (
+                    <div key={section.label} className="command-deck-overflow-block">
+                      <p className="command-deck-overflow-kicker">{section.label}</p>
+                      <span className="command-deck-overflow-hint">{section.hint}</span>
+                      <div className="command-deck-overflow-list">
+                        {section.items.map((tabId) => {
+                          const item = navById.get(tabId);
+                          if (!item) {
+                            return null;
+                          }
+                          const isOfficeAlias = item.id === "office" && (tab === "office" || tab === "officeLab");
+                          return (
+                            <button
+                              type="button"
+                              key={item.id}
+                              className={`command-deck-overflow-item${tab === item.id || isOfficeAlias ? " active" : ""}`}
+                              onClick={() => {
+                                closeCommandDeckMenus();
+                                setTab(item.id);
+                              }}
+                            >
+                              <span className="nav-code">{item.code}</span>
+                              <span className="nav-label">{item.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="command-deck-overflow-note">
+                    <strong>{appCopy.nextStepTitle}:</strong> {nextStepByTab[tab]}
+                  </div>
+                </div>
+              </details>
+            </nav>
+          </div>
+        </div>
+        <div className="command-deck-zone command-deck-zone-center">
+          <div className="command-deck-surface-band">
+            <div className="command-deck-surface-tabs" role="tablist" aria-label="Work surfaces">
+              {(["chat", "cowork", "code"] as const).map((surface) => (
+                <button
+                  type="button"
+                  key={surface}
+                  role="tab"
+                  aria-selected={tab === "chat" && workSurface === surface}
+                  className={`command-deck-surface-tab${tab === "chat" && workSurface === surface ? " active" : ""}`}
+                  onClick={() => {
+                    closeCommandDeckMenus();
+                    setWorkSurface(surface);
+                    setTab("chat");
+                  }}
+                >
+                  {CHAT_MODE_PRESETS[surface].label}
+                </button>
+              ))}
+            </div>
+            <p className="command-deck-surface-note">
+              {tab === "chat"
+                ? `${CHAT_MODE_PRESETS[workSurface].label} is active. ${CHAT_MODE_PRESETS[workSurface].summary}`
+                : "Jump directly into Chat, Cowork, or Code from anywhere in Mission Control."}
+            </p>
+          </div>
+        </div>
+        <div className="command-deck-zone command-deck-zone-right">
+          <div className="app-topbar-actions command-deck-utilities command-deck-utility-band">
+            <div className="command-deck-utility-cluster command-deck-utility-cluster-primary">
+              <button
+                type="button"
+                className="shell-quick-action shell-command-trigger-topbar"
+                onClick={() => {
+                  closeCommandDeckMenus();
+                  setPaletteOpen(true);
+                }}
+              >
+                {appCopy.quickActionsButton}
+              </button>
+              <GlobalFreshnessPill streamState={streamState} />
+            </div>
+            <div className="command-deck-utility-cluster command-deck-utility-cluster-context">
+              <label className="ui-technical-toggle shell-workspace-picker">
+                <span className="shell-action-label">Workspace</span>
+                <GCSelect
+                  value={activeWorkspaceId}
+                  onChange={setActiveWorkspaceId}
+                  options={[...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceId }]
+                    .filter((item, index, arr) => arr.findIndex((other) => other.workspaceId === item.workspaceId) === index)
+                    .map((item) => ({ value: item.workspaceId, label: item.name }))}
+                />
+              </label>
+              <button
+                type="button"
+                className="shell-status-link"
+                onClick={() => {
+                  closeCommandDeckMenus();
+                  setTab("approvals");
+                }}
+              >
+                <StatusChip tone={approvalSurfaceCount > 0 ? "warning" : "success"}>
+                  {approvalSurfaceCount > 0 ? `${approvalSurfaceCount} approvals` : "Approvals clear"}
+                </StatusChip>
+              </button>
+            </div>
+            <div className="command-deck-utility-cluster command-deck-utility-cluster-settings">
+              <details ref={preferencesMenuRef} className="shell-preferences" open={preferencesMenuOpen}>
+                <summary
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setPreferencesMenuOpen((current) => {
+                      const next = !current;
+                      if (next) {
+                        setMoreMenuOpen(false);
+                      }
+                      return next;
+                    });
+                  }}
+                >
+                  Preferences
+                </summary>
+                <div className="shell-preferences-panel">
+                  <div className="shell-preferences-group">
+                    <span className="shell-action-label">Density</span>
+                    <div className="ui-experience-switch ui-density-switch">
+                      <button
+                        type="button"
+                        className={density === "comfortable" ? "active" : ""}
+                        onClick={() => {
+                          closeCommandDeckMenus();
+                          setDensity("comfortable");
+                        }}
+                      >
+                        Comfortable
+                      </button>
+                      <button
+                        type="button"
+                        className={density === "default" ? "active" : ""}
+                        onClick={() => {
+                          closeCommandDeckMenus();
+                          setDensity("default");
+                        }}
+                      >
+                        Default
+                      </button>
+                      <button
+                        type="button"
+                        className={density === "compact" ? "active" : ""}
+                        onClick={() => {
+                          closeCommandDeckMenus();
+                          setDensity("compact");
+                        }}
+                      >
+                        Compact
+                      </button>
+                    </div>
+                  </div>
+                  <div className="shell-preferences-group">
+                    <span className="shell-action-label">Effects</span>
+                    <div className="ui-experience-switch ui-density-switch">
+                      <button
+                        type="button"
+                        className={effectsMode === "auto" ? "active" : ""}
+                        onClick={() => {
+                          closeCommandDeckMenus();
+                          setEffectsMode("auto");
+                        }}
+                      >
+                        Auto
+                      </button>
+                      <button
+                        type="button"
+                        className={effectsMode === "full" ? "active" : ""}
+                        onClick={() => {
+                          closeCommandDeckMenus();
+                          setEffectsMode("full");
+                        }}
+                      >
+                        Full
+                      </button>
+                      <button
+                        type="button"
+                        className={effectsMode === "reduced" ? "active" : ""}
+                        onClick={() => {
+                          closeCommandDeckMenus();
+                          setEffectsMode("reduced");
+                        }}
+                      >
+                        Reduced
+                      </button>
+                    </div>
+                  </div>
+                  <div className="shell-preferences-group shell-preferences-switches">
+                    <GCSwitch
+                      checked={showTechnicalDetails}
+                      onCheckedChange={(checked) => {
+                        closeCommandDeckMenus();
+                        setShowTechnicalDetails(checked);
+                      }}
+                      label="Technical details"
+                    />
+                  </div>
+                  <HelpHint
+                    label="Command deck guidance"
+                    text={nextStepByTab[tab]}
+                  />
+                  {isDevDiagnosticsEnabled() ? (
+                    <button
+                      type="button"
+                      className="shell-quick-action shell-preferences-diagnostics"
+                      onClick={() => {
+                        closeCommandDeckMenus();
+                        setDiagnosticsOpen((current) => !current);
+                      }}
+                    >
+                      {diagnosticsOpen ? "Hide diagnostics" : "Diagnostics"}
+                    </button>
+                  ) : null}
+                </div>
+              </details>
+            </div>
           </div>
         </div>
       </header>
       <main className="content shell-content shell-content-command-deck">
+        {notifications.length > 0 ? (
+          <div className="shell-notification-region">
+            <NotificationStack
+              items={notifications}
+              onDismiss={(id) => setNotifications((current) => current.filter((item) => item.id !== id))}
+            />
+          </div>
+        ) : null}
         {shellGatewayState.status === "degraded-live-updates" ? (
           <div className="status-banner warning">
             {shellGatewayState.summary} {shellGatewayState.nextStep}
@@ -1211,10 +1408,6 @@ export function App() {
           />
         </Suspense>
       ) : null}
-      <NotificationStack
-        items={notifications}
-        onDismiss={(id) => setNotifications((current) => current.filter((item) => item.id !== id))}
-      />
       <DeviceAccessApprovalModal
         open={Boolean(activeDeviceAccessPrompt)}
         prompt={activeDeviceAccessPrompt}

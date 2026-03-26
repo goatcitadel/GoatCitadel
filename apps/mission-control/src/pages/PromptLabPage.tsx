@@ -31,6 +31,7 @@ import { GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
+import "../styles/prompt-lab.css";
 
 interface ScoreDraft {
   routingScore: 0 | 1 | 2;
@@ -804,6 +805,42 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     }
   }, [importText, load]);
 
+  const selectedPack = packs.find((pack) => pack.packId === selectedPackId) ?? null;
+  const promptLabOverviewCards = [
+    {
+      label: "Pack",
+      value: selectedPack?.name ?? "No pack selected",
+      detail: selectedPack ? `${selectedPack.testCount} tests loaded` : "Import or select a pack to start evaluating.",
+    },
+    {
+      label: "Coverage",
+      value: `${tests.length - testOutcomeSummary.notRunCount}/${tests.length || 0}`,
+      detail: tests.length > 0
+        ? `${testOutcomeSummary.notRunCount} tests still not run`
+        : "No prompt tests loaded yet",
+    },
+    {
+      label: "Quality",
+      value: report ? `${(report.summary.passRate * 100).toFixed(1)}% pass` : "No report yet",
+      detail: report
+        ? `${report.summary.averageTotalScore.toFixed(2)}/10 average at threshold ${passThreshold}/10`
+        : "Run and score a pack to generate the scorecard.",
+    },
+    {
+      label: "Model lane",
+      value: reuseLastModel && lastSuccessfulModel
+        ? `${lastSuccessfulModel.providerId}/${lastSuccessfulModel.model}`
+        : selectedRunModel?.providerId
+          ? `${selectedRunModel.providerId}/${selectedRunModel.model ?? "provider default"}`
+          : "No model selected",
+      detail: activeRun
+        ? `Currently running ${activeRun.testCode ?? "prompt-pack run"} in ${activeRun.mode} mode`
+        : unscoredCompletedCount > 0
+          ? `${unscoredCompletedCount} completed run(s) still need scoring`
+          : "Ready for the next evaluation pass.",
+    },
+  ];
+
   if (initialLoading) {
     return (
       <section>
@@ -815,12 +852,16 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
 
   return (
     <section className="prompt-lab">
-      <header className="prompt-lab-header">
-        <div>
+      <header className="prompt-lab-hero">
+        <div className="prompt-lab-hero-copy">
+          <p className="prompt-lab-kicker">Evaluation Console</p>
           <h2>{pageCopy.promptLab.title}</h2>
-          <p className="office-subtitle">{pageCopy.promptLab.subtitle}</p>
+          <p className="prompt-lab-intro">{pageCopy.promptLab.subtitle}</p>
+          <p className="office-subtitle">
+            Re-running a test creates a fresh run. Historical scores stay attached to older runs until you rescore the new output.
+          </p>
         </div>
-        <div className="prompt-lab-actions">
+        <div className="prompt-lab-actions prompt-lab-hero-actions">
           <ActionButton
             label="Run next test"
             pending={activeRun?.mode === "next"}
@@ -866,73 +907,84 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         </div>
       </header>
 
+      <section className="prompt-lab-overview" aria-label="Prompt Lab summary">
+        {promptLabOverviewCards.map((card) => (
+          <article key={card.label} className="prompt-lab-overview-card">
+            <span className="prompt-lab-overview-label">{card.label}</span>
+            <strong>{card.value}</strong>
+            <p>{card.detail}</p>
+          </article>
+        ))}
+      </section>
+
       {error ? <p className="error">{error}</p> : null}
       {success ? <p className="status-banner">{success}</p> : null}
-      <p className="office-subtitle">
-        Re-running a test creates a fresh run. Historical scores stay attached to older runs until you rescore the new output.
-      </p>
-      {activeRun ? (
-        <div className="status-banner">
-          Run in progress: {activeRun.testCode ?? "prompt-pack run"} ({activeRun.mode})
+      <div className="prompt-lab-status-stack">
+        {activeRun ? (
+          <div className="status-banner">
+            Run in progress: {activeRun.testCode ?? "prompt-pack run"} ({activeRun.mode})
+          </div>
+        ) : null}
+        {benchmarkStatus ? (
+          <div className="status-banner">
+            Benchmark {benchmarkStatus.run.benchmarkRunId}: {benchmarkStatus.run.status}
+            {" "}({benchmarkStatus.progress.completedItems}/{benchmarkStatus.progress.totalItems})
+          </div>
+        ) : null}
+        {isRefreshing ? (
+          <div className="status-banner">Refreshing prompt-pack results in the background...</div>
+        ) : null}
+        {isFallbackRefreshing ? (
+          <div className="status-banner warning">Live updates degraded, checking periodically.</div>
+        ) : null}
+        <div className="status-banner prompt-lab-reset-banner">
+          <span className="prompt-lab-inline-label">Reset options</span>
+          <label>
+            <input
+              type="checkbox"
+              checked={resetClearRuns}
+              onChange={(event) => setResetClearRuns(event.target.checked)}
+              disabled={running || resetting || exporting || importing || autoScoring}
+            />{" "}
+            Clear runs
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={resetClearScores}
+              onChange={(event) => setResetClearScores(event.target.checked)}
+              disabled={running || resetting || exporting || importing || autoScoring}
+            />{" "}
+            Clear scores
+          </label>
         </div>
-      ) : null}
-      {benchmarkStatus ? (
-        <div className="status-banner">
-          Benchmark {benchmarkStatus.run.benchmarkRunId}: {benchmarkStatus.run.status}
-          {" "}({benchmarkStatus.progress.completedItems}/{benchmarkStatus.progress.totalItems})
+        <div className="status-banner warning">
+          {autoScoreOnRun
+            ? "Auto-score is ON (model + rule checks). You can still edit any score manually."
+            : "Run status only confirms execution. Pass rate updates after scoring."}
+          {unscoredCompletedCount > 0 ? ` ${unscoredCompletedCount} run(s) still need scoring.` : ""}
         </div>
-      ) : null}
-      {isRefreshing ? (
-        <div className="status-banner">Refreshing prompt-pack results in the background...</div>
-      ) : null}
-      {isFallbackRefreshing ? (
-        <div className="status-banner warning">Live updates degraded, checking periodically.</div>
-      ) : null}
-      <div className="status-banner">
-        <span style={{ marginRight: 12 }}>Reset options:</span>
-        <label style={{ marginRight: 12 }}>
-          <input
-            type="checkbox"
-            checked={resetClearRuns}
-            onChange={(event) => setResetClearRuns(event.target.checked)}
-            disabled={running || resetting || exporting || importing || autoScoring}
-          />{" "}
-          Clear runs
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={resetClearScores}
-            onChange={(event) => setResetClearScores(event.target.checked)}
-            disabled={running || resetting || exporting || importing || autoScoring}
-          />{" "}
-          Clear scores
-        </label>
-      </div>
-      <div className="status-banner warning">
-        {autoScoreOnRun
-          ? "Auto-score is ON (model + rule checks). You can still edit any score manually."
-          : "Run status only confirms execution. Pass rate updates after scoring."}
-        {unscoredCompletedCount > 0 ? ` ${unscoredCompletedCount} run(s) still need scoring.` : ""}
-      </div>
-      <div className="status-banner">
-        Run failures: <strong>{testOutcomeSummary.runFailureCount}</strong>
-        {" "} | Score failures: <strong>{testOutcomeSummary.scoreFailureCount}</strong>
-        {" "} | Needs score: <strong>{testOutcomeSummary.needsScoreCount}</strong>
-      </div>
-      {exportInfo?.path ? (
         <div className="status-banner">
-          Export file: <code>{exportInfo.path}</code>
-          {exportInfo.updatedAt ? ` (updated ${new Date(exportInfo.updatedAt).toLocaleTimeString()})` : ""}
-          {exportInfo.exists ? ` • ${exportInfo.sizeBytes} bytes` : " • not generated yet"}
-          <button type="button" onClick={() => void copyExportPath()} style={{ marginLeft: 12 }}>
-            Copy path
-          </button>
+          Run failures: <strong>{testOutcomeSummary.runFailureCount}</strong>
+          {" "} | Score failures: <strong>{testOutcomeSummary.scoreFailureCount}</strong>
+          {" "} | Needs score: <strong>{testOutcomeSummary.needsScoreCount}</strong>
         </div>
-      ) : null}
+        {exportInfo?.path ? (
+          <div className="status-banner prompt-lab-export-banner">
+            <div>
+              Export file: <code>{exportInfo.path}</code>
+              {exportInfo.updatedAt ? ` (updated ${new Date(exportInfo.updatedAt).toLocaleTimeString()})` : ""}
+              {exportInfo.exists ? ` • ${exportInfo.sizeBytes} bytes` : " • not generated yet"}
+            </div>
+            <button type="button" onClick={() => void copyExportPath()}>
+              Copy path
+            </button>
+          </div>
+        ) : null}
+      </div>
 
       <div className="prompt-lab-grid">
-        <article className="card prompt-lab-import">
+        <article className="card prompt-lab-surface prompt-lab-import">
           <h3>Import Prompt Pack</h3>
           <textarea
             rows={10}
@@ -944,7 +996,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
           <p className="office-subtitle">Tip: import once, then use Run next test to move quickly through the pack.</p>
         </article>
 
-        <article className="card prompt-lab-packs">
+        <article className="card prompt-lab-surface prompt-lab-packs">
           <h3>Prompt Packs</h3>
           <ul>
             {packs.map((pack) => (
@@ -1006,7 +1058,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
             <p className="office-subtitle">
               Run a provider/model matrix on selected test codes (default high-signal subset).
             </p>
-            <label style={{ display: "grid", gap: 4 }}>
+            <label className="prompt-lab-field">
               Test codes (comma or newline separated)
               <textarea
                 rows={2}
@@ -1015,7 +1067,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
                 placeholder="TEST-03, TEST-06, TEST-10, TEST-12, TEST-15, TEST-28"
               />
             </label>
-            <label style={{ display: "grid", gap: 4 }}>
+            <label className="prompt-lab-field">
               Providers matrix (one per line: provider/model)
               <textarea
                 rows={3}
@@ -1066,7 +1118,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       </div>
 
       <div className="prompt-lab-grid">
-        <article className="card prompt-lab-tests">
+        <article className="card prompt-lab-surface prompt-lab-tests">
           <div className="prompt-lab-tests-header">
             <h3>Tests</h3>
             <label className="chat-v11-select">
@@ -1119,19 +1171,19 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
           ) : null}
         </article>
 
-        <article className="card prompt-lab-detail">
+        <article className="card prompt-lab-surface prompt-lab-detail">
           <h3>{selectedTest ? `${selectedTest.code} - ${selectedTest.title}` : "Select a test"}</h3>
           {selectedTest ? <pre>{selectedTest.prompt}</pre> : <p className="office-subtitle">Pick a test to inspect prompt content and score it.</p>}
           {selectedTest && selectedPlaceholders.length > 0 ? (
-            <section className="status-banner warning" style={{ marginBottom: 12 }}>
-              <p style={{ marginTop: 0 }}>
+            <section className="status-banner warning prompt-lab-placeholder-banner">
+              <p className="prompt-lab-placeholder-copy">
                 This test has placeholder tokens. Fill them before running.
               </p>
-              <div style={{ display: "grid", gap: 8 }}>
+              <div className="prompt-lab-placeholder-fields">
                 {selectedPlaceholders.map((placeholder) => {
                   const key = normalizePromptPlaceholderKey(placeholder);
                   return (
-                    <label key={placeholder} style={{ display: "grid", gap: 4 }}>
+                    <label key={placeholder} className="prompt-lab-field">
                       {placeholder}
                       <input
                         value={placeholderValues[key] ?? ""}
@@ -1149,11 +1201,11 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
                 })}
               </div>
               {selectedMissingPlaceholders.length > 0 ? (
-                <p style={{ marginBottom: 0 }}>
+                <p className="prompt-lab-placeholder-note">
                   Missing: {selectedMissingPlaceholders.join(", ")}
                 </p>
               ) : (
-                <p style={{ marginBottom: 0 }}>All placeholders set for this test.</p>
+                <p className="prompt-lab-placeholder-note">All placeholders set for this test.</p>
               )}
             </section>
           ) : null}
@@ -1218,7 +1270,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       </div>
 
       {report ? (
-        <article className="card prompt-lab-summary">
+        <article className="card prompt-lab-surface prompt-lab-summary">
           <h3>Report</h3>
           <p>Total tests: {report.summary.totalTests}</p>
           <p>Executed runs: {report.summary.completedRuns}</p>

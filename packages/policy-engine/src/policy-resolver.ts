@@ -1,6 +1,7 @@
 import type { EffectiveToolPolicy, ToolPolicyConfig } from "@goatcitadel/contracts";
+import { matchesToolPattern } from "./tool-patterns.js";
 
-export function resolveEffectivePolicy(config: ToolPolicyConfig, agentId: string): EffectiveToolPolicy {
+export function resolveEffectivePolicy(config: ToolPolicyConfig, agentId = ""): EffectiveToolPolicy {
   const profileName = config.agents[agentId]?.tools?.profile ?? config.tools.profile;
   const profileTools = new Set(config.profiles[profileName] ?? []);
 
@@ -28,8 +29,12 @@ export function resolveEffectivePolicy(config: ToolPolicyConfig, agentId: string
     effectiveTools.add(tool);
   }
 
-  for (const denied of denySet) {
-    effectiveTools.delete(denied);
+  if (!effectiveTools.has("*")) {
+    for (const tool of [...effectiveTools]) {
+      if (matchesPatternSet(denySet, tool)) {
+        effectiveTools.delete(tool);
+      }
+    }
   }
 
   return {
@@ -41,9 +46,18 @@ export function resolveEffectivePolicy(config: ToolPolicyConfig, agentId: string
 }
 
 export function isToolAllowed(policy: EffectiveToolPolicy, toolName: string): boolean {
-  if (policy.denySet.has(toolName)) {
+  if (matchesPatternSet(policy.denySet, toolName)) {
     return false;
   }
 
-  return policy.effectiveTools.has("*") || policy.effectiveTools.has(toolName);
+  return policy.effectiveTools.has("*") || matchesPatternSet(policy.effectiveTools, toolName);
+}
+
+function matchesPatternSet(values: Iterable<string>, toolName: string): boolean {
+  for (const value of values) {
+    if (matchesToolPattern(value, toolName)) {
+      return true;
+    }
+  }
+  return false;
 }

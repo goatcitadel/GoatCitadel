@@ -26,10 +26,7 @@ const API_BASE = import.meta.env.VITE_GATEWAY_URL ?? inferDefaultGatewayBaseUrl(
 const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
 const EVENT_CURSOR_STORAGE_KEY = "goatcitadel.events.cursor.v1";
-const SAFE_RETRY_METHODS = new Set(["GET", "HEAD"]);
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-const RETRYABLE_HTTP_STATUS_CODES = new Set([408, 429, 502, 503, 504]);
-const SAFE_REQUEST_RETRY_DELAYS_MS = [250];
 const BROWSER_MUTATION_INTENT_HEADER = "x-goatcitadel-browser-intent";
 const BROWSER_MUTATION_INTENT_VALUE = "mutation";
 
@@ -469,16 +466,15 @@ function isPrivateOrCarrierGradeIpv4(host: string): boolean {
   return a === 100 && b >= 64 && b <= 127;
 }
 
-function normalizeHttpMethod(method?: string): string {
-  return (method ?? "GET").toUpperCase();
-}
-
-function buildGatewayHeaders(path: string, method: string, correlationId: string, extraHeaders?: HeadersInit): HeadersInit {
-  return {
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const authHeaders = readGatewayAuthHeaders(path);
+  const method = (init?.method ?? "GET").toUpperCase();
+  const correlationId = createCorrelationId();
+  const headers = {
     "Content-Type": "application/json",
     ...(method !== "GET" ? { "Idempotency-Key": crypto.randomUUID() } : {}),
     ...(MUTATING_METHODS.has(method) ? { [BROWSER_MUTATION_INTENT_HEADER]: BROWSER_MUTATION_INTENT_VALUE } : {}),
-    ...readGatewayAuthHeaders(path),
+    ...authHeaders,
     "x-goatcitadel-correlation-id": correlationId,
     "x-goatcitadel-origin-surface": inferOriginSurface(path),
     ...(extraHeaders ?? {}),
@@ -511,20 +507,39 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     correlationId,
     route: path,
   });
-  const maxAttempts = SAFE_RETRY_METHODS.has(method) ? SAFE_REQUEST_RETRY_DELAYS_MS.length + 1 : 1;
-  let lastError: ApiRequestError | null = null;
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    try {
-      const response = await fetch(`${API_BASE}${path}`, {
-        headers: {
-          ...headers,
-        },
-        ...init,
-        method,
-      });
-      const responseCorrelationId = response.headers.get("x-goatcitadel-correlation-id") ?? correlationId;
-      setDevDiagnosticsActiveCorrelationId(responseCorrelationId);
-      setDevDiagnosticsGatewayReachable(true);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        ...headers,
+      },
+      ...init,
+      method,
+    });
+  } catch (error) {
+    setDevDiagnosticsGatewayReachable(false);
+    setDevDiagnosticsLastRequestError(`${method} ${path}: network error`);
+    recordClientDiagnostic({
+      level: "error",
+      category: "api",
+      event: "request.network_error",
+      message: `${method} ${path} failed before a response was received`,
+      correlationId,
+      route: path,
+      context: {
+        error: (error as Error).message,
+      },
+    });
+    throw new ApiRequestError(`Network error ${method} ${path}: ${(error as Error).message}`, {
+      kind: "network",
+      method,
+      path,
+      cause: error,
+    });
+  }
+  const responseCorrelationId = response.headers.get("x-goatcitadel-correlation-id") ?? correlationId;
+  setDevDiagnosticsActiveCorrelationId(responseCorrelationId);
+  setDevDiagnosticsGatewayReachable(true);
 
       if (!response.ok) {
         const text = await response.text();

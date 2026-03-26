@@ -73,8 +73,9 @@ describe("admin routes", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({
-      error: "restore blocked: file path outside workspace",
+      error: "Backup file path must stay within the GoatCitadel backup directory.",
     });
+    expect(restoreBackup).not.toHaveBeenCalled();
   });
 
   it("returns backup verification output from the gateway", async () => {
@@ -105,5 +106,28 @@ describe("admin routes", () => {
       verified: true,
       filesVerified: 3,
     });
+  });
+
+  it("rejects backup verification traversal before reaching the gateway", async () => {
+    const verifyBackup = vi.fn(async () => ({
+      verified: true,
+    }));
+    app = Fastify();
+    app.decorate("gateway", { verifyBackup } as never);
+    await app.register(adminRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/backups/verify",
+      payload: {
+        filePath: "../outside.backup",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: "Backup file path must stay within the GoatCitadel backup directory.",
+    });
+    expect(verifyBackup).not.toHaveBeenCalled();
   });
 });

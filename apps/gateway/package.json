@@ -2,7 +2,7 @@
   "name": "@goatcitadel/gateway",
   "version": "0.6.0-beta.2",
   "type": "module",
-  "main": "./dist/apps/gateway/src/main.js",
+  "main": "./dist/main.js",
   "dependencies": {
     "adm-zip": "0.5.16",
     "@inquirer/prompts": "^7.8.4",
@@ -29,8 +29,8 @@
     "dev": "tsx src/dev-supervisor.ts",
     "dev:watch": "tsx src/dev-supervisor.ts",
     "dev:supervisor": "tsx src/dev-supervisor.ts",
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --passWithNoTests --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",
     "coverage:smoke": "c8 --report-dir=coverage-smoke --reporter=json tsx src/coverage-smoke.ts",
@@ -43,7 +43,7 @@
     "voice:runtime": "tsx src/voice-runtime-cli.ts",
     "admin": "tsx src/admin-cli.ts",
     "config:sync": "tsx src/config-sync.ts",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -b tsconfig.json"
   }
 }
 

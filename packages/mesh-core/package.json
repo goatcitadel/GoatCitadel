@@ -2,12 +2,12 @@
   "name": "@goatcitadel/mesh-core",
   "version": "0.6.0-beta.2",
   "type": "module",
-  "main": "./dist/mesh-core/src/index.js",
-  "types": "./dist/mesh-core/src/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/mesh-core/src/index.d.ts",
-      "default": "./dist/mesh-core/src/index.js"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     }
   },
   "dependencies": {
@@ -15,11 +15,11 @@
     "@goatcitadel/storage": "workspace:*"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --passWithNoTests --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -b tsconfig.json"
   }
 }
 

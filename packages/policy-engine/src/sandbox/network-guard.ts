@@ -21,8 +21,7 @@ export function isHostAllowed(hostOrUrl: string, allowlist: string[]): boolean {
   const isPrivateOrReserved = isPrivateOrReservedHost(hostname);
 
   if (allowlist.length === 0) {
-    // Default-open for public hosts, default-deny for private/reserved ranges.
-    return !isPrivateOrReserved;
+    return false;
   }
 
   const matched = allowlist.some((pattern) => {

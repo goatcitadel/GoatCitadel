@@ -54,11 +54,60 @@ describe("MemoryContextRepository", () => {
       expiresAt: "2099-01-01T00:00:00.000Z",
     });
 
-    const fetched = repo.findFreshByCacheKey("cache-1", "2026-01-01T00:00:00.000Z");
+    const fetched = repo.findFreshByCacheKey({
+      cacheKey: "cache-1",
+      scope: "chat",
+      sessionId: "session-1",
+    }, "2026-01-01T00:00:00.000Z");
     assert.ok(fetched);
     assert.equal(fetched.contextId, inserted.contextId);
     assert.equal(fetched.citations.length, 1);
     assert.equal(repo.get(inserted.contextId).contextText, "distilled context");
+  });
+
+  it("keeps same raw cache keys isolated across sessions", () => {
+    const repo = createRepo();
+    repo.upsert({
+      cacheKey: "cache-shared",
+      scope: "chat",
+      sessionId: "session-1",
+      queryHash: "q-1",
+      sourcesHash: "s-1",
+      contextText: "session one context",
+      citations: [],
+      quality: { status: "generated" },
+      originalTokenEstimate: 100,
+      distilledTokenEstimate: 40,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    repo.upsert({
+      cacheKey: "cache-shared",
+      scope: "chat",
+      sessionId: "session-2",
+      queryHash: "q-2",
+      sourcesHash: "s-2",
+      contextText: "session two context",
+      citations: [],
+      quality: { status: "generated" },
+      originalTokenEstimate: 120,
+      distilledTokenEstimate: 44,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+
+    const sessionOne = repo.findFreshByCacheKey({
+      cacheKey: "cache-shared",
+      scope: "chat",
+      sessionId: "session-1",
+    }, "2026-01-01T00:00:00.000Z");
+    const sessionTwo = repo.findFreshByCacheKey({
+      cacheKey: "cache-shared",
+      scope: "chat",
+      sessionId: "session-2",
+    }, "2026-01-01T00:00:00.000Z");
+
+    assert.equal(sessionOne?.contextText, "session one context");
+    assert.equal(sessionTwo?.contextText, "session two context");
+    assert.notEqual(sessionOne?.contextId, sessionTwo?.contextId);
   });
 
   it("prunes expired and old context packs", () => {

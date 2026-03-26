@@ -965,6 +965,7 @@ export interface ChatStreamApprovalRecord {
   approvalId: string;
   toolName?: string;
   reason?: string;
+  expiresAt?: string;
 }
 
 export interface ChatStreamChunkBase {

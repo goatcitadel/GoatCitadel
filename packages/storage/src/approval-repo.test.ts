@@ -77,6 +77,26 @@ describe("ApprovalRepository", () => {
     assert.equal(failed.explanationError, "provider timeout");
   });
 
+  it("round-trips approvals with and without expiry", () => {
+    const repo = createRepo();
+    const withoutExpiry = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "dir" },
+      preview: { command: "dir" },
+    });
+    const withExpiry = repo.create({
+      kind: "browser.click",
+      riskLevel: "danger",
+      payload: { selector: "#confirm" },
+      preview: { selector: "#confirm" },
+      expiresAt: "2026-03-22T16:15:00.000Z",
+    });
+
+    assert.equal(withoutExpiry.expiresAt, undefined);
+    assert.equal(repo.get(withExpiry.approvalId).expiresAt, "2026-03-22T16:15:00.000Z");
+  });
+
   it("prevents double resolution of the same approval", () => {
     const repo = createRepo();
     const created = repo.create({

@@ -113,6 +113,7 @@ function createService(db: FakeDb, publishRealtime = vi.fn()): CronAutomationSer
       backup: async () => {},
       memoryFlush: async () => {},
       costReport: async () => {},
+      updateReview: async () => {},
     },
   });
 }

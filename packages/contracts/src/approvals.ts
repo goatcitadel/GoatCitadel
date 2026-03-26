@@ -18,6 +18,7 @@ export interface ApprovalRequest {
   payload: Record<string, unknown>;
   preview: Record<string, unknown>;
   createdAt: string;
+  expiresAt?: string;
   resolvedAt?: string;
   resolvedBy?: string;
   resolutionNote?: string;
@@ -31,6 +32,7 @@ export interface ApprovalCreateInput {
   riskLevel: ApprovalRequest["riskLevel"];
   payload: Record<string, unknown>;
   preview: Record<string, unknown>;
+  expiresAt?: string | null;
 }
 
 export interface ApprovalResolveInput {

@@ -43,12 +43,23 @@ export class TranscriptLog {
   public async read(sessionId: string): Promise<TranscriptEvent[]> {
     const filePath = path.join(this.transcriptsDir, `${sessionId}.jsonl`);
     const raw = await fs.readFile(filePath, "utf8");
-    return raw
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => safeJsonParse<TranscriptEvent | undefined>(line, undefined))
-      .filter((event): event is TranscriptEvent => Boolean(event));
+    const events: TranscriptEvent[] = [];
+    for (const [index, line] of raw.split("\n").entries()) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const event = safeJsonParse<TranscriptEvent | undefined>(trimmed, undefined);
+      if (!event) {
+        console.warn("[goatcitadel] transcript line is malformed; continuing with degraded transcript read", {
+          sessionId,
+          lineNumber: index + 1,
+        });
+        continue;
+      }
+      events.push(event);
+    }
+    return events;
   }
 
   public async delete(sessionId: string): Promise<void> {

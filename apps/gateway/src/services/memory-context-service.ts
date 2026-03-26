@@ -70,7 +70,14 @@ export class MemoryContextService {
     });
 
     if (!input.forceRefresh) {
-      const cached = this.storage.memoryContexts.findFreshByCacheKey(cacheKey);
+      const cached = this.storage.memoryContexts.findFreshByCacheKey({
+        cacheKey,
+        scope: input.scope,
+        sessionId: input.sessionId,
+        taskId: input.taskId,
+        runId: input.runId,
+        phaseId: input.phaseId,
+      });
       if (cached) {
         this.storage.memoryQmdRuns.append({
           scope: input.scope,

@@ -185,6 +185,7 @@ export interface ChatAgentTurnResult {
     approvalId: string;
     toolName?: string;
     reason?: string;
+    expiresAt?: string;
   };
 }
 
@@ -256,6 +257,7 @@ export class ChatAgentOrchestrator {
         approvalId: approval.approvalId,
         toolName: approval.toolName,
         reason: approval.reason,
+        expiresAt: approval.expiresAt,
       } : undefined,
     };
   }
@@ -327,6 +329,7 @@ export class ChatAgentOrchestrator {
       approvalId: string;
       toolName?: string;
       reason?: string;
+      expiresAt?: string;
     } | undefined;
     const usageTotals = {
       inputTokens: 0,
@@ -494,6 +497,7 @@ export class ChatAgentOrchestrator {
               approvalId: syntheticRun.record.approvalId,
               toolName: syntheticRun.record.toolName,
               reason: "Approval required by policy.",
+              expiresAt: syntheticRun.approvalExpiresAt,
             };
             this.deps.storage.chatInlineApprovals.upsert({
               approvalId: syntheticRun.record.approvalId,
@@ -502,6 +506,7 @@ export class ChatAgentOrchestrator {
               toolName: syntheticRun.record.toolName,
               status: "pending",
               reason: "Approval required by policy.",
+              expiresAt: syntheticRun.approvalExpiresAt,
             });
             break;
           }
@@ -676,6 +681,7 @@ export class ChatAgentOrchestrator {
           approvalId: syntheticRun.record.approvalId,
           toolName: syntheticRun.record.toolName,
           reason: "Approval required by policy.",
+          expiresAt: syntheticRun.approvalExpiresAt,
         };
         this.deps.storage.chatInlineApprovals.upsert({
           approvalId: syntheticRun.record.approvalId,
@@ -684,6 +690,7 @@ export class ChatAgentOrchestrator {
           toolName: syntheticRun.record.toolName,
           status: "pending",
           reason: "Approval required by policy.",
+          expiresAt: syntheticRun.approvalExpiresAt,
         });
       }
     }
@@ -788,6 +795,7 @@ export class ChatAgentOrchestrator {
           approvalId: syntheticRun.record.approvalId,
           toolName: syntheticRun.record.toolName,
           reason: "Approval required by policy.",
+          expiresAt: syntheticRun.approvalExpiresAt,
         };
         this.deps.storage.chatInlineApprovals.upsert({
           approvalId: syntheticRun.record.approvalId,
@@ -796,6 +804,7 @@ export class ChatAgentOrchestrator {
           toolName: syntheticRun.record.toolName,
           status: "pending",
           reason: "Approval required by policy.",
+          expiresAt: syntheticRun.approvalExpiresAt,
         });
       }
     }
@@ -1079,6 +1088,7 @@ export class ChatAgentOrchestrator {
               approvalId: executed.record.approvalId,
               toolName: executed.record.toolName,
               reason: "Approval required by policy.",
+              expiresAt: executed.approvalExpiresAt,
             };
             this.deps.storage.chatInlineApprovals.upsert({
               approvalId: executed.record.approvalId,
@@ -1087,6 +1097,7 @@ export class ChatAgentOrchestrator {
               toolName: executed.record.toolName,
               status: "pending",
               reason: "Approval required by policy.",
+              expiresAt: executed.approvalExpiresAt,
             });
             break;
           }
@@ -1540,6 +1551,7 @@ export class ChatAgentOrchestrator {
     turnBudgetDeadline?: number;
   }): Promise<{
     record: ChatToolRunRecord;
+    approvalExpiresAt?: string;
     chunk?: ChatStreamChunkDraft;
   }> {
     const preflight = this.preflightToolInvocation({
@@ -1657,6 +1669,9 @@ export class ChatAgentOrchestrator {
       });
 
       if (result.outcome === "approval_required") {
+        const approvalExpiresAt = result.approvalId
+          ? this.resolveApprovalExpiresAt(result.approvalId, result.expiresAt)
+          : undefined;
         const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
           status: "approval_required",
           approvalId: result.approvalId,
@@ -1665,6 +1680,7 @@ export class ChatAgentOrchestrator {
         });
         return {
           record: updated,
+          approvalExpiresAt,
           chunk: {
             type: "tool_result",
             sessionId: input.input.sessionId,
@@ -1707,6 +1723,9 @@ export class ChatAgentOrchestrator {
           }
 
           if (writeFallback.result.outcome === "approval_required") {
+            const approvalExpiresAt = writeFallback.result.approvalId
+              ? this.resolveApprovalExpiresAt(writeFallback.result.approvalId, writeFallback.result.expiresAt)
+              : undefined;
             const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
               status: "approval_required",
               approvalId: writeFallback.result.approvalId,
@@ -1719,6 +1738,7 @@ export class ChatAgentOrchestrator {
             });
             return {
               record: updated,
+              approvalExpiresAt,
               chunk: {
                 type: "tool_result",
                 sessionId: input.input.sessionId,
@@ -1845,6 +1865,17 @@ export class ChatAgentOrchestrator {
           toolRun: updated,
         },
       };
+    }
+  }
+
+  private resolveApprovalExpiresAt(approvalId: string, fallback?: string): string | undefined {
+    if (fallback) {
+      return fallback;
+    }
+    try {
+      return this.deps.storage.approvals.get(approvalId).expiresAt;
+    } catch {
+      return undefined;
     }
   }
 

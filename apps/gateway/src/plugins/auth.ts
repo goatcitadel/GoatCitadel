@@ -29,6 +29,16 @@ const MAX_ACTIVE_SSE_TOKENS = 10_000;
 
 export const authPlugin = fp(async (fastify) => {
   const sseTokens = new Map<string, SseTokenRecord>();
+  const configuredQueryParam = fastify.gatewayConfig.assistant.auth.token.queryParam?.trim();
+  if (configuredQueryParam) {
+    fastify.log.warn(
+      {
+        authMode: fastify.gatewayConfig.assistant.auth.mode,
+        queryParam: configuredQueryParam,
+      },
+      "assistant.auth.token.queryParam is deprecated for normal gateway requests; only SSE bridge tokens still use query parameters.",
+    );
+  }
   fastify.decorateRequest("authActorId", "anonymous");
   fastify.decorateRequest("authActorSource", "none");
   fastify.decorateRequest("authDeviceId", undefined);
@@ -65,7 +75,6 @@ export const authPlugin = fp(async (fastify) => {
       return;
     }
     if (isNextcloudTalkWebhookPath(request.url)) {
-      setAuthActor(request, "nextcloud-talk:webhook", "none");
       return;
     }
 
@@ -120,8 +129,7 @@ export const authPlugin = fp(async (fastify) => {
       }
 
       const provided = providedBearerToken
-        ?? readHeaderToken(request.headers["x-goatcitadel-token"])
-        ?? readQueryToken(request.query, auth.token.queryParam);
+        ?? readHeaderToken(request.headers["x-goatcitadel-token"]);
 
       if (!provided || !timingSafeStringEqual(provided, configuredToken)) {
         return reply.code(401).send({

@@ -102,7 +102,11 @@ describe("chat routes additional coverage", () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/event-stream");
     expect(response.body).toContain("\"type\":\"delta\"");
-    expect(agentSendChatMessageStream).toHaveBeenCalledWith("sess-1", expect.objectContaining({ content: "Hello" }));
+    expect(agentSendChatMessageStream).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({ content: "Hello" }),
+      expect.any(AbortSignal),
+    );
   });
 
   it("emits an error chunk without a fabricated done chunk when SSE streaming fails", async () => {

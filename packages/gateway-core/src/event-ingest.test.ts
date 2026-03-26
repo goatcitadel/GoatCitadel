@@ -36,11 +36,15 @@ describe("EventIngestService", () => {
       kind: "dm",
       channel: "chat",
       account: "local",
-      timestamp: "2026-03-20T00:00:00.000Z",
-      tokenInputTotal: 0,
-      tokenOutputTotal: 0,
-      tokenCachedInputTotal: 0,
+      lastActivityAt: "2026-03-22T00:00:00.000Z",
+      updatedAt: "2026-03-22T00:00:00.000Z",
+      health: "healthy",
+      tokenInput: 0,
+      tokenOutput: 0,
+      tokenCachedInput: 0,
+      tokenTotal: 0,
       costUsdTotal: 0,
+      budgetState: "ok",
     };
 
     const storage = {
@@ -113,11 +117,15 @@ describe("EventIngestService", () => {
       kind: "dm",
       channel: "chat",
       account: "local",
-      timestamp: "2026-03-20T00:00:00.000Z",
-      tokenInputTotal: 0,
-      tokenOutputTotal: 0,
-      tokenCachedInputTotal: 0,
+      lastActivityAt: "2026-03-22T00:00:00.000Z",
+      updatedAt: "2026-03-22T00:00:00.000Z",
+      health: "healthy",
+      tokenInput: 0,
+      tokenOutput: 0,
+      tokenCachedInput: 0,
+      tokenTotal: 0,
       costUsdTotal: 0,
+      budgetState: "ok",
     };
 
     const storage = {

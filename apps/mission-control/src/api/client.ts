@@ -263,6 +263,43 @@ export function getGatewayApiBaseUrl(): string {
   return API_BASE;
 }
 
+const SAFE_RETRY_METHODS = new Set(["GET", "HEAD"]);
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const RETRYABLE_HTTP_STATUS_CODES = new Set([408, 429, 502, 503, 504]);
+const SAFE_REQUEST_RETRY_DELAYS_MS = [250];
+const BROWSER_MUTATION_INTENT_HEADER = "x-goatcitadel-browser-intent";
+const BROWSER_MUTATION_INTENT_VALUE = "mutation";
+
+function normalizeHttpMethod(method?: string): string {
+  return (method ?? "GET").toUpperCase();
+}
+
+function buildGatewayHeaders(path: string, method: string, correlationId: string, extraHeaders?: HeadersInit): HeadersInit {
+  return {
+    "Content-Type": "application/json",
+    ...(method !== "GET" ? { "Idempotency-Key": crypto.randomUUID() } : {}),
+    ...(MUTATING_METHODS.has(method) ? { [BROWSER_MUTATION_INTENT_HEADER]: BROWSER_MUTATION_INTENT_VALUE } : {}),
+    ...readGatewayAuthHeaders(path),
+    "x-goatcitadel-correlation-id": correlationId,
+    "x-goatcitadel-origin-surface": inferOriginSurface(path),
+    ...(extraHeaders ?? {}),
+  };
+}
+
+function shouldRetrySafeRequest(method: string, error?: ApiRequestError): boolean {
+  if (!SAFE_RETRY_METHODS.has(method) || !error) {
+    return false;
+  }
+  if (error.kind === "network") {
+    return true;
+  }
+  return error.status !== undefined && RETRYABLE_HTTP_STATUS_CODES.has(error.status);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+}
+
 function unwrapApiResponse<T>(payload: unknown): T {
   if (
     payload
@@ -345,17 +382,9 @@ function isPrivateOrCarrierGradeIpv4(host: string): boolean {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const authHeaders = readGatewayAuthHeaders(path);
-  const method = init?.method ?? "GET";
+  const method = normalizeHttpMethod(init?.method);
   const correlationId = createCorrelationId();
-  const headers = {
-    "Content-Type": "application/json",
-    ...(method !== "GET" ? { "Idempotency-Key": crypto.randomUUID() } : {}),
-    ...authHeaders,
-    "x-goatcitadel-correlation-id": correlationId,
-    "x-goatcitadel-origin-surface": inferOriginSurface(path),
-    ...(init?.headers ?? {}),
-  };
+  const headers = buildGatewayHeaders(path, method, correlationId, init?.headers);
   recordClientDiagnostic({
     level: "info",
     category: "api",
@@ -364,79 +393,123 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     correlationId,
     route: path,
   });
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE}${path}`, {
-      headers: {
-        ...headers,
-      },
-      ...init,
-    });
-  } catch (error) {
-    setDevDiagnosticsGatewayReachable(false);
-    setDevDiagnosticsLastRequestError(`${method} ${path}: network error`);
-    recordClientDiagnostic({
-      level: "error",
-      category: "api",
-      event: "request.network_error",
-      message: `${method} ${path} failed before a response was received`,
-      correlationId,
-      route: path,
-      context: {
-        error: (error as Error).message,
-      },
-    });
-    throw new ApiRequestError(`Network error ${method} ${path}: ${(error as Error).message}`, {
-      kind: "network",
-      method,
-      path,
-      cause: error,
-    });
-  }
-  const responseCorrelationId = res.headers.get("x-goatcitadel-correlation-id") ?? correlationId;
-  setDevDiagnosticsActiveCorrelationId(responseCorrelationId);
-  setDevDiagnosticsGatewayReachable(true);
+  const maxAttempts = SAFE_RETRY_METHODS.has(method) ? SAFE_REQUEST_RETRY_DELAYS_MS.length + 1 : 1;
+  let lastError: ApiRequestError | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const res = await fetch(`${API_BASE}${path}`, {
+        headers: {
+          ...headers,
+        },
+        ...init,
+        method,
+      });
+      const responseCorrelationId = res.headers.get("x-goatcitadel-correlation-id") ?? correlationId;
+      setDevDiagnosticsActiveCorrelationId(responseCorrelationId);
+      setDevDiagnosticsGatewayReachable(true);
 
-  if (!res.ok) {
-    const text = await res.text();
-    const parsed = parseApiError(text);
-    setDevDiagnosticsLastRequestError(`${method} ${path}: ${res.status}`);
-    recordClientDiagnostic({
-      level: "error",
-      category: "api",
-      event: "request.error",
-      message: `${method} ${path} failed (${res.status})`,
-      correlationId: responseCorrelationId,
-      route: path,
-      context: {
-        status: res.status,
-        body: text.slice(0, 600),
-      },
-    });
-    throw new ApiRequestError(`API error ${res.status}: ${text}`, {
-      kind: "http",
-      method,
-      path,
-      status: res.status,
-      body: parsed.body,
-      bodyText: text,
-      authMode: parsed.authMode,
-    });
+      if (!res.ok) {
+        const text = await res.text();
+        const parsed = parseApiError(text);
+        lastError = new ApiRequestError(`API error ${res.status}: ${text}`, {
+          kind: "http",
+          method,
+          path,
+          status: res.status,
+          body: parsed.body,
+          bodyText: text,
+          authMode: parsed.authMode,
+        });
+        if (shouldRetrySafeRequest(method, lastError) && attempt < maxAttempts - 1) {
+          recordClientDiagnostic({
+            level: "warn",
+            category: "api",
+            event: "request.retry",
+            message: `${method} ${path} retrying after transient response`,
+            correlationId: responseCorrelationId,
+            route: path,
+            context: {
+              attempt: attempt + 1,
+              status: res.status,
+            },
+          });
+          await sleep(SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ?? SAFE_REQUEST_RETRY_DELAYS_MS[SAFE_REQUEST_RETRY_DELAYS_MS.length - 1] ?? 250);
+          continue;
+        }
+        setDevDiagnosticsLastRequestError(`${method} ${path}: ${res.status}`);
+        recordClientDiagnostic({
+          level: "error",
+          category: "api",
+          event: "request.error",
+          message: `${method} ${path} failed (${res.status})`,
+          correlationId: responseCorrelationId,
+          route: path,
+          context: {
+            status: res.status,
+            body: text.slice(0, 600),
+          },
+        });
+        throw lastError;
+      }
+
+      setDevDiagnosticsLastRequestError(undefined);
+      recordClientDiagnostic({
+        level: "info",
+        category: "api",
+        event: "request.finish",
+        message: `${method} ${path} completed`,
+        correlationId: responseCorrelationId,
+        route: path,
+        context: {
+          status: res.status,
+        },
+      });
+      return unwrapApiResponse<T>(await res.json());
+    } catch (error) {
+      lastError = error instanceof ApiRequestError
+        ? error
+        : new ApiRequestError(`Network error ${method} ${path}: ${(error as Error).message}`, {
+          kind: "network",
+          method,
+          path,
+          cause: error,
+        });
+      if (shouldRetrySafeRequest(method, lastError) && attempt < maxAttempts - 1) {
+        recordClientDiagnostic({
+          level: "warn",
+          category: "api",
+          event: "request.retry",
+          message: `${method} ${path} retrying after network failure`,
+          correlationId,
+          route: path,
+          context: {
+            attempt: attempt + 1,
+            error: lastError.message,
+          },
+        });
+        await sleep(SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ?? SAFE_REQUEST_RETRY_DELAYS_MS[SAFE_REQUEST_RETRY_DELAYS_MS.length - 1] ?? 250);
+        continue;
+      }
+      if (lastError.kind === "network") {
+        setDevDiagnosticsGatewayReachable(false);
+        setDevDiagnosticsLastRequestError(`${method} ${path}: network error`);
+        recordClientDiagnostic({
+          level: "error",
+          category: "api",
+          event: "request.network_error",
+          message: `${method} ${path} failed before a response was received`,
+          correlationId,
+          route: path,
+          context: {
+            error: lastError.message,
+          },
+        });
+      }
+      throw lastError;
+    }
   }
 
-  setDevDiagnosticsLastRequestError(undefined);
-  recordClientDiagnostic({
-    level: "info",
-    category: "api",
-    event: "request.finish",
-    message: `${method} ${path} completed`,
-    correlationId: responseCorrelationId,
-    route: path,
-    context: {
-      status: res.status,
-    },
-  });
-  return unwrapApiResponse<T>(await res.json());
+  throw lastError ?? new Error(`Unreachable request state for ${method} ${path}`);
 }
 
 export interface UiActionResult<T> {
@@ -1448,7 +1521,6 @@ export async function streamAgentChatMessage(
   options: { signal?: AbortSignal } = {},
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/agent-send/stream`;
-  const authHeaders = readGatewayAuthHeaders(path);
   const correlationId = createCorrelationId();
   recordClientDiagnostic({
     level: "info",
@@ -1462,14 +1534,9 @@ export async function streamAgentChatMessage(
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     signal: options.signal,
-    headers: {
-      "Content-Type": "application/json",
-      "Idempotency-Key": crypto.randomUUID(),
-      "x-goatcitadel-correlation-id": correlationId,
-      "x-goatcitadel-origin-surface": "chat",
+    headers: buildGatewayHeaders(path, "POST", correlationId, {
       "x-goatcitadel-session-id": sessionId,
-      ...authHeaders,
-    },
+    }),
     body: JSON.stringify(input),
   });
   if (!response.ok || !response.body) {
@@ -1544,19 +1611,13 @@ export async function streamRetryChatTurn(
   options: { signal?: AbortSignal } = {},
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/retry/stream`;
-  const authHeaders = readGatewayAuthHeaders(path);
   const correlationId = createCorrelationId();
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     signal: options.signal,
-    headers: {
-      "Content-Type": "application/json",
-      "Idempotency-Key": crypto.randomUUID(),
-      "x-goatcitadel-correlation-id": correlationId,
-      "x-goatcitadel-origin-surface": "chat",
+    headers: buildGatewayHeaders(path, "POST", correlationId, {
       "x-goatcitadel-session-id": sessionId,
-      ...authHeaders,
-    },
+    }),
     body: JSON.stringify(input),
   });
   if (!response.ok || !response.body) {
@@ -1588,19 +1649,13 @@ export async function streamEditChatTurn(
   options: { signal?: AbortSignal } = {},
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/edit/stream`;
-  const authHeaders = readGatewayAuthHeaders(path);
   const correlationId = createCorrelationId();
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     signal: options.signal,
-    headers: {
-      "Content-Type": "application/json",
-      "Idempotency-Key": crypto.randomUUID(),
-      "x-goatcitadel-correlation-id": correlationId,
-      "x-goatcitadel-origin-surface": "chat",
+    headers: buildGatewayHeaders(path, "POST", correlationId, {
       "x-goatcitadel-session-id": sessionId,
-      ...authHeaders,
-    },
+    }),
     body: JSON.stringify(input),
   });
   if (!response.ok || !response.body) {
@@ -1621,20 +1676,16 @@ export async function resumeChatTurnStream(
     query.set("sinceEventId", options.sinceEventId);
   }
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/stream${query.size > 0 ? `?${query.toString()}` : ""}`;
-  const authHeaders = readGatewayAuthHeaders(path);
   const correlationId = createCorrelationId();
   const response = await fetch(`${API_BASE}${path}`, {
     method: "GET",
     signal: options.signal,
-    headers: {
+    headers: buildGatewayHeaders(path, "GET", correlationId, {
       Accept: "text/event-stream",
       "Cache-Control": "no-cache",
-      "x-goatcitadel-correlation-id": correlationId,
-      "x-goatcitadel-origin-surface": "chat",
       "x-goatcitadel-session-id": sessionId,
       ...(options.sinceEventId ? { "Last-Event-ID": options.sinceEventId } : {}),
-      ...authHeaders,
-    },
+    }),
   });
   if (!response.ok || !response.body) {
     const text = await response.text();
@@ -1912,18 +1963,12 @@ export async function streamChatDelegation(
   onChunk: (chunk: ChatDelegationStreamChunk) => void,
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate/stream`;
-  const authHeaders = readGatewayAuthHeaders(path);
   const correlationId = createCorrelationId();
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Idempotency-Key": crypto.randomUUID(),
-      "x-goatcitadel-correlation-id": correlationId,
-      "x-goatcitadel-origin-surface": "chat",
+    headers: buildGatewayHeaders(path, "POST", correlationId, {
       "x-goatcitadel-session-id": sessionId,
-      ...authHeaders,
-    },
+    }),
     body: JSON.stringify(input),
   });
   if (!response.ok || !response.body) {

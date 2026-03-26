@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
+import { mock } from "node:test";
 import type { TranscriptEvent } from "@goatcitadel/contracts";
 import { TranscriptLog } from "./transcript-log.js";
 
@@ -48,6 +49,24 @@ describe("TranscriptLog", () => {
     await log.delete(sessionId);
 
     await assert.rejects(() => log.read(sessionId));
+  });
+
+  it("warns and skips malformed transcript lines", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-transcripts-${randomUUID()}`);
+    createdDirs.push(root);
+    const log = new TranscriptLog(root);
+    const sessionId = "session-corrupt-test";
+    const warn = mock.method(console, "warn", () => {});
+
+    await log.append(buildEvent(sessionId, 0));
+    const filePath = path.join(root, `${sessionId}.jsonl`);
+    fs.appendFileSync(filePath, "{not-json}\n", "utf8");
+    await log.append(buildEvent(sessionId, 1));
+
+    const events = await log.read(sessionId);
+
+    assert.equal(events.length, 2);
+    assert.equal(warn.mock.callCount(), 1);
   });
 });
 

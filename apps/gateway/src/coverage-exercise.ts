@@ -1021,11 +1021,7 @@ async function requestJson<T = unknown>(
   url: string,
   payload?: Record<string, unknown>,
 ): Promise<RequestResult<T>> {
-  const headers: Record<string, string> = {};
-  if (method !== "GET") {
-    headers["Content-Type"] = "application/json";
-    headers["Idempotency-Key"] = `coverage-${randomUUID()}`;
-  }
+  const headers = createCoverageRequestHeaders(app, method);
   const response = await app.inject({
     method,
     url,
@@ -1042,6 +1038,44 @@ async function requestJson<T = unknown>(
     statusCode: response.statusCode,
     body: parsed,
   };
+}
+
+function createCoverageRequestHeaders(app: FastifyInstance, method: HttpMethod): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const gatewayApp = app as FastifyInstance & {
+    gatewayConfig?: {
+      assistant?: {
+        auth?: {
+          mode?: "none" | "token" | "basic";
+          token?: {
+            value?: string;
+          };
+          basic?: {
+            username?: string;
+            password?: string;
+          };
+        };
+      };
+    };
+  };
+  const auth = gatewayApp.gatewayConfig?.assistant?.auth;
+  if (auth?.mode === "token") {
+    const token = auth.token?.value?.trim();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+  } else if (auth?.mode === "basic") {
+    const username = auth.basic?.username?.trim();
+    const password = auth.basic?.password?.trim();
+    if (username && password) {
+      headers.Authorization = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+    }
+  }
+  if (method !== "GET") {
+    headers["Content-Type"] = "application/json";
+    headers["Idempotency-Key"] = `coverage-${randomUUID()}`;
+  }
+  return headers;
 }
 
 runCoverageExercise().catch((error) => {

@@ -11,7 +11,7 @@ export class AuditLog {
     const filePath = path.join(this.auditDir, `${stream}.jsonl`);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     const attribution = getRequestAttribution();
-    const line = JSON.stringify({
+    const baseRecord = {
       timestamp: new Date().toISOString(),
       ...payload,
       correlationId: payload.correlationId ?? attribution?.correlationId,
@@ -20,7 +20,27 @@ export class AuditLog {
       actorId: payload.actorId ?? attribution?.actorId,
       deviceId: payload.deviceId ?? attribution?.deviceId,
       grantId: payload.grantId ?? attribution?.grantId,
-    }) + "\n";
+    };
+    let line: string;
+    try {
+      line = JSON.stringify(baseRecord) + "\n";
+    } catch (error) {
+      console.warn("[goatcitadel] audit log payload could not be serialized; writing degraded record", {
+        stream,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      line = JSON.stringify({
+        timestamp: baseRecord.timestamp,
+        correlationId: baseRecord.correlationId,
+        traceId: baseRecord.traceId,
+        originSurface: baseRecord.originSurface,
+        actorId: baseRecord.actorId,
+        deviceId: baseRecord.deviceId,
+        grantId: baseRecord.grantId,
+        serializationError: error instanceof Error ? error.message : String(error),
+        degraded: true,
+      }) + "\n";
+    }
     await fs.appendFile(filePath, line, { encoding: "utf8" });
   }
 }

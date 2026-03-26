@@ -1,8 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { clampInt } from "@goatcitadel/contracts";
 import type {
+  CapabilityGapCauseClass,
+  CapabilityGapEventRecord,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ChatSendMessageRequest,
+  ChatSendMessageResponse,
   ChatMemoryMode,
   ChatMode,
   ChatThinkingLevel,
@@ -15,6 +19,8 @@ import type {
   DecisionReplayItemRecord,
   DecisionReplayItemRuleScores,
   DecisionReplayRunRecord,
+  RepairCandidateRecord,
+  RepairValidationStatus,
   ReplayDiffSummary,
   ReplayOverrideDraft,
   ReplayOverrideStep,
@@ -43,6 +49,24 @@ const IMPROVEMENT_CAUSE_CLASSES = new Set<DecisionReplayCauseClass>([
   "retrieval_miss",
   "incomplete_retry_repair",
   "other",
+]);
+const CAPABILITY_GAP_CAUSE_CLASSES = new Set<CapabilityGapCauseClass>([
+  "tool_exists_but_not_in_profile",
+  "tool_requires_approval_but_not_exposed",
+  "skill_missing",
+  "provider_tool_mismatch",
+  "retryable_network_failure",
+  "policy_denied_by_config",
+  "missing_required_tool_evidence",
+  "routing_profile_mismatch",
+]);
+const REPAIR_VALIDATION_STATUSES = new Set<RepairValidationStatus>([
+  "not_started",
+  "queued",
+  "running",
+  "needs_review",
+  "passed",
+  "failed",
 ]);
 
 // ── helper types ─────────────────────────────────────────────────────
@@ -78,6 +102,79 @@ interface ReplayScoredItemResult {
   judgeUsed: boolean;
 }
 
+interface CapabilityGapEventUpsertInput {
+  sessionId: string;
+  turnId?: string;
+  runId?: string;
+  causeClass: CapabilityGapCauseClass;
+  failureClass?: string;
+  promptExcerpt?: string;
+  promptRef?: string;
+  requestedTool?: string;
+  toolFamily?: string;
+  toolProfile?: string;
+  policyReason?: string;
+  providerId?: string;
+  model?: string;
+  configArea?: string;
+  suggestedRepairClass?: string;
+  confidence?: number;
+  recoveryOptions?: string[];
+}
+
+interface RepairCandidateValidationUpdateInput {
+  status: RepairValidationStatus;
+  summary?: string;
+}
+
+interface CapabilityGapEventRow {
+  event_id: string;
+  session_id: string;
+  turn_id: string | null;
+  run_id: string | null;
+  cause_class: string;
+  failure_class: string | null;
+  prompt_excerpt: string | null;
+  prompt_ref: string | null;
+  requested_tool: string | null;
+  tool_family: string | null;
+  tool_profile: string | null;
+  policy_reason: string | null;
+  provider_id: string | null;
+  model: string | null;
+  config_area: string | null;
+  suggested_repair_class: string | null;
+  confidence: number;
+  repeat_count: number;
+  recovery_options_json: string;
+  replay_run_id: string | null;
+  replay_status: string | null;
+  repair_candidate_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface RepairCandidateRow {
+  candidate_id: string;
+  fingerprint: string;
+  cause_class: string;
+  title: string;
+  summary: string;
+  requested_tool: string | null;
+  tool_profile: string | null;
+  provider_id: string | null;
+  config_area: string | null;
+  suggested_patch: string | null;
+  replay_run_id: string | null;
+  validation_status: string;
+  validation_summary: string | null;
+  event_count: number;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
+  last_seen_at: string;
+}
+
 /**
  * Callbacks needed from GatewayService.
  */
@@ -85,6 +182,11 @@ export interface ImprovementServiceCallbacks {
   createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
   getPromptRunnerModelDefaults(): { providerId?: string; model?: string };
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
+  retryChatTurn(
+    sessionId: string,
+    turnId: string,
+    overrides: Partial<ChatSendMessageRequest>,
+  ): Promise<ChatSendMessageResponse>;
   readonly backgroundTasks: Set<Promise<void>>;
   closing: boolean;
 }
@@ -154,7 +256,9 @@ export class ImprovementService {
   constructor(
     private readonly ctx: ServiceContext,
     private readonly callbacks: ImprovementServiceCallbacks,
-  ) {}
+  ) {
+    this.ensureCapabilityGapTables();
+  }
 
   // ── scheduler lifecycle ──────────────────────────────────────────
 
@@ -306,6 +410,222 @@ export class ImprovementService {
     return rows.map((row) => mapDecisionReplayRunRow(row));
   }
 
+  listCapabilityGapEvents(limit = 100): CapabilityGapEventRecord[] {
+    this.ensureCapabilityGapTables();
+    const rows = this.ctx.gatewaySql.prepare(`
+      SELECT *
+      FROM capability_gap_events
+      ORDER BY updated_at DESC, created_at DESC
+      LIMIT ?
+    `).all(Math.max(1, Math.min(limit, 500))) as unknown as CapabilityGapEventRow[];
+    return rows.map((row) => mapCapabilityGapEventRow(row));
+  }
+
+  listRepairCandidates(limit = 60): RepairCandidateRecord[] {
+    this.ensureCapabilityGapTables();
+    const rows = this.ctx.gatewaySql.prepare(`
+      SELECT *
+      FROM repair_candidates
+      ORDER BY last_seen_at DESC, updated_at DESC
+      LIMIT ?
+    `).all(Math.max(1, Math.min(limit, 300))) as unknown as RepairCandidateRow[];
+    return rows.map((row) => mapRepairCandidateRow(row));
+  }
+
+  updateRepairCandidateValidation(
+    candidateId: string,
+    input: RepairCandidateValidationUpdateInput,
+  ): RepairCandidateRecord {
+    this.ensureCapabilityGapTables();
+    const existing = this.ctx.gatewaySql.prepare(`
+      SELECT *
+      FROM repair_candidates
+      WHERE candidate_id = ?
+      LIMIT 1
+    `).get(candidateId) as unknown as RepairCandidateRow | undefined;
+    if (!existing) {
+      throw new Error(`Repair candidate not found: ${candidateId}`);
+    }
+    const now = new Date().toISOString();
+    const normalizedStatus = REPAIR_VALIDATION_STATUSES.has(input.status)
+      ? input.status
+      : "not_started";
+    const normalizedSummary = input.summary?.trim() || null;
+    this.ctx.gatewaySql.prepare(`
+      UPDATE repair_candidates
+      SET validation_status = @validationStatus,
+          validation_summary = @validationSummary,
+          updated_at = @updatedAt
+      WHERE candidate_id = @candidateId
+    `).run({
+      validationStatus: normalizedStatus,
+      validationSummary: normalizedSummary,
+      updatedAt: now,
+      candidateId,
+    });
+    const row = this.ctx.gatewaySql.prepare(`
+      SELECT *
+      FROM repair_candidates
+      WHERE candidate_id = ?
+    `).get(candidateId) as unknown as RepairCandidateRow;
+    return mapRepairCandidateRow(row);
+  }
+
+  recordCapabilityGapEvent(input: CapabilityGapEventUpsertInput): CapabilityGapEventRecord {
+    this.ensureCapabilityGapTables();
+    const now = new Date().toISOString();
+    const normalizedCauseClass = CAPABILITY_GAP_CAUSE_CLASSES.has(input.causeClass)
+      ? input.causeClass
+      : "policy_denied_by_config";
+    const normalizedRecoveryOptions = normalizeRecoveryOptions(input.recoveryOptions);
+    const confidence = clamp01(input.confidence ?? 0.65);
+    const fingerprint = buildCapabilityGapFingerprint({
+      causeClass: normalizedCauseClass,
+      requestedTool: input.requestedTool,
+      toolProfile: input.toolProfile,
+      providerId: input.providerId,
+    });
+    const existing = this.ctx.gatewaySql.prepare(`
+      SELECT *
+      FROM capability_gap_events
+      WHERE fingerprint = ?
+      LIMIT 1
+    `).get(fingerprint) as unknown as CapabilityGapEventRow | undefined;
+    const eventId = existing?.event_id ?? randomUUID();
+    const repeatCount = (existing?.repeat_count ?? 0) + 1;
+    const recoveryOptionsJson = JSON.stringify(normalizedRecoveryOptions);
+
+    this.ctx.gatewaySql.prepare(`
+      INSERT INTO capability_gap_events (
+        event_id,
+        fingerprint,
+        session_id,
+        turn_id,
+        run_id,
+        cause_class,
+        failure_class,
+        prompt_excerpt,
+        prompt_ref,
+        requested_tool,
+        tool_family,
+        tool_profile,
+        policy_reason,
+        provider_id,
+        model,
+        config_area,
+        suggested_repair_class,
+        confidence,
+        repeat_count,
+        recovery_options_json,
+        replay_run_id,
+        replay_status,
+        repair_candidate_id,
+        created_at,
+        updated_at
+      ) VALUES (
+        @eventId,
+        @fingerprint,
+        @sessionId,
+        @turnId,
+        @runId,
+        @causeClass,
+        @failureClass,
+        @promptExcerpt,
+        @promptRef,
+        @requestedTool,
+        @toolFamily,
+        @toolProfile,
+        @policyReason,
+        @providerId,
+        @model,
+        @configArea,
+        @suggestedRepairClass,
+        @confidence,
+        @repeatCount,
+        @recoveryOptionsJson,
+        @replayRunId,
+        @replayStatus,
+        @repairCandidateId,
+        @createdAt,
+        @updatedAt
+      )
+      ON CONFLICT(event_id) DO UPDATE SET
+        session_id = excluded.session_id,
+        turn_id = COALESCE(excluded.turn_id, capability_gap_events.turn_id),
+        run_id = COALESCE(excluded.run_id, capability_gap_events.run_id),
+        failure_class = COALESCE(excluded.failure_class, capability_gap_events.failure_class),
+        prompt_excerpt = COALESCE(excluded.prompt_excerpt, capability_gap_events.prompt_excerpt),
+        prompt_ref = COALESCE(excluded.prompt_ref, capability_gap_events.prompt_ref),
+        requested_tool = COALESCE(excluded.requested_tool, capability_gap_events.requested_tool),
+        tool_family = COALESCE(excluded.tool_family, capability_gap_events.tool_family),
+        tool_profile = COALESCE(excluded.tool_profile, capability_gap_events.tool_profile),
+        policy_reason = COALESCE(excluded.policy_reason, capability_gap_events.policy_reason),
+        provider_id = COALESCE(excluded.provider_id, capability_gap_events.provider_id),
+        model = COALESCE(excluded.model, capability_gap_events.model),
+        config_area = COALESCE(excluded.config_area, capability_gap_events.config_area),
+        suggested_repair_class = COALESCE(excluded.suggested_repair_class, capability_gap_events.suggested_repair_class),
+        confidence = CASE
+          WHEN excluded.confidence > capability_gap_events.confidence THEN excluded.confidence
+          ELSE capability_gap_events.confidence
+        END,
+        repeat_count = excluded.repeat_count,
+        recovery_options_json = excluded.recovery_options_json,
+        updated_at = excluded.updated_at
+    `).run({
+      eventId,
+      fingerprint,
+      sessionId: input.sessionId,
+      turnId: input.turnId ?? null,
+      runId: input.runId ?? null,
+      causeClass: normalizedCauseClass,
+      failureClass: input.failureClass ?? null,
+      promptExcerpt: input.promptExcerpt ?? null,
+      promptRef: input.promptRef ?? null,
+      requestedTool: input.requestedTool ?? null,
+      toolFamily: input.toolFamily ?? null,
+      toolProfile: input.toolProfile ?? null,
+      policyReason: input.policyReason ?? null,
+      providerId: input.providerId ?? null,
+      model: input.model ?? null,
+      configArea: input.configArea ?? null,
+      suggestedRepairClass: input.suggestedRepairClass ?? null,
+      confidence,
+      repeatCount,
+      recoveryOptionsJson,
+      replayRunId: existing?.replay_run_id ?? null,
+      replayStatus: existing?.replay_status ?? "not_run",
+      repairCandidateId: existing?.repair_candidate_id ?? null,
+      createdAt: existing?.created_at ?? now,
+      updatedAt: now,
+    });
+
+    const candidate = repeatCount >= 2
+      ? this.upsertRepairCandidate({
+        causeClass: normalizedCauseClass,
+        requestedTool: input.requestedTool,
+        toolProfile: input.toolProfile,
+        providerId: input.providerId,
+        configArea: input.configArea,
+        confidence,
+        eventCount: repeatCount,
+      })
+      : undefined;
+    if (candidate) {
+      this.ctx.gatewaySql.prepare(`
+        UPDATE capability_gap_events
+        SET repair_candidate_id = ?,
+            updated_at = ?
+        WHERE event_id = ?
+      `).run(candidate.candidateId, now, eventId);
+    }
+    const row = this.ctx.gatewaySql.prepare(`
+      SELECT *
+      FROM capability_gap_events
+      WHERE event_id = ?
+    `).get(eventId) as unknown as CapabilityGapEventRow;
+    return mapCapabilityGapEventRow(row);
+  }
+
   getImprovementReport(reportId: string): WeeklyImprovementReportRecord {
     const row = this.ctx.gatewaySql.prepare(`
       SELECT *
@@ -411,6 +731,7 @@ export class ImprovementService {
   createReplayOverrideDraft(
     sourceRunId: string,
     overrides: ReplayOverrideStep[] = [],
+    _links?: { capabilityGapEventId?: string; repairCandidateId?: string },
   ): ReplayOverrideDraft {
     this.ctx.requireFeatureEnabled("replayOverridesV1Enabled");
     const now = new Date().toISOString();
@@ -446,9 +767,10 @@ export class ImprovementService {
   executeReplayOverride(
     sourceRunId: string,
     overrides: ReplayOverrideStep[] = [],
+    links?: { capabilityGapEventId?: string; repairCandidateId?: string },
   ): ReplayOverrideDraft {
     this.ctx.requireFeatureEnabled("replayOverridesV1Enabled");
-    const draft = this.createReplayOverrideDraft(sourceRunId, overrides);
+    const draft = this.createReplayOverrideDraft(sourceRunId, overrides, links);
     const runningAt = new Date().toISOString();
     this.ctx.gatewaySql.prepare(`
       UPDATE replay_override_runs
@@ -564,6 +886,174 @@ export class ImprovementService {
       costUsdDelta: Number(overrides.length) * 0,
       errorChanged: false,
     };
+  }
+
+  private upsertRepairCandidate(input: {
+    causeClass: CapabilityGapCauseClass;
+    requestedTool?: string;
+    toolProfile?: string;
+    providerId?: string;
+    configArea?: string;
+    confidence: number;
+    eventCount: number;
+  }): RepairCandidateRecord {
+    const now = new Date().toISOString();
+    const fingerprint = buildCapabilityGapFingerprint(input);
+    const existing = this.ctx.gatewaySql.prepare(`
+      SELECT *
+      FROM repair_candidates
+      WHERE fingerprint = ?
+      LIMIT 1
+    `).get(fingerprint) as RepairCandidateRow | undefined;
+    const candidateId = existing?.candidate_id ?? randomUUID();
+    const title = buildRepairCandidateTitle(input.causeClass, input.requestedTool);
+    const summary = buildRepairCandidateSummary(input);
+    const suggestedPatch = buildSuggestedRepairPatch(input);
+
+    this.ctx.gatewaySql.prepare(`
+      INSERT INTO repair_candidates (
+        candidate_id,
+        fingerprint,
+        cause_class,
+        title,
+        summary,
+        requested_tool,
+        tool_profile,
+        provider_id,
+        config_area,
+        suggested_patch,
+        replay_run_id,
+        validation_status,
+        validation_summary,
+        event_count,
+        confidence,
+        created_at,
+        updated_at,
+        last_seen_at
+      ) VALUES (
+        @candidateId,
+        @fingerprint,
+        @causeClass,
+        @title,
+        @summary,
+        @requestedTool,
+        @toolProfile,
+        @providerId,
+        @configArea,
+        @suggestedPatch,
+        @replayRunId,
+        @validationStatus,
+        @validationSummary,
+        @eventCount,
+        @confidence,
+        @createdAt,
+        @updatedAt,
+        @lastSeenAt
+      )
+      ON CONFLICT(candidate_id) DO UPDATE SET
+        requested_tool = COALESCE(excluded.requested_tool, repair_candidates.requested_tool),
+        tool_profile = COALESCE(excluded.tool_profile, repair_candidates.tool_profile),
+        provider_id = COALESCE(excluded.provider_id, repair_candidates.provider_id),
+        config_area = COALESCE(excluded.config_area, repair_candidates.config_area),
+        suggested_patch = COALESCE(excluded.suggested_patch, repair_candidates.suggested_patch),
+        title = excluded.title,
+        summary = excluded.summary,
+        event_count = excluded.event_count,
+        confidence = CASE
+          WHEN excluded.confidence > repair_candidates.confidence THEN excluded.confidence
+          ELSE repair_candidates.confidence
+        END,
+        updated_at = excluded.updated_at,
+        last_seen_at = excluded.last_seen_at
+    `).run({
+      candidateId,
+      fingerprint,
+      causeClass: input.causeClass,
+      title,
+      summary,
+      requestedTool: input.requestedTool ?? null,
+      toolProfile: input.toolProfile ?? null,
+      providerId: input.providerId ?? null,
+      configArea: input.configArea ?? null,
+      suggestedPatch: suggestedPatch ?? null,
+      replayRunId: existing?.replay_run_id ?? null,
+      validationStatus: existing?.validation_status ?? "not_started",
+      validationSummary: existing?.validation_summary ?? null,
+      eventCount: Math.max(1, input.eventCount),
+      confidence: clamp01(input.confidence),
+      createdAt: existing?.created_at ?? now,
+      updatedAt: now,
+      lastSeenAt: now,
+    });
+
+    const row = this.ctx.gatewaySql.prepare(`
+      SELECT *
+      FROM repair_candidates
+      WHERE candidate_id = ?
+    `).get(candidateId) as unknown as RepairCandidateRow;
+    return mapRepairCandidateRow(row);
+  }
+
+  private ensureCapabilityGapTables(): void {
+    this.ctx.gatewaySql.exec(`
+      CREATE TABLE IF NOT EXISTS capability_gap_events (
+        event_id TEXT PRIMARY KEY,
+        fingerprint TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        turn_id TEXT,
+        run_id TEXT,
+        cause_class TEXT NOT NULL,
+        failure_class TEXT,
+        prompt_excerpt TEXT,
+        prompt_ref TEXT,
+        requested_tool TEXT,
+        tool_family TEXT,
+        tool_profile TEXT,
+        policy_reason TEXT,
+        provider_id TEXT,
+        model TEXT,
+        config_area TEXT,
+        suggested_repair_class TEXT,
+        confidence REAL NOT NULL DEFAULT 0.5,
+        repeat_count INTEGER NOT NULL DEFAULT 1,
+        recovery_options_json TEXT NOT NULL DEFAULT '[]',
+        replay_run_id TEXT,
+        replay_status TEXT NOT NULL DEFAULT 'not_run',
+        repair_candidate_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_capability_gap_events_fingerprint
+        ON capability_gap_events(fingerprint);
+      CREATE INDEX IF NOT EXISTS idx_capability_gap_events_updated
+        ON capability_gap_events(updated_at DESC, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_capability_gap_events_cause
+        ON capability_gap_events(cause_class, updated_at DESC);
+      CREATE TABLE IF NOT EXISTS repair_candidates (
+        candidate_id TEXT PRIMARY KEY,
+        fingerprint TEXT NOT NULL,
+        cause_class TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        requested_tool TEXT,
+        tool_profile TEXT,
+        provider_id TEXT,
+        config_area TEXT,
+        suggested_patch TEXT,
+        replay_run_id TEXT,
+        validation_status TEXT NOT NULL DEFAULT 'not_started',
+        validation_summary TEXT,
+        event_count INTEGER NOT NULL DEFAULT 1,
+        confidence REAL NOT NULL DEFAULT 0.5,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_candidates_fingerprint
+        ON repair_candidates(fingerprint);
+      CREATE INDEX IF NOT EXISTS idx_repair_candidates_last_seen
+        ON repair_candidates(last_seen_at DESC, updated_at DESC);
+    `);
   }
 
   private readDecisionReplayRun(runId: string): DecisionReplayRunRecord {
@@ -1289,6 +1779,175 @@ function mapImprovementReportRow(row: {
     }),
     previousReportId: row.previous_report_id ?? undefined, createdAt: row.created_at,
   };
+}
+
+function mapCapabilityGapEventRow(row: CapabilityGapEventRow): CapabilityGapEventRecord {
+  return {
+    eventId: row.event_id,
+    sessionId: row.session_id,
+    turnId: row.turn_id ?? undefined,
+    runId: row.run_id ?? undefined,
+    causeClass: CAPABILITY_GAP_CAUSE_CLASSES.has(row.cause_class as CapabilityGapCauseClass)
+      ? row.cause_class as CapabilityGapCauseClass
+      : "policy_denied_by_config",
+    failureClass: row.failure_class ?? undefined,
+    promptExcerpt: row.prompt_excerpt ?? undefined,
+    promptRef: row.prompt_ref ?? undefined,
+    requestedTool: row.requested_tool ?? undefined,
+    toolFamily: row.tool_family ?? undefined,
+    toolProfile: row.tool_profile ?? undefined,
+    policyReason: row.policy_reason ?? undefined,
+    providerId: row.provider_id ?? undefined,
+    model: row.model ?? undefined,
+    configArea: row.config_area ?? undefined,
+    suggestedRepairClass: row.suggested_repair_class ?? undefined,
+    confidence: clamp01(row.confidence),
+    repeatCount: Math.max(1, row.repeat_count),
+    recoveryOptions: normalizeRecoveryOptions(safeJsonParse<string[]>(row.recovery_options_json, [])),
+    replayRunId: row.replay_run_id ?? undefined,
+    replayStatus: normalizeReplayStatus(row.replay_status),
+    repairCandidateId: row.repair_candidate_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapRepairCandidateRow(row: RepairCandidateRow): RepairCandidateRecord {
+  return {
+    candidateId: row.candidate_id,
+    fingerprint: row.fingerprint,
+    causeClass: CAPABILITY_GAP_CAUSE_CLASSES.has(row.cause_class as CapabilityGapCauseClass)
+      ? row.cause_class as CapabilityGapCauseClass
+      : "policy_denied_by_config",
+    title: row.title,
+    summary: row.summary,
+    requestedTool: row.requested_tool ?? undefined,
+    toolProfile: row.tool_profile ?? undefined,
+    providerId: row.provider_id ?? undefined,
+    configArea: row.config_area ?? undefined,
+    suggestedPatch: row.suggested_patch ?? undefined,
+    replayRunId: row.replay_run_id ?? undefined,
+    validationStatus: normalizeRepairValidationStatus(row.validation_status),
+    validationSummary: row.validation_summary ?? undefined,
+    eventCount: Math.max(1, row.event_count),
+    confidence: clamp01(row.confidence),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastSeenAt: row.last_seen_at,
+  };
+}
+
+function normalizeRecoveryOptions(values: string[] | undefined): CapabilityGapEventRecord["recoveryOptions"] {
+  const allowed = new Set<CapabilityGapEventRecord["recoveryOptions"][number]>([
+    "temporary_session_allow",
+    "switch_tool_profile",
+    "request_approval",
+    "install_skill",
+    "reroute_provider",
+    "retry_once",
+    "replay_failed_turn",
+    "patch_config",
+  ]);
+  return [...new Set((values ?? []).filter((value): value is CapabilityGapEventRecord["recoveryOptions"][number] => (
+    allowed.has(value as CapabilityGapEventRecord["recoveryOptions"][number])
+  )))];
+}
+
+function normalizeReplayStatus(value: string | null | undefined): CapabilityGapEventRecord["replayStatus"] {
+  if (value === "queued" || value === "running" || value === "completed" || value === "failed") {
+    return value;
+  }
+  return "not_run";
+}
+
+function normalizeRepairValidationStatus(value: string | null | undefined): RepairCandidateRecord["validationStatus"] {
+  if (
+    value === "not_started"
+    || value === "queued"
+    || value === "running"
+    || value === "needs_review"
+    || value === "passed"
+    || value === "failed"
+  ) {
+    return value;
+  }
+  return "not_started";
+}
+
+function buildCapabilityGapFingerprint(input: {
+  causeClass: CapabilityGapCauseClass;
+  requestedTool?: string;
+  toolProfile?: string;
+  providerId?: string;
+}): string {
+  return [
+    input.causeClass,
+    input.requestedTool?.trim().toLowerCase() ?? "",
+    input.toolProfile?.trim().toLowerCase() ?? "",
+    input.providerId?.trim().toLowerCase() ?? "",
+  ].join("|");
+}
+
+function buildRepairCandidateTitle(causeClass: CapabilityGapCauseClass, requestedTool?: string): string {
+  const toolLabel = requestedTool ? ` for ${requestedTool}` : "";
+  switch (causeClass) {
+    case "tool_exists_but_not_in_profile":
+      return `Tool profile mismatch${toolLabel}`;
+    case "tool_requires_approval_but_not_exposed":
+      return `Approval path missing${toolLabel}`;
+    case "skill_missing":
+      return `Missing skill capability${toolLabel}`;
+    case "provider_tool_mismatch":
+      return `Provider/tool mismatch${toolLabel}`;
+    case "retryable_network_failure":
+      return `Retryable network failure${toolLabel}`;
+    case "missing_required_tool_evidence":
+      return `Missing tool evidence${toolLabel}`;
+    case "routing_profile_mismatch":
+      return `Routing/profile mismatch${toolLabel}`;
+    case "policy_denied_by_config":
+    default:
+      return `Config policy block${toolLabel}`;
+  }
+}
+
+function buildRepairCandidateSummary(input: {
+  causeClass: CapabilityGapCauseClass;
+  requestedTool?: string;
+  toolProfile?: string;
+  providerId?: string;
+  configArea?: string;
+  eventCount: number;
+}): string {
+  const fragments = [
+    `${input.eventCount} recurring event${input.eventCount === 1 ? "" : "s"} detected`,
+    input.requestedTool ? `tool ${input.requestedTool}` : undefined,
+    input.toolProfile ? `profile ${input.toolProfile}` : undefined,
+    input.providerId ? `provider ${input.providerId}` : undefined,
+    input.configArea ? `config ${input.configArea}` : undefined,
+  ].filter(Boolean);
+  return `${fragments.join(" · ")}. Validate with replay before apply.`;
+}
+
+function buildSuggestedRepairPatch(input: {
+  causeClass: CapabilityGapCauseClass;
+  requestedTool?: string;
+  toolProfile?: string;
+  configArea?: string;
+}): string | undefined {
+  if (!input.configArea) {
+    return undefined;
+  }
+  switch (input.causeClass) {
+    case "tool_exists_but_not_in_profile":
+      return `Review ${input.configArea} and allow ${input.requestedTool ?? "the blocked tool"} in profile ${input.toolProfile ?? "current"}.`;
+    case "tool_requires_approval_but_not_exposed":
+      return `Review ${input.configArea} and expose an approval-required path for ${input.requestedTool ?? "the blocked tool"}.`;
+    case "skill_missing":
+      return `Review ${input.configArea} and add an installable source or workflow for the missing skill capability.`;
+    default:
+      return `Review ${input.configArea} for the minimal config-only repair.`;
+  }
 }
 
 function normalizeDecisionReplayCauseClass(value: string): DecisionReplayCauseClass {

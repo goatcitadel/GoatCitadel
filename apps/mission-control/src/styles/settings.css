@@ -1,0 +1,103 @@
+.settings-v2-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.settings-v2-nav {
+  position: sticky;
+  top: 88px;
+  display: grid;
+  gap: 14px;
+}
+
+.settings-v2-nav-head {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-v2-nav-head h3 {
+  margin: 0;
+}
+
+.settings-v2-nav-list {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-v2-nav-item {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(120, 146, 186, 0.16);
+  background: rgba(17, 23, 35, 0.78);
+}
+
+.settings-v2-nav-item strong {
+  font-size: 0.88rem;
+}
+
+.settings-v2-nav-item span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.settings-v2-content {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.settings-v2-section {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-v2-panel {
+  margin-bottom: 0;
+}
+
+.settings-v2-summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.settings-v2-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-v2-overview-grid > div {
+  border: 1px solid rgba(120, 146, 186, 0.14);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: rgba(15, 20, 31, 0.64);
+}
+
+.settings-v2-overview-grid strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+@media (max-width: 1180px) {
+    .settings-v2-layout,
+  .settings-v2-overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-v2-nav {
+    position: static;
+  }
+}

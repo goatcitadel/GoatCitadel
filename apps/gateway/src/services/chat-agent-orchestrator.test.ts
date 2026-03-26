@@ -479,6 +479,19 @@ function createMockStorage(): unknown {
     chatInlineApprovals: {
       upsert: () => undefined,
     },
+    approvals: {
+      get: (approvalId: string) => ({
+        approvalId,
+        kind: "shell.exec",
+        riskLevel: "danger",
+        status: "pending",
+        payload: {},
+        preview: {},
+        createdAt: "2026-03-22T12:00:00.000Z",
+        expiresAt: "2026-03-22T12:15:00.000Z",
+        explanationStatus: "not_requested",
+      }),
+    },
   };
 }
 

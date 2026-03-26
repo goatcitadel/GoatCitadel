@@ -15,6 +15,7 @@ import { ApprovalGate } from "./approval-gate.js";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { resolveEffectivePolicy } from "./policy-resolver.js";
 import { createDefaultToolRegistry, type ToolDefinition, type ToolRegistry } from "./tool-registry.js";
+import { matchesAnyToolPattern, matchesToolPattern } from "./tool-patterns.js";
 import { assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
 import { assertHostAllowed } from "./sandbox/network-guard.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
@@ -41,6 +42,7 @@ export interface ToolPolicyEngineRuntimeOptions {
 
 const BANKR_OPTIONAL_MIGRATION_MESSAGE =
   "Bankr built-in is disabled. Install the optional skill pack (docs/OPTIONAL_BANKR_SKILL.md; templates/skills/bankr-optional/SKILL.md).";
+const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 
 export class ToolPolicyEngine {
   private readonly approvals: ApprovalGate;
@@ -166,11 +168,13 @@ export class ToolPolicyEngine {
     }
 
     if (evaluation.requiresApproval) {
+      const expiresAt = new Date(Date.now() + DEFAULT_APPROVAL_TTL_MS).toISOString();
       const approval = await this.approvals.create({
         kind: request.toolName,
         riskLevel: evaluation.riskLevel,
         payload: request.args,
         preview: this.buildApprovalPreview(request),
+        expiresAt,
       });
 
       this.storage.pendingApprovalActions.upsertPending({
@@ -205,6 +209,7 @@ export class ToolPolicyEngine {
       return {
         outcome: "approval_required",
         approvalId: approval.approvalId,
+        expiresAt: approval.expiresAt ?? expiresAt,
         policyReason: evaluation.policyReason,
         auditEventId,
       };
@@ -319,11 +324,11 @@ export class ToolPolicyEngine {
     }
 
     const policy = resolveEffectivePolicy(this.config, request.agentId);
-    if (matchesAnyPattern(policy.denySet, request.toolName)) {
+    if (matchesAnyToolPattern(policy.denySet, request.toolName)) {
       return deny(riskLevel, "policy_deny", "tool denied by policy");
     }
 
-    if (!toolDef && !matchesAnyPattern(policy.effectiveTools, request.toolName)) {
+    if (!toolDef && !matchesAnyToolPattern(policy.effectiveTools, request.toolName)) {
       return deny(riskLevel, "unknown_tool", `unknown tool ${request.toolName}`);
     }
 
@@ -364,7 +369,7 @@ export class ToolPolicyEngine {
       }
     }
 
-    const inProfile = matchesAnyPattern(policy.effectiveTools, request.toolName);
+    const inProfile = matchesAnyToolPattern(policy.effectiveTools, request.toolName);
     const hasAllowGrant = grantDecision?.decision === "allow";
     if (!inProfile && !hasAllowGrant) {
       return deny(riskLevel, "profile_disallow", "tool not available in resolved profile");
@@ -434,6 +439,7 @@ export class ToolPolicyEngine {
 
   private resolveGrantDecision(request: ToolAccessEvaluateRequest): GrantDecision | undefined {
     const scoped = buildScopeCandidates(request);
+    const matchingGrants: ToolGrantRecord[] = [];
     for (const candidate of scoped) {
       const grants = this.storage.toolGrants.list(candidate.scope, candidate.scopeRef, 500)
         .filter((grant) => isGrantActive(grant))
@@ -442,16 +448,17 @@ export class ToolPolicyEngine {
       if (grants.length === 0) {
         continue;
       }
+      matchingGrants.push(...grants);
+    }
 
-      const denyGrant = grants.find((grant) => grant.decision === "deny");
-      if (denyGrant) {
-        return { decision: "deny", grant: denyGrant };
-      }
+    const denyGrant = matchingGrants.find((grant) => grant.decision === "deny");
+    if (denyGrant) {
+      return { decision: "deny", grant: denyGrant };
+    }
 
-      const allowGrant = grants.find((grant) => grant.decision === "allow");
-      if (allowGrant) {
-        return { decision: "allow", grant: allowGrant };
-      }
+    const allowGrant = matchingGrants.find((grant) => grant.decision === "allow");
+    if (allowGrant) {
+      return { decision: "allow", grant: allowGrant };
     }
 
     return undefined;
@@ -786,33 +793,6 @@ function buildScopeCandidates(request: ToolAccessEvaluateRequest): Array<{ scope
   out.push({ scope: "session", scopeRef: request.sessionId });
   out.push({ scope: "global", scopeRef: "global" });
   return out;
-}
-
-function matchesAnyPattern(values: Iterable<string>, toolName: string): boolean {
-  for (const value of values) {
-    if (matchesToolPattern(value, toolName)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function matchesToolPattern(pattern: string, toolName: string): boolean {
-  const trimmed = pattern.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (trimmed === "*") {
-    return true;
-  }
-  if (!trimmed.includes("*")) {
-    return trimmed === toolName;
-  }
-  const escaped = trimmed
-    .replace(/[|\\{}()[\]^$+?.]/g, "\\$&")
-    .replace(/\*/g, ".*");
-  const regex = new RegExp(`^${escaped}$`);
-  return regex.test(toolName);
 }
 
 function isGrantActive(grant: ToolGrantRecord): boolean {

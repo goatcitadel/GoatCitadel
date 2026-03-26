@@ -37,9 +37,9 @@ describe("isHostAllowed", () => {
       .toBe(false);
   });
 
-  it("allows public hosts when allowlist is empty", () => {
+  it("fails closed for public hosts when allowlist is empty", () => {
     expect(isHostAllowed("https://api.openai.com/v1/chat/completions", []))
-      .toBe(true);
+      .toBe(false);
   });
 
   it("blocks private and metadata hosts when allowlist is empty", () => {

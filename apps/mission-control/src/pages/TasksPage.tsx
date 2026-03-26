@@ -593,229 +593,246 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
           </table>
         </Panel>
 
-        <div>
+        <div className="task-detail-stack">
           {!selectedTask ? <p>Select a task to inspect details.</p> : null}
           {selectedTask ? (
-            <Panel
-              title={selectedTask.title}
-              subtitle={selectedTask.description || "No description yet."}
-            >
-              <p>{selectedTask.description || "No description yet."}</p>
-              {selectedTask.deletedAt ? (
+            <>
+              <Panel
+                title={selectedTask.title}
+                subtitle="Task summary and queue controls."
+                actions={(
+                  <div className="workflow-summary-strip">
+                    <StatusChip tone={isSelectedTaskDeleted ? "muted" : "live"}>{selectedTask.status}</StatusChip>
+                    <StatusChip tone="muted">Priority {selectedTask.priority}</StatusChip>
+                    {selectedTask.deletedAt ? <StatusChip tone="warning">In trash</StatusChip> : null}
+                  </div>
+                )}
+                className="task-detail-summary-panel"
+              >
+                <p>{selectedTask.description || "No description yet."}</p>
+                <FieldHelp>
+                  Use the status controls here to move the task through the execution lane before updating detailed notes.
+                </FieldHelp>
+                {selectedTask.deletedAt ? (
+                  <p className="office-subtitle">
+                    In Trash since {new Date(selectedTask.deletedAt).toLocaleString()}
+                    {selectedTask.deleteReason ? ` (${selectedTask.deleteReason})` : ""}
+                  </p>
+                ) : null}
+
+                <div className="controls-row task-status-row">
+                  <span>Status:</span>
+                  {statuses.map((status) => (
+                    <button type="button"
+                      key={status}
+                      className={selectedTask.status === status ? "active" : ""}
+                      disabled={isSelectedTaskDeleted}
+                      onClick={() => void onStatusChange(status)}
+                    >
+                      {status}
+                    </button>
+                  ))}
+                </div>
+              </Panel>
+
+              <Panel title="Run checkpoint resume" subtitle="Recover long-running workflows from the last known checkpoint.">
                 <p className="office-subtitle">
-                  In Trash since {new Date(selectedTask.deletedAt).toLocaleString()}
-                  {selectedTask.deleteReason ? ` (${selectedTask.deleteReason})` : ""}
+                  Use this when a long-running workflow is paused or waiting. Resume continues from the exact checkpoint.
                 </p>
-              ) : null}
-
-              <div className="controls-row">
-                <span>Status:</span>
-                {statuses.map((status) => (
-                  <button type="button"
-                    key={status}
-                    className={selectedTask.status === status ? "active" : ""}
-                    disabled={isSelectedTaskDeleted}
-                    onClick={() => void onStatusChange(status)}
-                  >
-                    {status}
-                  </button>
-                ))}
-              </div>
-
-              <h4>Run Checkpoint Resume</h4>
-              <p className="office-subtitle">
-                Use this when a long-running workflow is paused or waiting. Resume continues from the exact checkpoint.
-              </p>
-              <FieldHelp>Load the run first so you can see the blocked step before resuming or waking it.</FieldHelp>
-              <div className="controls-row">
-                <label htmlFor="taskDurableRunId">Run ID</label>
-                <input
-                  id="taskDurableRunId"
-                  value={durableRunId}
-                  onChange={(event) => setDurableRunId(event.target.value)}
-                  placeholder="durable run id"
-                />
-                <button
-                  type="button"
-                  onClick={() => { void loadDurableState(durableRunId); }}
-                  disabled={durableBusy !== null}
-                >
-                  {durableBusy === "load" ? "Loading..." : "Load run"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { void onResumeDurable(); }}
-                  disabled={durableBusy !== null || !durableStatus}
-                >
-                  {durableBusy === "resume" ? "Resuming..." : "Resume from checkpoint"}
-                </button>
-              </div>
-              {durableStatus?.status === "waiting" ? (
+                <FieldHelp>Load the run first so you can see the blocked step before resuming or waking it.</FieldHelp>
                 <div className="controls-row">
-                  <label htmlFor="taskDurableWake">Wake event</label>
+                  <label htmlFor="taskDurableRunId">Run ID</label>
                   <input
-                    id="taskDurableWake"
-                    value={durableWakeKey}
-                    onChange={(event) => setDurableWakeKey(event.target.value)}
-                    placeholder="manual.resume"
+                    id="taskDurableRunId"
+                    value={durableRunId}
+                    onChange={(event) => setDurableRunId(event.target.value)}
+                    placeholder="durable run id"
                   />
                   <button
                     type="button"
-                    onClick={() => { void onWakeDurable(); }}
+                    onClick={() => { void loadDurableState(durableRunId); }}
                     disabled={durableBusy !== null}
                   >
-                    {durableBusy === "wake" ? "Waking..." : "Wake waiting run"}
+                    {durableBusy === "load" ? "Loading..." : "Load run"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { void onResumeDurable(); }}
+                    disabled={durableBusy !== null || !durableStatus}
+                  >
+                    {durableBusy === "resume" ? "Resuming..." : "Resume from checkpoint"}
                   </button>
                 </div>
-              ) : null}
-              {durableStatus ? (
-                <p className="office-subtitle">
-                  Status: {durableStatus.status}
-                  {durableStatus.blockedStep ? ` | Blocked step: ${durableStatus.blockedStep}` : ""}
-                  {durableStatus.blockedReason ? ` | Reason: ${durableStatus.blockedReason}` : ""}
-                  {" | "}
-                  Updated: {new Date(durableStatus.updatedAt).toLocaleString()}
-                </p>
-              ) : (
-                <p className="office-subtitle">
-                  No run loaded yet. If unsure, copy a run ID from Improvement or durable diagnostics.
-                </p>
-              )}
-              {durableTimeline.length > 0 ? (
-                <details>
-                  <summary>Checkpoint timeline ({durableTimeline.length})</summary>
-                  <ul className="compact-list">
-                    {durableTimeline.slice(-12).reverse().map((event) => (
-                      <li key={event.eventId}>
-                        <strong>{event.eventType}</strong>
-                        {event.stepKey ? ` | ${event.stepKey}` : ""}
-                        {" | "}
-                        {new Date(event.createdAt).toLocaleString()}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              ) : null}
+                {durableStatus?.status === "waiting" ? (
+                  <div className="controls-row">
+                    <label htmlFor="taskDurableWake">Wake event</label>
+                    <input
+                      id="taskDurableWake"
+                      value={durableWakeKey}
+                      onChange={(event) => setDurableWakeKey(event.target.value)}
+                      placeholder="manual.resume"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => { void onWakeDurable(); }}
+                      disabled={durableBusy !== null}
+                    >
+                      {durableBusy === "wake" ? "Waking..." : "Wake waiting run"}
+                    </button>
+                  </div>
+                ) : null}
+                {durableStatus ? (
+                  <p className="office-subtitle">
+                    Status: {durableStatus.status}
+                    {durableStatus.blockedStep ? ` | Blocked step: ${durableStatus.blockedStep}` : ""}
+                    {durableStatus.blockedReason ? ` | Reason: ${durableStatus.blockedReason}` : ""}
+                    {" | "}
+                    Updated: {new Date(durableStatus.updatedAt).toLocaleString()}
+                  </p>
+                ) : (
+                  <p className="office-subtitle">
+                    No run loaded yet. If unsure, copy a run ID from Improvement or durable diagnostics.
+                  </p>
+                )}
+                {durableTimeline.length > 0 ? (
+                  <details>
+                    <summary>Checkpoint timeline ({durableTimeline.length})</summary>
+                    <ul className="compact-list">
+                      {durableTimeline.slice(-12).reverse().map((event) => (
+                        <li key={event.eventId}>
+                          <strong>{event.eventType}</strong>
+                          {event.stepKey ? ` | ${event.stepKey}` : ""}
+                          {" | "}
+                          {new Date(event.createdAt).toLocaleString()}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
+              </Panel>
 
-              <h4>Activities</h4>
-              {loadingDetails ? <p className="office-subtitle">Refreshing task details...</p> : null}
-              <FieldHelp>Use activities for short operator-visible progress notes.</FieldHelp>
-              <div className="controls-row">
-                <SelectOrCustom
-                  value={activityMessage}
-                  onChange={setActivityMessage}
-                  options={ACTIVITY_OPTIONS}
-                  customPlaceholder="Custom activity message"
-                  customLabel="Activity message"
-                  autoSelectFirstOption
-                />
-                <button type="button" disabled={!canAddActivity} onClick={() => void onAddActivity()}>Add Activity</button>
-              </div>
-              {!canAddActivity ? <p className="office-subtitle">{activityBlockedReason}</p> : null}
-              <ul className="compact-list">
-                {activities.map((activity) => (
-                  <li key={activity.activityId}>
-                    <strong>{activity.activityType}</strong> - {activity.message}
-                    <small> ({new Date(activity.createdAt).toLocaleString()})</small>
-                  </li>
-                ))}
-              </ul>
-              {activities.length === 0 ? <p className="office-subtitle">No activities yet.</p> : null}
+              <Panel title="Activities" subtitle="Operator-visible progress notes for the selected task.">
+                {loadingDetails ? <p className="office-subtitle">Refreshing task details...</p> : null}
+                <FieldHelp>Use activities for short operator-visible progress notes.</FieldHelp>
+                <div className="controls-row">
+                  <SelectOrCustom
+                    value={activityMessage}
+                    onChange={setActivityMessage}
+                    options={ACTIVITY_OPTIONS}
+                    customPlaceholder="Custom activity message"
+                    customLabel="Activity message"
+                    autoSelectFirstOption
+                  />
+                  <button type="button" disabled={!canAddActivity} onClick={() => void onAddActivity()}>Add Activity</button>
+                </div>
+                {!canAddActivity ? <p className="office-subtitle">{activityBlockedReason}</p> : null}
+                <ul className="compact-list">
+                  {activities.map((activity) => (
+                    <li key={activity.activityId}>
+                      <strong>{activity.activityType}</strong> - {activity.message}
+                      <small> ({new Date(activity.createdAt).toLocaleString()})</small>
+                    </li>
+                  ))}
+                </ul>
+                {activities.length === 0 ? <p className="office-subtitle">No activities yet.</p> : null}
+              </Panel>
 
-              <h4>Deliverables</h4>
-              <FieldHelp>Attach concrete outputs here so review stays tied to the task.</FieldHelp>
-              <div className="controls-row">
-                <SelectOrCustom
-                  value={deliverableTitle}
-                  onChange={setDeliverableTitle}
-                  options={DELIVERABLE_TITLE_OPTIONS}
-                  customPlaceholder="Custom deliverable title"
-                  customLabel="Deliverable title"
-                  autoSelectFirstOption
-                />
-                <SelectOrCustom
-                  value={deliverablePath}
-                  onChange={setDeliverablePath}
-                  options={DELIVERABLE_PATH_OPTIONS}
-                  customPlaceholder="Optional custom path"
-                  customLabel="Deliverable path"
-                />
-                <button type="button" disabled={!canAddDeliverable} onClick={() => void onAddDeliverable()}>Add Deliverable</button>
-              </div>
-              {!canAddDeliverable ? <p className="office-subtitle">{deliverableBlockedReason}</p> : null}
-              <ul className="compact-list">
-                {deliverables.map((deliverable) => (
-                  <li key={deliverable.deliverableId}>
-                    <strong>{deliverable.title}</strong>
-                    {deliverable.path ? ` - ${deliverable.path}` : ""}
-                  </li>
-                ))}
-              </ul>
-              {deliverables.length === 0 ? <p className="office-subtitle">No deliverables yet.</p> : null}
+              <Panel title="Deliverables" subtitle="Attach concrete outputs so review stays bound to the task.">
+                <FieldHelp>Attach concrete outputs here so review stays tied to the task.</FieldHelp>
+                <div className="controls-row">
+                  <SelectOrCustom
+                    value={deliverableTitle}
+                    onChange={setDeliverableTitle}
+                    options={DELIVERABLE_TITLE_OPTIONS}
+                    customPlaceholder="Custom deliverable title"
+                    customLabel="Deliverable title"
+                    autoSelectFirstOption
+                  />
+                  <SelectOrCustom
+                    value={deliverablePath}
+                    onChange={setDeliverablePath}
+                    options={DELIVERABLE_PATH_OPTIONS}
+                    customPlaceholder="Optional custom path"
+                    customLabel="Deliverable path"
+                  />
+                  <button type="button" disabled={!canAddDeliverable} onClick={() => void onAddDeliverable()}>Add Deliverable</button>
+                </div>
+                {!canAddDeliverable ? <p className="office-subtitle">{deliverableBlockedReason}</p> : null}
+                <ul className="compact-list">
+                  {deliverables.map((deliverable) => (
+                    <li key={deliverable.deliverableId}>
+                      <strong>{deliverable.title}</strong>
+                      {deliverable.path ? ` - ${deliverable.path}` : ""}
+                    </li>
+                  ))}
+                </ul>
+                {deliverables.length === 0 ? <p className="office-subtitle">No deliverables yet.</p> : null}
+              </Panel>
 
-              <h4>Goat Subagent Sessions</h4>
-              <FieldHelp>Link delegated sessions here when the task is split across agents.</FieldHelp>
-              <div className="controls-row">
-                <SelectOrCustom
-                  value={subagentSessionId}
-                  onChange={setSubagentSessionId}
-                  options={subagentSessionOptions}
-                  customPlaceholder="Session id"
-                  customLabel="Session id"
-                  autoSelectFirstOption
-                />
-                <SelectOrCustom
-                  value={subagentRoleId}
-                  onChange={(nextRoleId) => {
-                    setSubagentRoleId(nextRoleId);
-                    const role = (
-                      agentProfiles.length > 0
-                        ? agentProfiles.find((item) => item.roleId === nextRoleId)
-                        : BUILTIN_AGENT_ROSTER.find((item) => item.roleId === nextRoleId)
-                    );
-                    if (role) {
-                      setSubagentName(role.name);
-                    }
-                  }}
-                  options={subagentRoleOptions}
-                  customPlaceholder="Optional role id"
-                  customLabel="Role id"
-                />
-                <SelectOrCustom
-                  value={subagentName}
-                  onChange={setSubagentName}
-                  options={subagentNameOptions}
-                  customPlaceholder="Optional agent name"
-                  customLabel="Agent name"
-                />
-                <button type="button" disabled={!canAddSubagent} onClick={() => void onAddSubagent()}>Add Subagent</button>
-              </div>
-              {!canAddSubagent ? <p className="office-subtitle">{subagentBlockedReason}</p> : null}
-              {!showAdvanced && subagentSessionOptions.length === 0 ? (
-                <p className="office-subtitle">
-                  No existing session IDs found yet. Create a chat session first, or open advanced mode to enter an external session ID.
-                </p>
-              ) : null}
-              <button type="button" onClick={() => setShowAdvanced((current) => !current)}>
-                {showAdvanced ? "Hide advanced subagent details" : "Show advanced subagent details"}
-              </button>
-              {showAdvanced ? (
-                <p className="office-subtitle">
-                  Advanced mode lets you provide arbitrary session IDs and custom names for external sessions.
-                </p>
-              ) : null}
-              <ul className="compact-list">
-                {subagents.map((session) => (
-                  <li key={session.subagentSessionId}>
-                    <strong>{session.agentName ?? session.agentSessionId}</strong> - {session.status}
-                    {session.status === "active" ? (
-                      <button type="button" disabled={isSelectedTaskDeleted} onClick={() => void onCompleteSubagent(session.agentSessionId)}>Mark Completed</button>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-              {subagents.length === 0 ? <p className="office-subtitle">No subagent sessions linked yet.</p> : null}
-            </Panel>
+              <Panel title="Goat subagent sessions" subtitle="Track delegated execution without leaving the selected task.">
+                <FieldHelp>Link delegated sessions here when the task is split across agents.</FieldHelp>
+                <div className="controls-row">
+                  <SelectOrCustom
+                    value={subagentSessionId}
+                    onChange={setSubagentSessionId}
+                    options={subagentSessionOptions}
+                    customPlaceholder="Session id"
+                    customLabel="Session id"
+                    autoSelectFirstOption
+                  />
+                  <SelectOrCustom
+                    value={subagentRoleId}
+                    onChange={(nextRoleId) => {
+                      setSubagentRoleId(nextRoleId);
+                      const role = (
+                        agentProfiles.length > 0
+                          ? agentProfiles.find((item) => item.roleId === nextRoleId)
+                          : BUILTIN_AGENT_ROSTER.find((item) => item.roleId === nextRoleId)
+                      );
+                      if (role) {
+                        setSubagentName(role.name);
+                      }
+                    }}
+                    options={subagentRoleOptions}
+                    customPlaceholder="Optional role id"
+                    customLabel="Role id"
+                  />
+                  <SelectOrCustom
+                    value={subagentName}
+                    onChange={setSubagentName}
+                    options={subagentNameOptions}
+                    customPlaceholder="Optional agent name"
+                    customLabel="Agent name"
+                  />
+                  <button type="button" disabled={!canAddSubagent} onClick={() => void onAddSubagent()}>Add Subagent</button>
+                </div>
+                {!canAddSubagent ? <p className="office-subtitle">{subagentBlockedReason}</p> : null}
+                {!showAdvanced && subagentSessionOptions.length === 0 ? (
+                  <p className="office-subtitle">
+                    No existing session IDs found yet. Create a chat session first, or open advanced mode to enter an external session ID.
+                  </p>
+                ) : null}
+                <button type="button" onClick={() => setShowAdvanced((current) => !current)}>
+                  {showAdvanced ? "Hide advanced subagent details" : "Show advanced subagent details"}
+                </button>
+                {showAdvanced ? (
+                  <p className="office-subtitle">
+                    Advanced mode lets you provide arbitrary session IDs and custom names for external sessions.
+                  </p>
+                ) : null}
+                <ul className="compact-list">
+                  {subagents.map((session) => (
+                    <li key={session.subagentSessionId}>
+                      <strong>{session.agentName ?? session.agentSessionId}</strong> - {session.status}
+                      {session.status === "active" ? (
+                        <button type="button" disabled={isSelectedTaskDeleted} onClick={() => void onCompleteSubagent(session.agentSessionId)}>Mark Completed</button>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+                {subagents.length === 0 ? <p className="office-subtitle">No subagent sessions linked yet.</p> : null}
+              </Panel>
+            </>
           ) : null}
         </div>
       </div>

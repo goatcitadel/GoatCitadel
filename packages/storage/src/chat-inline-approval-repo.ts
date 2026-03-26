@@ -8,6 +8,7 @@ export interface ChatInlineApprovalRecord {
   toolName?: string;
   status: "pending" | "approved" | "denied";
   reason?: string;
+  expiresAt?: string;
   resolvedBy?: string;
   createdAt: string;
   resolvedAt?: string;
@@ -20,6 +21,7 @@ interface ChatInlineApprovalRow {
   tool_name: string | null;
   status: "pending" | "approved" | "denied";
   reason: string | null;
+  expires_at: string | null;
   resolved_by: string | null;
   created_at: string;
   resolved_at: string | null;
@@ -34,13 +36,14 @@ export class ChatInlineApprovalRepository {
     this.getStmt = db.prepare("SELECT * FROM chat_inline_approvals WHERE approval_id = ?");
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_inline_approvals (
-        approval_id, session_id, turn_id, tool_name, status, reason, resolved_by, created_at, resolved_at
+        approval_id, session_id, turn_id, tool_name, status, reason, expires_at, resolved_by, created_at, resolved_at
       ) VALUES (
-        @approvalId, @sessionId, @turnId, @toolName, @status, @reason, @resolvedBy, @createdAt, @resolvedAt
+        @approvalId, @sessionId, @turnId, @toolName, @status, @reason, @expiresAt, @resolvedBy, @createdAt, @resolvedAt
       )
       ON CONFLICT(approval_id) DO UPDATE SET
         status = excluded.status,
         reason = excluded.reason,
+        expires_at = COALESCE(excluded.expires_at, chat_inline_approvals.expires_at),
         resolved_by = excluded.resolved_by,
         resolved_at = excluded.resolved_at
     `);
@@ -63,6 +66,7 @@ export class ChatInlineApprovalRepository {
     toolName?: string;
     status: "pending" | "approved" | "denied";
     reason?: string;
+    expiresAt?: string;
     resolvedBy?: string;
     createdAt?: string;
     resolvedAt?: string;
@@ -76,6 +80,7 @@ export class ChatInlineApprovalRepository {
       toolName: input.toolName ?? null,
       status: input.status,
       reason: input.reason ?? null,
+      expiresAt: input.expiresAt ?? current?.expiresAt ?? null,
       resolvedBy: input.resolvedBy ?? null,
       createdAt: current?.createdAt ?? input.createdAt ?? now,
       resolvedAt: input.resolvedAt ?? (input.status === "pending" ? null : now),
@@ -105,6 +110,7 @@ function mapRow(row: ChatInlineApprovalRow): ChatInlineApprovalRecord {
     toolName: row.tool_name ?? undefined,
     status: row.status,
     reason: row.reason ?? undefined,
+    expiresAt: row.expires_at ?? undefined,
     resolvedBy: row.resolved_by ?? undefined,
     createdAt: row.created_at,
     resolvedAt: row.resolved_at ?? undefined,
