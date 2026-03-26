@@ -123,3 +123,78 @@ export interface WeeklyImprovementReportRecord {
   previousReportId?: string;
   createdAt: string;
 }
+
+export type CapabilityGapCauseClass =
+  | "tool_exists_but_not_in_profile"
+  | "tool_requires_approval_but_not_exposed"
+  | "skill_missing"
+  | "provider_tool_mismatch"
+  | "retryable_network_failure"
+  | "policy_denied_by_config"
+  | "missing_required_tool_evidence"
+  | "routing_profile_mismatch";
+
+export interface CapabilityGapEventRecord {
+  eventId: string;
+  sessionId: string;
+  turnId?: string;
+  runId?: string;
+  causeClass: CapabilityGapCauseClass;
+  failureClass?: string;
+  promptExcerpt?: string;
+  promptRef?: string;
+  requestedTool?: string;
+  toolFamily?: string;
+  toolProfile?: string;
+  policyReason?: string;
+  providerId?: string;
+  model?: string;
+  configArea?: string;
+  suggestedRepairClass?: string;
+  confidence: number;
+  repeatCount: number;
+  recoveryOptions: Array<
+    | "temporary_session_allow"
+    | "switch_tool_profile"
+    | "request_approval"
+    | "install_skill"
+    | "reroute_provider"
+    | "retry_once"
+    | "replay_failed_turn"
+    | "patch_config"
+  >;
+  replayRunId?: string;
+  replayStatus: "not_run" | "queued" | "running" | "completed" | "failed";
+  repairCandidateId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RepairValidationStatus =
+  | "not_started"
+  | "queued"
+  | "running"
+  | "needs_review"
+  | "passed"
+  | "failed";
+
+export interface RepairCandidateRecord {
+  candidateId: string;
+  fingerprint: string;
+  causeClass: CapabilityGapCauseClass;
+  title: string;
+  summary: string;
+  requestedTool?: string;
+  toolProfile?: string;
+  providerId?: string;
+  configArea?: string;
+  suggestedPatch?: string;
+  replayRunId?: string;
+  validationStatus: RepairValidationStatus;
+  validationSummary?: string;
+  eventCount: number;
+  confidence: number;
+  createdAt: string;
+  updatedAt: string;
+  lastSeenAt: string;
+}

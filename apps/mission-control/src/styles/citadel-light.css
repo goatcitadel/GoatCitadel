@@ -3,35 +3,38 @@
 }
 
 .theme-citadel-light {
-  --background: #f3f6f7;
-  --surface: #ffffff;
-  --surface-elevated: #ffffff;
-  --surface-muted: #f7f9fa;
-  --text-primary: #15262f;
-  --text-secondary: #415761;
-  --text-muted: #6c818b;
-  --border-quiet: rgba(21, 50, 59, 0.08);
-  --border-default: rgba(21, 50, 59, 0.13);
-  --border-strong: rgba(17, 112, 138, 0.24);
+  --background: #a8bcc3;
+  --surface: #97adb5;
+  --surface-elevated: #8ca4ad;
+  --surface-muted: #7f98a2;
+  --text-primary: #0f1d24;
+  --text-secondary: #253a42;
+  --text-muted: #4f6670;
+  --border-quiet: rgba(15, 35, 44, 0.11);
+  --border-default: rgba(15, 35, 44, 0.18);
+  --border-strong: rgba(17, 112, 138, 0.3);
   --accent: #11708a;
-  --focus: rgba(17, 112, 138, 0.16);
+  --focus: rgba(17, 112, 138, 0.2);
   --success: #15835f;
   --warning: #b66a1f;
   --danger: #b54a59;
-  --gc-bg-shell: #f3f6f7;
-  --gc-bg-sidebar: #f7f9fa;
-  --gc-bg-panel: #ffffff;
-  --gc-bg-panel-elevated: #ffffff;
-  --gc-bg-panel-muted: #f7f9fa;
-  --gc-bg-inset: #f0f4f5;
-  --gc-border-quiet: rgba(21, 50, 59, 0.08);
-  --gc-border-default: rgba(21, 50, 59, 0.13);
-  --gc-border-strong: rgba(17, 112, 138, 0.24);
+  --info: #0d5f7a;
+  --gc-bg-shell: #a8bcc3;
+  --gc-bg-sidebar: #98afb7;
+  --gc-bg-panel: #97adb5;
+  --gc-bg-panel-elevated: #8ca4ad;
+  --gc-bg-panel-muted: #7f98a2;
+  --gc-bg-inset: #728a94;
+  --gc-bg-code: #10212b;
+  --gc-bg-code-soft: #18313d;
+  --gc-border-quiet: rgba(15, 35, 44, 0.11);
+  --gc-border-default: rgba(15, 35, 44, 0.22);
+  --gc-border-strong: rgba(17, 112, 138, 0.38);
   --gc-border-live: rgba(14, 145, 170, 0.48);
-  --gc-text-primary: #15262f;
-  --gc-text-secondary: #415761;
-  --gc-text-muted: #6c818b;
-  --gc-text-disabled: #81939b;
+  --gc-text-primary: #0f1d24;
+  --gc-text-secondary: #253a42;
+  --gc-text-muted: #4f6670;
+  --gc-text-disabled: #687f88;
   --gc-accent: #11708a;
   --gc-accent-strong: #0e5f75;
   --gc-accent-ember: #b66a1f;
@@ -39,24 +42,35 @@
   --gc-accent-success: #15835f;
   --gc-accent-warning: #b66a1f;
   --gc-accent-danger: #b54a59;
-  --panel: #ffffff;
-  --panel-alt: #f7f9fa;
-  --panel-border: rgba(21, 50, 59, 0.12);
-  --panel-soft: #f7f9fa;
-  --panel-elevated: #ffffff;
-  --panel-accent: rgba(17, 112, 138, 0.06);
-  --text-muted: #6c818b;
+  --gc-accent-info: #0d5f7a;
+  --gc-teal-surface-strong: rgba(156, 190, 200, 0.99);
+  --gc-teal-surface: rgba(139, 175, 186, 0.98);
+  --gc-teal-surface-soft: rgba(122, 159, 171, 0.97);
+  --gc-teal-surface-deep: rgba(107, 145, 158, 0.96);
+  --gc-shell-band: linear-gradient(180deg, rgba(173, 195, 203, 0.99), rgba(155, 179, 188, 0.98));
+  --gc-shell-band-muted: linear-gradient(180deg, rgba(161, 184, 192, 0.99), rgba(143, 168, 177, 0.98));
+  --panel: #97adb5;
+  --panel-alt: #7f98a2;
+  --panel-border: rgba(15, 35, 44, 0.16);
+  --panel-soft: #7f98a2;
+  --panel-elevated: #8ca4ad;
+  --panel-accent: rgba(17, 112, 138, 0.14);
+  --text-muted: #5e737d;
   --accent: #11708a;
   color: var(--gc-text-primary);
 }
 
 .layout-shell.theme-citadel-light {
-  background: linear-gradient(180deg, #f7f9fa 0%, #f2f5f6 100%);
-  grid-template-columns: 296px minmax(0, 1fr);
+  background: linear-gradient(180deg, #a8bcc3 0%, #97adb5 100%);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .layout-shell.theme-citadel-light::before {
   content: none;
+}
+
+.layout-shell.theme-citadel-light.layout-shell-command-deck {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .theme-citadel-light .content.shell-content {
@@ -64,10 +78,20 @@
   min-width: 0;
   overflow-x: clip;
   max-width: none;
-  padding: 24px 28px 36px;
+  padding: 20px 24px 30px;
   display: grid;
-  gap: 18px;
+  gap: 14px;
   background: transparent;
+}
+
+.layout-shell.theme-citadel-light.layout-shell-command-deck .sidebar {
+  display: none;
+}
+
+.layout-shell.theme-citadel-light.layout-shell-command-deck .content.shell-content {
+  grid-column: 1;
+  width: 100%;
+  padding-left: 28px;
 }
 
 .theme-citadel-light .sidebar {
@@ -93,9 +117,9 @@
   height: 48px;
   padding: 6px;
   border-radius: 12px;
-  border-color: rgba(15, 138, 166, 0.2);
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 10px 22px rgba(18, 61, 74, 0.08);
+  border-color: rgba(15, 138, 166, 0.24);
+  background: rgba(252, 254, 255, 0.94);
+  box-shadow: 0 12px 26px rgba(18, 61, 74, 0.11);
 }
 
 .theme-citadel-light .sidebar-brand-wordmark {
@@ -191,9 +215,10 @@
 .theme-citadel-light .gc-select-trigger,
 .theme-citadel-light .gc-combobox-trigger {
   min-height: 42px;
-  border-radius: 12px;
+  border-radius: 8px;
   border: 1px solid var(--gc-border-default);
-  background: #ffffff;
+  background:
+    linear-gradient(180deg, rgba(152, 186, 196, 0.99), rgba(126, 162, 172, 0.97));
   color: var(--gc-text-primary);
   box-shadow: none;
 }
@@ -202,7 +227,8 @@
 .theme-citadel-light .gc-select-trigger:hover,
 .theme-citadel-light .gc-combobox-trigger:hover {
   border-color: rgba(17, 112, 138, 0.24);
-  background: #fcfefe;
+  background:
+    linear-gradient(180deg, rgba(145, 179, 189, 0.99), rgba(119, 156, 166, 0.97));
   box-shadow: none;
 }
 
@@ -225,7 +251,8 @@
 .theme-citadel-light .gc-select-option.active,
 .theme-citadel-light .gc-combobox-option.active {
   border-color: rgba(15, 138, 166, 0.42);
-  background: rgba(231, 247, 251, 0.98);
+  background:
+    linear-gradient(180deg, rgba(118, 171, 185, 0.99), rgba(93, 147, 161, 0.97));
   color: var(--gc-accent-strong);
 }
 
@@ -340,9 +367,14 @@
   padding: 16px 18px;
   border-radius: 16px;
   border: 1px solid var(--gc-border-default);
-  background: rgba(255, 255, 255, 0.96);
+  background:
+    linear-gradient(180deg, rgba(200, 214, 220, 0.99), rgba(185, 201, 208, 0.98));
   backdrop-filter: blur(8px);
-  box-shadow: 0 1px 2px rgba(21, 50, 59, 0.04);
+  box-shadow: 0 6px 16px rgba(21, 50, 59, 0.05);
+}
+
+.theme-citadel-light .shell-topbar::after {
+  opacity: 0.32;
 }
 
 .theme-citadel-light .shell-topbar-title-row {
@@ -355,7 +387,7 @@
 .theme-citadel-light .shell-topbar h3,
 .theme-citadel-light .page-header-title {
   margin: 0;
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-family: var(--font-body);
   font-size: clamp(1.48rem, 1.24rem + 0.7vw, 1.92rem);
   font-weight: 600;
   line-height: 1.08;
@@ -410,11 +442,13 @@
 }
 
 .theme-citadel-light .shell-workspace-picker {
+  flex: 1 1 230px;
   min-width: 220px;
   padding: 8px 12px;
-  border-radius: 12px;
+  border-radius: 9px;
   border: 1px solid var(--gc-border-default);
-  background: #ffffff;
+  background:
+    linear-gradient(180deg, rgba(163, 194, 202, 0.99), rgba(137, 170, 180, 0.97));
 }
 
 .theme-citadel-light .shell-preferences {
@@ -422,6 +456,7 @@
 }
 
 .theme-citadel-light .shell-preferences summary {
+  min-width: 116px;
   list-style: none;
   cursor: pointer;
   min-height: 44px;
@@ -429,9 +464,10 @@
   align-items: center;
   justify-content: center;
   padding: 0 14px;
-  border-radius: 14px;
+  border-radius: 9px;
   border: 1px solid var(--gc-border-default);
-  background: rgba(255, 255, 255, 0.98);
+  background:
+    linear-gradient(180deg, rgba(164, 195, 203, 0.99), rgba(137, 171, 181, 0.97));
   color: var(--gc-text-primary);
 }
 
@@ -450,7 +486,8 @@
   padding: 16px;
   border-radius: 16px;
   border: 1px solid var(--gc-border-default);
-  background: rgba(255, 255, 255, 0.98);
+  background:
+    linear-gradient(180deg, rgba(186, 217, 225, 0.99), rgba(158, 192, 202, 0.97));
   box-shadow: 0 16px 30px rgba(22, 62, 73, 0.1);
 }
 
@@ -470,8 +507,9 @@
 .theme-citadel-light .workflow-page .data-toolbar {
   border-radius: 16px;
   border: 1px solid var(--gc-border-default);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 1px 2px rgba(21, 50, 59, 0.04);
+  background:
+    linear-gradient(180deg, rgba(168, 199, 208, 0.99), rgba(142, 176, 186, 0.97));
+  box-shadow: 0 12px 28px rgba(21, 50, 59, 0.08);
 }
 
 .theme-citadel-light .shell-context-bar {
@@ -479,6 +517,155 @@
   grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
   gap: 20px;
   padding: 16px 18px;
+}
+
+.theme-citadel-light .prompt-lab-hero {
+  padding: 22px 24px;
+  border-radius: 24px;
+  border: 1px solid rgba(17, 112, 138, 0.12);
+  background:
+    radial-gradient(circle at top right, rgba(17, 112, 138, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(245, 249, 250, 0.96));
+  box-shadow: 0 16px 32px rgba(24, 73, 86, 0.08);
+}
+
+.theme-citadel-light .prompt-lab-kicker,
+.theme-citadel-light .prompt-lab-overview-label {
+  color: var(--gc-accent-strong);
+}
+
+.theme-citadel-light .prompt-lab-intro {
+  color: var(--gc-text-primary);
+}
+
+.theme-citadel-light .prompt-lab-overview-card {
+  border-color: rgba(17, 112, 138, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 250, 0.96));
+  box-shadow: 0 10px 24px rgba(23, 66, 79, 0.06);
+}
+
+.theme-citadel-light .prompt-lab-overview-card strong {
+  color: var(--gc-text-primary);
+}
+
+.theme-citadel-light .prompt-lab-overview-card p {
+  color: var(--gc-text-secondary);
+}
+
+.theme-citadel-light .prompt-lab-surface {
+  border-radius: 24px;
+  border: 1px solid rgba(21, 50, 59, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 252, 0.98));
+  box-shadow: 0 14px 28px rgba(23, 66, 79, 0.07);
+}
+
+.theme-citadel-light .prompt-lab-surface h3,
+.theme-citadel-light .prompt-lab-surface h4,
+.theme-citadel-light .prompt-lab-surface strong,
+.theme-citadel-light .prompt-lab-surface code,
+.theme-citadel-light .prompt-lab-surface th,
+.theme-citadel-light .prompt-lab-surface td {
+  color: var(--gc-text-primary);
+}
+
+.theme-citadel-light .prompt-lab-surface p,
+.theme-citadel-light .prompt-lab-surface li,
+.theme-citadel-light .prompt-lab-surface label,
+.theme-citadel-light .prompt-lab-surface summary,
+.theme-citadel-light .prompt-lab-test-meta {
+  color: var(--gc-text-secondary);
+  opacity: 1;
+}
+
+.theme-citadel-light .prompt-lab-field {
+  color: var(--gc-text-primary);
+  font-weight: 600;
+}
+
+.theme-citadel-light .prompt-lab-field textarea,
+.theme-citadel-light .prompt-lab-field input {
+  font-weight: 400;
+}
+
+.theme-citadel-light .prompt-lab-placeholder-banner {
+  border-color: rgba(182, 106, 31, 0.18);
+  background: linear-gradient(180deg, rgba(255, 249, 242, 0.98), rgba(255, 245, 234, 0.98));
+}
+
+.theme-citadel-light .prompt-lab-placeholder-fields {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.theme-citadel-light .prompt-lab-placeholder-copy,
+.theme-citadel-light .prompt-lab-placeholder-note {
+  color: var(--gc-text-primary);
+}
+
+.theme-citadel-light .prompt-lab-detail pre,
+.theme-citadel-light .prompt-lab-benchmark-panel,
+.theme-citadel-light .prompt-lab-run-summary,
+.theme-citadel-light .prompt-lab-packs li,
+.theme-citadel-light .prompt-lab-tests li {
+  border-color: rgba(17, 112, 138, 0.16);
+  background: #f6fafb;
+  color: var(--gc-text-primary);
+}
+
+.theme-citadel-light .prompt-lab-packs button,
+.theme-citadel-light .prompt-lab-tests button {
+  border-color: rgba(17, 112, 138, 0.1);
+  background: #ffffff;
+  color: var(--gc-text-primary);
+}
+
+.theme-citadel-light .prompt-lab-packs button.active,
+.theme-citadel-light .prompt-lab-tests button.active {
+  border-color: rgba(17, 112, 138, 0.26);
+  background: rgba(223, 242, 247, 0.96);
+  color: var(--gc-accent-strong);
+}
+
+.theme-citadel-light .prompt-lab-chip {
+  border-color: rgba(21, 50, 59, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.theme-citadel-light .prompt-lab-chip.run-not-run,
+.theme-citadel-light .prompt-lab-chip.result-not-run {
+  color: var(--gc-text-muted);
+}
+
+.theme-citadel-light .prompt-lab-chip.run-completed,
+.theme-citadel-light .prompt-lab-chip.result-passing {
+  color: #145f48;
+}
+
+.theme-citadel-light .prompt-lab-chip.run-running,
+.theme-citadel-light .prompt-lab-chip.score-ready {
+  color: #0d5870;
+}
+
+.theme-citadel-light .prompt-lab-chip.run-failed,
+.theme-citadel-light .prompt-lab-chip.result-run-failed {
+  color: #8e3444;
+}
+
+.theme-citadel-light .prompt-lab-chip.score-missing,
+.theme-citadel-light .prompt-lab-chip.result-score-failed,
+.theme-citadel-light .prompt-lab-chip.result-needs-score {
+  color: #8e5618;
+}
+
+.theme-citadel-light .prompt-lab-reset-banner,
+.theme-citadel-light .prompt-lab-export-banner {
+  align-items: center;
+}
+
+.theme-citadel-light .prompt-lab-export-banner button,
+.theme-citadel-light .prompt-lab-reset-banner button {
+  min-height: 38px;
 }
 
 .theme-citadel-light .shell-context-lead {
@@ -538,12 +725,12 @@
   border-radius: 10px;
   border-color: rgba(21, 50, 59, 0.08);
   color: var(--gc-text-secondary);
-  background: #ffffff;
+  background: linear-gradient(180deg, rgba(179, 211, 219, 0.98), rgba(150, 185, 194, 0.96));
 }
 
 .theme-citadel-light .shell-context-pill.active {
   border-color: rgba(17, 112, 138, 0.14);
-  background: rgba(17, 112, 138, 0.08);
+  background: linear-gradient(180deg, rgba(151, 199, 211, 0.99), rgba(123, 172, 184, 0.97));
   color: var(--gc-text-primary);
 }
 
@@ -554,17 +741,34 @@
 
 .theme-citadel-light .page-header {
   margin: 0;
-  padding: 16px 18px;
+  padding: var(--mc-surface-pad);
 }
 
 .theme-citadel-light .page-header-main {
   gap: 10px;
 }
 
+.theme-citadel-light .page-header-meta {
+  display: grid;
+  gap: 12px;
+}
+
 .theme-citadel-light .page-header-subtitle,
 .theme-citadel-light .page-header-hint {
   font-size: 0.96rem;
   line-height: 1.55;
+}
+
+.theme-citadel-light .page-header-hint {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(17, 112, 138, 0.14);
+  background:
+    linear-gradient(180deg, rgba(139, 173, 182, 0.99), rgba(116, 153, 163, 0.97));
+}
+
+.theme-citadel-light .page-header-actions {
+  align-items: flex-start;
 }
 
 .theme-citadel-light .section-header {
@@ -575,27 +779,37 @@
   margin-bottom: 14px;
 }
 
-.theme-citadel-light .panel-body,
-.theme-citadel-light .panel-pad-default,
-.theme-citadel-light .panel-pad-spacious {
-  padding: 0;
+.theme-citadel-light .panel {
+  gap: 16px;
 }
 
-.theme-citadel-light .panel {
-  padding: 16px 18px;
+.theme-citadel-light .panel-body {
+  gap: 14px;
+}
+
+.theme-citadel-light .panel-pad-compact {
+  padding: var(--mc-surface-pad-compact);
+}
+
+.theme-citadel-light .panel-pad-default {
+  padding: var(--mc-surface-pad);
+}
+
+.theme-citadel-light .panel-pad-spacious {
+  padding: var(--mc-surface-pad-spacious);
 }
 
 .theme-citadel-light .panel-soft {
-  background: #f9fbfc;
+  background: linear-gradient(180deg, rgba(136, 170, 180, 0.99), rgba(113, 149, 160, 0.97));
 }
 
 .theme-citadel-light .panel-accent {
-  background: #f3fbfd;
+  background: linear-gradient(180deg, rgba(128, 167, 177, 0.99), rgba(106, 146, 157, 0.97));
 }
 
 .theme-citadel-light .panel-warning {
   border-color: rgba(182, 106, 31, 0.22);
-  background: #fffaf3;
+  background: linear-gradient(180deg, rgba(203, 218, 214, 0.99), rgba(182, 198, 193, 0.97));
 }
 
 .theme-citadel-light .panel-critical {
@@ -607,23 +821,23 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(21, 50, 59, 0.1);
-  background: rgba(247, 249, 250, 0.98);
-  color: var(--gc-text-secondary);
+  padding: 4px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(21, 50, 59, 0.14);
+  background: rgba(154, 186, 194, 0.98);
+  color: var(--gc-text-primary);
   font-size: 0.76rem;
 }
 
 .theme-citadel-light .status-chip-live {
   border-color: rgba(15, 138, 166, 0.24);
-  background: rgba(231, 247, 251, 0.98);
+  background: rgba(130, 181, 193, 0.99);
   color: var(--gc-accent-strong);
 }
 
 .theme-citadel-light .status-chip-success {
   border-color: rgba(21, 131, 95, 0.24);
-  background: rgba(236, 250, 244, 0.98);
+  background: rgba(221, 239, 229, 0.98);
   color: var(--gc-accent-success);
 }
 
@@ -640,9 +854,9 @@
 }
 
 .theme-citadel-light .status-chip-muted {
-  color: var(--gc-text-secondary);
+  color: var(--gc-text-primary);
   border-color: rgba(20, 67, 80, 0.16);
-  background: rgba(241, 246, 248, 0.98);
+  background: rgba(145, 174, 182, 0.98);
 }
 
 .theme-citadel-light .data-toolbar {
@@ -660,7 +874,7 @@
 
 .theme-citadel-light .stat-card-value {
   margin: 8px 0 6px;
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-family: var(--font-body);
   font-size: clamp(1.88rem, 1.62rem + 0.7vw, 2.3rem);
   line-height: 0.98;
   color: var(--gc-text-primary);
@@ -677,7 +891,7 @@
 
 .theme-citadel-light .gc-action-secondary {
   border-color: var(--gc-border-default);
-  background: #ffffff;
+  background: linear-gradient(180deg, rgba(176, 208, 216, 0.99), rgba(147, 182, 192, 0.97));
   color: var(--gc-text-primary);
 }
 
@@ -689,14 +903,14 @@
 
 .theme-citadel-light .gc-action-tertiary {
   border-color: var(--gc-border-quiet);
-  background: var(--gc-bg-panel-muted);
+  background: linear-gradient(180deg, rgba(166, 198, 206, 0.99), rgba(138, 172, 181, 0.97));
   color: var(--gc-text-secondary);
   box-shadow: none;
 }
 
 .theme-citadel-light .gc-action-danger {
   border-color: rgba(181, 74, 89, 0.2);
-  background: #fff5f7;
+  background: linear-gradient(180deg, rgba(173, 194, 201, 0.99), rgba(148, 172, 180, 0.97));
   color: var(--gc-accent-danger);
 }
 
@@ -760,7 +974,7 @@
 .theme-citadel-light .dashboard-hero-heading h1 {
   max-width: 30ch;
   color: var(--gc-text-primary);
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-family: var(--font-body);
   font-size: clamp(1.38rem, 1.16rem + 0.34vw, 1.62rem);
   font-weight: 600;
   line-height: 1.2;
@@ -783,6 +997,37 @@
 .theme-citadel-light .dashboard-quick-actions-panel,
 .theme-citadel-light .dashboard-command-notes {
   min-height: 100%;
+}
+
+.theme-citadel-light .workflow-page > .data-toolbar,
+.theme-citadel-light .dashboard-hero .data-toolbar {
+  padding: var(--mc-toolbar-pad);
+  border-radius: 18px;
+  border: 1px solid var(--gc-border-default);
+  background: var(--gc-shell-band);
+  box-shadow: 0 12px 28px rgba(20, 52, 62, 0.08);
+}
+
+.theme-citadel-light .workflow-page > .data-toolbar .data-toolbar-primary,
+.theme-citadel-light .workflow-page > .data-toolbar .data-toolbar-secondary,
+.theme-citadel-light .dashboard-hero .data-toolbar .data-toolbar-primary,
+.theme-citadel-light .dashboard-hero .data-toolbar .data-toolbar-secondary {
+  gap: 10px;
+}
+
+.theme-citadel-light .workflow-status-stack > .error,
+.theme-citadel-light .workflow-status-stack > .office-subtitle {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--gc-border-default);
+  background: var(--gc-shell-band-muted);
+  box-shadow: 0 10px 22px rgba(20, 52, 62, 0.06);
+}
+
+.theme-citadel-light .workflow-status-stack > .error {
+  border-color: rgba(181, 74, 89, 0.2);
+  background: linear-gradient(180deg, rgba(255, 250, 251, 0.98), rgba(255, 245, 247, 0.98));
 }
 
 .theme-citadel-light .dashboard-priority-list li,
@@ -817,11 +1062,15 @@
 }
 
 .theme-citadel-light table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
   border-radius: 18px;
   overflow: hidden;
 }
 
 .theme-citadel-light thead th {
+  padding: 14px 16px;
   font-size: 0.84rem;
   text-transform: none;
   letter-spacing: 0.04em;
@@ -829,25 +1078,149 @@
   background: rgba(243, 248, 250, 0.98);
 }
 
+.theme-citadel-light tbody td {
+  padding: 14px 16px;
+  vertical-align: top;
+  border-top: 1px solid rgba(20, 67, 80, 0.08);
+}
+
 .theme-citadel-light tbody tr:hover td {
   background: rgba(232, 246, 249, 0.98);
 }
 
+.theme-citadel-light .row-selected td,
+.theme-citadel-light tbody tr.row-selected td {
+  background: rgba(228, 245, 249, 0.98);
+}
+
+.theme-citadel-light .replay-box {
+  margin-top: 0;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(20, 67, 80, 0.1);
+  background: rgba(247, 251, 252, 0.98);
+  box-shadow: none;
+}
+
+.theme-citadel-light pre {
+  border: 1px solid rgba(14, 145, 170, 0.2);
+  background:
+    linear-gradient(180deg, rgba(24, 49, 61, 0.98), rgba(16, 33, 43, 0.99)),
+    var(--gc-bg-code);
+  color: #ebf7fb;
+  padding: 14px 16px;
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.theme-citadel-light pre code {
+  color: inherit;
+}
+
 .theme-citadel-light .chat-v11 {
-  gap: 18px;
+  gap: 14px;
 }
 
 .theme-citadel-light .chat-v11-header {
   margin: 0;
 }
 
+.theme-citadel-light .chat-v11-header.page-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 6px 12px;
+  padding: 8px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(48, 90, 104, 0.24);
+  background:
+    linear-gradient(180deg, rgba(131, 160, 170, 0.97), rgba(115, 145, 155, 0.97));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.theme-citadel-light .chat-v11-header .page-header-main {
+  gap: 2px;
+}
+
+.theme-citadel-light .chat-v11-header .page-header-title {
+  font-size: clamp(1.14rem, 1.05rem + 0.2vw, 1.32rem);
+  line-height: 1.02;
+}
+
+.theme-citadel-light .chat-v11-header .page-header-meta {
+  gap: 6px;
+}
+
+.theme-citadel-light .chat-v11-header .page-header-subtitle {
+  max-width: 48ch;
+  font-size: 0.8rem;
+  line-height: 1.28;
+}
+
+.theme-citadel-light .chat-v11-header .page-header-hint {
+  max-width: 42rem;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border-color: rgba(39, 99, 116, 0.18);
+  background: rgba(147, 176, 186, 0.74);
+  font-size: 0.77rem;
+  line-height: 1.28;
+}
+
+.theme-citadel-light .chat-v11-page-actions {
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+}
+
 .theme-citadel-light .chat-v11-main,
-.theme-citadel-light .chat-v11-main-grid.with-cowork {
-  gap: 16px;
+.theme-citadel-light .chat-v11-main-grid.with-cowork,
+.theme-citadel-light .chat-v11-main-grid.with-code {
+  gap: 12px;
 }
 
 .theme-citadel-light .chat-v11-shell {
-  gap: 18px;
+  --gc-chat-app: #6a838d;
+  --gc-chat-thread: #81979f;
+  --gc-chat-composer: #8ca2ab;
+  --gc-chat-elevated: #788e98;
+  --gc-chat-elevated-soft: #8ca2ab;
+  --gc-chat-border: #738a94;
+  --gc-chat-border-strong: rgba(56, 182, 200, 0.48);
+  --gc-chat-text: #fbfdfe;
+  --gc-chat-muted: #eef5f7;
+  --gc-chat-accent: #38b6c8;
+  --gc-chat-accent-soft: rgba(56, 182, 200, 0.16);
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.theme-citadel-light .chat-v11.mode-chat .chat-v11-shell {
+  grid-template-columns: 244px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-shell {
+  --gc-chat-border-strong: rgba(66, 201, 219, 0.56);
+  --gc-chat-accent: #42c9db;
+  --gc-chat-accent-soft: rgba(66, 201, 219, 0.18);
+  grid-template-columns: 214px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-v11-shell {
+  --gc-chat-thread: #778f98;
+  --gc-chat-composer: #8399a1;
+  --gc-chat-elevated: #70858f;
+  --gc-chat-elevated-soft: #8499a1;
+  --gc-chat-border: #6c8189;
+  --gc-chat-border-strong: rgba(151, 224, 234, 0.44);
+  --gc-chat-accent: #97e0ea;
+  --gc-chat-accent-soft: rgba(151, 224, 234, 0.14);
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 14px;
 }
 
 .theme-citadel-light .chat-v11-topbar,
@@ -858,7 +1231,318 @@
 }
 
 .theme-citadel-light .chat-v11-left {
+  gap: 10px;
+  position: sticky;
+  top: 92px;
+  max-height: calc(100vh - 108px);
+  overflow-y: auto;
+}
+
+.theme-citadel-light .chat-v11-left,
+.theme-citadel-light .chat-v11-thread,
+.theme-citadel-light .chat-v11-empty-shell {
+  border-radius: 18px;
+  border: 1px solid var(--gc-chat-border);
+  background:
+    linear-gradient(180deg, rgba(164, 182, 189, 0.99), rgba(145, 165, 173, 0.99));
+  box-shadow: 0 12px 24px rgba(17, 31, 38, 0.08);
+  color: var(--gc-chat-text);
+}
+
+.theme-citadel-light .chat-v11-left {
   gap: 14px;
+  background:
+    linear-gradient(180deg, rgba(136, 156, 165, 0.99), rgba(118, 139, 148, 0.99));
+}
+
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-header {
+  border-color: rgba(59, 154, 171, 0.28);
+  background:
+    radial-gradient(circle at top right, rgba(66, 201, 219, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(133, 165, 175, 0.98), rgba(113, 146, 156, 0.98));
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-v11-header {
+  border-color: rgba(88, 115, 126, 0.34);
+  background:
+    linear-gradient(135deg, rgba(128, 149, 158, 0.98), rgba(108, 130, 139, 0.98)),
+    repeating-linear-gradient(90deg, rgba(232, 240, 243, 0.06) 0 1px, transparent 1px 28px);
+}
+
+.theme-citadel-light .panel.panel-soft.chat-v11-left {
+  background:
+    linear-gradient(180deg, rgba(136, 156, 165, 0.99), rgba(118, 139, 148, 0.99)) !important;
+  border-color: rgba(72, 97, 109, 0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 12px 24px rgba(27, 54, 64, 0.1) !important;
+}
+
+.theme-citadel-light .chat-v11-conversation-shell {
+  display: grid;
+  gap: 12px;
+  align-items: start;
+}
+
+.theme-citadel-light .chat-v11-topbar-panel,
+.theme-citadel-light .chat-v11-agentic-card,
+.theme-citadel-light .chat-v11-session-bar,
+.theme-citadel-light .chat-v11-external-bind {
+  border-color: var(--gc-chat-border);
+  background:
+    linear-gradient(180deg, rgba(126, 149, 158, 0.98), rgba(107, 130, 140, 0.98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 10px 18px rgba(24, 43, 51, 0.08);
+  color: var(--gc-chat-text);
+}
+
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-topbar-panel,
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-agentic-card,
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-session-bar,
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-external-bind,
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-workspace-summary {
+  border-color: rgba(66, 201, 219, 0.26);
+  background:
+    radial-gradient(circle at top right, rgba(66, 201, 219, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(127, 152, 161, 0.98), rgba(106, 130, 139, 0.98));
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-v11-topbar-panel,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-agentic-card,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-session-bar,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-external-bind,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-workspace-summary {
+  border-color: rgba(84, 107, 117, 0.44);
+  background:
+    linear-gradient(180deg, rgba(119, 140, 149, 0.99), rgba(97, 118, 126, 0.99));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 10px 18px rgba(19, 31, 37, 0.12);
+}
+
+.theme-citadel-light .chat-v11-topbar-panel .panel-body,
+.theme-citadel-light .chat-v11-session-bar .panel-body,
+.theme-citadel-light .chat-v11-external-bind .panel-body {
+  gap: 12px;
+}
+
+.theme-citadel-light .chat-v11-inspector-lane {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  align-self: start;
+}
+
+.theme-citadel-light .chat-v11-conversation-shell.surface-cowork .chat-v11-inspector-lane {
+  grid-template-columns:
+    minmax(280px, 0.92fr)
+    minmax(400px, 1.18fr)
+    minmax(260px, 0.78fr);
+  grid-template-areas:
+    "surface trace session"
+    "memory trace inbox";
+  gap: 12px;
+}
+
+.theme-citadel-light .chat-v11-conversation-shell.surface-code .chat-v11-inspector-lane {
+  grid-template-columns:
+    minmax(420px, 1.14fr)
+    minmax(280px, 0.86fr);
+  grid-template-areas: "surface session";
+  gap: 12px;
+}
+
+.theme-citadel-light .chat-v11-conversation-shell.surface-cowork .chat-v11-inspector-lane,
+.theme-citadel-light .chat-v11-conversation-shell.surface-code .chat-v11-inspector-lane {
+  border-top: 1px solid rgba(88, 113, 125, 0.18);
+  padding-top: 2px;
+}
+
+.theme-citadel-light .chat-v11-thread {
+  overflow: hidden;
+  min-height: clamp(400px, calc(100vh - 220px), 720px);
+}
+
+.theme-citadel-light .chat-v11.mode-chat .chat-v11-thread {
+  min-height: clamp(390px, calc(100vh - 238px), 680px);
+}
+
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-thread,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-thread {
+  min-height: clamp(410px, calc(100vh - 215px), 720px);
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-v11-settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-v11-setting-row {
+  padding: 8px 10px;
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-v11-setting-row-wide {
+  grid-column: 1 / -1;
+}
+
+.theme-citadel-light .card.chat-v11-thread {
+  border-color: rgba(108, 129, 140, 0.26);
+  background:
+    linear-gradient(180deg, rgba(154, 173, 181, 0.99), rgba(135, 155, 164, 0.99));
+  box-shadow: 0 12px 22px rgba(23, 37, 44, 0.08);
+}
+
+.theme-citadel-light .card.chat-v11-thread {
+  background:
+    linear-gradient(180deg, rgba(154, 173, 181, 0.99), rgba(135, 155, 164, 0.99)) !important;
+  border-color: rgba(98, 120, 132, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 12px 24px rgba(23, 37, 44, 0.08) !important;
+}
+
+.theme-citadel-light .card.chat-v11-thread::before {
+  background: linear-gradient(90deg, rgba(224, 238, 242, 0.24), rgba(56, 182, 200, 0.12), transparent 78%);
+}
+
+.theme-citadel-light .chat-v11-thread-scroll {
+  background:
+    linear-gradient(180deg, rgba(176, 193, 199, 0.99), rgba(160, 178, 185, 0.99));
+}
+
+.theme-citadel-light .chat-cowork-panel,
+.theme-citadel-light .chat-code-workbench {
+  border: 1px solid var(--gc-chat-border);
+  background:
+    linear-gradient(180deg, rgba(146, 166, 174, 0.99), rgba(126, 147, 155, 0.99));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 10px 20px rgba(22, 38, 44, 0.08);
+  color: var(--gc-chat-text);
+}
+
+.theme-citadel-light .chat-v11.mode-cowork .chat-cowork-panel {
+  border-color: rgba(66, 201, 219, 0.28);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(66, 201, 219, 0.14), transparent 30%),
+    linear-gradient(180deg, rgba(136, 159, 168, 0.99), rgba(116, 138, 147, 0.99));
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-code-workbench {
+  border-color: rgba(84, 107, 117, 0.48);
+  border-radius: 12px;
+  background:
+    repeating-linear-gradient(90deg, rgba(231, 239, 242, 0.05) 0 1px, transparent 1px 28px),
+    linear-gradient(180deg, rgba(128, 148, 156, 0.99), rgba(107, 128, 136, 0.99));
+}
+
+.theme-citadel-light .chat-cowork-panel > header,
+.theme-citadel-light .chat-code-workbench-head,
+.theme-citadel-light .chat-cowork-orchestration,
+.theme-citadel-light .chat-code-workbench-empty,
+.theme-citadel-light .chat-cowork-panel ul,
+.theme-citadel-light .chat-code-workbench-tabs,
+.theme-citadel-light .chat-code-workbench-meta,
+.theme-citadel-light .chat-code-workbench-note {
+  padding-inline: 14px;
+}
+
+.theme-citadel-light .chat-cowork-panel > header,
+.theme-citadel-light .chat-code-workbench-head {
+  padding-top: 14px;
+}
+
+.theme-citadel-light .chat-cowork-panel > header p,
+.theme-citadel-light .chat-code-workbench-head p,
+.theme-citadel-light .chat-code-workbench-note,
+.theme-citadel-light .chat-code-workbench-empty p {
+  color: rgba(233, 242, 245, 0.82);
+}
+
+.theme-citadel-light .chat-cowork-panel li,
+.theme-citadel-light .chat-code-workbench-tabs button {
+  border: 1px solid rgba(88, 113, 123, 0.34);
+  background: rgba(221, 232, 236, 0.1);
+  color: var(--gc-chat-text);
+}
+
+.theme-citadel-light .chat-cowork-panel li {
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+.theme-citadel-light .chat-code-workbench-tabs button {
+  min-height: 36px;
+  border-radius: 10px;
+}
+
+.theme-citadel-light .chat-code-workbench-tabs button.active {
+  border-color: rgba(151, 224, 234, 0.42);
+  background: rgba(151, 224, 234, 0.16);
+}
+
+.theme-citadel-light .chat-code-workbench-meta {
+  color: rgba(236, 245, 247, 0.84);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+.theme-citadel-light .chat-code-workbench-editor {
+  margin: 0 14px 14px;
+  border-radius: 10px;
+  border-color: rgba(223, 236, 240, 0.14);
+  background: rgba(76, 96, 103, 0.5);
+  color: #f8fbfd;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-code-workbench {
+  border-radius: 16px;
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-code-workbench-editor {
+  min-height: 560px;
+}
+
+.theme-citadel-light .chat-v11.mode-cowork .card.chat-v11-thread::before {
+  background: linear-gradient(90deg, rgba(231, 242, 245, 0.2), rgba(66, 201, 219, 0.18), transparent 74%);
+}
+
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-thread-scroll {
+  background:
+    radial-gradient(circle at top right, rgba(66, 201, 219, 0.12), transparent 30%),
+    linear-gradient(180deg, rgba(175, 193, 199, 0.99), rgba(157, 177, 184, 0.99));
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-v11-left,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-thread,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-empty-shell {
+  border-radius: 14px;
+}
+
+.theme-citadel-light .chat-v11.mode-code .card.chat-v11-thread {
+  border-color: rgba(77, 99, 109, 0.44);
+  background:
+    linear-gradient(180deg, rgba(143, 163, 171, 0.99), rgba(122, 143, 151, 0.99)) !important;
+}
+
+.theme-citadel-light .chat-v11.mode-code .card.chat-v11-thread::before {
+  background: linear-gradient(90deg, rgba(233, 241, 244, 0.16), rgba(151, 224, 234, 0.1), transparent 62%);
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-v11-thread-scroll {
+  background:
+    repeating-linear-gradient(90deg, rgba(234, 241, 243, 0.04) 0 1px, transparent 1px 28px),
+    linear-gradient(180deg, rgba(164, 182, 188, 0.99), rgba(146, 166, 173, 0.99));
+}
+
+.theme-citadel-light .chat-v11-session-rail,
+.theme-citadel-light .chat-v11-session-virtuoso,
+.theme-citadel-light .chat-v11-rail-section {
+  background: transparent;
 }
 
 .theme-citadel-light .chat-v11-left-actions,
@@ -874,29 +1558,79 @@
 .theme-citadel-light .chat-attachment-chip {
   min-height: 40px;
   border-radius: 12px;
-  border: 1px solid var(--gc-border-default);
-  background: rgba(247, 251, 252, 0.98);
-  color: var(--gc-text-secondary);
+  border: 1px solid var(--gc-chat-border);
+  background: rgba(220, 230, 234, 0.2);
+  color: rgba(31, 65, 76, 0.86);
+  box-shadow: none;
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-v11-project-toggle,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-filter-row button,
+.theme-citadel-light .chat-v11.mode-code .chat-attachment-chip,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-composer,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-suggestion-card,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-proactive-list li,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-memory-list li,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-surface-identity,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-project-create,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-turn-card,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-turn-bubble,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-turn-list li,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-thread-notices li,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-queue-list li,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-composer-banner,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-queue-bar {
+  border-radius: 12px;
+}
+
+.theme-citadel-light .chat-v11-suggestion-card,
+.theme-citadel-light .chat-v11-proactive-list li,
+.theme-citadel-light .chat-v11-memory-list li,
+.theme-citadel-light .chat-v11-surface-identity {
+  border: 1px solid rgba(93, 123, 136, 0.52);
+  border-radius: 14px;
+  background: rgba(230, 238, 242, 0.1);
   box-shadow: none;
 }
 
 .theme-citadel-light .chat-v11-project-toggle.active,
 .theme-citadel-light .chat-v11-filter-row button.active {
-  border-color: rgba(15, 138, 166, 0.34);
-  background: rgba(232, 246, 249, 0.98);
-  color: var(--gc-accent-strong);
+  border-color: var(--gc-chat-border-strong);
+  background: var(--gc-chat-accent-soft);
+  color: var(--gc-chat-text);
 }
 
 .theme-citadel-light .chat-v11-left-head input,
 .theme-citadel-light .chat-v11-session-bar input,
 .theme-citadel-light .chat-v11-external-bind input,
-.theme-citadel-light .chat-v11-composer textarea,
-.theme-citadel-light .gc-select-trigger {
-  background: rgba(255, 255, 255, 0.98);
+.theme-citadel-light .chat-v11-composer textarea {
+  font-family: var(--font-reading);
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(213, 224, 229, 0.24);
+  color: #12303a;
+}
+
+.theme-citadel-light .chat-v11-left-head input::placeholder,
+.theme-citadel-light .chat-v11-session-bar input::placeholder,
+.theme-citadel-light .chat-v11-external-bind input::placeholder,
+.theme-citadel-light .chat-v11-composer textarea::placeholder {
+  color: var(--gc-chat-muted);
+}
+
+.theme-citadel-light .chat-v11-composer textarea {
+  border-color: rgba(238, 246, 249, 0.14);
+  background: rgba(78, 101, 111, 0.38);
+  color: #f7fbfd;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.theme-citadel-light .chat-v11-composer textarea::placeholder {
+  color: rgba(238, 245, 247, 0.74);
 }
 
 .theme-citadel-light .chat-v11-thread {
-  padding: 0;
+  gap: 14px;
+  padding: 10px;
 }
 
 .theme-citadel-light .chat-v11-messages {
@@ -906,16 +1640,19 @@
 .theme-citadel-light .chat-v11-message {
   padding: 14px 16px;
   border-radius: 18px;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(204, 216, 221, 0.34);
+  color: #102a33;
 }
 
 .theme-citadel-light .chat-v11-message.user {
-  border-color: rgba(15, 138, 166, 0.24);
-  background: rgba(234, 248, 251, 0.98);
+  border-color: rgba(56, 182, 200, 0.32);
+  background: rgba(56, 182, 200, 0.18);
 }
 
 .theme-citadel-light .chat-v11-message.system {
-  border-color: rgba(181, 74, 89, 0.18);
-  background: rgba(255, 248, 249, 0.98);
+  border-color: rgba(229, 154, 99, 0.28);
+  background: rgba(229, 154, 99, 0.14);
 }
 
 .theme-citadel-light .chat-v11-message-meta,
@@ -923,7 +1660,81 @@
 .theme-citadel-light .command-palette-hint,
 .theme-citadel-light .command-palette-shortcut,
 .theme-citadel-light .notification-item span {
-  color: var(--gc-text-muted);
+  color: rgba(30, 64, 74, 0.8);
+}
+
+.theme-citadel-light .chat-v11-message-meta {
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-family: var(--font-reading);
+  letter-spacing: 0.03em;
+}
+
+.theme-citadel-light .chat-v11-message-meta strong {
+  color: #173740;
+}
+
+.theme-citadel-light .chat-v11-turn-bubble.assistant .chat-v11-message-meta,
+.theme-citadel-light .chat-v11-turn-bubble.assistant .chat-v11-message-meta strong,
+.theme-citadel-light .chat-v11-thread-notices .chat-v11-message-meta,
+.theme-citadel-light .chat-v11-thread-notices .chat-v11-message-meta strong {
+  color: rgba(24, 55, 64, 0.82);
+}
+
+.theme-citadel-light .chat-v11-left h3,
+.theme-citadel-light .chat-v11-left h4,
+.theme-citadel-light .chat-v11-left strong,
+.theme-citadel-light .chat-v11-left label,
+.theme-citadel-light .chat-v11-left p,
+.theme-citadel-light .chat-v11-thread p,
+.theme-citadel-light .chat-v11-thread li {
+  font-family: var(--font-reading);
+  color: inherit;
+}
+
+.theme-citadel-light .chat-v11-left h3,
+.theme-citadel-light .chat-v11-left h4,
+.theme-citadel-light .chat-v11-left strong,
+.theme-citadel-light .chat-v11-agentic-card h4,
+.theme-citadel-light .chat-v11-agentic-card strong,
+.theme-citadel-light .chat-v11-topbar-panel h4,
+.theme-citadel-light .chat-v11-session-bar h4,
+.theme-citadel-light .chat-v11-external-bind h4 {
+  color: #f8fcfd;
+}
+
+.theme-citadel-light .chat-v11-workspace-copy p,
+.theme-citadel-light .chat-v11-agentic-card p,
+.theme-citadel-light .chat-v11-topbar-panel p,
+.theme-citadel-light .chat-v11-session-bar p,
+.theme-citadel-light .chat-v11-external-bind p {
+  color: rgba(236, 244, 247, 0.82);
+}
+
+.theme-citadel-light .chat-v11-suggestion-card,
+.theme-citadel-light .chat-v11-proactive-list li,
+.theme-citadel-light .chat-v11-memory-list li,
+.theme-citadel-light .chat-v11-trace-card .trace-card {
+  border-color: rgba(82, 108, 120, 0.42);
+  background: rgba(229, 237, 241, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-trace-card .chat-trace-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: -10px -10px 0;
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid rgba(82, 108, 120, 0.18);
+  background:
+    linear-gradient(180deg, rgba(128, 151, 160, 0.98), rgba(119, 141, 149, 0.96));
+  border-top-left-radius: 10px;
+  border-top-right-radius: 10px;
+}
+
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-trace-card .chat-trace-body {
+  padding-top: 2px;
 }
 
 .theme-citadel-light .notification-item p:not(.notification-tone) {
@@ -931,10 +1742,76 @@
 }
 
 .theme-citadel-light .command-deck-shell {
+  --mc-shell-gap: 12px;
+  --mc-shell-card-pad: 12px 16px;
+  --mc-control-gap: 8px;
+  --mc-control-min-height: 36px;
   border: 1px solid var(--gc-border-default);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 251, 252, 0.98));
-  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.08);
+    radial-gradient(circle at top left, rgba(15, 138, 166, 0.06), transparent 24%),
+    radial-gradient(circle at top right, rgba(17, 112, 138, 0.05), transparent 26%),
+    linear-gradient(180deg, rgba(182, 198, 205, 0.99), rgba(168, 186, 194, 0.98));
+  box-shadow: 0 22px 48px rgba(15, 23, 42, 0.06);
+  gap: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+.theme-citadel-light .command-deck-shell.app-topbar.shell-topbar {
+  background:
+    radial-gradient(circle at top left, rgba(15, 138, 166, 0.06), transparent 24%),
+    radial-gradient(circle at top right, rgba(17, 112, 138, 0.05), transparent 26%),
+    linear-gradient(180deg, rgba(182, 198, 205, 0.99), rgba(168, 186, 194, 0.98)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 22px 48px rgba(15, 23, 42, 0.06) !important;
+}
+
+.theme-citadel-light .command-deck-zone {
+  padding: 12px 16px;
+}
+
+.theme-citadel-light .command-deck-zone-center,
+.theme-citadel-light .command-deck-zone-right {
+  border-left: 1px solid rgba(20, 67, 80, 0.1);
+}
+
+.theme-citadel-light .command-deck-zone-left,
+.theme-citadel-light .command-deck-zone-center {
+  gap: 8px;
+}
+
+.theme-citadel-light .command-deck-navband,
+.theme-citadel-light .command-deck-surface-band,
+.theme-citadel-light .command-deck-utility-band {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.theme-citadel-light .command-deck-brandbar {
+  padding: 0 0 4px;
+}
+
+.theme-citadel-light .command-deck-utility-cluster {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.theme-citadel-light .command-deck-utility-cluster + .command-deck-utility-cluster {
+  padding-top: 8px;
+  border-top: 1px solid rgba(20, 67, 80, 0.1);
+}
+
+.theme-citadel-light .command-deck-utility-cluster-context {
+  align-items: stretch;
+}
+
+.theme-citadel-light .command-deck-utility-cluster-settings {
+  justify-content: flex-end;
 }
 
 .theme-citadel-light .command-deck-brand-kicker,
@@ -942,13 +1819,30 @@
   color: var(--gc-text-muted);
 }
 
+.theme-citadel-light .command-deck-nav,
+.theme-citadel-light .command-deck-surface-tabs,
+.theme-citadel-light .command-deck-utilities {
+  gap: 6px;
+}
+
+.theme-citadel-light .command-deck-utility-band {
+  gap: 10px;
+  width: 100%;
+}
+
+.theme-citadel-light .command-deck-surface-note {
+  max-width: 26ch;
+}
+
 .theme-citadel-light .command-deck-pill,
 .theme-citadel-light .command-deck-surface-tab,
 .theme-citadel-light .command-deck-overflow summary,
 .theme-citadel-light .command-deck-overflow-item {
   border-color: var(--gc-border-default);
-  background: rgba(247, 251, 252, 0.98);
-  color: var(--gc-text-secondary);
+  border-radius: 7px;
+  padding-inline: 12px;
+  background: linear-gradient(180deg, rgba(118, 155, 166, 0.99), rgba(95, 132, 144, 0.97));
+  color: var(--gc-text-primary);
   box-shadow: none;
 }
 
@@ -956,13 +1850,13 @@
 .theme-citadel-light .command-deck-surface-tab.active,
 .theme-citadel-light .command-deck-overflow-item.active {
   border-color: rgba(15, 138, 166, 0.34);
-  background: rgba(232, 246, 249, 0.98);
-  color: var(--gc-accent-strong);
+  background: linear-gradient(180deg, rgba(92, 145, 160, 0.99), rgba(70, 123, 138, 0.97));
+  color: #f3fbfd;
 }
 
 .theme-citadel-light .command-deck-overflow-panel {
   border-color: var(--gc-border-default);
-  background: rgba(255, 255, 255, 0.99);
+  background: linear-gradient(180deg, rgba(127, 162, 172, 0.99), rgba(104, 140, 151, 0.97));
   box-shadow: 0 24px 44px rgba(15, 23, 42, 0.12);
 }
 
@@ -972,24 +1866,97 @@
   color: var(--gc-text-muted);
 }
 
+.theme-citadel-light .command-deck-surface-note {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.34;
+}
+
 .theme-citadel-light .chat-v11-workspace-summary,
-.theme-citadel-light .chat-v11-summary-card,
-.theme-citadel-light .chat-v11-command-dock {
-  border-color: var(--gc-border-default);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: none;
+.theme-citadel-light .chat-v11-summary-card {
+  border-color: var(--gc-chat-border);
+  background:
+    linear-gradient(180deg, rgba(141, 161, 168, 0.99), rgba(123, 144, 151, 0.99));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  color: var(--gc-chat-text);
+}
+
+.theme-citadel-light .chat-v11-workspace-summary {
+  gap: 8px;
+  padding: 10px;
+}
+
+.theme-citadel-light .chat-v11-workspace-copy {
+  gap: 3px;
+}
+
+.theme-citadel-light .chat-v11-workspace-copy h3 {
+  font-size: 0.95rem;
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-v11-workspace-kicker,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-setting-label,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-message-meta,
+.theme-citadel-light .chat-v11.mode-code .chat-v11-turn-strip span:not(.status-chip),
+.theme-citadel-light .chat-v11.mode-code .chat-v11-composer-actions p {
+  font-family: Consolas, "Courier New", monospace;
+  letter-spacing: 0.04em;
+}
+
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-workspace-kicker,
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-setting-label {
+  color: rgba(233, 248, 250, 0.86);
+}
+
+.theme-citadel-light .chat-v11-summary-grid {
+  gap: 8px;
+}
+
+.theme-citadel-light .chat-v11-summary-card {
+  padding: 9px 10px;
+  border-color: rgba(88, 113, 125, 0.42);
+  background:
+    linear-gradient(180deg, rgba(118, 138, 146, 0.98), rgba(101, 122, 130, 0.98));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .theme-citadel-light .chat-v11-summary-card span,
 .theme-citadel-light .chat-v11-workspace-kicker {
-  color: var(--gc-text-muted);
+  color: var(--gc-chat-muted);
 }
 
 .theme-citadel-light .chat-v11-composer {
   padding: 14px;
   border-radius: 20px;
-  border: 1px solid var(--gc-border-default);
-  background: #ffffff;
+  border: 1px solid var(--gc-chat-border);
+  background:
+    linear-gradient(180deg, rgba(125, 146, 154, 0.99), rgba(106, 127, 135, 0.99));
+  color: var(--gc-chat-text);
+}
+
+.theme-citadel-light .card.chat-v11-thread .chat-v11-composer {
+  border-top-color: rgba(227, 238, 242, 0.16);
+  background:
+    linear-gradient(180deg, rgba(120, 141, 149, 0.99), rgba(101, 122, 130, 0.99));
+}
+
+.theme-citadel-light .card.chat-v11-thread .chat-v11-composer {
+  background:
+    linear-gradient(180deg, rgba(120, 141, 149, 0.99), rgba(101, 122, 130, 0.99)) !important;
+  box-shadow: none !important;
+}
+
+.theme-citadel-light .chat-v11.mode-cowork .chat-v11-composer {
+  border-color: rgba(66, 201, 219, 0.22);
+  background:
+    radial-gradient(circle at bottom right, rgba(66, 201, 219, 0.08), transparent 28%),
+    linear-gradient(180deg, rgba(122, 145, 153, 0.99), rgba(103, 126, 134, 0.99));
+}
+
+.theme-citadel-light .chat-v11.mode-code .chat-v11-composer {
+  border-color: rgba(84, 107, 117, 0.5);
+  background:
+    linear-gradient(180deg, rgba(114, 136, 144, 0.99), rgba(95, 116, 124, 0.99));
 }
 
 .theme-citadel-light .chat-v11-project-create,
@@ -1001,33 +1968,117 @@
 .theme-citadel-light .chat-v11-composer-banner,
 .theme-citadel-light .chat-v11-queue-bar,
 .theme-citadel-light .chat-v11-surface-identity {
-  border: 1px solid rgba(20, 67, 80, 0.1);
+  border: 1px solid var(--gc-chat-border);
   border-radius: 16px;
-  background: rgba(248, 251, 252, 0.96);
+  background: rgba(144, 163, 170, 0.94);
   box-shadow: none;
+  color: var(--gc-chat-text);
 }
 
 .theme-citadel-light .chat-v11-turn-bubble.user {
-  background: rgba(234, 248, 251, 0.98);
+  background: rgba(56, 182, 200, 0.2);
 }
 
 .theme-citadel-light .chat-v11-turn-bubble.assistant {
-  background: rgba(248, 251, 252, 0.98);
+  background: rgba(159, 177, 184, 0.34);
+}
+
+.theme-citadel-light .card.chat-v11-thread .chat-v11-turn-card {
+  background: rgba(125, 144, 152, 0.98) !important;
+  border-color: rgba(49, 74, 85, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 10px 18px rgba(23, 37, 44, 0.1) !important;
+}
+
+.theme-citadel-light .chat-v11-turn-bubble {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.theme-citadel-light .chat-v11-turn-bubble > p:not(.chat-v11-message-meta),
+.theme-citadel-light .chat-v11-markdown p,
+.theme-citadel-light .chat-v11-markdown li {
+  font-size: 1rem;
+  font-weight: 500;
 }
 
 .theme-citadel-light .chat-v11-turn-strip span:not(.status-chip) {
-  border: 1px solid rgba(20, 67, 80, 0.1);
-  background: rgba(247, 251, 252, 0.96);
-  color: var(--gc-text-secondary);
+  font-family: var(--font-reading);
+  border: 1px solid var(--gc-chat-border);
+  background: rgba(228, 236, 240, 0.08);
+  color: var(--gc-chat-muted);
+}
+
+.theme-citadel-light .chat-v11-turn-strip {
+  gap: 8px;
+  row-gap: 8px;
 }
 
 .theme-citadel-light .chat-v11-turn-details {
-  border-top-color: rgba(20, 67, 80, 0.08);
+  border-top-color: rgba(255, 255, 255, 0.08);
 }
 
 .theme-citadel-light .chat-v11-turn-details summary,
 .theme-citadel-light .chat-v11-markdown a {
-  color: var(--gc-accent-strong);
+  color: var(--gc-chat-accent);
+}
+
+.theme-citadel-light .chat-v11-turn-details summary {
+  font-size: 0.79rem;
+  font-weight: 700;
+  font-family: var(--font-reading);
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.theme-citadel-light .chat-v11-settings-grid {
+  gap: 12px;
+}
+
+.theme-citadel-light .chat-v11-setting-row {
+  padding-top: 8px;
+  border-top: 1px solid rgba(95, 125, 136, 0.22);
+}
+
+.theme-citadel-light .chat-v11-setting-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.theme-citadel-light .chat-v11-setting-label {
+  color: var(--gc-chat-text);
+  font-weight: 600;
+}
+
+.theme-citadel-light .chat-v11-setting-hint {
+  color: var(--gc-chat-muted);
+}
+
+.theme-citadel-light .chat-v11-setting-control .gc-switch-row {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.theme-citadel-light .chat-v11-setting-control .chat-mode-switch {
+  justify-content: flex-end;
+}
+
+.theme-citadel-light .chat-v11-setting-control .chat-model-picker-note {
+  color: var(--gc-chat-muted);
+}
+
+.theme-citadel-light .chat-v11-recovery-banner {
+  border-color: rgba(167, 114, 114, 0.34);
+  background: rgba(220, 228, 233, 0.2);
+}
+
+.theme-citadel-light .chat-v11-recovery-head strong {
+  color: var(--gc-chat-text);
+}
+
+.theme-citadel-light .chat-v11-recovery-copy p {
+  color: var(--gc-chat-muted);
 }
 
 .theme-citadel-light .chat-v11-markdown h1,
@@ -1036,27 +2087,63 @@
 .theme-citadel-light .chat-v11-markdown h4,
 .theme-citadel-light .chat-v11-markdown h5,
 .theme-citadel-light .chat-v11-markdown h6 {
-  color: var(--gc-text-primary);
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: var(--gc-chat-text);
+  font-family: var(--font-reading);
   letter-spacing: -0.02em;
+}
+
+.theme-citadel-light .chat-v11-markdown ul,
+.theme-citadel-light .chat-v11-markdown ol {
+  padding-left: 1.5rem;
+}
+
+.theme-citadel-light .chat-v11-turn-section h5 {
+  color: var(--gc-chat-muted);
+}
+
+.theme-citadel-light .chat-v11-setting-row {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border-top: 0;
+  background: rgba(226, 236, 240, 0.08);
+}
+
+.theme-citadel-light .chat-v11-setting-row + .chat-v11-setting-row {
+  margin-top: 8px;
 }
 
 .theme-citadel-light .chat-v11-markdown pre,
 .theme-citadel-light .chat-v11-markdown :not(pre) > code {
-  border-color: rgba(20, 67, 80, 0.1);
-  background: rgba(244, 248, 250, 0.96);
-  color: var(--gc-text-primary);
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(132, 150, 158, 0.22);
+  color: var(--gc-chat-text);
 }
 
 .theme-citadel-light .chat-v11-composer-actions p {
-  color: var(--gc-text-muted);
+  color: var(--gc-chat-muted);
+}
+
+.theme-citadel-light .chat-v11-empty-thread {
+  background: rgba(220, 228, 233, 0.18);
 }
 
 .theme-citadel-light .chat-v11-session-row button.active,
 .theme-citadel-light .chat-v11-command-popover button.active {
-  border-color: rgba(15, 138, 166, 0.36);
-  background: rgba(233, 247, 250, 0.98);
-  color: var(--gc-accent-strong);
+  border-color: var(--gc-chat-border-strong);
+  background: rgba(56, 182, 200, 0.26);
+  color: #f6fbfd;
+}
+
+.theme-citadel-light .chat-v11-command-popover {
+  border-color: var(--gc-chat-border);
+  background: rgba(171, 189, 195, 0.98);
+}
+
+.theme-citadel-light .chat-v11-command-popover button span,
+.theme-citadel-light .chat-v11-session-row button,
+.theme-citadel-light .chat-v11-session-row time {
+  font-family: var(--font-reading);
+  color: var(--gc-chat-muted);
 }
 
 .theme-citadel-light .chat-v11-rail-title h4 {
@@ -1066,12 +2153,91 @@
   letter-spacing: 0.03em;
 }
 
+.theme-citadel-light .split-grid {
+  gap: 18px;
+  align-items: start;
+}
+
+.theme-citadel-light .split-grid > * {
+  min-width: 0;
+}
+
+.theme-citadel-light .controls-row,
+.theme-citadel-light .actions {
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.theme-citadel-light .controls-row label {
+  color: var(--gc-accent-strong);
+  font-weight: 600;
+}
+
+.theme-citadel-light .panel h4,
+.theme-citadel-light .replay-box h4 {
+  margin: 2px 0 0;
+  color: var(--gc-text-primary);
+  font-size: 0.96rem;
+  letter-spacing: -0.01em;
+}
+
+.theme-citadel-light details > summary {
+  color: var(--gc-accent-strong);
+  cursor: pointer;
+}
+
+.theme-citadel-light .approval-card {
+  min-height: 100%;
+}
+
+.theme-citadel-light .approval-card-danger {
+  border-color: rgba(182, 106, 31, 0.22);
+}
+
+.theme-citadel-light .approval-card-nuclear {
+  border-color: rgba(181, 74, 89, 0.22);
+}
+
+.theme-citadel-light .approval-empty-panel,
+.theme-citadel-light .dashboard-urgent-panel,
+.theme-citadel-light .dashboard-quick-actions-panel,
+.theme-citadel-light .dashboard-command-notes {
+  background: var(--gc-shell-band);
+}
+
+.theme-citadel-light .approval-card .panel-body,
+.theme-citadel-light .approval-empty-panel .panel-body {
+  gap: 16px;
+}
+
+.theme-citadel-light .task-detail-summary-panel {
+  background: var(--gc-shell-band);
+}
+
+.theme-citadel-light .task-status-row {
+  align-items: center;
+}
+
+.theme-citadel-light .task-status-row button {
+  min-height: 38px;
+}
+
+.theme-citadel-light .workflow-page table .actions {
+  align-items: flex-start;
+}
+
+.theme-citadel-light .workflow-page table button,
+.theme-citadel-light .workflow-page .actions button {
+  min-height: 40px;
+}
+
 .theme-citadel-light .command-palette {
   width: min(720px, calc(100vw - 28px));
 }
 
 .theme-citadel-light .command-palette-head h3 {
-  font-family: "Rajdhani", "Segoe UI", sans-serif;
+  font-family: var(--font-display);
   font-size: 1.5rem;
   text-transform: none;
   letter-spacing: 0.02em;
@@ -1152,8 +2318,8 @@
 }
 
 .theme-citadel-light .gc-switch-root {
-  width: 48px;
-  height: 28px;
+  width: 42px;
+  height: 24px;
   background: rgba(216, 228, 233, 0.98);
 }
 
@@ -1162,8 +2328,8 @@
 }
 
 .theme-citadel-light .gc-switch-thumb {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   background: #ffffff;
 }
 
@@ -1202,8 +2368,9 @@
 }
 
 .theme-citadel-light .global-freshness-pill {
-  min-height: 44px;
-  border-radius: 999px;
+  min-height: 40px;
+  padding: 5px 12px;
+  border-radius: 10px;
   border-color: rgba(15, 138, 166, 0.16);
   background: rgba(247, 251, 252, 0.96);
   color: var(--gc-text-secondary);
@@ -1215,7 +2382,7 @@
 }
 
 .theme-citadel-light .global-freshness-pill .status-dot {
-  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.82);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.82);
 }
 
 .theme-citadel-light .global-freshness-pill.live .status-dot {
@@ -1234,15 +2401,32 @@
 .theme-citadel-light .status-banner {
   border-color: rgba(20, 67, 80, 0.12);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 250, 0.98)),
-    #ffffff;
+    linear-gradient(180deg, rgba(176, 207, 215, 0.99), rgba(148, 183, 193, 0.97)),
+    rgba(158, 192, 201, 0.98);
   color: var(--gc-text-primary);
   box-shadow: 0 10px 28px rgba(22, 54, 65, 0.08);
 }
 
 .theme-citadel-light .status-banner.warning {
-  border-color: rgba(182, 106, 31, 0.24);
-  color: #7f4a10;
+  border-color: rgba(132, 140, 91, 0.26);
+  background:
+    linear-gradient(180deg, rgba(199, 214, 208, 0.99), rgba(176, 194, 187, 0.97)),
+    rgba(186, 204, 197, 0.97);
+  color: #596340;
+}
+
+.theme-citadel-light .chat-v11-topbar-panel .gc-select-trigger,
+.theme-citadel-light .chat-v11-topbar-panel .gc-combobox-trigger,
+.theme-citadel-light .chat-v11-session-bar .gc-select-trigger,
+.theme-citadel-light .chat-v11-external-bind .gc-select-trigger {
+  background: linear-gradient(180deg, rgba(132, 166, 176, 0.99), rgba(107, 143, 153, 0.97));
+}
+
+.theme-citadel-light .chat-v11-topbar-panel .gc-switch-root,
+.theme-citadel-light .chat-v11-session-bar .gc-switch-root,
+.theme-citadel-light .chat-v11-external-bind .gc-switch-root {
+  background: linear-gradient(180deg, rgba(128, 162, 172, 0.99), rgba(103, 139, 149, 0.97));
+  border-color: rgba(17, 112, 138, 0.22);
 }
 
 .theme-citadel-light .status-banner.success,
@@ -1345,6 +2529,19 @@
   padding: 12px 14px;
 }
 
+.theme-citadel-light .chat-v11 > .error {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(121, 149, 157, 0.26);
+  background: linear-gradient(180deg, rgba(191, 210, 216, 0.96), rgba(170, 190, 197, 0.96));
+  color: #294953;
+  box-shadow: 0 8px 20px rgba(24, 56, 66, 0.06);
+}
+
 @media (max-width: 1400px) {
   .theme-citadel-light .shell-context-bar {
     grid-template-columns: 1fr;
@@ -1370,12 +2567,33 @@
 }
 
 @media (max-width: 920px) {
-  .theme-citadel-light .shell-topbar {
-    flex-direction: column;
+  .theme-citadel-light .command-deck-zone {
+    padding: 16px;
+  }
+
+  .theme-citadel-light .command-deck-zone-center,
+  .theme-citadel-light .command-deck-zone-right {
+    border-left: 0;
+    border-top: 1px solid rgba(20, 67, 80, 0.1);
+  }
+
+  .theme-citadel-light .command-deck-brand {
+    align-items: flex-start;
+  }
+
+  .theme-citadel-light .command-deck-pill,
+  .theme-citadel-light .command-deck-surface-tab,
+  .theme-citadel-light .command-deck-overflow summary {
+    flex: 1 1 140px;
+    justify-content: center;
   }
 
   .theme-citadel-light .app-topbar-actions {
     justify-content: flex-start;
+  }
+
+  .theme-citadel-light .command-deck-surface-note {
+    max-width: none;
   }
 
   .theme-citadel-light .shell-workspace-picker {
@@ -1383,15 +2601,29 @@
     min-width: 0;
   }
 
-  .theme-citadel-light .chat-v11-main-grid,
-  .theme-citadel-light .chat-v11-main-grid.with-cowork {
+.theme-citadel-light .chat-v11-main-grid,
+.theme-citadel-light .chat-v11-main-grid.with-cowork,
+.theme-citadel-light .chat-v11-main-grid.with-code {
     grid-template-columns: 1fr;
+  }
+
+  .theme-citadel-light .chat-v11-conversation-shell.surface-cowork .chat-v11-inspector-lane,
+  .theme-citadel-light .chat-v11-conversation-shell.surface-code .chat-v11-inspector-lane {
+    grid-template-areas: none;
+  }
+
+  .theme-citadel-light .chat-v11.mode-code .chat-v11-settings-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
 @media (max-width: 720px) {
   .theme-citadel-light .content.shell-content {
     padding: 16px;
+  }
+
+  .theme-citadel-light .split-grid {
+    grid-template-columns: 1fr;
   }
 
   .theme-citadel-light .sidebar-primary-nav {
@@ -1408,8 +2640,42 @@
     border-radius: 18px;
   }
 
+  .theme-citadel-light .command-deck-zone {
+    padding: 12px;
+  }
+
+  .theme-citadel-light .command-deck-zone-left,
+  .theme-citadel-light .command-deck-zone-center {
+    gap: 10px;
+  }
+
+  .theme-citadel-light .command-deck-brand {
+    gap: 10px;
+  }
+
+  .theme-citadel-light .command-deck-navband,
+  .theme-citadel-light .command-deck-surface-band,
+  .theme-citadel-light .command-deck-utility-band {
+    gap: 8px;
+  }
+
+  .theme-citadel-light .command-deck-pill,
+  .theme-citadel-light .command-deck-surface-tab,
+  .theme-citadel-light .command-deck-overflow summary {
+    min-height: 40px;
+  }
+
   .theme-citadel-light .notification-item {
     min-width: 0;
     width: min(100%, 340px);
+  }
+
+  .theme-citadel-light .command-deck-overflow-panel {
+    min-width: min(100vw - 48px, 320px);
+  }
+
+  .theme-citadel-light .command-deck-surface-note {
+    font-size: 0.78rem;
+    line-height: 1.4;
   }
 }

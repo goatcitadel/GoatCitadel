@@ -193,7 +193,7 @@ describe("SkillImportService lookup", () => {
     const result = await service.listSources("browser automation", 5);
 
     expect(result.items[0]).toMatchObject({
-      name: "Chrome Devtools Mcp",
+      skillFamily: "browser_automation",
       matchReason: "Capability match",
     });
   });
@@ -293,5 +293,110 @@ describe("SkillImportService validation", () => {
       sourceRef: "https://www.moltbook.com/skill.md",
     });
     expect(result.inferredSkillName).toBe("Moltbook");
+  });
+
+  it("rejects curated overlap with GoatCitadel's bundled safe self-improvement skill", async () => {
+    const skillDir = path.join(rootDir, "self-improving");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), [
+      "---",
+      "name: Self Improving",
+      "description: Iteratively review and improve the runtime by replaying prior work.",
+      "---",
+      "",
+      "Review the repo and replay improvement cycles.",
+      "",
+    ].join("\n"));
+    fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
+
+    const service = new SkillImportService("F:/code/personal-ai", createSystemSettingsRepo() as never);
+    await expect(service.validateImport({
+      sourceRef: skillDir,
+      sourceType: "local_path",
+      sourceProvider: "local",
+    })).resolves.toMatchObject({
+      valid: false,
+      errors: expect.arrayContaining([
+        expect.stringContaining("native safe self-improvement bundle"),
+      ]),
+    });
+  });
+
+  it("blocks overlapping Cloudflare-family installs into skills/extra", async () => {
+    const firstSkillDir = path.join(rootDir, "cloudflare-api");
+    fs.mkdirSync(firstSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(firstSkillDir, "SKILL.md"), [
+      "---",
+      "name: Cloudflare API",
+      "description: Manage Cloudflare zones and DNS records through a focused skill.",
+      "---",
+      "",
+      "Use Cloudflare APIs to inspect and update DNS records.",
+      "",
+    ].join("\n"));
+    fs.writeFileSync(path.join(firstSkillDir, "LICENSE"), "MIT\n");
+
+    const secondSkillDir = path.join(rootDir, "cloudflare-manager");
+    fs.mkdirSync(secondSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(secondSkillDir, "SKILL.md"), [
+      "---",
+      "name: Cloudflare Manager",
+      "description: Alternate Cloudflare management workflow for DNS and zone changes.",
+      "---",
+      "",
+      "Manage Cloudflare resources and DNS state.",
+      "",
+    ].join("\n"));
+    fs.writeFileSync(path.join(secondSkillDir, "LICENSE"), "MIT\n");
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    await service.installImport({
+      sourceRef: firstSkillDir,
+      sourceType: "local_path",
+      sourceProvider: "local",
+    });
+
+    const validation = await service.validateImport({
+      sourceRef: secondSkillDir,
+      sourceType: "local_path",
+      sourceProvider: "local",
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.errors).toEqual(expect.arrayContaining([
+      expect.stringContaining('Duplicate skill family "cloudflare_dns"'),
+      expect.stringContaining("skills/extra/cloudflare-api"),
+    ]));
+  });
+
+  it("writes enriched source metadata for repo-managed installs", async () => {
+    const skillDir = path.join(rootDir, "cloudflare-api");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), [
+      "---",
+      "name: Cloudflare API",
+      "description: Manage Cloudflare zones and DNS records through a focused skill.",
+      "---",
+      "",
+      "Use Cloudflare APIs to inspect and update DNS records.",
+      "",
+    ].join("\n"));
+    fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const installed = await service.installImport({
+      sourceRef: skillDir,
+      sourceType: "local_path",
+      sourceProvider: "local",
+    });
+    const manifest = JSON.parse(fs.readFileSync(installed.sourceManifestPath, "utf8")) as Record<string, unknown>;
+
+    expect(manifest.manifestVersion).toBe(2);
+    expect(manifest.duplicateFamily).toBe("cloudflare_dns");
+    expect(manifest.reviewDisposition).toBe("allow");
+    expect(typeof manifest.installedAt).toBe("string");
+    expect(typeof manifest.lastReviewedAt).toBe("string");
+    expect(typeof manifest.lastCheckedAt).toBe("string");
+    expect(manifest).toHaveProperty("resolvedUpstream");
   });
 });

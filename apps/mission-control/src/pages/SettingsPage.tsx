@@ -42,6 +42,7 @@ import { GCSelect, GCSwitch } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { dedupeProviderModels, previewProviderModels, useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
+import "../styles/settings.css";
 
 const TOOL_PROFILE_OPTIONS: SelectOption[] = [
   { value: "minimal", label: "minimal (safest)" },

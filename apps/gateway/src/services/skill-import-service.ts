@@ -44,6 +44,34 @@ interface SkillInstallInput extends SkillImportInput {
   confirmHighRisk?: boolean;
 }
 
+interface InstalledSkillSourceManifest {
+  manifestVersion?: number;
+  installedAt?: string;
+  lastReviewedAt?: string;
+  lastCheckedAt?: string;
+  duplicateFamily?: string;
+  reviewDisposition?: "allow" | "conditional" | "reference_only" | "reject";
+  marketplaceListingUrl?: string;
+  resolvedUpstream?: {
+    url?: string;
+    ref?: string;
+    version?: string;
+  };
+  candidate?: {
+    canonicalKey?: string;
+    sourceRef?: string;
+    sourceUrl?: string;
+    repositoryUrl?: string;
+  };
+}
+
+interface SkillInstallDuplicateMatch {
+  scope: "extra" | "bundled";
+  identifier: string;
+  duplicateFamily?: string;
+  canonicalKey?: string;
+}
+
 const HOSTED_SKILL_BUNDLE_FILES = [
   { remoteName: "skill.md", localName: "SKILL.md", required: true },
   { remoteName: "heartbeat.md", localName: "HEARTBEAT.md", required: false },
@@ -115,6 +143,149 @@ const FALLBACK_SOURCE_ITEMS: SkillSourceResultRecord[] = [
     skillFamily: "browser_automation",
   },
   {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/lucassynnott/cloudflare-api",
+    name: "Cloudflare API",
+    description: "Cloudflare-focused skill for zone, DNS, and API operations.",
+    tags: ["clawhub", "cloudflare", "dns", "api"],
+    sourceKind: "marketplace_listing",
+    installability: "review_only",
+    installHint: "Pick one primary Cloudflare or DNS skill for GoatCitadel and import only the validated upstream repository.",
+    skillFamily: "cloudflare_dns",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/1999AZZAR/cloudflare-manager",
+    name: "Cloudflare Manager",
+    description: "Cloudflare management skill for DNS and edge operations.",
+    tags: ["clawhub", "cloudflare", "dns", "manager"],
+    sourceKind: "marketplace_listing",
+    installability: "review_only",
+    installHint: "Pick one primary Cloudflare or DNS skill for GoatCitadel and import only the validated upstream repository.",
+    skillFamily: "cloudflare_dns",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/steipete/domain-dns-ops",
+    name: "Domain DNS Ops",
+    description: "Domain and DNS operations skill best treated as reference material unless it adds a unique workflow beyond the primary Cloudflare path.",
+    tags: ["clawhub", "dns", "domain", "ops"],
+    sourceKind: "marketplace_listing",
+    installability: "review_only",
+    installHint: "Keep as reference by default; prefer one primary Cloudflare or DNS skill for installation.",
+    skillFamily: "cloudflare_dns",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/Dolverin/flaresolverr",
+    name: "FlareSolverr",
+    description: "FlareSolverr integration skill for sites that require a separately operated FlareSolverr service.",
+    tags: ["clawhub", "flaresolverr", "browser", "network"],
+    sourceKind: "marketplace_listing",
+    installability: "review_only",
+    installHint: "Only import after confirming a working FlareSolverr service is already part of the runtime.",
+    skillFamily: "flaresolverr_runtime",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/steipete/gog",
+    name: "GoG",
+    description: "Google CLI and OAuth oriented workflow skill.",
+    tags: ["clawhub", "google", "oauth", "cli"],
+    sourceKind: "marketplace_listing",
+    installability: "review_only",
+    installHint: "Only import when Google CLI or OAuth workflows are an active GoatCitadel requirement.",
+    skillFamily: "google_cli_oauth",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/TheSethRose/agent-browser",
+    name: "Agent Browser",
+    description: "Browser automation skill that overlaps existing agent-browser capability in the broader environment.",
+    tags: ["clawhub", "browser", "automation", "agent-browser"],
+    sourceKind: "marketplace_listing",
+    installability: "review_only",
+    installHint: "Treat as overlap reference unless the repo needs a distinct repo-managed browser skill variant.",
+    skillFamily: "browser_automation",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/halthelobster/proactive-agent",
+    name: "Proactive Agent",
+    description: "Proactive workflow skill that should be mined for ideas first rather than installed immediately.",
+    tags: ["clawhub", "proactive", "automation", "agent"],
+    sourceKind: "marketplace_listing",
+    installability: "review_only",
+    installHint: "Use as a design reference first. Do not make it part of the first repo-managed install batch.",
+    skillFamily: "proactive_automation",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/spclaudehome/skill-vetter",
+    name: "Skill Vetter",
+    description: "Skill vetting workflow that overlaps GoatCitadel's native import and trust posture.",
+    tags: ["clawhub", "vetting", "trust", "review"],
+    sourceKind: "marketplace_listing",
+    installability: "review_only",
+    installHint: "Treat as overlap reference; GoatCitadel already has native import validation and vetting controls.",
+    skillFamily: "skill_vetting",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/ivangdavila/self-improving",
+    name: "Self Improving",
+    description: "Self-improvement workflow that overlaps GoatCitadel's bundled safe self-improvement capability.",
+    tags: ["clawhub", "self-improving", "improvement", "replay"],
+    sourceKind: "marketplace_listing",
+    installability: "review_only",
+    installHint: "Treat as overlap reference; GoatCitadel already ships a safer native self-improvement path.",
+    skillFamily: "safe_self_improvement",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/Shaivpidadi/free-ride",
+    name: "Free Ride",
+    description: "OpenClaw-oriented skill with environment-specific assumptions.",
+    tags: ["clawhub", "openclaw", "automation"],
+    sourceKind: "marketplace_listing",
+    installability: "review_only",
+    installHint: "Only consider after confirming a concrete GoatCitadel use case and runtime compatibility.",
+    skillFamily: "openclaw_experiment",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/maximeprades/auto-updater",
+    name: "Auto Updater",
+    description: "Auto-updater workflow best treated as a pattern source because GoatCitadel should implement updates natively and review-first.",
+    tags: ["clawhub", "updater", "automation"],
+    sourceKind: "marketplace_listing",
+    installability: "review_only",
+    installHint: "Use as a pattern reference only; prefer GoatCitadel's native report-first update review flow.",
+    skillFamily: "auto_updates",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/NeilJo-GY/open-persona",
+    name: "Open Persona",
+    description: "Persona-oriented skill that is optional future capability rather than a first-batch install.",
+    tags: ["clawhub", "persona", "identity"],
+    sourceKind: "marketplace_listing",
+    installability: "review_only",
+    installHint: "Hold as an optional future capability rather than a first-pass repo-managed install.",
+    skillFamily: "persona_runtime",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/linkbag/ai-swarm",
+    name: "AI Swarm",
+    description: "High-impact swarm automation skill that can mutate repositories and automation state aggressively.",
+    tags: ["clawhub", "swarm", "automation", "agents"],
+    sourceKind: "reference",
+    installability: "not_installable",
+    installHint: "Quarantine for now. Review manually before any future consideration because it can drive broad repo mutation and automation behavior.",
+    skillFamily: "multi_agent_swarm",
+  },
+  {
     sourceProvider: "external",
     sourceUrl: "https://animalhouse.ai/skills/animal-house",
     repositoryUrl: "https://github.com/geeks-accelerator/animal-house-ai",
@@ -130,6 +301,7 @@ const FALLBACK_SOURCE_ITEMS: SkillSourceResultRecord[] = [
 
 const LOOKUP_FAMILY_TERMS: Array<{ family: string; tokens: string[] }> = [
   { family: "browser_automation", tokens: ["browser", "playwright", "automation", "web", "e2e", "screenshot", "testing"] },
+  { family: "cloudflare_dns", tokens: ["cloudflare", "dns", "domain", "zones"] },
   { family: "figma_design", tokens: ["figma", "design", "ui", "frontend", "implementation", "prototype"] },
   { family: "notebook_research", tokens: ["notebooklm", "notes", "research", "study", "knowledge", "source-grounded"] },
   { family: "messaging_notifications", tokens: ["discord", "slack", "notification", "notifications", "alert", "messaging", "channel"] },
@@ -137,6 +309,74 @@ const LOOKUP_FAMILY_TERMS: Array<{ family: string; tokens: string[] }> = [
   { family: "docs_authoring", tokens: ["docs", "documentation", "doc", "writing", "authoring"] },
   { family: "mcp_integrations", tokens: ["mcp", "integration", "server", "template", "connector"] },
   { family: "games_and_experiments", tokens: ["game", "virtual", "pet", "creature", "pixel", "animalhouse", "tamagotchi"] },
+];
+
+const REVIEW_POLICY_HINTS: Array<{
+  pattern: RegExp;
+  duplicateFamily?: string;
+  reviewDisposition: "allow" | "conditional" | "reference_only" | "reject";
+  message: string;
+}> = [
+  {
+    pattern: /\bself[-\s]?improv/i,
+    duplicateFamily: "safe_self_improvement",
+    reviewDisposition: "reject",
+    message: "GoatCitadel already ships a native safe self-improvement bundle; keep this as reference only.",
+  },
+  {
+    pattern: /\bskill[-\s]?vetter\b|\bvetter\b/i,
+    duplicateFamily: "skill_vetting",
+    reviewDisposition: "reject",
+    message: "GoatCitadel already has native skill import vetting and a bundled MCP vetter; keep this as reference only.",
+  },
+  {
+    pattern: /\bai[-\s]?swarm\b/i,
+    duplicateFamily: "multi_agent_swarm",
+    reviewDisposition: "reject",
+    message: "This swarm automation should stay quarantined because it can drive broad repo mutation and automation behavior.",
+  },
+  {
+    pattern: /\bproactive[-\s]?agent\b/i,
+    duplicateFamily: "proactive_automation",
+    reviewDisposition: "reference_only",
+    message: "Treat this as a design reference first, not a first-pass repo-managed install.",
+  },
+  {
+    pattern: /\bauto[-\s]?updater\b/i,
+    duplicateFamily: "auto_updates",
+    reviewDisposition: "reference_only",
+    message: "Use this as a pattern reference only; GoatCitadel should keep update review native and report-first.",
+  },
+  {
+    pattern: /\bfree[-\s]?ride\b/i,
+    duplicateFamily: "openclaw_experiment",
+    reviewDisposition: "conditional",
+    message: "Only install after confirming a concrete GoatCitadel use case and runtime compatibility.",
+  },
+  {
+    pattern: /\bopen[-\s]?persona\b/i,
+    duplicateFamily: "persona_runtime",
+    reviewDisposition: "reference_only",
+    message: "Hold this as optional future capability rather than part of the first install batch.",
+  },
+  {
+    pattern: /\bflaresolverr\b/i,
+    duplicateFamily: "flaresolverr_runtime",
+    reviewDisposition: "conditional",
+    message: "Only install after confirming a working FlareSolverr service already exists in the runtime.",
+  },
+  {
+    pattern: /\bgog\b|google oauth|google cli/i,
+    duplicateFamily: "google_cli_oauth",
+    reviewDisposition: "conditional",
+    message: "Only install when Google CLI or OAuth workflows are an active GoatCitadel requirement.",
+  },
+  {
+    pattern: /\bcloudflare\b|\bdns\b|\bdomain[-\s]?dns\b/i,
+    duplicateFamily: "cloudflare_dns",
+    reviewDisposition: "allow",
+    message: "Choose one primary Cloudflare or DNS skill for repo-managed installation and avoid overlapping installs in the same family.",
+  },
 ];
 
 export class SkillImportService {
@@ -325,11 +565,39 @@ export class SkillImportService {
       await fs.cp(materialized.skillDir, installedPath, { recursive: true, force: Boolean(input.force) });
 
       const sourceManifestPath = path.join(installedPath, "source.json");
+      const installedAt = new Date().toISOString();
+      const duplicateFamily = deriveReviewPolicy({
+        inferredSkillName: validation.inferredSkillName,
+        sourceRef: validation.candidate.sourceRef,
+      })?.duplicateFamily;
+      const reviewDisposition = deriveReviewPolicy({
+        inferredSkillName: validation.inferredSkillName,
+        sourceRef: validation.candidate.sourceRef,
+      })?.reviewDisposition;
+      const curatedEntry = findCuratedSourceByUrl(validation.candidate.sourceRef);
+      const resolvedUpstreamVersion = validation.candidate.sourceType === "git_url"
+        ? await resolveGitHeadRevision(materialized.sourceDir).catch(() => undefined)
+        : undefined;
       await fs.writeFile(
         sourceManifestPath,
         JSON.stringify(
           {
-            installedAt: new Date().toISOString(),
+            manifestVersion: 2,
+            installedAt,
+            lastReviewedAt: installedAt,
+            lastCheckedAt: installedAt,
+            duplicateFamily,
+            reviewDisposition,
+            marketplaceListingUrl: curatedEntry?.sourceProvider === "clawhub"
+              || curatedEntry?.sourceProvider === "skillsmp"
+              || curatedEntry?.sourceProvider === "agentskill"
+              ? curatedEntry.sourceUrl
+              : undefined,
+            resolvedUpstream: {
+              url: validation.candidate.repositoryUrl ?? validation.candidate.sourceUrl ?? validation.candidate.sourceRef,
+              ref: validation.candidate.sourceType === "git_url" ? "HEAD" : undefined,
+              version: resolvedUpstreamVersion,
+            },
             candidate: validation.candidate,
             riskLevel: validation.riskLevel,
             warnings: validation.warnings,
@@ -454,6 +722,59 @@ export class SkillImportService {
       }
     }
     return keys;
+  }
+
+  private findDuplicateInstallMatches(input: {
+    canonicalKey: string;
+    duplicateFamily?: string;
+    inferredSkillId?: string;
+  }): SkillInstallDuplicateMatch[] {
+    const matches: SkillInstallDuplicateMatch[] = [];
+    const extraRoot = path.resolve(this.rootDir, "skills", "extra");
+    if (fsSync.existsSync(extraRoot)) {
+      for (const entry of fsSync.readdirSync(extraRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        if (input.inferredSkillId && entry.name === input.inferredSkillId) {
+          continue;
+        }
+        const sourceManifestPath = path.join(extraRoot, entry.name, "source.json");
+        if (!fsSync.existsSync(sourceManifestPath)) {
+          continue;
+        }
+        try {
+          const parsed = JSON.parse(fsSync.readFileSync(sourceManifestPath, "utf8")) as InstalledSkillSourceManifest;
+          const manifestFamily = parsed.duplicateFamily
+            ?? deriveReviewPolicy({
+              inferredSkillName: entry.name,
+              sourceRef: parsed.candidate?.sourceRef ?? parsed.candidate?.repositoryUrl ?? parsed.candidate?.sourceUrl ?? entry.name,
+            })?.duplicateFamily;
+          if (parsed.candidate?.canonicalKey && parsed.candidate.canonicalKey === input.canonicalKey) {
+            matches.push({
+              scope: "extra",
+              identifier: `skills/extra/${entry.name}`,
+              canonicalKey: parsed.candidate.canonicalKey,
+              duplicateFamily: manifestFamily,
+            });
+            continue;
+          }
+          if (input.duplicateFamily && manifestFamily === input.duplicateFamily) {
+            matches.push({
+              scope: "extra",
+              identifier: `skills/extra/${entry.name}`,
+              canonicalKey: parsed.candidate?.canonicalKey,
+              duplicateFamily: manifestFamily,
+            });
+          }
+        } catch {
+          // Ignore malformed manifests when checking duplicate installs.
+        }
+      }
+    }
+
+    const bundledMatches = findBundledDuplicateMatches(this.rootDir, input.duplicateFamily);
+    return [...matches, ...bundledMatches];
   }
 
   private async searchProvider(
@@ -711,17 +1032,35 @@ export class SkillImportService {
       warnings.push("No license file detected.");
     }
 
-    const valid = errors.length === 0;
+    const reviewPolicy = deriveReviewPolicy({
+      inferredSkillName,
+      sourceRef: source.candidate.sourceRef,
+    });
+    if (reviewPolicy?.message) {
+      if (reviewPolicy.reviewDisposition === "reject") {
+        errors.push(reviewPolicy.message);
+      } else {
+        warnings.push(reviewPolicy.message);
+      }
+    }
+    const duplicateMatches = this.findDuplicateInstallMatches({
+      canonicalKey: source.candidate.canonicalKey,
+      duplicateFamily: reviewPolicy?.duplicateFamily,
+      inferredSkillId,
+    });
+    if (duplicateMatches.length > 0) {
+      errors.push(buildDuplicateInstallMessage(duplicateMatches, reviewPolicy?.duplicateFamily));
+    }
     const riskLevel = deriveRiskLevel({
       suspiciousScripts,
       networkIndicators,
       scanIncomplete,
       descriptionQuality,
-      valid,
+      valid: errors.length === 0,
     });
 
     return {
-      valid,
+      valid: errors.length === 0,
       riskLevel,
       errors,
       warnings,
@@ -1255,6 +1594,73 @@ function buildLookupIndex(item: SkillSourceResultRecord): {
     expandedTokens,
     skillFamily,
   };
+}
+
+function deriveReviewPolicy(input: {
+  inferredSkillName?: string;
+  sourceRef: string;
+}): {
+  duplicateFamily?: string;
+  reviewDisposition: "allow" | "conditional" | "reference_only" | "reject";
+  message: string;
+} | undefined {
+  const haystack = `${input.inferredSkillName ?? ""} ${input.sourceRef}`.trim();
+  for (const entry of REVIEW_POLICY_HINTS) {
+    if (entry.pattern.test(haystack)) {
+      return {
+        duplicateFamily: entry.duplicateFamily,
+        reviewDisposition: entry.reviewDisposition,
+        message: entry.message,
+      };
+    }
+  }
+  return undefined;
+}
+
+function buildDuplicateInstallMessage(
+  matches: SkillInstallDuplicateMatch[],
+  duplicateFamily?: string,
+): string {
+  const locations = matches.map((match) => match.identifier).join(", ");
+  if (duplicateFamily) {
+    return `Duplicate skill family "${duplicateFamily}" is already present in ${locations}. Keep only one repo-managed install for that family.`;
+  }
+  return `An equivalent repo-managed skill source is already present in ${locations}.`;
+}
+
+function findBundledDuplicateMatches(
+  rootDir: string,
+  duplicateFamily?: string,
+): SkillInstallDuplicateMatch[] {
+  if (!duplicateFamily) {
+    return [];
+  }
+  const bundledMatches: Array<{ family: string; identifier: string }> = [
+    {
+      family: "safe_self_improvement",
+      identifier: "skills/bundled/goatcitadel-native-safe-self-improvement",
+    },
+    {
+      family: "skill_vetting",
+      identifier: "skills/bundled/mcp-vetter",
+    },
+  ];
+  return bundledMatches
+    .filter((item) => item.family === duplicateFamily && fsSync.existsSync(path.resolve(rootDir, item.identifier)))
+    .map((item) => ({
+      scope: "bundled" as const,
+      identifier: item.identifier,
+      duplicateFamily: item.family,
+    }));
+}
+
+async function resolveGitHeadRevision(repoDir: string): Promise<string | undefined> {
+  const result = await execFileAsync("git", ["rev-parse", "HEAD"], {
+    cwd: repoDir,
+    windowsHide: true,
+  });
+  const stdout = String(result.stdout ?? "").trim();
+  return stdout || undefined;
 }
 
 async function resolveMarketplaceUpstream(sourceUrl: string): Promise<string | undefined> {

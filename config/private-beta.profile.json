@@ -27,6 +27,12 @@
         "name": "Private Beta Daily Backup",
         "schedule": "30 2 * * * America/Los_Angeles",
         "enabled": true
+      },
+      {
+        "jobId": "update-review-daily",
+        "name": "Daily Update Review",
+        "schedule": "15 4 * * * America/Los_Angeles",
+        "enabled": true
       }
     ]
   }

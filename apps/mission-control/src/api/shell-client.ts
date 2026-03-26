@@ -26,6 +26,9 @@ const API_BASE = import.meta.env.VITE_GATEWAY_URL ?? inferDefaultGatewayBaseUrl(
 const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
 const EVENT_CURSOR_STORAGE_KEY = "goatcitadel.events.cursor.v1";
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const BROWSER_MUTATION_INTENT_HEADER = "x-goatcitadel-browser-intent";
+const BROWSER_MUTATION_INTENT_VALUE = "mutation";
 
 export interface GatewayAuthState {
   mode?: "none" | "token" | "basic";
@@ -465,11 +468,12 @@ function isPrivateOrCarrierGradeIpv4(host: string): boolean {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const authHeaders = readGatewayAuthHeaders(path);
-  const method = init?.method ?? "GET";
+  const method = (init?.method ?? "GET").toUpperCase();
   const correlationId = createCorrelationId();
   const headers = {
     "Content-Type": "application/json",
     ...(method !== "GET" ? { "Idempotency-Key": crypto.randomUUID() } : {}),
+    ...(MUTATING_METHODS.has(method) ? { [BROWSER_MUTATION_INTENT_HEADER]: BROWSER_MUTATION_INTENT_VALUE } : {}),
     ...authHeaders,
     "x-goatcitadel-correlation-id": correlationId,
     "x-goatcitadel-origin-surface": inferOriginSurface(path),
@@ -490,6 +494,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         ...headers,
       },
       ...init,
+      method,
     });
   } catch (error) {
     setDevDiagnosticsGatewayReachable(false);

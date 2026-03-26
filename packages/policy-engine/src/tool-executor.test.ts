@@ -598,6 +598,73 @@ describe("executeTool", () => {
     );
   });
 
+  it("rejects risky background shell command with an unverified approval id", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const riskyPolicy: ToolPolicyConfig = {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        riskyShellPatterns: ["node --version"],
+        requireApprovalForRiskyShell: true,
+      },
+    };
+    const request: ToolInvokeRequest = {
+      toolName: "shell.exec_background",
+      args: { command: "node --version" },
+      agentId: "agent",
+      sessionId: "sess-bg-spoofed-approval",
+      consentContext: {
+        source: "ui",
+        reason: "approval:apr_spoofed",
+      },
+    };
+
+    await expect(executeTool(request, riskyPolicy, storageStub)).rejects.toThrow(
+      "Risky shell command requires approval",
+    );
+  });
+
+  it("allows risky background shell command only with a verified approval context", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const riskyPolicy: ToolPolicyConfig = {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        riskyShellPatterns: ["node --version"],
+        requireApprovalForRiskyShell: true,
+      },
+    };
+    vi.mocked(storageStub.pendingApprovalActions.find).mockReturnValue({
+      approvalId: "apr_bg_123",
+      actionType: "tool.invoke",
+      request: {
+        toolName: "shell.exec_background",
+        args: { command: "node --version" },
+        agentId: "agent",
+        sessionId: "sess-bg-approved",
+      },
+      createdAt: "2026-03-21T00:00:00.000Z",
+      resolutionStatus: "pending",
+    });
+
+    const result = await executeTool({
+      toolName: "shell.exec_background",
+      args: { command: "node --version" },
+      agentId: "agent",
+      sessionId: "sess-bg-approved",
+      consentContext: {
+        source: "ui",
+        reason: "approval:apr_bg_123",
+      },
+    }, riskyPolicy, storageStub);
+
+    expect(result).toMatchObject({
+      command: "node --version",
+      detached: true,
+      started: true,
+    });
+  });
+
   it("sends channel messages through Slack bot API with rendered attachments", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.SLACK_BOT_TOKEN = "xoxb-test";

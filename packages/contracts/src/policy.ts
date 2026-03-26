@@ -44,6 +44,7 @@ export interface ToolInvokeRequest {
 export interface ToolInvokeResult {
   outcome: "executed" | "approval_required" | "blocked";
   approvalId?: string;
+  expiresAt?: string;
   policyReason: string;
   auditEventId: string;
   result?: Record<string, unknown>;

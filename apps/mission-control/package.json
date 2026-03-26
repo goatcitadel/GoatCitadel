@@ -4,13 +4,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -p tsconfig.json && vite build",
+    "build": "tsc -b tsconfig.json tsconfig.node.json && vite build",
     "perf:check": "node ../../scripts/check-mission-control-budgets.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -b tsconfig.json tsconfig.node.json",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --passWithNoTests --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -b tsconfig.json tsconfig.node.json"
   },
   "dependencies": {
     "@goatcitadel/contracts": "workspace:*",

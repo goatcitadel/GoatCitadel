@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
@@ -101,6 +103,10 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
+    const jailed = resolveBackupPathWithinRoot(parsed.data.filePath);
+    if (!jailed.ok) {
+      return reply.code(400).send({ error: jailed.error });
+    }
     try {
       return reply.send(await fastify.gateway.restoreBackup(parsed.data));
     } catch (error) {
@@ -113,6 +119,10 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
+    const jailed = resolveBackupPathWithinRoot(parsed.data.filePath);
+    if (!jailed.ok) {
+      return reply.code(400).send({ error: jailed.error });
+    }
     try {
       return reply.send(await fastify.gateway.verifyBackup(parsed.data));
     } catch (error) {
@@ -120,3 +130,16 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 };
+
+function resolveBackupPathWithinRoot(filePath: string): { ok: true; resolvedPath: string } | { ok: false; error: string } {
+  const backupRoot = path.resolve(path.join(os.homedir(), ".GoatCitadel", "backups"));
+  const resolvedPath = path.resolve(backupRoot, filePath);
+  const relative = path.relative(backupRoot, resolvedPath);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return {
+      ok: false,
+      error: "Backup file path must stay within the GoatCitadel backup directory.",
+    };
+  }
+  return { ok: true, resolvedPath };
+}

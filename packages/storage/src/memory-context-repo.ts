@@ -44,6 +44,15 @@ export interface MemoryContextInsertInput {
   expiresAt: string;
 }
 
+export interface MemoryContextLookupInput {
+  cacheKey: string;
+  scope: MemoryContextScope;
+  sessionId?: string;
+  taskId?: string;
+  runId?: string;
+  phaseId?: string;
+}
+
 export class MemoryContextRepository {
   private readonly insertStmt;
   private readonly getStmt;
@@ -84,6 +93,11 @@ export class MemoryContextRepository {
     this.getByCacheKeyStmt = db.prepare(`
       SELECT * FROM memory_context_packs
       WHERE cache_key = @cacheKey
+        AND scope = @scope
+        AND session_id IS @sessionId
+        AND task_id IS @taskId
+        AND run_id IS @runId
+        AND phase_id IS @phaseId
         AND expires_at > @now
       LIMIT 1
     `);
@@ -110,10 +124,11 @@ export class MemoryContextRepository {
   public upsert(input: MemoryContextInsertInput): MemoryContextPack {
     const createdAt = input.createdAt ?? new Date().toISOString();
     const contextId = randomUUID();
+    const scopedCacheKey = toScopedCacheKey(input);
 
     this.insertStmt.run({
       contextId,
-      cacheKey: input.cacheKey,
+      cacheKey: scopedCacheKey,
       scope: input.scope,
       sessionId: input.sessionId ?? null,
       taskId: input.taskId ?? null,
@@ -131,7 +146,12 @@ export class MemoryContextRepository {
     });
 
     const fresh = this.getByCacheKeyStmt.get({
-      cacheKey: input.cacheKey,
+      cacheKey: scopedCacheKey,
+      scope: input.scope,
+      sessionId: input.sessionId ?? null,
+      taskId: input.taskId ?? null,
+      runId: input.runId ?? null,
+      phaseId: input.phaseId ?? null,
       now: "1970-01-01T00:00:00.000Z",
     }) as MemoryContextRow | undefined;
     if (!fresh) {
@@ -140,9 +160,14 @@ export class MemoryContextRepository {
     return mapRow(fresh);
   }
 
-  public findFreshByCacheKey(cacheKey: string, now = new Date().toISOString()): MemoryContextPack | undefined {
+  public findFreshByCacheKey(input: MemoryContextLookupInput, now = new Date().toISOString()): MemoryContextPack | undefined {
     const row = this.getByCacheKeyStmt.get({
-      cacheKey,
+      cacheKey: toScopedCacheKey(input),
+      scope: input.scope,
+      sessionId: input.sessionId ?? null,
+      taskId: input.taskId ?? null,
+      runId: input.runId ?? null,
+      phaseId: input.phaseId ?? null,
       now,
     }) as MemoryContextRow | undefined;
     return row ? mapRow(row) : undefined;
@@ -199,4 +224,15 @@ function mapRow(row: MemoryContextRow): MemoryContextPack {
     createdAt: row.created_at,
     expiresAt: row.expires_at,
   };
+}
+
+function toScopedCacheKey(input: MemoryContextLookupInput): string {
+  return [
+    input.scope,
+    input.sessionId ?? "",
+    input.taskId ?? "",
+    input.runId ?? "",
+    input.phaseId ?? "",
+    input.cacheKey,
+  ].join("|");
 }

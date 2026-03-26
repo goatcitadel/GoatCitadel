@@ -51,8 +51,8 @@ describe("sqlite approvals migration", () => {
     assert.equal(columns.has("explanation_json"), true);
     assert.equal(columns.has("explanation_error"), true);
     assert.equal(columns.has("explanation_updated_at"), true);
+    assert.equal(columns.has("expires_at"), true);
 
     db.close();
   });
 });
-

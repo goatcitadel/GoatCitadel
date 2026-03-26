@@ -297,6 +297,21 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "approval_inbox_schema",
     up: createApprovalInboxSchema,
   },
+  {
+    version: 39,
+    name: "approval_expiry_runtime_schema",
+    up: createApprovalExpiryRuntimeSchema,
+  },
+  {
+    version: 40,
+    name: "realtime_event_sequence_state",
+    up: createRealtimeEventSequenceStateSchema,
+  },
+  {
+    version: 41,
+    name: "tool_access_decision_hot_path_indexes",
+    up: createToolAccessDecisionHotPathIndexes,
+  },
 ];
 
 function createBaseSchema(db: DatabaseSync): void {
@@ -348,6 +363,7 @@ function createBaseSchema(db: DatabaseSync): void {
       explanation_error TEXT,
       explanation_updated_at TEXT,
       created_at TEXT NOT NULL,
+      expires_at TEXT,
       resolved_at TEXT,
       resolved_by TEXT,
       resolution_note TEXT
@@ -1488,6 +1504,7 @@ function createAgenticChatSchema(db: DatabaseSync): void {
       tool_name TEXT,
       status TEXT NOT NULL,
       reason TEXT,
+      expires_at TEXT,
       resolved_by TEXT,
       created_at TEXT NOT NULL,
       resolved_at TEXT
@@ -2464,6 +2481,62 @@ function createApprovalInboxSchema(db: DatabaseSync): void {
       ON approval_inbox_items(receiver_kind, receiver_id, state, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_approval_inbox_approval_created
       ON approval_inbox_items(approval_id, created_at DESC);
+  `);
+}
+
+function createApprovalExpiryRuntimeSchema(db: DatabaseSync): void {
+  addColumnIfMissingIfTableExists(db, "approvals", "expires_at", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_inline_approvals", "expires_at", "TEXT");
+}
+
+function createRealtimeEventSequenceStateSchema(db: DatabaseSync): void {
+  const tableExists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get("realtime_events") as { name: string } | undefined;
+  if (!tableExists) {
+    return;
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS realtime_event_sequence_state (
+      stream_name TEXT PRIMARY KEY,
+      last_sequence INTEGER NOT NULL
+    );
+  `);
+  const maxSequenceRow = db.prepare("SELECT COALESCE(MAX(sequence), 0) AS max_sequence FROM realtime_events")
+    .get() as { max_sequence?: number | null } | undefined;
+  const maxSequence = Number(maxSequenceRow?.max_sequence ?? 0);
+  db.prepare(`
+    INSERT INTO realtime_event_sequence_state (stream_name, last_sequence)
+    VALUES ('events', @lastSequence)
+    ON CONFLICT(stream_name) DO UPDATE SET
+      last_sequence = CASE
+        WHEN realtime_event_sequence_state.last_sequence < excluded.last_sequence
+          THEN excluded.last_sequence
+        ELSE realtime_event_sequence_state.last_sequence
+      END
+  `).run({ lastSequence: maxSequence });
+}
+
+function createToolAccessDecisionHotPathIndexes(db: DatabaseSync): void {
+  const tableExists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get("tool_access_decisions") as { name: string } | undefined;
+  if (!tableExists) {
+    return;
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_tool_agent_session_time
+      ON tool_access_decisions(tool_name, agent_id, session_id, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_tool_task_time
+      ON tool_access_decisions(tool_name, task_id, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_allowed_tool_time
+      ON tool_access_decisions(allowed, tool_name, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_agent_allowed_tool_time
+      ON tool_access_decisions(agent_id, allowed, tool_name, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_session_allowed_tool_time
+      ON tool_access_decisions(agent_id, session_id, allowed, tool_name, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_task_allowed_tool_time
+      ON tool_access_decisions(task_id, allowed, tool_name, timestamp DESC);
   `);
 }
 

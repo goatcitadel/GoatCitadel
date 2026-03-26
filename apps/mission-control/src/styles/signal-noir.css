@@ -48,7 +48,7 @@
     radial-gradient(circle at 84% 12%, rgba(255, 154, 69, 0.14), transparent 18%),
     radial-gradient(circle at 50% 100%, rgba(255, 86, 120, 0.09), transparent 28%),
     linear-gradient(180deg, #081018 0%, #060910 48%, #03060b 100%);
-  font-family: "Segoe UI", "Verdana", sans-serif;
+  font-family: var(--font-body);
 }
 
 .layout-shell.theme-signal-noir::before {
@@ -131,7 +131,7 @@
 .theme-signal-noir .chat-v11-turn-strip span,
 .theme-signal-noir .chat-trace-title,
 .theme-signal-noir .chat-trace-meta {
-  font-family: "Rajdhani", "Segoe UI", "Verdana", sans-serif;
+  font-family: var(--font-display);
   letter-spacing: 0.08em;
 }
 
@@ -159,7 +159,7 @@
 .theme-signal-noir .stat-card-value,
 .theme-signal-noir .dashboard-vitals-value,
 .theme-signal-noir .sidebar-footer-value {
-  font-family: "Rajdhani", "Segoe UI", "Verdana", sans-serif;
+  font-family: var(--font-display);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
 }
@@ -693,7 +693,7 @@
 }
 
 .theme-signal-noir .command-palette-head h3 {
-  font-family: "Rajdhani", "Segoe UI", "Verdana", sans-serif;
+  font-family: var(--font-display);
   font-size: 1.4rem;
   letter-spacing: 0.05em;
   text-transform: uppercase;

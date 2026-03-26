@@ -174,7 +174,7 @@ function ChatTurnDetails({
   const suggestionSummary = renderSuggestionSummary(turn.trace.capabilityUpgradeSuggestions);
   return (
     <details className="chat-v11-turn-details">
-      <summary>Run details</summary>
+      <summary>Review run details</summary>
       <ChatBranchSwitcher turn={turn} onSwitch={onSwitchBranch} />
       <div className="chat-v11-row-actions">
         {turn.assistantMessage ? <button type="button" onClick={() => onRetryTurn(turn.turnId)}>Retry answer</button> : null}

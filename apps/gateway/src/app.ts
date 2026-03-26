@@ -55,6 +55,10 @@ import { enterDevDiagnosticsContext } from "./dev-diagnostics/service.js";
 
 loadLocalEnvFile();
 
+const MUTATING_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const BROWSER_MUTATION_INTENT_HEADER = "x-goatcitadel-browser-intent";
+const BROWSER_MUTATION_INTENT_VALUE = "mutation";
+
 export async function buildApp() {
   const verbose = isVerboseLoggingEnabled();
   const app = Fastify({
@@ -99,6 +103,8 @@ export async function buildApp() {
     const traceId = readTraceId(request.headers.traceparent, correlationId);
     const originSurface = readRequestHeader(request.headers["x-goatcitadel-origin-surface"]);
     const sessionId = readRequestHeader(request.headers["x-goatcitadel-session-id"]);
+    const browserOrigin = readRequestHeader(request.headers.origin);
+    const browserIntent = readRequestHeader(request.headers[BROWSER_MUTATION_INTENT_HEADER]);
     (request as typeof request & { correlationId?: string; traceId?: string; originSurface?: string; requestSessionId?: string }).correlationId = correlationId;
     (request as typeof request & { correlationId?: string; traceId?: string; originSurface?: string; requestSessionId?: string }).traceId = traceId;
     (request as typeof request & { correlationId?: string; traceId?: string; originSurface?: string; requestSessionId?: string }).originSurface = originSurface;
@@ -131,6 +137,15 @@ export async function buildApp() {
     if (isSuspiciousEncodedPath(rawUrl)) {
       return reply.code(400).send({
         error: "Rejected request path due to suspicious encoded path segments.",
+      });
+    }
+    if (
+      MUTATING_HTTP_METHODS.has(request.method.toUpperCase())
+      && browserOrigin
+      && browserIntent !== BROWSER_MUTATION_INTENT_VALUE
+    ) {
+      return reply.code(400).send({
+        error: `Missing ${BROWSER_MUTATION_INTENT_HEADER}: ${BROWSER_MUTATION_INTENT_VALUE} for browser-origin mutating request.`,
       });
     }
   });

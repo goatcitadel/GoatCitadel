@@ -22,6 +22,7 @@ interface ApprovalRow {
   explanation_error: string | null;
   explanation_updated_at: string | null;
   created_at: string;
+  expires_at: string | null;
   resolved_at: string | null;
   resolved_by: string | null;
   resolution_note: string | null;
@@ -40,10 +41,10 @@ export class ApprovalRepository {
     this.createStmt = db.prepare(`
       INSERT INTO approvals (
         approval_id, kind, risk_level, status, payload_json, preview_json,
-        explanation_status, created_at
+        explanation_status, created_at, expires_at
       ) VALUES (
         @approvalId, @kind, @riskLevel, @status, @payloadJson, @previewJson,
-        @explanationStatus, @createdAt
+        @explanationStatus, @createdAt, @expiresAt
       )
     `);
     this.listStmt = db.prepare("SELECT * FROM approvals WHERE (@status IS NULL OR status = @status) ORDER BY created_at DESC LIMIT @limit");
@@ -95,6 +96,7 @@ export class ApprovalRepository {
       previewJson: JSON.stringify(input.preview),
       explanationStatus: "not_requested",
       createdAt: now,
+      expiresAt: input.expiresAt ?? null,
     });
 
     return this.get(approvalId);
@@ -179,6 +181,7 @@ function mapRow(row: ApprovalRow): ApprovalRequest {
     payload: safeJsonParse<Record<string, unknown>>(row.payload_json, {}),
     preview: safeJsonParse<Record<string, unknown>>(row.preview_json, {}),
     createdAt: row.created_at,
+    expiresAt: row.expires_at ?? undefined,
     resolvedAt: row.resolved_at ?? undefined,
     resolvedBy: row.resolved_by ?? undefined,
     resolutionNote: row.resolution_note ?? undefined,

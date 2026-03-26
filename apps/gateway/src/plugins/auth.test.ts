@@ -137,6 +137,20 @@ describe("auth plugin", () => {
     expect(oversized.statusCode).toBe(401);
   });
 
+  it("rejects deprecated query-param auth tokens on normal routes", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/protected?access_token=alpha-token",
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
   it("handles long token comparisons via timing-safe flow", async () => {
     const longToken = "t".repeat(3000);
     app = await buildApp({

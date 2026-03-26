@@ -10,6 +10,7 @@ import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail } from "./sandbox/path-jail.js";
 import { assertHostAllowed } from "./sandbox/network-guard.js";
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
+import { matchesToolPattern } from "./tool-patterns.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import {
   appendBankrActionAudit,
@@ -679,7 +680,7 @@ async function shellExecBackground(
   const command = required(args.command, "command");
   const cwd = resolveOptionalCwd(args.cwd, request, config, storage);
   const shellRisk = classifyShellRisk(command, config.sandbox.riskyShellPatterns);
-  const approvalBypass = typeof request.consentContext?.reason === "string" && request.consentContext.reason.startsWith("approval:");
+  const approvalBypass = hasVerifiedApprovalBypass(request, storage);
   if (shellRisk.risky && config.sandbox.requireApprovalForRiskyShell && !approvalBypass) {
     throw new Error(
       `Risky shell command requires approval (matched pattern: ${shellRisk.matchedPattern ?? "unknown"})`,
@@ -5093,20 +5094,7 @@ function buildGrantScopeCandidates(
 }
 
 function matchesGrantToolPattern(pattern: string, toolName: string): boolean {
-  const trimmed = pattern.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (trimmed === "*") {
-    return true;
-  }
-  if (!trimmed.includes("*")) {
-    return trimmed === toolName;
-  }
-  const escaped = trimmed
-    .replace(/[|\\{}()[\]^$+?.]/g, "\\$&")
-    .replace(/\*/g, ".*");
-  return new RegExp(`^${escaped}$`).test(toolName);
+  return matchesToolPattern(pattern, toolName);
 }
 
 function isGrantActive(grant: ToolGrantRecord): boolean {

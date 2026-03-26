@@ -147,6 +147,19 @@ async function restartGateway(reason: string): Promise<void> {
 }
 
 async function startChild(): Promise<void> {
+  if (await isPortOpen()) {
+    log.error("gateway port already in use before spawn", {
+      host: gatewayHealthHost,
+      port: gatewayPort,
+      advice: "Stop the existing listener on this port before running pnpm dev.",
+    });
+    const delay = registerFailureAndGetDelay("port_in_use_before_spawn");
+    if (delay !== null) {
+      scheduleRestartAfter(delay, "port in use");
+    }
+    return;
+  }
+
   const { command, args } = buildGatewayStartCommand();
 
   child = spawn(command, args, {

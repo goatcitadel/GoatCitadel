@@ -38,4 +38,22 @@ describe("resolveEffectivePolicy", () => {
     expect(isToolAllowed(policy, "http.get")).toBe(false);
     expect(isToolAllowed(policy, "shell.exec")).toBe(true);
   });
+
+  it("applies glob denies against profile-derived tools", () => {
+    const policy = resolveEffectivePolicy({
+      ...config,
+      profiles: {
+        coding: ["session.status", "session.inspect", "fs.read"],
+      },
+      tools: {
+        profile: "coding",
+        allow: [],
+        deny: ["session.*"],
+      },
+    });
+
+    expect(isToolAllowed(policy, "session.status")).toBe(false);
+    expect(isToolAllowed(policy, "session.inspect")).toBe(false);
+    expect(isToolAllowed(policy, "fs.read")).toBe(true);
+  });
 });

@@ -1567,6 +1567,31 @@ describe("prompt-pack helpers", () => {
     expect(byMode.get("code")).toBe(36);
   });
 
+  it("parses the focused v2 prompt pack markdown for recent GoatCitadel capabilities", async () => {
+    const markdown = await fs.readFile(
+      new URL("../../../../goatcitadel_prompt_pack_v2.md", import.meta.url),
+      "utf8",
+    );
+
+    const tests = parsePromptPackTests(markdown);
+    const byMode = new Map<string, number>();
+    for (const test of tests) {
+      if (!test.mode) {
+        continue;
+      }
+      byMode.set(test.mode, (byMode.get(test.mode) ?? 0) + 1);
+    }
+
+    expect(tests).toHaveLength(36);
+    expect(new Set(tests.map((test) => test.code)).size).toBe(36);
+    expect(tests[0]?.code).toBe("TEST-C101");
+    expect(tests.some((test) => test.code === "TEST-W111" && test.prompt.includes("skill-import-service.ts"))).toBe(true);
+    expect(tests.some((test) => test.code === "TEST-D110" && test.prompt.includes("update-review-daily"))).toBe(true);
+    expect(byMode.get("chat")).toBe(12);
+    expect(byMode.get("cowork")).toBe(12);
+    expect(byMode.get("code")).toBe(12);
+  });
+
   it("parses dotted manual test codes so they survive import refreshes", () => {
     const markdown = [
       "## 2.6 Baseline sanity check",

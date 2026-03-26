@@ -15,7 +15,7 @@ interface RealtimeEventRow {
 
 export class RealtimeEventRepository {
   private readonly insertStmt;
-  private readonly nextSequenceStmt;
+  private readonly allocateSequenceStmt;
   private readonly listLatestStmt;
   private readonly listBySequenceStmt;
   private readonly listAfterSequenceStmt;
@@ -26,9 +26,11 @@ export class RealtimeEventRepository {
   private appendCount = 0;
 
   public constructor(private readonly db: DatabaseSync) {
-    this.nextSequenceStmt = db.prepare(`
-      SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
-      FROM realtime_events
+    this.allocateSequenceStmt = db.prepare(`
+      UPDATE realtime_event_sequence_state
+      SET last_sequence = last_sequence + 1
+      WHERE stream_name = 'events'
+      RETURNING last_sequence
     `);
     this.insertStmt = db.prepare(`
       INSERT INTO realtime_events (
@@ -107,16 +109,24 @@ export class RealtimeEventRepository {
       grantId: payload.grantId ?? attribution?.grantId,
     };
     const eventId = randomUUID();
-    const nextSequenceRow = this.nextSequenceStmt.get() as { next_sequence?: number } | undefined;
-    const sequence = Number(nextSequenceRow?.next_sequence ?? 1);
-    this.insertStmt.run({
-      eventId,
-      sequence,
-      eventType,
-      source,
-      payloadJson: JSON.stringify(attributedPayload),
-      createdAt,
-    });
+    let sequence = 1;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const nextSequenceRow = this.allocateSequenceStmt.get() as { last_sequence?: number } | undefined;
+      sequence = Number(nextSequenceRow?.last_sequence ?? 1);
+      this.insertStmt.run({
+        eventId,
+        sequence,
+        eventType,
+        source,
+        payloadJson: JSON.stringify(attributedPayload),
+        createdAt,
+      });
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
     this.appendCount += 1;
     if (this.appendCount % 100 === 0) {
       this.pruneStmt.run({ maxRows: 10000 });

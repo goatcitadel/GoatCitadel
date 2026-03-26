@@ -6,12 +6,14 @@ export const IMPROVEMENT_WEEKLY_JOB_ID = "self_improvement_weekly_replay";
 export const PRIVATE_BETA_BACKUP_JOB_ID = "private_beta_backup_daily";
 export const MEMORY_FLUSH_DAILY_JOB_ID = "memory-flush-daily";
 export const COST_REPORT_HOURLY_JOB_ID = "cost-report-hourly";
+export const UPDATE_REVIEW_DAILY_JOB_ID = "update-review-daily";
 
 const SYSTEM_CRON_JOB_IDS = new Set([
   IMPROVEMENT_WEEKLY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
   MEMORY_FLUSH_DAILY_JOB_ID,
   COST_REPORT_HOURLY_JOB_ID,
+  UPDATE_REVIEW_DAILY_JOB_ID,
 ]);
 
 export interface CronAutomationServiceDeps {
@@ -29,6 +31,7 @@ export interface CronAutomationServiceDeps {
     backup: () => Promise<void>;
     memoryFlush: () => Promise<void>;
     costReport: () => Promise<void>;
+    updateReview: () => Promise<void>;
   };
 }
 
@@ -139,6 +142,8 @@ export class CronAutomationService {
       await this.deps.runHandlers.memoryFlush();
     } else if (normalizedJobId === COST_REPORT_HOURLY_JOB_ID) {
       await this.deps.runHandlers.costReport();
+    } else if (normalizedJobId === UPDATE_REVIEW_DAILY_JOB_ID) {
+      await this.deps.runHandlers.updateReview();
     } else {
       throw new Error(`Cron job has no runnable handler: ${normalizedJobId}`);
     }

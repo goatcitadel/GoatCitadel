@@ -434,10 +434,29 @@ const attachmentContentQuerySchema = z.object({
 
 async function streamSseReply(
   reply: FastifyReply,
+  request: { raw: { on: (event: string, listener: () => void) => void; off?: (event: string, listener: () => void) => void } },
   sessionId: string,
-  source: () => AsyncGenerator<unknown>,
+  source: (signal: AbortSignal) => AsyncGenerator<unknown>,
 ): Promise<void> {
   const raw = reply.raw;
+  const controller = new AbortController();
+  let closed = false;
+  let finished = false;
+  const cleanup = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    if (!controller.signal.aborted) {
+      controller.abort(new Error("chat_sse_client_disconnected"));
+    }
+  };
+  const detach = () => {
+    raw.off?.("close", cleanup);
+    request.raw.off?.("aborted", cleanup);
+  };
+
+  reply.hijack();
   const corsOrigin = reply.getHeader("Access-Control-Allow-Origin");
   const corsCredentials = reply.getHeader("Access-Control-Allow-Credentials");
   const corsVary = reply.getHeader("Vary");
@@ -452,8 +471,13 @@ async function streamSseReply(
   });
   raw.flushHeaders?.();
   raw.write(": connected\n\n");
+  raw.on("close", cleanup);
+  request.raw.on("aborted", cleanup);
 
   const send = (payload: unknown) => {
+    if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
+      return;
+    }
     const eventId = typeof payload === "object" && payload && "eventId" in payload && typeof (payload as { eventId?: unknown }).eventId === "string"
       ? (payload as { eventId: string }).eventId
       : undefined;
@@ -464,22 +488,33 @@ async function streamSseReply(
   };
 
   try {
-    for await (const chunk of source()) {
+    for await (const chunk of source(controller.signal)) {
+      if (controller.signal.aborted) {
+        break;
+      }
       send(chunk);
     }
+    finished = !controller.signal.aborted;
   } catch (error) {
-    reply.log.error({ err: error, sessionId }, "chat SSE stream failed");
-    send({
-      type: "error",
-      sessionId,
-      eventId: randomUUID(),
-      sequence: 0,
-      error: getPublicChatSseErrorMessage(error),
-    });
+    if (!controller.signal.aborted) {
+      reply.log.error({ err: error, sessionId }, "chat SSE stream failed");
+      send({
+        type: "error",
+        sessionId,
+        eventId: randomUUID(),
+        sequence: 0,
+        error: getPublicChatSseErrorMessage(error),
+      });
+    }
   } finally {
-    raw.end();
+    if (!finished) {
+      cleanup();
+    }
+    detach();
+    if (!raw.destroyed && !raw.writableEnded) {
+      raw.end();
+    }
   }
-  reply.hijack();
 }
 
 function isChatTurnWriteConflictError(error: unknown): boolean {
@@ -855,8 +890,8 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    return streamSseReply(reply, params.data.sessionId, () =>
-      fastify.gateway.agentSendChatMessageStream(params.data.sessionId, body.data));
+    return streamSseReply(reply, request, params.data.sessionId, (signal) =>
+      fastify.gateway.agentSendChatMessageStream(params.data.sessionId, body.data, signal));
   });
 
   fastify.get("/api/v1/chat/sessions/:sessionId/turns/:turnId/stream", async (request, reply) => {
@@ -874,8 +909,8 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       ? request.headers["last-event-id"]
       : undefined;
     const sinceEventId = query.data.sinceEventId ?? headerEventId;
-    return streamSseReply(reply, params.data.sessionId, () =>
-      fastify.gateway.resumeAgentChatTurnStream(params.data.sessionId, params.data.turnId, sinceEventId));
+    return streamSseReply(reply, request, params.data.sessionId, (signal) =>
+      fastify.gateway.resumeAgentChatTurnStream(params.data.sessionId, params.data.turnId, sinceEventId, signal));
   });
 
   fastify.post("/api/v1/chat/sessions/:sessionId/turns/:turnId/select", async (request, reply) => {
@@ -919,8 +954,8 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         },
       });
     }
-    return streamSseReply(reply, params.data.sessionId, () =>
-      fastify.gateway.retryChatTurnStream(params.data.sessionId, params.data.turnId, body.data));
+    return streamSseReply(reply, request, params.data.sessionId, (signal) =>
+      fastify.gateway.retryChatTurnStream(params.data.sessionId, params.data.turnId, body.data, signal));
   });
 
   fastify.post("/api/v1/chat/sessions/:sessionId/turns/:turnId/edit", async (request, reply) => {
@@ -952,8 +987,8 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         },
       });
     }
-    return streamSseReply(reply, params.data.sessionId, () =>
-      fastify.gateway.editChatTurnStream(params.data.sessionId, params.data.turnId, body.data));
+    return streamSseReply(reply, request, params.data.sessionId, (signal) =>
+      fastify.gateway.editChatTurnStream(params.data.sessionId, params.data.turnId, body.data, signal));
   });
 
   fastify.post("/api/v1/chat/sessions/:sessionId/turns/:turnId/cancel", async (request, reply) => {
@@ -1091,9 +1126,26 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const raw = reply.raw;
+    const controller = new AbortController();
+    let closed = false;
+    let finished = false;
+    const cleanup = () => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      if (!controller.signal.aborted) {
+        controller.abort(new Error("chat_delegation_client_disconnected"));
+      }
+    };
+    const detach = () => {
+      raw.off?.("close", cleanup);
+      request.raw.off?.("aborted", cleanup);
+    };
     const corsOrigin = reply.getHeader("Access-Control-Allow-Origin");
     const corsCredentials = reply.getHeader("Access-Control-Allow-Credentials");
     const corsVary = reply.getHeader("Vary");
+    reply.hijack();
     raw.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
@@ -1105,22 +1157,39 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
     });
     raw.flushHeaders?.();
     raw.write(": connected\n\n");
+    raw.on("close", cleanup);
+    request.raw.on("aborted", cleanup);
 
     const send = (payload: unknown) => {
+      if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
+        return;
+      }
       raw.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
     try {
       for await (const chunk of fastify.gateway.runChatDelegationStream(params.data.sessionId, body.data)) {
+        if (controller.signal.aborted) {
+          break;
+        }
         send(chunk);
       }
+      finished = !controller.signal.aborted;
     } catch (error) {
-      send({ type: "error", error: (error as Error).message });
-      send({ type: "done" });
+      if (!controller.signal.aborted) {
+        reply.log.error({ err: error, sessionId: params.data.sessionId }, "chat delegation SSE stream failed");
+        send({ type: "error", error: getPublicChatSseErrorMessage(error) });
+        send({ type: "done" });
+      }
     } finally {
-      raw.end();
+      if (!finished) {
+        cleanup();
+      }
+      detach();
+      if (!raw.destroyed && !raw.writableEnded) {
+        raw.end();
+      }
     }
-    reply.hijack();
   });
 
   fastify.get("/api/v1/chat/sessions/:sessionId/delegations/:runId", async (request, reply) => {

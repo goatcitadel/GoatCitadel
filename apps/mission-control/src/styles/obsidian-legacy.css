@@ -3411,7 +3411,7 @@
 
 .shell-page-loading-kicker {
   margin: 0 0 8px;
-  font-family: "Rajdhani", "Segoe UI", "Verdana", sans-serif;
+  font-family: var(--font-display);
   font-size: 0.74rem;
   font-weight: 600;
   letter-spacing: 0.16em;
@@ -3421,7 +3421,7 @@
 
 .shell-page-loading-card h3 {
   margin: 0;
-  font-family: "Rajdhani", "Segoe UI", "Verdana", sans-serif;
+  font-family: var(--font-display);
   font-size: clamp(1.4rem, 1.15rem + 0.55vw, 1.8rem);
   letter-spacing: 0.05em;
   text-transform: uppercase;

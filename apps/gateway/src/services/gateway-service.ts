@@ -379,8 +379,13 @@ import {
   normalizeCronJobName,
   normalizeCronSchedule,
   PRIVATE_BETA_BACKUP_JOB_ID,
+  UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
+import {
+  createDailyUpdateReview,
+  renderUpdateReviewMarkdown,
+} from "./gateway/update-review.js";
 import {
   createGatewayAuthCredentialPlan,
   readAssistantAuthConfigSnapshotSync,
@@ -830,9 +835,12 @@ const MEMORY_FLUSH_DAILY_TIME_ZONE = "America/Los_Angeles";
 const MEMORY_FLUSH_DAILY_SCHEDULE_LABEL = "0 3 * * * America/Los_Angeles";
 const COST_REPORT_HOURLY_TIME_ZONE = "America/Los_Angeles";
 const COST_REPORT_HOURLY_SCHEDULE_LABEL = "0 * * * * America/Los_Angeles";
+const UPDATE_REVIEW_DAILY_TIME_ZONE = "America/Los_Angeles";
+const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angeles";
 const PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY = "private_beta_backup_last_day_key_v1";
 const MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY = "memory_flush_daily_last_day_key_v1";
 const COST_REPORT_HOURLY_DEDUP_SETTING_KEY = "cost_report_hourly_last_hour_key_v1";
+const UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY = "update_review_daily_last_day_key_v1";
 const IMPROVEMENT_WEEKLY_SAMPLE_SIZE = 500;
 const IMPROVEMENT_JUDGE_SAMPLE_LIMIT = 120;
 const IMPROVEMENT_JUDGE_TIMEOUT_MS = 15_000;
@@ -841,6 +849,7 @@ const IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY = "improvement_weekly_last_week_key_v
 const MEMORY_FLUSH_HISTORY_DAYS = 30;
 const COST_REPORT_LOOKBACK_HOURS = 1;
 const COST_REPORT_OUTPUT_DIR = "artifacts/cost-reports";
+const UPDATE_REVIEW_OUTPUT_DIR = "artifacts/update-review";
 const IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE = "improvement_tune_blocker_template_v1";
 const IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD = "improvement_tune_retry_threshold_v1";
 const IMPROVEMENT_TUNE_KEY_LIVE_INTENT = "improvement_tune_live_intent_threshold_v1";
@@ -1220,6 +1229,9 @@ export class GatewayService {
         costReport: async () => {
           await this.runCostReportSchedulerIfDue({ force: true });
         },
+        updateReview: async () => {
+          await this.runUpdateReviewSchedulerIfDue({ force: true });
+        },
       },
     });
 
@@ -1358,6 +1370,7 @@ export class GatewayService {
     this.ensurePrivateBetaBackupCronJob();
     this.ensureMemoryFlushCronJob();
     this.ensureCostReportCronJob();
+    this.ensureUpdateReviewCronJob();
     this.meshService.init();
     await this.npuSidecar.init();
     // Enforce env-only secret persistence policy on startup.
@@ -2159,6 +2172,7 @@ export class GatewayService {
     await this.runPrivateBetaBackupSchedulerIfDue();
     await this.runMemoryFlushSchedulerIfDue();
     await this.runCostReportSchedulerIfDue();
+    await this.runUpdateReviewSchedulerIfDue();
   }
 
   private async runPrivateBetaBackupSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
@@ -2340,6 +2354,79 @@ export class GatewayService {
       unknownEvents: usageAvailability.unknownEvents,
       windowStartIso,
       windowEndIso,
+    });
+  }
+
+  private async runUpdateReviewSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
+    const job = this.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
+    if (!job?.enabled) {
+      return;
+    }
+    const now = new Date();
+    if (!options.force && !isCronJobDueNow(job, now, {
+      defaultHour: 4,
+      defaultMinute: 15,
+      defaultWeekday: undefined,
+      defaultTimeZone: UPDATE_REVIEW_DAILY_TIME_ZONE,
+    })) {
+      return;
+    }
+    const dayKey = toDayKeyForTimezone(now, UPDATE_REVIEW_DAILY_TIME_ZONE);
+    const lastDayKey = this.storage.systemSettings.get<string>(UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY)?.value;
+    if (!options.force && dayKey === lastDayKey) {
+      return;
+    }
+
+    const report = await createDailyUpdateReview(this.config.rootDir);
+    const reportDir = path.join(this.config.rootDir, UPDATE_REVIEW_OUTPUT_DIR);
+    await fs.mkdir(reportDir, { recursive: true });
+    const reportFileName = `update-review-${dayKey}.md`;
+    const outputPath = path.join(reportDir, reportFileName);
+    await fs.writeFile(outputPath, `${renderUpdateReviewMarkdown(report)}\n`, "utf8");
+
+    this.storage.systemSettings.set(UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY, dayKey);
+    const finishedAt = new Date().toISOString();
+    this.storage.cronJobs.upsert({
+      ...job,
+      lastRunAt: finishedAt,
+      nextRunAt: new Date(Date.now() + (24 * 60 * 60 * 1000)).toISOString(),
+    });
+
+    const hasAlerts = report.summary.outdatedDependencyCount > 0
+      || report.summary.changedSkillSourceCount > 0
+      || report.summary.warningCount > 0;
+    if (this.isFeatureEnabled("cronReviewQueueV1Enabled")) {
+      this.cronAutomationService.recordCronReviewItem({
+        jobId: UPDATE_REVIEW_DAILY_JOB_ID,
+        runId: randomUUID(),
+        severity: hasAlerts ? "medium" : "low",
+        status: hasAlerts ? "open" : "resolved",
+        summary: {
+          trigger: options.force ? "manual_run" : "scheduler",
+          outputPath: path.relative(this.config.rootDir, outputPath).replaceAll("\\", "/"),
+          outdatedDependencyCount: report.summary.outdatedDependencyCount,
+          changedSkillSourceCount: report.summary.changedSkillSourceCount,
+          warningCount: report.summary.warningCount,
+          checkedSkillCount: report.summary.checkedSkillCount,
+        },
+        diff: {
+          type: "update_review_daily",
+          changed: hasAlerts,
+          outdatedDependencyCount: report.summary.outdatedDependencyCount,
+          changedSkillSourceCount: report.summary.changedSkillSourceCount,
+          warningCount: report.summary.warningCount,
+        },
+      });
+    }
+
+    this.publishRealtime("cron_job_run", "cron", {
+      type: "update_review_daily",
+      jobId: UPDATE_REVIEW_DAILY_JOB_ID,
+      outputPath,
+      outdatedDependencyCount: report.summary.outdatedDependencyCount,
+      changedSkillSourceCount: report.summary.changedSkillSourceCount,
+      warningCount: report.summary.warningCount,
+      checkedSkillCount: report.summary.checkedSkillCount,
     });
   }
 
@@ -6072,6 +6159,7 @@ export class GatewayService {
   public async *agentSendChatMessageStream(
     sessionId: string,
     input: ChatSendMessageRequest,
+    _signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
     yield* this.withChatTurnWriteLeaseStream(sessionId, "agent-send/stream", () => {
       const self = this;
@@ -6348,6 +6436,7 @@ export class GatewayService {
     sessionId: string,
     turnId: string,
     overrides: Partial<ChatSendMessageRequest> = {},
+    _signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
     yield* this.withChatTurnWriteLeaseStream(sessionId, "retry-turn/stream", () => {
       const self = this;
@@ -6426,6 +6515,7 @@ export class GatewayService {
     sessionId: string,
     turnId: string,
     input: ChatSendMessageRequest,
+    _signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
     yield* this.withChatTurnWriteLeaseStream(sessionId, "edit-turn/stream", () => {
       const self = this;
@@ -7210,6 +7300,7 @@ export class GatewayService {
     sessionId: string,
     turnId: string,
     sinceEventId?: string,
+    _signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
     yield* this.streamPersistedChatTurnEvents(sessionId, turnId, {
       sinceEventId,
@@ -13736,7 +13827,7 @@ export class GatewayService {
   }
 
   private scheduleApprovalExplanation(approval: ApprovalRequest): void {
-    if (this.closing) {
+    if (this.closing || !approval || typeof approval.approvalId !== "string" || approval.approvalId.trim().length === 0) {
       return;
     }
 
@@ -14852,6 +14943,19 @@ export class GatewayService {
       jobId: COST_REPORT_HOURLY_JOB_ID,
       name: "Cost Report Hourly",
       schedule: COST_REPORT_HOURLY_SCHEDULE_LABEL,
+      enabled: existing?.enabled ?? true,
+      lastRunAt: existing?.lastRunAt,
+      nextRunAt: existing?.nextRunAt,
+    }, now);
+  }
+
+  private ensureUpdateReviewCronJob(): void {
+    const existing = this.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
+    const now = new Date().toISOString();
+    this.storage.cronJobs.upsert({
+      jobId: UPDATE_REVIEW_DAILY_JOB_ID,
+      name: "Daily Update Review",
+      schedule: UPDATE_REVIEW_DAILY_SCHEDULE_LABEL,
       enabled: existing?.enabled ?? true,
       lastRunAt: existing?.lastRunAt,
       nextRunAt: existing?.nextRunAt,
