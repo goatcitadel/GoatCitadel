@@ -37,6 +37,7 @@ import {
   approveChatTool,
   archiveChatSession,
   assignChatSessionProject,
+  cancelChatTurn,
   createMcpServer,
   createChatProject,
   createChatSpecialistCandidate,
@@ -91,9 +92,8 @@ import {
 import { ActionButton } from "../components/ActionButton";
 import { CardSkeleton } from "../components/CardSkeleton";
 import { ChatPlanningPill } from "../components/chat/ChatPlanningPill";
-import { ChatPendingApprovalPanel, type ChatPendingApprovalState } from "../components/chat/ChatPendingApprovalPanel";
 import { ChatQueueBar, type ChatQueueItemView } from "../components/chat/ChatQueueBar";
-import { SurfaceReconnectBanner } from "../components/chat/SurfaceReconnectBanner";
+import { ChatSessionRail } from "../components/chat/ChatSessionRail";
 import {
   isThreadMutatingStreamChunk,
   type PendingStreamTurnSeed,
@@ -110,23 +110,14 @@ import { CoworkCanvasPanel } from "../components/CoworkCanvasPanel";
 import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
 import { HelpHint } from "../components/HelpHint";
+import { InlineApprovalPrompt } from "../components/InlineApprovalPrompt";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
 import { GCCombobox, GCSelect, GCSwitch } from "../components/ui";
-import { useEventStreamStatus } from "../hooks/useEventStreamStatus";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { pageCopy } from "../content/copy";
-import {
-  buildQueuedOutboundItemView,
-  resolveProviderSelectionPlan,
-  resolveStreamTurnOperation,
-} from "./chat/chat-page-helpers";
-import { ChatComposerShell } from "./chat/ChatComposerShell";
-import { ChatSessionSidebar } from "./chat/ChatSessionSidebar";
-import { ChatThreadShell } from "./chat/ChatThreadShell";
-import { useChatSurfaceOrchestration, type OutboundQueueItem } from "./chat/useChatSurfaceOrchestration";
 import {
   recordClientDiagnostic,
   setDevDiagnosticsActiveChatSession,
@@ -163,15 +154,10 @@ const CODE_DELEGATION_PRESETS = {
   },
 } as const;
 
-function isApprovalExpired(expiresAt?: string, nowMs = Date.now()): boolean {
-  if (!expiresAt) {
-    return false;
-  }
-  const expiresAtMs = Date.parse(expiresAt);
-  if (!Number.isFinite(expiresAtMs)) {
-    return false;
-  }
-  return expiresAtMs <= nowMs;
+interface PendingApprovalState {
+  approvalId: string;
+  toolName?: string;
+  reason?: string;
 }
 
 interface CommandCatalogItem {
@@ -201,6 +187,17 @@ interface FinalizedStreamMessageState {
   placeholderId: string;
   messageId?: string;
   content: string;
+}
+
+interface OutboundQueueItem {
+  id: string;
+  action: "send" | "edit" | "retry";
+  sessionId?: string;
+  targetTurnId?: string;
+  content: string;
+  attachments: ChatAttachmentRecord[];
+  createdAt: string;
+  paused?: boolean;
 }
 
 type SessionControlPending =
@@ -428,14 +425,17 @@ export function ChatPage({
   const [capabilitySuggestions, setCapabilitySuggestions] = useState<ChatCapabilityUpgradeSuggestion[]>([]);
   const [specialistSuggestions, setSpecialistSuggestions] = useState<ChatSpecialistCandidateSuggestionRecord[]>([]);
   const [specialistCandidates, setSpecialistCandidates] = useState<ChatSpecialistCandidateRecord[]>([]);
+  const [pendingApproval, setPendingApproval] = useState<PendingApprovalState | null>(null);
   const [proactiveStatus, setProactiveStatus] = useState<ProactivePolicy | null>(null);
   const [proactiveRuns, setProactiveRuns] = useState<ProactiveRunRecord[]>([]);
   const [learnedMemory, setLearnedMemory] = useState<LearnedMemoryItemRecord[]>([]);
   const [delegationSuggestion, setDelegationSuggestion] = useState<ChatDelegationSuggestionRecord | null>(null);
   const [localNotices, setLocalNotices] = useState<ChatThreadNotice[]>([]);
+  const [queuedOutbound, setQueuedOutbound] = useState<OutboundQueueItem[]>([]);
   const [installedSkills, setInstalledSkills] = useState<SkillListItem[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerRecord[]>([]);
   const [mcpTemplates, setMcpTemplates] = useState<Array<McpServerTemplateRecord & { installed: boolean }>>([]);
+  const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -446,8 +446,6 @@ export function ChatPage({
   const [creatingSessionMode, setCreatingSessionMode] = useState<ChatMode | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachmentRecord[]>([]);
-  const [pendingApproval, setPendingApproval] = useState<ChatPendingApprovalState | null>(null);
-  const [approvalPending, setApprovalPending] = useState(false);
   const [streamEnabled, setStreamEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     const raw = window.localStorage.getItem(STREAM_PREF_KEY);
@@ -461,7 +459,7 @@ export function ChatPage({
   const [integrationConnectionId, setIntegrationConnectionId] = useState("");
   const [integrationTarget, setIntegrationTarget] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
-  const [loadingProviderId, setLoadingProviderId] = useState<string | null>(null);
+  const [approvalPending, setApprovalPending] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const [followThreadOutput, setFollowThreadOutput] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -487,34 +485,6 @@ export function ChatPage({
     providers: runtimeProviderCatalog,
     loadModelsForProvider,
   } = useProviderModelCatalog("chat");
-  const {
-    queuedOutbound,
-    setQueuedOutbound,
-    editingTurnId,
-    setEditingTurnId,
-    handleSend,
-    handleRetryTurn,
-    handleStopActiveTurn,
-    handleBeginEditTurn,
-    handleResumeQueue,
-    handleRemoveQueuedItem,
-  } = useChatSurfaceOrchestration({
-    draft,
-    pendingAttachments,
-    selectedSessionId,
-    thread,
-    sending,
-    composerRef,
-    activeStreamRef,
-    tryBeginOutboundExecutionRef,
-    executeOutboundItemRef,
-    pushLocalNoticeRef,
-    setDraft,
-    setPendingAttachments,
-    setError,
-    loadSessionCoreStateRef,
-    abortActiveChatStream,
-  });
 
   const loadSidebar = useCallback(async () => {
     recordClientDiagnostic({
@@ -573,7 +543,6 @@ export function ChatPage({
       timestamp: new Date().toISOString(),
     }, ...current].slice(0, 12));
   }, []);
-  pushLocalNoticeRef.current = pushLocalNotice;
 
   const commitThreadUpdate = useCallback((
     updater: ChatThreadResponse | null | ((current: ChatThreadResponse | null) => ChatThreadResponse | null),
@@ -655,7 +624,6 @@ export function ChatPage({
       }
     }
   }, [applyFetchedThread]);
-  loadSessionCoreStateRef.current = loadSessionCoreState;
 
   const scheduleStreamMessageReconciliation = useCallback((sessionId: string) => {
     if (streamReconcileTimeoutRef.current) {
@@ -679,15 +647,6 @@ export function ChatPage({
       }).catch((err: Error) => setError(err.message));
     }, 400);
   }, [loadSessionCoreState]);
-
-  const clearStreamLocalState = useCallback(() => {
-    setPendingApproval(null);
-    finalizedStreamMessageRef.current = null;
-    if (streamReconcileTimeoutRef.current) {
-      clearTimeout(streamReconcileTimeoutRef.current);
-      streamReconcileTimeoutRef.current = null;
-    }
-  }, []);
 
   const loadSessionSecondaryState = useCallback(async (
     sessionId: string,
@@ -834,7 +793,6 @@ export function ChatPage({
       setThread(null);
       setSelectedTurnId(null);
       setPrefs(null);
-      prefsRef.current = null;
       setBinding(null);
       setProactiveStatus(null);
       setProactiveRuns([]);
@@ -843,7 +801,11 @@ export function ChatPage({
       setDelegationSuggestion(null);
       setLocalNotices([]);
       setPendingAttachments([]);
-      clearStreamLocalState();
+      finalizedStreamMessageRef.current = null;
+      if (streamReconcileTimeoutRef.current) {
+        clearTimeout(streamReconcileTimeoutRef.current);
+        streamReconcileTimeoutRef.current = null;
+      }
       lastLoadedSessionIdRef.current = null;
       return;
     }
@@ -851,18 +813,20 @@ export function ChatPage({
       const hadActiveStream = activeStreamRef.current !== null;
       abortActiveChatStream(activeStreamRef.current);
       activeStreamRef.current = null;
-      prefsRef.current = null;
       if (hadActiveStream) {
         pushLocalNotice("Stream interrupted - switched sessions. The previous turn may still be processing on the server.", "warning");
       }
       setPendingAttachments([]);
       setThread(null);
       setSelectedTurnId(null);
-      setPrefs(null);
-      setBinding(null);
       setEditingTurnId(null);
       setLocalNotices([]);
-      clearStreamLocalState();
+      setPendingApproval(null);
+      finalizedStreamMessageRef.current = null;
+      if (streamReconcileTimeoutRef.current) {
+        clearTimeout(streamReconcileTimeoutRef.current);
+        streamReconcileTimeoutRef.current = null;
+      }
       lastLoadedSessionIdRef.current = selectedSessionId;
     }
     setDelegationSuggestion(null);
@@ -873,7 +837,7 @@ export function ChatPage({
       includeThread: true,
       deferSecondary: true,
     }).catch((err: Error) => setError(err.message));
-  }, [clearStreamLocalState, loadSessionState, selectedSessionId]);
+  }, [loadSessionState, selectedSessionId]);
 
   useEffect(() => {
     setFollowThreadOutput(true);
@@ -1023,19 +987,8 @@ export function ChatPage({
     return runtimeProviderCatalog.map((provider) => ({
       providerId: provider.providerId,
       label: provider.label,
-      defaultModel: provider.defaultModel,
-      disabled: Boolean(provider.apiKeyRef) && provider.hasApiKey === false,
-      availabilityLabel: provider.apiKeyRef && provider.hasApiKey === false
-        ? `${provider.label} (API key missing)`
-        : provider.label,
-      availabilityHint: provider.apiKeyRef && provider.hasApiKey === false
-        ? `${provider.label} is unavailable until ${provider.apiKeySource === "env"
-          ? `the ${provider.apiKeyRef} environment variable is set`
-          : "its API key is configured"}.`
-        : undefined,
       models: dedupeStrings([
         ...provider.models,
-        provider.defaultModel,
         provider.providerId === activeProviderId ? activeModel : undefined,
         prefs?.providerId === provider.providerId ? prefs.model : undefined,
       ]),
@@ -1203,33 +1156,6 @@ export function ChatPage({
   });
   const showLearnedMemoryPanel = shouldShowLearnedMemoryPanel(messageMode, learnedMemory.length);
   const canSend = Boolean(draft.trim()) && !sending;
-  const eventStreamStatus = useEventStreamStatus();
-
-  useEffect(() => {
-    if (!lockSurface || !surface || !selectedSessionId) {
-      lastShellSurfaceSyncKeyRef.current = null;
-      return;
-    }
-    if (prefs?.mode === surface) {
-      lastShellSurfaceSyncKeyRef.current = `${selectedSessionId}:${surface}`;
-      return;
-    }
-    const syncKey = `${selectedSessionId}:${surface}`;
-    if (lastShellSurfaceSyncKeyRef.current === syncKey) {
-      return;
-    }
-    lastShellSurfaceSyncKeyRef.current = syncKey;
-    lastLocalPrefMutationAtRef.current = Date.now();
-    void updateChatSessionPrefs(selectedSessionId, { mode: surface })
-      .then((updated) => {
-        setPrefs(updated);
-        setError(null);
-      })
-      .catch((err) => {
-        lastShellSurfaceSyncKeyRef.current = null;
-        setError((err as Error).message);
-      });
-  }, [lockSurface, prefs?.mode, selectedSessionId, surface]);
 
   useEffect(() => {
     if (!lockSurface || !surface || !selectedSessionId) {
@@ -1273,7 +1199,6 @@ export function ChatPage({
     setSending(true);
     return true;
   }, []);
-  tryBeginOutboundExecutionRef.current = tryBeginOutboundExecution;
 
   const finishOutboundExecution = useCallback(() => {
     sendingRef.current = false;
@@ -1881,11 +1806,10 @@ export function ChatPage({
           if (
             liveStream?.streamToken !== streamToken
             || liveStream.sessionId !== session!.sessionId
-            || selectedSessionIdRef.current !== liveStream.sessionId
+            || selectedSessionIdRef.current !== session!.sessionId
           ) {
             return;
           }
-          const activeSessionId = liveStream.sessionId;
           liveStream.lastEventId = chunk.eventId;
           if (chunk.runId) {
             liveStream.runId = chunk.runId;
@@ -1898,7 +1822,7 @@ export function ChatPage({
           }
           if (chunk.type === "message_done") {
             finalizedStreamMessageRef.current = {
-              sessionId: activeSessionId,
+              sessionId: session!.sessionId,
               placeholderId: chunk.messageId,
               messageId: chunk.messageId,
               content: chunk.content,
@@ -1918,7 +1842,6 @@ export function ChatPage({
               approvalId: chunk.approval.approvalId,
               toolName: chunk.approval.toolName,
               reason: chunk.approval.reason,
-              expiresAt: chunk.approval.expiresAt,
             });
           }
           if (chunk.type === "error") {
@@ -1928,7 +1851,7 @@ export function ChatPage({
               category: "chat",
               event: "stream.chunk_error",
               message: chunk.error || "Streaming request failed.",
-              sessionId: activeSessionId,
+              sessionId: session!.sessionId,
               turnId: chunk.turnId,
             });
           }
@@ -1940,7 +1863,7 @@ export function ChatPage({
             category: "chat",
             event: "thread.render_path",
             message: `Applying ${chunk.type} chunk to thread`,
-            sessionId: activeSessionId,
+            sessionId: session!.sessionId,
             turnId: chunk.turnId,
             context: {
               chunkType: chunk.type,
@@ -1950,19 +1873,14 @@ export function ChatPage({
             current,
             chunk,
             streamSeed,
-            activeSessionId,
+            session!.sessionId,
             prefsRef.current,
           ));
         };
         let resumeAttempts = 0;
         for (;;) {
           try {
-            const streamOperation = resolveStreamTurnOperation({
-              action: item.action,
-              resumeAttempts,
-              targetTurnId: item.targetTurnId,
-            });
-            if (streamOperation === "resume") {
+            if (resumeAttempts > 0) {
               const liveStream = activeStreamRef.current;
               if (!liveStream?.turnId) {
                 throw new Error("Streaming request failed before the turn could be resumed.");
@@ -1973,7 +1891,7 @@ export function ChatPage({
                 signal: controller.signal,
                 sinceEventId: liveStream.lastEventId,
               });
-            } else if (streamOperation === "retry" && item.targetTurnId) {
+            } else if (item.action === "retry" && item.targetTurnId) {
               await streamRetryChatTurn(session.sessionId, item.targetTurnId, {
                 providerId: currentPrefs?.providerId,
                 model: currentPrefs?.model,
@@ -1982,7 +1900,7 @@ export function ChatPage({
                 memoryMode: currentPrefs?.memoryMode,
                 thinkingLevel: currentPrefs?.thinkingLevel,
               }, onChunk, { signal: controller.signal });
-            } else if (streamOperation === "edit" && item.targetTurnId) {
+            } else if (item.action === "edit" && item.targetTurnId) {
               await streamEditChatTurn(session.sessionId, item.targetTurnId, {
                 content: trimmedContent,
                 attachments: attachmentIds,
@@ -2025,7 +1943,7 @@ export function ChatPage({
             resumeAttempts += 1;
           }
         }
-        scheduleStreamMessageReconciliation(activeStreamRef.current?.sessionId ?? session.sessionId);
+        scheduleStreamMessageReconciliation(session.sessionId);
       } else {
         const sent = item.action === "retry" && item.targetTurnId
           ? await retryChatTurn(session.sessionId, item.targetTurnId, {
@@ -2132,8 +2050,25 @@ export function ChatPage({
     scheduleStreamMessageReconciliation,
     streamEnabled,
   ]);
-  executeOutboundItemRef.current = executeOutboundItem;
-  const handleSendAction = useCallback(async () => {
+
+  useEffect(() => {
+    executeOutboundItemRef.current = executeOutboundItem;
+  }, [executeOutboundItem]);
+
+  const handleSend = useCallback(async () => {
+    const content = draft.trim();
+    if (!content) return;
+    const nextItem: OutboundQueueItem = {
+      id: `queue-${Date.now()}`,
+      action: editingTurnId ? "edit" : "send",
+      sessionId: selectedSessionId ?? undefined,
+      targetTurnId: editingTurnId ?? undefined,
+      content,
+      attachments: pendingAttachments,
+      createdAt: new Date().toISOString(),
+    };
+    setDraft("");
+    setPendingAttachments([]);
     setPendingApproval(null);
     if (!tryBeginOutboundExecution()) {
       setQueuedOutbound((current) => [...current, nextItem]);
@@ -2229,6 +2164,47 @@ export function ChatPage({
     }
   }, [commitThreadUpdate, selectedSessionId]);
 
+  const handleResumeQueue = useCallback(() => {
+    recordClientDiagnostic({
+      level: "info",
+      category: "chat",
+      event: "queue.resume",
+      message: "Resuming queued outbound chat items",
+      sessionId: selectedSessionId ?? undefined,
+      context: {
+        queuedCount: queuedOutbound.length,
+      },
+    });
+    setQueuedOutbound((current) => current.map((item) => ({ ...item, paused: false })));
+  }, [queuedOutbound.length, selectedSessionId]);
+
+  const handleRemoveQueuedItem = useCallback((id: string) => {
+    recordClientDiagnostic({
+      level: "info",
+      category: "chat",
+      event: "queue.remove",
+      message: "Removed queued outbound chat item",
+      sessionId: selectedSessionId ?? undefined,
+      context: { id },
+    });
+    setQueuedOutbound((current) => current.filter((item) => item.id !== id));
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (sendingRef.current || sending) {
+      return;
+    }
+    const nextItem = queuedOutbound.find((item) => !item.paused);
+    if (!nextItem) {
+      return;
+    }
+    if (!tryBeginOutboundExecution()) {
+      return;
+    }
+    setQueuedOutbound((current) => current.filter((item) => item.id !== nextItem.id));
+    void executeOutboundItemRef.current(nextItem);
+  }, [queuedOutbound, sending, tryBeginOutboundExecution]);
+
   const handleComposerKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (commandSuggestions.length > 0) {
       if (event.key === "ArrowDown") {
@@ -2250,16 +2226,12 @@ export function ChatPage({
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      void handleSendAction();
+      void handleSend();
     }
-  }, [applyDraftCommand, commandIndex, commandSuggestions, handleSendAction]);
+  }, [applyDraftCommand, commandIndex, commandSuggestions, handleSend]);
 
   const handleApprovePending = useCallback(async () => {
     if (!selectedSession || !pendingApproval) return;
-    if (isApprovalExpired(pendingApproval.expiresAt)) {
-      pushLocalNotice("Approval expired. Rerun the action to request a fresh approval.", "warning");
-      return;
-    }
     setApprovalPending(true);
     try {
       await approveChatTool(selectedSession.sessionId, pendingApproval.approvalId);
@@ -2274,10 +2246,6 @@ export function ChatPage({
 
   const handleDenyPending = useCallback(async () => {
     if (!selectedSession || !pendingApproval) return;
-    if (isApprovalExpired(pendingApproval.expiresAt)) {
-      pushLocalNotice("Approval expired. Rerun the action to request a fresh approval.", "warning");
-      return;
-    }
     setApprovalPending(true);
     try {
       await denyChatTool(selectedSession.sessionId, pendingApproval.approvalId);
@@ -2290,14 +2258,6 @@ export function ChatPage({
     }
   }, [pendingApproval, pushLocalNotice, selectedSession]);
 
-  const handleRefreshSurface = useCallback(async () => {
-    setError(null);
-    await loadSidebar();
-    if (selectedSession) {
-      await loadSessionCoreState(selectedSession.sessionId);
-    }
-  }, [loadSessionCoreState, loadSidebar, selectedSession]);
-
   const handlePrefPatch = useCallback(async (patch: ChatSessionPrefsPatch) => {
     if (!selectedSession) return;
     lastLocalPrefMutationAtRef.current = Date.now();
@@ -2308,42 +2268,6 @@ export function ChatPage({
       setError((err as Error).message);
     }
   }, [selectedSession]);
-
-  const handleProviderChange = useCallback(async (providerId: string) => {
-    if (!selectedSessionId) {
-      return;
-    }
-    const provider = providerOptions.find((item) => item.providerId === providerId);
-    const initialPlan = resolveProviderSelectionPlan({
-      provider,
-      loadedModels: [],
-    });
-    if (!provider) {
-      return;
-    }
-    if (initialPlan.blockedMessage) {
-      pushLocalNotice(initialPlan.blockedMessage, "warning");
-      return;
-    }
-    setLoadingProviderId(providerId);
-    setError(null);
-    try {
-      const loadedModels = await loadModelsForProvider(providerId);
-      const plan = resolveProviderSelectionPlan({
-        provider,
-        loadedModels,
-      });
-      if (!plan.nextModel) {
-        pushLocalNotice(plan.missingModelMessage ?? `No models are available for ${provider.label} yet. Check the provider configuration and retry.`, "warning");
-        return;
-      }
-      await handlePrefPatch({ providerId, model: plan.nextModel });
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoadingProviderId((current) => (current === providerId ? null : current));
-    }
-  }, [handlePrefPatch, loadModelsForProvider, providerOptions, pushLocalNotice, selectedSessionId]);
 
   if (loading) {
     return (
@@ -2481,27 +2405,23 @@ export function ChatPage({
             <div className={`chat-v11-conversation-shell surface-${messageMode}`}>
               <div className={`chat-v11-main-grid${isCoworkSurface ? " with-cowork" : ""}${isCodeSurface ? " with-code" : ""}`}>
                 <article className={`card chat-v11-thread mode-${messageMode}`}>
-                  <ChatThreadShell
-                    loading={messagesLoading}
-                    thread={thread}
-                    selectedTurnId={selectedTurnId}
-                    notices={localNotices}
-                    followOutput={followThreadOutput}
-                    streamStatus={streamStatus}
-                    queuedCount={queuedOutbound.length}
-                    streamError={error}
-                    pendingApproval={pendingApproval}
-                    approvalPending={approvalPending}
-                    eventStreamStatus={eventStreamStatus}
-                    onBottomStateChange={setFollowThreadOutput}
-                    onSelectTurn={setSelectedTurnId}
-                    onSwitchBranch={(turnId) => void handleSelectBranchTurn(turnId)}
-                    onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
-                    onEditTurn={handleBeginEditTurn}
-                    onApprovePending={() => void handleApprovePending()}
-                    onDenyPending={() => void handleDenyPending()}
-                    onRefresh={() => void handleRefreshSurface()}
-                  />
+                  <div className="chat-v11-thread-scroll">
+                    <ChatThreadView
+                      loading={messagesLoading}
+                      thread={thread}
+                      selectedTurnId={selectedTurnId}
+                      notices={localNotices}
+                      followOutput={followThreadOutput}
+                      streamStatus={streamStatus}
+                      queuedCount={queuedOutbound.length}
+                      streamError={error}
+                      onBottomStateChange={setFollowThreadOutput}
+                      onSelectTurn={setSelectedTurnId}
+                      onSwitchBranch={(turnId) => void handleSelectBranchTurn(turnId)}
+                      onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
+                      onEditTurn={handleBeginEditTurn}
+                    />
+                  </div>
 
                   {pendingApproval ? <InlineApprovalPrompt approvalId={pendingApproval.approvalId} toolName={pendingApproval.toolName} reason={pendingApproval.reason} pending={approvalPending} onApprove={() => void handleApprovePending()} onDeny={() => void handleDenyPending()} /> : null}
 
@@ -2834,11 +2754,11 @@ export function ChatPage({
                           providers={providerOptions}
                           providerId={selectedProviderId}
                           model={prefs?.model ?? runtimeLlmConfig?.activeModel ?? settings?.llm.activeModel}
-                          pendingProviderId={loadingProviderId}
-                          modelLoading={loadingProviderId !== null}
-                          disabled={!selectedSessionId || sending || loadingProviderId !== null}
+                          disabled={!selectedSessionId || sending}
                           onChangeProvider={(providerId) => {
-                            void handleProviderChange(providerId);
+                            const provider = providerOptions.find((item) => item.providerId === providerId);
+                            void loadModelsForProvider(providerId);
+                            void handlePrefPatch({ providerId, model: provider?.models[0] });
                           }}
                           onChangeModel={(model) => void handlePrefPatch({ model })}
                         />
@@ -3368,95 +3288,6 @@ export function ChatPage({
           )}
         </div>
       </div>
-      <footer className={`chat-v11-command-dock mode-${messageMode}`} aria-label={`${activeModePreset.label} command dock`}>
-        {isChatSurface ? (
-          <>
-            <ActionButton
-              label="New chat session"
-              variant="primary"
-              pending={creatingSessionMode === "chat"}
-              disabled={sending || Boolean(creatingSessionMode)}
-              onClick={() => handleCreateSession("chat")}
-            />
-            <ActionButton
-              label="Attach"
-              variant="secondary"
-              disabled={sending}
-              onClick={() => fileInputRef.current?.click()}
-            />
-            <ActionButton
-              label="Summarize"
-              variant="secondary"
-              disabled={sending}
-              onClick={() => primeComposer("Summarize the current thread, key decisions, and next steps.")}
-            />
-            <ActionButton
-              label={sending ? "Sending..." : "Send"}
-              variant="tertiary"
-              disabled={!canSend}
-              onClick={() => void handleSend()}
-            />
-          </>
-        ) : null}
-        {isCoworkSurface ? (
-          <>
-            <ActionButton
-              label="New cowork session"
-              variant="primary"
-              pending={creatingSessionMode === "cowork"}
-              disabled={sending || Boolean(creatingSessionMode)}
-              onClick={() => handleCreateSession("cowork")}
-            />
-            <ActionButton
-              label="Delegate"
-              variant="secondary"
-              disabled={!selectedSessionId || sending}
-              onClick={() => void handleSuggestDelegation()}
-            />
-            <ActionButton
-              label="Plan"
-              variant="secondary"
-              disabled={sending}
-              onClick={() => primeComposer("Create a step-by-step execution plan with checkpoints, owners, and failure modes for this objective: ")}
-            />
-            <ActionButton
-              label="Checkpoint"
-              variant="tertiary"
-              disabled={!selectedSessionId || sending}
-              onClick={() => void handleTriggerProactive()}
-            />
-          </>
-        ) : null}
-        {isCodeSurface ? (
-          <>
-            <ActionButton
-              label="New code session"
-              variant="primary"
-              pending={creatingSessionMode === "code"}
-              disabled={sending || Boolean(creatingSessionMode)}
-              onClick={() => handleCreateSession("code")}
-            />
-            <ActionButton
-              label="Delegate review"
-              variant="secondary"
-              disabled={!selectedSessionId || sending || codeModeNeedsProjectBinding}
-              onClick={() => void handleRunCodeDelegation("review")}
-            />
-            <ActionButton
-              label="Run tests"
-              variant="secondary"
-              disabled={!selectedSessionId || sending || codeModeNeedsProjectBinding}
-              onClick={() => void handleRunCodeDelegation("test")}
-            />
-            <ActionButton
-              label="Ship handoff"
-              variant="tertiary"
-              disabled={!selectedSessionId || sending || codeModeNeedsProjectBinding}
-              onClick={() => void handleRunCodeDelegation("ship")}
-            />
-          </>
-        ) : null}
-      </footer>
     </section>
   );
 }

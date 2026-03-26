@@ -918,33 +918,6 @@ export function App() {
           setTab("chat");
         },
       },
-      {
-        id: "surface:chat",
-        label: "Open Chat surface",
-        keywords: ["chat", "surface", "workspace"],
-        run: () => {
-          setWorkSurface("chat");
-          setTab("chat");
-        },
-      },
-      {
-        id: "surface:cowork",
-        label: "Open Cowork surface",
-        keywords: ["cowork", "surface", "workspace", "delegate"],
-        run: () => {
-          setWorkSurface("cowork");
-          setTab("chat");
-        },
-      },
-      {
-        id: "surface:code",
-        label: "Open Code surface",
-        keywords: ["code", "surface", "workspace", "implement"],
-        run: () => {
-          setWorkSurface("code");
-          setTab("chat");
-        },
-      },
       ...(isDevDiagnosticsEnabled()
         ? [{
           id: "dev:diagnostics",
