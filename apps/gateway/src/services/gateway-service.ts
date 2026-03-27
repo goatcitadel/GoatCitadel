@@ -148,6 +148,12 @@ import type {
   IntegrationConnectionCreateInput,
   IntegrationConnectionUpdateInput,
   IntegrationKind,
+  HookCreateInput,
+  HookDecisionBlock,
+  HookRecord,
+  HookRunRecord,
+  HookTrigger,
+  HookUpdateInput,
   McpInvokeRequest,
   McpInvokeResponse,
   McpOAuthStartResponse,
@@ -398,6 +404,7 @@ import { resolveProjectRootForToolContext, resolveToolRequestPaths } from "./too
 import type { ServiceContext } from "./service-context.js";
 import { ChatProjectService } from "./chat-project-service.js";
 import { DurableRunService } from "./durable-run-service.js";
+import { HooksService } from "./hooks-service.js";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { PromptPackService, normalizePromptTestCode, clampPromptScore } from "./prompt-pack-service.js";
 import { ChatProactiveService } from "./chat-proactive-service.js";
@@ -1089,6 +1096,7 @@ export class GatewayService {
   private readonly devDiagnostics: GatewayDevDiagnosticsService;
   private readonly chatProjectService: ChatProjectService;
   private readonly durableRunService: DurableRunService;
+  private readonly hooksService: HooksService;
   private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
   private readonly promptPackService: PromptPackService;
   private readonly chatProactiveService: ChatProactiveService;
@@ -1257,6 +1265,10 @@ export class GatewayService {
       markWorkflowUnrecoverable: async (run, reason) => {
         await this.markDurableWorkflowUnrecoverable(run, reason);
       },
+    });
+    this.hooksService = new HooksService(serviceCtx, {
+      createDurableRun: (input) => this.durableRunService.createDurableRun(input),
+      requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
     });
     this.chatLearnedMemoryService = new ChatLearnedMemoryService(serviceCtx);
     this.promptPackService = new PromptPackService(serviceCtx, {
@@ -1487,6 +1499,29 @@ export class GatewayService {
       workspaceId: restored.workspaceId,
     });
     return restored;
+  }
+
+  public listWorkspaceHooks(workspaceId: string, limit = 200): HookRecord[] {
+    return this.hooksService.listWorkspaceHooks(this.normalizeWorkspaceId(workspaceId), limit);
+  }
+
+  public listWorkspaceHookRuns(workspaceId: string, limit = 200): HookRunRecord[] {
+    return this.hooksService.listWorkspaceHookRuns(this.normalizeWorkspaceId(workspaceId), limit);
+  }
+
+  public createWorkspaceHook(input: HookCreateInput): HookRecord {
+    return this.hooksService.createWorkspaceHook({
+      ...input,
+      workspaceId: this.normalizeWorkspaceId(input.workspaceId),
+    });
+  }
+
+  public updateWorkspaceHook(workspaceId: string, hookId: string, input: HookUpdateInput): HookRecord {
+    return this.hooksService.updateWorkspaceHook(this.normalizeWorkspaceId(workspaceId), hookId, input);
+  }
+
+  public deleteWorkspaceHook(workspaceId: string, hookId: string): boolean {
+    return this.hooksService.deleteWorkspaceHook(this.normalizeWorkspaceId(workspaceId), hookId);
   }
 
   public async listGlobalGuidance(): Promise<GuidanceDocumentRecord[]> {
@@ -4228,6 +4263,19 @@ export class GatewayService {
     if (run.status === "queued") {
       this.durableRunService.requestRunProcessing(runId);
     }
+    this.hooksService.enqueueAfterHooks({
+      workspaceId: this.resolveDurableRunHookWorkspaceId(run),
+      trigger: "orchestration.retry.scheduled",
+      entityType: "durable_run",
+      entityId: runId,
+      payload: {
+        runId,
+        reason,
+        actorId,
+        status: run.status,
+        attemptCount: run.attemptCount,
+      },
+    });
     return run;
   }
 
@@ -4241,6 +4289,18 @@ export class GatewayService {
   ): DurableRunRecord {
     const run = this.durableRunService.wakeDurableRun(runId, event);
     this.durableRunService.requestRunProcessing(runId);
+    this.hooksService.enqueueAfterHooks({
+      workspaceId: this.resolveDurableRunHookWorkspaceId(run),
+      trigger: "orchestration.run.woken",
+      entityType: "durable_run",
+      entityId: runId,
+      payload: {
+        runId,
+        eventKey: event.eventKey,
+        correlationId: event.correlationId,
+        payload: event.payload ?? {},
+      },
+    });
     return run;
   }
 
@@ -6793,6 +6853,93 @@ export class GatewayService {
     return payload as ConnectorDeliveryWorkflowPayload;
   }
 
+  private parseHookDeliveryWorkflowPayload(run: DurableRunRecord): {
+    version: "hook.delivery.v1";
+    hookRunId: string;
+    hookId: string;
+    workspaceId: string;
+    trigger: HookTrigger;
+    entityType: string;
+    entityId: string;
+  } | undefined {
+    const payload = run.payload as Partial<{
+      version: "hook.delivery.v1";
+      hookRunId: string;
+      hookId: string;
+      workspaceId: string;
+      trigger: HookTrigger;
+      entityType: string;
+      entityId: string;
+    }> | undefined;
+    if (!payload || payload.version !== "hook.delivery.v1") {
+      return undefined;
+    }
+    if (
+      typeof payload.hookRunId !== "string"
+      || typeof payload.hookId !== "string"
+      || typeof payload.workspaceId !== "string"
+      || typeof payload.trigger !== "string"
+      || typeof payload.entityType !== "string"
+      || typeof payload.entityId !== "string"
+    ) {
+      return undefined;
+    }
+    return payload as {
+      version: "hook.delivery.v1";
+      hookRunId: string;
+      hookId: string;
+      workspaceId: string;
+      trigger: HookTrigger;
+      entityType: string;
+      entityId: string;
+    };
+  }
+
+  private resolveDurableRunHookWorkspaceId(run: DurableRunRecord): string {
+    if (run.workflowKey === "hook.delivery") {
+      const payload = this.parseHookDeliveryWorkflowPayload(run);
+      if (payload?.workspaceId) {
+        return this.normalizeWorkspaceId(payload.workspaceId);
+      }
+      return DEFAULT_WORKSPACE_ID;
+    }
+    if (run.workflowKey === "connector.delivery") {
+      const payload = this.parseConnectorDeliveryWorkflowPayload(run);
+      const workspaceId = typeof payload?.payload?.workspaceId === "string"
+        ? payload.payload.workspaceId.trim()
+        : "";
+      if (workspaceId) {
+        return this.normalizeWorkspaceId(workspaceId);
+      }
+      return DEFAULT_WORKSPACE_ID;
+    }
+    if (run.workflowKey === "approval.wait") {
+      const payload = this.parseApprovalWaitWorkflowPayload(run);
+      if (payload) {
+        try {
+          const approval = this.storage.approvals.get(payload.approvalId);
+          return this.resolveApprovalHookWorkspaceId({
+            approvalId: approval.approvalId,
+            ...(approval.payload ?? {}),
+          });
+        } catch {
+          return DEFAULT_WORKSPACE_ID;
+        }
+      }
+      return DEFAULT_WORKSPACE_ID;
+    }
+    if (run.workflowKey === "chat.turn.execute") {
+      const payload = this.parseDurableChatTurnPayload(run);
+      if (payload?.sessionId) {
+        const meta = this.storage.chatSessionMeta.get(payload.sessionId);
+        if (meta?.workspaceId) {
+          return this.normalizeWorkspaceId(meta.workspaceId);
+        }
+      }
+    }
+    return DEFAULT_WORKSPACE_ID;
+  }
+
   private createDurableChatTurnPayload(
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
@@ -7085,6 +7232,9 @@ export class GatewayService {
       case "connector.delivery":
         await this.executeDurableConnectorDeliveryRun(run);
         return;
+      case "hook.delivery":
+        await this.executeDurableHookDeliveryRun(run);
+        return;
       default:
         throw new Error(`Unsupported durable workflow: ${run.workflowKey}`);
     }
@@ -7102,6 +7252,10 @@ export class GatewayService {
         return this.parseConnectorDeliveryWorkflowPayload(run)
           ? { recoverable: true }
           : { recoverable: false, reason: "Durable connector delivery payload is invalid or incomplete." };
+      case "hook.delivery":
+        return this.parseHookDeliveryWorkflowPayload(run)
+          ? { recoverable: true }
+          : { recoverable: false, reason: "Durable hook delivery payload is invalid or incomplete." };
       default:
         return { recoverable: false, reason: `Unsupported durable workflow: ${run.workflowKey}` };
     }
@@ -7135,6 +7289,19 @@ export class GatewayService {
 
   private async markDurableWorkflowUnrecoverable(run: DurableRunRecord, reason: string): Promise<void> {
     if (run.workflowKey === "approval.wait" || run.workflowKey === "connector.delivery") {
+      this.publishRealtime("system", "durable", {
+        type: "durable_workflow_unrecoverable",
+        runId: run.runId,
+        workflowKey: run.workflowKey,
+        reason,
+      });
+      return;
+    }
+    if (run.workflowKey === "hook.delivery") {
+      const payload = this.parseHookDeliveryWorkflowPayload(run);
+      if (payload) {
+        this.hooksService.markHookRunDeadLettered(payload.hookRunId, reason);
+      }
       this.publishRealtime("system", "durable", {
         type: "durable_workflow_unrecoverable",
         runId: run.runId,
@@ -7241,6 +7408,39 @@ export class GatewayService {
       ...checkpointState,
     });
     this.completeDurableWorkflowRun(run.runId, checkpointState);
+  }
+
+  private async executeDurableHookDeliveryRun(run: DurableRunRecord): Promise<void> {
+    const payload = this.parseHookDeliveryWorkflowPayload(run);
+    if (!payload) {
+      throw new Error("Durable hook delivery payload is invalid or incomplete.");
+    }
+    try {
+      const delivered = await this.hooksService.executeHookDelivery(payload.hookRunId, run.attemptCount + 1);
+      this.completeDurableWorkflowRun(run.runId, {
+        hookRunId: delivered.runId,
+        hookId: delivered.hookId,
+        status: delivered.status,
+        trigger: delivered.trigger,
+      });
+    } catch (error) {
+      const retry = this.durableRunService.retryDurableRun(
+        run.runId,
+        error instanceof Error ? error.message : "hook delivery failed",
+        "hooks",
+      );
+      if (retry.status === "queued") {
+        const nextDelayMs = this.computeDurableRetryDelayMs(retry, retry.attemptCount);
+        setTimeout(() => {
+          this.durableRunService.requestRunProcessing(run.runId);
+        }, nextDelayMs);
+        return;
+      }
+      this.hooksService.markHookRunDeadLettered(
+        payload.hookRunId,
+        error instanceof Error ? error.message : "hook delivery failed",
+      );
+    }
   }
 
   private async executeDurableChatTurnRun(run: DurableRunRecord): Promise<void> {
@@ -7796,6 +7996,8 @@ export class GatewayService {
 
   public async invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
     const normalizedRequest = this.resolveToolInvokeRequestPaths(request);
+    const toolHookWorkspaceId = this.resolveToolHookWorkspaceId(normalizedRequest);
+    const toolHookEntityId = `${normalizedRequest.sessionId}:${randomUUID()}`;
     const deploymentGuard = evaluateDeploymentProfileToolAccess(
       this.config.assistant.deploymentProfile,
       normalizedRequest.toolName,
@@ -7809,12 +8011,68 @@ export class GatewayService {
       };
     }
 
-    const result = await this.policyEngine.invoke(normalizedRequest);
+    const beforeHook = await this.hooksService.runInlineHooks<{
+      toolName?: string;
+      args?: Record<string, unknown>;
+    }>({
+      workspaceId: toolHookWorkspaceId,
+      trigger: "tool.call.before",
+      entityType: "tool_call",
+      entityId: toolHookEntityId,
+      payload: {
+        toolName: normalizedRequest.toolName,
+        args: normalizedRequest.args,
+        agentId: normalizedRequest.agentId,
+        sessionId: normalizedRequest.sessionId,
+        taskId: normalizedRequest.taskId,
+      },
+      parsePatch: (value) => this.parseToolCallHookPatch(value),
+      mergePatch: (current, next) => ({
+        ...(current ?? {}),
+        ...next,
+      }),
+    });
+    if (beforeHook.blockedBy) {
+      return {
+        outcome: "blocked",
+        policyReason: `hook blocked: ${beforeHook.blockedBy.reason}`,
+        auditEventId: randomUUID(),
+      };
+    }
+
+    const hookableRequest = beforeHook.patch
+      ? {
+        ...normalizedRequest,
+        ...(beforeHook.patch.toolName ? { toolName: beforeHook.patch.toolName } : {}),
+        ...(beforeHook.patch.args ? { args: beforeHook.patch.args } : {}),
+      }
+      : normalizedRequest;
+
+    let result: ToolInvokeResult;
+    try {
+      result = await this.policyEngine.invoke(hookableRequest);
+    } catch (error) {
+      this.hooksService.enqueueAfterHooks({
+        workspaceId: toolHookWorkspaceId,
+        trigger: "tool.call.error",
+        entityType: "tool_call",
+        entityId: toolHookEntityId,
+        payload: {
+          toolName: hookableRequest.toolName,
+          args: hookableRequest.args,
+          sessionId: hookableRequest.sessionId,
+          taskId: hookableRequest.taskId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      throw error;
+    }
+
     this.publishRealtime("tool_invoked", "policy", {
-      toolName: normalizedRequest.toolName,
-      sessionId: normalizedRequest.sessionId,
-      agentId: normalizedRequest.agentId,
-      taskId: normalizedRequest.taskId,
+      toolName: hookableRequest.toolName,
+      sessionId: hookableRequest.sessionId,
+      agentId: hookableRequest.agentId,
+      taskId: hookableRequest.taskId,
       outcome: result.outcome,
       policyReason: result.policyReason,
       approvalId: result.approvalId,
@@ -7824,6 +8082,23 @@ export class GatewayService {
     if (result.outcome === "approval_required" && result.approvalId) {
       this.scheduleApprovalExplanationById(result.approvalId);
     }
+
+    this.hooksService.enqueueAfterHooks({
+      workspaceId: toolHookWorkspaceId,
+      trigger: "tool.call.after",
+      entityType: "tool_call",
+      entityId: toolHookEntityId,
+      payload: {
+        toolName: hookableRequest.toolName,
+        args: hookableRequest.args,
+        sessionId: hookableRequest.sessionId,
+        taskId: hookableRequest.taskId,
+        outcome: result.outcome,
+        policyReason: result.policyReason,
+        approvalId: result.approvalId,
+        result: result.result,
+      },
+    });
 
     return result;
   }
@@ -7886,7 +8161,68 @@ export class GatewayService {
   }
 
   public async createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest> {
-    const approval = this.storage.approvals.create(input);
+    const approvalHookWorkspaceId = this.resolveApprovalHookWorkspaceId(input.payload);
+    const approvalHookEntityId = randomUUID();
+    const beforeHook = await this.hooksService.runInlineHooks<{
+      riskLevel?: ApprovalCreateInput["riskLevel"];
+      payloadMerge?: Record<string, unknown>;
+      previewMerge?: Record<string, unknown>;
+      expiresAt?: string | null;
+    }>({
+      workspaceId: approvalHookWorkspaceId,
+      trigger: "approval.create.before",
+      entityType: "approval",
+      entityId: approvalHookEntityId,
+      payload: {
+        kind: input.kind,
+        riskLevel: input.riskLevel,
+        payload: input.payload,
+        preview: input.preview,
+        expiresAt: input.expiresAt ?? null,
+      },
+      parsePatch: (value) => this.parseApprovalCreateHookPatch(value),
+      mergePatch: (current, next) => ({
+        ...(current ?? {}),
+        ...next,
+        ...(current?.payloadMerge || next.payloadMerge
+          ? {
+            payloadMerge: {
+              ...(current?.payloadMerge ?? {}),
+              ...(next.payloadMerge ?? {}),
+            },
+          }
+          : {}),
+        ...(current?.previewMerge || next.previewMerge
+          ? {
+            previewMerge: {
+              ...(current?.previewMerge ?? {}),
+              ...(next.previewMerge ?? {}),
+            },
+          }
+          : {}),
+      }),
+    });
+    if (beforeHook.blockedBy) {
+      throw new Error(beforeHook.blockedBy.reason);
+    }
+
+    const hookableInput = beforeHook.patch
+      ? {
+        ...input,
+        ...(beforeHook.patch.riskLevel ? { riskLevel: beforeHook.patch.riskLevel } : {}),
+        payload: {
+          ...input.payload,
+          ...(beforeHook.patch.payloadMerge ?? {}),
+        },
+        preview: {
+          ...input.preview,
+          ...(beforeHook.patch.previewMerge ?? {}),
+        },
+        expiresAt: beforeHook.patch.expiresAt !== undefined ? beforeHook.patch.expiresAt : input.expiresAt,
+      }
+      : input;
+
+    const approval = this.storage.approvals.create(hookableInput);
 
     this.storage.approvalEvents.append({
       approvalId: approval.approvalId,
@@ -8102,6 +8438,22 @@ export class GatewayService {
 
     await this.recordApprovalResolutionEffects(approval, input, executedAction);
 
+    this.hooksService.enqueueAfterHooks({
+      workspaceId: this.resolveApprovalHookWorkspaceId({
+        approvalId,
+        ...(approval.payload ?? {}),
+      }),
+      trigger: "approval.resolve.after",
+      entityType: "approval",
+      entityId: approval.approvalId,
+      payload: {
+        approval,
+        decision: input.decision,
+        resolvedBy: input.resolvedBy,
+        executedAction,
+      },
+    });
+
     return {
       approval,
       executedAction,
@@ -8228,7 +8580,7 @@ export class GatewayService {
       resolvedAt: approval.resolvedAt ?? new Date().toISOString(),
     });
     try {
-      this.durableRunService.wakeDurableRun(row.run_id, {
+      this.wakeDurableRun(row.run_id, {
         eventKey: "approval.resolved",
         correlationId: approval.approvalId,
         payload: {
@@ -11873,16 +12225,80 @@ export class GatewayService {
       }
       : request;
 
+    const chatHookWorkspaceId = this.resolveChatCompletionHookWorkspaceId(request);
+    const chatHookEntityId = request.memory?.sessionId?.trim() || randomUUID();
+    let hookableRequest = withContext;
+
+    const modelSelectHook = await this.hooksService.runInlineHooks<{
+      providerId?: string;
+      model?: string;
+    }>({
+      workspaceId: chatHookWorkspaceId,
+      trigger: "llm.model.select.before",
+      entityType: "chat_completion",
+      entityId: chatHookEntityId,
+      payload: {
+        providerId: hookableRequest.providerId,
+        model: hookableRequest.model,
+        messageCount: hookableRequest.messages.length,
+      },
+      parsePatch: (value) => this.parseLlmModelSelectHookPatch(value),
+      mergePatch: (current, next) => ({
+        ...(current ?? {}),
+        ...next,
+      }),
+    });
+    if (modelSelectHook.blockedBy) {
+      throw new Error(modelSelectHook.blockedBy.reason);
+    }
+    if (modelSelectHook.patch) {
+      hookableRequest = {
+        ...hookableRequest,
+        ...modelSelectHook.patch,
+      };
+    }
+
+    const llmRequestHook = await this.hooksService.runInlineHooks<{
+      providerId?: string;
+      model?: string;
+      prependMessages?: typeof hookableRequest.messages;
+      appendMessages?: typeof hookableRequest.messages;
+      tools?: Array<Record<string, unknown>>;
+      toolChoice?: string | Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    }>({
+      workspaceId: chatHookWorkspaceId,
+      trigger: "llm.request.before",
+      entityType: "chat_completion",
+      entityId: chatHookEntityId,
+      payload: {
+        providerId: hookableRequest.providerId,
+        model: hookableRequest.model,
+        messages: hookableRequest.messages,
+        tools: hookableRequest.tools ?? [],
+        toolChoice: hookableRequest.tool_choice,
+        metadata: hookableRequest.metadata ?? {},
+      },
+      parsePatch: (value) => this.parseLlmRequestHookPatch(value),
+      mergePatch: (current, next) => this.mergeLlmRequestHookPatch(current, next),
+    });
+    if (llmRequestHook.blockedBy) {
+      throw new Error(llmRequestHook.blockedBy.reason);
+    }
+    if (llmRequestHook.patch) {
+      hookableRequest = this.applyLlmRequestHookPatch(hookableRequest, llmRequestHook.patch);
+    }
+
     const runtime = this.llmService.getRuntimeConfig({
       includeKeychainForActiveProvider: true,
       useCache: true,
     });
-    const primaryProviderId = withContext.providerId ?? runtime.activeProviderId;
+    const primaryProviderId = hookableRequest.providerId ?? runtime.activeProviderId;
     const primaryProvider = runtime.providers.find((item) => item.providerId === primaryProviderId);
-    const primaryModel = withContext.model
+    const primaryModel = hookableRequest.model
       ?? primaryProvider?.defaultModel
       ?? runtime.activeModel;
-    const allowCrossProviderFallback = shouldAllowCrossProviderFallback(withContext);
+    const allowCrossProviderFallback = shouldAllowCrossProviderFallback(hookableRequest);
     const routing: ChatTurnTraceRecord["routing"] = {
       primaryProviderId,
       primaryModel,
@@ -11892,20 +12308,20 @@ export class GatewayService {
     };
 
     const retryAttempts = [
-      withContext,
-      normalizeToolProtocolRetryRequest(withContext, 1),
-      normalizeToolProtocolRetryRequest(withContext, 2),
+      hookableRequest,
+      normalizeToolProtocolRetryRequest(hookableRequest, 1),
+      normalizeToolProtocolRetryRequest(hookableRequest, 2),
     ];
-    const completionDeadline = createChatCompletionDeadline(withContext.timeoutMs);
+    const completionDeadline = createChatCompletionDeadline(hookableRequest.timeoutMs);
     let lastError: Error | undefined;
 
     for (let index = 0; index < retryAttempts.length; index += 1) {
       const attemptRequest = retryAttempts[index]!;
       try {
-        const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
-        response = await this.llmService.chatCompletions({
-          ...attemptRequest,
-          timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
+          const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
+          response = await this.llmService.chatCompletions({
+            ...attemptRequest,
+            timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
         });
         routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
         routing.effectiveModel = response.model ?? attemptRequest.model ?? primaryModel;
@@ -11919,7 +12335,7 @@ export class GatewayService {
         }
         break;
       } catch (error) {
-        lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
+        lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
         this.recordDevDiagnostic({
           level: "warn",
           category: "chat",
@@ -11946,12 +12362,12 @@ export class GatewayService {
       const fallbacks = this.resolveFallbackTargets(runtime, primaryProviderId, primaryModel);
       for (const fallback of fallbacks) {
         try {
-          const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
-          response = await this.llmService.chatCompletions({
-            ...normalizeToolProtocolRetryRequest(withContext, 2),
+            const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
+            response = await this.llmService.chatCompletions({
+            ...normalizeToolProtocolRetryRequest(hookableRequest, 2),
             providerId: fallback.providerId,
             model: fallback.model,
-            timeoutMs: attemptTimeoutMs ?? withContext.timeoutMs,
+            timeoutMs: attemptTimeoutMs ?? hookableRequest.timeoutMs,
           });
           this.recordDevDiagnostic({
             level: "info",
@@ -11973,7 +12389,7 @@ export class GatewayService {
           routing.effectiveModel = routing.fallbackModel;
           break;
         } catch (error) {
-          lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
+          lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
         }
       }
     }
@@ -12034,6 +12450,23 @@ export class GatewayService {
       };
     }
     response.routing = routing;
+    this.hooksService.enqueueAfterHooks({
+      workspaceId: chatHookWorkspaceId,
+      trigger: "llm.response.after",
+      entityType: "chat_completion",
+      entityId: chatHookEntityId,
+      payload: {
+        providerId: routing.effectiveProviderId ?? primaryProviderId,
+        model: routing.effectiveModel ?? primaryModel,
+        request: {
+          providerId: hookableRequest.providerId,
+          model: hookableRequest.model,
+          metadata: hookableRequest.metadata ?? {},
+          messageCount: hookableRequest.messages.length,
+        },
+        response,
+      },
+    });
     return response;
   }
 
@@ -12255,12 +12688,47 @@ export class GatewayService {
     return persisted;
   }
 
-  public runOrchestrationPlan(planId: string): OrchestrationRun {
-    const plan = this.storage.orchestration.getPlan(planId);
+  public async runOrchestrationPlan(planId: string): Promise<OrchestrationRun> {
+    let plan = this.storage.orchestration.getPlan(planId);
     let run = this.storage.orchestration.findLatestRunByPlan(planId);
 
     if (!run) {
       run = this.createOrchestrationPlan(plan);
+    }
+
+    const runBeforeHook = await this.hooksService.runInlineHooks<{
+      maxIterations?: number;
+      maxRuntimeMinutes?: number;
+      maxCostUsd?: number;
+    }>({
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      trigger: "orchestration.run.before",
+      entityType: "orchestration_run",
+      entityId: run.runId,
+      payload: {
+        planId: plan.planId,
+        goal: plan.goal,
+        maxIterations: plan.maxIterations,
+        maxRuntimeMinutes: plan.maxRuntimeMinutes,
+        maxCostUsd: plan.maxCostUsd,
+      },
+      parsePatch: (value) => this.parseOrchestrationRunHookPatch(value),
+      mergePatch: (current, next) => ({
+        ...(current ?? {}),
+        ...next,
+      }),
+    });
+    if (runBeforeHook.blockedBy) {
+      throw new Error(runBeforeHook.blockedBy.reason);
+    }
+    if (runBeforeHook.patch) {
+      plan = {
+        ...plan,
+        ...(runBeforeHook.patch.maxIterations !== undefined ? { maxIterations: runBeforeHook.patch.maxIterations } : {}),
+        ...(runBeforeHook.patch.maxRuntimeMinutes !== undefined ? { maxRuntimeMinutes: runBeforeHook.patch.maxRuntimeMinutes } : {}),
+        ...(runBeforeHook.patch.maxCostUsd !== undefined ? { maxCostUsd: runBeforeHook.patch.maxCostUsd } : {}),
+      };
+      this.storage.orchestration.upsertPlan(plan);
     }
 
     const started = this.orchestrationEngine.startRun(plan, run);
@@ -12299,15 +12767,45 @@ export class GatewayService {
     return persisted;
   }
 
-  public approvePhase(
+  public async approvePhase(
     runId: string,
     phaseId: string,
     approvedBy: string,
     costIncrementUsd = 0,
-  ): { run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] } {
+  ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }> {
     const run = this.storage.orchestration.getRun(runId);
-    const plan = this.storage.orchestration.getPlan(run.planId);
+    let plan = this.storage.orchestration.getPlan(run.planId);
     const previousWaveId = run.currentWaveId;
+
+    const phaseBeforeHook = await this.hooksService.runInlineHooks<{
+      ownerAgentId?: string;
+      specPath?: string;
+      loopMode?: "fresh-context" | "compaction";
+      requiresApproval?: boolean;
+    }>({
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      trigger: "orchestration.phase.before",
+      entityType: "orchestration_phase",
+      entityId: `${runId}:${phaseId}`,
+      payload: {
+        runId,
+        phaseId,
+        approvedBy,
+        costIncrementUsd,
+      },
+      parsePatch: (value) => this.parseOrchestrationPhaseHookPatch(value),
+      mergePatch: (current, next) => ({
+        ...(current ?? {}),
+        ...next,
+      }),
+    });
+    if (phaseBeforeHook.blockedBy) {
+      throw new Error(phaseBeforeHook.blockedBy.reason);
+    }
+    if (phaseBeforeHook.patch) {
+      plan = this.applyOrchestrationPhaseHookPatch(plan, phaseId, phaseBeforeHook.patch);
+      this.storage.orchestration.upsertPlan(plan);
+    }
 
     const next = this.orchestrationEngine.approvePhase(plan, run, phaseId, {
       costIncrementUsd,
@@ -12391,6 +12889,22 @@ export class GatewayService {
     if (this.config.assistant.memory.enabled && this.config.assistant.memory.qmd.applyToOrchestration) {
       this.scheduleOrchestrationMemoryContext(plan, persisted);
     }
+
+    this.hooksService.enqueueAfterHooks({
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      trigger: "orchestration.phase.after",
+      entityType: "orchestration_phase",
+      entityId: `${runId}:${phaseId}`,
+      payload: {
+        runId,
+        planId: plan.planId,
+        phaseId,
+        approvedBy,
+        status: persisted.status,
+        currentWaveId: persisted.currentWaveId,
+        currentPhaseId: persisted.currentPhaseId,
+      },
+    });
 
     return {
       run: persisted,
@@ -13968,6 +14482,326 @@ export class GatewayService {
       throw new Error("workspaceId contains unsupported characters");
     }
     return normalized;
+  }
+
+  private resolveChatCompletionHookWorkspaceId(request: ChatCompletionRequest): string {
+    const explicitWorkspace = request.memory?.workspace?.trim();
+    if (explicitWorkspace) {
+      return this.normalizeWorkspaceId(explicitWorkspace);
+    }
+    const sessionId = request.memory?.sessionId?.trim();
+    if (sessionId) {
+      const meta = this.storage.chatSessionMeta.get(sessionId);
+      if (meta?.workspaceId) {
+        return this.normalizeWorkspaceId(meta.workspaceId);
+      }
+    }
+    return DEFAULT_WORKSPACE_ID;
+  }
+
+  private resolveToolHookWorkspaceId(request: ToolInvokeRequest): string {
+    const meta = this.storage.chatSessionMeta.get(request.sessionId);
+    return this.normalizeWorkspaceId(meta?.workspaceId ?? DEFAULT_WORKSPACE_ID);
+  }
+
+  private resolveApprovalHookWorkspaceId(payload?: Record<string, unknown>): string {
+    const fromPayload = typeof payload?.workspaceId === "string" ? payload.workspaceId.trim() : "";
+    if (fromPayload) {
+      return this.normalizeWorkspaceId(fromPayload);
+    }
+    const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId.trim() : "";
+    if (sessionId) {
+      const meta = this.storage.chatSessionMeta.get(sessionId);
+      if (meta?.workspaceId) {
+        return this.normalizeWorkspaceId(meta.workspaceId);
+      }
+    }
+    return DEFAULT_WORKSPACE_ID;
+  }
+
+  private parseLlmModelSelectHookPatch(value: Record<string, unknown>): {
+    providerId?: string;
+    model?: string;
+  } | undefined {
+    const providerId = typeof value.providerId === "string" && value.providerId.trim()
+      ? value.providerId.trim()
+      : undefined;
+    const model = typeof value.model === "string" && value.model.trim()
+      ? value.model.trim()
+      : undefined;
+    if (!providerId && !model) {
+      return undefined;
+    }
+    return {
+      ...(providerId ? { providerId } : {}),
+      ...(model ? { model } : {}),
+    };
+  }
+
+  private parseLlmRequestHookPatch(value: Record<string, unknown>): {
+    providerId?: string;
+    model?: string;
+    prependMessages?: ChatCompletionRequest["messages"];
+    appendMessages?: ChatCompletionRequest["messages"];
+    tools?: Array<Record<string, unknown>>;
+    toolChoice?: string | Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  } | undefined {
+    const base = this.parseLlmModelSelectHookPatch(value);
+    const prependMessages = this.parseChatCompletionMessages(value.prependMessages);
+    const appendMessages = this.parseChatCompletionMessages(value.appendMessages);
+    const tools = Array.isArray(value.tools)
+      ? value.tools.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+      : undefined;
+    const toolChoice = typeof value.toolChoice === "string"
+      ? value.toolChoice
+      : (value.toolChoice && typeof value.toolChoice === "object" && !Array.isArray(value.toolChoice)
+          ? value.toolChoice as Record<string, unknown>
+          : undefined);
+    const metadata = value.metadata && typeof value.metadata === "object" && !Array.isArray(value.metadata)
+      ? value.metadata as Record<string, unknown>
+      : undefined;
+    if (!base && !prependMessages && !appendMessages && !tools && !toolChoice && !metadata) {
+      return undefined;
+    }
+    return {
+      ...(base ?? {}),
+      ...(prependMessages ? { prependMessages } : {}),
+      ...(appendMessages ? { appendMessages } : {}),
+      ...(tools ? { tools } : {}),
+      ...(toolChoice ? { toolChoice } : {}),
+      ...(metadata ? { metadata } : {}),
+    };
+  }
+
+  private mergeLlmRequestHookPatch(
+    current: {
+      providerId?: string;
+      model?: string;
+      prependMessages?: ChatCompletionRequest["messages"];
+      appendMessages?: ChatCompletionRequest["messages"];
+      tools?: Array<Record<string, unknown>>;
+      toolChoice?: string | Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    } | undefined,
+    next: {
+      providerId?: string;
+      model?: string;
+      prependMessages?: ChatCompletionRequest["messages"];
+      appendMessages?: ChatCompletionRequest["messages"];
+      tools?: Array<Record<string, unknown>>;
+      toolChoice?: string | Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    },
+  ) {
+    return {
+      ...(current ?? {}),
+      ...next,
+      ...(current?.prependMessages || next.prependMessages
+        ? { prependMessages: [...(current?.prependMessages ?? []), ...(next.prependMessages ?? [])] }
+        : {}),
+      ...(current?.appendMessages || next.appendMessages
+        ? { appendMessages: [...(current?.appendMessages ?? []), ...(next.appendMessages ?? [])] }
+        : {}),
+      ...(current?.metadata || next.metadata
+        ? { metadata: { ...(current?.metadata ?? {}), ...(next.metadata ?? {}) } }
+        : {}),
+    };
+  }
+
+  private applyLlmRequestHookPatch(
+    request: ChatCompletionRequest,
+    patch: {
+      providerId?: string;
+      model?: string;
+      prependMessages?: ChatCompletionRequest["messages"];
+      appendMessages?: ChatCompletionRequest["messages"];
+      tools?: Array<Record<string, unknown>>;
+      toolChoice?: string | Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    },
+  ): ChatCompletionRequest {
+    return {
+      ...request,
+      ...(patch.providerId ? { providerId: patch.providerId } : {}),
+      ...(patch.model ? { model: patch.model } : {}),
+      messages: [
+        ...(patch.prependMessages ?? []),
+        ...request.messages,
+        ...(patch.appendMessages ?? []),
+      ],
+      ...(patch.tools ? { tools: patch.tools } : {}),
+      ...(patch.toolChoice ? { tool_choice: patch.toolChoice } : {}),
+      ...(patch.metadata ? { metadata: { ...(request.metadata ?? {}), ...patch.metadata } } : {}),
+    };
+  }
+
+  private parseChatCompletionMessages(value: unknown): ChatCompletionRequest["messages"] | undefined {
+    if (!Array.isArray(value)) {
+      return undefined;
+    }
+    const messages = value.flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return [];
+      }
+      const candidate = item as {
+        role?: unknown;
+        content?: unknown;
+        name?: unknown;
+        tool_call_id?: unknown;
+      };
+      if (
+        candidate.role !== "system"
+        && candidate.role !== "developer"
+        && candidate.role !== "user"
+        && candidate.role !== "assistant"
+        && candidate.role !== "tool"
+      ) {
+        return [];
+      }
+      if (typeof candidate.content !== "string" && !Array.isArray(candidate.content)) {
+        return [];
+      }
+      return [{
+        role: candidate.role as ChatCompletionRequest["messages"][number]["role"],
+        content: candidate.content,
+        ...(typeof candidate.name === "string" && candidate.name.trim() ? { name: candidate.name.trim() } : {}),
+        ...(typeof candidate.tool_call_id === "string" && candidate.tool_call_id.trim()
+          ? { tool_call_id: candidate.tool_call_id.trim() }
+          : {}),
+      }];
+    });
+    return messages.length > 0 ? messages : undefined;
+  }
+
+  private parseToolCallHookPatch(value: Record<string, unknown>): {
+    toolName?: string;
+    args?: Record<string, unknown>;
+  } | undefined {
+    const toolName = typeof value.toolName === "string" && value.toolName.trim()
+      ? value.toolName.trim()
+      : undefined;
+    const args = value.args && typeof value.args === "object" && !Array.isArray(value.args)
+      ? value.args as Record<string, unknown>
+      : undefined;
+    if (!toolName && !args) {
+      return undefined;
+    }
+    return {
+      ...(toolName ? { toolName } : {}),
+      ...(args ? { args } : {}),
+    };
+  }
+
+  private parseApprovalCreateHookPatch(value: Record<string, unknown>): {
+    riskLevel?: ApprovalCreateInput["riskLevel"];
+    payloadMerge?: Record<string, unknown>;
+    previewMerge?: Record<string, unknown>;
+    expiresAt?: string | null;
+  } | undefined {
+    const riskLevel = value.riskLevel === "safe"
+      || value.riskLevel === "caution"
+      || value.riskLevel === "danger"
+      || value.riskLevel === "nuclear"
+      ? value.riskLevel
+      : undefined;
+    const payloadMerge = value.payloadMerge && typeof value.payloadMerge === "object" && !Array.isArray(value.payloadMerge)
+      ? value.payloadMerge as Record<string, unknown>
+      : undefined;
+    const previewMerge = value.previewMerge && typeof value.previewMerge === "object" && !Array.isArray(value.previewMerge)
+      ? value.previewMerge as Record<string, unknown>
+      : undefined;
+    const expiresAt = value.expiresAt === null
+      ? null
+      : (typeof value.expiresAt === "string" && value.expiresAt.trim() ? value.expiresAt.trim() : undefined);
+    if (!riskLevel && !payloadMerge && !previewMerge && expiresAt === undefined) {
+      return undefined;
+    }
+    return {
+      ...(riskLevel ? { riskLevel } : {}),
+      ...(payloadMerge ? { payloadMerge } : {}),
+      ...(previewMerge ? { previewMerge } : {}),
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    };
+  }
+
+  private parseOrchestrationRunHookPatch(value: Record<string, unknown>): {
+    maxIterations?: number;
+    maxRuntimeMinutes?: number;
+    maxCostUsd?: number;
+  } | undefined {
+    const maxIterations = parseOptionalPositiveInt(value.maxIterations);
+    const maxRuntimeMinutes = parseOptionalPositiveInt(value.maxRuntimeMinutes);
+    const maxCostUsd = typeof value.maxCostUsd === "number" && Number.isFinite(value.maxCostUsd) && value.maxCostUsd > 0
+      ? value.maxCostUsd
+      : undefined;
+    if (maxIterations === undefined && maxRuntimeMinutes === undefined && maxCostUsd === undefined) {
+      return undefined;
+    }
+    return {
+      ...(maxIterations !== undefined ? { maxIterations } : {}),
+      ...(maxRuntimeMinutes !== undefined ? { maxRuntimeMinutes } : {}),
+      ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
+    };
+  }
+
+  private parseOrchestrationPhaseHookPatch(value: Record<string, unknown>): {
+    ownerAgentId?: string;
+    specPath?: string;
+    loopMode?: "fresh-context" | "compaction";
+    requiresApproval?: boolean;
+  } | undefined {
+    const ownerAgentId = typeof value.ownerAgentId === "string" && value.ownerAgentId.trim()
+      ? value.ownerAgentId.trim()
+      : undefined;
+    const specPath = typeof value.specPath === "string" && value.specPath.trim()
+      ? value.specPath.trim()
+      : undefined;
+    const loopMode = value.loopMode === "fresh-context" || value.loopMode === "compaction"
+      ? value.loopMode
+      : undefined;
+    const requiresApproval = typeof value.requiresApproval === "boolean"
+      ? value.requiresApproval
+      : undefined;
+    if (!ownerAgentId && !specPath && !loopMode && requiresApproval === undefined) {
+      return undefined;
+    }
+    return {
+      ...(ownerAgentId ? { ownerAgentId } : {}),
+      ...(specPath ? { specPath } : {}),
+      ...(loopMode ? { loopMode } : {}),
+      ...(requiresApproval !== undefined ? { requiresApproval } : {}),
+    };
+  }
+
+  private applyOrchestrationPhaseHookPatch(
+    plan: OrchestrationPlan,
+    phaseId: string,
+    patch: {
+      ownerAgentId?: string;
+      specPath?: string;
+      loopMode?: "fresh-context" | "compaction";
+      requiresApproval?: boolean;
+    },
+  ): OrchestrationPlan {
+    return {
+      ...plan,
+      waves: plan.waves.map((wave) => ({
+        ...wave,
+        phases: wave.phases.map((phase) => {
+          if (phase.phaseId !== phaseId) {
+            return phase;
+          }
+          return {
+            ...phase,
+            ...(patch.ownerAgentId ? { ownerAgentId: patch.ownerAgentId } : {}),
+            ...(patch.specPath ? { specPath: patch.specPath } : {}),
+            ...(patch.loopMode ? { loopMode: patch.loopMode } : {}),
+            ...(patch.requiresApproval !== undefined ? { requiresApproval: patch.requiresApproval } : {}),
+          };
+        }),
+      })),
+    };
   }
 
   private resolveGuidancePath(

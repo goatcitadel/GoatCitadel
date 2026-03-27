@@ -45,6 +45,7 @@ import { mediaRoutes } from "./routes/media.js";
 import { daemonRoutes } from "./routes/daemon.js";
 import { improvementRoutes } from "./routes/improvement.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
+import { hooksRoutes } from "./routes/hooks.js";
 import { durableRoutes } from "./routes/durable.js";
 import { connectorsRoutes } from "./routes/connectors.js";
 import { createGatewayLogger, isVerboseLoggingEnabled } from "./runtime-ux.js";
@@ -252,6 +253,7 @@ export async function buildApp() {
   await app.register(daemonRoutes);
   await app.register(improvementRoutes);
   await app.register(workspacesRoutes);
+  await app.register(hooksRoutes);
   await app.register(durableRoutes);
   await app.register(connectorsRoutes);
   await app.register(addonsRoutes);

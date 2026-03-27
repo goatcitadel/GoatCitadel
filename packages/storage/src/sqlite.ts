@@ -312,6 +312,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "tool_access_decision_hot_path_indexes",
     up: createToolAccessDecisionHotPathIndexes,
   },
+  {
+    version: 42,
+    name: "workspace_hook_runtime_schema",
+    up: createWorkspaceHookRuntimeSchema,
+  },
 ];
 
 function createBaseSchema(db: DatabaseSync): void {
@@ -2537,6 +2542,60 @@ function createToolAccessDecisionHotPathIndexes(db: DatabaseSync): void {
       ON tool_access_decisions(agent_id, session_id, allowed, tool_name, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_task_allowed_tool_time
       ON tool_access_decisions(task_id, allowed, tool_name, timestamp DESC);
+  `);
+}
+
+function createWorkspaceHookRuntimeSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workspace_hooks (
+      hook_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      label TEXT NOT NULL,
+      trigger TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      priority INTEGER NOT NULL DEFAULT 100,
+      timeout_ms INTEGER NOT NULL DEFAULT 5000,
+      fail_policy TEXT NOT NULL DEFAULT 'open',
+      action_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workspace_hooks_workspace_priority
+      ON workspace_hooks(workspace_id, priority DESC, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_workspace_hooks_workspace_trigger
+      ON workspace_hooks(workspace_id, trigger, enabled, priority DESC, created_at ASC);
+
+    CREATE TABLE IF NOT EXISTS hook_runs (
+      run_id TEXT PRIMARY KEY,
+      hook_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      trigger TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      durable_run_id TEXT,
+      decision_json TEXT,
+      patch_summary_json TEXT,
+      error_text TEXT,
+      latency_ms INTEGER,
+      request_payload_json TEXT,
+      response_payload_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_hook_runs_hook_idempotency
+      ON hook_runs(hook_id, idempotency_key);
+    CREATE INDEX IF NOT EXISTS idx_hook_runs_workspace_created
+      ON hook_runs(workspace_id, created_at DESC, run_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_hook_runs_durable
+      ON hook_runs(durable_run_id, created_at DESC);
   `);
 }
 
