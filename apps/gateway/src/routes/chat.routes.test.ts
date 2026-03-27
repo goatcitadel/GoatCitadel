@@ -37,12 +37,16 @@ describe("chat routes additional coverage", () => {
 
     const listResponse = await app.inject({
       method: "GET",
-      url: "/api/v1/chat/sessions?limit=2",
+      url: "/api/v1/chat/sessions?limit=2&includeHidden=true",
     });
     expect(listResponse.statusCode).toBe(200);
     expect(listResponse.json()).toMatchObject({
       nextCursor: "2026-03-05T10:00:01.000Z|sess-1",
     });
+    expect(listChatSessions).toHaveBeenCalledWith(expect.objectContaining({
+      includeHidden: true,
+      limit: 2,
+    }));
 
     const createResponse = await app.inject({
       method: "POST",
@@ -50,10 +54,55 @@ describe("chat routes additional coverage", () => {
       payload: {
         title: "Fresh chat",
         mode: "cowork",
+        origin: "prompt_pack",
+        includeInHistory: false,
       },
     });
     expect(createResponse.statusCode).toBe(201);
-    expect(createChatSession).toHaveBeenCalledWith({ title: "Fresh chat", mode: "cowork" });
+    expect(createChatSession).toHaveBeenCalledWith({
+      title: "Fresh chat",
+      mode: "cowork",
+      origin: "prompt_pack",
+      includeInHistory: false,
+    });
+  });
+
+  it("archives workspace chat sessions through the bulk archive route", async () => {
+    const archiveChatSessionsBulk = vi.fn(async () => ({
+      workspaceId: "default",
+      scope: "mission",
+      includeHidden: false,
+      archivedCount: 4,
+      skippedCount: 1,
+      failedCount: 0,
+      archivedSessionIds: ["sess-1", "sess-2", "sess-3", "sess-4"],
+      failures: [],
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      archiveChatSessionsBulk,
+    } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/archive-bulk",
+      payload: {
+        workspaceId: "default",
+        scope: "mission",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(archiveChatSessionsBulk).toHaveBeenCalledWith({
+      workspaceId: "default",
+      scope: "mission",
+    });
+    expect(response.json()).toMatchObject({
+      archivedCount: 4,
+      skippedCount: 1,
+      failedCount: 0,
+    });
   });
 
   it("deletes chat sessions through the gateway", async () => {

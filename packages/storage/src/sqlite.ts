@@ -317,6 +317,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "workspace_hook_runtime_schema",
     up: createWorkspaceHookRuntimeSchema,
   },
+  {
+    version: 43,
+    name: "chat_session_history_visibility",
+    up: createChatSessionHistoryVisibilitySchema,
+  },
 ];
 
 function createBaseSchema(db: DatabaseSync): void {
@@ -1195,7 +1200,10 @@ function createChatWorkspaceSchema(db: DatabaseSync): void {
 
     CREATE TABLE IF NOT EXISTS chat_session_meta (
       session_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
       title TEXT,
+      origin TEXT,
+      include_in_history INTEGER NOT NULL DEFAULT 1,
       pinned INTEGER NOT NULL DEFAULT 0,
       lifecycle_status TEXT NOT NULL DEFAULT 'active',
       archived_at TEXT,
@@ -1209,6 +1217,8 @@ function createChatWorkspaceSchema(db: DatabaseSync): void {
       ON chat_session_meta(lifecycle_status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_chat_session_meta_pinned
       ON chat_session_meta(pinned DESC, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_meta_history_visibility
+      ON chat_session_meta(workspace_id, include_in_history, lifecycle_status, updated_at DESC);
 
     CREATE TABLE IF NOT EXISTS chat_session_projects (
       session_id TEXT PRIMARY KEY,
@@ -2542,6 +2552,20 @@ function createToolAccessDecisionHotPathIndexes(db: DatabaseSync): void {
       ON tool_access_decisions(agent_id, session_id, allowed, tool_name, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_task_allowed_tool_time
       ON tool_access_decisions(task_id, allowed, tool_name, timestamp DESC);
+  `);
+}
+
+function createChatSessionHistoryVisibilitySchema(db: DatabaseSync): void {
+  addColumnIfMissing(db, "chat_session_meta", "origin", "TEXT");
+  addColumnIfMissing(db, "chat_session_meta", "include_in_history", "INTEGER NOT NULL DEFAULT 1");
+
+  db.exec(`
+    UPDATE chat_session_meta
+    SET include_in_history = 1
+    WHERE include_in_history IS NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_chat_session_meta_history_visibility
+      ON chat_session_meta(workspace_id, include_in_history, lifecycle_status, updated_at DESC);
   `);
 }
 

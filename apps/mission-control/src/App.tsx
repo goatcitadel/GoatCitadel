@@ -1,4 +1,4 @@
-import { memo, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import { CHAT_MODE_PRESETS } from "@goatcitadel/contracts";
 import {
   consumeGatewayAccessBootstrapFromLocation,
@@ -8,26 +8,46 @@ import {
   preflightGatewayAccess,
   resolveApproval,
   resolveApprovalWithRemoteToken,
+  type EventStreamConnectionState,
   type GatewayAccessPreflightResult,
   type RealtimeEvent,
-  type EventStreamConnectionState,
 } from "./api/shell-client";
+import type { DashboardStateResponse } from "./api/client";
 import { DeviceAccessApprovalModal, type DeviceAccessApprovalPrompt } from "./components/DeviceAccessApprovalModal";
+import { GCSelect } from "./components/ui";
 import { GatewayAccessGate } from "./components/GatewayAccessGate";
-import { GlobalFreshnessPill } from "./components/GlobalFreshnessPill";
-import { HelpHint } from "./components/HelpHint";
 import { NotificationStack, type NotificationItem, upsertNotificationItem } from "./components/NotificationStack";
 import { PageErrorBoundary } from "./components/PageErrorBoundary";
 import { RemoteApprovalActionModal, type RemoteApprovalActionPrompt } from "./components/RemoteApprovalActionModal";
-import { ClockBadge } from "./components/ClockBadge";
+import { ShellPageFrame } from "./components/ShellPageFrame";
 import { StatusChip } from "./components/StatusChip";
+import { StatusStrip } from "./components/StatusStrip";
 import { appCopy } from "./content/copy";
+import {
+  buildRouteSearch,
+  DEFAULT_ROUTE,
+  getPageLabel,
+  normalizeResolvedRoute,
+  PAGE_META,
+  readRouteFromLocation,
+  SPACE_META,
+  SPACE_PAGES,
+  type ActivityTab,
+  type AgentsTab,
+  type ArtifactsTab,
+  type IntegrationsTab,
+  type ResolvedRoute,
+  type SettingsTab,
+  type Space,
+  type SpacePage,
+  type WorkSurface,
+} from "./content/page-registry";
 import { emitRefresh, type RefreshTopic } from "./state/refresh-bus";
 import { useUiPreferences } from "./state/ui-preferences";
 import { resolveEffectiveEffectsMode } from "./state/effects-mode";
 import { publishEventStreamStatus, resetEventStreamStatus } from "./state/event-stream-status-store";
 import { deriveShellGatewayAccessState } from "./state/gateway-shell-state";
-import { useEventStreamStatus } from "./hooks/useEventStreamStatus";
+import { useRefreshSubscription } from "./hooks/useRefreshSubscription";
 import {
   isDevDiagnosticsEnabled,
   recordClientDiagnostic,
@@ -36,7 +56,6 @@ import {
   setDevDiagnosticsGatewayReachable,
   setDevDiagnosticsSseState,
 } from "./state/dev-diagnostics-store";
-import { GCSelect, GCSwitch } from "./components/ui";
 
 function lazyPage(loader: () => Promise<Record<string, unknown>>, exportName: string) {
   return lazy(async () => {
@@ -45,35 +64,29 @@ function lazyPage(loader: () => Promise<Record<string, unknown>>, exportName: st
   });
 }
 
-const AddonsPage = lazyPage(() => import("./pages/AddonsPage"), "AddonsPage");
-const CommandPalette = lazyPage(() => import("./components/CommandPalette"), "CommandPalette");
-const OnboardingPage = lazyPage(() => import("./pages/OnboardingPage"), "OnboardingPage");
-const DashboardPage = lazyPage(() => import("./pages/DashboardPage"), "DashboardPage");
-const DevDiagnosticsPanel = lazyPage(() => import("./components/DevDiagnosticsPanel"), "DevDiagnosticsPanel");
-const SystemPage = lazyPage(() => import("./pages/SystemPage"), "SystemPage");
-const FilesPage = lazyPage(() => import("./pages/FilesPage"), "FilesPage");
-const MemoryPage = lazyPage(() => import("./pages/MemoryPage"), "MemoryPage");
-const AgentsPage = lazyPage(() => import("./pages/AgentsPage"), "AgentsPage");
-const OfficePage = lazyPage(() => import("./pages/OfficePage"), "OfficePage");
-const OfficeLabPage = lazyPage(() => import("./pages/OfficeLabPage"), "OfficeLabPage");
-const ActivityPage = lazyPage(() => import("./pages/ActivityPage"), "ActivityPage");
-const CronPage = lazyPage(() => import("./pages/CronPage"), "CronPage");
-const SessionsPage = lazyPage(() => import("./pages/SessionsPage"), "SessionsPage");
-const ChatPage = lazyPage(() => import("./pages/ChatPage"), "ChatPage");
-const AssemblyPage = lazyPage(() => import("./pages/AssemblyPage"), "AssemblyPage");
-const PromptLabPage = lazyPage(() => import("./pages/PromptLabPage"), "PromptLabPage");
-const ImprovementPage = lazyPage(() => import("./pages/ImprovementPage"), "ImprovementPage");
-const SkillsPage = lazyPage(() => import("./pages/SkillsPage"), "SkillsPage");
-const CostConsolePage = lazyPage(() => import("./pages/CostConsolePage"), "CostConsolePage");
-const SettingsPage = lazyPage(() => import("./pages/SettingsPage"), "SettingsPage");
-const ToolsPage = lazyPage(() => import("./pages/ToolsPage"), "ToolsPage");
+const ActivityHubPage = lazyPage(() => import("./pages/ActivityHubPage"), "ActivityHubPage");
+const AgentsHubPage = lazyPage(() => import("./pages/AgentsHubPage"), "AgentsHubPage");
 const ApprovalsPage = lazyPage(() => import("./pages/ApprovalsPage"), "ApprovalsPage");
+const ArtifactsPage = lazyPage(() => import("./pages/ArtifactsPage"), "ArtifactsPage");
+const ChatPage = lazyPage(() => import("./pages/ChatPage"), "ChatPage");
+const CommandPalette = lazyPage(() => import("./components/CommandPalette"), "CommandPalette");
+const CostConsolePage = lazyPage(() => import("./pages/CostConsolePage"), "CostConsolePage");
+const DevDiagnosticsPanel = lazyPage(() => import("./components/DevDiagnosticsPanel"), "DevDiagnosticsPanel");
+const IntegrationsHubPage = lazyPage(() => import("./pages/IntegrationsHubPage"), "IntegrationsHubPage");
+const PromptLabPage = lazyPage(() => import("./pages/PromptLabPage"), "PromptLabPage");
+const SessionsPage = lazyPage(() => import("./pages/SessionsPage"), "SessionsPage");
+const SettingsHubPage = lazyPage(() => import("./pages/SettingsHubPage"), "SettingsHubPage");
+const SystemPage = lazyPage(() => import("./pages/SystemPage"), "SystemPage");
 const TasksPage = lazyPage(() => import("./pages/TasksPage"), "TasksPage");
-const IntegrationsPage = lazyPage(() => import("./pages/IntegrationsPage"), "IntegrationsPage");
-const McpPage = lazyPage(() => import("./pages/McpPage"), "McpPage");
-const MeshPage = lazyPage(() => import("./pages/MeshPage"), "MeshPage");
-const NpuPage = lazyPage(() => import("./pages/NpuPage"), "NpuPage");
-const WorkspacesPage = lazyPage(() => import("./pages/WorkspacesPage"), "WorkspacesPage");
+const ToolsPage = lazyPage(() => import("./pages/ToolsPage"), "ToolsPage");
+
+export function deriveShellApprovalCount(
+  operateStatus: DashboardStateResponse | null,
+  localPromptCount: number,
+): number {
+  const backendPendingApprovals = operateStatus?.pendingApprovals ?? 0;
+  return Math.max(0, backendPendingApprovals + localPromptCount);
+}
 
 function PageLoadingFallback({ label }: { label: string }) {
   return (
@@ -86,172 +99,8 @@ function PageLoadingFallback({ label }: { label: string }) {
   );
 }
 
-type Tab =
-  | "addons"
-  | "onboarding"
-  | "dashboard"
-  | "system"
-  | "files"
-  | "memory"
-  | "agents"
-  | "office"
-  | "officeLab"
-  | "activity"
-  | "cron"
-  | "sessions"
-  | "chat"
-  | "assembly"
-  | "promptLab"
-  | "improvement"
-  | "skills"
-  | "costs"
-  | "settings"
-  | "workspaces"
-  | "tools"
-  | "approvals"
-  | "tasks"
-  | "integrations"
-  | "mcp"
-  | "mesh"
-  | "npu";
-
-type WorkSurface = "chat" | "cowork" | "code";
-
-const allTabs: Tab[] = [
-  "addons",
-  "onboarding",
-  "dashboard",
-  "system",
-  "files",
-  "memory",
-  "agents",
-  "office",
-  "officeLab",
-  "activity",
-  "cron",
-  "sessions",
-  "chat",
-  "assembly",
-  "promptLab",
-  "improvement",
-  "skills",
-  "costs",
-  "settings",
-  "workspaces",
-  "tools",
-  "approvals",
-  "tasks",
-  "integrations",
-  "mcp",
-  "mesh",
-  "npu",
-];
-
-const navItems: Array<{ id: Tab; label: string; code: string }> = appCopy.navItems;
-
-const nextStepByTab: Record<Tab, string> = appCopy.nextStepByTab;
-
-type PrimaryNavId = "home" | "work" | "observe" | "configure";
-
-interface SecondaryNavSection {
-  label: string;
-  hint: string;
-  items: Tab[];
-  simpleItems?: Tab[];
-}
-
-interface PrimaryNavMode {
-  id: PrimaryNavId;
-  label: string;
-  code: string;
-  description: string;
-  defaultTab: Tab;
-  sections: SecondaryNavSection[];
-}
-
-const primaryNavModes: PrimaryNavMode[] = [
-  {
-    id: "home",
-    label: "Home",
-    code: "HM",
-    description: "Start here for health, blockers, and where to intervene next.",
-    defaultTab: "dashboard",
-    sections: [
-      {
-        label: "Overview",
-        hint: "Daily command readouts and onboarding posture.",
-        items: ["dashboard", "onboarding"],
-        simpleItems: ["dashboard", "onboarding"],
-      },
-    ],
-  },
-  {
-    id: "work",
-    label: "Work",
-    code: "WK",
-    description: "Daily operator surfaces, queue management, and hands-on execution.",
-    defaultTab: "chat",
-    sections: [
-      {
-        label: "Daily loop",
-        hint: "The shortest path through chat, queue, and approvals.",
-        items: ["chat", "tasks", "approvals", "sessions", "office"],
-        simpleItems: ["chat", "tasks", "approvals", "office"],
-      },
-      {
-        label: "Builders",
-        hint: "Deeper orchestration and quality work when the task needs it.",
-        items: ["agents", "assembly", "promptLab", "improvement", "officeLab"],
-        simpleItems: ["agents"],
-      },
-    ],
-  },
-  {
-    id: "observe",
-    label: "Observe",
-    code: "OB",
-    description: "Operational visibility, traces, files, and runtime posture.",
-    defaultTab: "activity",
-    sections: [
-      {
-        label: "Signals",
-        hint: "Watch the machine and the workload move in real time.",
-        items: ["activity", "system", "costs", "cron"],
-        simpleItems: ["activity", "system", "costs"],
-      },
-      {
-        label: "Inspect",
-        hint: "Deeper state, storage, and multi-runtime health.",
-        items: ["memory", "files", "mesh", "npu"],
-        simpleItems: ["memory", "files"],
-      },
-    ],
-  },
-  {
-    id: "configure",
-    label: "Settings",
-    code: "CFG",
-    description: "Models, integrations, policies, workspace controls, and optional extensions.",
-    defaultTab: "settings",
-    sections: [
-      {
-        label: "Core setup",
-        hint: "Where provider, integration, and permission decisions should live.",
-        items: ["settings", "integrations", "tools", "workspaces"],
-        simpleItems: ["settings", "integrations"],
-      },
-      {
-        label: "Advanced",
-        hint: "Extend the platform without giving every admin page top-level weight.",
-        items: ["skills", "mcp", "addons"],
-        simpleItems: [],
-      },
-    ],
-  },
-];
-
 const refreshTopicRules: Array<{ topic: RefreshTopic; keywords: string[] }> = [
-  { topic: "dashboard", keywords: ["dashboard", "operator", "summit", "cron", "memory", "settings", "system", "onboarding", "llm"] },
+  { topic: "dashboard", keywords: ["dashboard", "operator", "summit", "cron", "memory", "settings", "system", "onboarding", "llm", "approval"] },
   { topic: "promptLab", keywords: ["prompt_pack", "promptlab", "prompt_lab", "prompt-pack"] },
   { topic: "chat", keywords: ["chat", "message", "session", "delegate", "proactive", "learned_memory", "llm", "provider", "model", "onboarding", "settings"] },
   { topic: "approvals", keywords: ["approval", "gatehouse"] },
@@ -291,125 +140,6 @@ function deriveRefreshTopics(event: RealtimeEvent): RefreshTopic[] {
   return [...topics];
 }
 
-function isTab(value: string | null): value is Tab {
-  if (!value) {
-    return false;
-  }
-  return allTabs.some((tab) => tab === value);
-}
-
-function isWorkSurface(value: string | null): value is WorkSurface {
-  return value === "chat" || value === "cowork" || value === "code";
-}
-
-function resolvePrimaryNav(tab: Tab): PrimaryNavId {
-  if (tab === "dashboard" || tab === "onboarding") {
-    return "home";
-  }
-  if (["chat", "tasks", "approvals", "sessions", "office", "officeLab", "agents", "assembly", "promptLab", "improvement"].includes(tab)) {
-    return "work";
-  }
-  if (["activity", "system", "files", "memory", "costs", "cron", "mesh", "npu"].includes(tab)) {
-    return "observe";
-  }
-  return "configure";
-}
-
-function readTabFromLocation(): Tab {
-  if (typeof window === "undefined") {
-    return "dashboard";
-  }
-
-  const url = new URL(window.location.href);
-  const queryTab = url.searchParams.get("tab");
-  if (isTab(queryTab)) {
-    return queryTab;
-  }
-
-  const hashTab = window.location.hash.startsWith("#")
-    ? window.location.hash.slice(1)
-    : window.location.hash;
-  if (isTab(hashTab)) {
-    return hashTab;
-  }
-
-  return "dashboard";
-}
-
-function readWorkSurfaceFromLocation(): WorkSurface {
-  if (typeof window === "undefined") {
-    return "chat";
-  }
-
-  const url = new URL(window.location.href);
-  const querySurface = url.searchParams.get("surface");
-  if (isWorkSurface(querySurface)) {
-    return querySurface;
-  }
-
-  return "chat";
-}
-
-const SidebarStatusFooter = memo(function SidebarStatusFooter({
-  streamState,
-  onboardingComplete,
-  uiMode,
-  setUiMode,
-}: {
-  streamState: EventStreamConnectionState;
-  onboardingComplete: boolean | null;
-  uiMode: "simple" | "advanced";
-  setUiMode: (mode: "simple" | "advanced") => void;
-}) {
-  const streamStatus = useEventStreamStatus();
-
-  return (
-    <footer className="sidebar-footer">
-      <div className="sidebar-health-card">
-        <div className="sidebar-health-row">
-          <span className="sidebar-footer-label">{appCopy.sidebar.stream}</span>
-          <StatusChip tone={streamStatus.state === "open" ? "live" : streamStatus.state === "error" ? "critical" : "warning"}>
-            {streamState}
-          </StatusChip>
-        </div>
-        <p className="sidebar-health-note">
-          {onboardingComplete === null
-            ? "Workspace readiness is still loading."
-            : onboardingComplete
-              ? "Operator surfaces are ready."
-              : "Launch Wizard still needs attention."}
-        </p>
-      </div>
-      <div className="sidebar-system-block">
-        <span className="sidebar-footer-label">Experience</span>
-        <div className="ui-experience-switch sidebar-experience-switch">
-          <button
-            type="button"
-            className={uiMode === "simple" ? "active" : ""}
-            onClick={() => setUiMode("simple")}
-          >
-            Beginner
-          </button>
-          <button
-            type="button"
-            className={uiMode === "advanced" ? "active" : ""}
-            onClick={() => setUiMode("advanced")}
-          >
-            Advanced
-          </button>
-        </div>
-        <span className="sidebar-footer-value sidebar-system-note">
-          {uiMode === "simple" ? "Reduced chrome, clearer defaults" : "Expanded controls and deeper views"}
-        </span>
-      </div>
-      <div className="sidebar-footer-meta">
-        <span>{appCopy.sidebar.mode}: {appCopy.sidebar.localMode}</span>
-        <ClockBadge />
-      </div>
-    </footer>
-  );
-});
-
 export function App() {
   const {
     mode: uiMode,
@@ -423,15 +153,10 @@ export function App() {
     activeWorkspaceId,
     setActiveWorkspaceId,
   } = useUiPreferences();
-  const [tab, setTab] = useState<Tab>(() => readTabFromLocation());
-  const [workSurface, setWorkSurface] = useState<WorkSurface>(() => readWorkSurfaceFromLocation());
+  const [route, setRoute] = useState<ResolvedRoute>(() => readRouteFromLocation());
   const [streamState, setStreamState] = useState<EventStreamConnectionState>("closed");
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [showBrandMark, setShowBrandMark] = useState(true);
-  const [showBrandWordmark, setShowBrandWordmark] = useState(true);
-  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
-  const [preferencesMenuOpen, setPreferencesMenuOpen] = useState(false);
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ workspaceId: string; name: string }>>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
@@ -439,14 +164,13 @@ export function App() {
   const [deviceAccessResolveBusy, setDeviceAccessResolveBusy] = useState(false);
   const [remoteApprovalPrompts, setRemoteApprovalPrompts] = useState<RemoteApprovalActionPrompt[]>([]);
   const [remoteApprovalResolveBusy, setRemoteApprovalResolveBusy] = useState(false);
+  const [operateStatus, setOperateStatus] = useState<DashboardStateResponse | null>(null);
   const [gatewayAccess, setGatewayAccess] = useState<GatewayAccessViewState>({
     status: "checking",
     message: "Verifying gateway reachability and access policy.",
   });
   const [gatewayAccessBusy, setGatewayAccessBusy] = useState(true);
   const [gatewayAccessRunId, setGatewayAccessRunId] = useState(0);
-  const moreMenuRef = useRef<HTMLDetailsElement | null>(null);
-  const preferencesMenuRef = useRef<HTMLDetailsElement | null>(null);
   const effectiveEffectsMode = useMemo(() => resolveEffectiveEffectsMode(effectsMode), [effectsMode]);
   const shellGatewayState = useMemo(
     () => deriveShellGatewayAccessState(gatewayAccess, streamState),
@@ -465,54 +189,25 @@ export function App() {
     }
   }, []);
 
-  const pushNotification = useCallback((tone: NotificationItem["tone"], message: string, groupKey?: string) => {
-    setNotifications((current) => {
-      return upsertNotificationItem(current, {
-        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        tone,
-        message,
-        timestamp: Date.now(),
-        groupKey,
-      });
-    });
-  }, []);
-
-  const activeDeviceAccessPrompt = deviceAccessPrompts[0];
-  const activeRemoteApprovalPrompt = remoteApprovalPrompts[0];
-  const closeCommandDeckMenus = useCallback(() => {
-    setMoreMenuOpen(false);
-    setPreferencesMenuOpen(false);
-  }, []);
-
-  useEffect(() => {
-    if (!moreMenuOpen && !preferencesMenuOpen) {
-      return;
+  const loadOperateStatus = useCallback(async () => {
+    try {
+      const { fetchDashboardState } = await import("./api/client");
+      const next = await fetchDashboardState();
+      setOperateStatus(next);
+    } catch {
+      // Keep the existing status snapshot if background refresh fails.
     }
+  }, []);
 
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) {
-        return;
-      }
-      if (moreMenuRef.current?.contains(target) || preferencesMenuRef.current?.contains(target)) {
-        return;
-      }
-      closeCommandDeckMenus();
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        closeCommandDeckMenus();
-      }
-    };
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [closeCommandDeckMenus, moreMenuOpen, preferencesMenuOpen]);
+  const pushNotification = useCallback((tone: NotificationItem["tone"], message: string, groupKey?: string) => {
+    setNotifications((current) => upsertNotificationItem(current, {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      tone,
+      message,
+      timestamp: Date.now(),
+      groupKey,
+    }));
+  }, []);
 
   const dismissDeviceAccessPrompt = useCallback((approvalId: string) => {
     setDeviceAccessPrompts((current) => current.filter((item) => item.approvalId !== approvalId));
@@ -520,6 +215,66 @@ export function App() {
 
   const dismissRemoteApprovalPrompt = useCallback((approvalId: string) => {
     setRemoteApprovalPrompts((current) => current.filter((item) => item.approvalId !== approvalId));
+  }, []);
+
+  const activeDeviceAccessPrompt = deviceAccessPrompts[0];
+  const activeRemoteApprovalPrompt = remoteApprovalPrompts[0];
+  const localApprovalPromptCount = deviceAccessPrompts.length + remoteApprovalPrompts.length;
+
+  const navigate = useCallback((nextRoute: ResolvedRoute) => {
+    setRoute(normalizeResolvedRoute(nextRoute));
+  }, []);
+
+  const handleSelectSpace = useCallback((space: Space) => {
+    const defaultRoute = space === "operate"
+      ? { space, page: "surface" as const, surface: "chat" as const }
+      : space === "observe"
+        ? { space, page: "activity" as const, tab: "activity" as const }
+        : { space, page: "settings" as const, tab: "general" as const };
+    navigate(defaultRoute);
+  }, [navigate]);
+
+  const handleSelectPage = useCallback((page: SpacePage) => {
+    if (page === "surface") {
+      navigate({ space: "operate", page: "surface", surface: route.page === "surface" ? route.surface : "chat" });
+      return;
+    }
+    const meta = PAGE_META[page];
+    if (meta.space === "observe" && page === "activity") {
+      navigate({ space: "observe", page, tab: "activity" });
+      return;
+    }
+    if (meta.space === "observe" && page === "artifacts") {
+      navigate({ space: "observe", page, tab: "memory" });
+      return;
+    }
+    if (meta.space === "configure" && page === "settings") {
+      navigate({ space: "configure", page, tab: route.page === "settings" ? route.tab : "general" });
+      return;
+    }
+    if (meta.space === "configure" && page === "integrations") {
+      navigate({ space: "configure", page, tab: route.page === "integrations" ? route.tab : "overview" });
+      return;
+    }
+    if (meta.space === "configure" && page === "agents") {
+      navigate({ space: "configure", page, tab: route.page === "agents" ? route.tab : "overview" });
+      return;
+    }
+    navigate({ space: meta.space, page });
+  }, [navigate, route.page, route.surface, route.tab]);
+
+  const handleSelectSurface = useCallback((surface: WorkSurface) => {
+    navigate({ space: "operate", page: "surface", surface });
+  }, [navigate]);
+
+  const handleOnboardingCompleted = useCallback(() => {
+    setOnboardingComplete(true);
+    navigate(DEFAULT_ROUTE);
+    void loadWorkspaceOptions();
+  }, [loadWorkspaceOptions, navigate]);
+
+  const retryGatewayAccess = useCallback(() => {
+    setGatewayAccessRunId((current) => current + 1);
   }, []);
 
   const handleResolveDeviceAccessPrompt = useCallback(async (decision: "approve" | "reject") => {
@@ -542,11 +297,7 @@ export function App() {
         `device-access:${activeDeviceAccessPrompt.approvalId}`,
       );
     } catch (error) {
-      pushNotification(
-        "error",
-        (error as Error).message,
-        `device-access-error:${activeDeviceAccessPrompt.approvalId}`,
-      );
+      pushNotification("error", (error as Error).message, `device-access-error:${activeDeviceAccessPrompt.approvalId}`);
     } finally {
       setDeviceAccessResolveBusy(false);
     }
@@ -566,25 +317,11 @@ export function App() {
         `remote-approval:${activeRemoteApprovalPrompt.approvalId}`,
       );
     } catch (error) {
-      pushNotification(
-        "error",
-        (error as Error).message,
-        `remote-approval-error:${activeRemoteApprovalPrompt.approvalId}`,
-      );
+      pushNotification("error", (error as Error).message, `remote-approval-error:${activeRemoteApprovalPrompt.approvalId}`);
     } finally {
       setRemoteApprovalResolveBusy(false);
     }
   }, [activeRemoteApprovalPrompt, dismissRemoteApprovalPrompt, pushNotification]);
-
-  const handleOnboardingCompleted = useCallback(() => {
-    setOnboardingComplete(true);
-    setTab("dashboard");
-    void loadWorkspaceOptions();
-  }, [loadWorkspaceOptions]);
-
-  const retryGatewayAccess = useCallback(() => {
-    setGatewayAccessRunId((current) => current + 1);
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -609,7 +346,12 @@ export function App() {
         }
         setOnboardingComplete(result.onboardingState?.completed ?? null);
         if (!result.onboardingState?.completed) {
-          setTab((current) => (current === "dashboard" ? "onboarding" : current));
+          setRoute((current) => {
+            if (current.space === "operate" && current.page === "surface") {
+              return normalizeResolvedRoute({ space: "configure", page: "settings", tab: "onboarding" });
+            }
+            return current;
+          });
         }
       })
       .catch((error) => {
@@ -670,11 +412,7 @@ export function App() {
           const prompt = parseDeviceAccessPrompt(event);
           if (prompt) {
             setDeviceAccessPrompts((current) => upsertDeviceAccessPrompt(current, prompt));
-            pushNotification(
-              "warning",
-              `${prompt.deviceLabel} is waiting for approval.`,
-              `device-access:${prompt.approvalId}`,
-            );
+            pushNotification("warning", `${prompt.deviceLabel} is waiting for approval.`, `device-access:${prompt.approvalId}`);
           }
         }
         if (event.eventType === "auth_device_request_resolved") {
@@ -687,11 +425,7 @@ export function App() {
           const prompt = parseRemoteApprovalActionPrompt(event);
           if (prompt) {
             setRemoteApprovalPrompts((current) => upsertRemoteApprovalPrompt(current, prompt));
-            pushNotification(
-              "warning",
-              `${prompt.kind} is waiting for a Mission Control decision.`,
-              `remote-approval:${prompt.approvalId}`,
-            );
+            pushNotification("warning", `${prompt.kind} is waiting for a Mission Control decision.`, `remote-approval:${prompt.approvalId}`);
           }
         }
         if (event.eventType === "approval_resolved") {
@@ -739,22 +473,36 @@ export function App() {
   }, [gatewayAccess.status, loadWorkspaceOptions]);
 
   useEffect(() => {
+    if (gatewayAccess.status !== "ready") {
+      setOperateStatus(null);
+      return;
+    }
+    void loadOperateStatus();
+  }, [gatewayAccess.status, loadOperateStatus]);
+
+  useRefreshSubscription("dashboard", () => loadOperateStatus(), {
+    enabled: gatewayAccess.status === "ready",
+    coalesceMs: 900,
+    staleMs: 20000,
+    pollIntervalMs: 15000,
+  });
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
     const url = new URL(window.location.href);
-    url.searchParams.set("tab", tab);
-    url.searchParams.set("surface", workSurface);
-    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
-    setDevDiagnosticsCurrentRoute(`${url.pathname}${url.search}${url.hash}`);
+    const search = buildRouteSearch(route);
+    window.history.replaceState(null, "", `${url.pathname}${search}${url.hash}`);
+    setDevDiagnosticsCurrentRoute(`${url.pathname}${search}${url.hash}`);
     recordClientDiagnostic({
       level: "info",
       category: "ui",
       event: "route.change",
-      message: `Switched to ${tab}`,
-      context: { tab, surface: workSurface },
+      message: `Switched to ${route.space}/${route.page}`,
+      context: { ...route },
     });
-  }, [tab, workSurface]);
+  }, [route]);
 
   useEffect(() => {
     setDevDiagnosticsCurrentEffectsMode(effectiveEffectsMode);
@@ -774,149 +522,85 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const navById = useMemo(() => new Map(navItems.map((item) => [item.id, item])), []);
-  const activeNav = navById.get(tab);
-  const activePrimaryMode = useMemo<PrimaryNavMode>(() => (
-    primaryNavModes.find((mode) => mode.id === resolvePrimaryNav(tab)) ?? primaryNavModes[0]!
-  ), [tab]);
-  const approvalSurfaceCount = deviceAccessPrompts.length + remoteApprovalPrompts.length;
-
-  const commandDeckSections = useMemo(() => {
-    return activePrimaryMode.sections
-      .map((section) => {
-        const preferredItems = section.simpleItems?.length
-          ? section.simpleItems
-          : section.items;
-        const items = preferredItems.filter((item, index, all) => all.indexOf(item) === index);
-        return {
-          ...section,
-          items,
-        };
-      })
-      .filter((section) => section.items.length > 0);
-  }, [activePrimaryMode.sections]);
-
-  const commandDeckNav = useMemo(() => {
-    const budget = uiMode === "simple" ? 4 : 5;
-    const allPreferredItems = commandDeckSections.flatMap((section) => section.items);
-    const uniqueItems = allPreferredItems.filter((item, index, all) => all.indexOf(item) === index);
-    const visibleItems = uniqueItems.slice(0, budget);
-
-    if (!visibleItems.includes(tab)) {
-      if (visibleItems.length >= budget) {
-        visibleItems.pop();
-      }
-      visibleItems.push(tab);
-    }
-
-    const visibleSet = new Set(visibleItems);
-    const overflowSections = activePrimaryMode.sections
-      .map((section) => ({
-        ...section,
-        items: section.items.filter((item) => !visibleSet.has(item)),
-      }))
-      .filter((section) => section.items.length > 0);
-
-    return {
-      visibleItems,
-      overflowSections,
-    };
-  }, [activePrimaryMode.sections, commandDeckSections, tab, uiMode]);
-
   const commandItems = useMemo(
     () => [
-      ...navItems.map((item) => ({
-        id: `tab:${item.id}`,
-        label: `Go to ${item.label}`,
-        keywords: [item.id, item.code],
-        run: () => {
-          closeCommandDeckMenus();
-          setTab(item.id);
-        },
+      ...Object.entries(SPACE_META).map(([space, meta]) => ({
+        id: `space:${space}`,
+        label: `Open ${meta.label}`,
+        keywords: [space, meta.label.toLowerCase()],
+        run: () => handleSelectSpace(space as Space),
+      })),
+      ...SPACE_PAGES.operate.map((item) => ({
+        id: `operate:${item.page}`,
+        label: item.page === "surface" ? "Open Chat surface" : `Open ${item.label}`,
+        keywords: [item.label.toLowerCase(), item.page],
+        run: () => item.page === "surface" ? handleSelectSurface("chat") : handleSelectPage(item.page),
+      })),
+      ...(["chat", "cowork", "code"] as const).map((surface) => ({
+        id: `surface:${surface}`,
+        label: `Open ${CHAT_MODE_PRESETS[surface].label}`,
+        keywords: [surface, CHAT_MODE_PRESETS[surface].label.toLowerCase()],
+        run: () => handleSelectSurface(surface),
       })),
       {
-        id: "mode:simple",
-        label: "Switch to Beginner experience",
-        keywords: ["beginner", "simple", "guided", "experience"],
-        run: () => {
-          closeCommandDeckMenus();
-          setUiMode("simple");
-        },
-      },
-      {
-        id: "mode:advanced",
-        label: "Switch to Advanced experience",
-        keywords: ["advanced", "full controls", "experience"],
-        run: () => {
-          closeCommandDeckMenus();
-          setUiMode("advanced");
-        },
+        id: "settings:open",
+        label: "Open Settings",
+        keywords: ["settings", "configure"],
+        run: () => navigate({ space: "configure", page: "settings", tab: "general" }),
       },
       {
         id: "density:compact",
         label: "Use Compact density",
         keywords: ["compact", "density", "layout"],
-        run: () => {
-          closeCommandDeckMenus();
-          setDensity("compact");
-        },
+        run: () => setDensity("compact"),
       },
       {
         id: "density:default",
         label: "Use Default density",
         keywords: ["default", "density", "layout"],
-        run: () => {
-          closeCommandDeckMenus();
-          setDensity("default");
-        },
+        run: () => setDensity("default"),
       },
       {
         id: "density:comfortable",
         label: "Use Comfortable density",
         keywords: ["comfortable", "density", "layout"],
-        run: () => {
-          closeCommandDeckMenus();
-          setDensity("comfortable");
-        },
+        run: () => setDensity("comfortable"),
+      },
+      {
+        id: "mode:simple",
+        label: "Switch to Beginner experience",
+        keywords: ["beginner", "simple", "guided", "experience"],
+        run: () => setUiMode("simple"),
+      },
+      {
+        id: "mode:advanced",
+        label: "Switch to Advanced experience",
+        keywords: ["advanced", "full controls", "experience"],
+        run: () => setUiMode("advanced"),
+      },
+      {
+        id: "effects:auto",
+        label: "Use automatic effects",
+        keywords: ["effects", "auto"],
+        run: () => setEffectsMode("auto"),
+      },
+      {
+        id: "effects:full",
+        label: "Use full effects",
+        keywords: ["effects", "full"],
+        run: () => setEffectsMode("full"),
+      },
+      {
+        id: "effects:reduced",
+        label: "Use reduced effects",
+        keywords: ["effects", "reduced"],
+        run: () => setEffectsMode("reduced"),
       },
       {
         id: "details:toggle",
         label: showTechnicalDetails ? "Hide technical details" : "Show technical details",
         keywords: ["technical", "details", "debug"],
-        run: () => {
-          closeCommandDeckMenus();
-          setShowTechnicalDetails(!showTechnicalDetails);
-        },
-      },
-      {
-        id: "surface:chat",
-        label: "Open Chat surface",
-        keywords: ["chat", "surface", "workspace"],
-        run: () => {
-          closeCommandDeckMenus();
-          setWorkSurface("chat");
-          setTab("chat");
-        },
-      },
-      {
-        id: "surface:cowork",
-        label: "Open Cowork surface",
-        keywords: ["cowork", "surface", "workspace", "delegate"],
-        run: () => {
-          closeCommandDeckMenus();
-          setWorkSurface("cowork");
-          setTab("chat");
-        },
-      },
-      {
-        id: "surface:code",
-        label: "Open Code surface",
-        keywords: ["code", "surface", "workspace", "implement"],
-        run: () => {
-          closeCommandDeckMenus();
-          setWorkSurface("code");
-          setTab("chat");
-        },
+        run: () => setShowTechnicalDetails(!showTechnicalDetails),
       },
       ...(isDevDiagnosticsEnabled()
         ? [{
@@ -927,95 +611,199 @@ export function App() {
         }]
         : []),
     ],
-    [closeCommandDeckMenus, diagnosticsOpen, setDensity, setShowTechnicalDetails, setUiMode, showTechnicalDetails],
+    [
+      diagnosticsOpen,
+      handleSelectPage,
+      handleSelectSpace,
+      handleSelectSurface,
+      navigate,
+      setDensity,
+      setEffectsMode,
+      setShowTechnicalDetails,
+      setUiMode,
+      showTechnicalDetails,
+    ],
   );
 
+  const currentPageLabel = getPageLabel(route);
+  const activePageDescription = route.page === "surface"
+    ? CHAT_MODE_PRESETS[route.surface ?? "chat"].summary
+    : PAGE_META[route.page].description;
+  const operateApprovalsCount = deriveShellApprovalCount(operateStatus, localApprovalPromptCount);
+  const operateActiveAgentsCount = operateStatus?.activeSubagents ?? 0;
+  const operateDailyCostUsd = operateStatus?.dailyCostUsd ?? 0;
+  const operateOpenTasksCount = (operateStatus?.taskStatusCounts ?? []).reduce((sum, item) => (
+    item.status === "done" ? sum : sum + item.count
+  ), 0);
+
+  const operateSurfaceTab = route.space === "operate" && route.page === "surface"
+    ? (route.surface ?? "chat")
+    : "chat";
+
+  const observeActivityTab = route.space === "observe" && route.page === "activity"
+    ? ((route.tab ?? "activity") as ActivityTab)
+    : "activity";
+
+  const observeArtifactsTab = route.space === "observe" && route.page === "artifacts"
+    ? ((route.tab ?? "memory") as ArtifactsTab)
+    : "memory";
+
+  const configureSettingsTab = route.space === "configure" && route.page === "settings"
+    ? ((route.tab ?? "general") as SettingsTab)
+    : "general";
+
+  const configureIntegrationsTab = route.space === "configure" && route.page === "integrations"
+    ? ((route.tab ?? "overview") as IntegrationsTab)
+    : "overview";
+
+  const configureAgentsTab = route.space === "configure" && route.page === "agents"
+    ? ((route.tab ?? "overview") as AgentsTab)
+    : "overview";
+
   const content = useMemo(() => {
-    if (tab === "addons") {
-      return <AddonsPage />;
-    }
-    if (tab === "onboarding") {
-      return <OnboardingPage onCompleted={handleOnboardingCompleted} />;
-    }
-    if (tab === "dashboard") {
-      return <DashboardPage onNavigate={(next: string) => setTab(next as Tab)} />;
-    }
-    if (tab === "system") {
-      return <SystemPage />;
-    }
-    if (tab === "files") {
-      return <FilesPage workspaceId={activeWorkspaceId} />;
-    }
-    if (tab === "memory") {
-      return <MemoryPage workspaceId={activeWorkspaceId} />;
-    }
-    if (tab === "agents") {
-      return <AgentsPage />;
-    }
-    if (tab === "office") {
-      return <OfficePage onOpenLab={() => setTab("officeLab")} />;
-    }
-    if (tab === "officeLab") {
-      return <OfficeLabPage onOpenImmersive={() => setTab("office")} />;
-    }
-    if (tab === "activity") {
-      return <ActivityPage />;
-    }
-    if (tab === "cron") {
-      return <CronPage />;
-    }
-    if (tab === "sessions") {
-      return <SessionsPage />;
-    }
-    if (tab === "chat") {
-      return <ChatPage workspaceId={activeWorkspaceId} surface={workSurface} lockSurface />;
-    }
-    if (tab === "assembly") {
-      return <AssemblyPage workspaceId={activeWorkspaceId} />;
-    }
-    if (tab === "promptLab") {
-      return <PromptLabPage workspaceId={activeWorkspaceId} />;
-    }
-    if (tab === "improvement") {
-      return <ImprovementPage workspaceId={activeWorkspaceId} />;
-    }
-    if (tab === "skills") {
-      return <SkillsPage />;
-    }
-    if (tab === "costs") {
-      return <CostConsolePage />;
-    }
-    if (tab === "settings") {
-      return <SettingsPage />;
-    }
-    if (tab === "workspaces") {
+    if (route.space === "operate") {
+      if (route.page === "surface") {
+        return (
+          <section className="space-page space-page-surface">
+            <ChatPage workspaceId={activeWorkspaceId} surface={route.surface} lockSurface />
+          </section>
+        );
+      }
+      if (route.page === "tasks") {
+        return (
+          <ShellPageFrame
+            eyebrow="Operate"
+            title="Trailboard"
+            subtitle="Track active work, blockers, and linked sessions without leaving the operator flow."
+          >
+            <TasksPage workspaceId={activeWorkspaceId} />
+          </ShellPageFrame>
+        );
+      }
       return (
-        <WorkspacesPage
+        <ShellPageFrame
+          eyebrow="Operate"
+          title="Approvals"
+          subtitle="Review risky actions, device access prompts, and operator decisions in one queue."
+        >
+          <ApprovalsPage />
+        </ShellPageFrame>
+      );
+    }
+
+    if (route.space === "observe") {
+      if (route.page === "activity") {
+        return (
+          <ActivityHubPage
+            workspaceId={activeWorkspaceId}
+            activeTab={observeActivityTab}
+            onTabChange={(tab: ActivityTab) => navigate({ space: "observe", page: "activity", tab })}
+          />
+        );
+      }
+      if (route.page === "sessions") {
+        return (
+          <ShellPageFrame
+            eyebrow="Observe"
+            title="Sessions"
+            subtitle="Inspect completed and active runs, timelines, and outcome summaries."
+          >
+            <SessionsPage />
+          </ShellPageFrame>
+        );
+      }
+      if (route.page === "artifacts") {
+        return (
+          <ArtifactsPage
+            workspaceId={activeWorkspaceId}
+            activeTab={observeArtifactsTab}
+            onTabChange={(tab: ArtifactsTab) => navigate({ space: "observe", page: "artifacts", tab })}
+          />
+        );
+      }
+      if (route.page === "costs") {
+        return (
+          <ShellPageFrame
+            eyebrow="Observe"
+            title="Costs"
+            subtitle="Monitor spend, provider usage, and runtime cost posture."
+          >
+            <CostConsolePage />
+          </ShellPageFrame>
+        );
+      }
+      if (route.page === "quality") {
+        return (
+          <ShellPageFrame
+            eyebrow="Observe"
+            title="Quality"
+            subtitle="Run prompt packs, inspect regressions, and benchmark reliability in one place."
+          >
+            <PromptLabPage workspaceId={activeWorkspaceId} />
+          </ShellPageFrame>
+        );
+      }
+      return (
+        <ShellPageFrame
+          eyebrow="Observe"
+          title="System"
+          subtitle="Machine, runtime, and infrastructure health for this Mission Control node."
+        >
+          <SystemPage />
+        </ShellPageFrame>
+      );
+    }
+
+    if (route.page === "settings") {
+      return (
+        <SettingsHubPage
+          activeTab={configureSettingsTab}
           activeWorkspaceId={activeWorkspaceId}
           onWorkspaceChange={setActiveWorkspaceId}
+          onTabChange={(tab: SettingsTab) => navigate({ space: "configure", page: "settings", tab })}
+          onOnboardingCompleted={handleOnboardingCompleted}
         />
       );
     }
-    if (tab === "tools") {
-      return <ToolsPage />;
+    if (route.page === "integrations") {
+      return (
+        <IntegrationsHubPage
+          activeTab={configureIntegrationsTab}
+          onTabChange={(tab: IntegrationsTab) => navigate({ space: "configure", page: "integrations", tab })}
+        />
+      );
     }
-    if (tab === "approvals") {
-      return <ApprovalsPage />;
+    if (route.page === "agents") {
+      return (
+        <AgentsHubPage
+          activeTab={configureAgentsTab}
+          onTabChange={(tab: AgentsTab) => navigate({ space: "configure", page: "agents", tab })}
+        />
+      );
     }
-    if (tab === "tasks") {
-      return <TasksPage workspaceId={activeWorkspaceId} />;
-    }
-    if (tab === "mesh") {
-      return <MeshPage />;
-    }
-    if (tab === "mcp") {
-      return <McpPage />;
-    }
-    if (tab === "npu") {
-      return <NpuPage />;
-    }
-    return <IntegrationsPage />;
-  }, [activeWorkspaceId, tab, workSurface, handleOnboardingCompleted, setActiveWorkspaceId]);
+    return (
+      <ShellPageFrame
+        eyebrow="Configure"
+        title="Tools"
+        subtitle="Manage tool access, grants, and operational safeguards."
+      >
+        <ToolsPage />
+      </ShellPageFrame>
+    );
+  }, [
+    activeWorkspaceId,
+    configureAgentsTab,
+    configureIntegrationsTab,
+    configureSettingsTab,
+    handleOnboardingCompleted,
+    navigate,
+    observeActivityTab,
+    observeArtifactsTab,
+    route.page,
+    route.space,
+    route.surface,
+    setActiveWorkspaceId,
+  ]);
 
   if (gatewayAccess.status !== "ready") {
     return (
@@ -1028,319 +816,107 @@ export function App() {
     );
   }
 
-  const currentModeDestinations = commandDeckNav.visibleItems
-    .map((tabId) => navById.get(tabId))
-    .filter((item): item is NonNullable<typeof activeNav> => Boolean(item));
+  const workspaceSelectOptions = [...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceId }]
+    .filter((item, index, arr) => arr.findIndex((other) => other.workspaceId === item.workspaceId) === index)
+    .map((item) => ({ value: item.workspaceId, label: item.name }));
 
   return (
     <div
+      className={`app-shell layout-shell theme-signal-noir ui-mode-${uiMode} ui-density-${density} ui-effects-${effectiveEffectsMode}${showTechnicalDetails ? "" : " ui-hide-technical"}`}
+      data-density={density}
       data-effects-mode={effectsMode}
       data-effective-effects-mode={effectiveEffectsMode}
-      className={`layout-shell layout-shell-command-deck theme-citadel-light ui-mode-${uiMode} ui-density-${density} ui-effects-${effectiveEffectsMode}${showTechnicalDetails ? "" : " ui-hide-technical"}`}
-      data-density={density}
     >
-      <header className="command-deck-shell app-topbar shell-topbar">
-        <div className="command-deck-zone command-deck-zone-left">
-          <div className="command-deck-brandbar">
-            <div className="command-deck-brand">
-              {showBrandMark ? (
-                <img
-                  src="/brand/goatcitadel-mark.png"
-                  alt="GoatCitadel mark"
-                  className="sidebar-brand-mark command-deck-brand-mark"
-                  onError={() => setShowBrandMark(false)}
-                />
-              ) : null}
-              <div className="command-deck-brand-copy">
-                {showBrandWordmark ? (
-                  <img
-                    src="/brand/goatcitadel-wordmark.png"
-                    alt="GoatCitadel"
-                    className="sidebar-brand-wordmark command-deck-brand-wordmark"
-                    onError={() => setShowBrandWordmark(false)}
-                  />
-                ) : <h1>{appCopy.brandTitle}</h1>}
-                <p className="command-deck-brand-kicker">{activePrimaryMode.label} command deck</p>
-              </div>
-            </div>
-          </div>
-          <div className="command-deck-navband">
-            <nav className="command-deck-nav" aria-label={`${activePrimaryMode.label} destinations`}>
-              {currentModeDestinations.map((item) => {
-                const isOfficeAlias = item.id === "office" && (tab === "office" || tab === "officeLab");
-                return (
-                  <button
-                    type="button"
-                    key={item.id}
-                    className={`command-deck-pill${tab === item.id || isOfficeAlias ? " active" : ""}`}
-                    onClick={() => {
-                      closeCommandDeckMenus();
-                      setTab(item.id);
-                    }}
-                  >
-                    <span className="nav-code">{item.code}</span>
-                    <span className="nav-label">{item.label}</span>
-                  </button>
-                );
-              })}
-              <details ref={moreMenuRef} className="command-deck-overflow" open={moreMenuOpen}>
-                <summary
-                  onClick={(event) => {
-                    event.preventDefault();
-                    setMoreMenuOpen((current) => {
-                      const next = !current;
-                      if (next) {
-                        setPreferencesMenuOpen(false);
-                      }
-                      return next;
-                    });
-                  }}
-                >
-                  More
-                </summary>
-                <div className="command-deck-overflow-panel">
-                  <div className="command-deck-overflow-block">
-                    <p className="command-deck-overflow-kicker">Spaces</p>
-                    <div className="command-deck-overflow-list command-deck-overflow-modes">
-                      {primaryNavModes.map((mode) => (
-                        <button
-                          type="button"
-                          key={mode.id}
-                          className={`command-deck-overflow-item${activePrimaryMode.id === mode.id ? " active" : ""}`}
-                          onClick={() => {
-                            closeCommandDeckMenus();
-                            setTab(mode.defaultTab);
-                          }}
-                        >
-                          <span className="nav-code">{mode.code}</span>
-                          <span className="nav-label">{mode.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {commandDeckNav.overflowSections.map((section) => (
-                    <div key={section.label} className="command-deck-overflow-block">
-                      <p className="command-deck-overflow-kicker">{section.label}</p>
-                      <span className="command-deck-overflow-hint">{section.hint}</span>
-                      <div className="command-deck-overflow-list">
-                        {section.items.map((tabId) => {
-                          const item = navById.get(tabId);
-                          if (!item) {
-                            return null;
-                          }
-                          const isOfficeAlias = item.id === "office" && (tab === "office" || tab === "officeLab");
-                          return (
-                            <button
-                              type="button"
-                              key={item.id}
-                              className={`command-deck-overflow-item${tab === item.id || isOfficeAlias ? " active" : ""}`}
-                              onClick={() => {
-                                closeCommandDeckMenus();
-                                setTab(item.id);
-                              }}
-                            >
-                              <span className="nav-code">{item.code}</span>
-                              <span className="nav-label">{item.label}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                  <div className="command-deck-overflow-note">
-                    <strong>{appCopy.nextStepTitle}:</strong> {nextStepByTab[tab]}
-                  </div>
-                </div>
-              </details>
-            </nav>
+      <header className="shell-bar">
+        <div className="shell-bar-brand">
+          <div className="shell-bar-brand-copy">
+            <p className="shell-bar-kicker">GoatCitadel Mission Control</p>
+            <h1 className="shell-bar-title">{SPACE_META[route.space].label}</h1>
           </div>
         </div>
-        <div className="command-deck-zone command-deck-zone-center">
-          <div className="command-deck-surface-band">
-            <div className="command-deck-surface-tabs" role="tablist" aria-label="Work surfaces">
-              {(["chat", "cowork", "code"] as const).map((surface) => (
-                <button
-                  type="button"
-                  key={surface}
-                  role="tab"
-                  aria-selected={tab === "chat" && workSurface === surface}
-                  className={`command-deck-surface-tab${tab === "chat" && workSurface === surface ? " active" : ""}`}
-                  onClick={() => {
-                    closeCommandDeckMenus();
-                    setWorkSurface(surface);
-                    setTab("chat");
-                  }}
-                >
-                  {CHAT_MODE_PRESETS[surface].label}
-                </button>
-              ))}
-            </div>
-            <p className="command-deck-surface-note">
-              {tab === "chat"
-                ? `${CHAT_MODE_PRESETS[workSurface].label} is active. ${CHAT_MODE_PRESETS[workSurface].summary}`
-                : "Jump directly into Chat, Cowork, or Code from anywhere in Mission Control."}
-            </p>
+        <nav className="space-nav" aria-label="Mission Control spaces">
+          {(Object.keys(SPACE_META) as Space[]).map((space) => (
+            <button
+              key={space}
+              type="button"
+              className={`space-nav-item${route.space === space ? " active" : ""}`}
+              onClick={() => handleSelectSpace(space)}
+            >
+              {SPACE_META[space].label}
+            </button>
+          ))}
+        </nav>
+        <div className="shell-bar-context">
+          <div className="shell-bar-page">
+            <p className="shell-bar-page-label">{currentPageLabel}</p>
+            <p className="shell-bar-page-note">{activePageDescription}</p>
           </div>
         </div>
-        <div className="command-deck-zone command-deck-zone-right">
-          <div className="app-topbar-actions command-deck-utilities command-deck-utility-band">
-            <div className="command-deck-utility-cluster command-deck-utility-cluster-primary">
-              <button
-                type="button"
-                className="shell-quick-action shell-command-trigger-topbar"
-                onClick={() => {
-                  closeCommandDeckMenus();
-                  setPaletteOpen(true);
-                }}
-              >
-                {appCopy.quickActionsButton}
-              </button>
-              <GlobalFreshnessPill streamState={streamState} />
-            </div>
-            <div className="command-deck-utility-cluster command-deck-utility-cluster-context">
-              <label className="ui-technical-toggle shell-workspace-picker">
-                <span className="shell-action-label">Workspace</span>
-                <GCSelect
-                  value={activeWorkspaceId}
-                  onChange={setActiveWorkspaceId}
-                  options={[...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceId }]
-                    .filter((item, index, arr) => arr.findIndex((other) => other.workspaceId === item.workspaceId) === index)
-                    .map((item) => ({ value: item.workspaceId, label: item.name }))}
-                />
-              </label>
-              <button
-                type="button"
-                className="shell-status-link"
-                onClick={() => {
-                  closeCommandDeckMenus();
-                  setTab("approvals");
-                }}
-              >
-                <StatusChip tone={approvalSurfaceCount > 0 ? "warning" : "success"}>
-                  {approvalSurfaceCount > 0 ? `${approvalSurfaceCount} approvals` : "Approvals clear"}
-                </StatusChip>
-              </button>
-            </div>
-            <div className="command-deck-utility-cluster command-deck-utility-cluster-settings">
-              <details ref={preferencesMenuRef} className="shell-preferences" open={preferencesMenuOpen}>
-                <summary
-                  onClick={(event) => {
-                    event.preventDefault();
-                    setPreferencesMenuOpen((current) => {
-                      const next = !current;
-                      if (next) {
-                        setMoreMenuOpen(false);
-                      }
-                      return next;
-                    });
-                  }}
-                >
-                  Preferences
-                </summary>
-                <div className="shell-preferences-panel">
-                  <div className="shell-preferences-group">
-                    <span className="shell-action-label">Density</span>
-                    <div className="ui-experience-switch ui-density-switch">
-                      <button
-                        type="button"
-                        className={density === "comfortable" ? "active" : ""}
-                        onClick={() => {
-                          closeCommandDeckMenus();
-                          setDensity("comfortable");
-                        }}
-                      >
-                        Comfortable
-                      </button>
-                      <button
-                        type="button"
-                        className={density === "default" ? "active" : ""}
-                        onClick={() => {
-                          closeCommandDeckMenus();
-                          setDensity("default");
-                        }}
-                      >
-                        Default
-                      </button>
-                      <button
-                        type="button"
-                        className={density === "compact" ? "active" : ""}
-                        onClick={() => {
-                          closeCommandDeckMenus();
-                          setDensity("compact");
-                        }}
-                      >
-                        Compact
-                      </button>
-                    </div>
-                  </div>
-                  <div className="shell-preferences-group">
-                    <span className="shell-action-label">Effects</span>
-                    <div className="ui-experience-switch ui-density-switch">
-                      <button
-                        type="button"
-                        className={effectsMode === "auto" ? "active" : ""}
-                        onClick={() => {
-                          closeCommandDeckMenus();
-                          setEffectsMode("auto");
-                        }}
-                      >
-                        Auto
-                      </button>
-                      <button
-                        type="button"
-                        className={effectsMode === "full" ? "active" : ""}
-                        onClick={() => {
-                          closeCommandDeckMenus();
-                          setEffectsMode("full");
-                        }}
-                      >
-                        Full
-                      </button>
-                      <button
-                        type="button"
-                        className={effectsMode === "reduced" ? "active" : ""}
-                        onClick={() => {
-                          closeCommandDeckMenus();
-                          setEffectsMode("reduced");
-                        }}
-                      >
-                        Reduced
-                      </button>
-                    </div>
-                  </div>
-                  <div className="shell-preferences-group shell-preferences-switches">
-                    <GCSwitch
-                      checked={showTechnicalDetails}
-                      onCheckedChange={(checked) => {
-                        closeCommandDeckMenus();
-                        setShowTechnicalDetails(checked);
-                      }}
-                      label="Technical details"
-                    />
-                  </div>
-                  <HelpHint
-                    label="Command deck guidance"
-                    text={nextStepByTab[tab]}
-                  />
-                  {isDevDiagnosticsEnabled() ? (
-                    <button
-                      type="button"
-                      className="shell-quick-action shell-preferences-diagnostics"
-                      onClick={() => {
-                        closeCommandDeckMenus();
-                        setDiagnosticsOpen((current) => !current);
-                      }}
-                    >
-                      {diagnosticsOpen ? "Hide diagnostics" : "Diagnostics"}
-                    </button>
-                  ) : null}
-                </div>
-              </details>
-            </div>
-          </div>
+        <div className="shell-bar-actions">
+          <button type="button" className="shell-command-trigger-topbar" onClick={() => setPaletteOpen(true)}>
+            {appCopy.quickActionsButton}
+          </button>
+          <label className="shell-workspace-picker">
+            <span className="shell-action-label">Workspace</span>
+            <GCSelect value={activeWorkspaceId} onChange={setActiveWorkspaceId} options={workspaceSelectOptions} />
+          </label>
+          <button
+            type="button"
+            className="shell-status-link"
+            onClick={() => navigate({ space: "operate", page: "approvals" })}
+          >
+            <StatusChip tone={operateApprovalsCount > 0 ? "warning" : "success"}>
+              {operateApprovalsCount > 0 ? `${operateApprovalsCount} approvals` : "Approvals clear"}
+            </StatusChip>
+          </button>
         </div>
       </header>
-      <main className="content shell-content shell-content-command-deck">
+
+      <div className="shell-secondary-nav">
+        {route.space === "operate" ? (
+          <nav className="surface-nav" aria-label="Operate destinations">
+            {(["chat", "cowork", "code"] as WorkSurface[]).map((surface) => (
+              <button
+                key={surface}
+                type="button"
+                className={`surface-nav-item${route.page === "surface" && operateSurfaceTab === surface ? " active" : ""}`}
+                onClick={() => handleSelectSurface(surface)}
+              >
+                {CHAT_MODE_PRESETS[surface].label}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={`surface-nav-item${route.page === "tasks" ? " active" : ""}`}
+              onClick={() => handleSelectPage("tasks")}
+            >
+              Tasks
+            </button>
+            <button
+              type="button"
+              className={`surface-nav-item${route.page === "approvals" ? " active" : ""}`}
+              onClick={() => handleSelectPage("approvals")}
+            >
+              Approvals
+            </button>
+          </nav>
+        ) : (
+          <nav className="secondary-page-nav" aria-label={`${SPACE_META[route.space].label} pages`}>
+            {SPACE_PAGES[route.space].map((item) => (
+              <button
+                key={item.page}
+                type="button"
+                className={`secondary-page-nav-item${route.page === item.page ? " active" : ""}`}
+                onClick={() => handleSelectPage(item.page)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        )}
+      </div>
+
+      <main className="shell-main">
         {notifications.length > 0 ? (
           <div className="shell-notification-region">
             <NotificationStack
@@ -1354,31 +930,37 @@ export function App() {
             {shellGatewayState.summary} {shellGatewayState.nextStep}
           </div>
         ) : null}
+        {route.space === "operate" ? (
+          <StatusStrip
+            approvalsCount={operateApprovalsCount}
+            activeAgentsCount={operateActiveAgentsCount}
+            dailyCostUsd={operateDailyCostUsd}
+            openTasksCount={operateOpenTasksCount}
+            onOpenApprovals={() => navigate({ space: "operate", page: "approvals" })}
+            onOpenAgents={() => navigate({ space: "configure", page: "agents", tab: "herd-live" })}
+            onOpenCosts={() => navigate({ space: "observe", page: "costs" })}
+            onOpenTasks={() => navigate({ space: "operate", page: "tasks" })}
+          />
+        ) : null}
         <PageErrorBoundary
-          resetKey={tab}
-          pageLabel={activeNav?.label ?? "Mission Control"}
-          onReturnToChat={() => setTab("chat")}
+          resetKey={`${route.space}:${route.page}:${route.surface ?? ""}:${route.tab ?? ""}`}
+          pageLabel={currentPageLabel}
+          onReturnToChat={() => navigate(DEFAULT_ROUTE)}
         >
-          <Suspense fallback={<PageLoadingFallback label={activeNav?.label ?? "Mission Control"} />}>
+          <Suspense fallback={<PageLoadingFallback label={currentPageLabel} />}>
             {content}
           </Suspense>
         </PageErrorBoundary>
       </main>
+
       {paletteOpen ? (
         <Suspense fallback={null}>
-          <CommandPalette
-            open={paletteOpen}
-            onClose={() => setPaletteOpen(false)}
-            items={commandItems}
-          />
+          <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={commandItems} />
         </Suspense>
       ) : null}
       {diagnosticsOpen && isDevDiagnosticsEnabled() ? (
         <Suspense fallback={null}>
-          <DevDiagnosticsPanel
-            open={diagnosticsOpen}
-            onClose={() => setDiagnosticsOpen(false)}
-          />
+          <DevDiagnosticsPanel open={diagnosticsOpen} onClose={() => setDiagnosticsOpen(false)} />
         </Suspense>
       ) : null}
       <DeviceAccessApprovalModal

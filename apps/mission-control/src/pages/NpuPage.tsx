@@ -25,9 +25,13 @@ interface NpuPageProps {
   settings?: RuntimeSettingsResponse | null;
 }
 
+type NpuStatusRecord = Awaited<ReturnType<typeof fetchNpuStatus>>;
+type NpuModelRecord = Awaited<ReturnType<typeof fetchNpuModels>>["items"][number];
+
 export function NpuPage({ settings }: NpuPageProps) {
-  const [status, setStatus] = useState<Awaited<ReturnType<typeof fetchNpuStatus>> | null>(null);
-  const [models, setModels] = useState<Awaited<ReturnType<typeof fetchNpuModels>>["items"]>([]);
+  const [status, setStatus] = useState<NpuStatusRecord | null>(null);
+  const [models, setModels] = useState<NpuModelRecord[]>([]);
+  const [modelCatalogError, setModelCatalogError] = useState<string | null>(null);
   const [npuEnabled, setNpuEnabled] = useState(settings?.npu.enabled ?? false);
   const [autoStart, setAutoStart] = useState(settings?.npu.autoStart ?? false);
   const [sidecarUrl, setSidecarUrl] = useState(settings?.npu.sidecarUrl ?? "http://127.0.0.1:11440");
@@ -45,6 +49,22 @@ export function NpuPage({ settings }: NpuPageProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const loadModels = async (statusRes: NpuStatusRecord): Promise<void> => {
+    if (!canLoadNpuModels(statusRes)) {
+      setModels([]);
+      setModelCatalogError(null);
+      return;
+    }
+    try {
+      const modelRes = await fetchNpuModels();
+      setModels(modelRes.items);
+      setModelCatalogError(null);
+    } catch (err) {
+      setModels([]);
+      setModelCatalogError((err as Error).message);
+    }
+  };
+
   const load = (options?: { background?: boolean }): Promise<void> => {
     const background = options?.background ?? false;
     if (background) {
@@ -53,10 +73,9 @@ export function NpuPage({ settings }: NpuPageProps) {
       setIsInitialLoading(true);
     }
     setError(null);
-    return Promise.all([fetchNpuStatus(), fetchNpuModels().catch(() => ({ items: [] })), fetchSettings()])
-      .then(([statusRes, modelRes, settingsRes]) => {
+    return Promise.all([fetchNpuStatus(), fetchSettings()])
+      .then(async ([statusRes, settingsRes]) => {
         setStatus(statusRes);
-        setModels(modelRes.items);
         setNpuEnabled(settingsRes.npu.enabled);
         setAutoStart(settingsRes.npu.autoStart);
         setSidecarUrl(settingsRes.npu.sidecarUrl);
@@ -65,6 +84,7 @@ export function NpuPage({ settings }: NpuPageProps) {
           autoStart: settingsRes.npu.autoStart,
           sidecarUrl: settingsRes.npu.sidecarUrl,
         });
+        await loadModels(statusRes);
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => {
@@ -133,8 +153,7 @@ export function NpuPage({ settings }: NpuPageProps) {
     try {
       const next = await startNpuRuntime();
       setStatus(next);
-      const modelRes = await fetchNpuModels().catch(() => ({ items: [] }));
-      setModels(modelRes.items);
+      await loadModels(next);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -148,6 +167,8 @@ export function NpuPage({ settings }: NpuPageProps) {
     try {
       const next = await stopNpuRuntime();
       setStatus(next);
+      setModels([]);
+      setModelCatalogError(null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -161,8 +182,7 @@ export function NpuPage({ settings }: NpuPageProps) {
     try {
       const next = await refreshNpuRuntime();
       setStatus(next);
-      const modelRes = await fetchNpuModels().catch(() => ({ items: [] }));
-      setModels(modelRes.items);
+      await loadModels(next);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -195,6 +215,7 @@ export function NpuPage({ settings }: NpuPageProps) {
       });
       const refreshed = await fetchNpuStatus();
       setStatus(refreshed);
+      await loadModels(refreshed);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -329,7 +350,15 @@ export function NpuPage({ settings }: NpuPageProps) {
             </tr>
           </thead>
           <tbody>
-            {models.length === 0 ? (
+            {!canLoadNpuModels(status) ? (
+              <tr>
+                <td colSpan={8}>Model catalog is unavailable until the sidecar is running and healthy.</td>
+              </tr>
+            ) : modelCatalogError ? (
+              <tr>
+                <td colSpan={8} className="error">{modelCatalogError}</td>
+              </tr>
+            ) : models.length === 0 ? (
               <tr>
                 <td colSpan={8}>No models reported by sidecar.</td>
               </tr>
@@ -352,3 +381,6 @@ export function NpuPage({ settings }: NpuPageProps) {
   );
 }
 
+function canLoadNpuModels(status: NpuStatusRecord | null): boolean {
+  return Boolean(status && status.processState === "running" && status.healthy);
+}

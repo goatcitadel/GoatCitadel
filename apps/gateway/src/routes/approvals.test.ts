@@ -142,4 +142,44 @@ describe("approvals routes", () => {
       decision: "approve",
     });
   });
+
+  it("bulk resolves pending approvals through the gateway", async () => {
+    const resolveApprovalsBulk = vi.fn(async () => ({
+      decision: "reject",
+      status: "pending",
+      resolvedCount: 6,
+      skippedCount: 1,
+      failedCount: 0,
+      results: [],
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      resolveApprovalsBulk,
+    } as never);
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals/bulk-resolve",
+      payload: {
+        decision: "reject",
+        status: "pending",
+        resolvedBy: "operator",
+        resolutionNote: "Clear pending approvals",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(resolveApprovalsBulk).toHaveBeenCalledWith({
+      decision: "reject",
+      status: "pending",
+      resolvedBy: "operator",
+      resolutionNote: "Clear pending approvals",
+    });
+    expect(response.json()).toMatchObject({
+      resolvedCount: 6,
+      skippedCount: 1,
+      failedCount: 0,
+    });
+  });
 });

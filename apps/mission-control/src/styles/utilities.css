@@ -1,0 +1,23 @@
+.stack-lg {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.stack-md {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.mobile-only {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .desktop-only {
+    display: none !important;
+  }
+
+  .mobile-only {
+    display: block;
+  }
+}

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useEmbeddedPageChrome } from "./EmbeddedPageChrome";
 
 interface PageHeaderProps {
   eyebrow?: string;
@@ -7,6 +8,7 @@ interface PageHeaderProps {
   hint?: ReactNode;
   actions?: ReactNode;
   className?: string;
+  forceVisible?: boolean;
 }
 
 export function PageHeader({
@@ -16,7 +18,12 @@ export function PageHeader({
   hint,
   actions,
   className,
+  forceVisible = false,
 }: PageHeaderProps) {
+  const embedded = useEmbeddedPageChrome();
+  if (embedded && !forceVisible) {
+    return null;
+  }
   const hasActions = Boolean(actions);
   const hasHint = Boolean(hint);
   const hasMeta = Boolean(subtitle || hint);

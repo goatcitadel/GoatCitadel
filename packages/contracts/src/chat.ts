@@ -4,6 +4,7 @@ import type { SkillSourceProvider } from "./skills.js";
 export type ChatProjectLifecycleStatus = "active" | "archived";
 export type ChatSessionScope = "mission" | "external";
 export type ChatSessionLifecycleStatus = "active" | "archived";
+export type ChatSessionOrigin = "operator" | "prompt_pack" | "system";
 export type ChatBindingTransport = "llm" | "integration";
 export type ChatMessageRole = "user" | "assistant" | "system";
 export type ChatAttachmentMediaType = "text" | "image" | "audio" | "video" | "binary";
@@ -72,6 +73,8 @@ export interface ChatSessionRecord {
   sessionKey: string;
   workspaceId?: string;
   scope: ChatSessionScope;
+  origin?: ChatSessionOrigin;
+  includeInHistory: boolean;
   title?: string;
   pinned: boolean;
   lifecycleStatus: ChatSessionLifecycleStatus;
@@ -84,6 +87,48 @@ export interface ChatSessionRecord {
   lastActivityAt: string;
   tokenTotal: number;
   costUsdTotal: number;
+}
+
+export interface ChatSessionCreateInput {
+  workspaceId?: string;
+  title?: string;
+  projectId?: string;
+  mode?: ChatMode;
+  origin?: ChatSessionOrigin;
+  includeInHistory?: boolean;
+}
+
+export interface ChatSessionListQuery {
+  scope?: ChatSessionScope | "all";
+  workspaceId?: string;
+  projectId?: string;
+  q?: string;
+  view?: ChatSessionLifecycleStatus | "all";
+  limit?: number;
+  cursor?: string;
+  includeHidden?: boolean;
+}
+
+export interface ChatSessionBulkArchiveInput {
+  workspaceId?: string;
+  scope?: ChatSessionScope | "all";
+  includeHidden?: boolean;
+}
+
+export interface ChatSessionBulkArchiveFailure {
+  sessionId: string;
+  error: string;
+}
+
+export interface ChatSessionBulkArchiveResult {
+  workspaceId: string;
+  scope: ChatSessionScope | "all";
+  attemptedCount: number;
+  archivedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  archivedSessionIds: string[];
+  failures: ChatSessionBulkArchiveFailure[];
 }
 
 export interface ChatSessionBindingRecord {

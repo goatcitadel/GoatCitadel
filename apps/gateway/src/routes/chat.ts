@@ -42,6 +42,7 @@ const listChatSessionsSchema = z.object({
   view: z.enum(["active", "archived", "all"]).optional(),
   limit: z.coerce.number().int().positive().max(1000).default(200),
   cursor: z.string().optional(),
+  includeHidden: z.enum(["true", "false", "1", "0"]).transform((value) => value === "true" || value === "1").optional(),
 });
 
 const sessionParamsSchema = z.object({
@@ -58,6 +59,14 @@ const createSessionSchema = z.object({
   title: z.string().optional(),
   projectId: z.string().optional(),
   mode: z.enum(["chat", "cowork", "code"]).optional(),
+  origin: z.enum(["operator", "prompt_pack", "system"]).optional(),
+  includeInHistory: z.boolean().optional(),
+});
+
+const bulkArchiveSessionsSchema = z.object({
+  workspaceId: z.string().min(1).optional(),
+  scope: z.enum(["mission", "external", "all"]).default("mission"),
+  includeHidden: z.boolean().optional(),
 });
 
 const updateSessionSchema = z.object({
@@ -653,6 +662,18 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const created = fastify.gateway.createChatSession(parsed.data);
       return reply.code(201).send(created);
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/archive-bulk", async (request, reply) => {
+    const parsed = bulkArchiveSessionsSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.gateway.archiveChatSessionsBulk(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

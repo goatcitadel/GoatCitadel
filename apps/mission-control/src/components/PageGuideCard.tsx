@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { globalCopy } from "../content/copy";
 import { useUiPreferences } from "../state/ui-preferences";
+import { useEmbeddedPageChrome } from "./EmbeddedPageChrome";
 
 interface PageGuideCardProps {
   pageId?: string;
@@ -15,6 +16,10 @@ interface PageGuideCardProps {
 }
 
 export function PageGuideCard(props: PageGuideCardProps) {
+  const embedded = useEmbeddedPageChrome();
+  if (embedded) {
+    return null;
+  }
   const { mode } = useUiPreferences();
   const compact = props.compact ?? true;
   const storageKey = props.pageId ? `goatcitadel.page_guide.${props.pageId}.${props.preferenceVersion ?? "v2"}` : null;

@@ -12,6 +12,8 @@ interface PanelProps {
   padding?: PanelPadding;
   className?: string;
   children: ReactNode;
+  collapsible?: boolean;
+  defaultExpanded?: boolean;
 }
 
 export function Panel({
@@ -22,8 +24,27 @@ export function Panel({
   padding = "default",
   className,
   children,
+  collapsible = false,
+  defaultExpanded = true,
 }: PanelProps) {
   const hasHeader = Boolean(title || subtitle || actions);
+  if (collapsible) {
+    return (
+      <details
+        className={`panel panel-${tone} panel-pad-${padding}${hasHeader ? " panel-has-header" : ""} panel-collapsible${className ? ` ${className}` : ""}`}
+        data-tone={tone}
+        data-padding={padding}
+        open={defaultExpanded}
+      >
+        <summary className="panel-summary">
+          {hasHeader ? (
+            <SectionHeader title={title ?? ""} subtitle={subtitle} actions={actions} />
+          ) : <span className="panel-summary-label">Details</span>}
+        </summary>
+        <div className="panel-body">{children}</div>
+      </details>
+    );
+  }
   return (
     <article
       className={`panel panel-${tone} panel-pad-${padding}${hasHeader ? " panel-has-header" : ""}${className ? ` ${className}` : ""}`}

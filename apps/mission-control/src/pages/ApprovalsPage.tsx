@@ -6,6 +6,7 @@ import {
   fetchDurableRun,
   fetchDurableRunTimeline,
   resolveApproval,
+  resolveApprovalsBulk,
   resumeDurableRun,
   type ApprovalReplayResponse,
   type ApprovalsResponse,
@@ -62,9 +63,12 @@ export function ApprovalsPage() {
   const [durableBusyByApprovalId, setDurableBusyByApprovalId] = useState<Record<string, boolean>>({});
   const [tracePreviewByApprovalId, setTracePreviewByApprovalId] = useState<Record<string, string[]>>({});
   const [pendingDecision, setPendingDecision] = useState<{ approvalId: string; decision: "approve" | "reject" } | null>(null);
+  const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
   const [pendingResumeApprovalId, setPendingResumeApprovalId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [summary, setSummary] = useState<string | null>(null);
   const resolveAction = useAction();
+  const bulkResolveAction = useAction();
 
   const load = useCallback(async () => {
     try {
@@ -95,6 +99,7 @@ export function ApprovalsPage() {
 
   const onResolve = async (approvalId: string, decision: "approve" | "reject") => {
     try {
+      setSummary(null);
       const result = await resolveAction.run(async () => resolveApproval(approvalId, decision));
       if (result.executedAction) {
         setError(
@@ -105,6 +110,23 @@ export function ApprovalsPage() {
       const replay = await fetchApprovalReplay(approvalId);
       setReplayById((prev) => ({ ...prev, [approvalId]: replay }));
     } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const onRejectAllPending = async () => {
+    try {
+      setError(null);
+      const result = await bulkResolveAction.run(async () => resolveApprovalsBulk({
+        decision: "reject",
+        status: "pending",
+        resolutionNote: "Bulk rejected from the approvals queue.",
+      }));
+      const message = `Rejected ${result.resolvedCount} pending approvals. Skipped ${result.skippedCount}. Failed ${result.failedCount}.`;
+      setSummary(message);
+      await load();
+    } catch (err) {
+      setSummary(null);
       setError((err as Error).message);
     }
   };
@@ -210,6 +232,14 @@ export function ApprovalsPage() {
     <div className="workflow-summary-strip">
       <StatusChip tone={data.items.length > 0 ? "warning" : "success"}>{data.items.length} pending</StatusChip>
       <StatusChip tone="muted">{Object.keys(replayById).length} replay trails loaded</StatusChip>
+      <button
+        type="button"
+        className="danger"
+        disabled={data.items.length === 0 || bulkResolveAction.pending}
+        onClick={() => setBulkRejectOpen(true)}
+      >
+        {bulkResolveAction.pending ? "Rejecting..." : "Reject all pending"}
+      </button>
     </div>
   );
 
@@ -232,6 +262,7 @@ export function ApprovalsPage() {
       />
       <div className="workflow-status-stack">
         {error ? <p className="error">{error}</p> : null}
+        {summary ? <p className="office-subtitle">{summary}</p> : null}
       </div>
       {data.items.length === 0 ? (
         <Panel
@@ -423,6 +454,22 @@ export function ApprovalsPage() {
           }
           void resumeFromCheckpoint(pendingResumeApprovalId).finally(() => {
             setPendingResumeApprovalId(null);
+          });
+        }}
+      />
+      <ConfirmModal
+        open={bulkRejectOpen}
+        title="Reject All Pending Approvals"
+        message={`Reject all ${data.items.length} pending approvals now? This does not approve or dismiss them locally; it resolves the pending queue with a reject decision and refreshes the shell counts afterward.`}
+        confirmLabel={bulkResolveAction.pending ? "Rejecting..." : "Reject all pending"}
+        danger
+        pending={bulkResolveAction.pending}
+        cancelDisabled={bulkResolveAction.pending}
+        disableDismiss={bulkResolveAction.pending}
+        onCancel={() => setBulkRejectOpen(false)}
+        onConfirm={() => {
+          void onRejectAllPending().finally(() => {
+            setBulkRejectOpen(false);
           });
         }}
       />

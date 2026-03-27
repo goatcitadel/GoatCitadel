@@ -4,6 +4,7 @@ import {
   fetchMemoryItemHistory,
   fetchMemoryItems,
   fetchMemoryQmdStats,
+  fetchSettings,
   forgetMemoryItem,
   patchMemoryItem,
 } from "../api/client";
@@ -58,6 +59,7 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [memoryAdminError, setMemoryAdminError] = useState<string | null>(null);
+  const [memoryAdminEnabled, setMemoryAdminEnabled] = useState(true);
   const [memoryItems, setMemoryItems] = useState<Array<{
     itemId: string;
     namespace: string;
@@ -94,29 +96,46 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
       setIsInitialLoading(true);
     }
     try {
-      const [filesRes, stats] = await Promise.all([
+      const [filesRes, stats, settings] = await Promise.all([
         fetchFilesList(".", 3000),
         fetchMemoryQmdStats(),
+        fetchSettings(),
       ]);
-      try {
-        const memoryRes = await fetchMemoryItems({ limit: 200, status: "all" });
-        setMemoryItems(memoryRes.items.map((item) => ({
-          itemId: item.itemId,
-          namespace: item.namespace,
-          title: item.title,
-          content: item.content,
-          pinned: item.pinned,
-          status: item.status,
-          updatedAt: item.updatedAt,
-          ttlOverrideSeconds: item.ttlOverrideSeconds,
-        })));
-        setSelectedMemoryItemId((current) => current ?? memoryRes.items[0]?.itemId ?? null);
-        setMemoryAdminError(null);
-      } catch (memoryErr) {
+      if (!settings.features.memoryLifecycleAdminV1Enabled) {
         setMemoryItems([]);
         setSelectedMemoryItemId(null);
         setMemoryHistory([]);
-        setMemoryAdminError((memoryErr as Error).message);
+        setMemoryAdminEnabled(false);
+        setMemoryAdminError(null);
+      } else {
+        try {
+          const memoryRes = await fetchMemoryItems({ limit: 200, status: "all" });
+          setMemoryItems(memoryRes.items.map((item) => ({
+            itemId: item.itemId,
+            namespace: item.namespace,
+            title: item.title,
+            content: item.content,
+            pinned: item.pinned,
+            status: item.status,
+            updatedAt: item.updatedAt,
+            ttlOverrideSeconds: item.ttlOverrideSeconds,
+          })));
+          setSelectedMemoryItemId((current) => current ?? memoryRes.items[0]?.itemId ?? null);
+          setMemoryAdminEnabled(true);
+          setMemoryAdminError(null);
+        } catch (memoryErr) {
+          const message = (memoryErr as Error).message;
+          setMemoryItems([]);
+          setSelectedMemoryItemId(null);
+          setMemoryHistory([]);
+          if (isMemoryLifecycleAdminDisabledError(message)) {
+            setMemoryAdminEnabled(false);
+            setMemoryAdminError(null);
+          } else {
+            setMemoryAdminEnabled(true);
+            setMemoryAdminError(message);
+          }
+        }
       }
       const scopedFiles = workspacePrefix
         ? filesRes.items
@@ -477,8 +496,11 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
           <HelpHint label="Memory lifecycle admin help" text="This panel lets you inspect, pin, and forget saved memory records directly. It is for operator review, not normal day-to-day chatting." />
         </>
       )} subtitle="Inspect, pin, and forget saved memory records directly when lifecycle admin is enabled.">
-        {memoryAdminError ? <p className="error">{memoryAdminError}</p> : null}
-        {memoryItems.length === 0 ? (
+        {!memoryAdminEnabled ? (
+          <p className="office-subtitle">
+            Memory lifecycle admin is disabled right now. File inventory and QMD context tracking are still available above.
+          </p>
+        ) : memoryAdminError ? <p className="error">{memoryAdminError}</p> : memoryItems.length === 0 ? (
           <p className="office-subtitle">No memory lifecycle records available.</p>
         ) : (
           <div className="split-grid">
@@ -623,6 +645,10 @@ function topLevelArea(relativePath: string): string {
   const normalized = relativePath.replaceAll("\\", "/");
   const [first] = normalized.split("/");
   return first && first.length > 0 ? first : "(root)";
+}
+
+function isMemoryLifecycleAdminDisabledError(message: string): boolean {
+  return message.includes("memoryLifecycleAdminV1Enabled") || message.includes("Feature flag");
 }
 
 function pickLatestTimestamp(current?: string, incoming?: string): string | undefined {

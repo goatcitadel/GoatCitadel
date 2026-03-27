@@ -6,6 +6,7 @@ import {
   fetchCronRunDiff,
   fetchCronJob,
   fetchCronJobs,
+  fetchSettings,
   pauseCronJob,
   retryCronReviewQueueItem,
   runCronJobNow,
@@ -49,6 +50,8 @@ export function CronPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isFallbackRefreshing, setIsFallbackRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reviewQueueEnabled, setReviewQueueEnabled] = useState(true);
+  const [reviewQueueError, setReviewQueueError] = useState<string | null>(null);
   const [reviewQueue, setReviewQueue] = useState<Array<{
     itemId: string;
     jobId: string;
@@ -68,12 +71,27 @@ export function CronPage() {
       setIsInitialLoading(true);
     }
     try {
-      const [response, review] = await Promise.all([
+      const [response, settings] = await Promise.all([
         fetchCronJobs(),
-        fetchCronReviewQueue(100).catch(() => ({ items: [] })),
+        fetchSettings(),
       ]);
+      const nextReviewQueueEnabled = settings.features.cronReviewQueueV1Enabled;
+      setReviewQueueEnabled(nextReviewQueueEnabled);
+      if (nextReviewQueueEnabled) {
+        try {
+          const review = await fetchCronReviewQueue(100);
+          setReviewQueue(review.items);
+          setReviewQueueError(null);
+        } catch (reviewErr) {
+          setReviewQueue([]);
+          setReviewQueueError((reviewErr as Error).message);
+        }
+      } else {
+        setReviewQueue([]);
+        setReviewQueueError(null);
+        setSelectedRunDiff(null);
+      }
       setData(response);
-      setReviewQueue(review.items);
       setSelectedJobId((current) => current ?? response.items[0]?.jobId ?? null);
     } finally {
       if (background) {
@@ -321,7 +339,9 @@ export function CronPage() {
         actions={(
           <div className="workflow-summary-strip">
             <StatusChip tone="muted">{data.items.length} jobs</StatusChip>
-            <StatusChip tone={reviewQueue.length > 0 ? "warning" : "success"}>{reviewQueue.length} review items</StatusChip>
+            <StatusChip tone={!reviewQueueEnabled ? "muted" : reviewQueue.length > 0 ? "warning" : "success"}>
+              {reviewQueueEnabled ? `${reviewQueue.length} review items` : "Review queue off"}
+            </StatusChip>
             {selectedJob ? <StatusChip tone={selectedJob.enabled ? "success" : "muted"}>{selectedJob.jobId}</StatusChip> : null}
           </div>
         )}
@@ -482,7 +502,11 @@ export function CronPage() {
       </Panel>
 
       <Panel title="Review Queue" subtitle="Flagged or notable cron outputs that need operator review, diff check, or retry.">
-        {reviewQueue.length === 0 ? (
+        {!reviewQueueEnabled ? (
+          <p className="office-subtitle">
+            Review queue is disabled right now. Scheduled jobs still appear above and can be run or edited normally.
+          </p>
+        ) : reviewQueueError ? <p className="error">{reviewQueueError}</p> : reviewQueue.length === 0 ? (
           <p className="office-subtitle">No review items recorded yet.</p>
         ) : (
           <table>

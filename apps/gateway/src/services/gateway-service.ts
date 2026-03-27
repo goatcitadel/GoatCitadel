@@ -69,6 +69,8 @@ import type {
   DeviceAccessRequestStatus,
   DeviceAccessRequestStatusResponse,
   DeploymentProfile,
+  ApprovalBulkResolveInput,
+  ApprovalBulkResolveResult,
   ApprovalCreateInput,
   ApprovalReplayEvent,
   ApprovalRequest,
@@ -108,8 +110,12 @@ import type {
   ChatRetrievalMode,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
+  ChatSessionBulkArchiveInput,
+  ChatSessionBulkArchiveResult,
+  ChatSessionCreateInput,
   ChatSessionPrefsRecord,
   ChatSessionBindingRecord,
+  ChatSessionListQuery,
   ChatSessionRecord,
   ChatSessionPrefsPatch,
   ChatSpecialistCandidateCreateInput,
@@ -891,16 +897,6 @@ const RUNTIME_GUIDANCE_DOC_TYPES: GuidanceDocType[] = ["goatcitadel", "agents", 
 const MAX_RUNTIME_GUIDANCE_CHARS = 6000;
 const GUIDANCE_DEBUG_KILL_SWITCH_ENV = "GOATCITADEL_DISABLE_GUIDANCE_INJECTION";
 
-interface ChatSessionListQuery {
-  scope?: "mission" | "external" | "all";
-  workspaceId?: string;
-  projectId?: string;
-  q?: string;
-  view?: "active" | "archived" | "all";
-  limit?: number;
-  cursor?: string;
-}
-
 type SessionAutonomyPrefs = SessionAutonomyPrefsRecord;
 
 interface ProactiveTriggerInput {
@@ -1668,6 +1664,7 @@ export class GatewayService {
     const workspaceId = this.normalizeWorkspaceId(query.workspaceId);
     const scope = query.scope ?? "all";
     const view = query.view ?? "active";
+    const includeHidden = query.includeHidden ?? false;
     const limit = Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200)));
     const allSessions = this.storage.sessions.list(20000);
     const projects = this.storage.chatProjects.list("all", 2000, workspaceId);
@@ -1684,6 +1681,9 @@ export class GatewayService {
     });
 
     records = records.filter((record) => this.normalizeWorkspaceId(record.workspaceId) === workspaceId);
+    if (!includeHidden) {
+      records = records.filter((record) => record.includeInHistory);
+    }
 
     if (scope !== "all") {
       records = records.filter((record) => record.scope === scope);
@@ -1737,12 +1737,7 @@ export class GatewayService {
     return records.slice(0, limit);
   }
 
-  public createChatSession(input: {
-    workspaceId?: string;
-    title?: string;
-    projectId?: string;
-    mode?: ChatMode;
-  }): ChatSessionRecord {
+  public createChatSession(input: ChatSessionCreateInput = {}): ChatSessionRecord {
     const workspaceId = this.normalizeWorkspaceId(input.workspaceId);
     const peer = `chat_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
     const route = {
@@ -1769,12 +1764,12 @@ export class GatewayService {
     this.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
     this.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
     this.ensureChatSessionRuntimeGrants(resolution.sessionId);
-    if (input.title?.trim()) {
-      this.storage.chatSessionMeta.patch(resolution.sessionId, {
-        workspaceId,
-        title: input.title.trim(),
-      }, now);
-    }
+    this.storage.chatSessionMeta.patch(resolution.sessionId, {
+      workspaceId,
+      title: input.title?.trim() ? input.title.trim() : undefined,
+      origin: input.origin,
+      includeInHistory: input.includeInHistory,
+    }, now);
     this.storage.chatSessionBindings.upsert({
       sessionId: resolution.sessionId,
       workspaceId,
@@ -1897,6 +1892,43 @@ export class GatewayService {
     return {
       deleted: result.deleted,
       sessionId,
+    };
+  }
+
+  public async archiveChatSessionsBulk(input: ChatSessionBulkArchiveInput = {}): Promise<ChatSessionBulkArchiveResult> {
+    const workspaceId = this.normalizeWorkspaceId(input.workspaceId);
+    const scope = input.scope ?? "mission";
+    const candidates = this.listChatSessions({
+      workspaceId,
+      scope,
+      view: "active",
+      limit: 20_000,
+      includeHidden: input.includeHidden ?? false,
+    });
+    const archivedSessionIds: string[] = [];
+    const failures: ChatSessionBulkArchiveResult["failures"] = [];
+
+    for (const session of candidates) {
+      try {
+        const archived = this.archiveChatSession(session.sessionId);
+        archivedSessionIds.push(archived.sessionId);
+      } catch (error) {
+        failures.push({
+          sessionId: session.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return {
+      workspaceId,
+      scope,
+      attemptedCount: candidates.length,
+      archivedCount: archivedSessionIds.length,
+      skippedCount: 0,
+      failedCount: failures.length,
+      archivedSessionIds,
+      failures,
     };
   }
 
@@ -8360,6 +8392,62 @@ export class GatewayService {
 
   public listApprovals(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
     return this.storage.approvals.list(status, limit);
+  }
+
+  public async resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult> {
+    const statusFilter = input.status ?? "pending";
+    const items = this.storage.approvals.list(statusFilter, 10_000);
+    const results: ApprovalBulkResolveResult["items"] = [];
+
+    for (const approval of items) {
+      try {
+        const result = await this.resolveApproval(approval.approvalId, {
+          decision: input.decision,
+          resolvedBy: input.resolvedBy,
+          resolutionNote: input.resolutionNote,
+        });
+        results.push({
+          approvalId: approval.approvalId,
+          outcome: "resolved",
+          status: result.approval.status,
+        });
+      } catch (error) {
+        if (error instanceof ConflictError) {
+          let status: ApprovalRequest["status"] | undefined;
+          try {
+            status = this.storage.approvals.get(approval.approvalId).status;
+          } catch {
+            status = undefined;
+          }
+          results.push({
+            approvalId: approval.approvalId,
+            outcome: "skipped",
+            status,
+            error: error.message,
+          });
+          continue;
+        }
+        results.push({
+          approvalId: approval.approvalId,
+          outcome: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const resolvedCount = results.filter((item) => item.outcome === "resolved").length;
+    const skippedCount = results.filter((item) => item.outcome === "skipped").length;
+    const failedCount = results.filter((item) => item.outcome === "failed").length;
+
+    return {
+      decision: input.decision,
+      statusFilter,
+      attemptedCount: results.length,
+      resolvedCount,
+      skippedCount,
+      failedCount,
+      items: results,
+    };
   }
 
   public getApprovalReplay(approvalId: string, replayedBy = "operator"): ApprovalReplayResult {
@@ -15923,6 +16011,21 @@ function calculateSavings(originalTokens: number, distilledTokens: number): numb
   return Number((((originalTokens - distilledTokens) / originalTokens) * 100).toFixed(2));
 }
 
+function parseOptionalPositiveInt(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function findPlanPhase(plan: OrchestrationPlan, phaseId: string) {
   for (const wave of plan.waves) {
     const phase = wave.phases.find((item) => item.phaseId === phaseId);
@@ -16132,6 +16235,8 @@ function toChatSessionRecord(
   meta: {
     workspaceId?: string;
     title?: string;
+    origin?: "operator" | "prompt_pack" | "system";
+    includeInHistory: boolean;
     pinned: boolean;
     lifecycleStatus: "active" | "archived";
     archivedAt?: string;
@@ -16143,6 +16248,8 @@ function toChatSessionRecord(
     sessionKey: session.sessionKey,
     workspaceId: meta.workspaceId ?? project?.workspaceId,
     scope: session.channel === "mission" ? "mission" : "external",
+    origin: meta.origin,
+    includeInHistory: meta.includeInHistory,
     title: meta.title ?? session.displayName,
     pinned: meta.pinned,
     lifecycleStatus: meta.lifecycleStatus,

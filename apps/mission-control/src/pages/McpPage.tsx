@@ -6,6 +6,7 @@ import {
   createMcpServer,
   deleteMcpServer,
   disconnectMcpServer,
+  fetchSettings,
   fetchMcpTemplateDiscovery,
   fetchMcpTemplates,
   fetchMcpServers,
@@ -91,6 +92,8 @@ export function McpPage() {
   }>>([]);
   const [templates, setTemplates] = useState<McpTemplateRecord[]>([]);
   const [templateDiscovery, setTemplateDiscovery] = useState<McpTemplateDiscoveryRecord[]>([]);
+  const [templateDiscoveryEnabled, setTemplateDiscoveryEnabled] = useState(true);
+  const [templateDiscoveryError, setTemplateDiscoveryError] = useState<string | null>(null);
   const [connectorRecords, setConnectorRecords] = useState<ConnectorRecord[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [tools, setTools] = useState<Array<{
@@ -144,15 +147,29 @@ export function McpPage() {
   }>>({});
 
   const loadServers = useCallback(async () => {
-    const [response, templateResponse, discoveryResponse, connectorResponse] = await Promise.all([
+    const [response, templateResponse, connectorResponse, settingsResponse] = await Promise.all([
       fetchMcpServers(),
       fetchMcpTemplates(),
-      fetchMcpTemplateDiscovery().catch(() => ({ items: [] })),
       fetchConnectorRecords("mcp_server"),
+      fetchSettings(),
     ]);
+    const nextTemplateDiscoveryEnabled = settingsResponse.features.connectorDiagnosticsV1Enabled;
+    setTemplateDiscoveryEnabled(nextTemplateDiscoveryEnabled);
+    if (nextTemplateDiscoveryEnabled) {
+      try {
+        const discoveryResponse = await fetchMcpTemplateDiscovery();
+        setTemplateDiscovery(discoveryResponse.items);
+        setTemplateDiscoveryError(null);
+      } catch (err) {
+        setTemplateDiscovery([]);
+        setTemplateDiscoveryError(formatMcpError((err as Error).message));
+      }
+    } else {
+      setTemplateDiscovery([]);
+      setTemplateDiscoveryError(null);
+    }
     setServers(response.items);
     setTemplates(templateResponse.items);
-    setTemplateDiscovery(discoveryResponse.items);
     setConnectorRecords(connectorResponse.items);
     setSelectedServerId((current) => {
       if (current && response.items.some((item) => item.serverId === current)) {
@@ -624,7 +641,11 @@ export function McpPage() {
         <p className="office-subtitle">
           Before installing a template, check whether required auth, command, or URL settings are ready.
         </p>
-        {templateDiscovery.length === 0 ? (
+        {!templateDiscoveryEnabled ? (
+          <p className="office-subtitle">Template discovery readiness is disabled right now. You can still install templates manually.</p>
+        ) : templateDiscoveryError ? (
+          <p className="error">{templateDiscoveryError}</p>
+        ) : templateDiscovery.length === 0 ? (
           <p className="office-subtitle">Discovery metadata is unavailable right now. You can still install templates manually.</p>
         ) : (
           <table>

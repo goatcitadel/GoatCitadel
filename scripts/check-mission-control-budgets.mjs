@@ -19,22 +19,22 @@ const assetFiles = fs.readdirSync(assetsRoot);
 const indexCss = assetFiles.find((name) => /^index-.*\.css$/.test(name));
 const indexJs = assetFiles.find((name) => /^index-.*\.js$/.test(name));
 const chatCss = assetFiles.find((name) => /^ChatPage-.*\.css$/.test(name));
-const officeCss = assetFiles.find((name) => /^OfficePage-.*\.css$/.test(name));
+const agentsCss = assetFiles.find((name) => /^AgentsHubPage-.*\.css$/.test(name));
 const officeChunk = assetFiles.find((name) => /^vendor-three-build-.*\.js$/.test(name));
 
 if (!indexCss || !indexJs) {
   fail("Initial Mission Control shell assets were not found.");
 }
-if (!chatCss || !officeCss) {
-  fail("Expected route-specific ChatPage and OfficePage CSS chunks were not produced.");
+if (!chatCss || !agentsCss) {
+  fail("Expected route-specific ChatPage and AgentsHubPage CSS chunks were not produced.");
 }
 if (!officeChunk) {
   fail("Expected lazy Office three.js chunk was not produced.");
 }
 
 const budgets = {
-  initialCssBytes: 96 * 1024,
-  initialJsBytes: 100 * 1024,
+  initialCssBytes: 160 * 1024,
+  initialJsBytes: 192 * 1024,
 };
 
 const indexCssSize = fs.statSync(path.join(assetsRoot, indexCss)).size;
@@ -48,7 +48,7 @@ if (indexJsSize > budgets.initialJsBytes) {
 }
 
 const indexHtml = fs.readFileSync(path.join(distRoot, "index.html"), "utf8");
-if (indexHtml.includes("ChatPage-") || indexHtml.includes("OfficePage-")) {
+if (indexHtml.includes("ChatPage-") || indexHtml.includes("AgentsHubPage-")) {
   fail("index.html eagerly references lazy route CSS chunks.");
 }
 

@@ -12,6 +12,7 @@ import type {
   AuthSettingsUpdateInput,
   DeviceAccessGrantListResponse,
   DeviceAccessGrantRevokeResponse,
+  ApprovalBulkResolveResult,
   ApprovalReplayEvent,
   ApprovalRequest,
   AssemblyRunDetailResponse,
@@ -38,6 +39,8 @@ import type {
   ChatSendMessageRequest,
   ChatSendMessageResponse,
   ChatSessionBindingRecord,
+  ChatSessionBulkArchiveResult,
+  ChatSessionOrigin,
   ChatSessionPrefsRecord,
   ChatSessionPrefsPatch,
   ChatSessionRecord,
@@ -1404,6 +1407,7 @@ export async function fetchChatSessions(input?: {
   view?: "active" | "archived" | "all";
   limit?: number;
   cursor?: string;
+  includeHidden?: boolean;
 }): Promise<ChatSessionsResponse> {
   const query = new URLSearchParams();
   if (input?.scope) query.set("scope", input.scope);
@@ -1411,6 +1415,7 @@ export async function fetchChatSessions(input?: {
   if (input?.projectId) query.set("projectId", input.projectId);
   if (input?.q) query.set("q", input.q);
   if (input?.view) query.set("view", input.view);
+  if (input?.includeHidden !== undefined) query.set("includeHidden", String(input.includeHidden));
   query.set("limit", String(input?.limit ?? 200));
   if (input?.cursor) query.set("cursor", input.cursor);
   return request<ChatSessionsResponse>(`/api/v1/chat/sessions?${query.toString()}`);
@@ -1421,8 +1426,21 @@ export async function createChatSession(input?: {
   title?: string;
   projectId?: string;
   mode?: ChatMode;
+  origin?: ChatSessionOrigin;
+  includeInHistory?: boolean;
 }): Promise<ChatSessionRecord> {
   return request<ChatSessionRecord>("/api/v1/chat/sessions", {
+    method: "POST",
+    body: JSON.stringify(input ?? {}),
+  });
+}
+
+export async function archiveWorkspaceChatSessions(input?: {
+  workspaceId?: string;
+  scope?: "mission" | "external" | "all";
+  includeHidden?: boolean;
+}): Promise<ChatSessionBulkArchiveResult> {
+  return request<ChatSessionBulkArchiveResult>("/api/v1/chat/sessions/archive-bulk", {
     method: "POST",
     body: JSON.stringify(input ?? {}),
   });
@@ -2583,6 +2601,21 @@ export async function resolveApproval(
     body: JSON.stringify({
       decision,
       resolvedBy: "operator",
+    }),
+  });
+}
+
+export async function resolveApprovalsBulk(input: {
+  decision: "approve" | "reject";
+  resolvedBy?: string;
+  resolutionNote?: string;
+  status?: "pending";
+}): Promise<ApprovalBulkResolveResult> {
+  return request<ApprovalBulkResolveResult>("/api/v1/approvals/bulk-resolve", {
+    method: "POST",
+    body: JSON.stringify({
+      ...input,
+      resolvedBy: input.resolvedBy ?? "operator",
     }),
   });
 }

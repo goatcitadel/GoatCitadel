@@ -34,6 +34,8 @@ function makeSession(
     sessionKey: "mission:operator:chat_123456",
     workspaceId: "default",
     scope: "mission",
+    origin: "operator",
+    includeInHistory: true,
     title: undefined,
     pinned: false,
     lifecycleStatus: "active",

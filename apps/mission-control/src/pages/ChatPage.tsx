@@ -36,6 +36,7 @@ import {
   acceptChatDelegation,
   approveChatTool,
   archiveChatSession,
+  archiveWorkspaceChatSessions,
   assignChatSessionProject,
   cancelChatTurn,
   createMcpServer,
@@ -102,6 +103,7 @@ import {
 import { ChatThreadView, type ChatThreadNotice } from "../components/chat/ChatThreadView";
 import type { ChatStreamStatus } from "../components/chat/ChatStreamStatusBar";
 import { ChatComposerPlusMenu } from "../components/ChatComposerPlusMenu";
+import { ConfirmModal } from "../components/ConfirmModal";
 import { ChatModeSwitch } from "../components/ChatModeSwitch";
 import { ChatModelPicker, type ChatModelProviderOption } from "../components/ChatModelPicker";
 import { ChatTraceCard } from "../components/ChatTraceCard";
@@ -208,6 +210,8 @@ type SessionControlPending =
   | "delete"
   | "project"
   | "binding";
+
+type ChatHistoryView = "active" | "archived";
 
 function normalizeComparableAssistantContent(value: string | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
@@ -415,6 +419,7 @@ export function ChatPage({
   const [projects, setProjects] = useState<ChatProjectsResponse | null>(null);
   const [sessions, setSessions] = useState<ChatSessionsResponse | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("all");
+  const [historyView, setHistoryView] = useState<ChatHistoryView>("active");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [thread, setThread] = useState<ChatThreadResponse | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
@@ -456,6 +461,8 @@ export function ChatPage({
   const [showProjectCreate, setShowProjectCreate] = useState(false);
   const [renameTitle, setRenameTitle] = useState("");
   const [sessionControlPending, setSessionControlPending] = useState<SessionControlPending>(null);
+  const [archiveWorkspacePending, setArchiveWorkspacePending] = useState(false);
+  const [archiveWorkspaceConfirmOpen, setArchiveWorkspaceConfirmOpen] = useState(false);
   const [integrationConnectionId, setIntegrationConnectionId] = useState("");
   const [integrationTarget, setIntegrationTarget] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
@@ -486,17 +493,17 @@ export function ChatPage({
     loadModelsForProvider,
   } = useProviderModelCatalog("chat");
 
-  const loadSidebar = useCallback(async () => {
+  const loadSidebar = useCallback(async (nextHistoryView: ChatHistoryView = historyView) => {
     recordClientDiagnostic({
       level: "debug",
       category: "chat",
       event: "sidebar.load",
       message: "Refreshing chat sidebar data",
-      context: { workspaceId },
+      context: { workspaceId, historyView: nextHistoryView },
     });
     const [nextProjects, nextSessions] = await Promise.all([
       fetchChatProjects("all", 500, workspaceId),
-      fetchChatSessions({ scope: "all", view: "all", limit: 500, workspaceId }),
+      fetchChatSessions({ scope: "all", view: nextHistoryView, limit: 500, workspaceId }),
     ]);
     setProjects(nextProjects);
     setSessions(nextSessions);
@@ -508,7 +515,7 @@ export function ChatPage({
         ? current
         : (nextSessions.items[0]?.sessionId ?? null);
     });
-  }, [workspaceId]);
+  }, [historyView, workspaceId]);
 
   const loadRuntimeCatalog = useCallback(async () => {
     const [runtimeSettings, commands, skills, servers, templates] = await Promise.all([
@@ -973,6 +980,13 @@ export function ChatPage({
     [visibleSessions],
   );
 
+  const workspaceMissionSessionCount = useMemo(
+    () => historyView === "active"
+      ? (sessions?.items ?? []).filter((item) => item.scope === "mission").length
+      : 0,
+    [historyView, sessions?.items],
+  );
+
   const externalSessions = useMemo(
     () => visibleSessions.filter((item) => item.scope === "external"),
     [visibleSessions],
@@ -1206,6 +1220,7 @@ export function ChatPage({
   }, []);
 
   const handleCreateSession = useCallback(async (mode: ChatMode) => {
+    const nextHistoryView: ChatHistoryView = historyView === "archived" ? "active" : historyView;
     setCreatingSessionMode(mode);
     setError(null);
     try {
@@ -1214,26 +1229,52 @@ export function ChatPage({
           ? { workspaceId, projectId: selectedProjectId, mode }
           : { workspaceId, mode },
       );
-      await loadSidebar();
+      if (nextHistoryView !== historyView) {
+        setHistoryView(nextHistoryView);
+      }
+      await loadSidebar(nextHistoryView);
       setSelectedSessionId(created.sessionId);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setCreatingSessionMode(null);
     }
-  }, [loadSidebar, selectedProjectId, workspaceId]);
+  }, [historyView, loadSidebar, selectedProjectId, workspaceId]);
 
   const ensureSession = useCallback(async (): Promise<ChatSessionRecord> => {
     if (selectedSession) return selectedSession;
+    const nextHistoryView: ChatHistoryView = historyView === "archived" ? "active" : historyView;
     const created = await createChatSession(
       selectedProjectId !== "all" && selectedProjectId !== "none"
         ? { workspaceId, projectId: selectedProjectId, mode: "chat" }
         : { workspaceId, mode: "chat" },
     );
-    await loadSidebar();
+    if (nextHistoryView !== historyView) {
+      setHistoryView(nextHistoryView);
+    }
+    await loadSidebar(nextHistoryView);
     setSelectedSessionId(created.sessionId);
     return created;
-  }, [loadSidebar, selectedProjectId, selectedSession, workspaceId]);
+  }, [historyView, loadSidebar, selectedProjectId, selectedSession, workspaceId]);
+
+  const handleArchiveWorkspaceMissionChats = useCallback(async () => {
+    setArchiveWorkspacePending(true);
+    setError(null);
+    try {
+      const result = await archiveWorkspaceChatSessions({
+        workspaceId,
+        scope: "mission",
+      });
+      const summary = `Archived ${result.archivedCount} mission chats in this workspace. Skipped ${result.skippedCount}. Failed ${result.failedCount}.`;
+      pushLocalNotice(summary, result.failedCount > 0 ? "warning" : result.archivedCount > 0 ? "success" : "neutral");
+      setHistoryView("active");
+      await loadSidebar("active");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setArchiveWorkspacePending(false);
+    }
+  }, [loadSidebar, pushLocalNotice, workspaceId]);
 
   const uploadAttachments = useCallback(async (files: File[]) => {
     if (files.length === 0) return;
@@ -2269,42 +2310,53 @@ export function ChatPage({
     }
   }, [selectedSession]);
 
+  const rootClassName = `chat-v11 mode-${messageMode}${lockSurface ? " shell-owned-surface" : ""}`;
+  const workspaceSummaryText = selectedSession
+    ? `${lockSurface ? "Current session" : isCodeSurface ? "Current code session" : `Active ${activeModePreset.label.toLowerCase()} session`}: ${selectedSession.title || visibleSessionLabelById.get(selectedSession.sessionId) || `Chat ${selectedSession.sessionId.slice(-6)}`}.`
+    : lockSurface
+      ? `Start a new ${activeModePreset.label.toLowerCase()} run or reopen a recent session from the left rail.`
+      : isCodeSurface
+        ? "Pick a code session or start a new one. Bind a project only when you want execution-heavy work."
+        : `Use the queue to reopen a session or start a new ${activeModePreset.label.toLowerCase()} run from the left rail.`;
+
   if (loading) {
     return (
-      <section className={`chat-v11 mode-${messageMode}`}>
-      <PageHeader
-        title={surfaceHeaderTitle}
-        subtitle={surfaceHeaderSubtitle}
-        className="page-header-command chat-v11-header"
-      />
+      <section className={rootClassName}>
+        {!lockSurface ? (
+          <PageHeader
+            title={surfaceHeaderTitle}
+            subtitle={surfaceHeaderSubtitle}
+            className="page-header-command chat-v11-header"
+          />
+        ) : null}
         <CardSkeleton lines={8} />
       </section>
     );
   }
 
   return (
-    <section className={`chat-v11 mode-${messageMode}`}>
-      <PageHeader
-        title={surfaceHeaderTitle}
-        subtitle={surfaceHeaderSubtitle}
-        hint={isCodeSurface
-          ? undefined
-          : lockSurface
-            ? `The shell owns ${activeModePreset.label}. Keep the thread central and use the right lane for deeper controls.`
+    <section className={rootClassName}>
+      {!lockSurface ? (
+        <PageHeader
+          title={surfaceHeaderTitle}
+          subtitle={surfaceHeaderSubtitle}
+          hint={isCodeSurface
+            ? undefined
             : "Stay in the main thread by default. Open trace, memory, and approvals only when you need them."}
-        className="page-header-command chat-v11-header"
-        actions={(
-          <div className="chat-v11-page-actions">
-            <StatusChip tone={selectedSessionId ? "live" : "muted"}>{selectedSessionId ? "Session selected" : "No session"}</StatusChip>
-            {selectedSession ? (
-              <StatusChip tone={selectedSession.scope === "external" ? "warning" : "success"}>
-                {selectedSession.scope === "external" ? "External writeback" : "Mission session"}
-              </StatusChip>
-            ) : null}
-            {!isCodeSurface && selectedTurn ? <StatusChip tone="muted">{selectedTurn.trace.status}</StatusChip> : null}
-          </div>
-        )}
-      />
+          className="page-header-command chat-v11-header"
+          actions={(
+            <div className="chat-v11-page-actions">
+              <StatusChip tone={selectedSessionId ? "live" : "muted"}>{selectedSessionId ? "Session selected" : "No session"}</StatusChip>
+              {selectedSession ? (
+                <StatusChip tone={selectedSession.scope === "external" ? "warning" : "success"}>
+                  {selectedSession.scope === "external" ? "External writeback" : "Mission session"}
+                </StatusChip>
+              ) : null}
+              {!isCodeSurface && selectedTurn ? <StatusChip tone="muted">{selectedTurn.trace.status}</StatusChip> : null}
+            </div>
+          )}
+        />
+      ) : null}
       {error ? <p className="error">{error}</p> : null}
       {isRefreshing ? <p className="status-banner">Refreshing chat context...</p> : null}
 
@@ -2314,15 +2366,9 @@ export function ChatPage({
             <div className="chat-v11-workspace-copy">
               <p className="chat-v11-workspace-kicker">Workspace</p>
               <h3>{selectedProject?.name ?? "Mission Control workspace"}</h3>
-              <p className="chat-v11-muted">
-                {selectedSession
-                  ? `${isCodeSurface ? "Current code session" : `Active ${activeModePreset.label.toLowerCase()} session`}: ${selectedSession.title || visibleSessionLabelById.get(selectedSession.sessionId) || `Chat ${selectedSession.sessionId.slice(-6)}`}.`
-                  : isCodeSurface
-                    ? "Pick a code session or start a new one. Bind a project only when you want execution-heavy work."
-                    : `Use the queue to reopen a session or start a new ${activeModePreset.label.toLowerCase()} run from the left rail.`}
-              </p>
+              <p className="chat-v11-muted">{workspaceSummaryText}</p>
             </div>
-            {!isCodeSurface ? (
+            {!isCodeSurface && !lockSurface ? (
               <div className="chat-v11-summary-grid">
                 {workspaceSummaryCards.map((item) => (
                   <div key={item.label} className="chat-v11-summary-card">
@@ -2357,7 +2403,22 @@ export function ChatPage({
             </div>
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a chat..." />
           </div>
-          <FieldHelp>Mission chats stay local. External chats can write back only when a binding is configured.</FieldHelp>
+          {!lockSurface ? <FieldHelp>Mission chats stay local. External chats can write back only when a binding is configured.</FieldHelp> : null}
+          <div className="chat-v11-filter-row">
+            <button type="button" className={historyView === "active" ? "active" : ""} onClick={() => setHistoryView("active")}>Active</button>
+            <button type="button" className={historyView === "archived" ? "active" : ""} onClick={() => setHistoryView("archived")}>Archived</button>
+            {isChatSurface && historyView === "active" ? (
+              <button
+                type="button"
+                className="danger"
+                disabled={archiveWorkspacePending || workspaceMissionSessionCount === 0}
+                onClick={() => setArchiveWorkspaceConfirmOpen(true)}
+              >
+                {archiveWorkspacePending ? "Archiving..." : "Archive workspace chats"}
+              </button>
+            ) : null}
+          </div>
+          <FieldHelp>Normal history defaults to active chats. Archived chats stay out of the default rail until you switch to the archived view.</FieldHelp>
           {showProjectCreate ? (
             <div className="chat-v11-project-create">
               <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="New project name" />
@@ -2558,7 +2619,7 @@ export function ChatPage({
                             onClick={() => {
                               setSessionControlPending("project");
                               void assignChatSessionProject(selectedSession.sessionId, selectedProjectBindingCandidateId)
-                                .then(loadSidebar)
+                                .then(() => loadSidebar())
                                 .catch((err) => setError((err as Error).message))
                                 .finally(() => setSessionControlPending(null));
                             }}
@@ -3239,7 +3300,7 @@ export function ChatPage({
                         selectedSession.sessionId,
                         value === "none" ? undefined : value,
                       )
-                        .then(loadSidebar)
+                        .then(() => loadSidebar())
                         .catch((err) => setError((err as Error).message))
                         .finally(() => setSessionControlPending(null));
                     }}
@@ -3288,6 +3349,22 @@ export function ChatPage({
           )}
         </div>
       </div>
+      <ConfirmModal
+        open={archiveWorkspaceConfirmOpen}
+        title="Archive Workspace Mission Chats"
+        message={`Archive ${workspaceMissionSessionCount} active mission chats in this workspace? Archived chats leave the default history rail but stay recoverable from the Archived view. External and integration-bound chats are not affected.`}
+        confirmLabel={archiveWorkspacePending ? "Archiving..." : "Archive mission chats"}
+        danger
+        pending={archiveWorkspacePending}
+        cancelDisabled={archiveWorkspacePending}
+        disableDismiss={archiveWorkspacePending}
+        onCancel={() => setArchiveWorkspaceConfirmOpen(false)}
+        onConfirm={() => {
+          void handleArchiveWorkspaceMissionChats().finally(() => {
+            setArchiveWorkspaceConfirmOpen(false);
+          });
+        }}
+      />
     </section>
   );
 }

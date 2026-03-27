@@ -15,6 +15,7 @@ import type {
   ChatCitationRecord,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
+  ChatSessionCreateInput,
   ChatSessionRecord,
   ChatTurnTraceRecord,
   PromptPackAutoScoreBatchResult,
@@ -93,12 +94,7 @@ interface PromptPackBenchmarkItemRow {
 // ── callbacks / deps the service cannot own directly ─────────────────
 export interface PromptPackServiceDeps {
   /** Create a transient chat session for running a prompt-pack test. */
-  createChatSession(input: {
-    title: string;
-    workspaceId?: string;
-    projectId?: string;
-    mode?: ChatMode;
-  }): ChatSessionRecord;
+  createChatSession(input: ChatSessionCreateInput): ChatSessionRecord;
   /** Send a message through the full agent pipeline. */
   agentSendChatMessage(
     sessionId: string,
@@ -308,6 +304,8 @@ export class PromptPackService {
         ? this.ensurePromptPackProjectBindingFor(projectBinding)
         : undefined,
       mode: executionProfile.mode,
+      origin: "prompt_pack",
+      includeInHistory: false,
     }).sessionId;
     this.ensurePromptPackSessionToolGrants(sessionId, executionProfile, resolvedPrompt.prompt, projectBinding);
 

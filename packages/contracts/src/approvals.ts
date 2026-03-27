@@ -42,6 +42,30 @@ export interface ApprovalResolveInput {
   resolvedBy: string;
 }
 
+export interface ApprovalBulkResolveInput {
+  decision: "approve" | "reject";
+  resolutionNote?: string;
+  resolvedBy: string;
+  status?: "pending";
+}
+
+export interface ApprovalBulkResolveItemResult {
+  approvalId: string;
+  outcome: "resolved" | "skipped" | "failed";
+  status?: ApprovalStatus;
+  error?: string;
+}
+
+export interface ApprovalBulkResolveResult {
+  decision: "approve" | "reject";
+  statusFilter: "pending";
+  attemptedCount: number;
+  resolvedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  items: ApprovalBulkResolveItemResult[];
+}
+
 export interface ApprovalReplayEvent {
   eventId: string;
   approvalId: string;

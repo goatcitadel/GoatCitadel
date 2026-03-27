@@ -1,0 +1,347 @@
+export type Space = "operate" | "observe" | "configure";
+export type WorkSurface = "chat" | "cowork" | "code";
+export type OperatePage = "surface" | "tasks" | "approvals";
+export type ObservePage = "activity" | "sessions" | "artifacts" | "costs" | "system" | "quality";
+export type ConfigurePage = "settings" | "integrations" | "tools" | "agents";
+export type SpacePage = OperatePage | ObservePage | ConfigurePage;
+
+export type ActivityTab = "activity" | "scheduler" | "improvement";
+export type ArtifactsTab = "memory" | "files";
+export type SettingsTab = "general" | "providers" | "access" | "budget" | "runtime" | "workspaces" | "addons" | "onboarding";
+export type IntegrationsTab = "overview" | "mcp";
+export type AgentsTab = "overview" | "herd-live" | "herd-lab" | "skills";
+
+export type NestedHostTab = ActivityTab | ArtifactsTab | SettingsTab | IntegrationsTab | AgentsTab;
+
+export interface ResolvedRoute {
+  space: Space;
+  page: SpacePage;
+  surface?: WorkSurface;
+  tab?: NestedHostTab;
+}
+
+interface RouteInfo {
+  space: Space;
+  page: SpacePage;
+  label: string;
+  description: string;
+}
+
+export const SPACE_META: Record<Space, { label: string; description: string }> = {
+  operate: {
+    label: "Operate",
+    description: "What needs doing or deciding now.",
+  },
+  observe: {
+    label: "Observe",
+    description: "What the system is doing and how it is behaving.",
+  },
+  configure: {
+    label: "Configure",
+    description: "How GoatCitadel is set up and governed.",
+  },
+};
+
+export const PAGE_META: Record<SpacePage, RouteInfo> = {
+  surface: {
+    space: "operate",
+    page: "surface",
+    label: "Surface",
+    description: "Chat, Cowork, and Code live here.",
+  },
+  tasks: {
+    space: "operate",
+    page: "tasks",
+    label: "Tasks",
+    description: "Trailboard for open work, blockers, and linked sessions.",
+  },
+  approvals: {
+    space: "operate",
+    page: "approvals",
+    label: "Approvals",
+    description: "Review and resolve risky actions waiting on you.",
+  },
+  activity: {
+    space: "observe",
+    page: "activity",
+    label: "Activity",
+    description: "Realtime events, scheduler state, and improvement signals.",
+  },
+  sessions: {
+    space: "observe",
+    page: "sessions",
+    label: "Sessions",
+    description: "Recent runs, timelines, and outcomes.",
+  },
+  artifacts: {
+    space: "observe",
+    page: "artifacts",
+    label: "Artifacts",
+    description: "Browse memory and files from one place.",
+  },
+  costs: {
+    space: "observe",
+    page: "costs",
+    label: "Costs",
+    description: "Spend and usage posture.",
+  },
+  system: {
+    space: "observe",
+    page: "system",
+    label: "System",
+    description: "Machine and runtime health.",
+  },
+  quality: {
+    space: "observe",
+    page: "quality",
+    label: "Quality",
+    description: "Prompt testing, benchmarks, and regressions.",
+  },
+  settings: {
+    space: "configure",
+    page: "settings",
+    label: "Settings",
+    description: "Defaults, runtime, workspaces, and onboarding.",
+  },
+  integrations: {
+    space: "configure",
+    page: "integrations",
+    label: "Integrations",
+    description: "Connected services and MCP servers.",
+  },
+  tools: {
+    space: "configure",
+    page: "tools",
+    label: "Tools",
+    description: "Tool access, grants, and permissions.",
+  },
+  agents: {
+    space: "configure",
+    page: "agents",
+    label: "Agents",
+    description: "Roster, herd views, and skills.",
+  },
+};
+
+export const SPACE_PAGES: Record<Space, Array<{ page: SpacePage; label: string }>> = {
+  operate: [
+    { page: "surface", label: "Chat" },
+    { page: "tasks", label: "Tasks" },
+    { page: "approvals", label: "Approvals" },
+  ],
+  observe: [
+    { page: "activity", label: "Activity" },
+    { page: "sessions", label: "Sessions" },
+    { page: "artifacts", label: "Artifacts" },
+    { page: "costs", label: "Costs" },
+    { page: "system", label: "System" },
+    { page: "quality", label: "Quality" },
+  ],
+  configure: [
+    { page: "settings", label: "Settings" },
+    { page: "integrations", label: "Integrations" },
+    { page: "tools", label: "Tools" },
+    { page: "agents", label: "Agents" },
+  ],
+};
+
+export const DEFAULT_ROUTE: ResolvedRoute = {
+  space: "operate",
+  page: "surface",
+  surface: "chat",
+};
+
+const LEGACY_TAB_REDIRECTS: Record<string, ResolvedRoute> = {
+  dashboard: { space: "operate", page: "surface", surface: "chat" },
+  chat: { space: "operate", page: "surface", surface: "chat" },
+  assembly: { space: "operate", page: "surface", surface: "cowork" },
+  tasks: { space: "operate", page: "tasks" },
+  approvals: { space: "operate", page: "approvals" },
+  activity: { space: "observe", page: "activity", tab: "activity" },
+  cron: { space: "observe", page: "activity", tab: "scheduler" },
+  improvement: { space: "observe", page: "activity", tab: "improvement" },
+  sessions: { space: "observe", page: "sessions" },
+  memory: { space: "observe", page: "artifacts", tab: "memory" },
+  files: { space: "observe", page: "artifacts", tab: "files" },
+  costs: { space: "observe", page: "costs" },
+  system: { space: "observe", page: "system" },
+  promptLab: { space: "observe", page: "quality" },
+  settings: { space: "configure", page: "settings", tab: "general" },
+  workspaces: { space: "configure", page: "settings", tab: "workspaces" },
+  addons: { space: "configure", page: "settings", tab: "addons" },
+  onboarding: { space: "configure", page: "settings", tab: "onboarding" },
+  mesh: { space: "configure", page: "settings", tab: "runtime" },
+  npu: { space: "configure", page: "settings", tab: "runtime" },
+  integrations: { space: "configure", page: "integrations", tab: "overview" },
+  mcp: { space: "configure", page: "integrations", tab: "mcp" },
+  tools: { space: "configure", page: "tools" },
+  agents: { space: "configure", page: "agents", tab: "overview" },
+  skills: { space: "configure", page: "agents", tab: "skills" },
+  office: { space: "configure", page: "agents", tab: "herd-live" },
+  officeLab: { space: "configure", page: "agents", tab: "herd-lab" },
+};
+
+function isSpace(value: string | null): value is Space {
+  return value === "operate" || value === "observe" || value === "configure";
+}
+
+function isOperatePage(value: string | null): value is OperatePage {
+  return value === "surface" || value === "tasks" || value === "approvals";
+}
+
+function isObservePage(value: string | null): value is ObservePage {
+  return value === "activity" || value === "sessions" || value === "artifacts" || value === "costs" || value === "system" || value === "quality";
+}
+
+function isConfigurePage(value: string | null): value is ConfigurePage {
+  return value === "settings" || value === "integrations" || value === "tools" || value === "agents";
+}
+
+export function isWorkSurface(value: string | null): value is WorkSurface {
+  return value === "chat" || value === "cowork" || value === "code";
+}
+
+function normalizeTab(page: SpacePage, tab: string | null): NestedHostTab | undefined {
+  if (!tab) {
+    return undefined;
+  }
+
+  if (page === "activity" && (tab === "activity" || tab === "scheduler" || tab === "improvement")) {
+    return tab;
+  }
+  if (page === "artifacts" && (tab === "memory" || tab === "files")) {
+    return tab;
+  }
+  if (page === "settings" && (
+    tab === "general" ||
+    tab === "providers" ||
+    tab === "access" ||
+    tab === "budget" ||
+    tab === "runtime" ||
+    tab === "workspaces" ||
+    tab === "addons" ||
+    tab === "onboarding"
+  )) {
+    return tab;
+  }
+  if (page === "integrations" && (tab === "overview" || tab === "mcp")) {
+    return tab;
+  }
+  if (page === "agents" && (tab === "overview" || tab === "herd-live" || tab === "herd-lab" || tab === "skills")) {
+    return tab;
+  }
+
+  return undefined;
+}
+
+export function normalizeResolvedRoute(route: ResolvedRoute): ResolvedRoute {
+  if (route.space === "operate" && route.page === "surface") {
+    return {
+      ...route,
+      surface: route.surface ?? "chat",
+    };
+  }
+  if (route.page === "activity") {
+    return {
+      ...route,
+      tab: normalizeTab(route.page, route.tab ?? null) ?? "activity",
+    };
+  }
+  if (route.page === "artifacts") {
+    return {
+      ...route,
+      tab: normalizeTab(route.page, route.tab ?? null) ?? "memory",
+    };
+  }
+  if (route.page === "settings") {
+    return {
+      ...route,
+      tab: normalizeTab(route.page, route.tab ?? null) ?? "general",
+    };
+  }
+  if (route.page === "integrations") {
+    return {
+      ...route,
+      tab: normalizeTab(route.page, route.tab ?? null) ?? "overview",
+    };
+  }
+  if (route.page === "agents") {
+    return {
+      ...route,
+      tab: normalizeTab(route.page, route.tab ?? null) ?? "overview",
+    };
+  }
+  return route;
+}
+
+export function readRouteFromLocation(): ResolvedRoute {
+  if (typeof window === "undefined") {
+    return DEFAULT_ROUTE;
+  }
+
+  const url = new URL(window.location.href);
+  const legacyTab = url.searchParams.get("tab");
+  if (legacyTab && legacyTab in LEGACY_TAB_REDIRECTS) {
+    const legacyRoute = LEGACY_TAB_REDIRECTS[legacyTab]!;
+    const querySurface = url.searchParams.get("surface");
+    const nextSurface = legacyRoute.page === "surface"
+      ? (isWorkSurface(querySurface) ? querySurface : legacyRoute.surface)
+      : legacyRoute.surface;
+    return normalizeResolvedRoute({
+      ...legacyRoute,
+      surface: nextSurface,
+    });
+  }
+
+  const space = url.searchParams.get("space");
+  const page = url.searchParams.get("page");
+  const surface = url.searchParams.get("surface");
+  const nestedTab = url.searchParams.get("tab");
+
+  if (isSpace(space)) {
+    if (space === "operate" && isOperatePage(page)) {
+      return normalizeResolvedRoute({
+        space,
+        page,
+        surface: isWorkSurface(surface) ? surface : undefined,
+      });
+    }
+    if (space === "observe" && isObservePage(page)) {
+      return normalizeResolvedRoute({
+        space,
+        page,
+        tab: normalizeTab(page, nestedTab),
+      });
+    }
+    if (space === "configure" && isConfigurePage(page)) {
+      return normalizeResolvedRoute({
+        space,
+        page,
+        tab: normalizeTab(page, nestedTab),
+      });
+    }
+  }
+
+  return DEFAULT_ROUTE;
+}
+
+export function buildRouteSearch(route: ResolvedRoute): string {
+  const next = normalizeResolvedRoute(route);
+  const params = new URLSearchParams();
+  params.set("space", next.space);
+  params.set("page", next.page);
+  if (next.page === "surface" && next.surface) {
+    params.set("surface", next.surface);
+  }
+  if (next.tab) {
+    params.set("tab", next.tab);
+  }
+  return `?${params.toString()}`;
+}
+
+export function getPageLabel(route: ResolvedRoute): string {
+  if (route.space === "operate" && route.page === "surface" && route.surface) {
+    return route.surface === "chat" ? "Chat" : route.surface === "cowork" ? "Cowork" : "Code";
+  }
+  return PAGE_META[route.page].label;
+}

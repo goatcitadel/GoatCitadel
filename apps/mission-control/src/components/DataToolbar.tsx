@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useEmbeddedPageChrome } from "./EmbeddedPageChrome";
 
 interface DataToolbarProps {
   primary?: ReactNode;
@@ -7,12 +8,13 @@ interface DataToolbarProps {
 }
 
 export function DataToolbar({ primary, secondary, className }: DataToolbarProps) {
+  const embedded = useEmbeddedPageChrome();
   return (
     <div
-      className={`data-toolbar${primary ? " data-toolbar-has-primary" : ""}${secondary ? " data-toolbar-has-secondary" : ""}${className ? ` ${className}` : ""}`}
+      className={`${embedded ? "action-bar" : "data-toolbar"}${primary ? ` ${embedded ? "action-bar-has-primary" : "data-toolbar-has-primary"}` : ""}${secondary ? ` ${embedded ? "action-bar-has-secondary" : "data-toolbar-has-secondary"}` : ""}${className ? ` ${className}` : ""}`}
     >
-      <div className="data-toolbar-primary">{primary}</div>
-      <div className="data-toolbar-secondary">{secondary}</div>
+      <div className={embedded ? "action-bar-primary" : "data-toolbar-primary"}>{primary}</div>
+      <div className={embedded ? "action-bar-secondary" : "data-toolbar-secondary"}>{secondary}</div>
     </div>
   );
 }

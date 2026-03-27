@@ -16,6 +16,7 @@ const persistGatewayAuthStateMock = vi.fn();
 const preflightGatewayAccessMock = vi.fn();
 const readStoredGatewayAuthStateMock = vi.fn();
 const chatPageMock = vi.fn();
+const fetchDashboardStateMock = vi.fn();
 
 vi.mock("./api/shell-client", () => ({
   clearGatewayAuthState: clearGatewayAuthStateMock,
@@ -33,6 +34,14 @@ vi.mock("./api/shell-client", () => ({
   resolveApprovalWithRemoteToken: resolveApprovalWithRemoteTokenMock,
 }));
 
+vi.mock("./api/client", async () => {
+  const actual = await vi.importActual<typeof import("./api/client")>("./api/client");
+  return {
+    ...actual,
+    fetchDashboardState: fetchDashboardStateMock,
+  };
+});
+
 vi.mock("./pages/DashboardPage", () => ({
   DashboardPage: () => <div>dashboard-ready</div>,
 }));
@@ -42,6 +51,10 @@ vi.mock("./pages/ChatPage", () => ({
     chatPageMock(props);
     return <div>{`chat-ready:${props.surface ?? "chat"}:${props.lockSurface ? "locked" : "open"}`}</div>;
   },
+}));
+
+vi.mock("./pages/TasksPage", () => ({
+  TasksPage: () => <div>tasks-ready</div>,
 }));
 
 vi.mock("./components/DeviceAccessApprovalModal", () => ({
@@ -98,10 +111,10 @@ function installMockWindow(): void {
   const location = {
     protocol: "http:",
     hostname: "localhost",
-    href: "http://localhost:5173/?tab=dashboard",
+    href: "http://localhost:5173/?space=operate&page=surface&surface=chat",
     pathname: "/",
     origin: "http://localhost:5173",
-    search: "?tab=dashboard",
+    search: "?space=operate&page=surface&surface=chat",
     hash: "",
   };
   const history = {
@@ -296,6 +309,15 @@ describe("App gateway access gate", () => {
     readStoredGatewayAuthStateMock.mockReturnValue(undefined);
     resolveApprovalMock.mockReset();
     resolveApprovalWithRemoteTokenMock.mockReset();
+    fetchDashboardStateMock.mockResolvedValue({
+      timestamp: new Date().toISOString(),
+      sessions: [],
+      pendingApprovals: 0,
+      activeSubagents: 0,
+      taskStatusCounts: [],
+      recentEvents: [],
+      dailyCostUsd: 0,
+    });
     chatPageMock.mockReset();
   });
 
@@ -336,16 +358,40 @@ describe("App gateway access gate", () => {
     await flush();
 
     const text = renderTreeText(renderer!);
-    expect(text).toContain("dashboard-ready");
+    expect(text).toContain("chat-ready:chat:locked");
     expect(connectEventStreamMock).toHaveBeenCalledTimes(1);
   });
 
-  it("collapses overflow secondary navigation into a More affordance in advanced mode", async () => {
+  it("adds backend pending approvals to unresolved local approval prompts", async () => {
+    const { deriveShellApprovalCount } = await import("./App");
+
+    expect(deriveShellApprovalCount(null, 0)).toBe(0);
+    expect(deriveShellApprovalCount({
+      timestamp: new Date().toISOString(),
+      sessions: [],
+      pendingApprovals: 3,
+      activeSubagents: 0,
+      taskStatusCounts: [],
+      recentEvents: [],
+      dailyCostUsd: 0,
+    }, 0)).toBe(3);
+    expect(deriveShellApprovalCount({
+      timestamp: new Date().toISOString(),
+      sessions: [],
+      pendingApprovals: 3,
+      activeSubagents: 0,
+      taskStatusCounts: [],
+      recentEvents: [],
+      dailyCostUsd: 0,
+    }, 2)).toBe(5);
+  });
+
+  it("renders the new three-space shell without the old overflow navigation", async () => {
     const { App } = await import("./App");
     const { UiPreferencesProvider } = await import("./state/ui-preferences");
     window.localStorage.setItem("goatcitadel.ui.mode.v1", "advanced");
-    window.location.search = "?tab=chat";
-    window.location.href = "http://localhost:5173/?tab=chat";
+    window.location.search = "?space=operate&page=surface&surface=chat";
+    window.location.href = "http://localhost:5173/?space=operate&page=surface&surface=chat";
     preflightGatewayAccessMock.mockResolvedValue(createReadyPreflightResult());
 
     let renderer: ReactTestRenderer;
@@ -360,12 +406,15 @@ describe("App gateway access gate", () => {
 
     const text = renderTreeText(renderer!);
     expect(text).toContain("chat-ready:chat:locked");
-    expect(text).toContain("More");
+    expect(text).toContain("Operate");
+    expect(text).toContain("Observe");
+    expect(text).toContain("Configure");
     expect(text).toContain("Cowork");
     expect(text).toContain("Code");
+    expect(text).not.toContain("More");
   });
 
-  it("reads the work surface from the URL and passes it to the shared Chat page", async () => {
+  it("reads the work surface from a legacy URL and passes it to the shared Chat page", async () => {
     const { App } = await import("./App");
     window.location.search = "?tab=chat&surface=code";
     window.location.href = "http://localhost:5173/?tab=chat&surface=code";
@@ -387,8 +436,8 @@ describe("App gateway access gate", () => {
 
   it("routes into the shared Chat page when a surface tab is selected from another page", async () => {
     const { App } = await import("./App");
-    window.location.search = "?tab=dashboard&surface=chat";
-    window.location.href = "http://localhost:5173/?tab=dashboard&surface=chat";
+    window.location.search = "?space=operate&page=tasks";
+    window.location.href = "http://localhost:5173/?space=operate&page=tasks";
     preflightGatewayAccessMock.mockResolvedValue(createReadyPreflightResult());
 
     let renderer: ReactTestRenderer;

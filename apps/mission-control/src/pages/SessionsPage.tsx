@@ -133,7 +133,7 @@ export function SessionsPage() {
   }
 
   return (
-    <section className="workflow-page">
+    <section className="workflow-page sessions-page">
       <PageHeader
         eyebrow="Runtime"
         title={pageCopy.sessions.title}
@@ -256,12 +256,12 @@ export function SessionsPage() {
                   <div className="virtual-list-item">
                     <button
                       type="button"
-                      className={session.sessionId === selected?.sessionId ? "active" : ""}
+                      className={`session-list-button ${session.sessionId === selected?.sessionId ? "active" : ""}`}
                       onClick={() => setSelectedSessionId(session.sessionId)}
                     >
                       {session.sessionKey}
                     </button>
-                    <p className="office-subtitle">
+                    <p className="office-subtitle session-detail-copy">
                       {session.health} | {new Date(session.updatedAt).toLocaleString()} | ${session.costUsdTotal.toFixed(4)}
                     </p>
                   </div>
@@ -279,13 +279,13 @@ export function SessionsPage() {
             {selected && !detailsLoading ? (
               <>
                 <p><strong>{selected.sessionKey}</strong></p>
-                <p className="office-subtitle">
+                <p className="office-subtitle session-detail-copy">
                   Session ID: {selected.sessionId}
                 </p>
-                <p className="office-subtitle">
+                <p className="office-subtitle session-detail-copy">
                   Last message: {summary?.lastMessagePreview ?? "(none yet)"}
                 </p>
-                <p className="office-subtitle">
+                <p className="office-subtitle session-detail-copy">
                   Timeline events: {summary?.transcriptEventCount ?? 0}
                 </p>
                 <h4>Recent Timeline</h4>
@@ -296,7 +296,7 @@ export function SessionsPage() {
                       itemContent={(_index, item) => (
                         <div className="virtual-list-item">
                           <strong>{item.type}</strong> [{item.actorType}] {new Date(item.timestamp).toLocaleString()}
-                          <p className="office-subtitle">{item.preview}</p>
+                          <p className="office-subtitle session-timeline-copy">{item.preview}</p>
                         </div>
                       )}
                     />

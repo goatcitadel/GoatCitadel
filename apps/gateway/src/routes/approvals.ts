@@ -16,6 +16,13 @@ const resolveSchema = z.object({
   resolvedBy: z.string().min(1),
 });
 
+const bulkResolveSchema = z.object({
+  decision: z.enum(["approve", "reject"]),
+  resolutionNote: z.string().optional(),
+  resolvedBy: z.string().min(1).optional(),
+  status: z.literal("pending").optional(),
+});
+
 const remoteTokenSchema = z.object({
   connectorId: z.string().min(1),
   expiresInMs: z.number().int().positive().max(24 * 60 * 60 * 1000).optional(),
@@ -62,6 +69,23 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
 
     const approvals = fastify.gateway.listApprovals(parsed.data.status, parsed.data.limit);
     return reply.send({ items: approvals });
+  });
+
+  fastify.post("/api/v1/approvals/bulk-resolve", async (request, reply) => {
+    const parsed = bulkResolveSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+
+    try {
+      const result = await fastify.gateway.resolveApprovalsBulk({
+        ...parsed.data,
+        resolvedBy: parsed.data.resolvedBy ?? resolveActorId(request),
+      });
+      return reply.send(result);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.post("/api/v1/approvals/:approvalId/resolve", async (request, reply) => {
