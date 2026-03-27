@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getRequestAttribution } from "./request-attribution.js";
 
-export type AuditStream = "tool_invocations" | "policy_blocks" | "approvals";
+export type AuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
 
 export class AuditLog {
   public constructor(private readonly auditDir: string) {}

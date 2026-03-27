@@ -45,7 +45,7 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/orchestration/plans/:planId/run", async (request, reply) => {
     const planId = (request.params as { planId: string }).planId;
-    const run = fastify.gateway.runOrchestrationPlan(planId);
+    const run = await fastify.gateway.runOrchestrationPlan(planId);
     return reply.send(run);
   });
 
@@ -63,7 +63,7 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     return reply.send(
-      fastify.gateway.approvePhase(
+      await fastify.gateway.approvePhase(
         parsed.data.runId,
         phaseId,
         parsed.data.approvedBy,

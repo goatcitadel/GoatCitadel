@@ -4,6 +4,10 @@ export interface WorkspacePrefs {
   uiMode?: "simple" | "advanced";
   technicalDetailsDefault?: boolean;
   operatorProfileId?: string;
+  hooks?: {
+    allowMutatingHooks?: boolean;
+    allowInterceptingHooks?: boolean;
+  };
   [key: string]: unknown;
 }
 

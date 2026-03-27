@@ -36,6 +36,7 @@ export * from "./proactive.js";
 export * from "./learned-memory.js";
 export * from "./improvement.js";
 export * from "./workspaces.js";
+export * from "./hooks.js";
 export * from "./durable.js";
 export * from "./replay.js";
 export * from "./dev-diagnostics.js";

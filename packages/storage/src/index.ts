@@ -56,6 +56,8 @@ import { WorkspaceRepository } from "./workspace-repo.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import { GatewaySqlRepository } from "./gateway-sql-repo.js";
 import { AssemblyRepository } from "./assembly-repo.js";
+import { WorkspaceHookRepository } from "./workspace-hook-repo.js";
+import { HookRunRepository } from "./hook-run-repo.js";
 
 export interface StorageOptions extends SqliteOptions {
   transcriptsDir: string;
@@ -123,6 +125,8 @@ export class Storage {
   public readonly promptPackRuns: PromptPackRunRepository;
   public readonly promptPackScores: PromptPackScoreRepository;
   public readonly workspaces: WorkspaceRepository;
+  public readonly workspaceHooks: WorkspaceHookRepository;
+  public readonly hookRuns: HookRunRepository;
   public readonly durableRuns: DurableRunRepository;
   public readonly gatewaySql: GatewaySqlRepository;
   public readonly assembly: AssemblyRepository;
@@ -184,6 +188,8 @@ export class Storage {
     this.promptPackRuns = new PromptPackRunRepository(this.db);
     this.promptPackScores = new PromptPackScoreRepository(this.db);
     this.workspaces = new WorkspaceRepository(this.db);
+    this.workspaceHooks = new WorkspaceHookRepository(this.db);
+    this.hookRuns = new HookRunRepository(this.db);
     this.durableRuns = new DurableRunRepository(this.db);
     this.gatewaySql = new GatewaySqlRepository(this.db);
     this.assembly = new AssemblyRepository(this.db);
@@ -406,6 +412,8 @@ export * from "./prompt-pack-repo.js";
 export * from "./prompt-pack-run-repo.js";
 export * from "./prompt-pack-score-repo.js";
 export * from "./workspace-repo.js";
+export * from "./workspace-hook-repo.js";
+export * from "./hook-run-repo.js";
 export * from "./durable-run-repo.js";
 export * from "./safe-json.js";
 export * from "./gateway-sql-repo.js";
