@@ -11,41 +11,136 @@ const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 const tmpDir = path.join(repoRoot, ".tmp", "public-share-screenshots");
 const runtimeRoot = path.join(tmpDir, "runtime");
 const outputDir = path.join(repoRoot, "docs", "screenshots", "mission-control");
-const gatewayUrl = "http://127.0.0.1:8787";
-const uiUrl = "http://127.0.0.1:5173";
+const gatewayPort = 18787;
+const uiPort = 15173;
+const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
+const uiUrl = `http://127.0.0.1:${uiPort}`;
 
 const screenshotTargets = [
-  { tab: "onboarding", file: "onboarding.png", title: "Onboarding" },
-  { tab: "dashboard", file: "dashboard.png", title: "Dashboard" },
-  { tab: "chat", file: "chat.png", title: "Chat Workspace" },
-  { tab: "promptLab", file: "prompt-lab.png", title: "Prompt Lab" },
-  { tab: "improvement", file: "improvement.png", title: "Improvement" },
-  { tab: "workspaces", file: "workspaces.png", title: "Workspaces" },
-  { tab: "system", file: "system.png", title: "System" },
-  { tab: "files", file: "files.png", title: "Files" },
-  { tab: "memory", file: "memory.png", title: "Memory" },
-  { tab: "agents", file: "agents.png", title: "Agents" },
   {
-    tab: "office",
-    file: "office.png",
-    title: "Office",
+    query: { space: "configure", page: "settings", tab: "onboarding" },
+    file: "settings-onboarding.png",
+    title: "Settings / Onboarding",
+  },
+  {
+    query: { space: "operate", page: "surface", surface: "chat" },
+    file: "operate-chat.png",
+    title: "Operate / Chat",
+  },
+  {
+    query: { space: "operate", page: "surface", surface: "cowork" },
+    file: "operate-cowork.png",
+    title: "Operate / Cowork",
+  },
+  {
+    query: { space: "operate", page: "surface", surface: "code" },
+    file: "operate-code.png",
+    title: "Operate / Code",
+  },
+  {
+    query: { space: "operate", page: "tasks" },
+    file: "operate-tasks.png",
+    title: "Operate / Tasks",
+  },
+  {
+    query: { space: "operate", page: "approvals" },
+    file: "operate-approvals.png",
+    title: "Operate / Approvals",
+  },
+  {
+    query: { space: "observe", page: "activity", tab: "activity" },
+    file: "observe-activity-live-feed.png",
+    title: "Observe / Activity / Live feed",
+  },
+  {
+    query: { space: "observe", page: "activity", tab: "scheduler" },
+    file: "observe-activity-scheduler.png",
+    title: "Observe / Activity / Scheduler",
+  },
+  {
+    query: { space: "observe", page: "activity", tab: "improvement" },
+    file: "observe-activity-improvement.png",
+    title: "Observe / Activity / Improvement",
+  },
+  {
+    query: { space: "observe", page: "sessions" },
+    file: "observe-sessions.png",
+    title: "Observe / Sessions",
+  },
+  {
+    query: { space: "observe", page: "artifacts", tab: "memory" },
+    file: "observe-artifacts-memory.png",
+    title: "Observe / Artifacts / Memory",
+  },
+  {
+    query: { space: "observe", page: "artifacts", tab: "files" },
+    file: "observe-artifacts-files.png",
+    title: "Observe / Artifacts / Files",
+  },
+  {
+    query: { space: "observe", page: "costs" },
+    file: "observe-costs.png",
+    title: "Observe / Costs",
+  },
+  {
+    query: { space: "observe", page: "system" },
+    file: "observe-system.png",
+    title: "Observe / System",
+  },
+  {
+    query: { space: "observe", page: "quality" },
+    file: "observe-quality.png",
+    title: "Observe / Quality",
+  },
+  {
+    query: { space: "configure", page: "settings", tab: "general" },
+    file: "configure-settings-general.png",
+    title: "Configure / Settings / General",
+  },
+  {
+    query: { space: "configure", page: "settings", tab: "workspaces" },
+    file: "configure-settings-workspaces.png",
+    title: "Configure / Settings / Workspaces",
+  },
+  {
+    query: { space: "configure", page: "tools" },
+    file: "configure-tools.png",
+    title: "Configure / Tools",
+    scrollY: 860,
+  },
+  {
+    query: { space: "configure", page: "integrations", tab: "overview" },
+    file: "configure-integrations-overview.png",
+    title: "Configure / Integrations / Overview",
+  },
+  {
+    query: { space: "configure", page: "integrations", tab: "mcp" },
+    file: "configure-integrations-mcp.png",
+    title: "Configure / Integrations / MCP",
+  },
+  {
+    query: { space: "configure", page: "agents", tab: "overview" },
+    file: "configure-agents-overview.png",
+    title: "Configure / Agents / Overview",
+  },
+  {
+    query: { space: "configure", page: "agents", tab: "herd-live" },
+    file: "configure-agents-herd-live.png",
+    title: "Configure / Agents / Herd Live",
     waitForSelector: ".office-webgl-stage-v5 canvas",
     screenshotSelector: ".office-stage-panel",
     settleMs: 6500,
   },
-  { tab: "activity", file: "activity.png", title: "Activity" },
-  { tab: "cron", file: "cron.png", title: "Scheduler" },
-  { tab: "sessions", file: "sessions.png", title: "Sessions" },
-  { tab: "skills", file: "skills.png", title: "Skills" },
-  { tab: "costs", file: "costs.png", title: "Costs" },
-  { tab: "settings", file: "settings.png", title: "Settings" },
-  { tab: "tools", file: "tools.png", title: "Tool Access", scrollY: 860 },
-  { tab: "approvals", file: "approvals.png", title: "Approvals" },
-  { tab: "tasks", file: "tasks.png", title: "Tasks" },
-  { tab: "integrations", file: "integrations.png", title: "Integrations" },
-  { tab: "mcp", file: "mcp.png", title: "MCP Servers" },
-  { tab: "mesh", file: "mesh.png", title: "Mesh" },
-  { tab: "npu", file: "npu.png", title: "NPU Runtime" },
+  {
+    query: { space: "configure", page: "agents", tab: "herd-lab" },
+    file: "configure-agents-herd-lab.png",
+    title: "Configure / Agents / Herd Lab",
+  },
+  {
+    query: { space: "configure", page: "agents", tab: "skills" },
+    file: "configure-agents-skills.png",
+    title: "Configure / Agents / Skills",
+  },
 ];
 
 async function main() {
@@ -54,12 +149,16 @@ async function main() {
   const gateway = await startProcess("gateway", [pnpmCommand(), "--dir", repoRoot, "dev:gateway"], {
     GOATCITADEL_ROOT_DIR: runtimeRoot,
     GATEWAY_HOST: "127.0.0.1",
-    GATEWAY_PORT: "8787",
+    GATEWAY_PORT: String(gatewayPort),
     GOATCITADEL_AUTH_MODE: "none",
   });
-  const ui = await startProcess("ui", [pnpmCommand(), "--dir", repoRoot, "dev:ui"], {
-    VITE_GATEWAY_URL: gatewayUrl,
-  });
+  const ui = await startProcess(
+    "ui",
+    [pnpmCommand(), "--dir", repoRoot, "--filter", "@goatcitadel/mission-control", "exec", "vite", "--host", "127.0.0.1", "--port", String(uiPort)],
+    {
+      VITE_GATEWAY_URL: gatewayUrl,
+    },
+  );
 
   try {
     await waitForHttp(`${gatewayUrl}/health`, "Gateway health");
@@ -90,6 +189,31 @@ async function prepareRuntimeRoot() {
       { recursive: true },
     );
   }
+  await forceScreenshotRuntimeAuthModeNone();
+}
+
+async function forceScreenshotRuntimeAuthModeNone() {
+  await patchJson(path.join(runtimeRoot, "config", "assistant.config.json"), (config) => {
+    config.assistant ??= {};
+    config.assistant.auth ??= {};
+    config.assistant.auth.mode = "none";
+    config.assistant.auth.allowLoopbackBypass = true;
+    return config;
+  });
+
+  await patchJson(path.join(runtimeRoot, "config", "goatcitadel.json"), (config) => {
+    config.assistant ??= {};
+    config.assistant.auth ??= {};
+    config.assistant.auth.mode = "none";
+    config.assistant.auth.allowLoopbackBypass = true;
+    return config;
+  });
+}
+
+async function patchJson(filePath, mutate) {
+  const raw = await fs.readFile(filePath, "utf8");
+  const next = mutate(JSON.parse(raw));
+  await fs.writeFile(filePath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
 }
 
 async function startProcess(name, commandArgs, extraEnv) {
@@ -415,9 +539,10 @@ async function captureScreenshots(activeWorkspaceId) {
 
     const page = await context.newPage();
     for (const target of screenshotTargets) {
-      const targetUrl = `${uiUrl}/?tab=${encodeURIComponent(target.tab)}`;
+      const params = new URLSearchParams(target.query);
+      const targetUrl = `${uiUrl}/?${params.toString()}`;
       await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(target.settleMs ?? (target.tab === "office" ? 5000 : 1800));
+      await page.waitForTimeout(target.settleMs ?? 1800);
       if (target.waitForSelector) {
         await page.waitForSelector(target.waitForSelector, {
           state: "visible",
