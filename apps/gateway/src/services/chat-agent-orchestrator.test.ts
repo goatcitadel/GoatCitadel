@@ -4452,6 +4452,134 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("Auto, Quick, or Deep");
   });
 
+  it("does not short-circuit cowork prompt-pack planning turns that mention recently added repo functionality", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: no-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "",
+      "## User Task",
+      "Create a short role-labeled plan for how GoatCitadel prompt-pack v2 should test recently added functionality without repeating the old 108-test balance. Keep the sections in the requested role order.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "## Product",
+                "- Focus the slice on new v2-only capabilities instead of re-running the frozen baseline.",
+                "",
+                "## Architect",
+                "- Group tests around recently added retrieval, provenance, and prompt-pack routing behaviors.",
+                "",
+                "## QA",
+                "- Gate the slice on score deltas plus one replay pass for the touched cases.",
+                "",
+                "## Synthesis",
+                "- Start with a narrow v2-only regression slice, then expand only after those tests stabilize.",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-recent-internal-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-recent-internal-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(result.assistantContent).toContain("## Product");
+    expect(result.assistantContent).not.toContain("Web is set to Off");
+  });
+
+  it("does not short-circuit code prompt-pack planning turns that only use recent as repo scope", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: no-tools",
+      "- This is a Code evaluation. Stay project-bound, concrete, and evidence-backed.",
+      "",
+      "## User Task",
+      "Propose the smallest Prompt Lab rollout slice for the new v2 pack so GoatCitadel can tighten recent feature quality without immediately rerunning the entire v1 baseline.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "## Findings / Plan",
+                "- Start with the v2-only prompts that cover newly added provenance, replay, and focused-pack behavior.",
+                "",
+                "## Changes",
+                "- Add a dedicated v2 target list for those tests instead of touching the full v1 matrix.",
+                "",
+                "## Validation",
+                "- Re-run only the focused slice and compare score deltas before widening scope.",
+                "",
+                "## Risks",
+                "- The slice must stay narrow enough that failures map back to the new work rather than generic baseline noise.",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-code-recent-internal-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-code-recent-internal-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(result.assistantContent).toContain("## Findings / Plan");
+    expect(result.assistantContent).not.toContain("Web is set to Off");
+  });
+
   it("strips web tools from normal turns when web mode is off", async () => {
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
@@ -6087,7 +6215,7 @@ describe("ChatAgentOrchestrator", () => {
 
     expect(result.assistantContent).toContain("exports `main` and `helper`");
     expect(result.assistantContent).not.toContain("I couldn't verify that with the required tools before answering.");
-    expect(createChatCompletion).toHaveBeenCalledTimes(3);
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
   });
 
   it("replaces prose-only Prompt Lab explicit-tools answers with an honest fallback when no tool path is available", async () => {
@@ -6291,6 +6419,84 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("webpack");
     // Two completions should have been requested (initial + retry)
     expect(createChatCompletion).toHaveBeenCalledTimes(2);
+  });
+
+  it("prefetches local repo search evidence for prompt-lab explicit file/code inspections without explicit paths", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Use file or code tools to inspect the skill import path, overlap detection behavior, and repo-managed skill provenance metadata. Summarize the concrete evidence an operator can review today and cite the exact files used.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "Operators can review the install and overlap logic in `apps/gateway/src/services/skill-import-service.ts`, the operator-facing policy in `docs/SKILL_ADOPTION_MATRIX.md`, and repo-managed provenance manifests under `skills/extra/<skill-id>/source.json`.",
+                "Those files together show the import path, overlapping family checks, and stored provenance fields.",
+              ].join(" "),
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValue({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-prefetch-search-files-1",
+        result: {
+          matches: [
+            { path: "apps/gateway/src/services/skill-import-service.ts", name: "skill-import-service.ts" },
+            { path: "docs/SKILL_ADOPTION_MATRIX.md", name: "SKILL_ADOPTION_MATRIX.md" },
+            { path: "skills/extra/cloudflare-api/source.json", name: "source.json" },
+          ],
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-local-search-prefetch-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-local-search-prefetch-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(invokeTool).toHaveBeenCalled();
+    expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
+      toolName: "code.search_files",
+      args: expect.objectContaining({
+        path: ".",
+      }),
+    });
+    expect((invokeTool.mock.calls[0]?.[0] as { args?: { query?: string } } | undefined)?.args?.query).toBeTruthy();
+    expect(result.assistantContent).toContain("apps/gateway/src/services/skill-import-service.ts");
+    expect(result.assistantContent).toContain("skills/extra/<skill-id>/source.json");
+    expect(result.assistantContent).not.toContain("I couldn't verify that with the required tools before answering.");
   });
 
   it("passes non-Prompt-Lab prompts through without explicit-tools enforcement", async () => {

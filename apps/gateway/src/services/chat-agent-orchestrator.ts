@@ -377,7 +377,9 @@ export class ChatAgentOrchestrator {
     }
     if (!assistantContent) {
       const settingsConflict = buildLiveDataSettingsConflictMessage({
+        mode: input.mode,
         webLookupIntent: intents.webLookup,
+        strictWebRequirement: detectExplicitWebLookupIntent(input.content) || detectDirectUrlIntent(input.content),
         timeIntent: intents.time,
         localFileIntent,
         webMode: input.webMode,
@@ -485,6 +487,102 @@ export class ChatAgentOrchestrator {
               citation,
             };
           }
+          if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId) {
+            finalStatus = "waiting_for_approval";
+            finalFailure = {
+              failureClass: "approval_required",
+              message: "Approval required by policy.",
+              retryable: true,
+              recommendedAction: getChatTurnRecoveryAction("approval_required"),
+            };
+            approvalPayload = {
+              approvalId: syntheticRun.record.approvalId,
+              toolName: syntheticRun.record.toolName,
+              reason: "Approval required by policy.",
+              expiresAt: syntheticRun.approvalExpiresAt,
+            };
+            this.deps.storage.chatInlineApprovals.upsert({
+              approvalId: syntheticRun.record.approvalId,
+              sessionId: input.sessionId,
+              turnId: input.turnId,
+              toolName: syntheticRun.record.toolName,
+              status: "pending",
+              reason: "Approval required by policy.",
+              expiresAt: syntheticRun.approvalExpiresAt,
+            });
+            break;
+          }
+        }
+      }
+
+      if (
+        !approvalPayload
+        && promptLabContractRequiresFileTools(promptLabContract)
+        && promptLabFilePaths.length === 0
+        && toolSchema.canonicalToModel.has("code.search_files")
+        && toolRunCount < executionBudget.maxToolRunsPerTurn
+        && isMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns)
+      ) {
+        const promptLabSearchPath = inferLocalToolPathFromPrompt("code.search_files", promptLabContract.userTask) ?? ".";
+        const promptLabSearchQueries = inferPromptLabLocalSearchQueries(promptLabContract.userTask);
+        for (const query of promptLabSearchQueries) {
+          if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
+            break;
+          }
+          throwIfChatTurnCancelled(input);
+          this.deps.storage.chatTurnTraces.patch(input.turnId, {
+            status: "waiting_for_tool",
+          });
+          ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+          const syntheticRun = await this.executeToolCall({
+            input,
+            turnId: input.turnId,
+            toolName: "code.search_files",
+            rawArgs: {
+              path: promptLabSearchPath,
+              query,
+            },
+            localFileIntent,
+            priorToolRuns: toolRuns,
+            turnBudgetDeadline,
+          });
+          toolRunCount += 1;
+          toolRuns.push(syntheticRun.record);
+          yield {
+            type: "tool_start",
+            sessionId: input.sessionId,
+            turnId: input.turnId,
+            toolRun: {
+              ...syntheticRun.record,
+              status: "started",
+            },
+          };
+          if (syntheticRun.chunk) {
+            yield syntheticRun.chunk;
+          }
+          const toolMessageId = `prefetch-search-files-${randomUUID()}`;
+          conversationMessages.push({
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: toolMessageId,
+                type: "function",
+                function: {
+                  name: this.resolveModelToolName("code.search_files", toolSchema.canonicalToModel),
+                  arguments: JSON.stringify({
+                    path: promptLabSearchPath,
+                    query,
+                  }),
+                },
+              },
+            ] as unknown as Array<Record<string, unknown>>,
+          } as unknown as ChatCompletionMessage);
+          conversationMessages.push({
+            role: "tool",
+            tool_call_id: toolMessageId,
+            content: JSON.stringify(syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." }),
+          } as ChatCompletionMessage);
           if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId) {
             finalStatus = "waiting_for_approval";
             finalFailure = {
@@ -3794,7 +3892,7 @@ function detectLocalFileIntent(content: string): boolean {
   if (/\b(local|workspace|project)\s+(file|files|path|paths|stack)\b/.test(normalized)) {
     return true;
   }
-  if (/\b(use|using|with)\s+(?:file|filesystem|code|file\/code)\s+tools\b/.test(normalized)) {
+  if (/\b(use|using|with)\s+(?:(?:file|filesystem)(?:\s+or\s+code)?|code|file\/code)\s+tools\b/.test(normalized)) {
     return true;
   }
   return (
@@ -3959,13 +4057,18 @@ function looksLikeFreshStandalonePrompt(userPrompt: string): boolean {
 }
 
 function buildLiveDataSettingsConflictMessage(input: {
+  mode: ChatMode;
   webLookupIntent: boolean;
+  strictWebRequirement: boolean;
   timeIntent: boolean;
   localFileIntent: boolean;
   webMode: ChatWebMode;
   toolAutonomy: ChatAgentTurnInput["toolAutonomy"];
 }): string | undefined {
   if (!input.webLookupIntent || input.timeIntent || input.localFileIntent) {
+    return undefined;
+  }
+  if (input.mode !== "chat" && !input.strictWebRequirement) {
     return undefined;
   }
   if (input.webMode === "off") {
@@ -4768,7 +4871,50 @@ function isLikelyLandingOrResultsPath(pathname: string): boolean {
 }
 
 function normalizeToolNameForComparison(toolName: string | undefined): string | undefined {
-  return typeof toolName === "string" ? toolName.replace(/_/g, ".") : undefined;
+  if (typeof toolName !== "string") {
+    return undefined;
+  }
+  if (toolName.includes(".")) {
+    return toolName;
+  }
+  const firstSeparator = toolName.indexOf("_");
+  if (firstSeparator < 0) {
+    return toolName;
+  }
+  return `${toolName.slice(0, firstSeparator)}.${toolName.slice(firstSeparator + 1)}`;
+}
+
+function buildToolNameComparisonAliases(toolName: string | undefined): Set<string> {
+  const aliases = new Set<string>();
+  const normalized = normalizeToolNameForComparison(toolName)?.toLowerCase();
+  if (!normalized) {
+    return aliases;
+  }
+  aliases.add(normalized);
+  aliases.add(normalized.replace(/\./g, "_"));
+  aliases.add(normalized.replace(/_/g, "."));
+  return aliases;
+}
+
+function toolNameMatchesUsedToolSet(expectedToolName: string, usedToolNames: Set<string>): boolean {
+  for (const alias of buildToolNameComparisonAliases(expectedToolName)) {
+    if (usedToolNames.has(alias)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function toolNameMatchesAnyKnownTool(toolName: string | undefined, expectedToolNames: Set<string>): boolean {
+  const aliases = buildToolNameComparisonAliases(toolName);
+  for (const expected of expectedToolNames) {
+    for (const alias of buildToolNameComparisonAliases(expected)) {
+      if (aliases.has(alias)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function isLikelyCommunityHost(hostname: string): boolean {
@@ -5519,21 +5665,20 @@ function listMissingPromptLabRequiredToolEvidence(
   const missing: string[] = [];
 
   for (const toolName of contract.requiredNamedTools) {
-    const normalizedToolName = normalizeToolNameForComparison(toolName) ?? toolName;
-    if (!usedToolNames.has(normalizedToolName)) {
+    if (!toolNameMatchesUsedToolSet(toolName, usedToolNames)) {
       missing.push(`named tool \`${toolName}\``);
     }
   }
 
   for (const family of contract.requiredToolFamilies) {
     if (family === "file/code tools") {
-      if (!completedToolRuns.some((run) => LOCAL_PATH_TOOL_NAMES.has(normalizeToolNameForComparison(run.toolName) ?? run.toolName))) {
+      if (!completedToolRuns.some((run) => toolNameMatchesAnyKnownTool(run.toolName, LOCAL_PATH_TOOL_NAMES))) {
         missing.push("file/code tools");
       }
       continue;
     }
     if (family === "web lookup tools") {
-      if (!completedToolRuns.some((run) => WEB_TOOL_NAMES.has(normalizeToolNameForComparison(run.toolName) ?? run.toolName))) {
+      if (!completedToolRuns.some((run) => toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES))) {
         missing.push("web lookup tools");
       }
     }
@@ -5571,17 +5716,17 @@ function canSatisfyPromptLabRequiredToolEvidence(
   const availableToolNames = new Set(
     [...availableTools.keys()].map((toolName) => normalizeToolNameForComparison(toolName) ?? toolName),
   );
-  if (contract.requiredNamedTools.some((toolName) => !availableToolNames.has(normalizeToolNameForComparison(toolName) ?? toolName))) {
+  if (contract.requiredNamedTools.some((toolName) => !toolNameMatchesUsedToolSet(toolName, availableToolNames))) {
     return false;
   }
   for (const family of contract.requiredToolFamilies) {
     if (family === "file/code tools") {
-      if (![...LOCAL_PATH_TOOL_NAMES].some((toolName) => availableTools.has(toolName))) {
+      if (![...availableTools.keys()].some((toolName) => toolNameMatchesAnyKnownTool(toolName, LOCAL_PATH_TOOL_NAMES))) {
         return false;
       }
       continue;
     }
-    if (family === "web lookup tools" && ![...WEB_TOOL_NAMES].some((toolName) => availableTools.has(toolName))) {
+    if (family === "web lookup tools" && ![...availableTools.keys()].some((toolName) => toolNameMatchesAnyKnownTool(toolName, WEB_TOOL_NAMES))) {
       return false;
     }
   }
@@ -5750,10 +5895,98 @@ function inferLocalSearchQueryFromPrompt(toolName: string, userContent: string):
   if (/\btests?\b|\bcoverage\b/.test(normalized)) {
     return "test";
   }
+  const keywordQuery = inferPromptLabLocalSearchQueries(taskContent)[0];
+  if (keywordQuery) {
+    return keywordQuery;
+  }
   if (toolName === "code.search") {
     return inferFileFindPatternFromPrompt(taskContent);
   }
   return undefined;
+}
+
+function inferPromptLabLocalSearchQueries(userContent: string): string[] {
+  const taskContent = extractPrimaryUserTaskContent(userContent);
+  const normalized = taskContent.toLowerCase();
+  const queries: string[] = [];
+  const addQuery = (value: string | undefined): void => {
+    const trimmed = value?.trim().toLowerCase();
+    if (!trimmed || queries.includes(trimmed)) {
+      return;
+    }
+    queries.push(trimmed);
+  };
+
+  for (const match of taskContent.matchAll(/`([^`\r\n]+)`/g)) {
+    const value = match[1]?.trim();
+    if (!value) {
+      continue;
+    }
+    const basename = value.replace(/\\/g, "/").split("/").filter(Boolean).at(-1);
+    addQuery(basename ?? value);
+  }
+
+  if (/\bskill import\b/i.test(taskContent)) {
+    addQuery("skill-import");
+  }
+  if (/\bsource\.json\b/i.test(taskContent)) {
+    addQuery("source.json");
+  }
+  if (/\boverlap\b/i.test(normalized)) {
+    addQuery("overlap");
+  }
+  if (/\bprovenance\b/i.test(normalized)) {
+    addQuery("provenance");
+  }
+  if (/\bprompt pack\b/i.test(taskContent)) {
+    addQuery("prompt-pack");
+  }
+  if (/\bworkspace\b/i.test(normalized) && /\boverride|guidance\b/i.test(normalized)) {
+    addQuery("workspace");
+  }
+  if (/\breplay\b|\bbenchmark\b|\btrend\b/i.test(normalized)) {
+    addQuery("replay");
+  }
+  if (/\bmemory\b/i.test(normalized) && /\bcontext|pack|qmd|lifecycle\b/i.test(normalized)) {
+    addQuery("memory");
+  }
+
+  const fallbackTokens = normalized
+    .replace(/[^a-z0-9._/-]+/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 4)
+    .filter((token) => ![
+      "that",
+      "with",
+      "from",
+      "into",
+      "using",
+      "file",
+      "files",
+      "code",
+      "tools",
+      "inspect",
+      "summarize",
+      "review",
+      "reviewable",
+      "operator",
+      "concrete",
+      "evidence",
+      "exact",
+      "path",
+      "paths",
+      "behavior",
+      "metadata",
+      "current",
+      "today",
+      "should",
+    ].includes(token))
+    .slice(0, 4);
+  for (const token of fallbackTokens) {
+    addQuery(token);
+  }
+
+  return queries.slice(0, 4);
 }
 
 function inferFileFindPatternFromPrompt(userContent: string): string | undefined {

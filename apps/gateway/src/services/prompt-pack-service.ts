@@ -294,7 +294,7 @@ export class PromptPackService {
         `Missing placeholder values for ${test.code}: ${resolvedPrompt.missingPlaceholders.join(", ")}.`,
       );
     }
-    const promptInput = buildPromptPackPromptInput(resolvedPrompt.prompt, executionProfile);
+    const promptInput = buildPromptPackPromptInput(resolvedPrompt.prompt, executionProfile, test.title);
     const projectBinding = resolvePromptPackProjectBinding(executionProfile, resolvedPrompt.prompt);
     const runId = randomUUID();
     const sessionId = input?.sessionId ?? this.deps.createChatSession({
@@ -1887,6 +1887,42 @@ function detectPromptRequestedRoles(prompt: string): string[] {
   return roles;
 }
 
+function extractPromptPackRolesInOrder(text: string): string[] {
+  const match = text.match(/roles?\s+in\s+order\b[:\s]*([^\n]+)/i);
+  if (!match?.[1]) {
+    return [];
+  }
+  const roleAliases = new Map<string, string>([
+    ["product", "product"],
+    ["architect", "architect"],
+    ["coder", "coder"],
+    ["qa", "qa"],
+    ["ops", "ops"],
+    ["researcher", "researcher"],
+    ["personal assistant", "personal assistant"],
+  ]);
+  const roles: string[] = [];
+  for (const rawPart of splitPromptPackLabelList(match[1])) {
+    const normalizedPart = rawPart
+      .toLowerCase()
+      .replace(/\bgoat\b/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const canonical = roleAliases.get(normalizedPart);
+    if (canonical && !roles.includes(canonical)) {
+      roles.push(canonical);
+    }
+  }
+  return roles;
+}
+
+function formatPromptPackRoleHeading(role: string): string {
+  if (role === "qa") {
+    return "QA";
+  }
+  return toTitleCase(role);
+}
+
 function roleSectionPresent(response: string, role: string): boolean {
   const normalized = response.toLowerCase();
   const patterns: Record<string, RegExp> = {
@@ -2618,12 +2654,19 @@ function promptPackNeedsShellExec(
 export function buildPromptPackPromptInput(
   prompt: string,
   profile: PromptPackExecutionProfile,
+  title?: string,
 ): {
   prompt: string;
   directives: PromptPackToolDirectives;
 } {
   const directives = detectPromptPackToolDirectives(prompt);
+  const titleRolesInOrder = title ? extractPromptPackRolesInOrder(title) : [];
   const orderedSections = extractPromptPackOrderedSections(prompt);
+  const effectiveOrderedSections = orderedSections.length > 0
+    ? orderedSections
+    : titleRolesInOrder.length > 0
+      ? [...titleRolesInOrder.map((role) => formatPromptPackRoleHeading(role)), "Synthesis"]
+      : [];
   const perspectiveLabels = extractPromptPackPerspectiveLabels(prompt);
   const controllerOwnedDelivery = promptRequiresControllerOwnedDelivery(prompt);
   const pathHints = extractPromptPackPathHints(prompt);
@@ -2655,8 +2698,8 @@ export function buildPromptPackPromptInput(
   if (profile.mode === "cowork") {
     harnessLines.push("- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.");
     harnessLines.push("- Answer the user's task directly. Do not grade, critique, review, or revise an imagined draft unless the prompt explicitly asks for review feedback.");
-    if (orderedSections.length > 0) {
-      harnessLines.push(`- Output exactly these top-level sections in this order: ${orderedSections.map((section) => `\`${section}\``).join(", ")}.`);
+    if (effectiveOrderedSections.length > 0) {
+      harnessLines.push(`- Output exactly these top-level sections in this order: ${effectiveOrderedSections.map((section) => `\`${section}\``).join(", ")}.`);
       harnessLines.push("- Do not add extra headings before, between, or after those sections.");
       harnessLines.push("- Keep each requested section compact, evidence-backed, and decision-oriented.");
     } else {

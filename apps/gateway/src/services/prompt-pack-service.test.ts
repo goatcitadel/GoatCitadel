@@ -787,6 +787,31 @@ describe("prompt-pack helpers", () => {
     expect(exactSectionCoworkInput.prompt).toContain("For `browser.interact`, send an explicit `steps` array.");
   });
 
+  it("derives exact cowork role order from title metadata when the prompt only references the requested order", () => {
+    const profile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-title-roles",
+        packId: "pack-1",
+        code: "TEST-W101",
+        title: "Roles in order Product, Architect, QA",
+        prompt: "Create a short role-labeled plan for how GoatCitadel prompt-pack v2 should test recently added functionality without repeating the old 108-test balance. Keep the sections in the requested role order.",
+        orderIndex: 5,
+        mode: "cowork",
+        toolTier: "no-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+
+    const promptInput = buildPromptPackPromptInput(
+      "Create a short role-labeled plan for how GoatCitadel prompt-pack v2 should test recently added functionality without repeating the old 108-test balance. Keep the sections in the requested role order.",
+      profile,
+      "Roles in order Product, Architect, QA",
+    );
+
+    expect(promptInput.prompt).toContain("Output exactly these top-level sections in this order: `Product`, `Architect`, `QA`, `Synthesis`.");
+    expect(promptInput.prompt).toContain("Do not add extra headings before, between, or after those sections.");
+  });
+
   it("does not append generic constraints boilerplate to non-empty prompt-pack answers", () => {
     const response = finalizePromptPackResponseText({
       prompt: "Use browser.navigate and summarize the page.",
@@ -1582,14 +1607,16 @@ describe("prompt-pack helpers", () => {
       byMode.set(test.mode, (byMode.get(test.mode) ?? 0) + 1);
     }
 
-    expect(tests).toHaveLength(36);
-    expect(new Set(tests.map((test) => test.code)).size).toBe(36);
+    expect(tests).toHaveLength(72);
+    expect(new Set(tests.map((test) => test.code)).size).toBe(72);
     expect(tests[0]?.code).toBe("TEST-C101");
     expect(tests.some((test) => test.code === "TEST-W111" && test.prompt.includes("skill-import-service.ts"))).toBe(true);
     expect(tests.some((test) => test.code === "TEST-D110" && test.prompt.includes("update-review-daily"))).toBe(true);
-    expect(byMode.get("chat")).toBe(12);
-    expect(byMode.get("cowork")).toBe(12);
-    expect(byMode.get("code")).toBe(12);
+    expect(tests.some((test) => test.code === "TEST-C121" && test.prompt.includes("memory routes"))).toBe(true);
+    expect(tests.some((test) => test.code === "TEST-D122" && test.prompt.includes("run-prompt-pack-gates.ts"))).toBe(true);
+    expect(byMode.get("chat")).toBe(24);
+    expect(byMode.get("cowork")).toBe(24);
+    expect(byMode.get("code")).toBe(24);
   });
 
   it("parses dotted manual test codes so they survive import refreshes", () => {
