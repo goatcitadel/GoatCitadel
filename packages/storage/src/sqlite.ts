@@ -3,6 +3,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { clampInt } from "@goatcitadel/contracts";
 
+const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+
 export interface SqliteOptions {
   dbPath: string;
   tuning?: {
@@ -19,11 +21,13 @@ export function ensureParentDir(filePath: string): void {
 
 export function createDatabase(options: SqliteOptions): DatabaseSync {
   ensureParentDir(options.dbPath);
-  const db = new DatabaseSync(options.dbPath);
+  const db = new DatabaseSync(options.dbPath, {
+    timeout: SQLITE_BUSY_TIMEOUT_MS,
+  });
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec("PRAGMA synchronous = FULL;");
-  db.exec("PRAGMA busy_timeout = 5000;");
+  db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS};`);
   if (options.tuning?.cacheSizeKb !== undefined) {
     db.exec(`PRAGMA cache_size = -${clampInt(options.tuning.cacheSizeKb, 4_096, 4_096, 262_144)};`);
   }

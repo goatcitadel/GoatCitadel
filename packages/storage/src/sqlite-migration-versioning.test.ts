@@ -1,9 +1,11 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { createDatabase } from "./sqlite.js";
 
 const createdFiles: string[] = [];
@@ -72,5 +74,50 @@ describe("sqlite schema migrations", () => {
     assert.ok(authDeviceGrantColumns.some((column) => column.name === "token_hash"));
 
     db.close();
+  });
+
+  it("waits through a transient lock before switching to WAL mode", async () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-lock-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+
+    const lockHolder = spawn(
+      process.execPath,
+      [
+        "-e",
+        `
+          const { DatabaseSync } = require("node:sqlite");
+          const db = new DatabaseSync(${JSON.stringify(dbPath)});
+          db.exec("CREATE TABLE IF NOT EXISTS hold_lock (id INTEGER PRIMARY KEY, value TEXT);");
+          db.exec("BEGIN EXCLUSIVE;");
+          process.stdout.write("LOCKED\\n");
+          setTimeout(() => {
+            db.exec("COMMIT;");
+            db.close();
+            process.exit(0);
+          }, 750);
+        `,
+      ],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    const [readyChunk] = await once(lockHolder.stdout!, "data");
+    assert.match(String(readyChunk), /LOCKED/);
+
+    const startedAt = Date.now();
+    const db = createDatabase({ dbPath });
+    const elapsedMs = Date.now() - startedAt;
+
+    const journalModeRow = db.prepare("PRAGMA journal_mode;").get() as { journal_mode: string };
+    assert.equal(journalModeRow.journal_mode, "wal");
+    assert.ok(
+      elapsedMs >= 500,
+      `expected createDatabase to wait for the lock to clear, observed ${elapsedMs}ms`,
+    );
+
+    db.close();
+    const [exitCode] = await once(lockHolder, "exit");
+    assert.equal(exitCode, 0);
   });
 });

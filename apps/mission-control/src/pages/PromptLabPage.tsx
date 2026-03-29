@@ -285,6 +285,10 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   const selectedTest = tests.find((item) => item.testId === selectedTestId) ?? null;
   const selectedRun = selectedTest ? latestRunByTest.get(selectedTest.testId) : undefined;
   const selectedScore = selectedTest ? latestScoreByTest.get(selectedTest.testId) : undefined;
+  const selectedRunModelUsage = useMemo(
+    () => resolvePromptPackRunModelUsage(selectedRun),
+    [selectedRun],
+  );
   const passThreshold = report?.summary.passThreshold ?? PROMPT_PACK_PASS_THRESHOLD;
   const selectedPlaceholders = useMemo(
     () => selectedTest ? extractPromptPlaceholders(selectedTest.prompt) : [],
@@ -1015,9 +1019,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
           <div className="prompt-lab-model-picker">
             <p className="office-subtitle">
               {reuseLastModel && lastSuccessfulModel
-                ? `Running with last successful model: ${lastSuccessfulModel.providerId}/${lastSuccessfulModel.model}`
+                ? `New runs will reuse the last successful request: ${lastSuccessfulModel.providerId}/${lastSuccessfulModel.model}`
                 : selectedRunModel?.providerId
-                  ? `Running with selected model: ${selectedRunModel.providerId}/${selectedRunModel.model ?? "(provider default)"}`
+                  ? `Requested model for new runs: ${selectedRunModel.providerId}/${selectedRunModel.model ?? "(provider default)"}`
                   : "Select a provider/model for this prompt-pack run."}
             </p>
             <ChatModelPicker
@@ -1213,12 +1217,21 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
             <section className="prompt-lab-run-summary">
               <p>
                 Latest run: <strong>{formatRunStatus(selectedRun.status)}</strong>
-                {selectedRun.providerId ? ` • ${selectedRun.providerId}` : ""}
-                {selectedRun.model ? ` / ${selectedRun.model}` : ""}
                 {selectedRun.runId ? ` • run ${selectedRun.runId}` : ""}
                 {selectedRun.startedAt ? ` • started ${formatDateTime(selectedRun.startedAt)}` : ""}
                 {selectedRun.finishedAt ? ` • finished ${formatDateTime(selectedRun.finishedAt)}` : ""}
               </p>
+              <p className="office-subtitle">
+                Requested model: {formatPromptPackProviderModel(selectedRunModelUsage.requestedProviderId, selectedRunModelUsage.requestedModel)}
+                {" • "}
+                Actual model used: {formatPromptPackProviderModel(selectedRunModelUsage.actualProviderId, selectedRunModelUsage.actualModel)}
+                {selectedRunModelUsage.fallbackUsed
+                  ? ` • fallback: ${formatPromptPackProviderModel(selectedRunModelUsage.fallbackProviderId, selectedRunModelUsage.fallbackModel)}`
+                  : ""}
+              </p>
+              {selectedRunModelUsage.fallbackReason ? (
+                <p className="office-subtitle">Fallback reason: {selectedRunModelUsage.fallbackReason}</p>
+              ) : null}
               {selectedRun.status === "failed" && selectedRun.error ? <p className="error">{selectedRun.error}</p> : null}
               {selectedRun.responseText ? (
                 <details>
@@ -1229,7 +1242,6 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
               {selectedRun.trace ? (
                 <p className="office-subtitle">
                   Tools used: {selectedRun.trace.toolRuns.length}
-                  {selectedRun.trace.routing?.fallbackUsed ? ` • fallback: ${selectedRun.trace.routing.fallbackModel ?? "model"}` : ""}
                 </p>
               ) : null}
               {selectedRun.citations && selectedRun.citations.length > 0 ? (
@@ -1501,6 +1513,38 @@ function formatRunStatus(status?: PromptPackRunRecord["status"]): string {
   if (status === "completed") return "Run completed";
   if (status === "failed") return "Run failed";
   return status;
+}
+
+function resolvePromptPackRunModelUsage(
+  run: Pick<PromptPackRunRecord, "providerId" | "model" | "trace"> | null | undefined,
+): {
+  requestedProviderId?: string;
+  requestedModel?: string;
+  actualProviderId?: string;
+  actualModel?: string;
+  fallbackProviderId?: string;
+  fallbackModel?: string;
+  fallbackReason?: string;
+  fallbackUsed: boolean;
+} {
+  const routing = run?.trace?.routing;
+  return {
+    requestedProviderId: run?.providerId ?? routing?.primaryProviderId,
+    requestedModel: run?.model ?? routing?.primaryModel,
+    actualProviderId: routing?.effectiveProviderId ?? run?.providerId ?? routing?.primaryProviderId,
+    actualModel: routing?.effectiveModel ?? run?.trace?.model ?? run?.model ?? routing?.primaryModel,
+    fallbackProviderId: routing?.fallbackProviderId,
+    fallbackModel: routing?.fallbackModel,
+    fallbackReason: routing?.fallbackReason,
+    fallbackUsed: routing?.fallbackUsed ?? false,
+  };
+}
+
+function formatPromptPackProviderModel(providerId?: string, model?: string): string {
+  if (!providerId && !model) {
+    return "unknown";
+  }
+  return `${providerId ?? "provider auto"}/${model ?? "provider default"}`;
 }
 
 function formatDateTime(value?: string): string {

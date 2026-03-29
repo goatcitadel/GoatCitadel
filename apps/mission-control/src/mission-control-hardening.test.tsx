@@ -16,6 +16,7 @@ const testState = vi.hoisted(() => {
     refreshRegistrations,
     api: {
       fetchConnectorRecords: vi.fn(),
+      fetchSettings: vi.fn(),
       connectMcpServer: vi.fn(),
       createMcpServer: vi.fn(),
       deleteMcpServer: vi.fn(),
@@ -186,7 +187,14 @@ function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   return match;
 }
 
-function createPromptPackReport() {
+function createPromptPackReport(overrides?: Partial<ReturnType<typeof createPromptPackReportBase>>) {
+  return {
+    ...createPromptPackReportBase(),
+    ...overrides,
+  };
+}
+
+function createPromptPackReportBase() {
   return {
     runs: [],
     scores: [],
@@ -237,6 +245,11 @@ beforeEach(() => {
   testState.api.fetchMcpTemplates.mockResolvedValue({ items: [] });
   testState.api.fetchMcpTemplateDiscovery.mockResolvedValue({ items: [] });
   testState.api.fetchConnectorRecords.mockResolvedValue({ items: [] });
+  testState.api.fetchSettings.mockResolvedValue({
+    features: {
+      connectorDiagnosticsV1Enabled: false,
+    },
+  });
   testState.api.fetchMcpTools.mockResolvedValue({ items: [] });
   testState.api.invokeMcpTool.mockResolvedValue({ ok: true, output: { items: [] } });
   testState.api.runMcpServerHealthCheck.mockResolvedValue({
@@ -391,5 +404,66 @@ describe("mission-control hardening", () => {
 
     expect(findButton(renderer!.root, "Pack B").props.className).toContain("active");
     expect(findButton(renderer!.root, "Pack A").props.className ?? "").not.toContain("active");
+  });
+
+  it("shows requested and actual models for prompt-pack runs when fallback routing occurs", async () => {
+    testState.api.fetchPromptPackReport.mockResolvedValue(createPromptPackReport({
+      runs: [
+        {
+          runId: "run-1",
+          packId: "pack-a",
+          testId: "pack-a-test-1",
+          status: "completed",
+          providerId: "openai",
+          model: "gpt-5.4",
+          responseText: "Done",
+          trace: {
+            turnId: "turn-1",
+            sessionId: "sess-1",
+            userMessageId: "user-1",
+            branchKind: "append",
+            status: "completed",
+            mode: "chat",
+            model: "gpt-4.1-mini",
+            webMode: "off",
+            memoryMode: "off",
+            thinkingLevel: "standard",
+            startedAt: "2026-03-21T12:00:00.000Z",
+            finishedAt: "2026-03-21T12:00:05.000Z",
+            toolRuns: [],
+            citations: [],
+            routing: {
+              primaryProviderId: "openai",
+              primaryModel: "gpt-5.4",
+              effectiveProviderId: "openai",
+              effectiveModel: "gpt-4.1-mini",
+              fallbackProviderId: "openai",
+              fallbackModel: "gpt-4.1-mini",
+              fallbackUsed: true,
+              fallbackReason: "primary failed (timeout)",
+            },
+          },
+          startedAt: "2026-03-21T12:00:00.000Z",
+          finishedAt: "2026-03-21T12:00:05.000Z",
+        },
+      ],
+      summary: {
+        ...createPromptPackReportBase().summary,
+        completedRuns: 1,
+      },
+    }));
+
+    let renderer: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<PromptLabPage workspaceId="default" />);
+    });
+    await flush();
+
+    const paragraphs = renderer!.root.findAllByType("p").map((node) => textContent(node));
+    expect(paragraphs.some((text) => text.includes("New runs will reuse the last successful request: openai/gpt-5.4"))).toBe(true);
+    expect(paragraphs.some((text) => text.includes("Requested model: openai/gpt-5.4"))).toBe(true);
+    expect(paragraphs.some((text) => text.includes("Actual model used: openai/gpt-4.1-mini"))).toBe(true);
+    expect(paragraphs.some((text) => text.includes("fallback: openai/gpt-4.1-mini"))).toBe(true);
+    expect(paragraphs.some((text) => text.includes("Fallback reason: primary failed (timeout)"))).toBe(true);
   });
 });
