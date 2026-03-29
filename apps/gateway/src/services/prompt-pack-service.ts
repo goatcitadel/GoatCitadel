@@ -107,6 +107,8 @@ export interface PromptPackServiceDeps {
   createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
   /** Resolve default provider/model for prompt-runner. */
   getPromptRunnerModelDefaults(): { providerId?: string; model?: string };
+  /** Resolve default provider/model for prompt-pack model judging. */
+  getPromptJudgeModelDefaults(): { providerId?: string; model?: string };
   /** Shared background-task set for fire-and-forget benchmark tasks. */
   backgroundTasks: Set<Promise<void>>;
 }
@@ -281,7 +283,7 @@ export class PromptPackService {
       throw new Error("Prompt-pack test does not belong to this pack.");
     }
 
-    const defaults = this.deps.getPromptRunnerModelDefaults();
+    const defaults = this.deps.getPromptJudgeModelDefaults();
     const providerId = input?.providerId ?? defaults.providerId;
     const model = input?.model ?? defaults.model;
     const executionProfile = resolvePromptPackExecutionProfile({
@@ -1022,7 +1024,7 @@ export class PromptPackService {
     if (tests.length === 0) {
       throw new Error("Prompt pack has no tests.");
     }
-    const defaults = this.deps.getPromptRunnerModelDefaults();
+    const defaults = this.deps.getPromptJudgeModelDefaults();
     const selectedTests = selector === "all"
       ? tests
       : tests.filter((test) => test.code.toUpperCase() === selector.toUpperCase());
@@ -1239,7 +1241,7 @@ export class PromptPackService {
     if (!input.run.responseText?.trim()) {
       return { error: "No assistant output available for model judging." };
     }
-    const defaults = this.deps.getPromptRunnerModelDefaults();
+    const defaults = this.deps.getPromptJudgeModelDefaults();
     const judgeTarget = resolvePromptPackJudgeTarget({
       inputProviderId: input.providerId,
       inputModel: input.model,
@@ -1324,7 +1326,7 @@ export class PromptPackService {
             }
             : undefined,
         });
-        const text = extractCompletionText(completion);
+        const text = extractPromptPackCompletionText(completion);
         return parseLooseJsonRecord(text) ?? parsePromptJudgeScoreRecord(text);
       };
 
@@ -1366,8 +1368,42 @@ export class PromptPackService {
           max_tokens: 400,
           service_tier: resolvePromptPackJudgeServiceTier(providerId),
         });
-        const fallbackText = extractCompletionText(fallbackCompletion);
+        const fallbackText = extractPromptPackCompletionText(fallbackCompletion);
         payload = parsePromptJudgeScoreRecord(fallbackText) ?? parseLooseJsonRecord(fallbackText);
+        if (!payload && fallbackText.trim()) {
+          const repairCompletion = await this.deps.createChatCompletion({
+            providerId,
+            model,
+            messages: [
+              {
+                role: "system",
+                content: [
+                  "Convert evaluator notes into one minified JSON object only.",
+                  "Use exactly these keys: routingScore, honestyScore, handoffScore, robustnessScore, usabilityScore, rationale.",
+                  "Each score must be 0, 1, or 2.",
+                  "Do not add markdown fences or commentary.",
+                ].join(" "),
+              },
+              {
+                role: "user",
+                content: [
+                  "Evaluator notes:",
+                  truncateForModelJudge(fallbackText, 2400),
+                ].join("\n\n"),
+              },
+            ],
+            temperature: resolvePromptPackJudgeTemperature(providerId, model),
+            max_tokens: 220,
+            service_tier: resolvePromptPackJudgeServiceTier(providerId),
+            response_format: useJsonResponseFormat
+              ? {
+                type: "json_object",
+              }
+              : undefined,
+          });
+          const repairedText = extractPromptPackCompletionText(repairCompletion);
+          payload = parseLooseJsonRecord(repairedText) ?? parsePromptJudgeScoreRecord(repairedText);
+        }
         if (!payload) {
           return {
             error: `Model judge returned non-JSON output. Excerpt: ${fallbackText.trim().slice(0, 220) || "(empty)"}`,
@@ -3045,7 +3081,10 @@ export function resolvePromptPackJudgeTarget(input: {
 function shouldPreferPromptPackJudgeDefaults(providerId?: string, model?: string): boolean {
   const normalizedProviderId = (providerId ?? "").trim().toLowerCase();
   const normalizedModel = (model ?? "").trim().toLowerCase();
-  return normalizedProviderId.includes("moonshot") || normalizedModel.includes("kimi");
+  return normalizedProviderId.includes("moonshot")
+    || normalizedModel.includes("kimi")
+    || normalizedProviderId.includes("ollama")
+    || normalizedModel.includes("qwen");
 }
 
 function shouldUsePromptPackJudgeJsonMode(providerId?: string, model?: string): boolean {
@@ -3536,7 +3575,7 @@ function truncateForModelJudge(value: string, maxChars: number): string {
   return value.slice(0, maxChars) + "\n[truncated]";
 }
 
-function extractCompletionText(response: ChatCompletionResponse): string {
+export function extractPromptPackCompletionText(response: ChatCompletionResponse): string {
   const choice = response.choices?.[0];
   const message = choice?.message as Record<string, unknown> | undefined;
   if (!message) {
@@ -3544,18 +3583,39 @@ function extractCompletionText(response: ChatCompletionResponse): string {
   }
   const content = message.content;
   if (typeof content === "string") {
-    return content;
+    const trimmed = content.trim();
+    if (trimmed) {
+      return trimmed;
+    }
   }
   if (Array.isArray(content)) {
-    return content
+    const extracted = content
       .map((part) => {
         const value = part as Record<string, unknown>;
-        return typeof value.text === "string" ? value.text : "";
+        if (typeof value.text === "string") {
+          return value.text;
+        }
+        const nestedText = value.text as Record<string, unknown> | undefined;
+        if (nestedText && typeof nestedText === "object" && typeof nestedText.value === "string") {
+          return nestedText.value;
+        }
+        if (typeof value.value === "string") {
+          return value.value;
+        }
+        if (typeof value.content === "string") {
+          return value.content;
+        }
+        return "";
       })
       .join("")
       .trim();
+    if (extracted) {
+      return extracted;
+    }
   }
-  return "";
+  return typeof message.reasoning_content === "string"
+    ? message.reasoning_content.trim()
+    : "";
 }
 
 function parsePromptJudgeScoreRecord(raw: string): Record<string, unknown> | undefined {

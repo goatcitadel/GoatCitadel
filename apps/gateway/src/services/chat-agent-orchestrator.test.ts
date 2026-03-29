@@ -6757,6 +6757,261 @@ describe("ChatAgentOrchestrator", () => {
       run.status === "approval_required" && run.toolName.includes("browser"))).toBe(true);
   });
 
+  it("enforces cowork scaffolding and evidence packets for local qwen Prompt Lab turns", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is a cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: file/code tools",
+      "- Output exactly these top-level sections in this order:",
+      "- `Researcher`",
+      "- `Architect`",
+      "- `QA`",
+      "",
+      "## User Task",
+      "Inspect `F:/code/project/src/streaming.ts` and summarize the main streaming risks.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "qwen3.5:9b",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "## Researcher\n- Abort cleanup looks risky under reconnect churn.",
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "qwen3.5:9b",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "## Researcher\n- Abort cleanup looks risky under reconnect churn.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-local-qwen-streaming-1",
+        result: {
+          path: "F:/code/project/src/streaming.ts",
+          content: "export function streamChatCompletion(signal?: AbortSignal) { signal?.throwIfAborted(); }",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-local-qwen-cowork-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-local-qwen-cowork-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "ollama",
+      model: "qwen3.5:9b",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("## Researcher");
+    expect(result.assistantContent).toContain("## Architect");
+    expect(result.assistantContent).toContain("## QA");
+    expect(result.assistantContent).toContain("## Synthesis");
+    expect(result.assistantContent).toContain("## Evidence Used");
+    expect(result.assistantContent).toContain("F:/code/project/src/streaming.ts");
+    expect(result.assistantContent).toContain("## Required Citations");
+  });
+
+  it("does not misread inline Prompt Lab cowork section contracts as extra qwen role headings", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: no-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "- Output exactly these top-level sections in this order: `Product`, `Ops`.",
+      "- Do not add extra headings before, between, or after those sections.",
+      "- Keep each requested section compact, evidence-backed, and decision-oriented.",
+      "",
+      "## User Task",
+      "Outline the safest operator-owned rollout path.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "qwen3.5:9b",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "## Product",
+                "- Goal: Keep the rollout narrow and reversible.",
+                "",
+                "## Ops",
+                "- Gate production behind one explicit validation checkpoint.",
+                "",
+                "## Synthesis",
+                "- Roll out in one controlled slice, then expand only after the checkpoint passes.",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-local-qwen-inline-sections-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-local-qwen-inline-sections-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "ollama",
+      model: "qwen3.5:9b",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "manual",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("## Product");
+    expect(result.assistantContent).toContain("## Ops");
+    expect(result.assistantContent).toContain("## Synthesis");
+    expect(result.assistantContent).not.toContain("## Do Not Add Extra Headings Before, Between, Or After Those Sections");
+    expect(result.assistantContent).not.toContain("## Keep Each Requested Section Compact, Evidence-backed, And Decision-oriented");
+  });
+
+  it("replaces Prompt Lab instruction-echo cowork repairs with deterministic role sections and file evidence", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "",
+      "## User Task",
+      "Use file or code tools to inspect Prompt Lab benchmark and replay wiring. Produce Architect, QA, and Synthesis sections in that order and cite the exact files used.",
+    ].join("\n");
+    const toolCalls = [
+      {
+        id: "call-search-files-1",
+        type: "function",
+        function: {
+          name: "code_search_files",
+          arguments: JSON.stringify({
+            path: ".",
+            query: "prompt-pack",
+          }),
+        },
+      },
+    ];
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: toolCalls,
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "I need to execute the required file and code searches to inspect the repo before drafting the findings.",
+                "",
+                "## Do Not Add Extra Headings Before, Between, Or After Those Sections",
+                "- Constraints: No blocking tool failures recorded.",
+                "- Workarounds: Continue with the evidence already gathered and flag any remaining unknowns explicitly.",
+                "",
+                "## Keep Each Requested Section Compact, Evidence-backed, And Decision-oriented",
+                "- Constraints: No blocking tool failures recorded.",
+                "- Workarounds: Continue with the evidence already gathered and flag any remaining unknowns explicitly.",
+                "",
+                "## Synthesis",
+                "- Constraints: No blocking tool failures recorded.",
+                "- Workarounds: Combine the visible role outputs into the best current recommendation and call out missing evidence.",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: randomUUID(),
+      result: {
+        matches: [
+          { path: "apps/gateway/src/services/prompt-pack-service.ts", name: "prompt-pack-service.ts" },
+          { path: "apps/gateway/src/routes/chat.ts", name: "chat.ts" },
+          { path: "packages/contracts/src/prompt-pack.ts", name: "prompt-pack.ts" },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-instruction-echo-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-instruction-echo-repair-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.assistantContent).toContain("## Architect");
+    expect(result.assistantContent).toContain("## QA");
+    expect(result.assistantContent).toContain("## Synthesis");
+    expect(result.assistantContent).toContain("apps/gateway/src/services/prompt-pack-service.ts");
+    expect(result.assistantContent).not.toContain("## Do Not Add Extra Headings Before, Between, Or After Those Sections");
+    expect(result.assistantContent).not.toContain("## Keep Each Requested Section Compact, Evidence-backed, And Decision-oriented");
+  });
   it("treats underscore-named required Prompt Lab tools as satisfied after approval-gated attempts", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",

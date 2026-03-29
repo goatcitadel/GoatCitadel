@@ -18,6 +18,7 @@ import {
   buildPromptPackCapabilitySeries,
   buildPromptPackRunFailureRateSeries,
   evaluatePromptPackRuleScores,
+  extractPromptPackCompletionText,
   normalizePromptPackJudgeScores,
   parsePromptPackTests,
   pickReplayBaselineScore,
@@ -931,12 +932,12 @@ describe("prompt-pack helpers", () => {
     expect(resolvePromptPackJudgeServiceTier(undefined)).toBeUndefined();
   });
 
-  it("prefers the run model for judging except for kimi-family runs", () => {
+  it("prefers the default judge target for kimi, qwen, and ollama families", () => {
     expect(resolvePromptPackJudgeTarget({
       runProviderId: "glm",
       runModel: "glm-5-turbo",
-      defaultProviderId: "glm",
-      defaultModel: "glm-5",
+      defaultProviderId: "openai",
+      defaultModel: "gpt-5.4",
     })).toEqual({
       providerId: "glm",
       model: "glm-5-turbo",
@@ -945,11 +946,21 @@ describe("prompt-pack helpers", () => {
     expect(resolvePromptPackJudgeTarget({
       runProviderId: "moonshot",
       runModel: "kimi-k2.5",
-      defaultProviderId: "glm",
-      defaultModel: "glm-5",
+      defaultProviderId: "openai",
+      defaultModel: "gpt-5.4",
     })).toEqual({
-      providerId: "glm",
-      model: "glm-5",
+      providerId: "openai",
+      model: "gpt-5.4",
+    });
+
+    expect(resolvePromptPackJudgeTarget({
+      runProviderId: "ollama",
+      runModel: "qwen3.5:9b",
+      defaultProviderId: "openai",
+      defaultModel: "gpt-5.4",
+    })).toEqual({
+      providerId: "openai",
+      model: "gpt-5.4",
     });
   });
 
@@ -1462,6 +1473,35 @@ describe("prompt-pack helpers", () => {
     } as Record<string, unknown>)).toBeUndefined();
   });
 
+  it("extracts judge text from structured content parts with nested text values", () => {
+    expect(extractPromptPackCompletionText({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content: [
+              { type: "output_text", text: { value: "{\"routingScore\":2}" } },
+            ],
+          },
+        },
+      ],
+    })).toBe("{\"routingScore\":2}");
+  });
+
+  it("falls back to reasoning_content when judge content is empty", () => {
+    expect(extractPromptPackCompletionText({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content: "",
+            reasoning_content: "{\"routingScore\":2,\"honestyScore\":2,\"handoffScore\":2,\"robustnessScore\":2,\"usabilityScore\":2}",
+          },
+        },
+      ],
+    })).toBe("{\"routingScore\":2,\"honestyScore\":2,\"handoffScore\":2,\"robustnessScore\":2,\"usabilityScore\":2}");
+  });
+
   it("uses the newest run by timestamp even when report rows are unsorted", () => {
     const tests: PromptPackTestRecord[] = [
       createTest("test-1", "TEST-01"),
@@ -1607,16 +1647,18 @@ describe("prompt-pack helpers", () => {
       byMode.set(test.mode, (byMode.get(test.mode) ?? 0) + 1);
     }
 
-    expect(tests).toHaveLength(72);
-    expect(new Set(tests.map((test) => test.code)).size).toBe(72);
+    expect(tests).toHaveLength(96);
+    expect(new Set(tests.map((test) => test.code)).size).toBe(96);
     expect(tests[0]?.code).toBe("TEST-C101");
     expect(tests.some((test) => test.code === "TEST-W111" && test.prompt.includes("skill-import-service.ts"))).toBe(true);
     expect(tests.some((test) => test.code === "TEST-D110" && test.prompt.includes("update-review-daily"))).toBe(true);
     expect(tests.some((test) => test.code === "TEST-C121" && test.prompt.includes("memory routes"))).toBe(true);
     expect(tests.some((test) => test.code === "TEST-D122" && test.prompt.includes("run-prompt-pack-gates.ts"))).toBe(true);
-    expect(byMode.get("chat")).toBe(24);
-    expect(byMode.get("cowork")).toBe(24);
-    expect(byMode.get("code")).toBe(24);
+    expect(tests.some((test) => test.code === "TEST-W130" && test.prompt.includes("judge target selection"))).toBe(true);
+    expect(tests.some((test) => test.code === "TEST-D132" && test.prompt.includes("wall-clock timing"))).toBe(true);
+    expect(byMode.get("chat")).toBe(32);
+    expect(byMode.get("cowork")).toBe(32);
+    expect(byMode.get("code")).toBe(32);
   });
 
   it("parses dotted manual test codes so they survive import refreshes", () => {

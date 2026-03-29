@@ -1272,6 +1272,7 @@ export class GatewayService {
       agentSendChatMessage: (sessionId, input) => this.agentSendChatMessage(sessionId, input),
       createChatCompletion: (request) => this.createChatCompletion(request),
       getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
+      getPromptJudgeModelDefaults: () => this.getPromptJudgeModelDefaults(),
       backgroundTasks: this.backgroundTasks,
     });
     this.chatProactiveService = new ChatProactiveService(serviceCtx, {
@@ -2873,6 +2874,39 @@ export class GatewayService {
       includeKeychainForActiveProvider: true,
       useCache: true,
     });
+    const glm = runtime.providers.find((provider) => provider.providerId === "glm" && provider.hasApiKey);
+    if (glm) {
+      return {
+        providerId: glm.providerId,
+        model: glm.defaultModel || "glm-5",
+      };
+    }
+    const kimi = runtime.providers.find((provider) => provider.providerId === "moonshot" && provider.hasApiKey);
+    if (kimi) {
+      return {
+        providerId: kimi.providerId,
+        model: kimi.defaultModel,
+      };
+    }
+    const active = runtime.providers.find((provider) => provider.providerId === runtime.activeProviderId);
+    return {
+      providerId: active?.providerId ?? runtime.activeProviderId,
+      model: runtime.activeModel,
+    };
+  }
+
+  private getPromptJudgeModelDefaults(): { providerId?: string; model?: string } {
+    const runtime = this.llmService.getRuntimeConfig({
+      includeKeychainForActiveProvider: true,
+      useCache: true,
+    });
+    const openai = runtime.providers.find((provider) => provider.providerId === "openai" && provider.hasApiKey);
+    if (openai) {
+      return {
+        providerId: openai.providerId,
+        model: "gpt-5.4",
+      };
+    }
     const glm = runtime.providers.find((provider) => provider.providerId === "glm" && provider.hasApiKey);
     if (glm) {
       return {
