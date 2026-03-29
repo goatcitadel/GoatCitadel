@@ -5826,7 +5826,7 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.turnTrace.status).toBe("completed");
     expect(result.assistantContent).not.toContain("recovered item(s)");
     expect(result.assistantContent).not.toContain("deterministic crawl");
-    expect(result.assistantContent).toContain("I couldn't finish that cleanly because");
+    expect(result.assistantContent).toContain("Based on the sources I did retrieve");
   });
 
   it("preserves file-read dependency evidence in the final synthesis prompt", async () => {
@@ -6907,6 +6907,65 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("## Keep Each Requested Section Compact, Evidence-backed, And Decision-oriented");
   });
 
+  it("does not force a synthesis section when the prompt says to keep the requested role order only", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: no-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "- Output exactly these top-level sections in this order: `Product`, `QA`.",
+      "- Do not add extra headings before, between, or after those sections.",
+      "",
+      "## User Task",
+      "Create role-labeled sections for a qwen-specific no-tools slice that tests strict section discipline, no extra headings, and uncertainty labeling. Keep the requested role order only.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "qwen3.5:9b",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "## Product",
+                "- Slice: Keep the qwen gate small and section-locked.",
+                "",
+                "## QA",
+                "- Unknowns: It still needs a strict grader check for extra headings.",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-local-qwen-role-order-only-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-local-qwen-role-order-only-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "ollama",
+      model: "qwen3.5:9b",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "manual",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("## Product");
+    expect(result.assistantContent).toContain("## QA");
+    expect(result.assistantContent).not.toContain("## Synthesis");
+  });
+
   it("replaces Prompt Lab instruction-echo cowork repairs with deterministic role sections and file evidence", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
@@ -7012,6 +7071,102 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("apps/gateway/src/services/prompt-pack-service.ts");
     expect(result.assistantContent).not.toContain("## Do Not Add Extra Headings Before, Between, Or After Those Sections");
     expect(result.assistantContent).not.toContain("## Keep Each Requested Section Compact, Evidence-backed, And Decision-oriented");
+  });
+
+  it("repairs raw qwen tool-call markup into a final answer after tool execution", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: implicit-tools",
+      "",
+      "## User Task",
+      "Inspect the repo if needed and propose the exact minimal automated test that proves `goatcitadel_prompt_pack_v2.md` parses cleanly and remains distinct from the frozen baseline.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "qwen3.5:9b",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-read-pack-1",
+                  type: "function",
+                  function: {
+                    name: "file_read_range",
+                    arguments: JSON.stringify({
+                      path: "goatcitadel_prompt_pack_v2.md",
+                      startLine: 1,
+                      endLine: 80,
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "qwen3.5:9b",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "<function=code_search_files>{\"query\":\"frozen baseline\"}</function>",
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "qwen3.5:9b",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Add one parser-focused regression test that loads `goatcitadel_prompt_pack_v2.md`, asserts the parse succeeds, and checks the parsed identity differs from the frozen baseline fixture instead of matching it byte-for-byte.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: randomUUID(),
+      result: {
+        path: "goatcitadel_prompt_pack_v2.md",
+        content: "# GoatCitadel Prompt Pack v2\n\nThis prompt pack is distinct from the frozen baseline fixture.\n",
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-qwen-raw-tool-markup-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-qwen-raw-tool-markup-repair-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "ollama",
+      model: "qwen3.5:9b",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("parser-focused regression test");
+    expect(result.assistantContent).not.toContain("<function=");
   });
   it("treats underscore-named required Prompt Lab tools as satisfied after approval-gated attempts", async () => {
     const wrappedPrompt = [

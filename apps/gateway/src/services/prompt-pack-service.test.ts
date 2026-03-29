@@ -79,6 +79,25 @@ describe("prompt-pack helpers", () => {
       codeProfile,
       "Read fixtures/prompt-pack-workspace/package.json using file/code tools.",
     )?.workspacePath).toBe("fixtures/prompt-pack-workspace");
+
+    const coworkProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-binding",
+        packId: "pack-1",
+        code: "TEST-BIND-02",
+        title: "Cowork Repo Binding",
+        prompt: "Use file or code tools to inspect apps/gateway/src/services/skill-import-service.ts and summarize the next provenance checks.",
+        orderIndex: 1,
+        mode: "cowork",
+        toolTier: "explicit-tools",
+        createdAt: "2026-03-21T00:00:00.000Z",
+      },
+    });
+
+    expect(resolvePromptPackProjectBinding(
+      coworkProfile,
+      "Use file or code tools to inspect apps/gateway/src/services/skill-import-service.ts and summarize the next provenance checks.",
+    )?.workspacePath).toBe("__prompt_pack_repo__");
   });
 
   it("resolves no-tools profiles and honors mode presets", () => {
@@ -817,6 +836,31 @@ describe("prompt-pack helpers", () => {
     expect(promptInput.prompt).toContain("Do not add extra headings before, between, or after those sections.");
   });
 
+  it("does not append synthesis when the prompt says to keep the requested role order only", () => {
+    const profile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-title-roles-only",
+        packId: "pack-1",
+        code: "TEST-W125",
+        title: "Roles in order Product, QA",
+        prompt: "Create role-labeled sections for a qwen-specific no-tools slice that tests strict section discipline, no extra headings, and uncertainty labeling. Keep the requested role order only.",
+        orderIndex: 6,
+        mode: "cowork",
+        toolTier: "no-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+
+    const promptInput = buildPromptPackPromptInput(
+      "Create role-labeled sections for a qwen-specific no-tools slice that tests strict section discipline, no extra headings, and uncertainty labeling. Keep the requested role order only.",
+      profile,
+      "Roles in order Product, QA",
+    );
+
+    expect(promptInput.prompt).toContain("Output exactly these top-level sections in this order: `Product`, `QA`.");
+    expect(promptInput.prompt).not.toContain("`Product`, `QA`, `Synthesis`");
+  });
+
   it("does not append generic constraints boilerplate to non-empty prompt-pack answers", () => {
     const response = finalizePromptPackResponseText({
       prompt: "Use browser.navigate and summarize the page.",
@@ -1493,6 +1537,57 @@ describe("prompt-pack helpers", () => {
     expect(evaluation.scores.routingScore).toBe(2);
     expect(evaluation.signals).toContain("cowork_role_contract_satisfied");
     expect(evaluation.signals).not.toContain("cowork_role_contract_missing_sections");
+  });
+
+  it("does not require synthesis in cowork scoring when the prompt says requested role order only", () => {
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: "Create role-labeled sections for a qwen-specific no-tools slice that tests strict section discipline, no extra headings, and uncertainty labeling. Keep the requested role order only.",
+      profile: {
+        mode: "cowork",
+        toolTier: "no-tools",
+        toolAutonomy: "manual",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "extended",
+      },
+      run: {
+        runId: "run-role-order-only",
+        packId: "pack-1",
+        testId: "test-role-order-only",
+        sessionId: "sess-role-order-only",
+        status: "completed",
+        mode: "cowork",
+        toolTier: "no-tools",
+        toolAutonomy: "manual",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "extended",
+        responseText: "## Product\n- Slice: Keep the qwen gate small.\n\n## QA\n- Unknowns: Verify uncertainty labels and extra-heading rejection.",
+        trace: {
+          turnId: "turn-role-order-only",
+          sessionId: "sess-role-order-only",
+          userMessageId: "user-role-order-only",
+          branchKind: "append",
+          status: "completed",
+          mode: "cowork",
+          webMode: "off",
+          memoryMode: "off",
+          thinkingLevel: "extended",
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+          toolRuns: [],
+          citations: [],
+          routing: {},
+        },
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.scores.handoffScore).toBe(2);
+    expect(evaluation.scores.routingScore).toBe(2);
+    expect(evaluation.signals).toContain("cowork_role_contract_satisfied");
+    expect(evaluation.signals).not.toContain("cowork_missing_synthesis_section");
   });
 
   it("accepts controller-owned cowork delivery when named perspectives are covered", () => {

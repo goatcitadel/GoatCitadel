@@ -1328,7 +1328,10 @@ export class ChatAgentOrchestrator {
       !approvalPayload
       && finalStatus !== "cancelled"
       && toolRuns.length > 0
-      && looksLikeDegradedAssistantFallbackContent(assistantContent)
+      && (
+        looksLikeDegradedAssistantFallbackContent(assistantContent)
+        || looksLikeSerializedToolCallMarkupContent(assistantContent)
+      )
     ) {
       const repairedFallback = await this.synthesizeToolOutcomeFallback({
         input,
@@ -1341,6 +1344,7 @@ export class ChatAgentOrchestrator {
       if (
         repairedContent.length > 0
         && !looksLikeDegradedAssistantFallbackContent(repairedContent)
+        && !looksLikeSerializedToolCallMarkupContent(repairedContent)
       ) {
         assistantContent = repairedContent;
         if (completionState.status !== "complete") {
@@ -1370,7 +1374,10 @@ export class ChatAgentOrchestrator {
         toolRuns,
         turnBudgetDeadline,
       });
-      if (repairedCompletion.content.trim().length > 0) {
+      if (
+        repairedCompletion.content.trim().length > 0
+        && !looksLikeSerializedToolCallMarkupContent(repairedCompletion.content)
+      ) {
         assistantContent = repairedCompletion.content.trim();
         completionState = {
           finishReason: completionState.finishReason,
@@ -3325,38 +3332,91 @@ function readToolCalls(
   rawArguments: string;
 }> {
   const raw = message.tool_calls;
-  if (!Array.isArray(raw)) {
+  const out: Array<{ id: string; toolName: string; args: Record<string, unknown>; rawArguments: string }> = [];
+  if (Array.isArray(raw)) {
+    for (const value of raw) {
+      const toolCall = value as Record<string, unknown>;
+      const id = typeof toolCall.id === "string" ? toolCall.id : `tool-${randomUUID()}`;
+      const fn = toolCall.function as Record<string, unknown> | undefined;
+      const rawToolName = typeof fn?.name === "string" ? fn.name : undefined;
+      const toolName = rawToolName ? (modelToCanonical.get(rawToolName) ?? rawToolName) : undefined;
+      if (!toolName) {
+        continue;
+      }
+      let args: Record<string, unknown> = {};
+      const rawArgs = fn?.arguments;
+      let rawArguments = "{}";
+      if (typeof rawArgs === "string" && rawArgs.trim()) {
+        rawArguments = rawArgs;
+        try {
+          const parsed = JSON.parse(rawArgs) as unknown;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            args = parsed as Record<string, unknown>;
+          }
+        } catch {
+          args = {};
+        }
+      } else {
+        rawArguments = JSON.stringify(args);
+      }
+      out.push({ id, toolName, args, rawArguments });
+    }
+    return out;
+  }
+  return parseSerializedToolCalls(extractMessageContent(message), modelToCanonical);
+}
+
+function parseSerializedToolCalls(
+  content: string,
+  modelToCanonical: Map<string, string>,
+): Array<{
+  id: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  rawArguments: string;
+}> {
+  const trimmed = content.trim();
+  if (!trimmed) {
     return [];
   }
-  const out: Array<{ id: string; toolName: string; args: Record<string, unknown>; rawArguments: string }> = [];
-  for (const value of raw) {
-    const toolCall = value as Record<string, unknown>;
-    const id = typeof toolCall.id === "string" ? toolCall.id : `tool-${randomUUID()}`;
-    const fn = toolCall.function as Record<string, unknown> | undefined;
-    const rawToolName = typeof fn?.name === "string" ? fn.name : undefined;
-    const toolName = rawToolName ? (modelToCanonical.get(rawToolName) ?? rawToolName) : undefined;
-    if (!toolName) {
+  const calls: Array<{ id: string; toolName: string; args: Record<string, unknown>; rawArguments: string }> = [];
+  const functionMatches = Array.from(trimmed.matchAll(/<function=([a-z0-9_.-]+)>([\s\S]*?)(?:<\/function>|<\/tool_call>)/gi));
+  for (const match of functionMatches) {
+    const rawToolName = match[1]?.trim();
+    if (!rawToolName) {
       continue;
     }
+    const toolName = modelToCanonical.get(rawToolName) ?? rawToolName;
+    const body = (match[2] ?? "").trim();
     let args: Record<string, unknown> = {};
-    const rawArgs = fn?.arguments;
     let rawArguments = "{}";
-    if (typeof rawArgs === "string" && rawArgs.trim()) {
-      rawArguments = rawArgs;
+    const parameterMatches = Array.from(body.matchAll(/<parameter=([a-z0-9_.-]+)>\s*([\s\S]*?)\s*<\/parameter>/gi));
+    if (parameterMatches.length > 0) {
+      args = Object.fromEntries(parameterMatches.map((parameterMatch) => [
+        parameterMatch[1]!,
+        parameterMatch[2]!.trim(),
+      ]));
+      rawArguments = JSON.stringify(args);
+    } else if (body) {
+      rawArguments = body;
       try {
-        const parsed = JSON.parse(rawArgs) as unknown;
+        const parsed = JSON.parse(body) as unknown;
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           args = parsed as Record<string, unknown>;
+          rawArguments = JSON.stringify(args);
         }
       } catch {
         args = {};
       }
-    } else {
-      rawArguments = JSON.stringify(args);
     }
-    out.push({ id, toolName, args, rawArguments });
+    calls.push({
+      id: `tool-${randomUUID()}`,
+      toolName,
+      args,
+      rawArguments,
+    });
   }
-  return out;
+  return calls;
 }
 
 function toProviderToolFunctionName(
@@ -5493,6 +5553,19 @@ function detectCoworkRoleOrder(prompt: string): string[] {
   return roles;
 }
 
+function promptKeepsRequestedRoleOrderOnly(prompt: string): boolean {
+  return /\bkeep\b[\s\S]{0,40}\brequested role order only\b/i.test(prompt)
+    || /\brequested role order only\b/i.test(prompt)
+    || (
+      /\brequested role order\b/i.test(prompt)
+      && /\bno extra headings\b/i.test(prompt)
+    );
+}
+
+function coworkContractRequiresSynthesis(prompt: string): boolean {
+  return !promptKeepsRequestedRoleOrderOnly(prompt);
+}
+
 function promptRequiresExplicitCoworkScaffold(prompt: string): boolean {
   return /\bat least two role-labeled sections\b/i.test(prompt)
     || /\boutput exactly these(?: top-level)? sections in this order\b/i.test(prompt)
@@ -5642,6 +5715,7 @@ function buildDeterministicCoworkRoleContractFallback(input: {
   const evidencePaths = collectObservedToolEvidencePaths(input.toolRuns).slice(0, 4);
   const searchScope = collectToolSearchScope(input.toolRuns).slice(0, 3);
   const constraints = summarizeCoworkToolConstraint(input.toolRuns);
+  const requiresSynthesis = coworkContractRequiresSynthesis(input.prompt);
   const evidenceLine = evidencePaths.length > 0
     ? `- Evidence: Reviewed ${evidencePaths.map((path) => `\`${path}\``).join(", ")}.`
     : "- Evidence: No file-specific evidence was retained from the tool trace.";
@@ -5660,10 +5734,12 @@ function buildDeterministicCoworkRoleContractFallback(input: {
     lines.push(workaroundsLine);
     lines.push("");
   }
-  lines.push("## Synthesis");
-  lines.push(evidenceLine);
-  lines.push(`- Constraints: ${constraints}`);
-  lines.push("- Workarounds: Combine the cited evidence into the best current recommendation and flag remaining gaps explicitly.");
+  if (requiresSynthesis) {
+    lines.push("## Synthesis");
+    lines.push(evidenceLine);
+    lines.push(`- Constraints: ${constraints}`);
+    lines.push("- Workarounds: Combine the cited evidence into the best current recommendation and flag remaining gaps explicitly.");
+  }
   if (isPromptLabHarnessContent(input.prompt)) {
     lines.push("");
     lines.push("## Evidence Used");
@@ -5697,9 +5773,10 @@ function normalizeCoworkRoleContractOutput(input: {
   const requiredRoles = detectCoworkRoleOrder(input.prompt);
   const presentRoles = detectPresentCoworkRoles(trimmed);
   const missingRequiredRoles = requiredRoles.filter((role) => !presentRoles.includes(role));
+  const requiresSynthesis = coworkContractRequiresSynthesis(input.prompt);
   const shouldRepair = looksLikePromptLabInstructionEchoContent(trimmed)
     || missingRequiredRoles.length > 0
-    || (requiredRoles.length > 0 && !hasCoworkSynthesisSection(trimmed));
+    || (requiresSynthesis && requiredRoles.length > 0 && !hasCoworkSynthesisSection(trimmed));
   if (!shouldRepair) {
     return trimmed;
   }
@@ -5920,6 +5997,29 @@ function looksLikeUserSafeFailureMessage(content: string): boolean {
 
 function looksLikeRecoverableAssistantFallbackContent(content: string): boolean {
   return looksLikeDegradedAssistantFallbackContent(content) || looksLikeUserSafeFailureMessage(content);
+}
+
+function looksLikeSerializedToolCallMarkupContent(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    /^<(?:function|tool_call)[=>\s]/i.test(normalized)
+    || normalized === "</tool_call>"
+    || normalized === "</function>"
+  ) {
+    return true;
+  }
+  const markers = [
+    /<function=[a-z0-9_.-]+>/i,
+    /<tool_call>/i,
+    /<\/tool_call>/i,
+    /"name"\s*:\s*"[a-z0-9_.-]+"/i,
+    /"arguments"\s*:\s*"\{/i,
+  ];
+  const hits = markers.filter((pattern) => pattern.test(content));
+  return hits.length >= 2;
 }
 
 function looksLikeFragmentaryStandaloneAnswer(input: {
@@ -7342,6 +7442,32 @@ function collectRecoveredAnswerPoints(
   if (fetchedContent) {
     for (const point of summarizeRecoveredFetchedContent(fetchedContent.text, Math.max(limit, 4), userPrompt)) {
       pushPoint(point);
+    }
+  }
+
+  for (const run of toolRuns) {
+    if (
+      run.status !== "executed"
+      || (
+        run.toolName !== "file.read_range"
+        && run.toolName !== "fs.read"
+      )
+      || !run.result
+      || typeof run.result !== "object"
+    ) {
+      continue;
+    }
+    const content = typeof (run.result as Record<string, unknown>).content === "string"
+      ? ((run.result as Record<string, unknown>).content as string)
+      : "";
+    if (!content.trim()) {
+      continue;
+    }
+    for (const point of summarizeRecoveredFetchedContent(content, 2, userPrompt)) {
+      pushPoint(point);
+    }
+    if (points.length >= limit) {
+      break;
     }
   }
 

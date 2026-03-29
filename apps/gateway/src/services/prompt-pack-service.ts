@@ -2485,7 +2485,12 @@ export function resolvePromptPackProjectBinding(
   profile: PromptPackExecutionProfile,
   prompt = "",
 ): PromptPackProjectBindingConfig | undefined {
-  if (!chatModeRequiresProjectBinding(profile.mode)) {
+  const pathHints = extractPromptPackPathHints(prompt);
+  const directives = detectPromptPackToolDirectives(prompt);
+  const needsProjectBinding = chatModeRequiresProjectBinding(profile.mode)
+    || directives.prefersFileTools
+    || pathHints.length > 0;
+  if (!needsProjectBinding) {
     return undefined;
   }
   if (prompt.toLowerCase().includes(PROMPT_PACK_PROJECT_WORKSPACE_PATH.toLowerCase())) {
@@ -2698,10 +2703,15 @@ export function buildPromptPackPromptInput(
   const directives = detectPromptPackToolDirectives(prompt);
   const titleRolesInOrder = title ? extractPromptPackRolesInOrder(title) : [];
   const orderedSections = extractPromptPackOrderedSections(prompt);
+  const requestedRoleOrderOnly = promptKeepsRequestedRoleOrderOnly(prompt);
   const effectiveOrderedSections = orderedSections.length > 0
     ? orderedSections
     : titleRolesInOrder.length > 0
-      ? [...titleRolesInOrder.map((role) => formatPromptPackRoleHeading(role)), "Synthesis"]
+      ? (
+        requestedRoleOrderOnly
+          ? titleRolesInOrder.map((role) => formatPromptPackRoleHeading(role))
+          : [...titleRolesInOrder.map((role) => formatPromptPackRoleHeading(role)), "Synthesis"]
+      )
       : [];
   const perspectiveLabels = extractPromptPackPerspectiveLabels(prompt);
   const controllerOwnedDelivery = promptRequiresControllerOwnedDelivery(prompt);
@@ -2763,6 +2773,7 @@ export function buildPromptPackPromptInput(
   if (profile.mode === "code") {
     harnessLines.push("- This is a Code evaluation. Stay project-bound, concrete, and evidence-backed.");
     harnessLines.push("- Answer the requested audit, plan, or fix directly. Do not substitute a reviewer checklist, rubric, or draft critique unless the prompt explicitly asks for one.");
+    harnessLines.push("- Stay anchored to the prompt's exact nouns and requested scope. Do not drift to a nearby repo task just because it sounds similar.");
     harnessLines.push("- If you read files or inspect code, name the exact file paths and the specific symbols, imports, scripts, or config values you observed.");
     harnessLines.push("- Do not say `based on my inspection`, `I inspected the repo`, or similar unless you also name the exact files or tool outputs that support that claim.");
     harnessLines.push("- Do not claim validation or execution unless you include the exact command/check and the result.");
@@ -2790,12 +2801,15 @@ export function buildPromptPackPromptInput(
     harnessLines.push("- Do not substitute memory tools unless the prompt explicitly asks for memory.");
     harnessLines.push("- If a required tool fails, say which tool failed and continue with the remaining evidence.");
     harnessLines.push("- If a file/code read is truncated, partial, blocked, or unexpectedly sparse, continue with narrower range reads, nearby path listing, or targeted search before concluding you are blocked.");
+    harnessLines.push("- One failed or partial file/code read is not enough to stop. Retry once with a narrower read or a targeted file search on the same topic before concluding the repo path is unavailable.");
     harnessLines.push("- For exact-evidence asks, do not write `based on my inspection` or claim exact patch points/assertions unless the answer names the exact files or tool outputs used.");
     if (directives.prefersFileTools) {
       harnessLines.push("- Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.");
       harnessLines.push("- Use those tools before concluding that local file access is unavailable.");
       harnessLines.push("- If local file paths are listed, inspect those paths before answering.");
       harnessLines.push("- Do not claim a local file was read unless a file/code tool actually executed.");
+      harnessLines.push("- When the prompt names subsystems instead of exact files, start with `code.search_files` or `file.find` using the prompt's concrete nouns, then read the strongest matches before answering.");
+      harnessLines.push("- Treat repo-relative paths such as `apps/...`, `packages/...`, `docs/...`, `config/...`, `scripts/...`, or `artifacts/...` as rooted at the GoatCitadel repository unless the prompt explicitly points to `fixtures/prompt-pack-workspace`.");
       if (pathHints.length > 0) {
         const boundedScope = pathHints.slice(0, 6).map((value) => `\`${value}\``).join(", ");
         harnessLines.push(`- Keep file/code reads inside the prompt-listed scope unless another path is explicitly required: ${boundedScope}.`);
@@ -2841,6 +2855,15 @@ function shouldDisablePromptPackModeOrchestration(
 ): boolean {
   void prompt;
   return profile.mode !== "chat";
+}
+
+function promptKeepsRequestedRoleOrderOnly(prompt: string): boolean {
+  return /\bkeep\b[\s\S]{0,40}\brequested role order only\b/i.test(prompt)
+    || /\brequested role order only\b/i.test(prompt)
+    || (
+      /\brequested role order\b/i.test(prompt)
+      && /\bno extra headings\b/i.test(prompt)
+    );
 }
 
 function extractPromptPackOrderedSections(prompt: string): string[] {
@@ -3131,6 +3154,7 @@ export function evaluatePromptPackRuleScores(input: {
   const presentRoles = detectPresentRoleSections(responseRaw);
   const synthesisSectionPresent = hasPromptPackSynthesisSection(responseRaw);
   const orderedSections = extractPromptPackOrderedSections(promptRaw);
+  const synthesisRequiredForCowork = !promptKeepsRequestedRoleOrderOnly(promptRaw);
   const requiredPerspectiveLabels = extractPromptPackPerspectiveLabels(promptRaw);
   const controllerOwnedDelivery = promptRequiresControllerOwnedDelivery(promptRaw);
   const hasOrderedSections = orderedSections.length > 0
@@ -3194,7 +3218,7 @@ export function evaluatePromptPackRuleScores(input: {
       ? hasOrderedSections
       : (controllerOwnedDelivery || requiredPerspectiveLabels.length > 1)
         ? (controllerOwnedContractSatisfied || namedPerspectiveContractSatisfied)
-        : presentRoles.length >= 2 && synthesisSectionPresent;
+        : presentRoles.length >= 2 && (synthesisRequiredForCowork ? synthesisSectionPresent : true);
     if (coworkContractSatisfied) {
       handoffScore = 2;
       routingScore = 2;
@@ -3210,7 +3234,7 @@ export function evaluatePromptPackRuleScores(input: {
       } else if (presentRoles.length < 2) {
         signals.push("cowork_missing_role_sections");
       }
-      if (!synthesisSectionPresent) {
+      if (synthesisRequiredForCowork && !synthesisSectionPresent) {
         signals.push("cowork_missing_synthesis_section");
       }
     }
