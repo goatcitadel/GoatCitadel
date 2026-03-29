@@ -17,6 +17,8 @@ import { PageGuideCard } from "../components/PageGuideCard";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { CardSkeleton } from "../components/CardSkeleton";
 import { StatusChip } from "../components/StatusChip";
+import { DataToolbar } from "../components/DataToolbar";
+import { useEmbeddedPageChrome } from "../components/EmbeddedPageChrome";
 import { useAction } from "../hooks/useAction";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { pageCopy } from "../content/copy";
@@ -57,6 +59,7 @@ function findDurableRunId(payload: unknown): string | undefined {
 }
 
 export function ApprovalsPage() {
+  const embedded = useEmbeddedPageChrome();
   const [data, setData] = useState<ApprovalsResponse | null>(null);
   const [replayById, setReplayById] = useState<Record<string, ApprovalReplayResponse>>({});
   const [durableByApprovalId, setDurableByApprovalId] = useState<Record<string, ApprovalDurableStatus | null>>({});
@@ -228,20 +231,23 @@ export function ApprovalsPage() {
     return <CardSkeleton lines={7} />;
   }
 
-  const approvalsHeaderActions = (
+  const hasPendingApprovals = data.items.length > 0;
+  const replayCount = Object.keys(replayById).length;
+
+  const approvalsHeaderActions = hasPendingApprovals ? (
     <div className="workflow-summary-strip">
-      <StatusChip tone={data.items.length > 0 ? "warning" : "success"}>{data.items.length} pending</StatusChip>
-      <StatusChip tone="muted">{Object.keys(replayById).length} replay trails loaded</StatusChip>
+      <StatusChip tone="warning">{data.items.length} pending</StatusChip>
+      {replayCount > 0 ? <StatusChip tone="muted">{replayCount} replay trails loaded</StatusChip> : null}
       <button
         type="button"
         className="danger"
-        disabled={data.items.length === 0 || bulkResolveAction.pending}
+        disabled={bulkResolveAction.pending}
         onClick={() => setBulkRejectOpen(true)}
       >
         {bulkResolveAction.pending ? "Rejecting..." : "Reject all pending"}
       </button>
     </div>
-  );
+  ) : null;
 
   return (
     <section className="workflow-page">
@@ -251,7 +257,7 @@ export function ApprovalsPage() {
         subtitle={pageCopy.approvals.subtitle}
         hint="Review risky actions, explanation status, and checkpoint recovery in one queue."
         className="page-header-citadel approvals-header"
-        actions={approvalsHeaderActions}
+        actions={embedded ? undefined : approvalsHeaderActions}
       />
       <PageGuideCard
         pageId="approvals"
@@ -260,18 +266,20 @@ export function ApprovalsPage() {
         actions={pageCopy.approvals.guide?.actions ?? []}
         terms={pageCopy.approvals.guide?.terms}
       />
+      {embedded && approvalsHeaderActions ? <DataToolbar primary={approvalsHeaderActions} className="approvals-toolbar" /> : null}
       <div className="workflow-status-stack">
         {error ? <p className="error">{error}</p> : null}
         {summary ? <p className="office-subtitle">{summary}</p> : null}
       </div>
-      {data.items.length === 0 ? (
+      {!hasPendingApprovals ? (
         <Panel
           title="No Pending Approvals"
-          subtitle="Risky actions land here when they need a human decision."
+          subtitle="The approvals queue is clear right now."
           tone="soft"
+          padding="compact"
           className="approval-empty-panel"
         >
-          <p className="office-subtitle">No approvals are waiting for review.</p>
+          <p className="office-subtitle">New risky actions will appear here when they need a human decision.</p>
         </Panel>
       ) : null}
       {data.items.map((approval) => {

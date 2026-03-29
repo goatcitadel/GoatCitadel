@@ -2206,9 +2206,17 @@
   background: var(--gc-shell-band);
 }
 
+.theme-citadel-light .approval-empty-panel {
+  box-shadow: var(--gc-shell-shadow-sm);
+}
+
 .theme-citadel-light .approval-card .panel-body,
 .theme-citadel-light .approval-empty-panel .panel-body {
   gap: 16px;
+}
+
+.theme-citadel-light .approval-empty-panel .panel-body {
+  gap: 10px;
 }
 
 .theme-citadel-light .task-detail-summary-panel {

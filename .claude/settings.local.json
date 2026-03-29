@@ -57,34 +57,69 @@
     "PreToolUse": [
       {
         "matcher": "Edit|Write",
-        "command": "node -e \"const f=process.env.CLAUDE_FILE_PATH||''; if(/\\.(env|env\\..*)$|pnpm-lock\\.yaml$/.test(f)){console.error('BLOCKED: protected file '+f);process.exit(1)}\""
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const f=process.env.CLAUDE_FILE_PATH||''; if(/\\.(env|env\\..*)$|pnpm-lock\\.yaml$/.test(f)){console.error('BLOCKED: protected file '+f);process.exit(1)}\""
+          }
+        ]
       },
       {
         "matcher": "Write",
-        "command": "node -e \"const f=process.env.CLAUDE_FILE_PATH||''; if(f.startsWith('config/')||f.includes('/config/')){console.error('BLOCKED: config files require manual review - '+f);process.exit(1)}\""
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const f=process.env.CLAUDE_FILE_PATH||''; if(f.startsWith('config/')||f.includes('/config/')){console.error('BLOCKED: config files require manual review - '+f);process.exit(1)}\""
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
-        "command": "node -e \"const f=process.env.CLAUDE_FILE_PATH||''; const p=require('path'); if(!['.ts','.tsx'].includes(p.extname(f)))process.exit(0); const app=f.includes('mission-control')?'apps/mission-control':'apps/gateway'; const {execSync}=require('child_process'); try{const r=execSync('npx tsc --noEmit -p '+app+'/tsconfig.json 2>&1',{timeout:30000,encoding:'utf8'}); console.log('typecheck passed')}catch(e){const lines=(e.stdout||'').split('\\n'); console.error(lines.slice(-8).join('\\n')); process.exit(1)}\""
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const f=process.env.CLAUDE_FILE_PATH||''; const p=require('path'); if(!['.ts','.tsx'].includes(p.extname(f)))process.exit(0); const app=f.includes('mission-control')?'apps/mission-control':'apps/gateway'; const {execSync}=require('child_process'); try{const r=execSync('npx tsc --noEmit -p '+app+'/tsconfig.json 2>&1',{timeout:30000,encoding:'utf8'}); console.log('typecheck passed')}catch(e){const lines=(e.stdout||'').split('\\n'); console.error(lines.slice(-8).join('\\n')); process.exit(1)}\""
+          }
+        ]
       },
       {
         "matcher": "Edit|Write",
-        "command": "node -e \"const f=process.env.CLAUDE_FILE_PATH||''; if(!f.endsWith('.test.ts')&&!f.endsWith('.test.tsx'))process.exit(0); const {execSync}=require('child_process'); try{execSync('npx vitest run '+f+' --reporter=verbose 2>&1',{timeout:30000,encoding:'utf8',stdio:'inherit'})}catch(e){process.exit(1)}\""
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const f=process.env.CLAUDE_FILE_PATH||''; if(!f.endsWith('.test.ts')&&!f.endsWith('.test.tsx'))process.exit(0); const {execSync}=require('child_process'); try{execSync('npx vitest run '+f+' --reporter=verbose 2>&1',{timeout:30000,encoding:'utf8',stdio:'inherit'})}catch(e){process.exit(1)}\""
+          }
+        ]
       },
       {
         "matcher": "Write",
-        "command": "node -e \"const fs=require('fs'); const f=process.env.CLAUDE_FILE_PATH||''; if(!f)process.exit(0); try{const lines=fs.readFileSync(f,'utf8').split('\\n').length; if(lines>800){console.error('WARNING: file exceeds 800 lines ('+lines+' lines) - consider splitting: '+f)}}catch(e){}\""
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const fs=require('fs'); const f=process.env.CLAUDE_FILE_PATH||''; if(!f)process.exit(0); try{const lines=fs.readFileSync(f,'utf8').split('\\n').length; if(lines>800){console.error('WARNING: file exceeds 800 lines ('+lines+' lines) - consider splitting: '+f)}}catch(e){}\""
+          }
+        ]
       },
       {
         "matcher": "Edit|Write",
-        "command": "node -e \"const f=process.env.CLAUDE_FILE_PATH||''; if(!f.startsWith('config/')||!f.endsWith('.json'))process.exit(0); const fs=require('fs'); try{JSON.parse(fs.readFileSync(f,'utf8')); console.log('JSON valid: '+f)}catch(e){console.error('Invalid JSON in '+f+': '+e.message); process.exit(1)}\""
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const f=process.env.CLAUDE_FILE_PATH||''; if(!f.startsWith('config/')||!f.endsWith('.json'))process.exit(0); const fs=require('fs'); try{JSON.parse(fs.readFileSync(f,'utf8')); console.log('JSON valid: '+f)}catch(e){console.error('Invalid JSON in '+f+': '+e.message); process.exit(1)}\""
+          }
+        ]
       }
     ],
     "Stop": [
       {
-        "command": "node -e \"const {execSync}=require('child_process'); console.log('Running final validation gates...'); try{execSync('pnpm -r typecheck 2>&1',{timeout:120000,encoding:'utf8',stdio:'inherit'}); console.log('typecheck passed')}catch(e){console.error('typecheck failed'); process.exit(1)}\" && node -e \"const {execSync}=require('child_process'); try{execSync('pnpm -r test 2>&1',{timeout:120000,encoding:'utf8',stdio:'inherit'}); console.log('tests passed')}catch(e){console.error('tests failed'); process.exit(1)}\""
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const {execSync}=require('child_process'); console.log('Running final validation gates...'); try{execSync('pnpm -r typecheck 2>&1',{timeout:120000,encoding:'utf8',stdio:'inherit'}); console.log('typecheck passed')}catch(e){console.error('typecheck failed'); process.exit(1)}\" && node -e \"const {execSync}=require('child_process'); try{execSync('pnpm -r test 2>&1',{timeout:120000,encoding:'utf8',stdio:'inherit'}); console.log('tests passed')}catch(e){console.error('tests failed'); process.exit(1)}\""
+          }
+        ]
       }
     ]
   }

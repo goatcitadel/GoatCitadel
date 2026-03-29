@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import "../styles/integrations.css";
 import {
   commsReact,
   commsSend,
@@ -79,14 +80,19 @@ const KIND_DESCRIPTIONS: Record<Exclude<IntegrationKind, "all">, string> = {
 
 const INTEGRATIONS_UPLOAD_SESSION_ID = "session:operator:integrations";
 
-export function IntegrationsPage() {
+interface IntegrationsPageProps {
+  view?: "overview" | "channels";
+}
+
+export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
+  const isChannelsView = view === "channels";
   const [catalog, setCatalog] = useState<IntegrationCatalogEntry[]>([]);
   const [connections, setConnections] = useState<IntegrationConnection[]>([]);
   const [connectorRecords, setConnectorRecords] = useState<ConnectorRecord[]>([]);
   const [plugins, setPlugins] = useState<Awaited<ReturnType<typeof fetchIntegrationPlugins>>["items"]>([]);
   const [pluginSource, setPluginSource] = useState("");
   const [pluginBusyId, setPluginBusyId] = useState<string | null>(null);
-  const [kindFilter, setKindFilter] = useState<IntegrationKind>("all");
+  const [kindFilter, setKindFilter] = useState<IntegrationKind>(() => (isChannelsView ? "channel" : "all"));
   const [connectionSearch, setConnectionSearch] = useState("");
   const [selectedCatalogId, setSelectedCatalogId] = useState("");
   const [label, setLabel] = useState("");
@@ -96,6 +102,7 @@ export function IntegrationsPage() {
   const [configJson, setConfigJson] = useState("{}");
   const [guidedConfig, setGuidedConfig] = useState<Record<string, unknown>>({});
   const [formSchema, setFormSchema] = useState<IntegrationCatalogEntry["formSchema"]>();
+  const [isFormSchemaLoading, setIsFormSchemaLoading] = useState(false);
   const [obsidianStatus, setObsidianStatus] = useState<ObsidianIntegrationStatus | null>(null);
   const [obsidianEnabled, setObsidianEnabled] = useState(false);
   const [obsidianVaultPath, setObsidianVaultPath] = useState("");
@@ -146,7 +153,9 @@ export function IntegrationsPage() {
 
   const load = (options?: { background?: boolean }): Promise<void> => {
     const background = options?.background ?? false;
-    const kind = kindFilter === "all" ? undefined : kindFilter;
+    const kind = (isChannelsView ? "channel" : kindFilter) === "all"
+      ? undefined
+      : (isChannelsView ? "channel" : kindFilter);
     const requestId = ++requestSeq.current;
     if (background) {
       setIsRefreshing(true);
@@ -204,8 +213,14 @@ export function IntegrationsPage() {
   };
 
   useEffect(() => {
+    if (isChannelsView && kindFilter !== "channel") {
+      setKindFilter("channel");
+    }
+  }, [isChannelsView, kindFilter]);
+
+  useEffect(() => {
     load({ background: false });
-  }, [kindFilter]);
+  }, [kindFilter, isChannelsView]);
 
   useRefreshSubscription(
     "integrations",
@@ -223,10 +238,13 @@ export function IntegrationsPage() {
   useEffect(() => {
     if (!selectedCatalogId) {
       setFormSchema(undefined);
+      setIsFormSchemaLoading(false);
       setGuidedConfig({});
       return;
     }
     let cancelled = false;
+    setFormSchema(undefined);
+    setIsFormSchemaLoading(true);
     void fetchIntegrationFormSchema(selectedCatalogId)
       .then((schema) => {
         if (cancelled) {
@@ -243,6 +261,11 @@ export function IntegrationsPage() {
       .catch(() => {
         if (!cancelled) {
           setFormSchema(undefined);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsFormSchemaLoading(false);
         }
       });
 
@@ -786,24 +809,50 @@ export function IntegrationsPage() {
       {isRefreshing ? <StatusChip tone="warning">Refreshing</StatusChip> : null}
     </div>
   );
+  const headerTitle = isChannelsView ? "Channels" : pageCopy.integrations.title;
+  const headerSubtitle = isChannelsView
+    ? "Standalone channel setup, delivery wiring, and operator message validation."
+    : pageCopy.integrations.subtitle;
+  const headerHint = isChannelsView
+    ? "Set up channel delivery here without mixing in non-channel integrations."
+    : "Connect only what you want live, validate risk before saving, and keep the catalog secondary.";
+  const createConnectionTitle = isChannelsView ? "Create Channel Connection" : "Create Connection";
+  const createConnectionSubtitle = isChannelsView
+    ? "Use guided setup for channel adapters first. Drop to JSON only when the channel schema does not cover your case."
+    : "Start in guided mode. Switch to advanced JSON only if you need unsupported fields.";
+  const connectionsTitle = isChannelsView ? "Configured Channel Connections" : "Configured Connections";
+  const connectionsSubtitle = isChannelsView
+    ? "Search channel adapters by name, delivery state, or last error."
+    : "Search by name, catalog, status, or error text.";
+  const guidedModeSummary = isChannelsView
+    ? "Best for beginners. GoatCitadel shows normal labeled fields like connection label, target, and enabled state."
+    : "Best for beginners. GoatCitadel shows normal labeled fields and safer defaults instead of raw config text.";
+  const advancedModeSummary = isChannelsView
+    ? "Best for experts or support-led setup. You edit the raw connection config directly when a channel needs extra fields."
+    : "Best for experts. You edit the raw connection config directly when guided setup does not expose a field you need.";
+  const selectedModeCallout = !showAdvancedJson
+    ? `${guidedModeSummary} Use this unless you already know you need custom JSON.`
+    : `${advancedModeSummary} This gives you more control, but it is easier to make mistakes.`;
 
   return (
     <section className="workflow-page">
       <PageHeader
         eyebrow="Integrate"
-        title={pageCopy.integrations.title}
-        subtitle={pageCopy.integrations.subtitle}
-        hint="Connect only what you want live, validate risk before saving, and keep the catalog secondary."
+        title={headerTitle}
+        subtitle={headerSubtitle}
+        hint={headerHint}
         actions={integrationsHeaderActions}
       />
-      <PageGuideCard
-        pageId="integrations"
-        what={pageCopy.integrations.guide?.what ?? ""}
-        when={pageCopy.integrations.guide?.when ?? ""}
-        mostCommonAction={pageCopy.integrations.guide?.mostCommonAction}
-        actions={pageCopy.integrations.guide?.actions ?? []}
-        terms={pageCopy.integrations.guide?.terms}
-      />
+      {!isChannelsView ? (
+        <PageGuideCard
+          pageId="integrations"
+          what={pageCopy.integrations.guide?.what ?? ""}
+          when={pageCopy.integrations.guide?.when ?? ""}
+          mostCommonAction={pageCopy.integrations.guide?.mostCommonAction}
+          actions={pageCopy.integrations.guide?.actions ?? []}
+          terms={pageCopy.integrations.guide?.terms}
+        />
+      ) : null}
 
       <div className="workflow-status-stack">
         {error ? <p className="error">{error}</p> : null}
@@ -815,9 +864,9 @@ export function IntegrationsPage() {
         subtitle="Catalog entries define the shape. Connections hold config and activate only when a page or workflow needs them."
       >
         <ol>
-          <li>Pick a catalog entry to define what you are connecting.</li>
-          <li>Fill guided fields (recommended), then save the connection.</li>
-          <li>Leave it connected for live use, or pause it until needed.</li>
+          <li>{isChannelsView ? "Pick a channel adapter from the catalog." : "Pick a catalog entry to define what you are connecting."}</li>
+          <li>{isChannelsView ? "Use guided fields first so default targets and auth expectations stay visible." : "Fill guided fields (recommended), then save the connection."}</li>
+          <li>{isChannelsView ? "Validate delivery in Channel Test Bench before you trust the adapter live." : "Leave it connected for live use, or pause it until needed."}</li>
         </ol>
         <div className="token-row">
           <span className="token-chip">Configured: {connectionSummary.total}</span>
@@ -828,10 +877,11 @@ export function IntegrationsPage() {
         </div>
       </Panel>
 
-      <Panel
-        title="Obsidian (Preferred Local Notes Path)"
-        subtitle="Use this when you want GoatCitadel to read and optionally append markdown in a local Obsidian vault."
-      >
+      {!isChannelsView ? (
+        <Panel
+          title="Obsidian (Preferred Local Notes Path)"
+          subtitle="Use this when you want GoatCitadel to read and optionally append markdown in a local Obsidian vault."
+        >
         <p className="office-subtitle">
           Use this for a local vault. Leave it disabled if you do not use Obsidian.
         </p>
@@ -951,12 +1001,14 @@ export function IntegrationsPage() {
             </button>
           </div>
         </details>
-      </Panel>
+        </Panel>
+      ) : null}
 
-      <Panel
-        title="Catalog Scope"
-        subtitle={kindFilter === "all" ? "Showing all available catalog entries." : KIND_DESCRIPTIONS[kindFilter]}
-      >
+      {!isChannelsView ? (
+        <Panel
+          title="Catalog Scope"
+          subtitle={kindFilter === "all" ? "Showing all available catalog entries." : KIND_DESCRIPTIONS[kindFilter]}
+        >
         <DataToolbar
           primary={(
             <div className="controls-row">
@@ -984,7 +1036,18 @@ export function IntegrationsPage() {
           )}
           secondary={<StatusChip>{catalog.length} entries</StatusChip>}
         />
-      </Panel>
+        </Panel>
+      ) : (
+        <Panel
+          title="Channel Catalog"
+          subtitle="Showing only channel adapters in this view."
+        >
+          <div className="workflow-summary-strip">
+            <StatusChip>Kind locked to channels</StatusChip>
+            <StatusChip>{catalog.length} channel entries</StatusChip>
+          </div>
+        </Panel>
+      )}
 
       <ChangeReviewPanel
         title="Pre-Save Safety Check"
@@ -996,8 +1059,8 @@ export function IntegrationsPage() {
       />
 
       <Panel
-        title="Create Connection"
-        subtitle="Start in guided mode. Switch to advanced JSON only if you need unsupported fields."
+        title={createConnectionTitle}
+        subtitle={createConnectionSubtitle}
       >
         {isInitialLoading ? <CardSkeleton lines={5} /> : null}
         {!isInitialLoading ? (
@@ -1084,21 +1147,62 @@ export function IntegrationsPage() {
               </div>
             ) : null}
 
-            <div className="controls-row">
-              <strong>Setup mode</strong>
-              <button type="button" className={!showAdvancedJson ? "active" : ""} onClick={() => setShowAdvancedJson(false)}>
-                Guided (recommended)
+            <div className="integrations-setup-mode-panel">
+              <div className="integrations-setup-mode-header">
+                <strong>Setup mode</strong>
+                <p className="office-subtitle">
+                  Choose the simple form or the raw config editor before you fill anything in.
+                </p>
+              </div>
+              <div className="integrations-setup-mode-toggle" role="group" aria-label="Setup mode">
+              <button
+                type="button"
+                aria-pressed={!showAdvancedJson}
+                className={`integrations-setup-mode-button${!showAdvancedJson ? " active" : ""}`}
+                onClick={() => setShowAdvancedJson(false)}
+              >
+                <span className="integrations-setup-mode-label">Guided</span>
+                <span className="integrations-setup-mode-note">Recommended for most people</span>
               </button>
-              <button type="button" className={showAdvancedJson ? "active" : ""} onClick={() => setShowAdvancedJson(true)}>
-                Advanced JSON
+              <button
+                type="button"
+                aria-pressed={showAdvancedJson}
+                className={`integrations-setup-mode-button${showAdvancedJson ? " active" : ""}`}
+                onClick={() => setShowAdvancedJson(true)}
+              >
+                <span className="integrations-setup-mode-label">Advanced JSON</span>
+                <span className="integrations-setup-mode-note">Raw config for edge cases</span>
               </button>
+              </div>
+              <div className="integrations-setup-mode-guidance">
+                <article className={`integrations-setup-mode-card${!showAdvancedJson ? " selected" : ""}`}>
+                  <h4>Guided</h4>
+                  <p>{guidedModeSummary}</p>
+                  <span>Use this when you want the easiest path.</span>
+                </article>
+                <article className={`integrations-setup-mode-card${showAdvancedJson ? " selected" : ""}`}>
+                  <h4>Advanced JSON</h4>
+                  <p>{advancedModeSummary}</p>
+                  <span>Use this only when docs or support tell you to.</span>
+                </article>
+              </div>
             </div>
+            <p className="integrations-setup-mode-status">
+              {!showAdvancedJson
+                ? (isFormSchemaLoading ? "Loading guided fields..." : "Guided mode is selected.")
+                : "Advanced JSON mode is selected."}
+            </p>
+            <p className="office-subtitle">{selectedModeCallout}</p>
             {!showAdvancedJson ? (
+              isFormSchemaLoading ? (
+                <CardSkeleton lines={4} />
+              ) : (
               <ConfigFormBuilder
                 schema={formSchema}
                 value={guidedConfig}
                 onChange={setGuidedConfig}
               />
+              )
             ) : (
               <>
                 <label htmlFor="connectionConfig">Connection config (JSON)</label>
@@ -1123,8 +1227,8 @@ export function IntegrationsPage() {
       </Panel>
 
       <Panel
-        title="Configured Connections"
-        subtitle="Search by name, catalog, status, or error text."
+        title={connectionsTitle}
+        subtitle={connectionsSubtitle}
       >
         <DataToolbar
           primary={(
@@ -1468,10 +1572,11 @@ export function IntegrationsPage() {
         )}
       </Panel>
 
-      <Panel
-        title="Plugin Adapters"
-        subtitle="Optional adapters for services that are not built in yet. Most users can skip this section."
-      >
+      {!isChannelsView ? (
+        <Panel
+          title="Plugin Adapters"
+          subtitle="Optional adapters for services that are not built in yet. Most users can skip this section."
+        >
         <details className="advanced-panel">
           <summary>Install new plugin adapter (advanced)</summary>
           <div className="controls-row" style={{ marginTop: 10 }}>
@@ -1525,7 +1630,8 @@ export function IntegrationsPage() {
             ))}
           </tbody>
         </table>
-      </Panel>
+        </Panel>
+      ) : null}
 
       <ConfirmModal
         open={Boolean(deleteTarget)}

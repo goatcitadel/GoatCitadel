@@ -8,7 +8,7 @@ export type SpacePage = OperatePage | ObservePage | ConfigurePage;
 export type ActivityTab = "activity" | "scheduler" | "improvement";
 export type ArtifactsTab = "memory" | "files";
 export type SettingsTab = "general" | "providers" | "access" | "budget" | "runtime" | "workspaces" | "addons" | "onboarding";
-export type IntegrationsTab = "overview" | "mcp";
+export type IntegrationsTab = "overview" | "channels" | "mcp";
 export type AgentsTab = "overview" | "herd-live" | "herd-lab" | "skills";
 
 export type NestedHostTab = ActivityTab | ArtifactsTab | SettingsTab | IntegrationsTab | AgentsTab;
@@ -173,6 +173,7 @@ const LEGACY_TAB_REDIRECTS: Record<string, ResolvedRoute> = {
   mesh: { space: "configure", page: "settings", tab: "runtime" },
   npu: { space: "configure", page: "settings", tab: "runtime" },
   integrations: { space: "configure", page: "integrations", tab: "overview" },
+  channels: { space: "configure", page: "integrations", tab: "channels" },
   mcp: { space: "configure", page: "integrations", tab: "mcp" },
   tools: { space: "configure", page: "tools" },
   agents: { space: "configure", page: "agents", tab: "overview" },
@@ -224,7 +225,7 @@ function normalizeTab(page: SpacePage, tab: string | null): NestedHostTab | unde
   )) {
     return tab;
   }
-  if (page === "integrations" && (tab === "overview" || tab === "mcp")) {
+  if (page === "integrations" && (tab === "overview" || tab === "channels" || tab === "mcp")) {
     return tab;
   }
   if (page === "agents" && (tab === "overview" || tab === "herd-live" || tab === "herd-lab" || tab === "skills")) {

@@ -13,6 +13,7 @@ import type {
   LlmRuntimeConfig,
 } from "@goatcitadel/contracts";
 import { findProviderTemplate } from "@goatcitadel/contracts";
+import { applyEstimatedCostToChatResponse, applyEstimatedCostToStreamChunk } from "./llm-pricing.js";
 import { SecretStoreService, SecretStoreUnavailableError } from "./secret-store-service.js";
 
 export interface LlmRuntimeUpdateInput {
@@ -470,7 +471,13 @@ export class LlmService {
       }
     }
 
-    return (await response.json()) as ChatCompletionResponse;
+    return applyEstimatedCostToChatResponse(
+      (await response.json()) as ChatCompletionResponse,
+      {
+        providerId: resolved.provider.providerId,
+        model,
+      },
+    );
   }
 
   private async *executeChatCompletionsStream(
@@ -535,7 +542,12 @@ export class LlmService {
       }
     }
 
-    yield* streamJsonSseResponse(response);
+    for await (const event of streamJsonSseResponse(response)) {
+      yield applyEstimatedCostToStreamChunk(event, {
+        providerId: resolved.provider.providerId,
+        model,
+      });
+    }
   }
 
   private async executeOpenAiResponses(
@@ -557,7 +569,10 @@ export class LlmService {
     }
 
     const json = (await response.json()) as Record<string, unknown>;
-    return adaptOpenAiResponsesResponse(json);
+    return applyEstimatedCostToChatResponse(adaptOpenAiResponsesResponse(json), {
+      providerId: resolved.provider.providerId,
+      model,
+    });
   }
 
   private async *executeOpenAiResponsesStream(
@@ -583,7 +598,10 @@ export class LlmService {
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     if (!contentType.includes("text/event-stream") || !response.body) {
       const json = (await response.json()) as Record<string, unknown>;
-      yield adaptOpenAiResponsesResponse(json);
+      yield applyEstimatedCostToChatResponse(adaptOpenAiResponsesResponse(json), {
+        providerId: resolved.provider.providerId,
+        model,
+      });
       return;
     }
 
@@ -634,7 +652,7 @@ export class LlmService {
 
       if (eventType === "response.completed" && isRecord(event.response)) {
         const adapted = adaptOpenAiResponsesResponse(event.response);
-        yield {
+        yield applyEstimatedCostToStreamChunk({
           id: adapted.id,
           model: adapted.model,
           choices: [
@@ -645,7 +663,10 @@ export class LlmService {
             },
           ],
           usage: adapted.usage,
-        };
+        }, {
+          providerId: resolved.provider.providerId,
+          model,
+        });
         continue;
       }
 
@@ -674,7 +695,10 @@ export class LlmService {
     }
 
     const json = (await response.json()) as Record<string, unknown>;
-    return adaptAnthropicMessageResponse(json);
+    return applyEstimatedCostToChatResponse(adaptAnthropicMessageResponse(json), {
+      providerId: resolved.provider.providerId,
+      model,
+    });
   }
 
   private async *executeAnthropicMessagesStream(
@@ -700,7 +724,10 @@ export class LlmService {
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     if (!contentType.includes("text/event-stream") || !response.body) {
       const json = (await response.json()) as Record<string, unknown>;
-      yield adaptAnthropicMessageResponse(json);
+      yield applyEstimatedCostToChatResponse(adaptAnthropicMessageResponse(json), {
+        providerId: resolved.provider.providerId,
+        model,
+      });
       return;
     }
 
@@ -797,7 +824,7 @@ export class LlmService {
       }
 
       if (eventType === "message_stop") {
-        yield {
+        yield applyEstimatedCostToStreamChunk({
           id: messageId,
           model: messageModel,
           choices: [
@@ -808,7 +835,10 @@ export class LlmService {
             },
           ],
           usage: normalizeAnthropicUsage(usage),
-        };
+        }, {
+          providerId: resolved.provider.providerId,
+          model,
+        });
       }
     }
   }

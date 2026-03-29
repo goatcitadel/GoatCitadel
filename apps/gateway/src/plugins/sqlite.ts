@@ -16,11 +16,14 @@ export const gatewayPlugin = fp(async (fastify) => {
   const rootDir = detectRootDir();
   const config = await loadGatewayConfig(rootDir);
   const gateway = new GatewayService(config);
-  await gateway.init();
   gateway.attachDevDiagnosticsLogger(fastify.log);
-
   fastify.decorate("gateway", gateway);
   fastify.decorate("gatewayConfig", config);
+  await gateway.initCritical();
+
+  fastify.addHook("onReady", async () => {
+    void gateway.startDeferredInit();
+  });
 
   fastify.addHook("onClose", async () => {
     await gateway.close();

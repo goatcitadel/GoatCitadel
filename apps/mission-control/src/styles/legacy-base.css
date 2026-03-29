@@ -2451,6 +2451,19 @@ body {
   gap: 8px;
 }
 
+.approval-empty-panel {
+  width: min(100%, 560px);
+  margin-inline: auto;
+}
+
+.approval-empty-panel .section-header {
+  gap: 8px;
+}
+
+.approval-empty-panel .panel-body {
+  gap: 10px;
+}
+
 .workflow-summary-strip {
   display: flex;
   align-items: center;

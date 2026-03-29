@@ -1110,6 +1110,8 @@ export class GatewayService {
   private maintenanceScheduler?: NodeJS.Timeout;
   private closing = false;
   private onboardingMarker: { completedAt?: string; completedBy?: string } = {};
+  private criticalInitComplete = false;
+  private deferredInitPromise?: Promise<void>;
 
   private get gatewaySql() {
     return this.storage.gatewaySql;
@@ -1368,11 +1370,44 @@ export class GatewayService {
   }
 
   public async init(): Promise<void> {
+    await this.initCritical();
+    await this.startDeferredInit();
+  }
+
+  public async initCritical(): Promise<void> {
+    if (this.criticalInitComplete) {
+      return;
+    }
     await this.loadOnboardingMarker();
     this.applyStoredFeatureFlags();
     this.storage.agentProfiles.seedBuiltins(BUILTIN_AGENT_PROFILES);
     const skills = await this.skillsService.reload();
     this.ensureSkillStates(skills.map((skill) => skill.skillId));
+    this.criticalInitComplete = true;
+  }
+
+  public startDeferredInit(): Promise<void> {
+    if (!this.criticalInitComplete) {
+      throw new Error("Gateway critical init must complete before deferred init starts.");
+    }
+    if (this.deferredInitPromise) {
+      return this.deferredInitPromise;
+    }
+    const task = this.runDeferredInit().catch((error) => {
+      console.error("[goatcitadel] deferred startup failed", error);
+      throw error;
+    });
+    this.deferredInitPromise = task;
+    task.catch(() => {});
+    this.backgroundTasks.add(task);
+    task.finally(() => this.backgroundTasks.delete(task));
+    return task;
+  }
+
+  private async runDeferredInit(): Promise<void> {
+    if (this.closing) {
+      return;
+    }
     this.improvementService.markInterruptedDecisionReplayRuns();
     await this.loadCronJobsFromConfig();
     this.improvementService.ensureWeeklyImprovementCronJob();
@@ -1382,6 +1417,9 @@ export class GatewayService {
     this.ensureUpdateReviewCronJob();
     this.meshService.init();
     await this.npuSidecar.init();
+    if (this.closing) {
+      return;
+    }
     // Enforce env-only secret persistence policy on startup.
     this.persistLlmConfig();
     this.persistAssistantConfig();
@@ -15868,18 +15906,21 @@ export class GatewayService {
     const parsed = JSON.parse(raw) as { jobs?: CronJobRecord[] } | CronJobRecord[];
     const jobs = Array.isArray(parsed) ? parsed : parsed.jobs ?? [];
 
-    for (const job of jobs) {
-      const existing = this.storage.cronJobs.get(job.jobId);
-      this.storage.cronJobs.upsert({
-        ...job,
-        jobId: normalizeCronJobId(job.jobId),
-        name: normalizeCronJobName(job.name),
-        schedule: normalizeCronSchedule(job.schedule),
-        enabled: Boolean(job.enabled),
-        lastRunAt: job.lastRunAt ?? existing?.lastRunAt,
-        nextRunAt: job.nextRunAt ?? existing?.nextRunAt,
-      });
-    }
+    this.storage.runImmediateTransaction(() => {
+      for (const job of jobs) {
+        const normalizedJobId = normalizeCronJobId(job.jobId);
+        const existing = this.storage.cronJobs.get(normalizedJobId);
+        this.storage.cronJobs.upsertIfChanged({
+          ...job,
+          jobId: normalizedJobId,
+          name: normalizeCronJobName(job.name),
+          schedule: normalizeCronSchedule(job.schedule),
+          enabled: Boolean(job.enabled),
+          lastRunAt: job.lastRunAt ?? existing?.lastRunAt,
+          nextRunAt: job.nextRunAt ?? existing?.nextRunAt,
+        });
+      }
+    });
   }
 
   private persistCronJobsConfig(): void {
@@ -15905,7 +15946,7 @@ export class GatewayService {
   private ensurePrivateBetaBackupCronJob(): void {
     const existing = this.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
     const now = new Date().toISOString();
-    this.storage.cronJobs.upsert({
+    this.storage.cronJobs.upsertIfChanged({
       jobId: PRIVATE_BETA_BACKUP_JOB_ID,
       name: "Private Beta Daily Backup",
       schedule: PRIVATE_BETA_BACKUP_SCHEDULE_LABEL,
@@ -15918,7 +15959,7 @@ export class GatewayService {
   private ensureMemoryFlushCronJob(): void {
     const existing = this.storage.cronJobs.get(MEMORY_FLUSH_DAILY_JOB_ID);
     const now = new Date().toISOString();
-    this.storage.cronJobs.upsert({
+    this.storage.cronJobs.upsertIfChanged({
       jobId: MEMORY_FLUSH_DAILY_JOB_ID,
       name: "Memory Flush Daily",
       schedule: MEMORY_FLUSH_DAILY_SCHEDULE_LABEL,
@@ -15931,7 +15972,7 @@ export class GatewayService {
   private ensureCostReportCronJob(): void {
     const existing = this.storage.cronJobs.get(COST_REPORT_HOURLY_JOB_ID);
     const now = new Date().toISOString();
-    this.storage.cronJobs.upsert({
+    this.storage.cronJobs.upsertIfChanged({
       jobId: COST_REPORT_HOURLY_JOB_ID,
       name: "Cost Report Hourly",
       schedule: COST_REPORT_HOURLY_SCHEDULE_LABEL,
@@ -15944,7 +15985,7 @@ export class GatewayService {
   private ensureUpdateReviewCronJob(): void {
     const existing = this.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
     const now = new Date().toISOString();
-    this.storage.cronJobs.upsert({
+    this.storage.cronJobs.upsertIfChanged({
       jobId: UPDATE_REVIEW_DAILY_JOB_ID,
       name: "Daily Update Review",
       schedule: UPDATE_REVIEW_DAILY_SCHEDULE_LABEL,

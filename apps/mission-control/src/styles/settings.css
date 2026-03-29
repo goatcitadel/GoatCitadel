@@ -5,6 +5,10 @@
   align-items: start;
 }
 
+.settings-v2-layout-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .settings-v2-nav {
   position: sticky;
   top: 88px;

@@ -58,7 +58,7 @@ export function SettingsHubPage({
         />
         <div className="settings-hub-content">
           <EmbeddedPageChromeProvider>
-            {rendersSettingsPage ? <SettingsPage /> : null}
+            {rendersSettingsPage ? <SettingsPage activeTab={activeTab} /> : null}
             {activeTab === "runtime" ? (
               <div className="stack-lg">
                 <MeshPage />

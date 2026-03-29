@@ -2560,6 +2560,13 @@ function createToolAccessDecisionHotPathIndexes(db: DatabaseSync): void {
 }
 
 function createChatSessionHistoryVisibilitySchema(db: DatabaseSync): void {
+  const tableExists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get("chat_session_meta") as { name: string } | undefined;
+  if (!tableExists) {
+    return;
+  }
+
   addColumnIfMissing(db, "chat_session_meta", "origin", "TEXT");
   addColumnIfMissing(db, "chat_session_meta", "include_in_history", "INTEGER NOT NULL DEFAULT 1");
 

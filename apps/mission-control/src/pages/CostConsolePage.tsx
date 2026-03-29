@@ -120,6 +120,13 @@ export function CostConsolePage() {
     );
   }
 
+  const totalInputTokens = data.items.reduce((sum, item) => sum + item.tokenInput, 0);
+  const totalOutputTokens = data.items.reduce((sum, item) => sum + item.tokenOutput, 0);
+  const totalTokens = data.items.reduce((sum, item) => sum + item.tokenTotal, 0);
+  const totalCostUsd = data.items.reduce((sum, item) => sum + item.costUsd, 0);
+  const hasTokenUsage = data.items.some((item) => item.tokenTotal > 0);
+  const showsMissingRecordedSpend = hasTokenUsage && totalCostUsd === 0;
+
   return (
     <section className="workflow-page">
       <PageHeader
@@ -149,7 +156,33 @@ export function CostConsolePage() {
         {isFallbackRefreshing ? (
           <p className="status-banner warning">Live updates degraded, checking periodically.</p>
         ) : null}
+        {showsMissingRecordedSpend ? (
+          <p className="status-banner warning">
+            USD spend is not being recorded for this window. GoatCitadel received token usage,
+            but these runs did not report a dollar amount, so recorded spend remains {formatUsd(totalCostUsd)}.
+            This commonly happens with local models or providers that omit price metadata.
+          </p>
+        ) : null}
       </div>
+      <Panel
+        title="Window Totals"
+        subtitle="Recorded spend and token activity for the selected scope and time window."
+        padding="compact"
+      >
+        <div className="workflow-summary-strip">
+          <StatusChip tone={showsMissingRecordedSpend ? "warning" : "success"}>
+            Recorded spend {formatUsd(totalCostUsd)}
+          </StatusChip>
+          <StatusChip tone="muted">Input {totalInputTokens.toLocaleString()} tokens</StatusChip>
+          <StatusChip tone="muted">Output {totalOutputTokens.toLocaleString()} tokens</StatusChip>
+          <StatusChip tone="muted">Total {totalTokens.toLocaleString()} tokens</StatusChip>
+        </div>
+        <p className="office-subtitle">
+          {showsMissingRecordedSpend
+            ? "The page can account for token volume here, but not actual USD charges yet."
+            : "Recorded spend reflects only the runs that reported a USD amount through the gateway."}
+        </p>
+      </Panel>
       <Panel
         title="Cost Controls"
         subtitle="Switch scope and run a leaner-cost recommendation without leaving the current console."
@@ -216,6 +249,10 @@ export function CostConsolePage() {
             <p className="office-subtitle">
               Some assistant responses did not include provider usage, so totals are partial for those events.
             </p>
+          ) : showsMissingRecordedSpend ? (
+            <p className="office-subtitle">
+              Token usage is available, but USD spend was not recorded for these runs.
+            </p>
           ) : (
             <p className="office-subtitle">All recent assistant events reported usage successfully.</p>
           )}
@@ -230,7 +267,7 @@ export function CostConsolePage() {
               <th>Token Input</th>
               <th>Token Output</th>
               <th>Total Tokens</th>
-              <th>Cost (USD)</th>
+              <th>Recorded Cost (USD)</th>
             </tr>
           </thead>
           <tbody>
@@ -240,7 +277,7 @@ export function CostConsolePage() {
                 <td>{item.tokenInput}</td>
                 <td>{item.tokenOutput}</td>
                 <td>{item.tokenTotal}</td>
-                <td>{item.costUsd.toFixed(4)}</td>
+                <td>{formatRecordedCost(item.costUsd, item.tokenTotal, showsMissingRecordedSpend)}</td>
               </tr>
             ))}
           </tbody>
@@ -272,5 +309,24 @@ function formatTokenDelta(delta: number): string {
     return `${Math.round(delta)} tokens`;
   }
   return "no token change";
+}
+
+function formatUsd(amount: number, fractionDigits = 2): string {
+  return amount.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  });
+}
+
+function formatRecordedCost(costUsd: number, tokenTotal: number, showsMissingRecordedSpend: boolean): string {
+  if (costUsd > 0) {
+    return formatUsd(costUsd, 4);
+  }
+  if (showsMissingRecordedSpend && tokenTotal > 0) {
+    return "Not recorded";
+  }
+  return formatUsd(costUsd, 4);
 }
 

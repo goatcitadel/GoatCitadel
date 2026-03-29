@@ -329,7 +329,7 @@ export class ImprovementService {
   ensureWeeklyImprovementCronJob(): void {
     const existing = this.ctx.storage.cronJobs.get("improvement_weekly");
     const now = new Date().toISOString();
-    this.ctx.storage.cronJobs.upsert({
+    this.ctx.storage.cronJobs.upsertIfChanged({
       jobId: "improvement_weekly",
       name: "Self-Improvement Weekly Replay",
       schedule: IMPROVEMENT_WEEKLY_SCHEDULE_LABEL,

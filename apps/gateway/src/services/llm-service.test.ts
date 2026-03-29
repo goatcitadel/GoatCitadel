@@ -1514,6 +1514,52 @@ describe("LlmService", () => {
     expect(chunks[0]?.id).toBe("chunk_multiline");
     expect(((chunks[0]?.choices as Array<Record<string, unknown>>)[0]?.delta as Record<string, unknown>)?.content).toBe("hello from multiline sse");
   });
+
+  it("estimates missing usage cost for chat completions responses", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-4.1-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({
+        id: "cmpl_estimated_cost",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
+        usage: {
+          prompt_tokens: 1_000,
+          completion_tokens: 500,
+          cached_prompt_tokens: 200,
+        },
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    )) as unknown as typeof fetch;
+
+    try {
+      const response = await service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-4.1-mini",
+        messages: [{ role: "user", content: "hello" }],
+      });
+
+      expect(response.usage?.cost_usd).toBe(0.00114);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 function createNoopSecretStore(): SecretStoreService {

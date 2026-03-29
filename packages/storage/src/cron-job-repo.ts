@@ -55,6 +55,14 @@ export class CronJobRepository {
     };
   }
 
+  public upsertIfChanged(job: CronJobRecord, now = new Date().toISOString()): CronJobRecord {
+    const existing = this.get(job.jobId);
+    if (existing && cronJobsMatch(existing, job)) {
+      return existing;
+    }
+    return this.upsert(job, now);
+  }
+
   public get(jobId: string): CronJobRecord | undefined {
     const row = this.getStmt.get({ jobId }) as unknown as CronJobRow | undefined;
     if (!row) {
@@ -85,4 +93,13 @@ function mapRow(row: CronJobRow): CronJobRecord {
     nextRunAt: row.next_run_at ?? undefined,
     updatedAt: row.updated_at,
   };
+}
+
+function cronJobsMatch(existing: CronJobRecord, next: CronJobRecord): boolean {
+  return existing.jobId === next.jobId
+    && existing.name === next.name
+    && existing.schedule === next.schedule
+    && existing.enabled === next.enabled
+    && existing.lastRunAt === next.lastRunAt
+    && existing.nextRunAt === next.nextRunAt;
 }

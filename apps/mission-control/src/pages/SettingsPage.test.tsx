@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildProviderScopedModelOptions,
   getModelPreviewFallbackModel,
+  resolveSettingsTabSections,
   resolveAuthStorageMode,
   resolveModelDraftHydration,
   resolveProviderModelSelection,
@@ -70,5 +71,12 @@ describe("SettingsPage model selection helpers", () => {
       activeSelection: true,
       providerEditor: true,
     });
+  });
+
+  it("groups shared settings sections by top-level tab", () => {
+    expect(resolveSettingsTabSections("general")).toEqual(["settings-overview", "settings-voice"]);
+    expect(resolveSettingsTabSections("providers")).toEqual(["settings-models", "settings-tests"]);
+    expect(resolveSettingsTabSections("access")).toEqual(["settings-access"]);
+    expect(resolveSettingsTabSections("budget")).toEqual(["settings-runtime"]);
   });
 });

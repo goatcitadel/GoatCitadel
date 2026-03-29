@@ -362,6 +362,42 @@ describe("App gateway access gate", () => {
     expect(connectEventStreamMock).toHaveBeenCalledTimes(1);
   });
 
+  it("automatically retries startup preflight while the gateway is temporarily unreachable", async () => {
+    vi.useFakeTimers();
+    try {
+      window.setTimeout = globalThis.setTimeout.bind(globalThis);
+      window.clearTimeout = globalThis.clearTimeout.bind(globalThis);
+      const { App } = await import("./App");
+      preflightGatewayAccessMock
+        .mockResolvedValueOnce({
+          status: "unreachable",
+          message: "Mission Control cannot reach the gateway yet.",
+          healthDetail: "Gateway health probe failed: connect ECONNREFUSED 127.0.0.1:8787",
+        })
+        .mockResolvedValueOnce(createReadyPreflightResult());
+
+      let renderer: ReactTestRenderer;
+      await act(async () => {
+        renderer = create(<App />);
+      });
+      await flush();
+
+      expect(renderTreeText(renderer!)).toContain("Mission Control access gate");
+      expect(preflightGatewayAccessMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      await flush();
+
+      expect(preflightGatewayAccessMock).toHaveBeenCalledTimes(2);
+      expect(renderTreeText(renderer!)).toContain("chat-ready:chat:locked");
+      expect(connectEventStreamMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("adds backend pending approvals to unresolved local approval prompts", async () => {
     const { deriveShellApprovalCount } = await import("./App");
 

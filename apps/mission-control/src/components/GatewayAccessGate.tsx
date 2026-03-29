@@ -26,6 +26,7 @@ interface GatewayAccessGateProps {
   gatewayBaseUrl: string;
   access: GatewayAccessView;
   busy: boolean;
+  autoRetryPending?: boolean;
   onRetry: () => void | Promise<void>;
 }
 
@@ -45,6 +46,7 @@ export function GatewayAccessGate({
   gatewayBaseUrl,
   access,
   busy,
+  autoRetryPending = false,
   onRetry,
 }: GatewayAccessGateProps) {
   const shellState = deriveShellGatewayAccessState(access);
@@ -213,6 +215,9 @@ export function GatewayAccessGate({
         <div className="gateway-access-status">
           <p>{shellState.summary}</p>
           <p className="gateway-access-note"><strong>Next:</strong> {shellState.nextStep}</p>
+          {access.status === "unreachable" && autoRetryPending ? (
+            <p className="gateway-access-note">Mission Control will retry the gateway handshake automatically.</p>
+          ) : null}
         </div>
 
         {shellState.detail ? (

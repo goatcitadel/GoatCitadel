@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { CHAT_MODE_PRESETS } from "@goatcitadel/contracts";
 import {
   consumeGatewayAccessBootstrapFromLocation,
@@ -79,6 +79,7 @@ const SettingsHubPage = lazyPage(() => import("./pages/SettingsHubPage"), "Setti
 const SystemPage = lazyPage(() => import("./pages/SystemPage"), "SystemPage");
 const TasksPage = lazyPage(() => import("./pages/TasksPage"), "TasksPage");
 const ToolsPage = lazyPage(() => import("./pages/ToolsPage"), "ToolsPage");
+const GATEWAY_ACCESS_AUTO_RETRY_MS = 300;
 
 export function deriveShellApprovalCount(
   operateStatus: DashboardStateResponse | null,
@@ -171,6 +172,8 @@ export function App() {
   });
   const [gatewayAccessBusy, setGatewayAccessBusy] = useState(true);
   const [gatewayAccessRunId, setGatewayAccessRunId] = useState(0);
+  const [gatewayAccessAutoRetryPending, setGatewayAccessAutoRetryPending] = useState(false);
+  const gatewayAccessAutoRetryTimerRef = useRef<number | null>(null);
   const effectiveEffectsMode = useMemo(() => resolveEffectiveEffectsMode(effectsMode), [effectsMode]);
   const shellGatewayState = useMemo(
     () => deriveShellGatewayAccessState(gatewayAccess, streamState),
@@ -377,6 +380,32 @@ export function App() {
       cancelled = true;
     };
   }, [gatewayAccessRunId]);
+
+  useEffect(() => {
+    if (gatewayAccessAutoRetryTimerRef.current !== null) {
+      window.clearTimeout(gatewayAccessAutoRetryTimerRef.current);
+      gatewayAccessAutoRetryTimerRef.current = null;
+    }
+    setGatewayAccessAutoRetryPending(false);
+    if (gatewayAccess.status !== "unreachable" || gatewayAccessBusy || typeof window === "undefined") {
+      return;
+    }
+
+    setGatewayAccessAutoRetryPending(true);
+    gatewayAccessAutoRetryTimerRef.current = window.setTimeout(() => {
+      gatewayAccessAutoRetryTimerRef.current = null;
+      setGatewayAccessAutoRetryPending(false);
+      setGatewayAccessRunId((current) => current + 1);
+    }, GATEWAY_ACCESS_AUTO_RETRY_MS);
+
+    return () => {
+      if (gatewayAccessAutoRetryTimerRef.current !== null) {
+        window.clearTimeout(gatewayAccessAutoRetryTimerRef.current);
+        gatewayAccessAutoRetryTimerRef.current = null;
+      }
+      setGatewayAccessAutoRetryPending(false);
+    };
+  }, [gatewayAccess.status, gatewayAccessBusy]);
 
   useEffect(() => {
     if (gatewayAccess.status !== "ready") {
@@ -811,6 +840,7 @@ export function App() {
         gatewayBaseUrl={getGatewayApiBaseUrl()}
         access={gatewayAccess}
         busy={gatewayAccessBusy}
+        autoRetryPending={gatewayAccessAutoRetryPending}
         onRetry={retryGatewayAccess}
       />
     );

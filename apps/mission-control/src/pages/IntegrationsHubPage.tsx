@@ -12,6 +12,7 @@ interface IntegrationsHubPageProps {
 
 const ITEMS: Array<{ id: IntegrationsTab; label: string }> = [
   { id: "overview", label: "Overview" },
+  { id: "channels", label: "Channels" },
   { id: "mcp", label: "MCP" },
 ];
 
@@ -25,7 +26,7 @@ export function IntegrationsHubPage({ activeTab, onTabChange }: IntegrationsHubP
       />
       <PageTabs items={ITEMS} activeId={activeTab} onSelect={(value) => onTabChange(value as IntegrationsTab)} />
       <EmbeddedPageChromeProvider>
-        {activeTab === "mcp" ? <McpPage /> : <IntegrationsPage />}
+        {activeTab === "mcp" ? <McpPage /> : <IntegrationsPage view={activeTab === "channels" ? "channels" : "overview"} />}
       </EmbeddedPageChromeProvider>
     </section>
   );

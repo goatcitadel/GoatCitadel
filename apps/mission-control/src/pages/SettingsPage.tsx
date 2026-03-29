@@ -42,6 +42,7 @@ import { GCSelect, GCSwitch } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { dedupeProviderModels, previewProviderModels, useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
+import type { SettingsTab } from "../content/page-registry";
 import "../styles/settings.css";
 
 const TOOL_PROFILE_OPTIONS: SelectOption[] = [
@@ -135,6 +136,8 @@ const SETTINGS_SECTIONS = [
   },
 ] as const;
 
+export type SettingsSectionId = typeof SETTINGS_SECTIONS[number]["id"];
+
 type ProviderApiStyle = RuntimeSettingsResponse["llm"]["providers"][number]["apiStyle"];
 
 const PROVIDER_API_STYLE_OPTIONS: Array<{ value: ProviderApiStyle; label: string }> = [
@@ -147,14 +150,47 @@ function isAbortError(error: unknown): boolean {
   return (error as { name?: string } | null)?.name === "AbortError";
 }
 
-function scrollToSettingsSection(sectionId: string): void {
+function scrollToSettingsSection(sectionId: string, behavior: ScrollBehavior = "smooth"): void {
   if (typeof document === "undefined") {
     return;
   }
-  document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById(sectionId)?.scrollIntoView({ behavior, block: "start" });
 }
 
-export function SettingsPage() {
+export interface SettingsPageProps {
+  activeTab?: SettingsTab;
+  focusSectionId?: SettingsSectionId;
+}
+
+export function resolveSettingsTabSection(tab: SettingsTab): SettingsSectionId {
+  switch (tab) {
+    case "providers":
+      return "settings-models";
+    case "access":
+      return "settings-access";
+    case "budget":
+      return "settings-runtime";
+    case "general":
+    default:
+      return "settings-overview";
+  }
+}
+
+export function resolveSettingsTabSections(tab: SettingsTab): SettingsSectionId[] {
+  switch (tab) {
+    case "providers":
+      return ["settings-models", "settings-tests"];
+    case "access":
+      return ["settings-access"];
+    case "budget":
+      return ["settings-runtime"];
+    case "general":
+    default:
+      return ["settings-overview", "settings-voice"];
+  }
+}
+
+export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = {}) {
   const [settings, setSettings] = useState<RuntimeSettingsResponse | null>(null);
   const [deploymentProfile, setDeploymentProfile] = useState<"local_dev" | "trusted_local" | "remote_hardened">("local_dev");
   const [profile, setProfile] = useState("");
@@ -251,6 +287,23 @@ export function SettingsPage() {
     () => runtimeProviderCatalog.find((provider) => provider.providerId === effectiveProviderId),
     [effectiveProviderId, runtimeProviderCatalog],
   );
+  const visibleSectionIds = useMemo(() => {
+    return activeTab ? new Set(resolveSettingsTabSections(activeTab)) : null;
+  }, [activeTab]);
+  const showSectionRail = !activeTab;
+  const shouldRenderSection = (sectionId: SettingsSectionId) => !visibleSectionIds || visibleSectionIds.has(sectionId);
+
+  useEffect(() => {
+    if (!focusSectionId || activeTab || typeof window === "undefined") {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      scrollToSettingsSection(focusSectionId, "auto");
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [activeTab, focusSectionId]);
 
   const activeModelOptions = useMemo<SelectOption[]>(() => {
     return buildProviderScopedModelOptions({
@@ -992,7 +1045,8 @@ export function SettingsPage() {
         onCriticalConfirmChange={setCriticalConfirmed}
       />
 
-      <div className="settings-v2-layout">
+      <div className={`settings-v2-layout${showSectionRail ? "" : " settings-v2-layout-single"}`}>
+        {showSectionRail ? (
         <aside className="panel panel-soft panel-pad-default settings-v2-nav">
           <div className="settings-v2-nav-head">
             <h3>Forge Sections</h3>
@@ -1007,8 +1061,10 @@ export function SettingsPage() {
             ))}
           </div>
         </aside>
+        ) : null}
 
         <div className="settings-v2-content">
+          {shouldRenderSection("settings-overview") ? (
           <section id="settings-overview" className="settings-v2-section">
             <Panel
               title="Current Forge Posture"
@@ -1049,7 +1105,9 @@ export function SettingsPage() {
               </div>
             </Panel>
           </section>
+          ) : null}
 
+          {shouldRenderSection("settings-access") ? (
           <section id="settings-access" className="settings-v2-section">
             <Panel
               className="settings-v2-panel"
@@ -1165,7 +1223,9 @@ export function SettingsPage() {
               </div>
             </Panel>
           </section>
+          ) : null}
 
+          {shouldRenderSection("settings-voice") ? (
           <section id="settings-voice" className="settings-v2-section">
             <Panel
               className="settings-v2-panel"
@@ -1354,7 +1414,9 @@ export function SettingsPage() {
         ) : null}
             </Panel>
           </section>
+          ) : null}
 
+          {shouldRenderSection("settings-runtime") ? (
           <section id="settings-runtime" className="settings-v2-section">
             <Panel
               className="settings-v2-panel"
@@ -1457,7 +1519,9 @@ export function SettingsPage() {
         <button type="button" onClick={onSaveRuntime} disabled={blockSaves}>Save Runtime Controls</button>
             </Panel>
           </section>
+          ) : null}
 
+          {shouldRenderSection("settings-models") ? (
           <section id="settings-models" className="settings-v2-section">
             <Panel
               className="settings-v2-panel"
@@ -1660,7 +1724,9 @@ export function SettingsPage() {
         ) : null}
             </Panel>
           </section>
+          ) : null}
 
+          {shouldRenderSection("settings-tests") ? (
           <section id="settings-tests" className="settings-v2-section">
             <Panel
               className="settings-v2-panel"
@@ -1709,6 +1775,7 @@ export function SettingsPage() {
         {chatResponse ? <pre>{chatResponse}</pre> : null}
             </Panel>
           </section>
+          ) : null}
         </div>
       </div>
       </section>
