@@ -10,6 +10,14 @@ import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail } from "./sandbox/path-jail.js";
 import { assertHostAllowed } from "./sandbox/network-guard.js";
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
+import {
+  collectLeakDetections,
+  sanitizeForModel,
+} from "./tool-security.js";
+import {
+  ingestDocumentViaBackend,
+  searchIngestedContext,
+} from "./ingestion-backends.js";
 import { matchesToolPattern } from "./tool-patterns.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import {
@@ -55,11 +63,19 @@ export async function executeTool(
   storage: Storage,
   options: ExecuteToolOptions = {},
 ): Promise<Record<string, unknown>> {
+  const argLeakDetections = collectLeakDetections(request.args);
+  if (argLeakDetections.length > 0 && (request.authContext?.secretRefs?.length ?? 0) === 0) {
+    throw new Error(
+      `Tool args contain secret-like material (${argLeakDetections.join(", ")}); resolve secrets at the tool host boundary instead.`,
+    );
+  }
+
   if (isBrowserToolName(request.toolName)) {
-    return executeBrowserTool(request.toolName, request.args, config, {
+    const rawResult = await executeBrowserTool(request.toolName, request.args, config, {
       sessionId: request.sessionId,
       signal: request.signal,
     });
+    return finalizeToolResult(rawResult);
   }
   if (
     request.toolName.startsWith("bankr.")
@@ -70,85 +86,87 @@ export async function executeTool(
 
   switch (request.toolName) {
     case "session.status":
-      return { sessionId: request.sessionId, status: "ok" };
+      return finalizeToolResult({ sessionId: request.sessionId, status: "ok" });
     case "time.now":
-      return timeNow();
+      return finalizeToolResult(timeNow());
     case "bankr.status":
-      return bankrStatus(storage);
+      return finalizeToolResult(await bankrStatus(storage));
     case "bankr.read":
-      return bankrPrompt(request, storage, "read");
+      return finalizeToolResult(await bankrPrompt(request, storage, "read"));
     case "bankr.write":
-      return bankrPrompt(request, storage, "write");
+      return finalizeToolResult(await bankrPrompt(request, storage, "write"));
     case "fs.read":
-      return fsRead(request, config, storage);
+      return finalizeToolResult(await fsRead(request, config, storage));
     case "file.read_range":
-      return fileReadRange(request, config, storage);
+      return finalizeToolResult(await fileReadRange(request, config, storage));
     case "file.find":
-      return fileFind(request, config, storage);
+      return finalizeToolResult(await fileFind(request, config, storage));
     case "code.search":
-      return codeSearch(request, config, storage);
+      return finalizeToolResult(await codeSearch(request, config, storage));
     case "code.search_files":
-      return codeSearchFiles(request, config, storage);
+      return finalizeToolResult(await codeSearchFiles(request, config, storage));
     case "fs.write":
-      return fsWrite(request.args, config);
+      return finalizeToolResult(await fsWrite(request.args, config));
     case "fs.list":
-      return fsList(request, config, storage);
+      return finalizeToolResult(await fsList(request, config, storage));
     case "fs.stat":
-      return fsStat(request, config, storage);
+      return finalizeToolResult(await fsStat(request, config, storage));
     case "fs.copy":
-      return fsCopy(request, config, storage);
+      return finalizeToolResult(await fsCopy(request, config, storage));
     case "fs.move":
-      return fsMove(request.args, config);
+      return finalizeToolResult(await fsMove(request.args, config));
     case "fs.delete":
-      return fsDelete(request.args, config);
+      return finalizeToolResult(await fsDelete(request.args, config));
     case "http.get":
-      return httpGet(request.args, config, request.signal);
+      return finalizeToolResult(await httpGet(request.args, config, request.signal));
     case "http.post":
-      return httpPost(request.args, config, request.signal);
+      return finalizeToolResult(await httpPost(request.args, config, request.signal));
     case "shell.exec":
-      return shellExec(request, config, storage);
+      return finalizeToolResult(await shellExec(request, config, storage));
     case "shell.exec_background":
-      return shellExecBackground(request, config, storage);
+      return finalizeToolResult(await shellExecBackground(request, config, storage));
     case "git.status":
-      return gitStatus();
+      return finalizeToolResult(await gitStatus());
     case "git.diff":
-      return gitDiff(request.args);
+      return finalizeToolResult(await gitDiff(request.args));
     case "git.add":
-      return gitAdd(request.args, config);
+      return finalizeToolResult(await gitAdd(request.args, config));
     case "git.commit":
-      return gitCommit(request.args);
+      return finalizeToolResult(await gitCommit(request.args));
     case "git.branch.create":
-      return gitBranchCreate(request.args);
+      return finalizeToolResult(await gitBranchCreate(request.args));
     case "git.branch.switch":
-      return gitBranchSwitch(request.args);
+      return finalizeToolResult(await gitBranchSwitch(request.args));
     case "git.worktree.create":
-      return gitWorktreeCreate(request.args, config);
+      return finalizeToolResult(await gitWorktreeCreate(request.args, config));
     case "git.worktree.remove":
-      return gitWorktreeRemove(request.args, config);
+      return finalizeToolResult(await gitWorktreeRemove(request.args, config));
     case "tests.run":
-      return runRestricted("test", request, config, storage);
+      return finalizeToolResult(await runRestricted("test", request, config, storage));
     case "lint.run":
-      return runRestricted("lint", request, config, storage);
+      return finalizeToolResult(await runRestricted("lint", request, config, storage));
     case "build.run":
-      return runRestricted("build", request, config, storage);
+      return finalizeToolResult(await runRestricted("build", request, config, storage));
     case "memory.read":
-      return memoryRead(request.args, storage);
+      return finalizeToolResult(await memoryRead(request.args, storage));
     case "memory.write":
-      return memoryWrite(request.args, storage, false);
+      return finalizeToolResult(await memoryWrite(request.args, storage, false));
     case "memory.upsert":
-      return memoryWrite(request.args, storage, true);
+      return finalizeToolResult(await memoryWrite(request.args, storage, true));
     case "memory.search":
-      return memorySearch(request.args, storage);
+      return finalizeToolResult(await memorySearch(request.args, storage));
     case "citations.build":
-      return citationsBuild(request.args);
+      return finalizeToolResult(citationsBuild(request.args));
     case "docs.ingest":
-      return docsIngest(request, config, storage);
+      return finalizeToolResult(await docsIngest(request, config, storage));
+    case "docs.search":
+      return finalizeToolResult(docsSearch(request.args, storage));
     case "embeddings.index":
-      return embeddingsIndex(request.args, storage);
+      return finalizeToolResult(await embeddingsIndex(request.args, storage));
     case "embeddings.query":
-      return embeddingsQuery(request.args, storage);
+      return finalizeToolResult(await embeddingsQuery(request.args, storage));
     case "artifacts.create":
-      return artifactsCreate(request.args, config);
+      return finalizeToolResult(await artifactsCreate(request.args, config));
     case "channel.send":
     case "channel.react":
     case "channel.unsend":
@@ -185,7 +203,7 @@ export async function executeTool(
     case "whatsapp.react":
     case "zalo.send":
     case "zalouser.send":
-      return commsInvoke(request.toolName, request.args, config, storage);
+      return finalizeToolResult(await commsInvoke(request.toolName, request.args, config, storage));
     default:
       throw new Error(`Unsupported tool executor: ${request.toolName}`);
   }
@@ -962,41 +980,43 @@ function citationsBuild(args: Record<string, unknown>) {
 }
 
 async function docsIngest(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
-  const args = request.args;
-  const sourceType = required(args.sourceType, "sourceType");
-  const source = required(args.source, "source");
-  const namespace = required(args.namespace, "namespace");
-  let text = "";
-  if (sourceType === "file") {
-    assertReadPathAllowedForRequest(source, request, config, storage);
-    text = await fs.readFile(path.resolve(source), "utf8");
-  } else if (sourceType === "url") {
-    const res = await fetchAllowlisted(source, { method: "GET" }, config.sandbox.networkAllowlist);
-    text = await res.response.text();
-  } else if (sourceType === "text") {
-    text = source;
-  } else {
-    throw new Error(`Unsupported sourceType: ${sourceType}`);
+  if (request.args.sourceType === "file") {
+    assertReadPathAllowedForRequest(String(request.args.source ?? ""), request, config, storage);
   }
-  const chunking = record(args.chunking);
-  const chunks = chunkText(
-    text,
-    clampInt(chunking.targetChars, 1200, 300, 3000),
-    clampInt(chunking.overlapChars, 180, 0, 900),
-    clampInt(chunking.maxChunks, 400, 1, 2000),
-  );
-  const doc = storage.knowledge.createDocument({
-    namespace,
-    sourceType: sourceType as "file" | "url" | "text",
-    sourceRef: source,
-    title: asString(args.title) ?? `${sourceType}:${source.slice(0, 64)}`,
-    metadata: record(args.metadata),
+  const ingested = await ingestDocumentViaBackend({
+    request,
+    storage,
+    fetchUrl: async (url) => {
+      const res = await fetchAllowlisted(url, { method: "GET" }, config.sandbox.networkAllowlist, request.signal);
+      const body = await res.response.text();
+      return {
+        finalUrl: res.finalUrl,
+        statusCode: res.response.status,
+        contentType: res.response.headers.get("content-type") ?? undefined,
+        body,
+      };
+    },
   });
-  storage.knowledge.appendChunks(doc.docId, chunks.map((chunk) => ({
-    content: chunk,
-    embedding: pseudoEmbedding(chunk),
-  })));
-  return { document: doc, chunksSaved: chunks.length };
+  return {
+    backend: ingested.backend,
+    fetchResult: ingested.fetchResult,
+    document: ingested.document,
+    chunksSaved: ingested.chunksSaved,
+    cached: ingested.cached,
+    chunks: ingested.chunks,
+  };
+}
+
+function docsSearch(args: Record<string, unknown>, storage: Storage) {
+  const query = required(args.query, "query");
+  const namespace = asString(args.namespace);
+  const limit = clampInt(args.limit, 8, 1, 50);
+  return searchIngestedContext({
+    storage,
+    namespace,
+    query,
+    limit,
+  });
 }
 
 async function embeddingsIndex(args: Record<string, unknown>, storage: Storage) {
@@ -1053,6 +1073,21 @@ async function artifactsCreate(args: Record<string, unknown>, config: ToolPolicy
   await fs.mkdir(path.dirname(full), { recursive: true });
   await fs.writeFile(full, out, "utf8");
   return { path: full, bytesWritten: out.length, template };
+}
+
+function finalizeToolResult(result: Record<string, unknown>): Record<string, unknown> {
+  const leakDetections = collectLeakDetections(result);
+  const sanitized = sanitizeForModel(result);
+  if (leakDetections.length === 0) {
+    return sanitized;
+  }
+  return {
+    ...sanitized,
+    security: {
+      sanitizedForModel: true,
+      leakDetections,
+    },
+  };
 }
 
 async function commsInvoke(

@@ -1,3 +1,4 @@
+import type { ToolExecutionTrustLevel } from "./internal-tooling.js";
 import type { ToolRiskLevel } from "./tools.js";
 
 export type ToolGrantScope = "global" | "session" | "agent" | "task";
@@ -53,6 +54,7 @@ export interface ToolAccessEvaluateRequest {
   sessionId: string;
   taskId?: string;
   args?: Record<string, unknown>;
+  trustLevel?: ToolExecutionTrustLevel;
 }
 
 export interface ToolAccessEvaluateResponse extends ToolAccessDecision {

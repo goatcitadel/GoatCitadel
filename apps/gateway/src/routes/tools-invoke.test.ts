@@ -33,6 +33,11 @@ describe("tools invoke route", () => {
         },
         agentId: "agent-1",
         sessionId: "session-1",
+        trustLevel: "trusted_workspace",
+        authContext: {
+          boundary: "tool_host_boundary",
+          secretRefs: ["keychain:goatcitadel:provider:openai"],
+        },
       },
     });
 
@@ -62,6 +67,11 @@ describe("tools invoke route", () => {
         },
         agentId: "agent-1",
         sessionId: "session-1",
+        trustLevel: "trusted_workspace",
+        authContext: {
+          boundary: "tool_host_boundary",
+          secretRefs: ["keychain:goatcitadel:provider:openai"],
+        },
       },
     });
 
@@ -74,6 +84,11 @@ describe("tools invoke route", () => {
           enforced: true,
         },
       }),
+      trustLevel: "trusted_workspace",
+      authContext: {
+        boundary: "tool_host_boundary",
+        secretRefs: ["keychain:goatcitadel:provider:openai"],
+      },
     }));
   });
 

@@ -44,7 +44,7 @@ const policyConfig: ToolPolicyConfig = {
   sandbox: {
     writeJailRoots: ["./workspace"],
     readOnlyRoots: ["./skills"],
-    networkAllowlist: ["localhost"],
+    networkAllowlist: ["localhost", "example.com", "127.0.0.1"],
     riskyShellPatterns: [],
     requireApprovalForRiskyShell: true,
   },
@@ -3457,6 +3457,110 @@ describe("executeTool", () => {
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "zalo-msg-1",
+    });
+  });
+
+  it("redacts secret-looking material from model-visible tool results", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response("Authorization: Bearer token-12345678901234567890", {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    })) as unknown as typeof fetch;
+
+    try {
+      const result = await executeTool({
+        toolName: "http.get",
+        args: { url: "https://example.com/secret" },
+        agentId: "agent",
+        sessionId: "sess-http-redact",
+      }, policyConfig, storageStub);
+
+      expect(String(result.body ?? "")).toContain("[REDACTED]");
+      expect(String(result.body ?? "")).not.toContain("token-12345678901234567890");
+      expect(result.security).toMatchObject({
+        sanitizedForModel: true,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("caches native ingested documents and searches attributed chunks", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const documents: Array<Record<string, unknown>> = [];
+    const chunksByDocId = new Map<string, Array<Record<string, unknown>>>();
+    let documentSeq = 0;
+    let chunkSeq = 0;
+    const storage = {
+      knowledge: {
+        listDocuments: vi.fn((namespace?: string) => documents.filter((doc) => !namespace || doc.namespace === namespace)),
+        createDocument: vi.fn((input: Record<string, unknown>) => {
+          const doc = {
+            docId: `doc-${++documentSeq}`,
+            namespace: input.namespace,
+            sourceType: input.sourceType,
+            sourceRef: input.sourceRef,
+            title: input.title,
+            metadata: input.metadata ?? {},
+            createdAt: new Date().toISOString(),
+          };
+          documents.unshift(doc);
+          return doc;
+        }),
+        appendChunks: vi.fn((docId: string, entries: Array<Record<string, unknown>>) => {
+          const saved = entries.map((entry, index) => ({
+            chunkId: `chunk-${++chunkSeq}`,
+            docId,
+            seq: index,
+            content: entry.content,
+            embedding: entry.embedding,
+            tokenEstimate: 1,
+            createdAt: new Date().toISOString(),
+          }));
+          chunksByDocId.set(docId, saved);
+          return saved;
+        }),
+        listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
+        listChunksByNamespace: vi.fn((namespace?: string) => {
+          const matchingDocIds = documents
+            .filter((doc) => !namespace || doc.namespace === namespace)
+            .map((doc) => String(doc.docId));
+          return matchingDocIds.flatMap((docId) => chunksByDocId.get(docId) ?? []);
+        }),
+      },
+    } as unknown as Storage;
+
+    const ingestRequest: ToolInvokeRequest = {
+      toolName: "docs.ingest",
+      args: {
+        sourceType: "text",
+        source: "Firecrawl is optional. GoatCitadel prefers native ingestion first.",
+        namespace: "research",
+        cacheTtlSeconds: 3600,
+      },
+      agentId: "agent",
+      sessionId: "sess-docs",
+      trustLevel: "trusted_workspace",
+    };
+
+    const first = await executeTool(ingestRequest, policyConfig, storage);
+    const second = await executeTool(ingestRequest, policyConfig, storage);
+    const search = await executeTool({
+      toolName: "docs.search",
+      args: {
+        namespace: "research",
+        query: "native ingestion",
+      },
+      agentId: "agent",
+      sessionId: "sess-docs",
+    }, policyConfig, storage);
+
+    expect(first.cached).toBe(false);
+    expect(second.cached).toBe(true);
+    expect((search.items as Array<Record<string, unknown>>)[0]?.attribution).toMatchObject({
+      sourceType: "text",
+      backend: "native",
     });
   });
 });

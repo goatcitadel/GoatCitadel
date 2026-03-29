@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import type { EgressDecision } from "@goatcitadel/contracts";
 
 const DISALLOWED_HOSTS = new Set([
   "0.0.0.0",
@@ -15,39 +16,78 @@ function wildcardToRegex(pattern: string): RegExp {
 }
 
 export function isHostAllowed(hostOrUrl: string, allowlist: string[]): boolean {
+  return evaluateHostEgress(hostOrUrl, allowlist).allowed;
+}
+
+export function evaluateHostEgress(hostOrUrl: string, allowlist: string[]): EgressDecision {
   const parsed = parseHost(hostOrUrl);
   const host = parsed.host.toLowerCase();
   const hostname = parsed.hostname.toLowerCase();
   const isPrivateOrReserved = isPrivateOrReservedHost(hostname);
 
-  if (allowlist.length === 0) {
-    return false;
+  if (!host && !hostname) {
+    return {
+      target: hostOrUrl,
+      hostname,
+      allowed: false,
+      approvalState: "blocked",
+      reason: "Host is empty.",
+    };
   }
 
-  const matched = allowlist.some((pattern) => {
+  const matchedPattern = allowlist.find((pattern) => {
     const regex = wildcardToRegex(pattern);
     return regex.test(host) || regex.test(hostname);
   });
-  if (!matched) {
-    return false;
+
+  if (!matchedPattern) {
+    return {
+      target: hostOrUrl,
+      hostname,
+      allowed: false,
+      approvalState: isPrivateOrReserved ? "blocked" : "approval_required",
+      reason: isPrivateOrReserved
+        ? `Private, loopback, or reserved host is blocked: ${hostOrUrl}`
+        : `Host is not yet allowlisted: ${hostOrUrl}`,
+    };
   }
 
   if (!isPrivateOrReserved) {
-    return true;
+    return {
+      target: hostOrUrl,
+      hostname,
+      allowed: true,
+      approvalState: "not_required",
+      reason: "Host matches network allowlist.",
+      matchedAllowlistPattern: matchedPattern,
+    };
   }
 
-  // Local loopback can be used when explicitly allowlisted.
-  if (isLoopbackHost(hostname)) {
-    return allowlist.some((pattern) => isExplicitLoopbackPattern(pattern, hostname));
+  if (isLoopbackHost(hostname) && isExplicitLoopbackPattern(matchedPattern, hostname)) {
+    return {
+      target: hostOrUrl,
+      hostname,
+      allowed: true,
+      approvalState: "not_required",
+      reason: "Loopback host explicitly allowlisted.",
+      matchedAllowlistPattern: matchedPattern,
+    };
   }
 
-  // Never permit broader private/link-local/metadata ranges.
-  return false;
+  return {
+    target: hostOrUrl,
+    hostname,
+    allowed: false,
+    approvalState: "blocked",
+    reason: `Private, metadata, or reserved host is blocked: ${hostOrUrl}`,
+    matchedAllowlistPattern: matchedPattern,
+  };
 }
 
 export function assertHostAllowed(hostOrUrl: string, allowlist: string[]): void {
-  if (!isHostAllowed(hostOrUrl, allowlist)) {
-    throw new Error(`Host not on allowlist: ${hostOrUrl}`);
+  const decision = evaluateHostEgress(hostOrUrl, allowlist);
+  if (!decision.allowed) {
+    throw new Error(decision.reason);
   }
 }
 

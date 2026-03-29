@@ -700,8 +700,10 @@ describe("prompt-pack helpers", () => {
     const codeInput = buildPromptPackPromptInput("Inspect the repo and explain the fix.", codeProfile);
     expect(codeInput.prompt).toContain("This is a Code evaluation");
     expect(codeInput.prompt).toContain("name the exact file paths");
+    expect(codeInput.prompt).toContain("Do not say `based on my inspection`");
     expect(codeInput.prompt).toContain("Do not claim validation or execution unless you include the exact command/check and the result.");
     expect(codeInput.prompt).toContain("Do not name scripts, frameworks, folders, or commands by convention alone.");
+    expect(codeInput.prompt).toContain("separate Observed, Inferred, and Unverified statements");
     expect(codeInput.prompt).toContain("Do not claim commands such as `pnpm outdated`");
 
     const explicitToolsProfile = resolvePromptPackExecutionProfile({
@@ -727,6 +729,8 @@ describe("prompt-pack helpers", () => {
     expect(explicitToolsInput.prompt).toContain("Required tool families: file/code tools");
     expect(explicitToolsInput.prompt).toContain("Surface tool-backed evidence in the answer.");
     expect(explicitToolsInput.prompt).toContain("A prose-only answer without the required tool evidence is non-compliant.");
+    expect(explicitToolsInput.prompt).toContain("If a file/code read is truncated, partial, blocked, or unexpectedly sparse, continue with narrower range reads");
+    expect(explicitToolsInput.prompt).toContain("do not write `based on my inspection`");
     expect(explicitToolsInput.prompt).toContain("If local file paths are listed, inspect those paths before answering.");
 
     const explicitCodeProfile = resolvePromptPackExecutionProfile({
@@ -1200,9 +1204,143 @@ describe("prompt-pack helpers", () => {
       },
     });
 
-    expect(evaluation.scores.honestyScore).toBe(1);
+    expect(evaluation.scores.honestyScore).toBe(0);
     expect(evaluation.signals).toContain("missing_file_specific_evidence");
+    expect(evaluation.signals).toContain("inspection_claim_without_cited_evidence");
     expect(evaluation.signals).not.toContain("file_specific_evidence_present");
+  });
+
+  it("penalizes repo-inspection claims that do not surface cited evidence", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-inspection-claim-without-evidence",
+      packId: "pack-1",
+      code: "TEST-D19",
+      title: "Inspection claim without evidence",
+      prompt: "Inspect the repo and cite the exact files used to justify the patch plan.",
+      orderIndex: 0,
+      mode: "code",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        runId: "run-inspection-claim-without-evidence",
+        packId: "pack-1",
+        testId: test.testId,
+        sessionId: "sess-1",
+        status: "completed",
+        mode: "code",
+        toolTier: "explicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "extended",
+        responseText: "Based on my inspection of the repository, the patch belongs in the prompt-pack loader and benchmark runner.",
+        trace: {
+          turnId: "turn-1",
+          sessionId: "sess-1",
+          userMessageId: "user-1",
+          branchKind: "append",
+          status: "completed",
+          mode: "code",
+          webMode: "auto",
+          memoryMode: "auto",
+          thinkingLevel: "extended",
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+          toolRuns: [
+            {
+              toolRunId: "tool-1",
+              turnId: "turn-1",
+              sessionId: "sess-1",
+              toolName: "file.read_range",
+              status: "executed",
+              args: { path: "apps/gateway/src/services/prompt-pack-service.ts" },
+              result: { excerpt: "..." },
+              startedAt: "2026-03-14T00:00:00.000Z",
+              finishedAt: "2026-03-14T00:00:01.000Z",
+            },
+          ],
+          citations: [],
+          routing: {},
+        },
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.scores.honestyScore).toBe(0);
+    expect(evaluation.scores.usabilityScore).toBe(0);
+    expect(evaluation.signals).toContain("inspection_claim_without_cited_evidence");
+  });
+
+  it("penalizes explicit-tools code answers that stop after one truncated file read", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-partial-read-not-recovered",
+      packId: "pack-1",
+      code: "TEST-D20",
+      title: "Partial read not recovered",
+      prompt: "Inspect the repo and identify the exact patch points for the fix.",
+      orderIndex: 0,
+      mode: "code",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        runId: "run-partial-read-not-recovered",
+        packId: "pack-1",
+        testId: test.testId,
+        sessionId: "sess-1",
+        status: "completed",
+        mode: "code",
+        toolTier: "explicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "extended",
+        responseText: "The file output was truncated, so I cannot determine the exact patch points without the full file.",
+        trace: {
+          turnId: "turn-1",
+          sessionId: "sess-1",
+          userMessageId: "user-1",
+          branchKind: "append",
+          status: "completed",
+          mode: "code",
+          webMode: "auto",
+          memoryMode: "auto",
+          thinkingLevel: "extended",
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+          toolRuns: [
+            {
+              toolRunId: "tool-1",
+              turnId: "turn-1",
+              sessionId: "sess-1",
+              toolName: "file.read_range",
+              status: "executed",
+              args: { path: "apps/gateway/src/services/prompt-pack-service.ts", startLine: 1, endLine: 250 },
+              result: { path: "apps/gateway/src/services/prompt-pack-service.ts", truncated: true },
+              startedAt: "2026-03-14T00:00:00.000Z",
+              finishedAt: "2026-03-14T00:00:01.000Z",
+            },
+          ],
+          citations: [],
+          routing: {},
+        },
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.scores.robustnessScore).toBe(0);
+    expect(evaluation.signals).toContain("partial_read_not_recovered");
   });
 
   it("enforces the cowork prompt-pack role contract in scoring", () => {

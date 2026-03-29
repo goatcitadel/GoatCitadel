@@ -1,3 +1,12 @@
+import type {
+  InternalToolCallV1,
+  InternalToolResultV1,
+  SecretResolutionBoundary,
+  ToolAuditRecord,
+  ToolExecutionTrustLevel,
+} from "./internal-tooling.js";
+import type { ContextSourceAttribution } from "./ingestion.js";
+
 export type ToolProfile =
   | "minimal"
   | "standard"
@@ -33,6 +42,12 @@ export interface ToolInvokeRequest {
   sessionId: string;
   taskId?: string;
   signal?: AbortSignal;
+  trustLevel?: ToolExecutionTrustLevel;
+  sourceAttribution?: ContextSourceAttribution[];
+  authContext?: {
+    boundary?: SecretResolutionBoundary;
+    secretRefs?: string[];
+  };
   consentContext?: {
     operatorId?: string;
     source?: "ui" | "tui" | "agent";
@@ -48,6 +63,9 @@ export interface ToolInvokeResult {
   policyReason: string;
   auditEventId: string;
   result?: Record<string, unknown>;
+  internalCall?: InternalToolCallV1;
+  internalResult?: InternalToolResultV1;
+  audit?: ToolAuditRecord;
 }
 
 export interface EffectiveToolPolicy {

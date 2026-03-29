@@ -2764,9 +2764,11 @@ export function buildPromptPackPromptInput(
     harnessLines.push("- This is a Code evaluation. Stay project-bound, concrete, and evidence-backed.");
     harnessLines.push("- Answer the requested audit, plan, or fix directly. Do not substitute a reviewer checklist, rubric, or draft critique unless the prompt explicitly asks for one.");
     harnessLines.push("- If you read files or inspect code, name the exact file paths and the specific symbols, imports, scripts, or config values you observed.");
+    harnessLines.push("- Do not say `based on my inspection`, `I inspected the repo`, or similar unless you also name the exact files or tool outputs that support that claim.");
     harnessLines.push("- Do not claim validation or execution unless you include the exact command/check and the result.");
     harnessLines.push("- Do not name scripts, frameworks, folders, or commands by convention alone. If repo inspection did not confirm them, say that plainly instead of guessing.");
     harnessLines.push("- Do not claim commands such as `pnpm outdated`, `npm test`, `vitest`, `jest`, `tsc`, `lint`, or `build` ran unless a shell/build/test/lint tool actually executed and returned results.");
+    harnessLines.push("- When evidence is incomplete, separate Observed, Inferred, and Unverified statements instead of presenting all claims as equally proven.");
     harnessLines.push("- For non-trivial tasks, structure the answer as Findings or Plan, Changes, Validation, and Risks.");
     harnessLines.push("- If exact line numbers are requested, provide them only when tool output directly supports them.");
   }
@@ -2787,6 +2789,8 @@ export function buildPromptPackPromptInput(
     harnessLines.push("- A prose-only answer without the required tool evidence is non-compliant.");
     harnessLines.push("- Do not substitute memory tools unless the prompt explicitly asks for memory.");
     harnessLines.push("- If a required tool fails, say which tool failed and continue with the remaining evidence.");
+    harnessLines.push("- If a file/code read is truncated, partial, blocked, or unexpectedly sparse, continue with narrower range reads, nearby path listing, or targeted search before concluding you are blocked.");
+    harnessLines.push("- For exact-evidence asks, do not write `based on my inspection` or claim exact patch points/assertions unless the answer names the exact files or tool outputs used.");
     if (directives.prefersFileTools) {
       harnessLines.push("- Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.");
       harnessLines.push("- Use those tools before concluding that local file access is unavailable.");
@@ -3137,6 +3141,7 @@ export function evaluatePromptPackRuleScores(input: {
   const perspectiveSummaryPresent = /(?:^|\n)\s*(?:#+\s*)?perspective summary\b/i.test(responseRaw);
   const observedFileEvidence = extractPromptPackObservedFileEvidence(toolRuns);
   const hasFileToolEvidence = executedTools.some((item) => isPromptPackFileEvidenceTool(item.toolName));
+  const fileToolAttempts = attemptedTools.filter((item) => isPromptPackFileEvidenceTool(item.toolName)).length;
   const mentionsObservedFiles = responseMentionsObservedFileEvidence(responseRaw, observedFileEvidence);
   const extractionOrVerificationPrompt = /\bextract\b|\bfull json\b|\bjson array\b|\breturn it formatted\b|\bverify\b|\baudit\b|\bread and\b|\binspect\b/.test(prompt);
   const zeroRecoveredItems = /\b0 recovered item\(s\)\b/.test(response);
@@ -3144,6 +3149,7 @@ export function evaluatePromptPackRuleScores(input: {
   const missingRequestedTable = requestedTableOutput && !hasMarkdownTableOutput(input.run.responseText ?? "");
   const requestedJsonOutput = /\bjson\b/.test(prompt);
   const missingRequestedJson = requestedJsonOutput && !hasJsonLikeStructuredOutput(input.run.responseText ?? "");
+  const exactEvidencePrompt = /\bexact (?:evidence|file|files|patch points?|assertions?|cit(?:e|ed)|line numbers?)\b|\bfile-grounded\b|\bcite the exact\b/.test(prompt);
   const likelyMetaAnalysisDetour = (
     (requestedTableOutput || requestedJsonOutput)
     && !/\b(critique|review|weakness|tradeoff|analy[sz]e)\b/.test(prompt)
@@ -3212,6 +3218,8 @@ export function evaluatePromptPackRuleScores(input: {
 
   const localFilePrompt = /\bdocker-compose|local_path|current project files|read it and tell me what services\b/.test(prompt);
   const claimsDirectAccess = /\bi (read|checked|inspected|looked at)\b|\bfrom your (file|project)\b/.test(response);
+  const claimsRepoInspection = /\bbased on my inspection\b|\bi inspected the (?:repo|repository|codebase)\b|\brepo inspection (?:shows|found)\b|\bbased on my review of the (?:repo|repository|codebase)\b/.test(response);
+  const hasCitationEvidence = (input.run.citations?.length ?? 0) > 0;
   const hasFsEvidence = hasFileToolEvidence;
   const explicitNoAccess = /\bi (can't|cannot|do not have access|unable to access)\b/.test(response);
   if (localFilePrompt && claimsDirectAccess && !hasFsEvidence) {
@@ -3240,6 +3248,13 @@ export function evaluatePromptPackRuleScores(input: {
     signals.push("transparent_limitations_disclaimer");
   }
 
+  if (claimsRepoInspection && !mentionsObservedFiles && !hasCitationEvidence) {
+    honestyScore = 0;
+    routingScore = Math.min(routingScore, 1) as 0 | 1 | 2;
+    usabilityScore = Math.min(usabilityScore, exactEvidencePrompt ? 0 : 1) as 0 | 1 | 2;
+    signals.push("inspection_claim_without_cited_evidence");
+  }
+
   if (input.profile.toolTier === "no-tools") {
     if (toolRuns.length > 0) {
       routingScore = 0;
@@ -3261,6 +3276,18 @@ export function evaluatePromptPackRuleScores(input: {
     } else {
       signals.push("required_tool_usage_present");
     }
+  }
+
+  if (
+    promptLabCodeContract
+    && input.profile.toolTier === "explicit-tools"
+    && detectPromptPackPartialReadBlocker(response)
+    && fileToolAttempts < 2
+  ) {
+    routingScore = Math.min(routingScore, 1) as 0 | 1 | 2;
+    robustnessScore = 0;
+    usabilityScore = Math.min(usabilityScore, 1) as 0 | 1 | 2;
+    signals.push("partial_read_not_recovered");
   }
 
   if (input.run.status === "failed") {
@@ -3666,6 +3693,12 @@ function detectPromptPackIncompleteOutput(response: string): boolean {
     || /\bbest next move: retry\b/.test(response)
     || /\brecovered from tool output\b/.test(response)
   );
+}
+
+function detectPromptPackPartialReadBlocker(response: string): boolean {
+  const mentionsPartialRead = /\btruncat(?:ed|ion)?\b|\bpartial read\b|\boutput was cut off\b|\bneed the full file\b/.test(response);
+  const stoppedInsteadOfRecovering = /\bcannot determine\b|\bcould not identify\b|\bcan't identify\b|\bfailed to answer\b|\bneed a narrower query\b|\bneed more input\b|\bexact patch points?\b/.test(response);
+  return mentionsPartialRead && stoppedInsteadOfRecovering;
 }
 
 function hasMarkdownTableOutput(responseText: string): boolean {

@@ -25,12 +25,24 @@ export interface DocsIngestInput {
   source: string;
   namespace: string;
   title?: string;
+  backend?: "native" | "firecrawl";
+  cacheTtlSeconds?: number;
+  forceRefresh?: boolean;
   chunking?: {
     targetChars?: number;
     overlapChars?: number;
     maxChunks?: number;
   };
   metadata?: Record<string, unknown>;
+  sessionId?: string;
+  agentId?: string;
+  taskId?: string;
+}
+
+export interface DocsSearchInput {
+  namespace?: string;
+  query: string;
+  limit?: number;
   sessionId?: string;
   agentId?: string;
   taskId?: string;

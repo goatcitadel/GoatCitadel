@@ -20,6 +20,13 @@ import { assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jai
 import { assertHostAllowed } from "./sandbox/network-guard.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { executeTool } from "./tool-executor.js";
+import {
+  buildInternalToolCall,
+  buildInternalToolResult,
+  buildToolAuditRecord,
+  deriveToolCapabilityPolicy,
+  isUntrustedToolEscalation,
+} from "./tool-security.js";
 
 interface AccessEvaluation {
   allowed: boolean;
@@ -113,6 +120,10 @@ export class ToolPolicyEngine {
 
   public async invoke(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
     const auditEventId = randomUUID();
+    const startedAt = new Date().toISOString();
+    const toolDef = this.registry.get(request.toolName);
+    const capabilityPolicy = deriveToolCapabilityPolicy(request.toolName, toolDef);
+    const internalCall = buildInternalToolCall(request, capabilityPolicy, startedAt);
     const evaluation = this.evaluateAccessInternal(request);
 
     this.storage.toolAccessDecisions.record({
@@ -134,10 +145,30 @@ export class ToolPolicyEngine {
         riskLevel: evaluation.riskLevel,
         matchedGrantId: evaluation.matchedGrantId,
       });
+      const completedAt = new Date().toISOString();
+      const internalResult = buildInternalToolResult({
+        toolName: request.toolName,
+        outcome: "blocked",
+        errorKind: "policy_block",
+        completedAt,
+      });
+      const audit = buildToolAuditRecord({
+        auditEventId,
+        request,
+        outcome: "blocked",
+        policyReason: reason,
+        startedAt,
+        completedAt,
+        matchedGrantId: evaluation.matchedGrantId,
+        errorKind: "policy_block",
+      });
       return {
         outcome: "blocked",
         policyReason: reason,
         auditEventId,
+        internalCall,
+        internalResult,
+        audit,
       };
     }
 
@@ -159,11 +190,28 @@ export class ToolPolicyEngine {
         `${evaluation.policyReason}; dry-run`,
         result,
       );
+      const completedAt = new Date().toISOString();
       return {
         outcome: "executed",
         policyReason: `${evaluation.policyReason}; dry-run`,
         auditEventId,
         result,
+        internalCall,
+        internalResult: buildInternalToolResult({
+          toolName: request.toolName,
+          outcome: "executed",
+          result,
+          completedAt,
+        }),
+        audit: buildToolAuditRecord({
+          auditEventId,
+          request,
+          outcome: "executed",
+          policyReason: `${evaluation.policyReason}; dry-run`,
+          startedAt,
+          completedAt,
+          matchedGrantId: evaluation.matchedGrantId,
+        }),
       };
     }
 
@@ -205,6 +253,7 @@ export class ToolPolicyEngine {
         undefined,
         approval.approvalId,
       );
+      const completedAt = new Date().toISOString();
 
       return {
         outcome: "approval_required",
@@ -212,6 +261,24 @@ export class ToolPolicyEngine {
         expiresAt: approval.expiresAt ?? expiresAt,
         policyReason: evaluation.policyReason,
         auditEventId,
+        internalCall,
+        internalResult: buildInternalToolResult({
+          toolName: request.toolName,
+          outcome: "approval_required",
+          errorKind: "approval_required",
+          completedAt,
+        }),
+        audit: buildToolAuditRecord({
+          auditEventId,
+          request,
+          outcome: "approval_required",
+          policyReason: evaluation.policyReason,
+          startedAt,
+          completedAt,
+          approvalId: approval.approvalId,
+          matchedGrantId: evaluation.matchedGrantId,
+          errorKind: "approval_required",
+        }),
       };
     }
 
@@ -220,6 +287,10 @@ export class ToolPolicyEngine {
       auditEventId,
       evaluation.policyReason,
       evaluation.grantToConsume,
+      startedAt,
+      evaluation.matchedGrantId,
+      undefined,
+      internalCall,
     );
   }
 
@@ -246,6 +317,10 @@ export class ToolPolicyEngine {
       },
     };
     const auditEventId = randomUUID();
+    const startedAt = new Date().toISOString();
+    const approvedToolDef = this.registry.get(approvedRequest.toolName);
+    const approvedCapabilityPolicy = deriveToolCapabilityPolicy(approvedRequest.toolName, approvedToolDef);
+    const internalCall = buildInternalToolCall(approvedRequest, approvedCapabilityPolicy, startedAt);
     const evaluation = this.evaluateAccessInternal(approvedRequest);
 
     this.storage.toolAccessDecisions.record({
@@ -275,10 +350,29 @@ export class ToolPolicyEngine {
         actorId: "system",
         payload: { outcome: "blocked", reason, auditEventId },
       });
+      const completedAt = new Date().toISOString();
       return {
         outcome: "blocked",
         policyReason: reason,
         auditEventId,
+        internalCall,
+        internalResult: buildInternalToolResult({
+          toolName: approvedRequest.toolName,
+          outcome: "blocked",
+          errorKind: "policy_block",
+          completedAt,
+        }),
+        audit: buildToolAuditRecord({
+          auditEventId,
+          request: approvedRequest,
+          outcome: "blocked",
+          policyReason: reason,
+          startedAt,
+          completedAt,
+          approvalId,
+          matchedGrantId: evaluation.matchedGrantId,
+          errorKind: "policy_block",
+        }),
       };
     }
 
@@ -287,6 +381,10 @@ export class ToolPolicyEngine {
       auditEventId,
       `allowed_via_approval:${approvalId}`,
       evaluation.grantToConsume,
+      startedAt,
+      evaluation.matchedGrantId,
+      approvalId,
+      internalCall,
     );
 
     this.storage.pendingApprovalActions.markResolved(
@@ -317,6 +415,7 @@ export class ToolPolicyEngine {
 
   private evaluateAccessInternal(request: ToolAccessEvaluateRequest): AccessEvaluation {
     const toolDef = this.registry.get(request.toolName);
+    const capabilityPolicy = deriveToolCapabilityPolicy(request.toolName, toolDef);
     const riskLevel = toolDef?.riskLevel ?? "caution";
     const shellRisk = this.evaluateShellRisk(request);
     if (isBankrToolName(request.toolName) && !this.runtimeOptions.isBankrBuiltinEnabled()) {
@@ -349,6 +448,14 @@ export class ToolPolicyEngine {
     const structuralError = this.validateStructuralSafety(request, allowGrant);
     if (structuralError) {
       return deny(riskLevel, "structural_safety_block", structuralError);
+    }
+
+    if (isUntrustedToolEscalation(request.trustLevel ?? "trusted_operator", capabilityPolicy)) {
+      return deny(
+        riskLevel,
+        "untrusted_source_privileged_tool_block",
+        `tool ${request.toolName} is blocked because untrusted external content cannot escalate into privileged execution`,
+      );
     }
 
     if (riskLevel !== "safe") {
@@ -567,7 +674,15 @@ export class ToolPolicyEngine {
 
       if (request.toolName === "docs.ingest" && request.args?.sourceType === "url") {
         const source = String(request.args?.source ?? "");
-        assertHostAllowed(source, this.config.sandbox.networkAllowlist);
+        if (source) {
+          assertHostAllowed(source, this.config.sandbox.networkAllowlist);
+        }
+        if (request.args?.backend === "firecrawl") {
+          const firecrawlBaseUrl = String(
+            request.args?.firecrawlBaseUrl ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002",
+          );
+          assertHostAllowed(firecrawlBaseUrl, this.config.sandbox.networkAllowlist);
+        }
       }
 
       if (request.toolName.startsWith("browser.")) {
@@ -682,6 +797,10 @@ export class ToolPolicyEngine {
     auditEventId: string,
     policyReason: string,
     grantIdToConsume?: string,
+    startedAt?: string,
+    matchedGrantId?: string,
+    approvalId?: string,
+    internalCall?: ReturnType<typeof buildInternalToolCall>,
   ): Promise<ToolInvokeResult> {
     try {
       const result = await executeTool(request, this.config, this.storage, {
@@ -691,21 +810,58 @@ export class ToolPolicyEngine {
         this.storage.toolGrants.consumeOne(grantIdToConsume);
       }
       await this.recordInvocation(auditEventId, request, "executed", policyReason, result);
+      const completedAt = new Date().toISOString();
       return {
         outcome: "executed",
         policyReason,
         auditEventId,
         result,
+        internalCall,
+        internalResult: buildInternalToolResult({
+          toolName: request.toolName,
+          outcome: "executed",
+          result,
+          completedAt,
+        }),
+        audit: buildToolAuditRecord({
+          auditEventId,
+          request,
+          outcome: "executed",
+          policyReason,
+          startedAt: startedAt ?? completedAt,
+          completedAt,
+          approvalId,
+          matchedGrantId,
+        }),
       };
     } catch (error) {
       const reason = `execution error: ${(error as Error).message}`;
       await this.recordBlocked(auditEventId, request, reason, {
         error: (error as Error).message,
       });
+      const completedAt = new Date().toISOString();
       return {
         outcome: "blocked",
         policyReason: reason,
         auditEventId,
+        internalCall,
+        internalResult: buildInternalToolResult({
+          toolName: request.toolName,
+          outcome: "blocked",
+          errorKind: "execution_error",
+          completedAt,
+        }),
+        audit: buildToolAuditRecord({
+          auditEventId,
+          request,
+          outcome: "blocked",
+          policyReason: reason,
+          startedAt: startedAt ?? completedAt,
+          completedAt,
+          approvalId,
+          matchedGrantId,
+          errorKind: "execution_error",
+        }),
       };
     }
   }

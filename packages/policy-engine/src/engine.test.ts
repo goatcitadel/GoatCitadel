@@ -313,6 +313,52 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     expect(evaluation.allowed).toBe(false);
     expect(evaluation.reasonCodes).toContain("grant_deny");
   });
+
+  it("blocks privileged execution when the request trust level is untrusted_external", () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hello" },
+      agentId: "agent",
+      sessionId: "session-1",
+      trustLevel: "untrusted_external",
+    });
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
+  });
+
+  it("returns internal tool envelopes for executed requests", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    const result = await engine.invoke({
+      toolName: "session.status",
+      args: {},
+      agentId: "agent",
+      sessionId: "session-1",
+      trustLevel: "trusted_workspace",
+    });
+
+    expect(result.outcome).toBe("executed");
+    expect(result.internalCall).toMatchObject({
+      version: "v1",
+      toolName: "session.status",
+      trustLevel: "trusted_workspace",
+    });
+    expect(result.internalResult).toMatchObject({
+      version: "v1",
+      toolName: "session.status",
+      outcome: "executed",
+    });
+    expect(result.audit).toMatchObject({
+      auditEventId: result.auditEventId,
+      toolName: "session.status",
+      outcome: "executed",
+    });
+  });
 });
 
 function createPendingApprovalAction(input: {

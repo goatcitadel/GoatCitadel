@@ -11,6 +11,19 @@ const bodySchema = z.object({
   agentId: z.string().min(1),
   sessionId: z.string().min(1),
   taskId: z.string().optional(),
+  trustLevel: z.enum(["trusted_operator", "trusted_workspace", "mixed_untrusted", "untrusted_external"]).optional(),
+  sourceAttribution: z.array(z.object({
+    sourceType: z.enum(["file", "url", "text", "memory", "mcp"]),
+    sourceRef: z.string().min(1),
+    title: z.string().optional(),
+    backend: z.enum(["native", "firecrawl"]).optional(),
+    fetchedAt: z.string().optional(),
+    trustLevel: z.enum(["trusted_operator", "trusted_workspace", "mixed_untrusted", "untrusted_external"]).optional(),
+  })).optional(),
+  authContext: z.object({
+    boundary: z.enum(["provider_boundary", "tool_host_boundary"]).optional(),
+    secretRefs: z.array(z.string()).optional(),
+  }).optional(),
   consentContext: z.object({
     operatorId: z.string().optional(),
     source: z.enum(["ui", "tui", "agent"]).optional(),

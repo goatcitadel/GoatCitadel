@@ -20,6 +20,8 @@ export * from "./agents.js";
 export * from "./tools.js";
 export * from "./tool-grants.js";
 export * from "./tool-catalog.js";
+export * from "./internal-tooling.js";
+export * from "./ingestion.js";
 export * from "./comms.js";
 export * from "./knowledge.js";
 export * from "./ui-forms.js";

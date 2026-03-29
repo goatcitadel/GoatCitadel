@@ -40,6 +40,7 @@
     "verify:soak": "node scripts/verification/run.mjs soak",
     "verify:review": "node scripts/verification/run.mjs review",
     "verify:all": "node scripts/verification/run.mjs all",
+    "security:trivy": "node scripts/trivy-scan.mjs .",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck"
   },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isHostAllowed } from "./sandbox/network-guard.js";
+import { evaluateHostEgress, isHostAllowed } from "./sandbox/network-guard.js";
 
 describe("isHostAllowed", () => {
   it("matches exact host", () => {
@@ -40,6 +40,20 @@ describe("isHostAllowed", () => {
   it("fails closed for public hosts when allowlist is empty", () => {
     expect(isHostAllowed("https://api.openai.com/v1/chat/completions", []))
       .toBe(false);
+  });
+
+  it("marks unknown public hosts as approval-required in the egress decision", () => {
+    expect(evaluateHostEgress("https://api.openai.com/v1/chat/completions", [])).toMatchObject({
+      allowed: false,
+      approvalState: "approval_required",
+    });
+  });
+
+  it("marks reserved hosts as blocked in the egress decision", () => {
+    expect(evaluateHostEgress("http://169.254.169.254/latest/meta-data", ["*"])).toMatchObject({
+      allowed: false,
+      approvalState: "blocked",
+    });
   });
 
   it("blocks private and metadata hosts when allowlist is empty", () => {
