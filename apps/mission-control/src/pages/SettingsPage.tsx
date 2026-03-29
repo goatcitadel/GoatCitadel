@@ -89,7 +89,7 @@ const ALLOWLIST_PRESETS: Array<{ id: string; label: string; hosts: string[] }> =
 ];
 
 const CHAT_PROMPT_PRESETS: Array<{ id: string; label: string; prompt: string }> = [
-  { id: "hello", label: "Hello smoke test", prompt: "Say hello from OpenAI-compatible chat completions." },
+  { id: "hello", label: "Hello smoke test", prompt: "Say hello from GoatCitadel's native-first provider routing." },
   {
     id: "plan",
     label: "Planning response",
@@ -135,6 +135,14 @@ const SETTINGS_SECTIONS = [
   },
 ] as const;
 
+type ProviderApiStyle = RuntimeSettingsResponse["llm"]["providers"][number]["apiStyle"];
+
+const PROVIDER_API_STYLE_OPTIONS: Array<{ value: ProviderApiStyle; label: string }> = [
+  { value: "openai-responses", label: "OpenAI Responses" },
+  { value: "anthropic-messages", label: "Anthropic Messages" },
+  { value: "openai-chat-completions", label: "OpenAI Chat Completions" },
+];
+
 function isAbortError(error: unknown): boolean {
   return (error as { name?: string } | null)?.name === "AbortError";
 }
@@ -159,6 +167,7 @@ export function SettingsPage() {
   const [providerId, setProviderId] = useState("custom");
   const [providerLabel, setProviderLabel] = useState("Custom");
   const [providerBaseUrl, setProviderBaseUrl] = useState("http://127.0.0.1:1234/v1");
+  const [providerApiStyle, setProviderApiStyle] = useState<ProviderApiStyle>("openai-responses");
   const [providerDefaultModel, setProviderDefaultModel] = useState("local-model");
   const [providerApiKey, setProviderApiKey] = useState("");
   const [providerApiKeyEnv, setProviderApiKeyEnv] = useState("");
@@ -215,6 +224,8 @@ export function SettingsPage() {
     providerId: provider.providerId,
     label: provider.label,
     baseUrl: provider.baseUrl,
+    apiStyle: provider.apiStyle,
+    resolvedApiStyle: provider.resolvedApiStyle,
     defaultModel: provider.defaultModel,
     apiKeySource: provider.apiKeySource as "none" | "keychain" | "env" | "inline" | undefined,
     apiKeyRef: provider.apiKeyRef,
@@ -236,6 +247,10 @@ export function SettingsPage() {
 
   const effectiveActiveProviderId = activeProviderId.trim() || settings?.llm.activeProviderId || "";
   const effectiveProviderId = providerId.trim() || effectiveActiveProviderId;
+  const currentProviderRuntime = useMemo(
+    () => runtimeProviderCatalog.find((provider) => provider.providerId === effectiveProviderId),
+    [effectiveProviderId, runtimeProviderCatalog],
+  );
 
   const activeModelOptions = useMemo<SelectOption[]>(() => {
     return buildProviderScopedModelOptions({
@@ -309,6 +324,7 @@ export function SettingsPage() {
           if (activeProvider) {
             setProviderLabel(activeProvider.label);
             setProviderBaseUrl(activeProvider.baseUrl);
+            setProviderApiStyle(activeProvider.apiStyle);
             setProviderDefaultModel(activeProvider.defaultModel);
             setProviderApiKeyEnv(activeProvider.apiKeySource === "env" && activeProvider.apiKeyRef ? activeProvider.apiKeyRef : "");
           }
@@ -533,6 +549,7 @@ export function SettingsPage() {
             providerId,
             label: providerLabel || undefined,
             baseUrl: providerBaseUrl || undefined,
+            apiStyle: providerApiStyle,
             defaultModel: providerDefaultModel || undefined,
             apiKeyEnv: providerApiKeyEnv || undefined,
           },
@@ -602,6 +619,7 @@ export function SettingsPage() {
       const res = await previewProviderModels({
         providerId: targetProviderId,
         baseUrl: targetBaseUrl,
+        apiStyle: providerApiStyle,
         apiKey: providerApiKey.trim() || undefined,
         apiKeyEnv: providerApiKeyEnv.trim() || undefined,
         fallbackModel: getModelPreviewFallbackModel(
@@ -662,7 +680,7 @@ export function SettingsPage() {
       }
       modelPreviewAbortRef.current?.abort();
     };
-  }, [activeProviderId, providerApiKey, providerApiKeyEnv, providerBaseUrl, providerId]);
+  }, [activeProviderId, providerApiKey, providerApiKeyEnv, providerApiStyle, providerBaseUrl, providerId]);
 
   const onTestChat = async () => {
     setError(null);
@@ -901,6 +919,7 @@ export function SettingsPage() {
     if (current) {
       setProviderLabel(current.label);
       setProviderBaseUrl(current.baseUrl);
+      setProviderApiStyle(current.apiStyle);
       setProviderDefaultModel(current.defaultModel);
       setProviderApiKeyEnv(current.apiKeySource === "env" ? (current.apiKeyRef ?? "") : "");
       setProviderApiKey("");
@@ -910,6 +929,7 @@ export function SettingsPage() {
     if (template) {
       setProviderLabel(template.label);
       setProviderBaseUrl(template.baseUrl);
+      setProviderApiStyle(template.apiStyle ?? "openai-chat-completions");
       setProviderDefaultModel(template.defaultModel);
       setProviderApiKeyEnv("");
       setProviderApiKey("");
@@ -930,6 +950,7 @@ export function SettingsPage() {
     setProviderId(nextProviderId);
     setProviderLabel(template.label);
     setProviderBaseUrl(template.baseUrl);
+    setProviderApiStyle(template.apiStyle ?? "openai-chat-completions");
     setProviderDefaultModel(template.defaultModel);
     setProviderApiKey("");
     setProviderApiKeyEnv("");
@@ -1440,8 +1461,8 @@ export function SettingsPage() {
           <section id="settings-models" className="settings-v2-section">
             <Panel
               className="settings-v2-panel"
-              title="LLM Providers & Models (OpenAI-Compatible)"
-              subtitle="This uses /v1/chat/completions only. Legacy /v1/completions is intentionally not used."
+              title="LLM Providers & Models"
+              subtitle="Direct OpenAI and Anthropic providers use native upstream APIs by default; compatibility gateways stay on chat-completions unless you explicitly change them."
             >
         <FieldHelp>Pick an active provider and model first, then use the advanced block only when you need to add or override provider details. Known values should stay in selects; custom entry is the fallback.</FieldHelp>
         <details className="advanced-panel">
@@ -1559,6 +1580,22 @@ export function SettingsPage() {
               />
             </div>
             <div className="controls-row">
+              <label htmlFor="providerApiStyle">Provider API Style <HelpHint label="Provider API style help" text="Configured API style is the upstream protocol GoatCitadel should target for this provider. Direct OpenAI defaults to Responses, direct Anthropic defaults to Messages, and compatibility gateways stay on chat-completions unless you explicitly change them." /></label>
+              <GCSelect
+                id="providerApiStyle"
+                value={providerApiStyle}
+                onChange={(nextApiStyle) => {
+                  setHasUnsavedProviderDraft(true);
+                  setProviderApiStyle(nextApiStyle as ProviderApiStyle);
+                }}
+                options={PROVIDER_API_STYLE_OPTIONS}
+              />
+            </div>
+            <p className="office-subtitle">
+              Configured API style: {providerApiStyle}
+              {currentProviderRuntime?.resolvedApiStyle ? ` · Resolved execution style: ${currentProviderRuntime.resolvedApiStyle}` : ""}
+            </p>
+            <div className="controls-row">
               <label htmlFor="providerDefaultModel">Default Model <HelpHint label="Default model help" text="Default model is the model GoatCitadel should choose first for this provider when a chat or page has not pinned a different model yet." /></label>
               <SelectOrCustom
                 id="providerDefaultModel"
@@ -1627,8 +1664,8 @@ export function SettingsPage() {
           <section id="settings-tests" className="settings-v2-section">
             <Panel
               className="settings-v2-panel"
-              title="LLM Test (chat/completions)"
-              subtitle="Test prompts default to direct model behavior without QMD memory context."
+              title="LLM Test (Unified Routing)"
+              subtitle="Test prompts run through GoatCitadel's unified LLM entrypoint without QMD memory context, so the response path reflects the provider's actual upstream API style."
             >
         <FieldHelp>Use test prompts to prove the active provider/model path before you rely on it elsewhere. This is the fastest way to confirm a provider is responding correctly.</FieldHelp>
         <div className="controls-row">

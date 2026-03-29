@@ -1225,6 +1225,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
                 Requested model: {formatPromptPackProviderModel(selectedRunModelUsage.requestedProviderId, selectedRunModelUsage.requestedModel)}
                 {" • "}
                 Actual model used: {formatPromptPackProviderModel(selectedRunModelUsage.actualProviderId, selectedRunModelUsage.actualModel)}
+                {selectedRunModelUsage.actualApiStyle ? ` • upstream API: ${selectedRunModelUsage.actualApiStyle}` : ""}
                 {selectedRunModelUsage.fallbackUsed
                   ? ` • fallback: ${formatPromptPackProviderModel(selectedRunModelUsage.fallbackProviderId, selectedRunModelUsage.fallbackModel)}`
                   : ""}
@@ -1520,8 +1521,10 @@ function resolvePromptPackRunModelUsage(
 ): {
   requestedProviderId?: string;
   requestedModel?: string;
+  requestedApiStyle?: string;
   actualProviderId?: string;
   actualModel?: string;
+  actualApiStyle?: string;
   fallbackProviderId?: string;
   fallbackModel?: string;
   fallbackReason?: string;
@@ -1531,8 +1534,10 @@ function resolvePromptPackRunModelUsage(
   return {
     requestedProviderId: run?.providerId ?? routing?.primaryProviderId,
     requestedModel: run?.model ?? routing?.primaryModel,
+    requestedApiStyle: routing?.primaryApiStyle,
     actualProviderId: routing?.effectiveProviderId ?? run?.providerId ?? routing?.primaryProviderId,
     actualModel: routing?.effectiveModel ?? run?.trace?.model ?? run?.model ?? routing?.primaryModel,
+    actualApiStyle: routing?.effectiveApiStyle,
     fallbackProviderId: routing?.fallbackProviderId,
     fallbackModel: routing?.fallbackModel,
     fallbackReason: routing?.fallbackReason,

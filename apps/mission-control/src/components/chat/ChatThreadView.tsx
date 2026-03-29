@@ -39,6 +39,7 @@ function summarizeRouting(turn: ChatThreadTurnRecord): string[] {
   const parts = [
     turn.trace.routing.effectiveProviderId,
     turn.trace.routing.effectiveModel,
+    turn.trace.routing.effectiveApiStyle,
     turn.trace.routing.fallbackUsed ? "fallback" : undefined,
   ].filter(Boolean);
   return parts as string[];
@@ -222,6 +223,7 @@ function ChatTurnDetails({
         <h5>Routing</h5>
         <p>{summarizeRouting(turn).join(" · ") || "No routing metadata yet."}</p>
         <p>Live data intent: {turn.trace.routing.liveDataIntent ? "yes" : "no"}</p>
+        {turn.trace.routing.effectiveApiStyle ? <p>Upstream API: {turn.trace.routing.effectiveApiStyle}</p> : null}
         {turn.trace.routing.fallbackReason ? <p>Fallback reason: {turn.trace.routing.fallbackReason}</p> : null}
       </div>
       {turn.trace.failure ? (

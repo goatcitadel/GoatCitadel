@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  collectProviderModelStaleness,
   collectSkillSourceDrift,
+  collectVendorChangelogDrift,
   collectWorkspaceDependencyDrift,
   parsePnpmOutdatedOutput,
   renderUpdateReviewMarkdown,
@@ -170,10 +172,38 @@ describe("renderUpdateReviewMarkdown", () => {
         ],
         warnings: ["cloudflare-api: upstream changed"],
       },
+      vendorChangelogDrift: {
+        items: [
+          {
+            sourceId: "openai",
+            sourceUrl: "https://developers.openai.com/api/docs/changelog",
+            latestUpdatedAt: "March 17, 2026",
+            status: "ok",
+            message: "Latest dated entry detected in the official changelog page.",
+          },
+        ],
+        warnings: [],
+      },
+      providerModelStaleness: {
+        items: [
+          {
+            providerId: "openai",
+            configuredApiStyle: "openai-chat-completions",
+            defaultModel: "gpt-4.1-mini",
+            preferredApiStyle: "openai-responses",
+            preferredModel: "gpt-5.4-mini",
+            status: "stale",
+            message: "Configured default is gpt-4.1-mini on openai-chat-completions; preferred is gpt-5.4-mini on openai-responses.",
+          },
+        ],
+        warnings: ["openai: stale default"],
+      },
       summary: {
         outdatedDependencyCount: 1,
         changedSkillSourceCount: 1,
-        warningCount: 1,
+        checkedVendorSourceCount: 1,
+        staleProviderCount: 1,
+        warningCount: 2,
         checkedSkillCount: 1,
       },
     });
@@ -181,6 +211,91 @@ describe("renderUpdateReviewMarkdown", () => {
     expect(markdown).toContain("# Daily Update Review");
     expect(markdown).toContain("| nanoid | 5.1.6 | 5.1.7 | @goatcitadel/gateway-core |");
     expect(markdown).toContain("| cloudflare-api | changed | abc123 | def456 |");
+    expect(markdown).toContain("| openai | ok | - | March 17, 2026 |");
+    expect(markdown).toContain("| openai | stale | gpt-4.1-mini / openai-chat-completions | gpt-5.4-mini / openai-responses |");
     expect(markdown).toContain("## Warnings");
+  });
+});
+
+describe("collectVendorChangelogDrift", () => {
+  it("parses official changelog pages and the OpenClaw changelog source", async () => {
+    const result = await collectVendorChangelogDrift("F:/code/personal-ai", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("openai.com")) {
+        return new Response("<h2>March 17, 2026</h2>", { status: 200 });
+      }
+      if (url.includes("claude.com")) {
+        return new Response("<h2>March 18, 2026</h2>", { status: 200 });
+      }
+      return new Response("## 2026.3.28.1\n\n- latest", {
+        status: 200,
+        headers: {
+          "last-modified": "Sat, 28 Mar 2026 21:45:58 GMT",
+        },
+      });
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceId: "openai",
+        latestUpdatedAt: "March 17, 2026",
+        status: "ok",
+      }),
+      expect.objectContaining({
+        sourceId: "anthropic",
+        latestUpdatedAt: "March 18, 2026",
+        status: "ok",
+      }),
+      expect.objectContaining({
+        sourceId: "openclaw",
+        latestVersion: "2026.3.28.1",
+        latestUpdatedAt: "Sat, 28 Mar 2026 21:45:58 GMT",
+        status: "ok",
+      }),
+    ]));
+  });
+});
+
+describe("collectProviderModelStaleness", () => {
+  it("flags stale direct-provider defaults in config/llm-providers.json", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-provider-staleness-"));
+    fs.mkdirSync(path.join(rootDir, "config"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, "config", "llm-providers.json"),
+      JSON.stringify({
+        activeProviderId: "openai",
+        providers: [
+          {
+            providerId: "openai",
+            apiStyle: "openai-chat-completions",
+            defaultModel: "gpt-4.1-mini",
+          },
+          {
+            providerId: "anthropic",
+            apiStyle: "anthropic-messages",
+            defaultModel: "claude-sonnet-4-6",
+          },
+        ],
+      }, null, 2),
+      "utf8",
+    );
+
+    try {
+      const result = await collectProviderModelStaleness(rootDir);
+      expect(result.items).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          providerId: "openai",
+          status: "stale",
+        }),
+        expect.objectContaining({
+          providerId: "anthropic",
+          status: "current",
+        }),
+      ]));
+      expect(result.warnings.some((warning) => warning.includes("openai"))).toBe(true);
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 });

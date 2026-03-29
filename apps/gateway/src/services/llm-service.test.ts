@@ -640,6 +640,495 @@ describe("LlmService", () => {
     expect(updated.providers.find((provider) => provider.providerId === "deepseek")?.defaultModel).toBe("deepseek-chat");
   });
 
+  it("preserves explicit apiStyle values when updating runtime config", () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-4.1-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const updated = service.updateRuntimeConfig({
+      upsertProvider: {
+        providerId: "anthropic",
+        label: "Anthropic",
+        baseUrl: "https://api.anthropic.com/v1",
+        apiStyle: "anthropic-messages",
+        defaultModel: "claude-sonnet-4-6",
+      },
+    });
+
+    expect(updated.providers.find((provider) => provider.providerId === "anthropic")?.apiStyle).toBe("anthropic-messages");
+  });
+
+  it("reports resolved execution api styles in runtime config", () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+        {
+          providerId: "anthropic",
+          label: "Anthropic",
+          baseUrl: "https://api.anthropic.com/v1",
+          apiStyle: "anthropic-messages",
+          defaultModel: "claude-sonnet-4-6",
+        },
+        {
+          providerId: "openrouter",
+          label: "OpenRouter",
+          baseUrl: "https://openrouter.ai/api/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "openai/gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const runtime = service.getRuntimeConfig();
+
+    expect(runtime.providers.find((provider) => provider.providerId === "openai")?.resolvedApiStyle).toBe("openai-responses");
+    expect(runtime.providers.find((provider) => provider.providerId === "anthropic")?.resolvedApiStyle).toBe("anthropic-messages");
+    expect(runtime.providers.find((provider) => provider.providerId === "openrouter")?.resolvedApiStyle).toBe("openai-chat-completions");
+  });
+
+  it("uses the OpenAI Responses API for GPT-5 native providers", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let requestUrl = "";
+    let payloadBody: Record<string, unknown> | undefined;
+
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      requestUrl = String(url);
+      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      return new Response(
+        JSON.stringify({
+          id: "resp_openai_native",
+          model: "gpt-5.4-mini",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "ok" }],
+            },
+          ],
+          usage: {
+            input_tokens: 12,
+            output_tokens: 3,
+            total_tokens: 15,
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const completion = await service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-5.4-mini",
+        messages: [
+          { role: "developer", content: "Be terse." },
+          { role: "user", content: "hello" },
+        ],
+        reasoning: { effort: "none" },
+        verbosity: "low",
+        service_tier: "flex",
+        prompt_cache_retention: "in_memory",
+        max_tokens: 256,
+      });
+
+      expect((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.content).toBe("ok");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(requestUrl).toBe("https://api.openai.com/v1/responses");
+    expect(payloadBody?.instructions).toBe("Be terse.");
+    expect(payloadBody?.reasoning).toEqual({ effort: "none" });
+    expect(payloadBody?.text).toEqual({ verbosity: "low" });
+    expect(payloadBody?.service_tier).toBe("flex");
+    expect(payloadBody?.prompt_cache_retention).toBe("in_memory");
+    expect(payloadBody?.max_output_tokens).toBe(256);
+    expect(payloadBody?.input).toEqual([
+      {
+        role: "user",
+        content: [{ type: "input_text", text: "hello" }],
+      },
+    ]);
+  });
+
+  it("falls back to chat completions for legacy OpenAI models on native-first providers", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let requestUrl = "";
+    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+      requestUrl = String(url);
+      return new Response(
+        JSON.stringify({
+          id: "cmpl_legacy_openai",
+          model: "gpt-4.1-mini",
+          choices: [{ index: 0, message: { role: "assistant", content: "legacy" } }],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const completion = await service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-4.1-mini",
+        messages: [{ role: "user", content: "hello" }],
+      });
+      expect((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.content).toBe("legacy");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(requestUrl).toBe("https://api.openai.com/v1/chat/completions");
+  });
+
+  it("uses the Anthropic Messages API for native Anthropic providers", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "anthropic",
+      providers: [
+        {
+          providerId: "anthropic",
+          label: "Anthropic",
+          baseUrl: "https://api.anthropic.com/v1",
+          apiStyle: "anthropic-messages",
+          defaultModel: "claude-sonnet-4-6",
+          apiKeyEnv: "ANTHROPIC_API_KEY",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, {
+      ...process.env,
+      ANTHROPIC_API_KEY: "anthropic-secret",
+    }, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let requestUrl = "";
+    let payloadBody: Record<string, unknown> | undefined;
+    let receivedHeaders: Headers | undefined;
+
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      requestUrl = String(url);
+      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      receivedHeaders = new Headers(init?.headers);
+      return new Response(
+        JSON.stringify({
+          id: "msg_native_anthropic",
+          model: "claude-sonnet-4-6",
+          role: "assistant",
+          content: [{ type: "text", text: "ok" }],
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 9,
+            output_tokens: 3,
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const completion = await service.chatCompletions({
+        providerId: "anthropic",
+        model: "claude-sonnet-4-6",
+        messages: [
+          { role: "system", content: "Answer in one sentence." },
+          { role: "user", content: "hello" },
+        ],
+        reasoning: { effort: "low" },
+        response_format: {
+          type: "json_schema",
+          name: "answer",
+          schema: { type: "object" },
+        },
+        max_tokens: 128,
+      });
+
+      expect((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.content).toBe("ok");
+      expect(completion.choices?.[0]?.finish_reason).toBe("stop");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(requestUrl).toBe("https://api.anthropic.com/v1/messages");
+    expect(receivedHeaders?.get("x-api-key")).toBe("anthropic-secret");
+    expect(receivedHeaders?.get("anthropic-version")).toBe("2023-06-01");
+    expect(receivedHeaders?.get("authorization")).toBeNull();
+    expect(payloadBody?.system).toBe("Answer in one sentence.");
+    expect(payloadBody?.messages).toEqual([
+      { role: "user", content: "hello" },
+    ]);
+    expect(payloadBody?.thinking).toEqual({
+      type: "enabled",
+      budget_tokens: 1024,
+    });
+    expect(payloadBody?.output_config).toEqual({
+      format: {
+        type: "json_schema",
+        name: "answer",
+        schema: { type: "object" },
+      },
+    });
+  });
+
+  it("round-trips tool calls and tool results through OpenAI Responses and dedupes duplicate call ids", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let payloadBody: Record<string, unknown> | undefined;
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      return new Response(
+        JSON.stringify({
+          id: "resp_openai_tool_roundtrip",
+          model: "gpt-5.4-mini",
+          output: [
+            {
+              type: "function_call",
+              call_id: "call_weather",
+              name: "lookup_weather",
+              arguments: "{\"zip\":\"91303\"}",
+            },
+            {
+              type: "function_call",
+              call_id: "call_weather",
+              name: "lookup_weather",
+              arguments: "{\"zip\":\"91303\"}",
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const completion = await service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-5.4-mini",
+        messages: [
+          { role: "user", content: "What is the weather in 91303?" },
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call_weather",
+                type: "function",
+                function: {
+                  name: "lookup_weather",
+                  arguments: "{\"zip\":\"91303\"}",
+                },
+              },
+            ],
+          } as unknown as { role: "assistant"; content: string },
+          {
+            role: "tool",
+            tool_call_id: "call_weather",
+            content: "{\"temp\":72}",
+          },
+        ],
+      });
+
+      expect(completion.choices?.[0]?.finish_reason).toBe("tool_calls");
+      expect(((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.tool_calls as unknown[])?.length).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(payloadBody?.input).toEqual([
+      {
+        role: "user",
+        content: [{ type: "input_text", text: "What is the weather in 91303?" }],
+      },
+      {
+        type: "function_call",
+        call_id: "call_weather",
+        name: "lookup_weather",
+        arguments: "{\"zip\":\"91303\"}",
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_weather",
+        output: "{\"temp\":72}",
+      },
+    ]);
+  });
+
+  it("round-trips tool calls and tool results through Anthropic Messages", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "anthropic",
+      providers: [
+        {
+          providerId: "anthropic",
+          label: "Anthropic",
+          baseUrl: "https://api.anthropic.com/v1",
+          apiStyle: "anthropic-messages",
+          defaultModel: "claude-sonnet-4-6",
+          apiKeyEnv: "ANTHROPIC_API_KEY",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, {
+      ...process.env,
+      ANTHROPIC_API_KEY: "anthropic-secret",
+    }, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let payloadBody: Record<string, unknown> | undefined;
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      return new Response(
+        JSON.stringify({
+          id: "msg_anthropic_tool_roundtrip",
+          model: "claude-sonnet-4-6",
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "call_weather",
+              name: "lookup_weather",
+              input: { zip: "91303" },
+            },
+          ],
+          stop_reason: "tool_use",
+          usage: {
+            input_tokens: 14,
+            output_tokens: 5,
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const completion = await service.chatCompletions({
+        providerId: "anthropic",
+        model: "claude-sonnet-4-6",
+        messages: [
+          { role: "user", content: "What is the weather in 91303?" },
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call_weather",
+                type: "function",
+                function: {
+                  name: "lookup_weather",
+                  arguments: "{\"zip\":\"91303\"}",
+                },
+              },
+            ],
+          } as unknown as { role: "assistant"; content: string },
+          {
+            role: "tool",
+            tool_call_id: "call_weather",
+            content: "{\"temp\":72}",
+          },
+        ],
+      });
+
+      expect(completion.choices?.[0]?.finish_reason).toBe("tool_calls");
+      expect(((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.tool_calls as unknown[])?.length).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(payloadBody?.messages).toEqual([
+      { role: "user", content: "What is the weather in 91303?" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call_weather",
+            name: "lookup_weather",
+            input: { zip: "91303" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call_weather",
+            content: "{\"temp\":72}",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("enforces network allowlist for outbound model calls when configured", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",

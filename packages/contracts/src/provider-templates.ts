@@ -1,29 +1,35 @@
+import type { LlmApiStyle } from "./llm.js";
+
 export interface ProviderTemplateDefinition {
   providerId: string;
   label: string;
   baseUrl: string;
   defaultModel: string;
+  apiStyle?: LlmApiStyle;
   knownModels?: string[];
 }
 
-export const providerTemplates = [
+export const providerTemplates: readonly ProviderTemplateDefinition[] = [
   {
     providerId: "openai",
     label: "OpenAI",
     baseUrl: "https://api.openai.com/v1",
     defaultModel: "gpt-5.4-mini",
+    apiStyle: "openai-responses",
   },
   {
     providerId: "anthropic",
-    label: "Anthropic (compatible endpoint)",
+    label: "Anthropic",
     baseUrl: "https://api.anthropic.com/v1",
     defaultModel: "claude-sonnet-4-6",
+    apiStyle: "anthropic-messages",
   },
   {
     providerId: "google",
     label: "Google (compatible endpoint)",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     defaultModel: "models/gemini-2.5-flash",
+    apiStyle: "openai-chat-completions",
     knownModels: [
       "models/gemini-2.5-flash",
       "models/gemini-2.5-flash-lite",
@@ -36,6 +42,7 @@ export const providerTemplates = [
     label: "MiniMax (compatible endpoint)",
     baseUrl: "https://api.minimax.io/v1",
     defaultModel: "MiniMax-M2.7",
+    apiStyle: "openai-chat-completions",
     knownModels: [
       "MiniMax-M2.7",
       "MiniMax-M2.7-highspeed",
@@ -51,60 +58,70 @@ export const providerTemplates = [
     label: "Vercel AI Gateway",
     baseUrl: "https://ai-gateway.vercel.sh/v1",
     defaultModel: "openai/gpt-5.4-mini",
+    apiStyle: "openai-chat-completions",
   },
   {
     providerId: "lmstudio",
     label: "LM Studio",
     baseUrl: "http://127.0.0.1:1234/v1",
     defaultModel: "local-model",
+    apiStyle: "openai-chat-completions",
   },
   {
     providerId: "ollama",
     label: "Ollama",
     baseUrl: "http://127.0.0.1:11434/v1",
     defaultModel: "llama3.1",
+    apiStyle: "openai-chat-completions",
   },
   {
     providerId: "localai",
     label: "LocalAI",
     baseUrl: "http://127.0.0.1:8080/v1",
     defaultModel: "local-model",
+    apiStyle: "openai-chat-completions",
   },
   {
     providerId: "npu-local",
     label: "NPU Local Sidecar",
     baseUrl: "http://127.0.0.1:11440/v1",
     defaultModel: "phi-3.5-mini-instruct",
+    apiStyle: "openai-chat-completions",
   },
   {
     providerId: "genie-ir20",
     label: "Genie IR20 (Tailnet)",
     baseUrl: "http://100.64.0.4:8910/v1",
     defaultModel: "IBM-Granite",
+    apiStyle: "openai-chat-completions",
   },
   {
     providerId: "openrouter",
     label: "OpenRouter",
     baseUrl: "https://openrouter.ai/api/v1",
     defaultModel: "openai/gpt-5.4-mini",
+    apiStyle: "openai-chat-completions",
   },
   {
     providerId: "mistral",
     label: "Mistral",
     baseUrl: "https://api.mistral.ai/v1",
     defaultModel: "mistral-small-latest",
+    apiStyle: "openai-chat-completions",
   },
   {
     providerId: "deepseek",
     label: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1",
     defaultModel: "deepseek-chat",
+    apiStyle: "openai-chat-completions",
   },
   {
     providerId: "glm",
     label: "GLM (Z.AI)",
     baseUrl: "https://api.z.ai/api/paas/v4",
     defaultModel: "glm-5",
+    apiStyle: "openai-chat-completions",
     knownModels: ["glm-5", "glm-5-air", "glm-5-flash", "glm-5-turbo"],
   },
   {
@@ -112,20 +129,23 @@ export const providerTemplates = [
     label: "Moonshot (Kimi API)",
     baseUrl: "https://api.moonshot.ai/v1",
     defaultModel: "kimi-k2.5",
+    apiStyle: "openai-chat-completions",
   },
   {
     providerId: "perplexity",
     label: "Perplexity",
     baseUrl: "https://api.perplexity.ai",
     defaultModel: "sonar",
+    apiStyle: "openai-chat-completions",
   },
   {
     providerId: "huggingface",
     label: "HuggingFace Inference",
     baseUrl: "https://router.huggingface.co/v1",
     defaultModel: "openai/gpt-oss-120b",
+    apiStyle: "openai-chat-completions",
   },
-] as const satisfies readonly ProviderTemplateDefinition[];
+];
 
 export function findProviderTemplate(providerId: string): ProviderTemplateDefinition | undefined {
   return providerTemplates.find((template) => template.providerId === providerId);

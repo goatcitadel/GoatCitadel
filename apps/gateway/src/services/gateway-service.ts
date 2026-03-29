@@ -9960,9 +9960,16 @@ export class GatewayService {
             providerId: provider.providerId,
             label: provider.label,
             baseUrl: provider.baseUrl,
+            apiStyle: provider.apiStyle,
+            resolvedApiStyle: this.llmService.resolveExecutionApiStyle(
+              provider.providerId,
+              provider.defaultModel,
+            ),
             defaultModel: provider.defaultModel,
             hasApiKey: provider.hasApiKey,
             apiKeySource: provider.apiKeySource,
+            hasKeychainSecret: provider.hasKeychainSecret,
+            apiKeyRef: provider.apiKeyRef,
           })),
         },
         mesh: settings.mesh,
@@ -10018,6 +10025,7 @@ export class GatewayService {
         providerId: string;
         label?: string;
         baseUrl?: string;
+        apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
         defaultModel?: string;
         apiKey?: string;
         apiKeyEnv?: string;
@@ -12218,6 +12226,7 @@ export class GatewayService {
       providerId: string;
       label?: string;
       baseUrl?: string;
+      apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
       defaultModel?: string;
       apiKey?: string;
       apiKeyEnv?: string;
@@ -12252,6 +12261,7 @@ export class GatewayService {
   public async previewLlmModels(input: {
     providerId: string;
     baseUrl: string;
+    apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
     apiKey?: string;
     apiKeyEnv?: string;
     headers?: Record<string, string>;
@@ -12420,12 +12430,15 @@ export class GatewayService {
     const primaryModel = hookableRequest.model
       ?? primaryProvider?.defaultModel
       ?? runtime.activeModel;
+    const primaryApiStyle = this.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
     const allowCrossProviderFallback = shouldAllowCrossProviderFallback(hookableRequest);
     const routing: ChatTurnTraceRecord["routing"] = {
       primaryProviderId,
       primaryModel,
+      primaryApiStyle,
       effectiveProviderId: primaryProviderId,
       effectiveModel: primaryModel,
+      effectiveApiStyle: primaryApiStyle,
       fallbackUsed: false,
     };
 
@@ -12447,10 +12460,15 @@ export class GatewayService {
         });
         routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
         routing.effectiveModel = response.model ?? attemptRequest.model ?? primaryModel;
+        routing.effectiveApiStyle = this.llmService.resolveExecutionApiStyle(
+          routing.effectiveProviderId,
+          routing.effectiveModel,
+        );
         if (index > 0) {
           routing.fallbackUsed = true;
           routing.fallbackProviderId = routing.effectiveProviderId;
           routing.fallbackModel = routing.effectiveModel;
+          routing.fallbackApiStyle = routing.effectiveApiStyle;
           routing.fallbackReason = index === 1
             ? "provider compatibility retry (normalized tool protocol)"
             : "provider compatibility retry (minimal thinking metadata)";
@@ -12506,9 +12524,14 @@ export class GatewayService {
           routing.fallbackUsed = true;
           routing.fallbackProviderId = fallback.providerId;
           routing.fallbackModel = response.model ?? fallback.model;
+          routing.fallbackApiStyle = this.llmService.resolveExecutionApiStyle(
+            fallback.providerId,
+            routing.fallbackModel,
+          );
           routing.fallbackReason = `primary failed (${lastError?.message ?? "unknown error"})`;
           routing.effectiveProviderId = fallback.providerId;
           routing.effectiveModel = routing.fallbackModel;
+          routing.effectiveApiStyle = routing.fallbackApiStyle;
           break;
         } catch (error) {
           lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
@@ -12640,12 +12663,15 @@ export class GatewayService {
     const primaryModel = withContext.model
       ?? primaryProvider?.defaultModel
       ?? runtime.activeModel;
+    const primaryApiStyle = this.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
     const allowCrossProviderFallback = shouldAllowCrossProviderFallback(withContext);
     const routing: ChatTurnTraceRecord["routing"] = {
       primaryProviderId,
       primaryModel,
+      primaryApiStyle,
       effectiveProviderId: primaryProviderId,
       effectiveModel: primaryModel,
+      effectiveApiStyle: primaryApiStyle,
       fallbackUsed: false,
     };
 
@@ -12672,10 +12698,15 @@ export class GatewayService {
         }
         routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
         routing.effectiveModel = attemptRequest.model ?? primaryModel;
+        routing.effectiveApiStyle = this.llmService.resolveExecutionApiStyle(
+          routing.effectiveProviderId,
+          routing.effectiveModel,
+        );
         if (index > 0) {
           routing.fallbackUsed = true;
           routing.fallbackProviderId = routing.effectiveProviderId;
           routing.fallbackModel = routing.effectiveModel;
+          routing.fallbackApiStyle = routing.effectiveApiStyle;
           routing.fallbackReason = index === 1
             ? "provider compatibility retry (normalized tool protocol)"
             : "provider compatibility retry (minimal thinking metadata)";
@@ -12707,9 +12738,14 @@ export class GatewayService {
           routing.fallbackUsed = true;
           routing.fallbackProviderId = fallback.providerId;
           routing.fallbackModel = fallback.model;
+          routing.fallbackApiStyle = this.llmService.resolveExecutionApiStyle(
+            fallback.providerId,
+            fallback.model,
+          );
           routing.fallbackReason = `primary failed (${lastError?.message ?? "unknown error"})`;
           routing.effectiveProviderId = fallback.providerId;
           routing.effectiveModel = fallback.model;
+          routing.effectiveApiStyle = routing.fallbackApiStyle;
           break;
         } catch (error) {
           lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);

@@ -15,6 +15,8 @@ export interface ProviderModelCatalogOption {
   label: string;
   baseUrl: string;
   defaultModel: string;
+  apiStyle: RuntimeSettingsResponse["llm"]["providers"][number]["apiStyle"];
+  resolvedApiStyle?: RuntimeSettingsResponse["llm"]["providers"][number]["resolvedApiStyle"];
   apiKeyRef?: string;
   apiKeySource?: string;
   hasApiKey?: boolean;
@@ -75,6 +77,8 @@ function buildProviderCatalog(
       label: provider.label,
       baseUrl: provider.baseUrl,
       defaultModel: provider.defaultModel,
+      apiStyle: provider.apiStyle,
+      resolvedApiStyle: provider.resolvedApiStyle,
       apiKeyRef: provider.apiKeyRef,
       apiKeySource: provider.apiKeySource,
       hasApiKey: provider.hasApiKey,
@@ -91,6 +95,7 @@ function buildProviderCatalog(
 export async function previewProviderModels(input: {
   providerId: string;
   baseUrl: string;
+  apiStyle?: RuntimeSettingsResponse["llm"]["providers"][number]["apiStyle"];
   apiKey?: string;
   apiKeyEnv?: string;
   headers?: Record<string, string>;
@@ -99,6 +104,7 @@ export async function previewProviderModels(input: {
   const response = await previewLlmModels({
     providerId: input.providerId,
     baseUrl: input.baseUrl,
+    apiStyle: input.apiStyle,
     apiKey: input.apiKey,
     apiKeyEnv: input.apiKeyEnv,
     headers: input.headers,

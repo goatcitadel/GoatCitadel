@@ -60,6 +60,7 @@ function makeTrace(): ChatTurnTraceRecord {
       primaryModel: "glm-5",
       effectiveProviderId: "glm",
       effectiveModel: "glm-5",
+      effectiveApiStyle: "openai-chat-completions",
     },
     failure: {
       failureClass: "tool_blocked",
@@ -113,6 +114,7 @@ describe("ChatTraceCard", () => {
       .trim();
 
     expect(text).toContain("Fallback reason: primary blocked by remote site");
+    expect(text).toContain("Upstream API: openai-chat-completions");
     expect(text).toContain("Engine: Built-in browser (builtin)");
     expect(text).toContain("URL: https://www.movieinsider.com/movies");
     expect(text).toContain("HTTP status: 403");

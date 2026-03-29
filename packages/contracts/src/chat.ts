@@ -685,11 +685,14 @@ export interface ChatTurnTraceRecord {
     usedVisionFallback?: boolean;
     effectiveProviderId?: string;
     effectiveModel?: string;
+    effectiveApiStyle?: import("./llm.js").LlmApiStyle;
     liveDataIntent?: boolean;
     primaryProviderId?: string;
     primaryModel?: string;
+    primaryApiStyle?: import("./llm.js").LlmApiStyle;
     fallbackProviderId?: string;
     fallbackModel?: string;
+    fallbackApiStyle?: import("./llm.js").LlmApiStyle;
     fallbackReason?: string;
     fallbackUsed?: boolean;
   };

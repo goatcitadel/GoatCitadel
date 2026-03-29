@@ -35,6 +35,7 @@ export interface LlmProviderSummary {
   label: string;
   baseUrl: string;
   apiStyle: LlmApiStyle;
+  resolvedApiStyle?: LlmApiStyle;
   defaultModel: string;
   hasApiKey: boolean;
   apiKeySource: "inline" | "env" | "keychain" | "none";
@@ -58,6 +59,7 @@ export interface LlmModelRecord {
 export interface LlmModelPreviewRequest {
   providerId: string;
   baseUrl: string;
+  apiStyle?: LlmApiStyle;
   apiKey?: string;
   apiKeyEnv?: string;
   headers?: Record<string, string>;
@@ -136,10 +138,13 @@ export interface ChatCompletionResponse {
   routing?: {
     primaryProviderId?: string;
     primaryModel?: string;
+    primaryApiStyle?: LlmApiStyle;
     effectiveProviderId?: string;
     effectiveModel?: string;
+    effectiveApiStyle?: LlmApiStyle;
     fallbackProviderId?: string;
     fallbackModel?: string;
+    fallbackApiStyle?: LlmApiStyle;
     fallbackReason?: string;
     fallbackUsed?: boolean;
   };

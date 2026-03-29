@@ -6148,9 +6148,10 @@ function resolvePromptLabOpenAiControls(
   if (input.mode !== "cowork" && input.mode !== "code") {
     return {};
   }
-  // Prompt Lab currently runs through chat/completions. GPT-5.* rejects
-  // reasoning_effort on tool-enabled turns there, so keep these controls for
-  // no-tools evaluations only until responses API support is added.
+  // Native GPT-5 no-tools evaluations now route through Responses, but
+  // compatibility/chat-completions turns can still reject reasoning controls
+  // once tools are enabled. Keep prompt-lab tool turns conservative until the
+  // orchestrator can key this decision off resolved execution style.
   if (hasFunctionTools) {
     return {};
   }

@@ -1,6 +1,7 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, create, type ReactTestInstance } from "react-test-renderer";
+import type { PromptPackReportRecord } from "@goatcitadel/contracts";
 import { ConfirmModal } from "./components/ConfirmModal";
 import { RemoteApprovalActionModal } from "./components/RemoteApprovalActionModal";
 import { McpPage } from "./pages/McpPage";
@@ -187,15 +188,33 @@ function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   return match;
 }
 
-function createPromptPackReport(overrides?: Partial<ReturnType<typeof createPromptPackReportBase>>) {
+function createPromptPackReport(overrides?: Partial<PromptPackReportRecord>) {
   return {
     ...createPromptPackReportBase(),
     ...overrides,
   };
 }
 
-function createPromptPackReportBase() {
+function createPromptPackReportBase(): PromptPackReportRecord {
   return {
+    pack: {
+      packId: "pack-a",
+      name: "Pack A",
+      testCount: 1,
+      createdAt: "2026-03-21T12:00:00.000Z",
+      updatedAt: "2026-03-21T12:00:00.000Z",
+    },
+    tests: [
+      {
+        testId: "pack-a-test-1",
+        packId: "pack-a",
+        code: "A-01",
+        title: "Alpha test",
+        prompt: "Prompt for pack-a",
+        orderIndex: 0,
+        createdAt: "2026-03-21T12:00:00.000Z",
+      },
+    ],
     runs: [],
     scores: [],
     summary: {

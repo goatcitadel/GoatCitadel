@@ -1092,7 +1092,8 @@ export interface RuntimeSettingsResponse {
       providerId: string;
       label: string;
       baseUrl: string;
-      apiStyle: "openai-chat-completions";
+      apiStyle: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
+      resolvedApiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
       defaultModel: string;
       hasApiKey: boolean;
       apiKeySource: "inline" | "env" | "keychain" | "none";
@@ -3454,6 +3455,7 @@ export async function patchSettings(input: {
       providerId: string;
       label?: string;
       baseUrl?: string;
+      apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
       defaultModel?: string;
       apiKey?: string;
       apiKeyEnv?: string;
@@ -3777,6 +3779,7 @@ export async function fetchAssemblyReputations(limit = 50): Promise<{ items: Mod
 export async function previewLlmModels(input: {
   providerId: string;
   baseUrl: string;
+  apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
   apiKey?: string;
   apiKeyEnv?: string;
   headers?: Record<string, string>;

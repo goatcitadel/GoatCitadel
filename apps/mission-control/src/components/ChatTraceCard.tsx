@@ -85,6 +85,7 @@ export function ChatTraceCard({
                 ? `Effective: ${trace.routing.effectiveProviderId ?? "provider auto"}${trace.routing.effectiveModel ? ` · ${trace.routing.effectiveModel}` : ""}`
                 : "Effective: not recorded"}
             </p>
+            {trace.routing.effectiveApiStyle ? <p>Upstream API: {trace.routing.effectiveApiStyle}</p> : null}
             {trace.routing.fallbackReason ? <p>Fallback reason: {trace.routing.fallbackReason}</p> : null}
           </div>
           {trace.toolRuns.length > 0 ? (

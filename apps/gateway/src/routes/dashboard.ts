@@ -42,6 +42,12 @@ const authUpdateSchema = z.object({
   basicPassword: z.string().optional(),
 });
 
+const llmApiStyleSchema = z.enum([
+  "openai-chat-completions",
+  "openai-responses",
+  "anthropic-messages",
+]);
+
 const updateSettingsSchema = z.object({
   deploymentProfile: z.enum(["local_dev", "trusted_local", "remote_hardened"]).optional(),
   defaultToolProfile: z.string().min(1).optional(),
@@ -56,6 +62,7 @@ const updateSettingsSchema = z.object({
       providerId: z.string().min(1),
       label: z.string().min(1).optional(),
       baseUrl: z.string().url().optional(),
+      apiStyle: llmApiStyleSchema.optional(),
       defaultModel: z.string().min(1).optional(),
       apiKey: z.string().min(1).optional(),
       apiKeyEnv: z.string().min(1).optional(),

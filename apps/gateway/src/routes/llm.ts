@@ -1,6 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
+const llmApiStyleSchema = z.enum([
+  "openai-chat-completions",
+  "openai-responses",
+  "anthropic-messages",
+]);
+
 const updateConfigSchema = z.object({
   activeProviderId: z.string().min(1).optional(),
   activeModel: z.string().min(1).optional(),
@@ -8,6 +14,7 @@ const updateConfigSchema = z.object({
     providerId: z.string().min(1),
     label: z.string().min(1).optional(),
     baseUrl: z.string().url().optional(),
+    apiStyle: llmApiStyleSchema.optional(),
     defaultModel: z.string().min(1).optional(),
     apiKey: z.string().min(1).optional(),
     apiKeyEnv: z.string().min(1).optional(),
@@ -22,6 +29,7 @@ const modelQuerySchema = z.object({
 const modelPreviewSchema = z.object({
   providerId: z.string().min(1),
   baseUrl: z.string().url(),
+  apiStyle: llmApiStyleSchema.optional(),
   apiKey: z.string().min(1).optional(),
   apiKeyEnv: z.string().min(1).optional(),
   headers: z.record(z.string()).optional(),

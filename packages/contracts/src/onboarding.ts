@@ -1,4 +1,5 @@
 import type { AuthRuntimeSettings, AuthSettingsUpdateInput } from "./integrations.js";
+import type { LlmApiStyle } from "./llm.js";
 import type { ToolProfile } from "./policy.js";
 
 export type OnboardingChecklistStatus = "complete" | "needs_input" | "optional";
@@ -27,6 +28,8 @@ export interface OnboardingState {
         providerId: string;
         label: string;
         baseUrl: string;
+        apiStyle: LlmApiStyle;
+        resolvedApiStyle?: LlmApiStyle;
         defaultModel: string;
         hasApiKey: boolean;
         apiKeySource: "inline" | "env" | "keychain" | "none";
@@ -58,6 +61,7 @@ export interface OnboardingBootstrapInput {
       providerId: string;
       label?: string;
       baseUrl?: string;
+      apiStyle?: LlmApiStyle;
       defaultModel?: string;
       apiKey?: string;
       apiKeyEnv?: string;

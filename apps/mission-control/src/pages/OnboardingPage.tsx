@@ -28,6 +28,7 @@ const TOOL_PROFILE_OPTIONS: SelectOption[] = [
 ];
 
 const BUDGET_OPTIONS: Array<RuntimeSettingsResponse["budgetMode"]> = ["saver", "balanced", "power"];
+type ProviderApiStyle = RuntimeSettingsResponse["llm"]["providers"][number]["apiStyle"];
 
 const ALLOWLIST_PRESETS: Array<{ id: string; label: string; hosts: string[] }> = [
   { id: "strict", label: "Strict (none)", hosts: [] },
@@ -135,10 +136,11 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   const [basicPassword, setBasicPassword] = useState("");
 
   const [activeProviderId, setActiveProviderId] = useState("openai");
-  const [activeModel, setActiveModel] = useState("gpt-4.1-mini");
+  const [activeModel, setActiveModel] = useState("gpt-5.4-mini");
   const [providerLabel, setProviderLabel] = useState("OpenAI");
   const [providerBaseUrl, setProviderBaseUrl] = useState("https://api.openai.com/v1");
-  const [providerDefaultModel, setProviderDefaultModel] = useState("gpt-4.1-mini");
+  const [providerApiStyle, setProviderApiStyle] = useState<ProviderApiStyle>("openai-responses");
+  const [providerDefaultModel, setProviderDefaultModel] = useState("gpt-5.4-mini");
   const [providerApiKey, setProviderApiKey] = useState("");
   const [providerApiKeyEnv, setProviderApiKeyEnv] = useState("");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
@@ -225,6 +227,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     if (activeProvider) {
       setProviderLabel(activeProvider.label);
       setProviderBaseUrl(activeProvider.baseUrl);
+      setProviderApiStyle(activeProvider.apiStyle);
       setProviderDefaultModel(activeProvider.defaultModel);
     }
 
@@ -379,6 +382,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       void previewProviderModels({
         providerId,
         baseUrl,
+        apiStyle: providerApiStyle,
         apiKey: providerApiKey.trim() || undefined,
         apiKeyEnv: providerApiKeyEnv.trim() || undefined,
         fallbackModel: providerDefaultModel || activeModel,
@@ -420,7 +424,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       }
       previewAbortRef.current?.abort();
     };
-  }, [activeProviderId, providerApiKey, providerApiKeyEnv, providerBaseUrl]);
+  }, [activeProviderId, providerApiKey, providerApiKeyEnv, providerApiStyle, providerBaseUrl]);
 
   const applyProviderTemplate = (providerId: string) => {
     const existing = runtimeProviderCatalog.find((provider) => provider.providerId === providerId)
@@ -432,6 +436,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     }
     setProviderLabel(source.label);
     setProviderBaseUrl(source.baseUrl);
+    setProviderApiStyle(source.apiStyle ?? "openai-chat-completions");
     setProviderDefaultModel(source.defaultModel);
     if (!activeModel || activeModel === providerDefaultModel) {
       setActiveModel(source.defaultModel);
@@ -522,6 +527,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
             providerId: activeProviderId,
             label: providerLabel || undefined,
             baseUrl: providerBaseUrl || undefined,
+            apiStyle: providerApiStyle,
             defaultModel: providerDefaultModel || undefined,
             apiKey: providerApiKey || undefined,
             apiKeyEnv: providerApiKeyEnv || undefined,
@@ -758,6 +764,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
               customLabel="Custom base URL"
             />
           </div>
+          <p className="office-subtitle">Upstream API style: {providerApiStyle}</p>
           <div className="controls-row">
             <label htmlFor="wizard-model">Active model <HelpHint label="Active model help" text="This is the model GoatCitadel will use immediately after onboarding. The list is discovered live when the provider supports it." /></label>
             <SelectOrCustom

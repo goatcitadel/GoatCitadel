@@ -3,6 +3,7 @@ import { assertHostAllowed } from "@goatcitadel/policy-engine";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
+  LlmApiStyle,
   LlmConfigFile,
   LlmModelRecord,
   LlmModelPreviewRequest,
@@ -21,6 +22,7 @@ export interface LlmRuntimeUpdateInput {
     providerId: string;
     label?: string;
     baseUrl?: string;
+    apiStyle?: LlmApiStyle;
     defaultModel?: string;
     apiKey?: string;
     apiKeyEnv?: string;
@@ -116,6 +118,7 @@ export class LlmService {
         label: provider.label,
         baseUrl: provider.baseUrl,
         apiStyle: provider.apiStyle,
+        resolvedApiStyle: resolveProviderExecutionApiStyle(provider, provider.defaultModel),
         defaultModel: provider.defaultModel,
         hasApiKey: status.hasApiKey,
         apiKeySource: status.apiKeySource,
@@ -152,7 +155,10 @@ export class LlmService {
         providerId: input.upsertProvider.providerId,
         label: input.upsertProvider.label ?? existing?.label ?? input.upsertProvider.providerId,
         baseUrl: input.upsertProvider.baseUrl ?? existing?.baseUrl ?? "http://127.0.0.1:1234/v1",
-        apiStyle: "openai-chat-completions",
+        apiStyle: normalizeProviderApiStyle(
+          input.upsertProvider.providerId,
+          input.upsertProvider.apiStyle ?? existing?.apiStyle,
+        ),
         defaultModel: input.upsertProvider.defaultModel ?? existing?.defaultModel ?? defaultModelForProvider(input.upsertProvider.providerId),
         apiKey: submittedApiKey ? undefined : (input.upsertProvider.apiKey ?? existing?.apiKey),
         apiKeyEnv: input.upsertProvider.apiKeyEnv ?? existing?.apiKeyEnv,
@@ -303,7 +309,7 @@ export class LlmService {
       providerId: input.providerId,
       label: existing?.label ?? input.providerId,
       baseUrl: input.baseUrl,
-      apiStyle: "openai-chat-completions",
+      apiStyle: normalizeProviderApiStyle(input.providerId, input.apiStyle ?? existing?.apiStyle),
       defaultModel: existing?.defaultModel ?? defaultModelForProvider(input.providerId),
       apiKey: input.apiKey ?? existing?.apiKey,
       apiKeyEnv: input.apiKeyEnv ?? existing?.apiKeyEnv,
@@ -352,14 +358,66 @@ export class LlmService {
 
     const resolved = this.resolveProvider(request.providerId);
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
-      const model = normalizeRequestedModel(
-        resolved.provider.providerId,
-        request.model ?? (resolved.provider.providerId === this.activeProviderId ? this.activeModel : resolved.provider.defaultModel),
-      );
-      const normalizedMessages = normalizeProviderMessages(
-        request.messages,
-        model,
-      );
+    const model = normalizeRequestedModel(
+      resolved.provider.providerId,
+      request.model ?? (resolved.provider.providerId === this.activeProviderId ? this.activeModel : resolved.provider.defaultModel),
+    );
+    const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
+
+    switch (apiStyle) {
+      case "openai-responses":
+        return this.executeOpenAiResponses(request, resolved, model);
+      case "anthropic-messages":
+        return this.executeAnthropicMessages(request, resolved, model);
+      default:
+        return this.executeChatCompletions(request, resolved, model);
+    }
+  }
+
+  public async *chatCompletionsStream(request: ChatCompletionRequest): AsyncGenerator<Record<string, unknown>> {
+    if (!request.messages || request.messages.length === 0) {
+      throw new Error("chat/completions requires at least one message");
+    }
+
+    const resolved = this.resolveProvider(request.providerId);
+    this.assertProviderHostAllowed(resolved.provider.baseUrl);
+    const model = normalizeRequestedModel(
+      resolved.provider.providerId,
+      request.model ?? (resolved.provider.providerId === this.activeProviderId ? this.activeModel : resolved.provider.defaultModel),
+    );
+    const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
+
+    switch (apiStyle) {
+      case "openai-responses":
+        yield* this.executeOpenAiResponsesStream(request, resolved, model);
+        return;
+      case "anthropic-messages":
+        yield* this.executeAnthropicMessagesStream(request, resolved, model);
+        return;
+      default:
+        yield* this.executeChatCompletionsStream(request, resolved, model);
+        return;
+    }
+  }
+
+  public resolveExecutionApiStyle(providerId?: string, model?: string): LlmApiStyle {
+    const resolved = this.resolveProvider(providerId);
+    const resolvedModel = normalizeRequestedModel(
+      resolved.provider.providerId,
+      model ?? (resolved.provider.providerId === this.activeProviderId ? this.activeModel : resolved.provider.defaultModel),
+    );
+    return resolveProviderExecutionApiStyle(resolved.provider, resolvedModel);
+  }
+
+  private async executeChatCompletions(
+    request: ChatCompletionRequest,
+    resolved: ResolvedProvider,
+    model: string,
+  ): Promise<ChatCompletionResponse> {
+    const normalizedMessages = normalizeProviderMessages(
+      request.messages,
+      model,
+    );
 
     const payload: Record<string, unknown> = {
       model,
@@ -389,7 +447,7 @@ export class LlmService {
     const endpoint = `${resolved.provider.baseUrl}/chat/completions`;
     const headers = this.buildHeaders(resolved, "chat");
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
-    let response = await postChatCompletionsRequest(endpoint, headers, payload, timeoutMs, request.signal);
+    let response = await postJsonRequest(endpoint, headers, payload, timeoutMs, request.signal);
 
     if (isRedirect(response.status)) {
       throw new Error(`chat completion blocked redirect (${response.status})`);
@@ -400,7 +458,7 @@ export class LlmService {
       if (request.metadata !== undefined && isMetadataStoreCompatibilityError(errorText)) {
         const fallbackPayload = { ...payload };
         delete fallbackPayload.metadata;
-        response = await postChatCompletionsRequest(endpoint, headers, fallbackPayload, timeoutMs, request.signal);
+        response = await postJsonRequest(endpoint, headers, fallbackPayload, timeoutMs, request.signal);
         if (isRedirect(response.status)) {
           throw new Error(`chat completion blocked redirect (${response.status})`);
         }
@@ -415,21 +473,15 @@ export class LlmService {
     return (await response.json()) as ChatCompletionResponse;
   }
 
-  public async *chatCompletionsStream(request: ChatCompletionRequest): AsyncGenerator<Record<string, unknown>> {
-    if (!request.messages || request.messages.length === 0) {
-      throw new Error("chat/completions requires at least one message");
-    }
-
-    const resolved = this.resolveProvider(request.providerId);
-    this.assertProviderHostAllowed(resolved.provider.baseUrl);
-      const model = normalizeRequestedModel(
-        resolved.provider.providerId,
-        request.model ?? (resolved.provider.providerId === this.activeProviderId ? this.activeModel : resolved.provider.defaultModel),
-      );
-      const normalizedMessages = normalizeProviderMessages(
-        request.messages,
-        model,
-      );
+  private async *executeChatCompletionsStream(
+    request: ChatCompletionRequest,
+    resolved: ResolvedProvider,
+    model: string,
+  ): AsyncGenerator<Record<string, unknown>> {
+    const normalizedMessages = normalizeProviderMessages(
+      request.messages,
+      model,
+    );
 
     const payload: Record<string, unknown> = {
       model,
@@ -460,7 +512,7 @@ export class LlmService {
     const endpoint = `${resolved.provider.baseUrl}/chat/completions`;
     const headers = this.buildHeaders(resolved, "chat");
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
-    let response = await postChatCompletionsRequest(endpoint, headers, payload, timeoutMs, request.signal);
+    let response = await postJsonRequest(endpoint, headers, payload, timeoutMs, request.signal);
 
     if (isRedirect(response.status)) {
       throw new Error(`chat completion blocked redirect (${response.status})`);
@@ -471,7 +523,7 @@ export class LlmService {
       if (request.metadata !== undefined && isMetadataStoreCompatibilityError(errorText)) {
         const fallbackPayload = { ...payload };
         delete fallbackPayload.metadata;
-        response = await postChatCompletionsRequest(endpoint, headers, fallbackPayload, timeoutMs, request.signal);
+        response = await postJsonRequest(endpoint, headers, fallbackPayload, timeoutMs, request.signal);
         if (isRedirect(response.status)) {
           throw new Error(`chat completion blocked redirect (${response.status})`);
         }
@@ -483,44 +535,280 @@ export class LlmService {
       }
     }
 
+    yield* streamJsonSseResponse(response);
+  }
+
+  private async executeOpenAiResponses(
+    request: ChatCompletionRequest,
+    resolved: ResolvedProvider,
+    model: string,
+  ): Promise<ChatCompletionResponse> {
+    const payload = buildOpenAiResponsesPayload(request, model);
+    const endpoint = `${resolved.provider.baseUrl}/responses`;
+    const headers = this.buildHeaders(resolved, "responses");
+    const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
+    const response = await postJsonRequest(endpoint, headers, payload, timeoutMs, request.signal);
+
+    if (isRedirect(response.status)) {
+      throw new Error(`responses request blocked redirect (${response.status})`);
+    }
+    if (!response.ok) {
+      throw new Error(await buildHttpError("responses request", response));
+    }
+
+    const json = (await response.json()) as Record<string, unknown>;
+    return adaptOpenAiResponsesResponse(json);
+  }
+
+  private async *executeOpenAiResponsesStream(
+    request: ChatCompletionRequest,
+    resolved: ResolvedProvider,
+    model: string,
+  ): AsyncGenerator<Record<string, unknown>> {
+    const payload = buildOpenAiResponsesPayload(request, model);
+    payload.stream = true;
+
+    const endpoint = `${resolved.provider.baseUrl}/responses`;
+    const headers = this.buildHeaders(resolved, "responses");
+    const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
+    const response = await postJsonRequest(endpoint, headers, payload, timeoutMs, request.signal);
+
+    if (isRedirect(response.status)) {
+      throw new Error(`responses request blocked redirect (${response.status})`);
+    }
+    if (!response.ok) {
+      throw new Error(await buildHttpError("responses request", response));
+    }
+
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     if (!contentType.includes("text/event-stream") || !response.body) {
       const json = (await response.json()) as Record<string, unknown>;
-      yield json;
+      yield adaptOpenAiResponsesResponse(json);
       return;
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
+    for await (const event of streamJsonSseResponse(response)) {
+      const eventType = typeof event.type === "string" ? event.type : "";
+      if (eventType === "response.output_text.delta") {
+        yield {
+          id: String(event.item_id ?? event.response_id ?? event.id ?? "response"),
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: String(event.delta ?? ""),
+              },
+            },
+          ],
+        };
+        continue;
+      }
+
+      if (eventType === "response.output_item.done") {
+        const item = isRecord(event.item) ? event.item : undefined;
+        if (item?.type === "function_call") {
+          yield {
+            id: String(item.id ?? event.item_id ?? "response"),
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: String(item.call_id ?? item.id ?? "call"),
+                      type: "function",
+                      function: {
+                        name: String(item.name ?? ""),
+                        arguments: String(item.arguments ?? "{}"),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          };
         }
-        buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split(/\r?\n\r?\n/g);
-        buffer = frames.pop() ?? "";
-        for (const frame of frames) {
-          const dataLines = frame
-            .split(/\r?\n/g)
-            .filter((line) => line.startsWith("data:"))
-            .map((line) => line.slice(5).trimStart())
-            .filter(Boolean);
-          for (const payload of parseSseFramePayloads(dataLines)) {
-            if (payload === "[DONE]") {
-              return;
-            }
-            yield payload;
+        continue;
+      }
+
+      if (eventType === "response.completed" && isRecord(event.response)) {
+        const adapted = adaptOpenAiResponsesResponse(event.response);
+        yield {
+          id: adapted.id,
+          model: adapted.model,
+          choices: [
+            {
+              index: 0,
+              delta: {},
+              finish_reason: adapted.choices?.[0]?.finish_reason ?? "stop",
+            },
+          ],
+          usage: adapted.usage,
+        };
+        continue;
+      }
+
+      if (eventType === "response.failed") {
+        throw new Error("responses stream failed");
+      }
+    }
+  }
+
+  private async executeAnthropicMessages(
+    request: ChatCompletionRequest,
+    resolved: ResolvedProvider,
+    model: string,
+  ): Promise<ChatCompletionResponse> {
+    const payload = buildAnthropicMessagesPayload(request, model);
+    const endpoint = `${resolved.provider.baseUrl}/messages`;
+    const headers = this.buildHeaders(resolved, "messages");
+    const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
+    const response = await postJsonRequest(endpoint, headers, payload, timeoutMs, request.signal);
+
+    if (isRedirect(response.status)) {
+      throw new Error(`messages request blocked redirect (${response.status})`);
+    }
+    if (!response.ok) {
+      throw new Error(await buildHttpError("messages request", response));
+    }
+
+    const json = (await response.json()) as Record<string, unknown>;
+    return adaptAnthropicMessageResponse(json);
+  }
+
+  private async *executeAnthropicMessagesStream(
+    request: ChatCompletionRequest,
+    resolved: ResolvedProvider,
+    model: string,
+  ): AsyncGenerator<Record<string, unknown>> {
+    const payload = buildAnthropicMessagesPayload(request, model);
+    payload.stream = true;
+
+    const endpoint = `${resolved.provider.baseUrl}/messages`;
+    const headers = this.buildHeaders(resolved, "messages");
+    const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
+    const response = await postJsonRequest(endpoint, headers, payload, timeoutMs, request.signal);
+
+    if (isRedirect(response.status)) {
+      throw new Error(`messages request blocked redirect (${response.status})`);
+    }
+    if (!response.ok) {
+      throw new Error(await buildHttpError("messages request", response));
+    }
+
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (!contentType.includes("text/event-stream") || !response.body) {
+      const json = (await response.json()) as Record<string, unknown>;
+      yield adaptAnthropicMessageResponse(json);
+      return;
+    }
+
+    const toolUseBuffers = new Map<number, {
+      id: string;
+      name: string;
+      partialJson: string;
+    }>();
+    let messageId: string | undefined;
+    let messageModel: string | undefined;
+    let finishReason: string | undefined;
+    let usage: Record<string, unknown> | undefined;
+
+    for await (const event of streamJsonSseResponse(response)) {
+      const eventType = typeof event.type === "string" ? event.type : "";
+      if (eventType === "message_start" && isRecord(event.message)) {
+        messageId = typeof event.message.id === "string" ? event.message.id : messageId;
+        messageModel = typeof event.message.model === "string" ? event.message.model : messageModel;
+        continue;
+      }
+
+      if (eventType === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
+        const block = event.content_block;
+        if (block.type === "tool_use") {
+          toolUseBuffers.set(event.index, {
+            id: String(block.id ?? `tool_${event.index}`),
+            name: String(block.name ?? ""),
+            partialJson: typeof block.input === "string" ? block.input : JSON.stringify(block.input ?? {}),
+          });
+        }
+        continue;
+      }
+
+      if (eventType === "content_block_delta" && isRecord(event.delta)) {
+        if (event.delta.type === "text_delta") {
+          yield {
+            id: messageId ?? "message",
+            model: messageModel,
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  content: String(event.delta.text ?? ""),
+                },
+              },
+            ],
+          };
+          continue;
+        }
+
+        if (event.delta.type === "input_json_delta" && typeof event.index === "number") {
+          const existing = toolUseBuffers.get(event.index);
+          if (existing) {
+            existing.partialJson += String(event.delta.partial_json ?? "");
           }
         }
+        continue;
       }
-    } finally {
-      try {
-        reader.releaseLock();
-      } catch {
-        // ignore
+
+      if (eventType === "content_block_stop" && typeof event.index === "number") {
+        const toolUse = toolUseBuffers.get(event.index);
+        if (toolUse) {
+          toolUseBuffers.delete(event.index);
+          yield {
+            id: messageId ?? toolUse.id,
+            model: messageModel,
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: toolUse.id,
+                      type: "function",
+                      function: {
+                        name: toolUse.name,
+                        arguments: normalizeJsonString(toolUse.partialJson),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          };
+        }
+        continue;
+      }
+
+      if (eventType === "message_delta") {
+        finishReason = typeof event.stop_reason === "string" ? event.stop_reason : finishReason;
+        usage = isRecord(event.usage) ? event.usage : usage;
+        continue;
+      }
+
+      if (eventType === "message_stop") {
+        yield {
+          id: messageId,
+          model: messageModel,
+          choices: [
+            {
+              index: 0,
+              delta: {},
+              finish_reason: mapAnthropicStopReason(finishReason),
+            },
+          ],
+          usage: normalizeAnthropicUsage(usage),
+        };
       }
     }
   }
@@ -575,14 +863,17 @@ export class LlmService {
 
   private buildHeaders(
     resolved: ResolvedProvider,
-    purpose: "chat" | "models" = "chat",
+    purpose: "chat" | "models" | "responses" | "messages" = "chat",
   ): Record<string, string> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...(resolved.provider.headers ?? {}),
     };
 
-    if (purpose === "models" && resolved.provider.providerId === "anthropic") {
+    const useAnthropicNativeHeaders = resolved.provider.providerId === "anthropic"
+      && (purpose === "models" || purpose === "messages");
+
+    if (useAnthropicNativeHeaders) {
       delete headers.Authorization;
       if (resolved.apiKey) {
         headers["x-api-key"] = resolved.apiKey;
@@ -687,8 +978,45 @@ function normalizeProvider(provider: LlmProviderConfig): LlmProviderConfig {
   return {
     ...provider,
     baseUrl: withV1,
-    apiStyle: "openai-chat-completions",
+    apiStyle: normalizeProviderApiStyle(provider.providerId, provider.apiStyle),
   };
+}
+
+function normalizeProviderApiStyle(providerId: string, apiStyle: LlmApiStyle | undefined): LlmApiStyle {
+  if (apiStyle === "openai-chat-completions" || apiStyle === "openai-responses" || apiStyle === "anthropic-messages") {
+    return apiStyle;
+  }
+  if (providerId === "openai") {
+    return "openai-responses";
+  }
+  if (providerId === "anthropic") {
+    return "anthropic-messages";
+  }
+  return "openai-chat-completions";
+}
+
+function resolveProviderExecutionApiStyle(provider: LlmProviderConfig, model: string): LlmApiStyle {
+  if (provider.providerId === "openai") {
+    if (provider.apiStyle === "openai-chat-completions") {
+      return "openai-chat-completions";
+    }
+    return isOpenAiResponsesPreferredModel(model)
+      ? "openai-responses"
+      : "openai-chat-completions";
+  }
+
+  if (provider.providerId === "anthropic") {
+    return provider.apiStyle === "openai-chat-completions"
+      ? "openai-chat-completions"
+      : "anthropic-messages";
+  }
+
+  return provider.apiStyle;
+}
+
+function isOpenAiResponsesPreferredModel(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  return /^gpt-5(?:$|[.-])/.test(normalized);
 }
 
 function normalizeRequestedModel(providerId: string, model: string): string {
@@ -850,7 +1178,7 @@ function shouldUseMaxCompletionTokens(providerId: string, model: string): boolea
   return /^gpt-5(?:$|[.-])/.test(normalized);
 }
 
-async function postChatCompletionsRequest(
+async function postJsonRequest(
   endpoint: string,
   headers: Record<string, string>,
   payload: Record<string, unknown>,
@@ -997,6 +1325,494 @@ function tryParseJsonRecord(payload: string): Record<string, unknown> | null {
   return null;
 }
 
+async function *streamJsonSseResponse(response: Response): AsyncGenerator<Record<string, unknown>> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.includes("text/event-stream") || !response.body) {
+    const json = (await response.json()) as Record<string, unknown>;
+    yield json;
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split(/\r?\n\r?\n/g);
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const dataLines = frame
+          .split(/\r?\n/g)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .filter(Boolean);
+        for (const payload of parseSseFramePayloads(dataLines)) {
+          if (payload === "[DONE]") {
+            return;
+          }
+          yield payload;
+        }
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function buildOpenAiResponsesPayload(
+  request: ChatCompletionRequest,
+  model: string,
+): Record<string, unknown> {
+  const { instructions, input } = buildOpenAiResponsesInput(request.messages);
+  const payload: Record<string, unknown> = {
+    model,
+    input,
+  };
+
+  if (instructions) {
+    payload.instructions = instructions;
+  }
+  if (request.temperature !== undefined) payload.temperature = request.temperature;
+  if (request.top_p !== undefined) payload.top_p = request.top_p;
+  if (request.max_tokens !== undefined) payload.max_output_tokens = request.max_tokens;
+  if (request.reasoning?.effort) payload.reasoning = { effort: request.reasoning.effort };
+  if (request.verbosity) payload.text = { ...(isRecord(payload.text) ? payload.text : {}), verbosity: request.verbosity };
+  if (request.response_format !== undefined) {
+    payload.text = {
+      ...(isRecord(payload.text) ? payload.text : {}),
+      format: request.response_format,
+    };
+  }
+  if (request.tools !== undefined) payload.tools = request.tools;
+  if (request.tool_choice !== undefined) payload.tool_choice = request.tool_choice;
+  if (request.stop !== undefined) payload.stop = request.stop;
+  if (request.metadata !== undefined) payload.metadata = request.metadata;
+  if (request.service_tier) payload.service_tier = request.service_tier;
+  if (request.prompt_cache_retention) payload.prompt_cache_retention = request.prompt_cache_retention;
+
+  return payload;
+}
+
+function buildOpenAiResponsesInput(
+  messages: ChatCompletionRequest["messages"],
+): { instructions?: string; input: Array<Record<string, unknown>> } {
+  const instructionParts: string[] = [];
+  const input: Array<Record<string, unknown>> = [];
+
+  for (const message of messages) {
+    const record = message as unknown as Record<string, unknown>;
+    if (message.role === "system" || message.role === "developer") {
+      const text = normalizeStringMessageContent(message.content);
+      if (text) {
+        instructionParts.push(text);
+      }
+      continue;
+    }
+
+    if (message.role === "tool") {
+      input.push({
+        type: "function_call_output",
+        call_id: message.tool_call_id,
+        output: normalizeToolOutputContent(message.content),
+      });
+      continue;
+    }
+
+    const role = message.role === "assistant" ? "assistant" : "user";
+    const content = mapOpenAiResponsesContent(message.content);
+    if (content.length > 0) {
+      input.push({ role, content });
+    }
+
+    if (message.role === "assistant" && Array.isArray(record.tool_calls)) {
+      for (const toolCall of record.tool_calls) {
+        if (!isRecord(toolCall) || !isRecord(toolCall.function)) {
+          continue;
+        }
+        input.push({
+          type: "function_call",
+          call_id: String(toolCall.id ?? randomToolCallId()),
+          name: String(toolCall.function.name ?? ""),
+          arguments: String(toolCall.function.arguments ?? "{}"),
+        });
+      }
+    }
+  }
+
+  return {
+    instructions: instructionParts.length > 0 ? instructionParts.join("\n\n") : undefined,
+    input,
+  };
+}
+
+function mapOpenAiResponsesContent(content: ChatCompletionRequest["messages"][number]["content"]): Array<Record<string, unknown>> {
+  if (typeof content === "string") {
+    return content.trim() ? [{ type: "input_text", text: content }] : [];
+  }
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.map((block) => {
+    if (!isRecord(block)) {
+      return undefined;
+    }
+    if (block.type === "input_text" || block.type === "input_image" || block.type === "input_file") {
+      return block;
+    }
+    if (block.type === "text" || block.type === "output_text") {
+      const text = String(block.text ?? "");
+      return text.trim() ? { type: "input_text", text } : undefined;
+    }
+    return block;
+  }).filter((block): block is Record<string, unknown> => Boolean(block));
+}
+
+function adaptOpenAiResponsesResponse(json: Record<string, unknown>): ChatCompletionResponse {
+  const output = Array.isArray(json.output) ? json.output.filter(isRecord) : [];
+  const assistantMessages = output.filter((item) => item.type === "message" && item.role === "assistant");
+  const assistantMessage = assistantMessages[0];
+  const toolCalls = dedupeToolCalls(
+    output
+      .filter((item) => item.type === "function_call")
+      .map((item) => ({
+        id: String(item.call_id ?? item.id ?? randomToolCallId()),
+        type: "function",
+        function: {
+          name: String(item.name ?? ""),
+          arguments: String(item.arguments ?? "{}"),
+        },
+      })),
+  );
+  const content = assistantMessage
+    ? extractOpenAiResponsesMessageText(assistantMessage)
+    : String(json.output_text ?? "");
+  const finishReason = toolCalls.length > 0
+    ? "tool_calls"
+    : mapOpenAiResponsesFinishReason(json);
+
+  return {
+    id: typeof json.id === "string" ? json.id : undefined,
+    object: "chat.completion",
+    created: typeof json.created_at === "number" ? json.created_at : undefined,
+    model: typeof json.model === "string" ? json.model : undefined,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content,
+          ...(assistantMessage?.phase ? { phase: assistantMessage.phase } : {}),
+          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        },
+        finish_reason: finishReason,
+      },
+    ],
+    usage: isRecord(json.usage) ? json.usage : undefined,
+  };
+}
+
+function extractOpenAiResponsesMessageText(message: Record<string, unknown>): string {
+  const content = Array.isArray(message.content) ? message.content.filter(isRecord) : [];
+  return content
+    .filter((part) => part.type === "output_text" || part.type === "text")
+    .map((part) => String(part.text ?? ""))
+    .join("");
+}
+
+function mapOpenAiResponsesFinishReason(json: Record<string, unknown>): string {
+  if (json.status === "incomplete" && isRecord(json.incomplete_details)) {
+    if (json.incomplete_details.reason === "max_output_tokens") {
+      return "length";
+    }
+  }
+  return "stop";
+}
+
+function buildAnthropicMessagesPayload(
+  request: ChatCompletionRequest,
+  model: string,
+): Record<string, unknown> {
+  const { system, messages } = buildAnthropicMessagesInput(request.messages);
+  const payload: Record<string, unknown> = {
+    model,
+    messages,
+  };
+  if (system !== undefined) {
+    payload.system = system;
+  }
+  if (request.temperature !== undefined) payload.temperature = request.temperature;
+  if (request.top_p !== undefined) payload.top_p = request.top_p;
+  if (request.max_tokens !== undefined) payload.max_tokens = request.max_tokens;
+  else payload.max_tokens = 1024;
+  if (request.stop !== undefined) payload.stop_sequences = Array.isArray(request.stop) ? request.stop : [request.stop];
+  if (request.tools !== undefined) payload.tools = request.tools;
+  if (request.tool_choice !== undefined) payload.tool_choice = request.tool_choice;
+  if (request.response_format !== undefined) payload.output_config = { format: request.response_format };
+  if (request.metadata !== undefined) payload.metadata = request.metadata;
+  if (request.reasoning?.effort && request.reasoning.effort !== "none") {
+    payload.thinking = {
+      type: "enabled",
+      budget_tokens: anthropicThinkingBudgetForEffort(request.reasoning.effort),
+    };
+  }
+  return payload;
+}
+
+function buildAnthropicMessagesInput(
+  messages: ChatCompletionRequest["messages"],
+): { system?: string | Array<Record<string, unknown>>; messages: Array<Record<string, unknown>> } {
+  const systemStrings: string[] = [];
+  const systemBlocks: Array<Record<string, unknown>> = [];
+  const normalizedMessages: Array<Record<string, unknown>> = [];
+
+  for (const message of messages) {
+    if (message.role === "system" || message.role === "developer") {
+      if (typeof message.content === "string") {
+        systemStrings.push(message.content);
+      } else if (Array.isArray(message.content)) {
+        systemBlocks.push(...message.content.map((block) => mapAnthropicContentBlock(block)).filter(isRecord));
+      }
+      continue;
+    }
+
+    if (message.role === "tool") {
+      normalizedMessages.push({
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: message.tool_call_id,
+            content: normalizeAnthropicToolResultContent(message.content),
+          },
+        ],
+      });
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      const assistantRecord = message as unknown as Record<string, unknown>;
+      const assistantContent = mapAnthropicMessageContent(message.content);
+      if (Array.isArray(assistantRecord.tool_calls)) {
+        for (const toolCall of assistantRecord.tool_calls) {
+          if (!isRecord(toolCall) || !isRecord(toolCall.function)) {
+            continue;
+          }
+          assistantContent.push({
+            type: "tool_use",
+            id: String(toolCall.id ?? randomToolCallId()),
+            name: String(toolCall.function.name ?? ""),
+            input: parseJsonObject(toolCall.function.arguments),
+          });
+        }
+      }
+      normalizedMessages.push({
+        role: "assistant",
+        content: anthropicContentValue(assistantContent),
+      });
+      continue;
+    }
+
+    normalizedMessages.push({
+      role: "user",
+      content: anthropicContentValue(mapAnthropicMessageContent(message.content)),
+    });
+  }
+
+  const system = systemBlocks.length > 0
+    ? [...systemBlocks, ...systemStrings.filter(Boolean).map((text) => ({ type: "text", text }))]
+    : (systemStrings.filter(Boolean).length > 0 ? systemStrings.filter(Boolean).join("\n\n") : undefined);
+
+  return { system, messages: normalizedMessages };
+}
+
+function mapAnthropicMessageContent(content: ChatCompletionRequest["messages"][number]["content"]): Array<Record<string, unknown>> {
+  if (typeof content === "string") {
+    return content.trim() ? [{ type: "text", text: content }] : [];
+  }
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.map((block) => mapAnthropicContentBlock(block)).filter(isRecord);
+}
+
+function mapAnthropicContentBlock(block: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(block)) {
+    return undefined;
+  }
+  if (block.type === "input_text" || block.type === "output_text") {
+    const text = String(block.text ?? "");
+    return text.trim() ? { type: "text", text } : undefined;
+  }
+  if (block.type === "text" && typeof block.text === "string" && !block.text.trim()) {
+    return undefined;
+  }
+  return block;
+}
+
+function anthropicContentValue(content: Array<Record<string, unknown>>): string | Array<Record<string, unknown>> {
+  if (content.length === 1 && content[0]?.type === "text" && typeof content[0].text === "string") {
+    return String(content[0].text);
+  }
+  return content;
+}
+
+function normalizeAnthropicToolResultContent(content: ChatCompletionRequest["messages"][number]["content"]): string | Array<Record<string, unknown>> {
+  if (typeof content === "string") {
+    return content;
+  }
+  const mapped = mapAnthropicMessageContent(content);
+  return anthropicContentValue(mapped);
+}
+
+function adaptAnthropicMessageResponse(json: Record<string, unknown>): ChatCompletionResponse {
+  const content = Array.isArray(json.content) ? json.content.filter(isRecord) : [];
+  const text = content
+    .filter((block) => block.type === "text")
+    .map((block) => String(block.text ?? ""))
+    .join("");
+  const toolCalls = dedupeToolCalls(
+    content
+      .filter((block) => block.type === "tool_use")
+      .map((block) => ({
+        id: String(block.id ?? randomToolCallId()),
+        type: "function",
+        function: {
+          name: String(block.name ?? ""),
+          arguments: JSON.stringify(block.input ?? {}),
+        },
+      })),
+  );
+
+  return {
+    id: typeof json.id === "string" ? json.id : undefined,
+    object: "chat.completion",
+    model: typeof json.model === "string" ? json.model : undefined,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: text,
+          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        },
+        finish_reason: mapAnthropicStopReason(typeof json.stop_reason === "string" ? json.stop_reason : undefined),
+      },
+    ],
+    usage: normalizeAnthropicUsage(isRecord(json.usage) ? json.usage : undefined),
+  };
+}
+
+function normalizeAnthropicUsage(usage: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
+  const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
+  return {
+    prompt_tokens: inputTokens,
+    completion_tokens: outputTokens,
+    total_tokens: inputTokens + outputTokens,
+  };
+}
+
+function mapAnthropicStopReason(stopReason: string | undefined): string {
+  switch (stopReason) {
+    case "tool_use":
+      return "tool_calls";
+    case "max_tokens":
+      return "length";
+    default:
+      return "stop";
+  }
+}
+
+function anthropicThinkingBudgetForEffort(effort: NonNullable<ChatCompletionRequest["reasoning"]>["effort"]): number {
+  switch (effort) {
+    case "low":
+      return 1024;
+    case "medium":
+      return 4096;
+    case "high":
+      return 8192;
+    case "xhigh":
+      return 16384;
+    default:
+      return 1024;
+  }
+}
+
+function normalizeToolOutputContent(content: ChatCompletionRequest["messages"][number]["content"]): string | Array<Record<string, unknown>> {
+  if (typeof content === "string") {
+    return content;
+  }
+  return mapOpenAiResponsesContent(content);
+}
+
+function normalizeStringMessageContent(content: ChatCompletionRequest["messages"][number]["content"]): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .filter(isRecord)
+    .map((block) => String(block.text ?? ""))
+    .join("\n")
+    .trim();
+}
+
+function dedupeToolCalls<T extends { id: string }>(toolCalls: T[]): T[] {
+  const seen = new Set<string>();
+  return toolCalls.filter((toolCall) => {
+    if (seen.has(toolCall.id)) {
+      return false;
+    }
+    seen.add(toolCall.id);
+    return true;
+  });
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> {
+  if (isRecord(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function normalizeJsonString(value: string): string {
+  try {
+    return JSON.stringify(JSON.parse(value));
+  } catch {
+    return value || "{}";
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function randomToolCallId(): string {
+  return `call_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function normalizeProviderMessages(
   messages: ChatCompletionRequest["messages"],
   model: string,
@@ -1039,10 +1855,13 @@ function inferProviderCapabilities(provider: LlmProviderConfig): {
   const base = provider.baseUrl.toLowerCase();
   const hasVision = (
     model.includes("vision")
+    || model.includes("gpt-5")
     || model.includes("gpt-4o")
     || model.includes("gpt-4.1")
     || model.includes("gemini")
     || model.includes("claude-3")
+    || model.includes("claude-sonnet-4")
+    || model.includes("claude-opus-4")
     || model.includes("kimi")
     || model.includes("glm")
   );
@@ -1050,8 +1869,8 @@ function inferProviderCapabilities(provider: LlmProviderConfig): {
   const hasVideo = model.includes("video");
   const hasToolCalling = true;
   const hasJsonMode = model.includes("gpt") || model.includes("glm") || model.includes("gemini") || base.includes("openai");
-  const hasWebSearch = model.includes("search") || model.includes("kimi") || model.includes("gpt-4.1");
-  const hasReasoning = model.includes("reason") || model.includes("thinking") || model.includes("o1") || model.includes("o3");
+  const hasWebSearch = model.includes("search") || model.includes("sonar") || model.includes("kimi") || model.includes("gpt-4.1") || model.includes("gpt-5");
+  const hasReasoning = model.includes("gpt-5") || model.includes("reason") || model.includes("thinking") || model.includes("o1") || model.includes("o3") || model.includes("claude-sonnet-4") || model.includes("claude-opus-4");
   return {
     vision: hasVision,
     audio: hasAudio,

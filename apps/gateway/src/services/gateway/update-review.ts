@@ -24,6 +24,25 @@ export interface SkillSourceDriftReviewItem {
   message: string;
 }
 
+export interface VendorChangelogReviewItem {
+  sourceId: "openai" | "anthropic" | "openclaw";
+  sourceUrl: string;
+  latestVersion?: string;
+  latestUpdatedAt?: string;
+  status: "ok" | "warning";
+  message: string;
+}
+
+export interface ProviderModelStalenessReviewItem {
+  providerId: "openai" | "anthropic";
+  configuredApiStyle?: string;
+  defaultModel?: string;
+  preferredApiStyle: "openai-responses" | "anthropic-messages";
+  preferredModel: string;
+  status: "current" | "stale" | "warning";
+  message: string;
+}
+
 export interface UpdateReviewReport {
   generatedAt: string;
   dependencyDrift: {
@@ -34,9 +53,19 @@ export interface UpdateReviewReport {
     items: SkillSourceDriftReviewItem[];
     warnings: string[];
   };
+  vendorChangelogDrift: {
+    items: VendorChangelogReviewItem[];
+    warnings: string[];
+  };
+  providerModelStaleness: {
+    items: ProviderModelStalenessReviewItem[];
+    warnings: string[];
+  };
   summary: {
     outdatedDependencyCount: number;
     changedSkillSourceCount: number;
+    checkedVendorSourceCount: number;
+    staleProviderCount: number;
     warningCount: number;
     checkedSkillCount: number;
   };
@@ -204,26 +233,195 @@ export async function collectSkillSourceDrift(
   return { items, warnings };
 }
 
+export async function collectVendorChangelogDrift(
+  _rootDir: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ items: VendorChangelogReviewItem[]; warnings: string[] }> {
+  const sources: Array<{
+    sourceId: VendorChangelogReviewItem["sourceId"];
+    sourceUrl: string;
+    parser: (body: string, headers: Headers) => { latestVersion?: string; latestUpdatedAt?: string; message: string } | null;
+  }> = [
+    {
+      sourceId: "openai",
+      sourceUrl: "https://developers.openai.com/api/docs/changelog",
+      parser: parseDateOnlyVendorChangelog,
+    },
+    {
+      sourceId: "anthropic",
+      sourceUrl: "https://platform.claude.com/docs/en/release-notes/overview",
+      parser: parseDateOnlyVendorChangelog,
+    },
+    {
+      sourceId: "openclaw",
+      sourceUrl: "https://raw.githubusercontent.com/openclaw/openclaw/main/CHANGELOG.md",
+      parser: parseOpenClawChangelog,
+    },
+  ];
+
+  const items: VendorChangelogReviewItem[] = [];
+  const warnings: string[] = [];
+
+  for (const source of sources) {
+    try {
+      const response = await fetchImpl(source.sourceUrl);
+      if (!response.ok) {
+        const message = `Changelog fetch failed (${response.status} ${response.statusText}).`;
+        items.push({
+          sourceId: source.sourceId,
+          sourceUrl: source.sourceUrl,
+          status: "warning",
+          message,
+        });
+        warnings.push(`${source.sourceId}: ${message}`);
+        continue;
+      }
+
+      const body = await response.text();
+      const parsed = source.parser(body, response.headers);
+      if (!parsed) {
+        const message = "Unable to parse the latest changelog entry from the upstream source.";
+        items.push({
+          sourceId: source.sourceId,
+          sourceUrl: source.sourceUrl,
+          status: "warning",
+          message,
+        });
+        warnings.push(`${source.sourceId}: ${message}`);
+        continue;
+      }
+
+      items.push({
+        sourceId: source.sourceId,
+        sourceUrl: source.sourceUrl,
+        latestVersion: parsed.latestVersion,
+        latestUpdatedAt: parsed.latestUpdatedAt,
+        status: "ok",
+        message: parsed.message,
+      });
+    } catch (error) {
+      const message = (error as Error).message || "Failed to query upstream changelog.";
+      items.push({
+        sourceId: source.sourceId,
+        sourceUrl: source.sourceUrl,
+        status: "warning",
+        message,
+      });
+      warnings.push(`${source.sourceId}: ${message}`);
+    }
+  }
+
+  return { items, warnings };
+}
+
+export async function collectProviderModelStaleness(
+  rootDir: string,
+): Promise<{ items: ProviderModelStalenessReviewItem[]; warnings: string[] }> {
+  const items: ProviderModelStalenessReviewItem[] = [];
+  const warnings: string[] = [];
+  const configPath = path.join(rootDir, "config", "llm-providers.json");
+
+  let parsed: {
+    providers?: Array<{
+      providerId?: string;
+      apiStyle?: string;
+      defaultModel?: string;
+    }>;
+  };
+  try {
+    parsed = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      providers?: Array<{
+        providerId?: string;
+        apiStyle?: string;
+        defaultModel?: string;
+      }>;
+    };
+  } catch (error) {
+    const message = `Unable to read ${path.relative(rootDir, configPath).replaceAll("\\", "/")}: ${(error as Error).message}`;
+    warnings.push(message);
+    return { items, warnings };
+  }
+
+  const preferred = [
+    {
+      providerId: "openai" as const,
+      preferredApiStyle: "openai-responses" as const,
+      preferredModel: "gpt-5.4-mini",
+    },
+    {
+      providerId: "anthropic" as const,
+      preferredApiStyle: "anthropic-messages" as const,
+      preferredModel: "claude-sonnet-4-6",
+    },
+  ];
+
+  for (const target of preferred) {
+    const provider = parsed.providers?.find((item) => item.providerId === target.providerId);
+    if (!provider) {
+      const message = "Provider is not configured in config/llm-providers.json.";
+      items.push({
+        providerId: target.providerId,
+        preferredApiStyle: target.preferredApiStyle,
+        preferredModel: target.preferredModel,
+        status: "warning",
+        message,
+      });
+      warnings.push(`${target.providerId}: ${message}`);
+      continue;
+    }
+
+    const isCurrent = provider.apiStyle === target.preferredApiStyle
+      && provider.defaultModel === target.preferredModel;
+    const message = isCurrent
+      ? "Configured default matches the preferred native-first provider baseline."
+      : `Configured default is ${provider.defaultModel ?? "unset"} on ${provider.apiStyle ?? "unset"}; preferred is ${target.preferredModel} on ${target.preferredApiStyle}.`;
+
+    items.push({
+      providerId: target.providerId,
+      configuredApiStyle: provider.apiStyle,
+      defaultModel: provider.defaultModel,
+      preferredApiStyle: target.preferredApiStyle,
+      preferredModel: target.preferredModel,
+      status: isCurrent ? "current" : "stale",
+      message,
+    });
+    if (!isCurrent) {
+      warnings.push(`${target.providerId}: ${message}`);
+    }
+  }
+
+  return { items, warnings };
+}
+
 export async function createDailyUpdateReview(
   rootDir: string,
   runCommand: ExecFileLike = execFileAsync,
 ): Promise<UpdateReviewReport> {
-  const [dependencyDrift, skillSourceDrift] = await Promise.all([
+  const [dependencyDrift, skillSourceDrift, vendorChangelogDrift, providerModelStaleness] = await Promise.all([
     collectWorkspaceDependencyDrift(rootDir, runCommand),
     collectSkillSourceDrift(rootDir, runCommand),
+    collectVendorChangelogDrift(rootDir),
+    collectProviderModelStaleness(rootDir),
   ]);
   const changedSkillSourceCount = skillSourceDrift.items.filter((item) => item.status === "changed").length;
+  const staleProviderCount = providerModelStaleness.items.filter((item) => item.status === "stale").length;
   const warningCount = dependencyDrift.warnings.length
     + skillSourceDrift.warnings.length
+    + vendorChangelogDrift.warnings.length
+    + providerModelStaleness.warnings.length
     + skillSourceDrift.items.filter((item) => item.status === "warning").length;
 
   return {
     generatedAt: new Date().toISOString(),
     dependencyDrift,
     skillSourceDrift,
+    vendorChangelogDrift,
+    providerModelStaleness,
     summary: {
       outdatedDependencyCount: dependencyDrift.items.length,
       changedSkillSourceCount,
+      checkedVendorSourceCount: vendorChangelogDrift.items.length,
+      staleProviderCount,
       warningCount,
       checkedSkillCount: skillSourceDrift.items.length,
     },
@@ -238,6 +436,8 @@ export function renderUpdateReviewMarkdown(report: UpdateReviewReport): string {
   lines.push(`- Outdated dependencies: ${report.summary.outdatedDependencyCount}`);
   lines.push(`- Skills checked: ${report.summary.checkedSkillCount}`);
   lines.push(`- Skills with upstream drift: ${report.summary.changedSkillSourceCount}`);
+  lines.push(`- Vendor changelogs checked: ${report.summary.checkedVendorSourceCount}`);
+  lines.push(`- Stale provider defaults: ${report.summary.staleProviderCount}`);
   lines.push(`- Warnings: ${report.summary.warningCount}`);
   lines.push("");
 
@@ -268,10 +468,50 @@ export function renderUpdateReviewMarkdown(report: UpdateReviewReport): string {
   }
   lines.push("");
 
-  if (report.dependencyDrift.warnings.length > 0 || report.skillSourceDrift.warnings.length > 0) {
+  lines.push("## Vendor Changelogs");
+  lines.push("");
+  if (report.vendorChangelogDrift.items.length === 0) {
+    lines.push("_No vendor changelog checks were completed._");
+  } else {
+    lines.push("| Source | Status | Latest | Updated | Notes |");
+    lines.push("| --- | --- | --- | --- | --- |");
+    for (const item of report.vendorChangelogDrift.items) {
+      lines.push(`| ${item.sourceId} | ${item.status} | ${item.latestVersion ?? "-"} | ${item.latestUpdatedAt ?? "-"} | ${item.message} |`);
+    }
+  }
+  lines.push("");
+
+  lines.push("## Provider Defaults");
+  lines.push("");
+  if (report.providerModelStaleness.items.length === 0) {
+    lines.push("_No direct-provider defaults were available for staleness review._");
+  } else {
+    lines.push("| Provider | Status | Configured | Preferred | Notes |");
+    lines.push("| --- | --- | --- | --- | --- |");
+    for (const item of report.providerModelStaleness.items) {
+      const configured = item.defaultModel || item.configuredApiStyle
+        ? `${item.defaultModel ?? "-"} / ${item.configuredApiStyle ?? "-"}`
+        : "-";
+      const preferred = `${item.preferredModel} / ${item.preferredApiStyle}`;
+      lines.push(`| ${item.providerId} | ${item.status} | ${configured} | ${preferred} | ${item.message} |`);
+    }
+  }
+  lines.push("");
+
+  if (
+    report.dependencyDrift.warnings.length > 0
+    || report.skillSourceDrift.warnings.length > 0
+    || report.vendorChangelogDrift.warnings.length > 0
+    || report.providerModelStaleness.warnings.length > 0
+  ) {
     lines.push("## Warnings");
     lines.push("");
-    for (const warning of [...report.dependencyDrift.warnings, ...report.skillSourceDrift.warnings]) {
+    for (const warning of [
+      ...report.dependencyDrift.warnings,
+      ...report.skillSourceDrift.warnings,
+      ...report.vendorChangelogDrift.warnings,
+      ...report.providerModelStaleness.warnings,
+    ]) {
       lines.push(`- ${warning}`);
     }
     lines.push("");
@@ -360,6 +600,37 @@ function parseGitLsRemoteHead(raw: string): string | undefined {
     return undefined;
   }
   return line.split(/\s+/)[0]?.trim() || undefined;
+}
+
+function parseDateOnlyVendorChangelog(
+  body: string,
+  _headers: Headers,
+): { latestUpdatedAt?: string; message: string } | null {
+  const match = body.match(/\b([A-Z][a-z]+ \d{1,2}, \d{4})\b/);
+  if (!match?.[1]) {
+    return null;
+  }
+  return {
+    latestUpdatedAt: match[1],
+    message: "Latest dated entry detected in the official changelog page.",
+  };
+}
+
+function parseOpenClawChangelog(
+  body: string,
+  headers: Headers,
+): { latestVersion?: string; latestUpdatedAt?: string; message: string } | null {
+  const versionMatch = body.match(/^##\s+([^\r\n]+)/m) ?? body.match(/^#\s+([^\r\n]+)/m);
+  const latestVersion = versionMatch?.[1]?.trim();
+  const latestUpdatedAt = headers.get("last-modified") ?? undefined;
+  if (!latestVersion && !latestUpdatedAt) {
+    return null;
+  }
+  return {
+    latestVersion,
+    latestUpdatedAt,
+    message: "Latest OpenClaw changelog heading detected from the repository source.",
+  };
 }
 
 async function readInstalledSkillSourceManifests(rootDir: string): Promise<Array<InstalledSkillSourceManifest & { skillId: string }>> {

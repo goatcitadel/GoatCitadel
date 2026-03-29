@@ -95,4 +95,75 @@ describe("llm routes", () => {
 
     expect(response.statusCode).toBe(400);
   });
+
+  it("accepts apiStyle in config update payloads", async () => {
+    const updateLlmConfig = vi.fn(async (request) => request);
+
+    app = Fastify();
+    app.decorate("gateway", {
+      createChatCompletion: vi.fn(),
+      getLlmConfig: vi.fn(),
+      listLlmProviders: vi.fn(),
+      updateLlmConfig,
+      listLlmModels: vi.fn(),
+      previewLlmModels: vi.fn(),
+    } as never);
+    await app.register(llmRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/llm/config",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      payload: JSON.stringify({
+        upsertProvider: {
+          providerId: "anthropic",
+          baseUrl: "https://api.anthropic.com/v1",
+          apiStyle: "anthropic-messages",
+          defaultModel: "claude-sonnet-4-6",
+        },
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(updateLlmConfig).toHaveBeenCalledWith(expect.objectContaining({
+      upsertProvider: expect.objectContaining({
+        apiStyle: "anthropic-messages",
+      }),
+    }));
+  });
+
+  it("accepts apiStyle in model preview payloads", async () => {
+    const previewLlmModels = vi.fn(async (request) => request);
+
+    app = Fastify();
+    app.decorate("gateway", {
+      createChatCompletion: vi.fn(),
+      getLlmConfig: vi.fn(),
+      listLlmProviders: vi.fn(),
+      updateLlmConfig: vi.fn(),
+      listLlmModels: vi.fn(),
+      previewLlmModels,
+    } as never);
+    await app.register(llmRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/llm/models/preview",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      payload: JSON.stringify({
+        providerId: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        apiStyle: "openai-responses",
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(previewLlmModels).toHaveBeenCalledWith(expect.objectContaining({
+      apiStyle: "openai-responses",
+    }));
+  });
 });
