@@ -7,7 +7,7 @@ Current release line: `0.6.0-beta.2`
 
 GoatCitadel is a local-first AI command center for operating real assistant workflows instead of just chatting with a model. The current product combines a React/Vite browser UI, a Fastify gateway, shared orchestration/policy/memory packages, and optional local runtimes for voice and NPU-backed inference.
 
-![GoatCitadel Mission Control - Operate / Chat](docs/screenshots/mission-control/operate-chat.png)
+![GoatCitadel Mission Control - Live shell](docs/screenshots/mission-control/operate-chat-live.png)
 
 ## What exists today
 
@@ -33,23 +33,34 @@ Those spaces are not README fiction; they are the current routed structure in `a
 - **Observe / System**: machine and runtime health.
 - **Observe / Quality**: Prompt Lab and evaluation workflows.
 - **Configure / Settings**: general, providers, access, budget, runtime, workspaces, add-ons, onboarding.
-- **Configure / Integrations**: connection overview plus MCP management.
+- **Configure / Integrations**: overview, channels, and MCP management.
 - **Configure / Tools**: tool access and permissions.
 - **Configure / Agents**: agent roster, Herd Live, Herd Lab, and Skills.
 
-## Current feature set
+## Current functionality
 
-- **Mode-aware chat surface** with `Chat`, `Cowork`, and `Code` behavior in one shell.
-- **Task and approval workflows** instead of a chat-only interface.
-- **Prompt evaluation** via the Quality space and Prompt Lab workflows.
-- **Workspace memory and file browsing** in the Artifacts space.
-- **Multi-provider configuration** through JSON config plus Mission Control settings.
-- **Policy-aware tool execution** with tool profiles, write jails, network controls, and approval gating.
-- **MCP and integrations support** through the Configure space and gateway routes.
-- **Agent roster and live herd views** including Herd Live and Herd Lab.
-- **Optional local voice runtime** managed around `whisper.cpp`.
-- **Optional Python NPU sidecar** in `apps/npu-sidecar`.
-- **Gateway API docs** at `/api/v1/docs`.
+- **One shell, three operator modes**: `Chat`, `Cowork`, and `Code` share the same conversation surface but use different posture and defaults.
+- **Approval-driven operations**: risky actions can pause for device approval, remote approval actions, or review queue handling instead of executing silently.
+- **Tasks, sessions, artifacts, and costs**: Mission Control is designed as an operations console, not a single-thread chat window.
+- **Prompt Lab and quality workflows**: evaluate prompts, inspect regressions, and track quality signals from the `Observe / Quality` space.
+- **Workspace-aware memory and file context**: browse memory and files from the same artifacts surface and apply workspace-scoped guidance.
+- **Native-first provider routing**: configure OpenAI, Anthropic-style, OpenAI-compatible, local, and routed provider endpoints from runtime settings.
+- **LLM cost estimation and repair tooling**: runtime usage can be priced in-app, and historical gaps can be repaired with `scripts/backfill-llm-costs.ts`.
+- **Tool policy and zero-trust controls**: tool profiles, read scopes, path jails, outbound allowlists, approval gates, and policy-engine ingestion contracts are built into the platform.
+- **Integrations and channels**: manage integrations, MCP servers, channel connectors, diagnostics, and message delivery tests from the Configure space.
+- **Agent operations**: browse agent roster, herd views, live activity, and skill inventory from one place.
+- **Optional local runtimes**: voice runtime support around `whisper.cpp` and an optional Python NPU sidecar live alongside the gateway.
+- **Gateway API docs**: interactive API docs are served from `/api/v1/docs`.
+
+## What you can do today
+
+- Start Mission Control and use the access gate for token/basic auth, loopback bypass, and remembered device grants.
+- Work in `Chat`, `Cowork`, or `Code` without leaving the shared shell.
+- Review risky operations from `Operate / Approvals` and follow approval events surfaced in the UI.
+- Monitor scheduler, improvement runs, sessions, artifacts, costs, system state, and prompt quality from the Observe space.
+- Configure providers, runtime posture, budgets, workspaces, onboarding, integrations, channels, MCP, tools, and agents from the Configure space.
+- Test model/provider wiring directly from settings before routing broader traffic through it.
+- Run local screenshot capture, prompt-pack gates, verification lanes, and gateway smoke checks from repo scripts.
 
 ## Repository layout
 
@@ -95,14 +106,14 @@ The repository currently supports two real paths:
 Windows:
 
 ```powershell
-iwr https://raw.githubusercontent.com/spurnout/GoatCitadel/main/install.ps1 -OutFile install.ps1
+iwr https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1 -OutFile install.ps1
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 macOS / Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/spurnout/GoatCitadel/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.sh -o install.sh
 bash install.sh
 ```
 
@@ -130,7 +141,7 @@ PowerShell note:
 ### Manual clone / contributor setup
 
 ```bash
-git clone https://github.com/spurnout/GoatCitadel.git
+git clone https://github.com/goatcitadel/GoatCitadel.git
 cd GoatCitadel
 corepack enable
 corepack prepare pnpm@10.31.0 --activate
@@ -183,6 +194,8 @@ Default local endpoints:
 - `.env.example` currently includes gateway host/port, provider keys, auth overrides, mesh toggles, and advanced voice runtime overrides.
 - The gateway enforces explicit auth posture for non-loopback exposure; the repo does not currently ship a Docker or Compose deployment path.
 - The default config catalog includes remote providers plus local/compatible endpoints such as Ollama, LM Studio, LocalAI, and the optional NPU sidecar.
+- Mission Control settings expose provider API styles, active model selection, auth storage mode, allowlist presets, and device access grant management.
+- Integrations currently cover overview, channel operations, and MCP administration in one routed surface.
 
 ## Architecture overview
 
@@ -222,15 +235,21 @@ That route breadth is why the product should be described as a control plane, no
 
 ## Screenshots
 
-The screenshots below were regenerated from the current app on **March 27, 2026** using the repo’s capture pipeline:
+The screenshots below were refreshed for the current app state on **March 29, 2026**. The gallery mixes the tracked Mission Control capture set with a current shell screenshot from the latest UI pass.
 
 ```bash
 pnpm screenshots:capture
 ```
 
-They come from a seeded, sanitized demo runtime and reflect the current `Operate / Observe / Configure` shell, not the older README-era naming.
+They reflect the current `Operate / Observe / Configure` shell, not the older dashboard-era layout.
 
 Full gallery: [docs/screenshots/mission-control](docs/screenshots/mission-control)
+
+### Current shell
+
+| Live shell | Code surface |
+| --- | --- |
+| ![Mission Control live shell](docs/screenshots/mission-control/operate-chat-live.png) | ![Operate Code](docs/screenshots/mission-control/operate-code.png) |
 
 ### Operate
 
@@ -248,15 +267,23 @@ Full gallery: [docs/screenshots/mission-control](docs/screenshots/mission-contro
 | --- | --- |
 | ![Observe Activity Live feed](docs/screenshots/mission-control/observe-activity-live-feed.png) | ![Observe Quality](docs/screenshots/mission-control/observe-quality.png) |
 
-| Sessions | Artifacts / Memory |
+| Sessions | Costs |
 | --- | --- |
-| ![Observe Sessions](docs/screenshots/mission-control/observe-sessions.png) | ![Observe Artifacts Memory](docs/screenshots/mission-control/observe-artifacts-memory.png) |
+| ![Observe Sessions](docs/screenshots/mission-control/observe-sessions.png) | ![Observe Costs](docs/screenshots/mission-control/observe-costs.png) |
+
+| Artifacts / Memory | System |
+| --- | --- |
+| ![Observe Artifacts Memory](docs/screenshots/mission-control/observe-artifacts-memory.png) | ![Observe System](docs/screenshots/mission-control/observe-system.png) |
 
 ### Configure
 
-| Settings / Onboarding | Integrations / MCP |
+| Settings / General | Integrations / Overview |
 | --- | --- |
-| ![Configure Settings Onboarding](docs/screenshots/mission-control/settings-onboarding.png) | ![Configure Integrations MCP](docs/screenshots/mission-control/configure-integrations-mcp.png) |
+| ![Configure Settings General](docs/screenshots/mission-control/configure-settings-general.png) | ![Configure Integrations Overview](docs/screenshots/mission-control/configure-integrations-overview.png) |
+
+| Integrations / MCP | Settings / Workspaces |
+| --- | --- |
+| ![Configure Integrations MCP](docs/screenshots/mission-control/configure-integrations-mcp.png) | ![Configure Settings Workspaces](docs/screenshots/mission-control/configure-settings-workspaces.png) |
 
 | Agents / Herd Live | Agents / Skills |
 | --- | --- |
@@ -273,6 +300,10 @@ pnpm -r typecheck
 pnpm -r build
 pnpm doctor -- --deep
 pnpm screenshots:capture
+pnpm verify:fast
+pnpm verify:deep:core
+pnpm prompt:gates
+pnpm docs:check
 ```
 
 For coding workflow expectations, see [docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md](docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md).

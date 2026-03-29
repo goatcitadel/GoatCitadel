@@ -6,75 +6,52 @@ The format is inspired by Keep a Changelog and uses semantic pre-release tags.
 
 ## [Unreleased]
 
-Target release: `0.6.0-beta.2`
-
 ### Added
 
-- First-class workspace domain foundation:
-  - `workspaces` table and repository with `create/list/update/archive/restore`.
-  - Backward-compatible default workspace (`default`) backfill for existing records.
-  - Workspace scoping columns added to core chat/task entities (`chat_projects`, `chat_session_meta`, `chat_session_bindings`, `chat_attachments`, `tasks`).
-- Workspace and guidance APIs:
-  - `GET/POST/PATCH` workspace lifecycle endpoints.
-  - Global guidance and workspace guidance read/write endpoints.
-- Runtime guidance resolution:
-  - Global + workspace override precedence.
-  - Bounded guidance injection on chat send/stream paths.
-  - Trace metadata for applied guidance sources and truncation state.
-  - Guidance injection kill-switch for debugging (`GOATCITADEL_DISABLE_GUIDANCE_INJECTION`).
-- Mission Control workspace UX:
-  - Workspaces page with switch/create/archive/restore.
-  - Guidance editor for global and workspace scopes.
-  - Active workspace selection persisted in UI preferences.
-  - Core pages wired to active workspace context (chat, tasks, files, memory, plus workspace-aware page props for prompt/improvement flows).
-- Governance documentation set:
-  - `GOATCITADEL.md`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `VISION.md`.
-  - `GOATCITADEL_LEARNING_LOG.md` for validated self-improvement tracking.
-  - Workspace override templates under `workspaces/default/`.
-- Docs validation script:
-  - `pnpm docs:check` validates required governance docs and headings.
-- Optional Bankr migration assets:
-  - `docs/OPTIONAL_BANKR_SKILL.md`
-  - `templates/skills/bankr-optional/SKILL.md`
-- Production-readiness hardening additions:
-  - `chat_messages` projection table and repository-backed chat message listing.
-  - Batch session autonomy preferences repository path for proactive scheduler flows.
-  - Hot-path storage indexes for approvals, tool invocations, and policy blocks.
-  - Expanded route/service tests for auth/chat/orchestrator and storage hot paths.
-- Public-share docs and review assets:
-  - `docs/COMMUNICATION_CHANNEL_SETUP_GUIDE.md`
-  - `docs/PUBLIC_SHARE_CHECKLIST.md`
-  - `docs/CLAUDE_PERFORMANCE_EFFICIENCY_REVIEW_PROMPT.md`
-  - `docs/CLAUDE_UI_UX_HUMANIZATION_PROMPT.md`
-  - `artifacts/perf/PERF_REVIEW_TRIAGE_TEMPLATE.md`
+- Mission Control command-deck shell:
+  - top-level `Operate`, `Observe`, and `Configure` spaces,
+  - routed `Chat`, `Cowork`, and `Code` surface modes,
+  - dedicated approvals, costs, quality, integrations, and agent hub views.
+- Native-first provider runtime controls:
+  - provider API-style selection in settings,
+  - active model switching and provider smoke-test flows,
+  - LLM pricing estimation helpers for supported providers and routed models.
+- Historical LLM spend repair tooling:
+  - `apps/gateway/src/services/llm-pricing.ts` for runtime cost estimation,
+  - `scripts/backfill-llm-costs.ts` for repairing missing assistant message and ledger costs.
+- Expanded integrations UX:
+  - integration overview and channels views,
+  - connector diagnostics,
+  - channel send/react/unsend test flows with attachment support,
+  - MCP management in the same surface.
+- Workspace and governance foundations:
+  - `workspaces` table and repository with `create/list/update/archive/restore`,
+  - workspace-scoped guidance APIs and resolution rules,
+  - governance docs and workspace override templates.
+- Zero-trust tool/runtime hardening:
+  - tool security enforcement and ingestion contracts in the policy engine,
+  - hot-path storage indexes for approvals, tool invocations, and policy blocks.
+- Docs and release assets:
+  - public-share review docs,
+  - screenshot capture pipeline,
+  - refreshed top-level README and screenshot coverage.
 
 ### Changed
 
-- Contracts updated with workspace and guidance types in shared package exports.
-- Chat/task contract records expanded with optional `workspaceId`.
-- Chat turn traces now support persisted `guidance` metadata.
-- README and docs positioning updated to include governance and workspace behavior expectations.
-- Built-in Bankr moved behind feature flag default-off (`bankrBuiltinEnabled: false`).
-- Legacy Bankr built-in endpoints now return migration guidance (`410`) while disabled.
-- Mission Control Skills page now shows a compact Bankr migration card instead of built-in Bankr policy controls.
-- Root/workspace package versions bumped to `0.6.0-beta.2`.
-- Public-share install surface refreshed:
-  - installer-generated launchers now delegate directly to the real repo CLI,
-  - installer-first docs lead the public install path,
-  - manual clone path remains documented separately for contributors and validation.
-- Screenshot pipeline rebuilt for public use:
-  - viewport-based captures instead of full-page dumps,
-  - sanitized demo runtime instead of local machine state,
-  - refreshed Mission Control gallery and README screenshot set.
-- README refreshed for public beta sharing:
-  - installer-first quick start,
-  - clearer manual/dev install path,
-  - updated communication channel guidance,
-  - public beta scope and caveat section.
+- Gateway startup sequencing is now split between critical init and deferred background init so the process can listen sooner while cron/bootstrap work finishes asynchronously.
+- Mission Control reconnect cadence was tightened so the UI returns faster after a gateway restart.
+- Approval, costs, integrations, and settings pages were reworked as clearer hub surfaces with stronger tests and more intentional page-level copy.
+- Prompt-pack evaluation and provider routing were hardened across recent mainline work, including better model usage surfacing and safer recovery behavior.
+- README and install docs now reflect the current GitHub owner, current Mission Control shell, and current screenshot set.
+
+### Fixed
+
+- Legacy SQLite migration fixtures no longer fail when replaying `createChatSessionHistoryVisibilitySchema` against databases that predate `chat_session_meta`.
+- Cron bootstrap now avoids rewriting unchanged cron jobs on startup and can restore configured jobs inside one immediate transaction.
 
 ### Notes
 
-- This release remains pre-1.0 and backward-compatible by defaulting omitted workspace references to `default`.
+- This line remains pre-1.0 and backward-compatible by defaulting omitted workspace references to `default`.
 - Product release history stays in `CHANGELOG.md`; validated runtime learning outcomes are tracked separately in `GOATCITADEL_LEARNING_LOG.md`.
 
 ## [0.1.0-beta.1] - 2026-02-28
