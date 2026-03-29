@@ -9,6 +9,7 @@ import type {
   McpInvokeRequest,
   McpInvokeResponse,
   ToolCatalogEntry,
+  ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { ChatAgentOrchestrator } from "./chat-agent-orchestrator.js";
@@ -2740,7 +2741,7 @@ describe("ChatAgentOrchestrator", () => {
       .mockResolvedValueOnce(navigateToolCallCompletion({ url: "https://www.movieinsider.com/movies" }))
       .mockResolvedValueOnce(navigateToolCallCompletion({ url: "https://www.movieinsider.com/movies" }));
     const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
       .mockResolvedValue({
         outcome: "executed",
         policyReason: "allowed",
@@ -2796,7 +2797,7 @@ describe("ChatAgentOrchestrator", () => {
         ],
       });
     const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
       .mockResolvedValue({
         outcome: "executed",
         policyReason: "allowed",
@@ -2901,7 +2902,7 @@ describe("ChatAgentOrchestrator", () => {
         ],
       });
     const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
       .mockResolvedValue({
         outcome: "executed",
         policyReason: "allowed",
@@ -6450,7 +6451,7 @@ describe("ChatAgentOrchestrator", () => {
         ],
       });
     const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
       .mockResolvedValue({
         outcome: "executed",
         policyReason: "allowed",
