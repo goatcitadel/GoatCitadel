@@ -20,6 +20,7 @@ export class AuditLog {
       actorId: payload.actorId ?? attribution?.actorId,
       deviceId: payload.deviceId ?? attribution?.deviceId,
       grantId: payload.grantId ?? attribution?.grantId,
+      companionSessionId: payload.companionSessionId ?? attribution?.companionSessionId,
     };
     let line: string;
     try {
@@ -37,10 +38,37 @@ export class AuditLog {
         actorId: baseRecord.actorId,
         deviceId: baseRecord.deviceId,
         grantId: baseRecord.grantId,
+        companionSessionId: baseRecord.companionSessionId,
         serializationError: error instanceof Error ? error.message : String(error),
         degraded: true,
       }) + "\n";
     }
     await fs.appendFile(filePath, line, { encoding: "utf8" });
+  }
+
+  public async list(stream: AuditStream): Promise<Record<string, unknown>[]> {
+    const filePath = path.join(this.auditDir, `${stream}.jsonl`);
+    let content: string;
+    try {
+      content = await fs.readFile(filePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    }
+
+    return content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .flatMap((line) => {
+        try {
+          const parsed = JSON.parse(line);
+          return parsed && typeof parsed === "object" ? [parsed as Record<string, unknown>] : [];
+        } catch {
+          return [];
+        }
+      });
   }
 }

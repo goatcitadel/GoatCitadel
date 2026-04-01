@@ -3,6 +3,7 @@ import type { ConnectorRecord } from "@goatcitadel/contracts";
 import {
   connectorSetupReady,
   connectorSupportsDeliveryAction,
+  getConnectorRuntimePostureSummary,
   getConnectorSetupDiagnostics,
   getConnectorSupportedAttachmentSources,
   getConnectorSupportedDeliveryActions,
@@ -61,6 +62,36 @@ describe("integration connector metadata helpers", () => {
     expect(getConnectorSetupDiagnostics(connector)).toEqual(["Missing config.bridgeUrl."]);
     expect(connectorSupportsDeliveryAction(connector, "channel.react")).toBe(false);
     expect(connectorSetupReady(connector)).toBe(false);
+  });
+
+  it("prefers shared channel-core metadata when available", () => {
+    const connector = makeConnector({
+      channelCapabilities: {
+        supportedActions: ["channel.send", "channel.reply", "channel.typing"],
+        supportedAttachmentSources: ["inline"],
+        supportNotes: ["Gateway mode enables typing and presence."],
+        runtimePosture: {
+          operatorSummary: "Persistent gateway runtime keeps inbound channel state synchronized.",
+        },
+        setupDiagnostics: [],
+        setupReady: true,
+      },
+      supportedDeliveryActions: ["channel.send"],
+      supportedAttachmentSources: ["url"],
+      setupDiagnostics: ["legacy diagnostic"],
+      setupReady: false,
+    });
+
+    expect(getConnectorSupportedDeliveryActions(connector)).toEqual([
+      "channel.send",
+      "channel.reply",
+      "channel.typing",
+    ]);
+    expect(getConnectorSupportedAttachmentSources(connector)).toEqual(["inline"]);
+    expect(getConnectorSupportNotes(connector)).toEqual(["Gateway mode enables typing and presence."]);
+    expect(getConnectorRuntimePostureSummary(connector)).toBe("Persistent gateway runtime keeps inbound channel state synchronized.");
+    expect(getConnectorSetupDiagnostics(connector)).toEqual([]);
+    expect(connectorSetupReady(connector)).toBe(true);
   });
 
   it("parses attachment URL and id inputs into normalized send payload fields", () => {

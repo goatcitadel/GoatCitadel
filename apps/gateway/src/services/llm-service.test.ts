@@ -1560,6 +1560,45 @@ describe("LlmService", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("falls back to an OpenAI shortlist when /models returns an empty payload", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ data: [] }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    )) as unknown as typeof fetch;
+
+    try {
+      const models = await service.listModels("openai");
+      expect(models.map((model) => model.id)).toEqual([
+        "gpt-5.4-mini",
+        "gpt-5.4",
+        "gpt-5-mini",
+        "gpt-4.1-mini",
+        "gpt-4o-mini",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 function createNoopSecretStore(): SecretStoreService {

@@ -9,7 +9,7 @@ const channelAttachmentSchema = z.object({
   attachmentId: z.string().uuid().optional(),
 });
 
-const channelSendSchema = z.object({
+const channelSendBaseSchema = z.object({
   connectionId: z.string().uuid(),
   target: z.string().min(1),
   message: z.string().default(""),
@@ -22,7 +22,16 @@ const channelSendSchema = z.object({
   sessionId: z.string().min(1).optional(),
   agentId: z.string().min(1).optional(),
   taskId: z.string().min(1).optional(),
-}).superRefine((value, ctx) => {
+});
+
+function validateChannelSendLike(
+  value: {
+    message: string;
+    attachments?: unknown[];
+    attachmentIds?: string[];
+  },
+  ctx: z.RefinementCtx,
+): void {
   const hasMessage = value.message.trim().length > 0;
   const hasAttachments = (value.attachments?.length ?? 0) > 0 || (value.attachmentIds?.length ?? 0) > 0;
   if (!hasMessage && !hasAttachments) {
@@ -32,7 +41,9 @@ const channelSendSchema = z.object({
       message: "message or at least one attachment is required",
     });
   }
-});
+}
+
+const channelSendSchema = channelSendBaseSchema.superRefine(validateChannelSendLike);
 
 const channelReactSchema = z.object({
   connectionId: z.string().uuid(),
@@ -46,6 +57,10 @@ const channelReactSchema = z.object({
   taskId: z.string().min(1).optional(),
 });
 
+const channelReplySchema = channelSendBaseSchema.extend({
+  replyToMessageId: z.string().min(1),
+}).superRefine(validateChannelSendLike);
+
 const channelUnsendSchema = z.object({
   connectionId: z.string().uuid(),
   messageId: z.string().min(1),
@@ -54,6 +69,20 @@ const channelUnsendSchema = z.object({
   sessionId: z.string().min(1).optional(),
   agentId: z.string().min(1).optional(),
   taskId: z.string().min(1).optional(),
+});
+
+const channelTypingSchema = z.object({
+  connectionId: z.string().uuid(),
+  target: z.string().min(1),
+  threadId: z.string().min(1).optional(),
+  durationMs: z.number().int().positive().max(60_000).optional(),
+  sessionId: z.string().min(1).optional(),
+  agentId: z.string().min(1).optional(),
+  taskId: z.string().min(1).optional(),
+});
+
+const connectionParamsSchema = z.object({
+  connectionId: z.string().uuid(),
 });
 
 const gmailReadSchema = z.object({
@@ -112,6 +141,14 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(await fastify.gateway.commsSend(parsed.data));
   });
 
+  fastify.post("/api/v1/comms/reply", async (request, reply) => {
+    const parsed = channelReplySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(await fastify.gateway.commsReply(parsed.data));
+  });
+
   fastify.post("/api/v1/comms/react", async (request, reply) => {
     const parsed = channelReactSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -126,6 +163,56 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send(await fastify.gateway.commsUnsend(parsed.data));
+  });
+
+  fastify.post("/api/v1/comms/typing", async (request, reply) => {
+    const parsed = channelTypingSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(await fastify.gateway.commsTyping(parsed.data));
+  });
+
+  fastify.get("/api/v1/comms/capabilities/:connectionId", async (request, reply) => {
+    const params = connectionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.getIntegrationConnectionChannelCapabilities(params.data.connectionId));
+    } catch (error) {
+      const message = (error as Error).message;
+      const notFound = message.toLowerCase().includes("unknown integration connection");
+      return reply.code(notFound ? 404 : 409).send({ error: message });
+    }
+  });
+
+  fastify.get("/api/v1/comms/runtime/:connectionId", async (request, reply) => {
+    const params = connectionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.getIntegrationConnectionChannelRuntimeStatus(params.data.connectionId));
+    } catch (error) {
+      const message = (error as Error).message;
+      const notFound = message.toLowerCase().includes("unknown integration connection");
+      return reply.code(notFound ? 404 : 409).send({ error: message });
+    }
+  });
+
+  fastify.get("/api/v1/comms/diagnostics/:connectionId", async (request, reply) => {
+    const params = connectionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.gateway.runIntegrationConnectionDiagnostics(params.data.connectionId));
+    } catch (error) {
+      const message = (error as Error).message;
+      const notFound = message.toLowerCase().includes("unknown integration connection");
+      return reply.code(notFound ? 404 : 409).send({ error: message });
+    }
   });
 
   fastify.post("/api/v1/comms/gmail/read", async (request, reply) => {

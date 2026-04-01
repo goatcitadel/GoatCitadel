@@ -180,7 +180,6 @@ export async function executeTool(
     case "discord.unsend":
     case "google-chat.send":
     case "line.send":
-    case "matrix.send":
     case "mattermost.send":
     case "mattermost.react":
     case "mattermost.unsend":
@@ -195,8 +194,6 @@ export async function executeTool(
     case "slack.unsend":
     case "telegram.unsend":
     case "telegram.react":
-    case "matrix.react":
-    case "matrix.unsend":
     case "telegram.send":
     case "teams.send":
     case "whatsapp.send":
@@ -1178,8 +1175,6 @@ async function executeCommsTool(
       return signalSend(connectionConfig, args, allowlist, target, renderedMessage);
     case "telegram":
       return telegramSend(connectionConfig, args, allowlist, target, message, attachments);
-    case "matrix":
-      return matrixSend(connectionConfig, args, allowlist, target, message, attachments);
     case "teams":
       return teamsSend(connectionConfig, args, allowlist, message, attachments);
     case "google-chat":
@@ -1227,8 +1222,6 @@ async function commsReact(
       return slackReact(connectionConfig, args, allowlist, target);
     case "discord":
       return discordReact(connectionConfig, args, allowlist, target);
-    case "matrix":
-      return matrixReact(connectionConfig, args, allowlist, target);
     case "mattermost":
       return mattermostReact(connectionConfig, args, allowlist, target);
     case "nextcloud-talk":
@@ -1260,8 +1253,6 @@ async function commsUnsend(
       return discordUnsend(connectionConfig, args, allowlist, target);
     case "telegram":
       return telegramUnsend(connectionConfig, args, allowlist, target);
-    case "matrix":
-      return matrixUnsend(connectionConfig, args, allowlist, target);
     case "mattermost":
       return mattermostUnsend(connectionConfig, args, allowlist, target);
     case "imessage":
@@ -1405,7 +1396,10 @@ async function slackSend(
   const token = secretFrom(config, "botToken", "botTokenEnv")
     ?? secretFrom(config, "token", "tokenEnv");
   const channel = asString(args.target) ?? resolvedTarget ?? asString(config.defaultChannel);
-  const threadTs = asString(args.threadTs) ?? asString(config.defaultThreadTs);
+  const threadTs = asString(args.threadTs)
+    ?? asString(args.replyToMessageId)
+    ?? asString(args.replyTo)
+    ?? asString(config.defaultThreadTs);
   if (!token) {
     throw new Error("Missing Slack bot token");
   }
@@ -1965,6 +1959,7 @@ async function telegramSend(
   const token = secretFrom(config, "botToken", "botTokenEnv")
     ?? secretFrom(config, "token", "tokenEnv");
   const chatId = asString(args.target) ?? resolvedTarget ?? asString(config.defaultChatId);
+  const replyToMessageId = parseOptionalIntegerLike(args.replyToMessageId ?? args.replyTo);
   if (!token) {
     throw new Error("Missing Telegram bot token");
   }
@@ -1973,13 +1968,13 @@ async function telegramSend(
   }
 
   if (attachments.length === 0) {
-    return telegramSendText(config, allowlist, token, chatId, message);
+    return telegramSendText(config, allowlist, token, chatId, message, replyToMessageId);
   }
 
   let lastMessageId: string | undefined;
   let caption = message.trim() || undefined;
   if (caption && caption.length > 1024) {
-    lastMessageId = await telegramSendText(config, allowlist, token, chatId, message);
+    lastMessageId = await telegramSendText(config, allowlist, token, chatId, message, replyToMessageId);
     caption = undefined;
   }
   for (const [index, attachment] of attachments.entries()) {
@@ -1991,6 +1986,7 @@ async function telegramSend(
       attachment,
       index,
       caption,
+      index === 0 ? replyToMessageId : undefined,
     );
     caption = undefined;
   }
@@ -2078,6 +2074,7 @@ async function telegramSendText(
   token: string,
   chatId: string,
   message: string,
+  replyToMessageId?: number,
 ): Promise<string> {
   const res = await fetchAllowlisted(
     `https://api.telegram.org/bot${token}/sendMessage`,
@@ -2088,6 +2085,7 @@ async function telegramSendText(
         chat_id: chatId,
         text: message,
         parse_mode: asString(config.parseMode) ?? undefined,
+        reply_parameters: replyToMessageId ? { message_id: replyToMessageId } : undefined,
       }),
     },
     allowlist,
@@ -2109,6 +2107,7 @@ async function telegramSendAttachment(
   attachment: ChannelAttachment,
   index: number,
   caption: string | undefined,
+  replyToMessageId?: number,
 ): Promise<string> {
   const parseMode = asString(config.parseMode) ?? undefined;
   const isImage = isImageChannelAttachment(attachment);
@@ -2135,6 +2134,9 @@ async function telegramSendAttachment(
     if (parseMode) {
       formData.set("parse_mode", parseMode);
     }
+    if (replyToMessageId) {
+      formData.set("reply_parameters", JSON.stringify({ message_id: replyToMessageId }));
+    }
     body = formData;
   } else {
     body = JSON.stringify({
@@ -2142,6 +2144,7 @@ async function telegramSendAttachment(
       [field]: required(attachment.url, "Telegram attachment URL"),
       caption,
       parse_mode: parseMode,
+      reply_parameters: replyToMessageId ? { message_id: replyToMessageId } : undefined,
     });
     headers = { "Content-Type": "application/json" };
   }
@@ -2164,228 +2167,15 @@ async function telegramSendAttachment(
   return providerMessageIdFromValue(result.message_id) ?? `telegram-${Date.now()}`;
 }
 
-async function matrixSendRoomEvent(
-  homeserverUrl: string,
-  accessToken: string,
-  roomId: string,
-  content: Record<string, unknown>,
-  allowlist: string[],
-): Promise<string> {
-  const txnId = randomUUID();
-  const res = await fetchAllowlisted(
-    `${homeserverUrl.replace(/\/+$/, "")}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(content),
-    },
-    allowlist,
-  );
-  const bodyText = await res.response.text();
-  if (!res.response.ok) {
-    throw new Error(`matrix.send failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
+function parseOptionalIntegerLike(value: unknown): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
   }
-  const body = parseJsonRecord(bodyText);
-  return asString(body.event_id) ?? `matrix-${Date.now()}`;
-}
-
-async function matrixSendAttachment(
-  homeserverUrl: string,
-  accessToken: string,
-  roomId: string,
-  attachment: ChannelAttachment,
-  index: number,
-  allowlist: string[],
-): Promise<string> {
-  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Matrix");
-  const fileName = resolveChannelAttachmentName(attachment, index);
-  const uploadUrl = new URL(`${homeserverUrl.replace(/\/+$/, "")}/_matrix/media/v3/upload`);
-  uploadUrl.searchParams.set("filename", fileName);
-  const uploadRes = await fetchAllowlisted(
-    uploadUrl.toString(),
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        ...(attachmentData.contentType ? { "Content-Type": attachmentData.contentType } : {}),
-      },
-      body: new Uint8Array(attachmentData.bytes),
-    },
-    allowlist,
-  );
-  const uploadBodyText = await uploadRes.response.text();
-  if (!uploadRes.response.ok) {
-    throw new Error(`matrix.send failed (${uploadRes.response.status})${uploadBodyText ? `: ${uploadBodyText}` : ""}`);
+  const parsed = parseIntegerLike(value);
+  if (parsed === undefined) {
+    throw new Error("Expected an integer-like reply target");
   }
-  const uploadBody = parseJsonRecord(uploadBodyText);
-  const contentUri = required(uploadBody.content_uri, "Matrix uploaded content URI");
-  const content: Record<string, unknown> = {
-    msgtype: resolveMatrixAttachmentMessageType(attachmentData.contentType),
-    body: fileName,
-    url: contentUri,
-    info: {
-      mimetype: attachmentData.contentType,
-      size: attachmentData.bytes.length,
-    },
-  };
-  return matrixSendRoomEvent(homeserverUrl, accessToken, roomId, content, allowlist);
-}
-
-function resolveMatrixAttachmentMessageType(contentType: string | undefined): string {
-  const normalized = contentType?.trim().toLowerCase();
-  if (normalized?.startsWith("image/")) {
-    return "m.image";
-  }
-  if (normalized?.startsWith("video/")) {
-    return "m.video";
-  }
-  if (normalized?.startsWith("audio/")) {
-    return "m.audio";
-  }
-  return "m.file";
-}
-
-async function matrixSend(
-  config: Record<string, unknown>,
-  args: Record<string, unknown>,
-  allowlist: string[],
-  target: string,
-  message: string,
-  attachments: ChannelAttachment[] = [],
-): Promise<string> {
-  const resolvedTarget = normalizeChannelTarget(target, "matrix");
-  const homeserverUrl = asString(config.homeserverUrl) ?? "https://matrix-client.matrix.org";
-  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
-  const roomId = asString(args.target) ?? resolvedTarget ?? asString(config.defaultRoomId);
-  if (!accessToken) {
-    throw new Error("Missing Matrix access token");
-  }
-  if (!roomId) {
-    throw new Error("Missing Matrix room target");
-  }
-  if (attachments.length === 0) {
-    return matrixSendRoomEvent(
-      homeserverUrl,
-      accessToken,
-      roomId,
-      {
-        msgtype: "m.text",
-        body: message,
-      },
-      allowlist,
-    );
-  }
-
-  let lastEventId: string | undefined;
-  if (message.trim()) {
-    lastEventId = await matrixSendRoomEvent(
-      homeserverUrl,
-      accessToken,
-      roomId,
-      {
-        msgtype: "m.text",
-        body: message,
-      },
-      allowlist,
-    );
-  }
-  for (const [index, attachment] of attachments.entries()) {
-    lastEventId = await matrixSendAttachment(
-      homeserverUrl,
-      accessToken,
-      roomId,
-      attachment,
-      index,
-      allowlist,
-    );
-  }
-  return lastEventId ?? `matrix-${Date.now()}`;
-}
-
-async function matrixReact(
-  config: Record<string, unknown>,
-  args: Record<string, unknown>,
-  allowlist: string[],
-  target: string,
-): Promise<string> {
-  const homeserverUrl = asString(config.homeserverUrl) ?? "https://matrix-client.matrix.org";
-  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
-  const roomId = asString(args.target) ?? normalizeChannelTarget(target, "matrix") ?? asString(config.defaultRoomId);
-  const eventId = required(args.messageId, "Matrix messageId");
-  const reaction = required(args.reaction, "Matrix reaction");
-  if (!accessToken) {
-    throw new Error("Missing Matrix access token");
-  }
-  if (!roomId) {
-    throw new Error("Missing Matrix room target");
-  }
-  const txnId = randomUUID();
-  const res = await fetchAllowlisted(
-    `${homeserverUrl.replace(/\/+$/, "")}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.reaction/${txnId}`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        "m.relates_to": {
-          rel_type: "m.annotation",
-          event_id: eventId,
-          key: reaction,
-        },
-      }),
-    },
-    allowlist,
-  );
-  const bodyText = await res.response.text();
-  if (!res.response.ok) {
-    throw new Error(`matrix.react failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
-  }
-  const body = parseJsonRecord(bodyText);
-  return asString(body.event_id) ?? `matrix-reaction-${Date.now()}`;
-}
-
-async function matrixUnsend(
-  config: Record<string, unknown>,
-  args: Record<string, unknown>,
-  allowlist: string[],
-  target: string,
-): Promise<string> {
-  const homeserverUrl = asString(config.homeserverUrl) ?? "https://matrix-client.matrix.org";
-  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
-  const roomId = asString(args.target) ?? normalizeChannelTarget(target, "matrix") ?? asString(config.defaultRoomId);
-  const eventId = required(args.messageId, "Matrix messageId");
-  if (!accessToken) {
-    throw new Error("Missing Matrix access token");
-  }
-  if (!roomId) {
-    throw new Error("Missing Matrix room target");
-  }
-  const txnId = randomUUID();
-  const res = await fetchAllowlisted(
-    `${homeserverUrl.replace(/\/+$/, "")}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/redact/${encodeURIComponent(eventId)}/${txnId}`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({}),
-    },
-    allowlist,
-  );
-  const bodyText = await res.response.text();
-  if (!res.response.ok) {
-    throw new Error(`matrix.unsend failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
-  }
-  return eventId;
+  return parsed;
 }
 
 async function teamsSend(
@@ -3165,7 +2955,6 @@ const CHANNEL_TARGET_KEYS: Record<string, string[]> = {
   slack: ["defaultChannel", "defaultTarget", "target"],
   discord: ["defaultChannelId", "defaultTarget", "target"],
   telegram: ["defaultChatId", "defaultTarget", "target"],
-  matrix: ["defaultRoomId", "defaultTarget", "target"],
   "google-chat": ["defaultThreadKey", "defaultTarget", "target"],
   whatsapp: ["defaultTarget", "defaultRecipient", "target"],
   signal: ["defaultRecipient", "defaultTarget", "target"],

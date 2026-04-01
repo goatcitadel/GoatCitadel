@@ -54,6 +54,7 @@ F:\code\personal-ai
 │  └─ mission-control          # React + Vite operator console
 ├─ packages
 │  ├─ contracts                # Shared TypeScript contracts
+│  ├─ extensions-sdk           # Author-facing add-on / integration-plugin SDK helpers
 │  ├─ storage                  # SQLite repositories + JSONL logs
 │  ├─ gateway-core             # Session keying, event ingest, token ledger
 │  ├─ policy-engine            # Tool policy resolver + sandbox gates
@@ -118,6 +119,7 @@ Mission Control is an API client, not a backend extension. It:
 ### 3.3 Shared Domain Packages
 
 - `@goatcitadel/contracts`: types shared across backend and frontend.
+- `@goatcitadel/extensions-sdk`: author-facing manifest schemas, validation, and file helpers for extensions.
 - `@goatcitadel/storage`: all SQLite repository and JSONL append/read logic.
 - `@goatcitadel/gateway-core`: event ingest and deterministic session key logic.
 - `@goatcitadel/policy-engine`: policy resolution and enforcement gates.

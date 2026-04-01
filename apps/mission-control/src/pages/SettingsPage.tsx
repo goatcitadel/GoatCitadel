@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { providerTemplates, type DeviceAccessGrantRecord } from "@goatcitadel/contracts";
+import {
+  buildVoiceOperatorGuidance,
+  buildVoiceRecoveryActions,
+  providerTemplates,
+  type DeviceAccessGrantRecord,
+} from "@goatcitadel/contracts";
 import {
   clearGatewayAuthState,
   createLlmChatCompletion,
@@ -10,6 +15,7 @@ import {
   persistGatewayAuthState,
   readStoredGatewayAuthState,
   revokeDeviceAccessGrant,
+  fetchVoiceTalkSessions,
   fetchVoiceStatus,
   fetchVoiceRuntimeStatus,
   fetchProviderSecretStatus,
@@ -29,7 +35,7 @@ import {
   type ProviderSecretStatus,
   type RuntimeSettingsResponse,
 } from "../api/client";
-import type { VoiceRuntimeStatus, VoiceStatus } from "@goatcitadel/contracts";
+import type { VoiceRuntimeStatus, VoiceStatus, VoiceTalkSessionRecord } from "@goatcitadel/contracts";
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { FieldHelp } from "../components/FieldHelp";
 import { HelpHint } from "../components/HelpHint";
@@ -231,6 +237,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
   const [chatResponse, setChatResponse] = useState("");
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
   const [voiceRuntime, setVoiceRuntime] = useState<VoiceRuntimeStatus | null>(null);
+  const [voiceTalkSessions, setVoiceTalkSessions] = useState<VoiceTalkSessionRecord[]>([]);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [voiceTalkMode, setVoiceTalkMode] = useState<"push_to_talk" | "wake">("push_to_talk");
   const [voiceFile, setVoiceFile] = useState<File | null>(null);
@@ -430,10 +437,11 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
   );
 
   useEffect(() => {
-    void Promise.all([fetchVoiceStatus(), fetchVoiceRuntimeStatus()])
-      .then(([status, runtime]) => {
+    void Promise.all([fetchVoiceStatus(), fetchVoiceRuntimeStatus(), fetchVoiceTalkSessions(8)])
+      .then(([status, runtime, talkSessions]) => {
         setVoiceStatus(status);
         setVoiceRuntime(runtime);
+        setVoiceTalkSessions(talkSessions);
         if (status.talk.mode) {
           setVoiceTalkMode(status.talk.mode);
         }
@@ -441,6 +449,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       .catch(() => {
         setVoiceStatus(null);
         setVoiceRuntime(null);
+        setVoiceTalkSessions([]);
       });
   }, []);
 
@@ -756,14 +765,24 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
   };
 
   const refreshVoiceRuntime = async () => {
-    const [status, runtime] = await Promise.all([
+    const [status, runtime, talkSessions] = await Promise.all([
       fetchVoiceStatus(),
       fetchVoiceRuntimeStatus(),
+      fetchVoiceTalkSessions(8),
     ]);
     setVoiceStatus(status);
     setVoiceRuntime(runtime);
+    setVoiceTalkSessions(talkSessions);
     if (status.talk.mode) {
       setVoiceTalkMode(status.talk.mode);
+    }
+  };
+
+  const refreshVoiceRuntimeAfterFailure = async () => {
+    try {
+      await refreshVoiceRuntime();
+    } catch {
+      // Preserve the original operator-facing failure when the refresh probe also fails.
     }
   };
 
@@ -831,6 +850,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       setVoiceActionInfo(`Talk Mode started (${formatTalkModeLabel(voiceTalkMode)}).`);
       setError(null);
     } catch (err) {
+      await refreshVoiceRuntimeAfterFailure();
       setVoiceActionInfo("");
       setError((err as Error).message);
     } finally {
@@ -866,6 +886,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       setVoiceActionInfo("Wake listener enabled.");
       setError(null);
     } catch (err) {
+      await refreshVoiceRuntimeAfterFailure();
       setVoiceActionInfo("");
       setError((err as Error).message);
     } finally {
@@ -909,6 +930,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       );
       setError(null);
     } catch (err) {
+      await refreshVoiceRuntimeAfterFailure();
       setVoiceActionInfo("");
       setError((err as Error).message);
     } finally {
@@ -1018,6 +1040,11 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
 
   const blockSaves = changeReview.overall === "critical" && !criticalConfirmed;
   const installedVoiceModelIds = new Set(voiceRuntime?.installedModels.map((item) => item.modelId) ?? []);
+  const voiceRecoveryActions = useMemo(() => buildVoiceRecoveryActions(voiceStatus, voiceRuntime), [voiceStatus, voiceRuntime]);
+  const voiceOperatorGuidance = useMemo(
+    () => buildVoiceOperatorGuidance(voiceStatus, voiceRuntime),
+    [voiceStatus, voiceRuntime],
+  );
 
   return (
     <section>
@@ -1280,6 +1307,28 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
               <p className="table-subtext">Binary path: {voiceRuntime.binaryPath}</p>
             ) : null}
           </article>
+          <article className="voice-status-card">
+            <h4>Recent Talk Sessions</h4>
+            {voiceTalkSessions.length === 0 ? (
+              <p className="table-subtext">No talk sessions recorded yet.</p>
+            ) : (
+              <ul className="compact-list">
+                {voiceTalkSessions.slice(0, 5).map((session) => (
+                  <li key={session.talkSessionId}>
+                    <strong>{formatTalkModeLabel(session.mode)}</strong> · {session.state}
+                    <div className="table-subtext">
+                      started {formatVoiceDate(session.startedAt ?? session.createdAt)}
+                      {session.stoppedAt ? ` · stopped ${formatVoiceDate(session.stoppedAt)}` : ""}
+                    </div>
+                    <div className="table-subtext">
+                      session {session.talkSessionId}
+                      {session.sessionId ? ` · chat ${session.sessionId}` : ""}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </article>
         </div>
         {voiceStatus?.stt.lastError ? (
           <p className="error">Last STT error: {voiceStatus.stt.lastError}</p>
@@ -1288,6 +1337,82 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
           <p className="error">Last runtime error: {voiceRuntime.lastError}</p>
         ) : null}
         {voiceActionInfo ? <p className="status-banner">{voiceActionInfo}</p> : null}
+        <article className="voice-help-card">
+          <h4>Operator posture</h4>
+          <FieldHelp>{voiceOperatorGuidance.postureSummary}</FieldHelp>
+          {voiceOperatorGuidance.recommendedActions.length > 0 ? (
+            <ul className="voice-help-list">
+              {voiceOperatorGuidance.recommendedActions.map((action) => (
+                <li key={action}>{action}</li>
+              ))}
+            </ul>
+          ) : null}
+        </article>
+        <article className="voice-help-card">
+          <h4>Recovery Next Steps</h4>
+          {voiceRecoveryActions.length > 0 ? (
+            <div className="workflow-status-stack">
+              {voiceRecoveryActions.map((action) => (
+                <div key={action.id}>
+                  <p className="office-subtitle">
+                    <strong>{action.title}</strong>{" "}
+                    <StatusChip tone={action.tone}>{action.tone}</StatusChip>
+                  </p>
+                  <FieldHelp>{action.description}</FieldHelp>
+                  <div className="controls-row">
+                    {action.id === "repair-runtime" ? (
+                      <button
+                        type="button"
+                        onClick={() => void onInstallManagedVoiceRuntime(voiceRuntime?.selectedModelId ?? "base.en", true)}
+                        disabled={voiceBusy}
+                      >
+                        Repair Voice Runtime
+                      </button>
+                    ) : null}
+                    {action.id === "install-starter-model" ? (
+                      <button
+                        type="button"
+                        onClick={() => void onInstallManagedVoiceRuntime("base.en", true)}
+                        disabled={voiceBusy}
+                      >
+                        Install Starter Model
+                      </button>
+                    ) : null}
+                    {action.id === "activate-installed-model" && action.modelId ? (
+                      <button
+                        type="button"
+                        onClick={() => void onSelectManagedVoiceModel(action.modelId!)}
+                        disabled={voiceBusy}
+                      >
+                        Activate {action.modelId}
+                      </button>
+                    ) : null}
+                    {action.id === "stop-talk-session" ? (
+                      <button type="button" onClick={onStopVoiceTalk} disabled={voiceBusy || voiceStatus?.talk.state !== "running"}>
+                        Stop Talk Mode
+                      </button>
+                    ) : null}
+                    {action.id === "stop-wake-listener" ? (
+                      <button type="button" onClick={onStopWake} disabled={voiceBusy || !voiceStatus?.wake.enabled}>
+                        Disable Wake
+                      </button>
+                    ) : null}
+                    {action.id === "refresh-runtime-state" ? (
+                      <button type="button" onClick={() => void refreshVoiceRuntime()} disabled={voiceBusy}>
+                        Refresh Voice Status
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <>
+              <FieldHelp>No operator recovery steps are active. Voice looks ready for the proof-lane run.</FieldHelp>
+              <FieldHelp>Use the System page voice proof draft to record the next transcription, talk, and wake validation pass.</FieldHelp>
+            </>
+          )}
+        </article>
         <article className="voice-help-card">
           <h4>Managed Voice Runtime</h4>
           <ul className="voice-help-list">
@@ -1852,6 +1977,7 @@ interface ProviderScopedModelOptionSource {
   defaultModel: string;
   models: string[];
 }
+export { buildVoiceRecoveryActions };
 
 export function buildProviderScopedModelOptions(input: {
   providerId: string;

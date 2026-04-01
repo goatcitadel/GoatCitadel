@@ -2,7 +2,6 @@ const CHANNEL_TARGET_KEYS: Record<string, string[]> = {
   slack: ["defaultChannel", "defaultTarget", "target"],
   discord: ["defaultChannelId", "defaultTarget", "target"],
   telegram: ["defaultChatId", "defaultTarget", "target"],
-  matrix: ["defaultRoomId", "defaultTarget", "target"],
   "google-chat": ["defaultThreadKey", "defaultTarget", "target"],
   whatsapp: ["defaultTarget", "defaultRecipient", "target"],
   signal: ["defaultRecipient", "defaultTarget", "target"],

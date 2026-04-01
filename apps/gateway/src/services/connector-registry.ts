@@ -9,7 +9,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { MCP_APPROVAL_DELIVERY_TOOL_NAME } from "./mcp-approval-inbox.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
-import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
+import { describeChannelCapabilities, describeChannelFeatureMetadata } from "./channel-diagnostics.js";
 
 const CONNECTOR_CAPABILITY_VERSION = "v1";
 
@@ -102,11 +102,14 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
       approvalDeliveryReady,
       approvalDeliveryReason: describeIntegrationApprovalDelivery(connection, approvalDeliveryTarget),
       approvalDeliveryTarget,
+      channelCapabilities: channelFeatures && connection.kind === "channel"
+        ? describeChannelCapabilities(connection.key, connection.config)
+        : undefined,
       supportedDeliveryActions: channelFeatures?.supportedDeliveryActions,
       supportedAttachmentSources: channelFeatures?.supportedAttachmentSources,
       channelSupportNotes: channelFeatures?.supportNotes,
       setupDiagnostics: channelFeatures?.setupDiagnostics,
-      setupReady: (channelFeatures?.setupDiagnostics.length ?? 0) === 0,
+      setupReady: channelFeatures?.setupReady ?? (channelFeatures?.setupDiagnostics.length ?? 0) === 0,
     },
     lastSeenAt: connection.lastSyncAt,
     lastError: connection.lastError,
@@ -182,8 +185,6 @@ function describeIntegrationApprovalDelivery(
       return "Set config.defaultChannelId to enable approval delivery.";
     case "telegram":
       return "Set config.defaultChatId to enable approval delivery.";
-    case "matrix":
-      return "Set config.defaultRoomId to enable approval delivery.";
     case "google-chat":
       return "Set config.defaultThreadKey to enable approval delivery.";
     case "whatsapp":

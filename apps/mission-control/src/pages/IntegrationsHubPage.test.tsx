@@ -3,11 +3,19 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const integrationsPageMock = vi.hoisted(() => vi.fn());
+const channelSetupPageMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./IntegrationsPage", () => ({
   IntegrationsPage: ({ view }: { view?: "overview" | "channels" }) => {
     integrationsPageMock(view);
     return <div>{`IntegrationsPage:${view ?? "overview"}`}</div>;
+  },
+}));
+
+vi.mock("./ChannelSetupPage", () => ({
+  ChannelSetupPage: () => {
+    channelSetupPageMock();
+    return <div>ChannelSetupPage</div>;
   },
 }));
 
@@ -24,6 +32,7 @@ function rendererText(renderer: ReactTestRenderer): string {
 describe("IntegrationsHubPage", () => {
   beforeEach(() => {
     integrationsPageMock.mockClear();
+    channelSetupPageMock.mockClear();
   });
 
   it("routes the channels tab to the dedicated channels view", async () => {
@@ -35,8 +44,9 @@ describe("IntegrationsHubPage", () => {
         );
       });
 
-      expect(integrationsPageMock).toHaveBeenCalledWith("channels");
-      expect(rendererText(renderer)).toContain("IntegrationsPage:channels");
+      expect(integrationsPageMock).not.toHaveBeenCalled();
+      expect(channelSetupPageMock).toHaveBeenCalled();
+      expect(rendererText(renderer)).toContain("ChannelSetupPage");
     } finally {
       renderer.unmount();
     }

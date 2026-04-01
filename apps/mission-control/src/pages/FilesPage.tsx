@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import {
   createFileFromTemplate,
@@ -46,6 +46,10 @@ const IMAGE_EXTENSIONS = new Set([
   "tiff",
 ]);
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
 export function FilesPage({ workspaceId = "default" }: { workspaceId?: string }) {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -68,6 +72,8 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
   const [showAdvancedUpload, setShowAdvancedUpload] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const riskDebounceRef = useRef<number | null>(null);
+  const riskAbortRef = useRef<AbortController | null>(null);
 
   const workspacePrefix = useMemo(
     () => (workspaceId && workspaceId !== "default" ? `workspaces/${workspaceId}/` : ""),
@@ -154,36 +160,55 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
 
   useEffect(() => {
     const from = autoPopulatedPath ?? uploadPath;
-    void evaluateUiChangeRisk({
-      pageId: "files",
-      changes: [
-        {
-          field: "uploadPath",
-          from,
-          to: uploadPath,
-        },
-      ],
-    })
-      .then((res) => {
-        setPathRisk({
-          overall: res.overall,
-          items: res.items.map((item) => ({
-            field: item.field,
-            level: item.level,
-            hint: item.hint,
-          })),
-        });
-      })
-      .catch(() => {
-        setPathRisk({
-          overall: "warning",
-          items: [{
+    if (riskDebounceRef.current) {
+      window.clearTimeout(riskDebounceRef.current);
+      riskDebounceRef.current = null;
+    }
+    riskDebounceRef.current = window.setTimeout(() => {
+      riskAbortRef.current?.abort();
+      const controller = new AbortController();
+      riskAbortRef.current = controller;
+      void evaluateUiChangeRisk({
+        pageId: "files",
+        changes: [
+          {
             field: "uploadPath",
-            level: "warning",
-            hint: "Risk preflight unavailable; local validation only.",
-          }],
+            from,
+            to: uploadPath,
+          },
+        ],
+      }, { signal: controller.signal })
+        .then((res) => {
+          setPathRisk({
+            overall: res.overall,
+            items: res.items.map((item) => ({
+              field: item.field,
+              level: item.level,
+              hint: item.hint,
+            })),
+          });
+        })
+        .catch((err: unknown) => {
+          if (isAbortError(err)) {
+            return;
+          }
+          setPathRisk({
+            overall: "warning",
+            items: [{
+              field: "uploadPath",
+              level: "warning",
+              hint: "Risk preflight unavailable; local validation only.",
+            }],
+          });
         });
-      });
+    }, 400);
+    return () => {
+      if (riskDebounceRef.current) {
+        window.clearTimeout(riskDebounceRef.current);
+        riskDebounceRef.current = null;
+      }
+      riskAbortRef.current?.abort();
+    };
   }, [autoPopulatedPath, uploadPath]);
 
   const filteredFiles = useMemo(() => {

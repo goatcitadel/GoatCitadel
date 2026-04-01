@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import {
   fetchConnectorRecords,
@@ -145,16 +145,28 @@ export function McpPage() {
     recommendedNextAction?: string;
     checkedAt: string;
   }>>({});
+  const templateDiscoveryEnabledRef = useRef(templateDiscoveryEnabled);
 
-  const loadServers = useCallback(async () => {
+  useEffect(() => {
+    templateDiscoveryEnabledRef.current = templateDiscoveryEnabled;
+  }, [templateDiscoveryEnabled]);
+
+  const loadServers = useCallback(async (options?: { background?: boolean }) => {
+    const background = options?.background ?? false;
+    const settingsPromise = background
+      ? Promise.resolve<Awaited<ReturnType<typeof fetchSettings>> | null>(null)
+      : fetchSettings();
     const [response, templateResponse, connectorResponse, settingsResponse] = await Promise.all([
       fetchMcpServers(),
       fetchMcpTemplates(),
       fetchConnectorRecords("mcp_server"),
-      fetchSettings(),
+      settingsPromise,
     ]);
-    const nextTemplateDiscoveryEnabled = settingsResponse.features.connectorDiagnosticsV1Enabled;
-    setTemplateDiscoveryEnabled(nextTemplateDiscoveryEnabled);
+    const nextTemplateDiscoveryEnabled = settingsResponse?.features.connectorDiagnosticsV1Enabled
+      ?? templateDiscoveryEnabledRef.current;
+    if (settingsResponse) {
+      setTemplateDiscoveryEnabled(nextTemplateDiscoveryEnabled);
+    }
     if (nextTemplateDiscoveryEnabled) {
       try {
         const discoveryResponse = await fetchMcpTemplateDiscovery();
@@ -187,7 +199,7 @@ export function McpPage() {
   useEffect(() => {
     let cancelled = false;
     setIsInitialLoading(true);
-    void loadServers()
+    void loadServers({ background: false })
       .then(() => {
         if (!cancelled) {
           setError(null);
@@ -213,7 +225,7 @@ export function McpPage() {
     async () => {
       setIsRefreshing(true);
       try {
-        await loadServers();
+        await loadServers({ background: true });
         if (selectedServerId) {
           await loadTools(selectedServerId);
         }

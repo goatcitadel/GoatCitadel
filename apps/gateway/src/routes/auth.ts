@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { sendRouteError } from "./_error-handler.js";
 
 const createDeviceRequestSchema = z.object({
   deviceLabel: z.string().trim().min(1).max(120).optional(),
@@ -27,6 +28,32 @@ const installTokenSchema = z.object({
   token: z.string().trim().min(16).max(4096).optional(),
   generateWhenMissing: z.boolean().optional(),
   persistToEnv: z.boolean().optional(),
+});
+
+const companionSessionExchangeSchema = z.object({
+  signingPublicKeyPem: z.string().trim().min(1).max(4096),
+  clientName: z.string().trim().min(1).max(120).optional(),
+  appVersion: z.string().trim().min(1).max(80).optional(),
+});
+
+const companionSessionRefreshSchema = z.object({
+  refreshToken: z.string().trim().min(1).max(4096),
+});
+
+const companionSessionParamsSchema = z.object({
+  sessionId: z.string().uuid(),
+});
+
+const companionSessionListQuerySchema = z.object({
+  view: z.enum(["active", "all"]).default("active"),
+  grantId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().positive().max(200).default(50),
+});
+
+const companionAuditQuerySchema = z.object({
+  sessionId: z.string().uuid().optional(),
+  grantId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().positive().max(200).default(50),
 });
 
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
@@ -61,6 +88,124 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({
         error: (error as Error).message,
       });
+    }
+  });
+
+  fastify.post("/api/v1/auth/companion/session/exchange", async (request, reply) => {
+    if (request.authActorSource !== "device" || !request.authGrantId) {
+      return reply.code(403).send({
+        error: "Companion session exchange requires an approved device grant.",
+      });
+    }
+    const parsed = companionSessionExchangeSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.gateway.exchangeCompanionSessionFromDeviceGrant(
+        request.authGrantId,
+        parsed.data,
+      ));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/auth/companion/session/refresh", async (request, reply) => {
+    const parsed = companionSessionRefreshSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.gateway.rotateCompanionSession(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/auth/companion/session", async (request, reply) => {
+    if (request.authActorSource !== "companion" || !request.authCompanionSessionId) {
+      return reply.code(403).send({
+        error: "Companion session access requires companion authentication.",
+      });
+    }
+    try {
+      return reply.send(fastify.gateway.getCompanionSessionInfo(request.authCompanionSessionId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/auth/companion/sessions", async (request, reply) => {
+    if (!isOperatorAuthSource(request.authActorSource)) {
+      return reply.code(403).send({
+        error: "Companion session admin access requires operator authentication.",
+      });
+    }
+    const parsed = companionSessionListQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.listCompanionSessions(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/auth/companion/sessions/:sessionId", async (request, reply) => {
+    if (!isOperatorAuthSource(request.authActorSource)) {
+      return reply.code(403).send({
+        error: "Companion session admin access requires operator authentication.",
+      });
+    }
+    const params = companionSessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.getCompanionSessionRecord(params.data.sessionId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/auth/companion/sessions/:sessionId/revoke", async (request, reply) => {
+    if (!isOperatorAuthSource(request.authActorSource)) {
+      return reply.code(403).send({
+        error: "Companion session admin access requires operator authentication.",
+      });
+    }
+    const params = companionSessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.gateway.revokeCompanionSession(
+        params.data.sessionId,
+        request.authActorId,
+      ));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/auth/companion/audit", async (request, reply) => {
+    if (!isOperatorAuthSource(request.authActorSource)) {
+      return reply.code(403).send({
+        error: "Companion audit access requires operator authentication.",
+      });
+    }
+    const parsed = companionAuditQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send({
+        items: await fastify.gateway.listCompanionAuditEvents(parsed.data),
+      });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -160,4 +305,8 @@ function readTraceId(
     }
   }
   return readHeaderValue(correlationId);
+}
+
+function isOperatorAuthSource(source: string): boolean {
+  return source === "token" || source === "basic" || source === "loopback";
 }

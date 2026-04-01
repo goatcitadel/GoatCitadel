@@ -884,6 +884,68 @@ describe("executeTool", () => {
     });
   });
 
+  it("sends Telegram replies with reply parameters", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.TELEGRAM_BOT_TOKEN = "tg-token";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      result: { message_id: 654 },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-telegram-reply",
+          key: "telegram",
+          config: {
+            botTokenEnv: "TELEGRAM_BOT_TOKEN",
+            defaultChatId: "-1001234567890",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-telegram-reply",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-telegram-reply",
+        message: "Following up in thread.",
+        replyToMessageId: "987654321",
+      },
+      agentId: "operator",
+      sessionId: "sess-telegram-reply",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["api.telegram.org"],
+      },
+    }, commsStorage);
+
+    const telegramCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    expect(String(telegramCall?.[1]?.body ?? "")).toContain("\"message_id\":987654321");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "654",
+    });
+  });
+
   it("uploads inline Slack attachments through the external upload flow", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
@@ -982,6 +1044,76 @@ describe("executeTool", () => {
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "1712345678.000200",
+    });
+  });
+
+  it("threads Slack bot-token replies from generic replyToMessageId inputs", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url === "https://slack.com/api/chat.postMessage") {
+        return new Response(JSON.stringify({
+          ok: true,
+          ts: "1712345678.000300",
+          channel: "C123THREAD",
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-slack-thread",
+          key: "slack",
+          config: {
+            botTokenEnv: "SLACK_BOT_TOKEN",
+            defaultChannel: "C123THREAD",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-slack-thread",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool({
+      toolName: "channel.send",
+      args: {
+        connectionId: "conn-slack-thread",
+        target: "C123THREAD",
+        message: "Thread reply",
+        replyToMessageId: "1712109984.100000",
+      },
+      agentId: "operator",
+      sessionId: "sess-slack-thread",
+    }, {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["slack.com", "*.slack.com"],
+      },
+    }, commsStorage);
+
+    const chatPostCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    expect(String(chatPostCall?.[1]?.body ?? "")).toContain("\"thread_ts\":\"1712109984.100000\"");
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "1712345678.000300",
     });
   });
 
@@ -2552,163 +2684,6 @@ describe("executeTool", () => {
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "987654321",
-    });
-  });
-
-  it("uploads Matrix attachments and emits attachment events", async () => {
-    mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.MATRIX_ACCESS_TOKEN = "matrix-token";
-    const fetchMock = vi.fn(async (input: string | URL) => {
-      const url = String(input);
-      if (url.includes("/_matrix/media/v3/upload")) {
-        return new Response(JSON.stringify({ content_uri: "mxc://matrix.example.com/media-123" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url.includes("/_matrix/client/v3/rooms/!room%3Aexample.com/send/m.room.message/")) {
-        return new Response(JSON.stringify({ event_id: "$matrix-file-1" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      return new Response("not found", { status: 404 });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const commsStorage = {
-      integrationConnections: {
-        get: vi.fn(() => ({
-          connectionId: "conn-matrix",
-          key: "matrix",
-          config: {
-            homeserverUrl: "https://matrix.example.com",
-            accessTokenEnv: "MATRIX_ACCESS_TOKEN",
-            defaultRoomId: "!room:example.com",
-          },
-        })),
-      },
-      commsDeliveries: {
-        createQueued: vi.fn((input: Record<string, unknown>) => ({
-          deliveryId: "delivery-matrix-file",
-          status: "queued",
-          channelKey: input.channelKey,
-          target: input.target,
-          createdAt: "2026-03-22T00:00:00.000Z",
-          updatedAt: "2026-03-22T00:00:00.000Z",
-        })),
-        markSent: vi.fn(),
-        markFailed: vi.fn(),
-      },
-    } as unknown as Storage;
-
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-matrix",
-        message: "",
-        attachments: [
-          {
-            title: "diagram.png",
-            mimeType: "image/png",
-            dataBase64: Buffer.from("matrix-image-bytes").toString("base64"),
-          },
-        ],
-      },
-      agentId: "operator",
-      sessionId: "sess-matrix-file",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["matrix.example.com"],
-      },
-    }, commsStorage);
-
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://matrix.example.com/_matrix/media/v3/upload?filename=diagram.png",
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      expect.stringContaining("/_matrix/client/v3/rooms/!room%3Aexample.com/send/m.room.message/"),
-      expect.objectContaining({ method: "PUT" }),
-    );
-    const eventCall = fetchMock.mock.calls[1] as [string, RequestInit?] | undefined;
-    const eventBody = String((eventCall?.[1]?.body) ?? "");
-    expect(eventBody).toContain("\"msgtype\":\"m.image\"");
-    expect(eventBody).toContain("\"body\":\"diagram.png\"");
-    expect(eventBody).toContain("\"url\":\"mxc://matrix.example.com/media-123\"");
-    expect(result).toMatchObject({
-      status: "sent",
-      providerMessageId: "$matrix-file-1",
-    });
-  });
-
-  it("reacts to Matrix events", async () => {
-    mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.MATRIX_ACCESS_TOKEN = "matrix-token";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ event_id: "$reaction-1" }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const commsStorage = {
-      integrationConnections: {
-        get: vi.fn(() => ({
-          connectionId: "conn-matrix",
-          key: "matrix",
-          config: {
-            homeserverUrl: "https://matrix.example.com",
-            accessTokenEnv: "MATRIX_ACCESS_TOKEN",
-            defaultRoomId: "!room:example.com",
-          },
-        })),
-      },
-      commsDeliveries: {
-        createQueued: vi.fn((input: Record<string, unknown>) => ({
-          deliveryId: "delivery-matrix-react",
-          status: "queued",
-          channelKey: input.channelKey,
-          target: input.target,
-          createdAt: "2026-03-22T00:00:00.000Z",
-          updatedAt: "2026-03-22T00:00:00.000Z",
-        })),
-        markSent: vi.fn(),
-        markFailed: vi.fn(),
-      },
-    } as unknown as Storage;
-
-    const result = await executeTool({
-      toolName: "channel.react",
-      args: {
-        connectionId: "conn-matrix",
-        messageId: "$event-123",
-        reaction: "👍",
-      },
-      agentId: "operator",
-      sessionId: "sess-matrix-react",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["matrix.example.com"],
-      },
-    }, commsStorage);
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/_matrix/client/v3/rooms/!room%3Aexample.com/send/m.reaction/"),
-      expect.objectContaining({ method: "PUT" }),
-    );
-    const matrixCall = fetchMock.mock.calls[0] as [string, RequestInit?] | undefined;
-    const matrixBody = String((matrixCall?.[1]?.body) ?? "");
-    expect(matrixBody).toContain("\"event_id\":\"$event-123\"");
-    expect(matrixBody).toContain("\"key\":\"👍\"");
-    expect(result).toMatchObject({
-      status: "sent",
-      providerMessageId: "$reaction-1",
     });
   });
 

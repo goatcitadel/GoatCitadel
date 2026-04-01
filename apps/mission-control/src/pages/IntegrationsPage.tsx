@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "../styles/integrations.css";
 import {
+  approveDiscordPairing,
   commsReact,
   commsSend,
   commsUnsend,
@@ -9,8 +10,10 @@ import {
   deleteIntegrationConnection,
   enableIntegrationPlugin,
   evaluateUiChangeRisk,
+  fetchChannelRuntimeStatus,
   fetchIntegrationCatalog,
   fetchIntegrationConnections,
+  fetchDiscordPairings,
   fetchConnectorRecords,
   fetchSettings,
   fetchIntegrationFormSchema,
@@ -19,6 +22,8 @@ import {
   installIntegrationPlugin,
   patchObsidianIntegrationConfig,
   fetchIntegrationConnectionDiagnostics,
+  reconnectDiscordRuntime,
+  revokeDiscordPairing,
   searchObsidianNotes,
   testObsidianIntegration,
   uploadChatAttachment,
@@ -28,7 +33,14 @@ import {
   type IntegrationConnection,
   type ObsidianIntegrationStatus,
 } from "../api/client";
-import type { ChannelAttachmentInput, ChatAttachmentRecord, ConnectorRecord } from "@goatcitadel/contracts";
+import type {
+  ChannelAttachmentInput,
+  ChatAttachmentRecord,
+  ChannelRuntimeStatus,
+  ConnectorRecord,
+  DiscordPairingRecord,
+  DiscordRuntimeStatus,
+} from "@goatcitadel/contracts";
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
@@ -49,6 +61,10 @@ import { pageCopy } from "../content/copy";
 type IntegrationKind = IntegrationCatalogEntry["kind"] | "all";
 type UiRiskLevel = "safe" | "warning" | "critical";
 type UiRiskItem = { field: string; level: UiRiskLevel; hint?: string };
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
 
 const KIND_OPTIONS: Array<{ value: IntegrationKind; label: string }> = [
   { value: "all", label: "All scopes" },
@@ -129,6 +145,12 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
   const [connectorDiagnosticsEnabled, setConnectorDiagnosticsEnabled] = useState(false);
   const [diagnosticsByConnectionId, setDiagnosticsByConnectionId] = useState<Record<string, Awaited<ReturnType<typeof fetchIntegrationConnectionDiagnostics>>>>({});
   const [selectedDiagnosticConnectionId, setSelectedDiagnosticConnectionId] = useState<string | null>(null);
+  const [discordPairingsByConnectionId, setDiscordPairingsByConnectionId] = useState<Record<string, {
+    runtime?: DiscordRuntimeStatus;
+    items: DiscordPairingRecord[];
+  }>>({});
+  const [channelRuntimeStatusByConnectionId, setChannelRuntimeStatusByConnectionId] = useState<Record<string, ChannelRuntimeStatus>>({});
+  const [discordPairingBusyId, setDiscordPairingBusyId] = useState<string | null>(null);
   const [selectedChannelConnectionId, setSelectedChannelConnectionId] = useState("");
   const [channelTestTarget, setChannelTestTarget] = useState("");
   const [channelTestMessage, setChannelTestMessage] = useState("Operator test message from GoatCitadel Mission Control.");
@@ -148,15 +170,27 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
   const [channelReactionEmoji, setChannelReactionEmoji] = useState("\ud83d\udc4d");
   const [channelUnsendMessageId, setChannelUnsendMessageId] = useState("");
   const requestSeq = useRef(0);
+  const riskDebounceRef = useRef<number | null>(null);
+  const riskAbortRef = useRef<AbortController | null>(null);
   const createAction = useAction();
   const deleteAction = useAction();
 
   const load = (options?: { background?: boolean }): Promise<void> => {
     const background = options?.background ?? false;
-    const kind = (isChannelsView ? "channel" : kindFilter) === "all"
+    const requestedKind = isChannelsView ? "channel" : kindFilter;
+    const kind: Exclude<IntegrationKind, "all"> | undefined = requestedKind === "all"
       ? undefined
-      : (isChannelsView ? "channel" : kindFilter);
+      : requestedKind;
     const requestId = ++requestSeq.current;
+    const pluginsPromise = isChannelsView
+      ? Promise.resolve<{ items: Awaited<ReturnType<typeof fetchIntegrationPlugins>>["items"] } | null>(null)
+      : fetchIntegrationPlugins();
+    const obsidianPromise = isChannelsView
+      ? Promise.resolve<ObsidianIntegrationStatus | null>(null)
+      : fetchObsidianIntegrationStatus();
+    const settingsPromise = background
+      ? Promise.resolve<Awaited<ReturnType<typeof fetchSettings>> | null>(null)
+      : fetchSettings();
     if (background) {
       setIsRefreshing(true);
     } else {
@@ -166,11 +200,11 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
       fetchIntegrationCatalog(kind),
       fetchIntegrationConnections(kind),
       fetchConnectorRecords("integration_connection"),
-      fetchIntegrationPlugins(),
-      fetchObsidianIntegrationStatus(),
-      fetchSettings(),
+      settingsPromise,
+      pluginsPromise,
+      obsidianPromise,
     ])
-      .then(([catalogRes, connectionRes, connectorRes, pluginRes, obsidianRes, settings]) => {
+      .then(([catalogRes, connectionRes, connectorRes, settings, pluginRes, obsidianRes]) => {
         if (requestId !== requestSeq.current) {
           return;
         }
@@ -178,13 +212,22 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
         setCatalog(nextCatalog);
         setConnections(connectionRes.items);
         setConnectorRecords(connectorRes.items);
-        setPlugins(pluginRes.items);
-        setObsidianStatus(obsidianRes);
-        setObsidianEnabled(obsidianRes.enabled);
-        setObsidianVaultPath(obsidianRes.vaultPath);
-        setObsidianMode(obsidianRes.mode);
-        setObsidianAllowedSubpaths(obsidianRes.allowedSubpaths.join(", "));
-        setConnectorDiagnosticsEnabled(settings.features.connectorDiagnosticsV1Enabled);
+        if (settings) {
+          setConnectorDiagnosticsEnabled(settings.features.connectorDiagnosticsV1Enabled);
+        }
+        if (isChannelsView) {
+          setPlugins([]);
+          setObsidianStatus(null);
+        } else {
+          setPlugins(pluginRes?.items ?? []);
+          if (obsidianRes) {
+            setObsidianStatus(obsidianRes);
+            setObsidianEnabled(obsidianRes.enabled);
+            setObsidianVaultPath(obsidianRes.vaultPath);
+            setObsidianMode(obsidianRes.mode);
+            setObsidianAllowedSubpaths(obsidianRes.allowedSubpaths.join(", "));
+          }
+        }
 
         const hasCurrentSelection = selectedCatalogId
           ? nextCatalog.some((entry) => entry.catalogId === selectedCatalogId)
@@ -336,6 +379,15 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     () => (selectedChannelConnection ? connectorBySourceId.get(selectedChannelConnection.connectionId) : undefined),
     [connectorBySourceId, selectedChannelConnection],
   );
+  const selectedDiscordRuntime = selectedChannelConnection
+    ? discordPairingsByConnectionId[selectedChannelConnection.connectionId]?.runtime
+    : undefined;
+  const selectedDiscordPairings = selectedChannelConnection
+    ? discordPairingsByConnectionId[selectedChannelConnection.connectionId]?.items ?? []
+    : [];
+  const selectedChannelRuntimeStatus = selectedChannelConnection
+    ? channelRuntimeStatusByConnectionId[selectedChannelConnection.connectionId]
+    : undefined;
 
   const effectiveConfig = useMemo(() => {
     if (showAdvancedJson) {
@@ -356,37 +408,55 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
       status,
       enabled,
     });
-
-    void evaluateUiChangeRisk({
-      pageId: "integrations",
-      changes: [
-        { field: "integration.kindFilter", from: "all", to: kindFilter },
-        { field: "integration.catalogId", from: "", to: selectedCatalogId },
-        { field: "integration.status", from: "connected", to: status },
-        { field: "integration.enabled", from: true, to: enabled },
-        { field: "integration.configJson", from: "{}", to: JSON.stringify(effectiveConfig) },
-      ],
-    })
-      .then((remoteReview) => {
-        const merged = mergeRiskItems(
-          localReview.items,
-          remoteReview.items.map((item) => ({
-            field: item.field,
-            level: item.level,
-            hint: item.hint,
-          })),
-        );
-        setChangeReview({
-          overall: deriveOverallRisk(merged),
-          items: merged,
+    if (riskDebounceRef.current) {
+      window.clearTimeout(riskDebounceRef.current);
+      riskDebounceRef.current = null;
+    }
+    riskDebounceRef.current = window.setTimeout(() => {
+      riskAbortRef.current?.abort();
+      const controller = new AbortController();
+      riskAbortRef.current = controller;
+      void evaluateUiChangeRisk({
+        pageId: "integrations",
+        changes: [
+          { field: "integration.kindFilter", from: "all", to: kindFilter },
+          { field: "integration.catalogId", from: "", to: selectedCatalogId },
+          { field: "integration.status", from: "connected", to: status },
+          { field: "integration.enabled", from: true, to: enabled },
+          { field: "integration.configJson", from: "{}", to: JSON.stringify(effectiveConfig) },
+        ],
+      }, { signal: controller.signal })
+        .then((remoteReview) => {
+          const merged = mergeRiskItems(
+            localReview.items,
+            remoteReview.items.map((item) => ({
+              field: item.field,
+              level: item.level,
+              hint: item.hint,
+            })),
+          );
+          setChangeReview({
+            overall: deriveOverallRisk(merged),
+            items: merged,
+          });
+        })
+        .catch((err: unknown) => {
+          if (isAbortError(err)) {
+            return;
+          }
+          setChangeReview({
+            overall: deriveOverallRisk(localReview.items),
+            items: localReview.items,
+          });
         });
-      })
-      .catch(() => {
-        setChangeReview({
-          overall: deriveOverallRisk(localReview.items),
-          items: localReview.items,
-        });
-      });
+    }, 400);
+    return () => {
+      if (riskDebounceRef.current) {
+        window.clearTimeout(riskDebounceRef.current);
+        riskDebounceRef.current = null;
+      }
+      riskAbortRef.current?.abort();
+    };
   }, [kindFilter, selectedCatalogId, selectedCatalog, status, enabled, effectiveConfig]);
 
   useEffect(() => {
@@ -407,6 +477,45 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     setChannelTestTarget(guessDefaultChannelTarget(selectedChannelConnection));
     setChannelTestResult(null);
     setChannelActionResult(null);
+  }, [selectedChannelConnection]);
+
+  useEffect(() => {
+    if (!selectedChannelConnection) {
+      return;
+    }
+    let cancelled = false;
+    void fetchChannelRuntimeStatus(selectedChannelConnection.connectionId)
+      .then((runtimeStatus) => {
+        if (cancelled) {
+          return;
+        }
+        setChannelRuntimeStatusByConnectionId((current) => ({
+          ...current,
+          [selectedChannelConnection.connectionId]: runtimeStatus,
+        }));
+      })
+      .catch(() => {
+        // preserve the last known runtime snapshot when refresh fails
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedChannelConnection]);
+
+  useEffect(() => {
+    if (!selectedChannelConnection || !isDiscordGatewayConnection(selectedChannelConnection)) {
+      return;
+    }
+    void fetchDiscordPairings(selectedChannelConnection.connectionId)
+      .then((result) => {
+        setDiscordPairingsByConnectionId((current) => ({
+          ...current,
+          [selectedChannelConnection.connectionId]: result,
+        }));
+      })
+      .catch(() => {
+        // leave previous snapshot in place if the refresh fails
+      });
   }, [selectedChannelConnection]);
 
   const onCreate = async () => {
@@ -490,6 +599,60 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
       setError((err as Error).message);
     } finally {
       setPluginBusyId(null);
+    }
+  };
+
+  const refreshDiscordPairings = async (connectionId: string) => {
+    const result = await fetchDiscordPairings(connectionId);
+    setDiscordPairingsByConnectionId((current) => ({
+      ...current,
+      [connectionId]: result,
+    }));
+  };
+
+  const onApproveDiscordPairing = async (connectionId: string, pairingId: string) => {
+    setDiscordPairingBusyId(`approve:${pairingId}`);
+    try {
+      await approveDiscordPairing(connectionId, pairingId);
+      await refreshDiscordPairings(connectionId);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDiscordPairingBusyId(null);
+    }
+  };
+
+  const onRevokeDiscordPairing = async (connectionId: string, pairingId: string) => {
+    setDiscordPairingBusyId(`revoke:${pairingId}`);
+    try {
+      await revokeDiscordPairing(connectionId, pairingId);
+      await refreshDiscordPairings(connectionId);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDiscordPairingBusyId(null);
+    }
+  };
+
+  const onReconnectDiscordRuntime = async (connectionId: string) => {
+    setDiscordPairingBusyId(`reconnect:${connectionId}`);
+    try {
+      const runtime = await reconnectDiscordRuntime(connectionId);
+      setDiscordPairingsByConnectionId((current) => ({
+        ...current,
+        [connectionId]: {
+          runtime,
+          items: current[connectionId]?.items ?? [],
+        },
+      }));
+      await refreshDiscordPairings(connectionId);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDiscordPairingBusyId(null);
     }
   };
 
@@ -1327,9 +1490,21 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
               }) => (
                 <li key={`${check.key}:${check.message}`}>
                   <strong>{check.key}</strong> [{check.status}] - {check.message}
-              </li>
+                </li>
             ))}
           </ul>
+            {selectedDiagnostics.probe?.steps?.length ? (
+              <>
+                <p className="office-subtitle"><strong>Probe truth</strong></p>
+                <ul className="improvement-simple-list">
+                  {selectedDiagnostics.probe.steps.map((step) => (
+                    <li key={`${step.key}:${step.message}`}>
+                      <strong>{step.label}</strong> [{step.status}] - {step.message}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
             {selectedDiagnostics.recommendedNextAction ? (
               <p className="office-subtitle">
                 Next step: {selectedDiagnostics.recommendedNextAction}
@@ -1395,6 +1570,19 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
                       {" | "}
                       Attachment sources: {formatConnectorList(getConnectorSupportedAttachmentSources(selectedChannelConnector))}
                     </p>
+                    <p className="office-subtitle">
+                      Runtime posture: {selectedChannelRuntimeStatus?.runtimePosture?.operatorSummary ?? getConnectorRuntimePostureSummary(selectedChannelConnector) ?? "not reported"}
+                      {" | "}
+                      Runtime ready: {selectedChannelRuntimeStatus ? (selectedChannelRuntimeStatus.ready ? "yes" : "no") : "unknown"}
+                    </p>
+                    {selectedChannelRuntimeStatus ? (
+                      <p className="office-subtitle">
+                        Last ready: {selectedChannelRuntimeStatus.lastReadyAt ? new Date(selectedChannelRuntimeStatus.lastReadyAt).toLocaleString() : "never"}
+                        {" | "}
+                        Last inbound: {selectedChannelRuntimeStatus.lastInboundAt ? new Date(selectedChannelRuntimeStatus.lastInboundAt).toLocaleString() : "never"}
+                        {selectedChannelRuntimeStatus.lastError ? ` | Runtime error: ${selectedChannelRuntimeStatus.lastError}` : ""}
+                      </p>
+                    ) : null}
                     {getConnectorSupportNotes(selectedChannelConnector).length > 0 ? (
                       <>
                         <p className="office-subtitle"><strong>Support notes</strong></p>
@@ -1415,6 +1603,74 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
                         </ul>
                       </>
                     ) : null}
+                  </div>
+                ) : null}
+                {isDiscordGatewayConnection(selectedChannelConnection) ? (
+                  <div className="card" style={{ marginBottom: 12 }}>
+                    <p>
+                      <strong>Discord gateway runtime</strong>
+                      {" · "}
+                      {selectedDiscordRuntime?.ready ? "logged in" : "not ready"}
+                    </p>
+                    <p className="office-subtitle">
+                      Bot: {selectedDiscordRuntime?.connectedBotTag ?? "unknown"}
+                      {" | "}
+                      Last inbound: {selectedDiscordRuntime?.lastInboundAt ? new Date(selectedDiscordRuntime.lastInboundAt).toLocaleString() : "never"}
+                      {" | "}
+                      Last reconnect: {selectedDiscordRuntime?.lastReconnectAt ? new Date(selectedDiscordRuntime.lastReconnectAt).toLocaleString() : "never"}
+                    </p>
+                    <p className="office-subtitle">
+                      Guilds connected: {selectedDiscordRuntime?.guildIds?.length ? selectedDiscordRuntime.guildIds.join(", ") : "none reported"}
+                    </p>
+                    {selectedDiscordRuntime?.lastError ? (
+                      <FieldHelp>Runtime error: {selectedDiscordRuntime.lastError}</FieldHelp>
+                    ) : null}
+                    <div className="controls-row" style={{ marginTop: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => void onReconnectDiscordRuntime(selectedChannelConnection.connectionId)}
+                        disabled={discordPairingBusyId === `reconnect:${selectedChannelConnection.connectionId}`}
+                      >
+                        {discordPairingBusyId === `reconnect:${selectedChannelConnection.connectionId}` ? "Reconnecting..." : "Reconnect Discord runtime"}
+                      </button>
+                    </div>
+                    <p className="office-subtitle" style={{ marginTop: 12 }}><strong>Pairings</strong></p>
+                    {selectedDiscordPairings.length === 0 ? (
+                      <FieldHelp>No pending or approved Discord peers yet.</FieldHelp>
+                    ) : (
+                      <ul className="improvement-simple-list">
+                        {selectedDiscordPairings.map((pairing) => (
+                          <li key={pairing.pairingId}>
+                            <strong>{pairing.displayName ?? pairing.userId}</strong>
+                            {" · "}
+                            {pairing.status}
+                            {" · "}
+                            code {pairing.code}
+                            {pairing.lastInboundAt ? ` · last inbound ${new Date(pairing.lastInboundAt).toLocaleString()}` : ""}
+                            {" "}
+                            {pairing.status !== "approved" ? (
+                              <button
+                                type="button"
+                                onClick={() => void onApproveDiscordPairing(selectedChannelConnection.connectionId, pairing.pairingId)}
+                                disabled={discordPairingBusyId === `approve:${pairing.pairingId}`}
+                              >
+                                {discordPairingBusyId === `approve:${pairing.pairingId}` ? "Approving..." : "Approve"}
+                              </button>
+                            ) : null}
+                            {" "}
+                            {pairing.status !== "revoked" ? (
+                              <button
+                                type="button"
+                                onClick={() => void onRevokeDiscordPairing(selectedChannelConnection.connectionId, pairing.pairingId)}
+                                disabled={discordPairingBusyId === `revoke:${pairing.pairingId}`}
+                              >
+                                {discordPairingBusyId === `revoke:${pairing.pairingId}` ? "Revoking..." : "Revoke"}
+                              </button>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 ) : null}
               </>
@@ -1518,7 +1774,7 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
                   Use provider message ids from a successful send or channel logs. Controls stay disabled unless the selected connector advertises that action.
                 </p>
                 <p className="table-subtext">
-                  Reaction format varies by provider: Slack and Mattermost expect emoji names, Discord and Matrix accept raw emoji, and iMessage uses BlueBubbles reaction keywords such as `love`.
+                  Reaction format varies by provider: Slack and Mattermost expect emoji names, Discord accepts raw emoji, and iMessage uses BlueBubbles reaction keywords such as `love`.
                 </p>
                 <div className="controls-row">
                   <label htmlFor="channelReactionMessageId">React message id</label>
@@ -1579,6 +1835,9 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
         >
         <details className="advanced-panel">
           <summary>Install new plugin adapter (advanced)</summary>
+          <FieldHelp>
+            Reference install path: <code>templates/integration-plugins/reference-integration-plugin/</code>
+          </FieldHelp>
           <div className="controls-row" style={{ marginTop: 10 }}>
             <input
               value={pluginSource}
@@ -1611,6 +1870,7 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
                 <td>
                   <strong>{plugin.label}</strong>
                   <div className="office-subtitle">{plugin.pluginId}</div>
+                  {plugin.source ? <div className="office-subtitle">{plugin.source}</div> : null}
                 </td>
                 <td>{plugin.version}</td>
                 <td>{plugin.capabilities.join(", ") || "-"}</td>
@@ -1812,6 +2072,13 @@ function formatStatus(status: IntegrationConnection["status"]): string {
   }
 }
 
+function isDiscordGatewayConnection(connection: IntegrationConnection): boolean {
+  if (connection.key !== "discord") {
+    return false;
+  }
+  return (connection.config as Record<string, unknown>).runtimeMode === "gateway";
+}
+
 function guessDefaultChannelTarget(connection: IntegrationConnection): string {
   const config = connection.config as Record<string, unknown>;
   const candidates = [
@@ -1850,18 +2117,63 @@ export function getConnectorMetadataStringList(connector: ConnectorRecord | unde
 }
 
 export function getConnectorSupportedDeliveryActions(connector: ConnectorRecord | undefined): string[] {
+  const channelCapabilities = connector?.metadata?.channelCapabilities;
+  if (channelCapabilities && typeof channelCapabilities === "object") {
+    const supportedActions = (channelCapabilities as { supportedActions?: unknown }).supportedActions;
+    if (Array.isArray(supportedActions)) {
+      return supportedActions.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+    }
+  }
   return getConnectorMetadataStringList(connector, "supportedDeliveryActions");
 }
 
 export function getConnectorSupportedAttachmentSources(connector: ConnectorRecord | undefined): string[] {
+  const channelCapabilities = connector?.metadata?.channelCapabilities;
+  if (channelCapabilities && typeof channelCapabilities === "object") {
+    const sources = (channelCapabilities as { supportedAttachmentSources?: unknown }).supportedAttachmentSources;
+    if (Array.isArray(sources)) {
+      return sources.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+    }
+  }
   return getConnectorMetadataStringList(connector, "supportedAttachmentSources");
 }
 
 export function getConnectorSupportNotes(connector: ConnectorRecord | undefined): string[] {
+  const channelCapabilities = connector?.metadata?.channelCapabilities;
+  if (channelCapabilities && typeof channelCapabilities === "object") {
+    const notes = (channelCapabilities as { supportNotes?: unknown }).supportNotes;
+    if (Array.isArray(notes)) {
+      return notes.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+    }
+  }
   return getConnectorMetadataStringList(connector, "channelSupportNotes");
 }
 
+export function getConnectorRuntimePostureSummary(connector: ConnectorRecord | undefined): string | undefined {
+  const channelCapabilities = connector?.metadata?.channelCapabilities;
+  if (channelCapabilities && typeof channelCapabilities === "object") {
+    const runtimePosture = (channelCapabilities as {
+      runtimePosture?: { operatorSummary?: unknown };
+    }).runtimePosture;
+    if (runtimePosture && typeof runtimePosture === "object" && typeof runtimePosture.operatorSummary === "string" && runtimePosture.operatorSummary.trim().length > 0) {
+      return runtimePosture.operatorSummary;
+    }
+  }
+  const metadata = connector?.metadata as { runtimePosture?: { operatorSummary?: unknown } } | undefined;
+  if (metadata?.runtimePosture && typeof metadata.runtimePosture === "object" && typeof metadata.runtimePosture.operatorSummary === "string" && metadata.runtimePosture.operatorSummary.trim().length > 0) {
+    return metadata.runtimePosture.operatorSummary;
+  }
+  return undefined;
+}
+
 export function getConnectorSetupDiagnostics(connector: ConnectorRecord | undefined): string[] {
+  const channelCapabilities = connector?.metadata?.channelCapabilities;
+  if (channelCapabilities && typeof channelCapabilities === "object") {
+    const diagnostics = (channelCapabilities as { setupDiagnostics?: unknown }).setupDiagnostics;
+    if (Array.isArray(diagnostics)) {
+      return diagnostics.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+    }
+  }
   return getConnectorMetadataStringList(connector, "setupDiagnostics");
 }
 
@@ -1870,6 +2182,13 @@ export function connectorSupportsDeliveryAction(connector: ConnectorRecord | und
 }
 
 export function connectorSetupReady(connector: ConnectorRecord | undefined): boolean {
+  const channelCapabilities = connector?.metadata?.channelCapabilities;
+  if (channelCapabilities && typeof channelCapabilities === "object") {
+    const setupReady = (channelCapabilities as { setupReady?: unknown }).setupReady;
+    if (typeof setupReady === "boolean") {
+      return setupReady;
+    }
+  }
   const explicit = connector?.metadata?.setupReady;
   if (typeof explicit === "boolean") {
     return explicit;

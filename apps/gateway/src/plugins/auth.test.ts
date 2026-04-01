@@ -37,7 +37,28 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
   app.decorate("gateway", {
     validateDeviceAccessToken: (token: string) => {
       if (token === "device-bearer") {
-        return { actorId: "device:test-grant" };
+        return {
+          actorId: "device:test-grant",
+          deviceId: "test-grant",
+          grantId: "test-grant",
+        };
+      }
+      return undefined;
+    },
+    validateCompanionAccessToken: (token: string) => {
+      if (token === "companion-bearer") {
+        return {
+          actorId: "companion:test-session",
+          deviceId: "test-grant",
+          grantId: "test-grant",
+          sessionId: "test-session",
+        };
+      }
+      return undefined;
+    },
+    verifyCompanionRequestSignature: (input: { path: string }) => {
+      if (input.path.includes("?")) {
+        throw new Error("Companion signed mutations must not include query parameters.");
       }
       return undefined;
     },
@@ -56,6 +77,47 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
       status: "pending",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       message: "Waiting for approval.",
+    }),
+    exchangeCompanionSessionFromDeviceGrant: async () => ({
+      contractId: "companion.android.v1",
+      sessionId: "test-session",
+      grantId: "test-grant",
+      actorId: "companion:test-session",
+      deviceLabel: "Pixel 9",
+      deviceType: "mobile",
+      platform: "Android",
+      accessToken: "companion-bearer",
+      accessTokenExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      refreshToken: "refresh-token",
+      refreshTokenExpiresAt: new Date(Date.now() + 120_000).toISOString(),
+      issuedAt: new Date().toISOString(),
+      signatureAlgorithm: "ed25519",
+    }),
+    rotateCompanionSession: async () => ({
+      contractId: "companion.android.v1",
+      sessionId: "test-session",
+      grantId: "test-grant",
+      actorId: "companion:test-session",
+      accessToken: "companion-bearer-next",
+      accessTokenExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      refreshToken: "refresh-token-next",
+      refreshTokenExpiresAt: new Date(Date.now() + 120_000).toISOString(),
+      issuedAt: new Date().toISOString(),
+      signatureAlgorithm: "ed25519",
+    }),
+    getCompanionSessionInfo: () => ({
+      contractId: "companion.android.v1",
+      sessionId: "test-session",
+      grantId: "test-grant",
+      actorId: "companion:test-session",
+      deviceLabel: "Pixel 9",
+      deviceType: "mobile",
+      platform: "Android",
+      createdAt: new Date().toISOString(),
+      accessTokenExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      refreshTokenExpiresAt: new Date(Date.now() + 120_000).toISOString(),
+      signatureAlgorithm: "ed25519",
+      metadata: {},
     }),
   } as never);
   app.decorate("gatewayConfig", {
@@ -77,6 +139,13 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
     ok: true,
     actorId: request.authActorId,
     actorSource: request.authActorSource,
+  }));
+
+  app.post("/protected-write", async (request) => ({
+    ok: true,
+    actorId: request.authActorId,
+    actorSource: request.authActorSource,
+    body: request.body,
   }));
 
   return app;
@@ -292,6 +361,106 @@ describe("auth plugin", () => {
     expect(response.json()).toMatchObject({
       actorSource: "device",
       actorId: "device:test-grant",
+    });
+  });
+
+  it("accepts companion bearer tokens for read requests", async () => {
+    app = await buildApp({
+      mode: "basic",
+      basic: { username: "goat", password: "citadel" },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: {
+        Authorization: "Bearer companion-bearer",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      actorSource: "companion",
+      actorId: "companion:test-session",
+    });
+  });
+
+  it("rejects unsigned companion mutating requests", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/protected-write",
+      headers: {
+        Authorization: "Bearer companion-bearer",
+      },
+      payload: {
+        action: "mutate",
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({
+      error: "Missing companion request signature headers.",
+    });
+  });
+
+  it("accepts signed companion mutating requests", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/protected-write",
+      headers: {
+        Authorization: "Bearer companion-bearer",
+        "x-goatcitadel-companion-timestamp": "2026-03-30T12:00:00.000Z",
+        "x-goatcitadel-companion-nonce": "nonce-123456",
+        "x-goatcitadel-companion-signature": "ZmFrZV9zaWduYXR1cmU",
+      },
+      payload: {
+        action: "mutate",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      actorSource: "companion",
+      actorId: "companion:test-session",
+      body: {
+        action: "mutate",
+      },
+    });
+  });
+
+  it("rejects companion mutating requests that include query params", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/protected-write?force=true",
+      headers: {
+        Authorization: "Bearer companion-bearer",
+        "x-goatcitadel-companion-timestamp": "2026-03-30T12:00:00.000Z",
+        "x-goatcitadel-companion-nonce": "nonce-123456",
+        "x-goatcitadel-companion-signature": "ZmFrZV9zaWduYXR1cmU",
+      },
+      payload: {
+        action: "mutate",
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({
+      error: "Companion signed mutations must not include query parameters.",
     });
   });
 

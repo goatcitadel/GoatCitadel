@@ -326,6 +326,16 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "chat_session_history_visibility",
     up: createChatSessionHistoryVisibilitySchema,
   },
+  {
+    version: 44,
+    name: "channel_setup_drafts",
+    up: createChannelSetupDraftsSchema,
+  },
+  {
+    version: 45,
+    name: "companion_session_runtime_schema",
+    up: createCompanionSessionRuntimeSchema,
+  },
 ];
 
 function createBaseSchema(db: DatabaseSync): void {
@@ -2556,6 +2566,80 @@ function createToolAccessDecisionHotPathIndexes(db: DatabaseSync): void {
       ON tool_access_decisions(agent_id, session_id, allowed, tool_name, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_task_allowed_tool_time
       ON tool_access_decisions(task_id, allowed, tool_name, timestamp DESC);
+  `);
+}
+
+function createCompanionSessionRuntimeSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS companion_sessions (
+      session_id TEXT PRIMARY KEY,
+      grant_id TEXT NOT NULL,
+      access_token_hash TEXT NOT NULL UNIQUE,
+      access_token_expires_at TEXT NOT NULL,
+      refresh_token_hash TEXT NOT NULL UNIQUE,
+      refresh_token_expires_at TEXT NOT NULL,
+      signing_public_key_pem TEXT NOT NULL,
+      signature_algorithm TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_rotated_at TEXT NOT NULL,
+      last_seen_at TEXT,
+      revoked_at TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      FOREIGN KEY(grant_id) REFERENCES auth_device_grants(grant_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_companion_sessions_grant_active
+      ON companion_sessions(grant_id, revoked_at, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_companion_sessions_access_expires
+      ON companion_sessions(access_token_expires_at);
+    CREATE INDEX IF NOT EXISTS idx_companion_sessions_refresh_expires
+      ON companion_sessions(refresh_token_expires_at);
+
+    CREATE TABLE IF NOT EXISTS companion_request_replays (
+      session_id TEXT NOT NULL,
+      nonce TEXT NOT NULL,
+      method TEXT NOT NULL,
+      path TEXT NOT NULL,
+      request_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      PRIMARY KEY(session_id, nonce),
+      FOREIGN KEY(session_id) REFERENCES companion_sessions(session_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_companion_request_replays_expires
+      ON companion_request_replays(expires_at);
+  `);
+}
+
+function createChannelSetupDraftsSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS channel_setup_drafts (
+      draft_id TEXT PRIMARY KEY,
+      catalog_id TEXT NOT NULL,
+      connection_id TEXT,
+      lifecycle_mode TEXT NOT NULL,
+      label TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      draft_json TEXT NOT NULL,
+      hydration_json TEXT,
+      content_version TEXT NOT NULL,
+      adapter_version TEXT NOT NULL,
+      validation_version TEXT NOT NULL,
+      test_version TEXT NOT NULL,
+      last_validated_at TEXT,
+      last_tested_at TEXT,
+      last_failure_category TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_channel_setup_drafts_catalog
+      ON channel_setup_drafts(catalog_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_channel_setup_drafts_connection
+      ON channel_setup_drafts(connection_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_channel_setup_drafts_lifecycle
+      ON channel_setup_drafts(lifecycle_mode, updated_at DESC);
   `);
 }
 

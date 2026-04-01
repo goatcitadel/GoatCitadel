@@ -992,11 +992,17 @@ export class LlmService {
     }
 
     const json = (await response.json()) as { data?: Array<Record<string, unknown>> };
-    return (json.data ?? []).map((record) => ({
+    const items = (json.data ?? []).map((record) => ({
       id: String(record.id ?? ""),
       ownedBy: record.owned_by ? String(record.owned_by) : undefined,
       created: typeof record.created === "number" ? record.created : undefined,
     })).filter((record) => Boolean(record.id));
+    return items.length > 0
+      ? items
+      : buildFallbackModelCatalog(
+        resolved.provider.providerId,
+        resolved.provider.defaultModel,
+      );
   }
 }
 
@@ -1116,20 +1122,30 @@ function fallbackModelCatalog(
     return undefined;
   }
 
-  if (providerId === "perplexity") {
-    return [
-      { id: "sonar" },
-      { id: "sonar-pro" },
-      { id: "sonar-reasoning-pro" },
-      { id: "sonar-deep-research" },
-    ];
+  const fallback = buildFallbackModelCatalog(providerId, defaultModel);
+  return fallback.length > 0 ? fallback : undefined;
+}
+
+function buildFallbackModelCatalog(
+  providerId: string,
+  defaultModel: string | undefined,
+): LlmModelRecord[] {
+  const template = findProviderTemplate(providerId);
+  const ids = new Set<string>();
+
+  const pushId = (value: string | undefined): void => {
+    const trimmed = value?.trim();
+    if (trimmed) {
+      ids.add(trimmed);
+    }
+  };
+
+  pushId(defaultModel);
+  for (const model of template?.knownModels ?? []) {
+    pushId(model);
   }
 
-  if (providerId === "minimax" && defaultModel) {
-    return [{ id: defaultModel }];
-  }
-
-  return undefined;
+  return Array.from(ids, (id) => ({ id }));
 }
 
 function shouldAppendV1(providerId: string, baseUrl: string): boolean {

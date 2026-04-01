@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   archiveAgentProfile,
   createAgentProfile,
@@ -49,6 +49,10 @@ const TITLE_OPTIONS = [
   "Runtime Operator",
 ].map((value) => ({ value, label: value }));
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
 export function AgentsPage() {
   const [agentsResponse, setAgentsResponse] = useState<AgentsResponse>({ items: [], view: "active" });
   const [view, setView] = useState<AgentView>("active");
@@ -73,6 +77,8 @@ export function AgentsPage() {
   });
   const archiveAction = useAction();
   const hardDeleteAction = useAction();
+  const riskDebounceRef = useRef<number | null>(null);
+  const riskAbortRef = useRef<AbortController | null>(null);
 
   const selected = useMemo(
     () => agentsResponse.items.find((agent) => agent.agentId === selectedAgentId),
@@ -189,23 +195,42 @@ export function AgentsPage() {
       return;
     }
 
-    void evaluateUiChangeRisk({
-      pageId: "agents",
-      changes,
-    })
-      .then((res) => {
-        setRisk({
-          overall: res.overall,
-          items: res.items.map((item) => ({
-            field: item.field,
-            level: item.level,
-            hint: item.hint,
-          })),
+    if (riskDebounceRef.current) {
+      window.clearTimeout(riskDebounceRef.current);
+      riskDebounceRef.current = null;
+    }
+    riskDebounceRef.current = window.setTimeout(() => {
+      riskAbortRef.current?.abort();
+      const controller = new AbortController();
+      riskAbortRef.current = controller;
+      void evaluateUiChangeRisk({
+        pageId: "agents",
+        changes,
+      }, { signal: controller.signal })
+        .then((res) => {
+          setRisk({
+            overall: res.overall,
+            items: res.items.map((item) => ({
+              field: item.field,
+              level: item.level,
+              hint: item.hint,
+            })),
+          });
+        })
+        .catch((err: unknown) => {
+          if (isAbortError(err)) {
+            return;
+          }
+          setRisk({ overall: "warning", items: [] });
         });
-      })
-      .catch(() => {
-        setRisk({ overall: "warning", items: [] });
-      });
+    }, 400);
+    return () => {
+      if (riskDebounceRef.current) {
+        window.clearTimeout(riskDebounceRef.current);
+        riskDebounceRef.current = null;
+      }
+      riskAbortRef.current?.abort();
+    };
   }, [creating, form, selected]);
 
   const onNew = () => {

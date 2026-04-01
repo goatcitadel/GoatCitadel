@@ -11,7 +11,7 @@ import { CardSkeleton } from "../components/CardSkeleton";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
-import { PixelOfficeCanvas } from "../components/PixelOfficeCanvas";
+import { PixelOfficeCanvas, type PixelOfficeCanvasCommand } from "../components/PixelOfficeCanvas";
 import { StatusChip } from "../components/StatusChip";
 import { pageCopy } from "../content/copy";
 import { buildAgentDirectory, type AgentDirectoryRecord } from "../data/agent-roster";
@@ -45,6 +45,8 @@ type LabZone = {
   tone: "critical" | "warning" | "live" | "muted";
 };
 
+type CanvasCommandRecord = PixelOfficeCanvasCommand;
+
 const ROOM_META: Record<OfficeZoneId, { eyebrow: string; summary: string; support: string; cls: string }> = {
   command: { eyebrow: "Meeting Room", summary: "Planning and orchestration stay visible here.", support: "Briefing wall", cls: "office-lab-room-command" },
   build: { eyebrow: "Workstations", summary: "Implementation and QA desks mirror the agent-office layout.", support: "Desk row", cls: "office-lab-room-build" },
@@ -64,6 +66,7 @@ export function OfficeLabPage({ onOpenImmersive }: OfficeLabPageProps) {
   const [events, setEvents] = useState<RealtimeEvent[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedZoneId, setSelectedZoneId] = useState<OfficeZoneId>("command");
+  const [lastCanvasCommand, setLastCanvasCommand] = useState<CanvasCommandRecord | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [streamState, setStreamState] = useState<"open" | "error" | "closed">("closed");
@@ -197,6 +200,18 @@ export function OfficeLabPage({ onOpenImmersive }: OfficeLabPageProps) {
 
   const selectedAgent = useMemo(() => labAgents.find((agent) => agent.agentId === selectedAgentId) ?? null, [labAgents, selectedAgentId]);
   const selectedZone = useMemo(() => zones.find((zone) => zone.zoneId === (selectedAgent?.zoneId ?? selectedZoneId)) ?? zones[0] ?? null, [selectedAgent, selectedZoneId, zones]);
+  const selectedCanvasCommand = useMemo(() => {
+    if (!lastCanvasCommand) {
+      return null;
+    }
+    if (selectedAgent) {
+      return lastCanvasCommand.agentId === selectedAgent.agentId ? lastCanvasCommand : null;
+    }
+    if (selectedZone) {
+      return lastCanvasCommand.zoneId === selectedZone.zoneId ? lastCanvasCommand : null;
+    }
+    return lastCanvasCommand;
+  }, [lastCanvasCommand, selectedAgent, selectedZone]);
 
   useEffect(() => {
     if (selectedAgentId && !labAgents.some((agent) => agent.agentId === selectedAgentId)) {
@@ -248,7 +263,7 @@ export function OfficeLabPage({ onOpenImmersive }: OfficeLabPageProps) {
       <div className="office-lab-layout">
         <Panel
           title="Agent Office"
-          subtitle="Pixel Agents style office scene adapted for Mission Control and remapped onto GoatCitadel decks."
+          subtitle="Pixel Agents style office scene adapted for Mission Control and remapped onto GoatCitadel decks. A2UI proof target: move from a zone view to an agent selection, then issue a seat or tile command and confirm the readout plus Inspector panel both reflect the directed mutation."
           className="office-lab-floor-panel"
         >
           {isLoading ? (
@@ -259,6 +274,7 @@ export function OfficeLabPage({ onOpenImmersive }: OfficeLabPageProps) {
                 zones={zones}
                 selectedAgentId={selectedAgent?.agentId ?? null}
                 selectedZoneId={selectedAgent?.zoneId ?? selectedZone?.zoneId ?? null}
+                selectedAgentReadoutOverride={selectedCanvasCommand?.summary ?? null}
                 recentEvents={events.slice(0, 20)}
                 onSelectAgent={(agentId, zoneId) => {
                   setSelectedZoneId(zoneId);
@@ -267,6 +283,9 @@ export function OfficeLabPage({ onOpenImmersive }: OfficeLabPageProps) {
                 onSelectZone={(zoneId) => {
                   setSelectedAgentId(null);
                   setSelectedZoneId(zoneId);
+                }}
+                onAgentCommand={(command) => {
+                  setLastCanvasCommand(command);
                 }}
               />
             </div>
@@ -297,6 +316,7 @@ export function OfficeLabPage({ onOpenImmersive }: OfficeLabPageProps) {
                 <p className="office-lab-inspector-summary">{selectedAgent.summary}</p>
                 <dl className="office-lab-inspector-grid">
                   <div><dt>Current task</dt><dd>{selectedAgent.latestAction}</dd></div>
+                  <div><dt>Canvas command</dt><dd>{selectedCanvasCommand?.summary ?? "No directed seat/tile command issued yet."}</dd></div>
                   <div><dt>Sessions</dt><dd>{selectedAgent.sessionCount} total / {selectedAgent.activeSessions} active</dd></div>
                   <div><dt>Specialties</dt><dd>{selectedAgent.specialties.join(", ") || "No specialties listed."}</dd></div>
                   <div><dt>Last signal</dt><dd>{selectedAgent.latestEvent ? formatRelativeTime(selectedAgent.latestEvent.timestamp) : "No live signal yet."}</dd></div>
@@ -311,6 +331,7 @@ export function OfficeLabPage({ onOpenImmersive }: OfficeLabPageProps) {
                 <p className="office-lab-inspector-summary">{selectedZone.leadAction}</p>
                 <dl className="office-lab-inspector-grid">
                   <div><dt>Agents in room</dt><dd>{selectedZone.agents.length}</dd></div>
+                  <div><dt>Last canvas command</dt><dd>{selectedCanvasCommand?.summary ?? "No directed seat/tile command issued in this zone yet."}</dd></div>
                   <div><dt>Room posture</dt><dd>{selectedZone.pendingApprovalCount > 0 ? "Waiting on operator decisions." : selectedZone.activeAgents > 0 ? "Running live work." : "Quiet / standby."}</dd></div>
                   <div><dt>Room type</dt><dd>{ROOM_META[selectedZone.zoneId].eyebrow}</dd></div>
                   <div><dt>Support marker</dt><dd>{ROOM_META[selectedZone.zoneId].support}</dd></div>

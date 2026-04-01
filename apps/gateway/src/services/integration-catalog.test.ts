@@ -105,24 +105,26 @@ describe("integration-catalog", () => {
     };
 
     expect(resolveIntegrationCatalogMaturity(plannedAliasEntry, new Set(["googlechat"]))).toBe("plugin");
-    expect(resolveIntegrationCatalogMaturity(whatsapp, new Set())).toBe("native");
+    expect(resolveIntegrationCatalogMaturity(whatsapp, new Set())).toBe("beta");
   });
 
-  it("promotes implemented channel bridges to native maturity and exposes richer capabilities", () => {
-    const implementedChannels = [
+  it("treats built-in planned bridges as beta until parity work is complete", () => {
+    const plannedBuiltInChannels = [
       "channel.signal",
       "channel.mattermost",
       "channel.imessage",
-      "channel.nextcloud-talk",
       "channel.line",
       "channel.zalo",
       "channel.zalouser",
     ];
 
-    for (const catalogId of implementedChannels) {
+    for (const catalogId of plannedBuiltInChannels) {
       const entry = requireCatalogEntry(catalogId);
-      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("native");
+      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("beta");
     }
+
+    const nextcloudTalk = requireCatalogEntry("channel.nextcloud-talk");
+    expect(resolveIntegrationCatalogMaturity(nextcloudTalk, new Set())).toBe("native");
 
     const imessage = requireCatalogEntry("channel.imessage");
     expect(imessage.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
@@ -137,10 +139,7 @@ describe("integration-catalog", () => {
     expect(googleChat.capabilities).toEqual(expect.arrayContaining(["attachments", "threads"]));
 
     const telegram = requireCatalogEntry("channel.telegram");
-    expect(telegram.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
-
-    const matrix = requireCatalogEntry("channel.matrix");
-    expect(matrix.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
+    expect(telegram.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend", "typing"]));
 
     const mattermost = requireCatalogEntry("channel.mattermost");
     expect(mattermost.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
@@ -153,6 +152,14 @@ describe("integration-catalog", () => {
 
     const zalouser = requireCatalogEntry("channel.zalouser");
     expect(zalouser.capabilities).toEqual(expect.arrayContaining(["attachments", "direct"]));
+  });
+
+  it("marks the local-first voice runtime surface as beta", () => {
+    const voice = requireCatalogEntry("automation.voice-wake-talk");
+
+    expect(voice.maturity).toBe("beta");
+    expect(resolveIntegrationCatalogMaturity(voice, new Set())).toBe("beta");
+    expect(voice.capabilities).toEqual(expect.arrayContaining(["voice"]));
   });
 });
 

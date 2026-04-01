@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchFilesList,
   fetchMemoryItemHistory,
@@ -82,6 +82,11 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
     itemId: string;
     title: string;
   } | null>(null);
+  const memoryAdminEnabledRef = useRef(memoryAdminEnabled);
+
+  useEffect(() => {
+    memoryAdminEnabledRef.current = memoryAdminEnabled;
+  }, [memoryAdminEnabled]);
 
   const workspacePrefix = useMemo(
     () => (workspaceId && workspaceId !== "default" ? `workspaces/${workspaceId}/` : ""),
@@ -96,16 +101,22 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
       setIsInitialLoading(true);
     }
     try {
+      const settingsPromise = background
+        ? Promise.resolve<Awaited<ReturnType<typeof fetchSettings>> | null>(null)
+        : fetchSettings();
       const [filesRes, stats, settings] = await Promise.all([
         fetchFilesList(".", 3000),
         fetchMemoryQmdStats(),
-        fetchSettings(),
+        settingsPromise,
       ]);
-      if (!settings.features.memoryLifecycleAdminV1Enabled) {
+      const memoryAdminAvailable = settings?.features.memoryLifecycleAdminV1Enabled ?? memoryAdminEnabledRef.current;
+      if (!memoryAdminAvailable) {
         setMemoryItems([]);
         setSelectedMemoryItemId(null);
         setMemoryHistory([]);
-        setMemoryAdminEnabled(false);
+        if (settings) {
+          setMemoryAdminEnabled(false);
+        }
         setMemoryAdminError(null);
       } else {
         try {
@@ -121,7 +132,9 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
             ttlOverrideSeconds: item.ttlOverrideSeconds,
           })));
           setSelectedMemoryItemId((current) => current ?? memoryRes.items[0]?.itemId ?? null);
-          setMemoryAdminEnabled(true);
+          if (settings) {
+            setMemoryAdminEnabled(true);
+          }
           setMemoryAdminError(null);
         } catch (memoryErr) {
           const message = (memoryErr as Error).message;

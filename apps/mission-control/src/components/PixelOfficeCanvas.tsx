@@ -28,13 +28,26 @@ type CanvasZone = {
   agents: CanvasAgent[];
 };
 
+export type PixelOfficeCanvasCommand = {
+  agentId: string;
+  agentName: string;
+  zoneId: OfficeZoneId;
+  zoneLabel: string;
+  kind: "move" | "reassign_seat" | "return_to_seat";
+  targetLabel: string;
+  summary: string;
+  issuedAt: string;
+};
+
 type PixelOfficeCanvasProps = {
   zones: CanvasZone[];
   selectedAgentId: string | null;
   selectedZoneId: OfficeZoneId | null;
+  selectedAgentReadoutOverride?: string | null;
   recentEvents?: RealtimeEvent[];
   onSelectAgent: (agentId: string, zoneId: OfficeZoneId) => void;
   onSelectZone: (zoneId: OfficeZoneId) => void;
+  onAgentCommand?: (command: PixelOfficeCanvasCommand) => void;
 };
 
 type ScreenWorldPosition = {
@@ -66,9 +79,11 @@ export function PixelOfficeCanvas({
   zones,
   selectedAgentId,
   selectedZoneId,
+  selectedAgentReadoutOverride,
   recentEvents,
   onSelectAgent,
   onSelectZone,
+  onAgentCommand,
 }: PixelOfficeCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -416,11 +431,37 @@ export function PixelOfficeCanvas({
     }
   }, [onSelectAgent, onSelectZone, selectedZoneId]);
 
+  const emitAgentCommand = useCallback((
+    numericId: number,
+    kind: PixelOfficeCanvasCommand["kind"],
+    targetLabel: string,
+    summary: string,
+  ) => {
+    const agent = reverseAgentMapRef.current.get(numericId);
+    if (!agent || !onAgentCommand) {
+      return;
+    }
+    onAgentCommand({
+      agentId: agent.agentId,
+      agentName: agent.name,
+      zoneId: agent.zoneId,
+      zoneLabel: agent.zoneLabel,
+      kind,
+      targetLabel,
+      summary,
+      issuedAt: new Date().toISOString(),
+    });
+  }, [onAgentCommand]);
+
   const commandAgentToTile = useCallback((numericId: number, col: number, row: number) => {
     const officeState = officeStateRef.current;
     if (!officeState) {
       return false;
     }
+
+    const agent = reverseAgentMapRef.current.get(numericId);
+    const agentName = agent?.name ?? "agent";
+    const zoneLabel = agent?.zoneLabel ?? "the current zone";
 
     const seatId = officeState.getSeatAtTile(col, row);
     if (seatId) {
@@ -429,17 +470,38 @@ export function PixelOfficeCanvas({
       if (seat && character) {
         if (character.seatId === seatId) {
           officeState.sendToSeat(numericId);
+          emitAgentCommand(
+            numericId,
+            "return_to_seat",
+            `seat ${seat.seatCol},${seat.seatRow}`,
+            `Directed ${agentName} back to seat ${seat.seatCol},${seat.seatRow} in ${zoneLabel}.`,
+          );
           return true;
         }
         if (!seat.assigned) {
           officeState.reassignSeat(numericId, seatId);
+          emitAgentCommand(
+            numericId,
+            "reassign_seat",
+            `seat ${seat.seatCol},${seat.seatRow}`,
+            `Reassigned ${agentName} to seat ${seat.seatCol},${seat.seatRow} in ${zoneLabel}.`,
+          );
           return true;
         }
       }
     }
 
-    return officeState.walkToTile(numericId, col, row);
-  }, []);
+    const moved = officeState.walkToTile(numericId, col, row);
+    if (moved) {
+      emitAgentCommand(
+        numericId,
+        "move",
+        `tile ${col},${row}`,
+        `Directed ${agentName} to tile ${col},${row} in ${zoneLabel}.`,
+      );
+    }
+    return moved;
+  }, [emitAgentCommand]);
 
   const handleMouseDown = useCallback((event: ReactMouseEvent<HTMLCanvasElement>) => {
     if (event.button !== 0) {
@@ -546,9 +608,18 @@ export function PixelOfficeCanvas({
     }
     const tile = screenToTile(event.clientX, event.clientY);
     if (tile) {
-      officeState.walkToTile(officeState.selectedAgentId, tile.col, tile.row);
+      const moved = officeState.walkToTile(officeState.selectedAgentId, tile.col, tile.row);
+      if (moved) {
+        const agent = reverseAgentMapRef.current.get(officeState.selectedAgentId);
+        emitAgentCommand(
+          officeState.selectedAgentId,
+          "move",
+          `tile ${tile.col},${tile.row}`,
+          `Directed ${agent?.name ?? "agent"} to tile ${tile.col},${tile.row} in ${agent?.zoneLabel ?? "the current zone"}.`,
+        );
+      }
     }
-  }, [screenToTile]);
+  }, [emitAgentCommand, screenToTile]);
 
   return (
     <div className="pixel-office">
@@ -574,12 +645,12 @@ export function PixelOfficeCanvas({
         </div>
         <div className="pixel-office-readout">
           <div>
-            <p className="pixel-office-kicker">Citadel One</p>
-            <strong>{selectedAgent ? selectedAgent.name : selectedZone?.label ?? "Office Floor"}</strong>
-          </div>
+          <p className="pixel-office-kicker">Citadel One</p>
+          <strong>{selectedAgent ? selectedAgent.name : selectedZone?.label ?? "Office Floor"}</strong>
+        </div>
           <p>
             {selectedAgent
-              ? selectedAgent.latestAction
+              ? selectedAgentReadoutOverride ?? selectedAgent.latestAction
               : selectedZone?.leadAction ?? `Zoom ${zoom}x${recentEvents?.length ? ` • ${recentEvents.length} live events` : ""}`}
           </p>
         </div>

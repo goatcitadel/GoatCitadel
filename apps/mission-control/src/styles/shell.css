@@ -227,8 +227,33 @@
 }
 
 .shell-notification-region {
+  position: fixed;
+  top: calc(118px + calc(var(--space-3) * var(--density-scale)));
+  right: calc(var(--space-5) * var(--density-scale));
+  z-index: 44;
+  width: min(340px, calc(100vw - 32px));
+  max-height: calc(100vh - 160px);
   display: grid;
-  gap: var(--space-2);
+  justify-items: stretch;
+  pointer-events: none;
+}
+
+.layout-shell .shell-notification-region .notification-stack {
+  position: static;
+  inset: auto;
+  width: 100%;
+  max-height: inherit;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: grid;
+  gap: 10px;
+  padding-right: 4px;
+  pointer-events: auto;
+}
+
+.layout-shell .shell-notification-region .notification-item {
+  min-width: 0;
+  width: 100%;
 }
 
 .settings-hub-grid {
@@ -604,5 +629,13 @@
 
   .status-strip {
     grid-template-columns: 1fr;
+  }
+
+  .shell-notification-region {
+    top: auto;
+    right: 16px;
+    bottom: 16px;
+    width: min(340px, calc(100vw - 24px));
+    max-height: min(42vh, 320px);
   }
 }

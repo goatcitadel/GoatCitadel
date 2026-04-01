@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "addon": {
+    "addonId": "reference-addon",
+    "label": "Reference Add-on",
+    "description": "Reference scaffold for a separate-repo GoatCitadel add-on authoring flow.",
+    "owner": "example-author",
+    "repoUrl": "https://github.com/example/goatcitadel-reference-addon",
+    "sameOwnerAsGoatCitadel": false,
+    "trustTier": "community",
+    "category": "productivity",
+    "runtimeType": "separate_repo_app",
+    "installCommands": [
+      {
+        "command": "git",
+        "args": ["clone", "--depth", "1", "https://github.com/example/goatcitadel-reference-addon", "<install-dir>"],
+        "note": "Clone the add-on into the GoatCitadel add-ons root."
+      },
+      {
+        "command": "corepack",
+        "args": ["pnpm", "install", "--frozen-lockfile"],
+        "note": "Install add-on dependencies."
+      },
+      {
+        "command": "corepack",
+        "args": ["pnpm", "run", "build"],
+        "note": "Build the add-on before launch."
+      }
+    ],
+    "webEntryMode": "external_local_url",
+    "launchUrl": "http://127.0.0.1:3100/",
+    "requiresSeparateRepoDownload": true,
+    "healthChecks": [
+      {
+        "key": "provenance",
+        "status": "warn",
+        "message": "Reference add-ons should declare provenance and trust boundaries clearly."
+      },
+      {
+        "key": "runtime",
+        "status": "pass",
+        "message": "Reference add-ons should expose a truthful local runtime health endpoint or equivalent startup signal."
+      }
+    ]
+  },
+  "authorNotes": "Use this manifest as a starting point for separate-repo add-ons. Replace placeholder URLs, commands, and launch ports with real values before publication."
+}

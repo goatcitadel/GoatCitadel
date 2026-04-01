@@ -14,6 +14,7 @@ import {
   getChatTurnRecoveryActionSummary,
   type ChatAttachmentRecord,
   type ChatCapabilityUpgradeSuggestion,
+  type ChatDelegateRequest,
   type ChatDelegationSuggestionRecord,
   type ChatMessageRecord,
   type ChatMode,
@@ -33,7 +34,6 @@ import {
   type SkillListItem,
 } from "@goatcitadel/contracts";
 import {
-  acceptChatDelegation,
   approveChatTool,
   archiveChatSession,
   archiveWorkspaceChatSessions,
@@ -75,6 +75,7 @@ import {
   updateChatProactivePolicy,
   setChatSessionBinding,
   suggestChatDelegation,
+  streamChatDelegation,
   streamAgentChatMessage,
   streamEditChatTurn,
   streamRetryChatTurn,
@@ -125,6 +126,10 @@ import {
   setDevDiagnosticsActiveChatSession,
   setDevDiagnosticsLatestTraceSummary,
 } from "../state/dev-diagnostics-store";
+import {
+  buildModelCommandSuggestions,
+  type CommandSuggestionItem,
+} from "./chat-command-suggestions";
 import "../styles/chat.css";
 
 const STREAM_PREF_KEY = "goatcitadel.chat.agent.stream.enabled";
@@ -150,7 +155,7 @@ const CODE_DELEGATION_PRESETS = {
   },
   ship: {
     label: "Ship cycle",
-    mode: "parallel" as const,
+    mode: "sequential" as const,
     roles: ["Architect", "Coder", "QA"],
     prefix: "Run an implement-review-test cycle for this task, then stitch the result into one operator-ready handoff. ",
   },
@@ -175,13 +180,6 @@ interface ActiveChatStreamState {
   turnId?: string;
   lastEventId?: string;
   runId?: string;
-}
-
-interface CommandSuggestionItem {
-  key: string;
-  command: string;
-  description: string;
-  applyValue: string;
 }
 
 interface FinalizedStreamMessageState {
@@ -316,6 +314,14 @@ export function shouldShowLearnedMemoryPanel(mode: ChatMode, learnedMemoryCount:
     return learnedMemoryCount > 0;
   }
   return true;
+}
+
+function toTitleCase(value: string): string {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function normalizeSpecialistFingerprint(input: { title?: string; role?: string }): string {
@@ -478,7 +484,8 @@ export function ChatPage({
   const lastLocalPrefMutationAtRef = useRef(0);
   const latestMessagesRef = useRef<ChatMessagesResponse["items"]>([]);
   const selectedSessionIdRef = useRef<string | null>(null);
-  const loadGenerationRef = useRef(0);
+  const loadCoreGenerationRef = useRef(0);
+  const loadSecondaryGenerationRef = useRef(0);
   const finalizedStreamMessageRef = useRef<FinalizedStreamMessageState | null>(null);
   const streamReconcileTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendingRef = useRef(false);
@@ -502,8 +509,8 @@ export function ChatPage({
       context: { workspaceId, historyView: nextHistoryView },
     });
     const [nextProjects, nextSessions] = await Promise.all([
-      fetchChatProjects("all", 500, workspaceId),
-      fetchChatSessions({ scope: "all", view: nextHistoryView, limit: 500, workspaceId }),
+      fetchChatProjects("all", 250, workspaceId),
+      fetchChatSessions({ scope: "all", view: nextHistoryView, limit: 250, workspaceId }),
     ]);
     setProjects(nextProjects);
     setSessions(nextSessions);
@@ -606,7 +613,7 @@ export function ChatPage({
       includeThread?: boolean;
     } = {},
   ) => {
-    const generation = ++loadGenerationRef.current;
+    const generation = ++loadCoreGenerationRef.current;
     const background = options.background ?? false;
     const includeThread = options.includeThread ?? true;
     const messageVersionAtStart = includeThread ? messageMutationVersionRef.current : null;
@@ -619,7 +626,7 @@ export function ChatPage({
         fetchChatSessionBinding(sessionId),
         fetchChatSessionPrefs(sessionId),
       ]);
-      if (generation !== loadGenerationRef.current) return; // stale response
+      if (generation !== loadCoreGenerationRef.current) return; // stale response
       if (nextThread) {
         applyFetchedThread(nextThread, messageVersionAtStart);
       }
@@ -661,7 +668,7 @@ export function ChatPage({
       background?: boolean;
     } = {},
   ) => {
-    const generation = ++loadGenerationRef.current;
+    const generation = ++loadSecondaryGenerationRef.current;
     const background = options.background ?? false;
     if (!background) {
       setSecondaryLoading(true);
@@ -673,7 +680,7 @@ export function ChatPage({
         fetchChatLearnedMemory(sessionId, 80),
         fetchChatSpecialistCandidates(sessionId, 80),
       ]);
-      if (generation !== loadGenerationRef.current) return; // stale response
+      if (generation !== loadSecondaryGenerationRef.current) return; // stale response
       setProactiveStatus(nextProactiveStatus.policy);
       setProactiveRuns(nextProactiveRuns.items);
       setLearnedMemory(nextMemory.items);
@@ -1046,6 +1053,14 @@ export function ChatPage({
         },
       ];
     }
+    const modelSuggestions = buildModelCommandSuggestions({
+      draft,
+      providers: providerOptions,
+      activeProviderId: selectedProviderId,
+    });
+    if (modelSuggestions.length > 0) {
+      return modelSuggestions;
+    }
     const skillStateMatch = normalized.match(/^\/skill\s+(enable|disable|sleep)\s+(.+)?$/);
     if (skillStateMatch) {
       const query = (skillStateMatch[2] ?? "").trim();
@@ -1103,7 +1118,7 @@ export function ChatPage({
         applyValue: item.command,
       }))
       .slice(0, 8);
-  }, [commandCatalog, draft, installedSkills, mcpServers, mcpTemplates]);
+  }, [commandCatalog, draft, installedSkills, mcpServers, mcpTemplates, providerOptions, selectedProviderId]);
 
   useEffect(() => setCommandIndex(0), [draft]);
 
@@ -1388,18 +1403,54 @@ export function ChatPage({
     }
   }, [draft, messages, selectedSession, sending]);
 
+  const runDelegationAction = useCallback(async (
+    sessionId: string,
+    request: ChatDelegateRequest,
+    label: string,
+  ) => {
+    if (!streamEnabled) {
+      return runChatDelegation(sessionId, request);
+    }
+
+    let finalResult: Awaited<ReturnType<typeof runChatDelegation>> | null = null;
+    await streamChatDelegation(sessionId, request, (chunk) => {
+      if (chunk.type === "status" && chunk.message) {
+        pushLocalNotice(chunk.message);
+        return;
+      }
+      if (chunk.type === "step" && chunk.step) {
+        if (chunk.step.status === "completed") {
+          pushLocalNotice(`${toTitleCase(chunk.step.role)} completed ${label.toLowerCase()} step ${chunk.step.index + 1}/${request.roles.length}.`);
+        } else if (chunk.step.status === "failed") {
+          pushLocalNotice(
+            `${toTitleCase(chunk.step.role)} failed ${label.toLowerCase()} step ${chunk.step.index + 1}/${request.roles.length}: ${chunk.step.error ?? "Unknown failure."}`,
+            "warning",
+          );
+        }
+        return;
+      }
+      if (chunk.type === "done" && chunk.result) {
+        finalResult = chunk.result;
+      }
+    });
+
+    if (!finalResult) {
+      throw new Error(`${label} finished without a final result payload.`);
+    }
+    return finalResult;
+  }, [pushLocalNotice, streamEnabled]);
+
   const handleAcceptDelegation = useCallback(async () => {
     if (!selectedSession || !delegationSuggestion || sending) return;
     setSending(true);
     try {
-      const accepted = await acceptChatDelegation(selectedSession.sessionId, {
-        suggestionId: delegationSuggestion.suggestionId,
+      const accepted = await runDelegationAction(selectedSession.sessionId, {
         objective: delegationSuggestion.objective,
         roles: delegationSuggestion.roles,
         mode: delegationSuggestion.mode,
         providerId: prefs?.providerId,
         model: prefs?.model,
-      });
+      }, "Delegation");
       pushLocalNotice(`Delegation completed:\n${accepted.stitchedOutput}`, "success");
       setDelegationSuggestion(null);
       await loadSidebar();
@@ -1408,7 +1459,7 @@ export function ChatPage({
     } finally {
       setSending(false);
     }
-  }, [delegationSuggestion, loadSidebar, prefs?.model, prefs?.providerId, pushLocalNotice, selectedSession, sending]);
+  }, [delegationSuggestion, loadSidebar, prefs?.model, prefs?.providerId, pushLocalNotice, runDelegationAction, selectedSession, sending]);
 
   const handleRunCodeDelegation = useCallback(async (
     presetKey: keyof typeof CODE_DELEGATION_PRESETS,
@@ -1431,13 +1482,13 @@ export function ChatPage({
     const preset = CODE_DELEGATION_PRESETS[presetKey];
     setSending(true);
     try {
-      const result = await runChatDelegation(selectedSession.sessionId, {
+      const result = await runDelegationAction(selectedSession.sessionId, {
         objective: `${preset.prefix}${baseObjective}`,
         roles: [...preset.roles],
         mode: preset.mode,
         providerId: prefs?.providerId,
         model: prefs?.model,
-      });
+      }, preset.label);
       pushLocalNotice(`${preset.label} completed:\n${result.stitchedOutput}`, "success");
       setDelegationSuggestion(null);
       await loadSidebar();
@@ -1454,6 +1505,7 @@ export function ChatPage({
     prefs?.model,
     prefs?.providerId,
     pushLocalNotice,
+    runDelegationAction,
     selectedSession,
     sending,
   ]);
@@ -1755,9 +1807,14 @@ export function ChatPage({
     const result = await parseChatCommand(sessionId, commandText);
     if (result.prefs) setPrefs(result.prefs);
     pushLocalNotice(formatCommandResult(result), result.ok ? "success" : "warning");
-    if (result.command === "/project") await loadSidebar();
+    if (result.command === "/project" || result.command === "/new") {
+      await loadSidebar();
+    }
     if (result.command === "/plan" && result.prefs) {
       setPrefs(result.prefs);
+    }
+    if (result.session) {
+      setSelectedSessionId(result.session.sessionId);
     }
     if (result.command === "/skill" || result.command === "/skills") {
       setInstalledSkills(await fetchSkills().then((payload) => payload.items));

@@ -1200,7 +1200,6 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       if (!controller.signal.aborted) {
         reply.log.error({ err: error, sessionId: params.data.sessionId }, "chat delegation SSE stream failed");
         send({ type: "error", error: getPublicChatSseErrorMessage(error) });
-        send({ type: "done" });
       }
     } finally {
       if (!finished) {

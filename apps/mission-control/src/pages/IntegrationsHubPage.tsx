@@ -2,6 +2,7 @@ import { EmbeddedPageChromeProvider } from "../components/EmbeddedPageChrome";
 import { PageTabs } from "../components/PageTabs";
 import { SectionTitle } from "../components/SectionTitle";
 import type { IntegrationsTab } from "../content/page-registry";
+import { ChannelSetupPage } from "./ChannelSetupPage";
 import { IntegrationsPage } from "./IntegrationsPage";
 import { McpPage } from "./McpPage";
 
@@ -26,7 +27,11 @@ export function IntegrationsHubPage({ activeTab, onTabChange }: IntegrationsHubP
       />
       <PageTabs items={ITEMS} activeId={activeTab} onSelect={(value) => onTabChange(value as IntegrationsTab)} />
       <EmbeddedPageChromeProvider>
-        {activeTab === "mcp" ? <McpPage /> : <IntegrationsPage view={activeTab === "channels" ? "channels" : "overview"} />}
+        {activeTab === "mcp"
+          ? <McpPage />
+          : activeTab === "channels"
+            ? <ChannelSetupPage />
+            : <IntegrationsPage view="overview" />}
       </EmbeddedPageChromeProvider>
     </section>
   );

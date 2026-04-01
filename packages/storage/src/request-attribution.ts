@@ -7,6 +7,7 @@ export interface RequestAttribution {
   actorId?: string;
   deviceId?: string;
   grantId?: string;
+  companionSessionId?: string;
 }
 
 const requestAttributionStorage = new AsyncLocalStorage<RequestAttribution>();

@@ -59,8 +59,9 @@ export function WorkspacesPage(props: {
   const [globalGuidance, setGlobalGuidance] = useState<GuidanceDocumentRecord[]>([]);
   const [workspaceGuidance, setWorkspaceGuidance] = useState<GuidanceDocumentRecord[]>([]);
 
-  const load = useCallback(async (options?: { background?: boolean }) => {
+  const load = useCallback(async (options?: { background?: boolean; includeGuidance?: boolean }) => {
     const background = options?.background ?? false;
+    const includeGuidance = options?.includeGuidance ?? !background;
     if (background) {
       setIsRefreshing(true);
     } else {
@@ -69,12 +70,16 @@ export function WorkspacesPage(props: {
     try {
       const [workspaceResponse, globalResponse, scopedGuidance] = await Promise.all([
         fetchWorkspaces("all", 300),
-        fetchGlobalGuidance(),
-        fetchWorkspaceGuidance(props.activeWorkspaceId),
+        includeGuidance ? fetchGlobalGuidance() : Promise.resolve(null),
+        includeGuidance ? fetchWorkspaceGuidance(props.activeWorkspaceId) : Promise.resolve(null),
       ]);
       setWorkspaces(workspaceResponse.items);
-      setGlobalGuidance(globalResponse.items);
-      setWorkspaceGuidance(scopedGuidance.workspace);
+      if (globalResponse) {
+        setGlobalGuidance(globalResponse.items);
+      }
+      if (scopedGuidance) {
+        setWorkspaceGuidance(scopedGuidance.workspace);
+      }
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -88,13 +93,13 @@ export function WorkspacesPage(props: {
   }, [props.activeWorkspaceId]);
 
   useEffect(() => {
-    void load({ background: false });
+    void load({ background: false, includeGuidance: true });
   }, [load]);
 
   useRefreshSubscription(
     "system",
     async () => {
-      await load({ background: true });
+      await load({ background: true, includeGuidance: false });
     },
     {
       enabled: !isInitialLoading,
@@ -147,7 +152,7 @@ export function WorkspacesPage(props: {
       setWorkspaceDescription("");
       props.onWorkspaceChange(created.workspaceId);
       setSuccess(`Workspace ${created.name} created.`);
-      await load({ background: true });
+      await load({ background: true, includeGuidance: false });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -164,7 +169,7 @@ export function WorkspacesPage(props: {
       if (archived.workspaceId === props.activeWorkspaceId) {
         props.onWorkspaceChange("default");
       }
-      await load({ background: true });
+      await load({ background: true, includeGuidance: false });
     } catch (err) {
       setError((err as Error).message);
     }
@@ -176,7 +181,7 @@ export function WorkspacesPage(props: {
     try {
       const restored = await restoreWorkspace(workspaceId);
       setSuccess(`Workspace ${restored.name} restored.`);
-      await load({ background: true });
+      await load({ background: true, includeGuidance: false });
     } catch (err) {
       setError((err as Error).message);
     }
@@ -194,7 +199,7 @@ export function WorkspacesPage(props: {
       }
       setSuccess(`Saved ${docType} guidance (${docScope}).`);
       setDirty(false);
-      await load({ background: true });
+      await load({ background: true, includeGuidance: true });
     } catch (err) {
       setError((err as Error).message);
     } finally {

@@ -16,6 +16,13 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://api.openai.com/v1",
     defaultModel: "gpt-5.4-mini",
     apiStyle: "openai-responses",
+    knownModels: [
+      "gpt-5.4-mini",
+      "gpt-5.4",
+      "gpt-5-mini",
+      "gpt-4.1-mini",
+      "gpt-4o-mini",
+    ],
   },
   {
     providerId: "anthropic",
@@ -23,6 +30,11 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://api.anthropic.com/v1",
     defaultModel: "claude-sonnet-4-6",
     apiStyle: "anthropic-messages",
+    knownModels: [
+      "claude-sonnet-4-6",
+      "claude-sonnet-4",
+      "claude-opus-4",
+    ],
   },
   {
     providerId: "google",
@@ -59,6 +71,12 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://ai-gateway.vercel.sh/v1",
     defaultModel: "openai/gpt-5.4-mini",
     apiStyle: "openai-chat-completions",
+    knownModels: [
+      "openai/gpt-5.4-mini",
+      "openai/gpt-5.4",
+      "openai/gpt-4.1-mini",
+      "openai/gpt-oss-120b",
+    ],
   },
   {
     providerId: "lmstudio",
@@ -101,6 +119,12 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://openrouter.ai/api/v1",
     defaultModel: "openai/gpt-5.4-mini",
     apiStyle: "openai-chat-completions",
+    knownModels: [
+      "openai/gpt-5.4-mini",
+      "openai/gpt-5.4",
+      "anthropic/claude-sonnet-4",
+      "google/gemini-2.5-flash",
+    ],
   },
   {
     providerId: "mistral",
@@ -108,6 +132,11 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://api.mistral.ai/v1",
     defaultModel: "mistral-small-latest",
     apiStyle: "openai-chat-completions",
+    knownModels: [
+      "mistral-small-latest",
+      "mistral-medium-latest",
+      "mistral-large-latest",
+    ],
   },
   {
     providerId: "deepseek",
@@ -115,6 +144,10 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://api.deepseek.com/v1",
     defaultModel: "deepseek-chat",
     apiStyle: "openai-chat-completions",
+    knownModels: [
+      "deepseek-chat",
+      "deepseek-reasoner",
+    ],
   },
   {
     providerId: "glm",
@@ -130,6 +163,11 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://api.moonshot.ai/v1",
     defaultModel: "kimi-k2.5",
     apiStyle: "openai-chat-completions",
+    knownModels: [
+      "kimi-k2.5",
+      "kimi-k2",
+      "kimi-1",
+    ],
   },
   {
     providerId: "perplexity",
@@ -137,6 +175,12 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://api.perplexity.ai",
     defaultModel: "sonar",
     apiStyle: "openai-chat-completions",
+    knownModels: [
+      "sonar",
+      "sonar-pro",
+      "sonar-reasoning-pro",
+      "sonar-deep-research",
+    ],
   },
   {
     providerId: "huggingface",

@@ -5,13 +5,31 @@ describe("provider templates", () => {
   it("uses GPT-5.4-mini defaults for OpenAI-family templates", () => {
     expect(findProviderTemplate("openai")?.defaultModel).toBe("gpt-5.4-mini");
     expect(findProviderTemplate("openai")?.apiStyle).toBe("openai-responses");
+    expect(findProviderTemplate("openai")?.knownModels).toEqual([
+      "gpt-5.4-mini",
+      "gpt-5.4",
+      "gpt-5-mini",
+      "gpt-4.1-mini",
+      "gpt-4o-mini",
+    ]);
     expect(findProviderTemplate("openrouter")?.defaultModel).toBe("openai/gpt-5.4-mini");
     expect(findProviderTemplate("openrouter")?.apiStyle).toBe("openai-chat-completions");
+    expect(findProviderTemplate("openrouter")?.knownModels).toEqual([
+      "openai/gpt-5.4-mini",
+      "openai/gpt-5.4",
+      "anthropic/claude-sonnet-4",
+      "google/gemini-2.5-flash",
+    ]);
     expect(findProviderTemplate("vercel")?.defaultModel).toBe("openai/gpt-5.4-mini");
   });
 
   it("marks Anthropic as a native messages provider", () => {
     expect(findProviderTemplate("anthropic")?.apiStyle).toBe("anthropic-messages");
+    expect(findProviderTemplate("anthropic")?.knownModels).toEqual([
+      "claude-sonnet-4-6",
+      "claude-sonnet-4",
+      "claude-opus-4",
+    ]);
   });
 
   it("includes a fallback Google Gemini shortlist for offline model pickers", () => {
@@ -32,6 +50,15 @@ describe("provider templates", () => {
       "MiniMax-M2.1",
       "MiniMax-M2.1-highspeed",
       "MiniMax-M2",
+    ]);
+  });
+
+  it("includes Perplexity models for unsupported /models endpoints", () => {
+    expect(findProviderTemplate("perplexity")?.knownModels).toEqual([
+      "sonar",
+      "sonar-pro",
+      "sonar-reasoning-pro",
+      "sonar-deep-research",
     ]);
   });
 });

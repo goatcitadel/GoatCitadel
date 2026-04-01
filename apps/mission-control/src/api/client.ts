@@ -12,14 +12,36 @@ import type {
   AuthSettingsUpdateInput,
   DeviceAccessGrantListResponse,
   DeviceAccessGrantRevokeResponse,
+  DiscordPairingRecord,
+  DiscordRuntimeStatus,
   ApprovalBulkResolveResult,
   ApprovalReplayEvent,
   ApprovalRequest,
+  A2UIProofLaneDraft,
+  ExtensionStarterPackArtifactRecord,
+  ExtensionStarterPackDraft,
+  ExtensionSdkBriefDraft,
   AssemblyRunDetailResponse,
   AssemblyRunRecord,
   ChangeRiskEvaluationResponse,
+  BrowserProofLaneDraft,
+  ChannelCapabilities,
+  ChannelRuntimeStatus,
+  FollowOnProofLaneArtifactRecord,
+  PackagingProofLaneDraft,
+  VoiceProofLaneDraft,
   ChannelReactInput,
+  ChannelReplyInput,
   ChannelSendInput,
+  ChannelSetupDefinition,
+  ChannelSetupDraft,
+  ChannelSetupDraftCreateInput,
+  ChannelSetupDraftUpdateInput,
+  ChannelSetupFinalizeResult,
+  ChannelSetupTestResult,
+  ChannelSetupValidationResult,
+  ChannelTypingInput,
+  ChannelTypingResult,
   ChannelUnsendInput,
   ChatAttachmentRecord,
   ChatMode,
@@ -163,6 +185,7 @@ import type {
   CreateAssemblyRunInput,
   ModelReputation,
 } from "@goatcitadel/contracts";
+import type { FollowOnParityReport } from "@goatcitadel/contracts";
 import {
   createCorrelationId,
   recordClientDiagnostic,
@@ -174,6 +197,8 @@ import {
 export type { GuidanceDocumentRecord };
 export type { SessionSummary, SessionTimelineItem };
 export type { ObsidianIntegrationConfig, ObsidianIntegrationStatus };
+export type { ExtensionSdkBriefDraft };
+export type { ExtensionStarterPackArtifactRecord, ExtensionStarterPackDraft };
 
 const DEFAULT_GATEWAY_HOST = "127.0.0.1";
 const DEFAULT_GATEWAY_PORT = 8787;
@@ -909,6 +934,13 @@ export interface ApprovalReplayResponse {
   pendingAction?: PendingApprovalAction;
 }
 
+export interface ApprovalResolveResponse {
+  approval: ApprovalRequest;
+  executedAction?: ToolInvokeResult;
+  replay: ApprovalReplayResponse;
+  durableRunId?: string;
+}
+
 export interface CostSummaryResponse {
   scope: string;
   from: string;
@@ -1010,6 +1042,8 @@ export interface SystemVitalsResponse {
   processRssBytes: number;
   processHeapUsedBytes: number;
 }
+
+export type { A2UIProofLaneDraft, BrowserProofLaneDraft, FollowOnParityReport, FollowOnProofLaneArtifactRecord, PackagingProofLaneDraft, VoiceProofLaneDraft };
 
 export interface CronJobsResponse {
   items: Array<{
@@ -1911,6 +1945,7 @@ export async function parseChatCommand(
   message: string;
   prefs?: ChatSessionPrefsRecord;
   research?: ResearchSummaryRecord;
+  session?: ChatSessionRecord;
 }> {
   return request(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/commands/parse`, {
     method: "POST",
@@ -2596,8 +2631,8 @@ export async function fetchApprovals(status = "pending"): Promise<ApprovalsRespo
 export async function resolveApproval(
   approvalId: string,
   decision: "approve" | "reject",
-): Promise<{ approval: ApprovalRequest; executedAction?: ToolInvokeResult }> {
-  return request(`/api/v1/approvals/${approvalId}/resolve`, {
+): Promise<ApprovalResolveResponse> {
+  return request<ApprovalResolveResponse>(`/api/v1/approvals/${approvalId}/resolve`, {
     method: "POST",
     body: JSON.stringify({
       decision,
@@ -2718,6 +2753,13 @@ export async function commsSend(input: ChannelSendInput): Promise<ToolInvokeResu
   });
 }
 
+export async function commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+  return request<ToolInvokeResult | Record<string, unknown>>("/api/v1/comms/reply", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>> {
   return request<ToolInvokeResult | Record<string, unknown>>("/api/v1/comms/react", {
     method: "POST",
@@ -2730,6 +2772,25 @@ export async function commsUnsend(input: ChannelUnsendInput): Promise<ToolInvoke
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export async function commsTyping(input: ChannelTypingInput): Promise<ChannelTypingResult> {
+  return request<ChannelTypingResult>("/api/v1/comms/typing", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchChannelCapabilities(connectionId: string): Promise<ChannelCapabilities> {
+  return request<ChannelCapabilities>(`/api/v1/comms/capabilities/${encodeURIComponent(connectionId)}`);
+}
+
+export async function fetchChannelRuntimeStatus(connectionId: string): Promise<ChannelRuntimeStatus> {
+  return request<ChannelRuntimeStatus>(`/api/v1/comms/runtime/${encodeURIComponent(connectionId)}`);
+}
+
+export async function fetchChannelDiagnostics(connectionId: string): Promise<ConnectorDiagnosticReport> {
+  return request<ConnectorDiagnosticReport>(`/api/v1/comms/diagnostics/${encodeURIComponent(connectionId)}`);
 }
 
 export async function commsGmailRead(input: GmailReadQuery): Promise<ToolInvokeResult | Record<string, unknown>> {
@@ -2965,6 +3026,83 @@ export async function fetchDashboardState(): Promise<DashboardStateResponse> {
 
 export async function fetchSystemVitals(): Promise<SystemVitalsResponse> {
   return request<SystemVitalsResponse>("/api/v1/system/vitals");
+}
+
+export async function fetchFollowOnParityReport(): Promise<FollowOnParityReport> {
+  return request<FollowOnParityReport>("/api/v1/system/follow-on-parity");
+}
+
+export async function fetchBrowserProofLaneDraft(): Promise<BrowserProofLaneDraft> {
+  return request<BrowserProofLaneDraft>("/api/v1/system/follow-on-parity/browser-proof-lane");
+}
+
+export async function exportBrowserProofLaneDraft(): Promise<FollowOnProofLaneArtifactRecord> {
+  return request<FollowOnProofLaneArtifactRecord>("/api/v1/system/follow-on-parity/browser-proof-lane/export", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function fetchPackagingProofLaneDraft(): Promise<PackagingProofLaneDraft> {
+  return request<PackagingProofLaneDraft>("/api/v1/system/follow-on-parity/packaging-proof-lane");
+}
+
+export async function exportPackagingProofLaneDraft(): Promise<FollowOnProofLaneArtifactRecord> {
+  return request<FollowOnProofLaneArtifactRecord>("/api/v1/system/follow-on-parity/packaging-proof-lane/export", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function fetchA2UIProofLaneDraft(): Promise<A2UIProofLaneDraft> {
+  return request<A2UIProofLaneDraft>("/api/v1/system/follow-on-parity/a2ui-proof-lane");
+}
+
+export async function fetchVoiceProofLaneDraft(): Promise<VoiceProofLaneDraft> {
+  return request<VoiceProofLaneDraft>("/api/v1/system/follow-on-parity/voice-proof-lane");
+}
+
+export async function exportVoiceProofLaneDraft(): Promise<FollowOnProofLaneArtifactRecord> {
+  return request<FollowOnProofLaneArtifactRecord>("/api/v1/system/follow-on-parity/voice-proof-lane/export", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function exportA2UIProofLaneDraft(): Promise<FollowOnProofLaneArtifactRecord> {
+  return request<FollowOnProofLaneArtifactRecord>("/api/v1/system/follow-on-parity/a2ui-proof-lane/export", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function exportCompanionBootstrapBrief(): Promise<FollowOnProofLaneArtifactRecord> {
+  return request<FollowOnProofLaneArtifactRecord>("/api/v1/system/follow-on-parity/companion-bootstrap-brief/export", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function fetchExtensionSdkBrief(): Promise<ExtensionSdkBriefDraft> {
+  return request<ExtensionSdkBriefDraft>("/api/v1/system/follow-on-parity/extension-sdk-brief");
+}
+
+export async function exportExtensionSdkBrief(): Promise<FollowOnProofLaneArtifactRecord> {
+  return request<FollowOnProofLaneArtifactRecord>("/api/v1/system/follow-on-parity/extension-sdk-brief/export", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function fetchExtensionStarterPack(): Promise<ExtensionStarterPackDraft> {
+  return request<ExtensionStarterPackDraft>("/api/v1/system/follow-on-parity/extension-starter-pack");
+}
+
+export async function exportExtensionStarterPack(): Promise<ExtensionStarterPackArtifactRecord> {
+  return request<ExtensionStarterPackArtifactRecord>("/api/v1/system/follow-on-parity/extension-starter-pack/export", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function fetchCronJobs(): Promise<CronJobsResponse> {
@@ -3588,6 +3726,105 @@ export async function fetchIntegrationCatalog(
   return request(`/api/v1/integrations/catalog${query}`);
 }
 
+export async function fetchChannelSetupDefinitions(): Promise<{ items: ChannelSetupDefinition[] }> {
+  return request<{ items: ChannelSetupDefinition[] }>("/api/v1/channels/setup-definitions");
+}
+
+export async function fetchChannelSetupDefinition(catalogId: string): Promise<ChannelSetupDefinition> {
+  return request<ChannelSetupDefinition>(
+    `/api/v1/channels/catalog/${encodeURIComponent(catalogId)}/setup-definition`,
+  );
+}
+
+export async function fetchChannelSetupDrafts(query?: {
+  catalogId?: string;
+  connectionId?: string;
+  limit?: number;
+}): Promise<{ items: ChannelSetupDraft[] }> {
+  const params = new URLSearchParams();
+  if (query?.catalogId) {
+    params.set("catalogId", query.catalogId);
+  }
+  if (query?.connectionId) {
+    params.set("connectionId", query.connectionId);
+  }
+  if (typeof query?.limit === "number") {
+    params.set("limit", String(query.limit));
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return request<{ items: ChannelSetupDraft[] }>(`/api/v1/channels/drafts${suffix}`);
+}
+
+export async function createChannelSetupDraft(
+  input: ChannelSetupDraftCreateInput,
+): Promise<ChannelSetupDraft> {
+  return request<ChannelSetupDraft>("/api/v1/channels/drafts", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateChannelSetupDraft(
+  draftId: string,
+  input: ChannelSetupDraftUpdateInput,
+): Promise<ChannelSetupDraft> {
+  return request<ChannelSetupDraft>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function validateChannelSetupDraft(draftId: string): Promise<ChannelSetupValidationResult> {
+  return request<ChannelSetupValidationResult>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}/validate`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function testChannelSetupDraft(draftId: string): Promise<ChannelSetupTestResult> {
+  return request<ChannelSetupTestResult>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}/test`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function finalizeChannelSetupDraft(draftId: string): Promise<ChannelSetupFinalizeResult> {
+  return request<ChannelSetupFinalizeResult>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}/finalize`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function createChannelRepairDraft(connectionId: string): Promise<ChannelSetupDraft> {
+  return request<ChannelSetupDraft>(
+    `/api/v1/channels/connections/${encodeURIComponent(connectionId)}/repair-draft`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function createChannelRotateSecretDraft(connectionId: string): Promise<ChannelSetupDraft> {
+  return request<ChannelSetupDraft>(
+    `/api/v1/channels/connections/${encodeURIComponent(connectionId)}/rotate-secret-draft`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function retestChannelConnection(connectionId: string): Promise<ChannelSetupTestResult> {
+  return request<ChannelSetupTestResult>(
+    `/api/v1/channels/connections/${encodeURIComponent(connectionId)}/retest`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
 export async function fetchIntegrationFormSchema(catalogId: string): Promise<IntegrationFormSchema> {
   return request<IntegrationFormSchema>(
     `/api/v1/integrations/catalog/${encodeURIComponent(catalogId)}/form-schema`,
@@ -3648,6 +3885,46 @@ export async function deleteIntegrationConnection(connectionId: string): Promise
 export async function fetchIntegrationConnectionDiagnostics(connectionId: string): Promise<ConnectorDiagnosticReport> {
   return request<ConnectorDiagnosticReport>(
     `/api/v1/integrations/connections/${encodeURIComponent(connectionId)}/diagnostics`,
+  );
+}
+
+export async function fetchDiscordPairings(connectionId: string): Promise<{
+  runtime?: DiscordRuntimeStatus;
+  items: DiscordPairingRecord[];
+}> {
+  return request<{
+    runtime?: DiscordRuntimeStatus;
+    items: DiscordPairingRecord[];
+  }>(`/api/v1/integrations/connections/${encodeURIComponent(connectionId)}/discord/pairings`);
+}
+
+export async function approveDiscordPairing(connectionId: string, pairingId: string): Promise<DiscordPairingRecord> {
+  return request<DiscordPairingRecord>(
+    `/api/v1/integrations/connections/${encodeURIComponent(connectionId)}/discord/pairings/${encodeURIComponent(pairingId)}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function revokeDiscordPairing(connectionId: string, pairingId: string): Promise<DiscordPairingRecord> {
+  return request<DiscordPairingRecord>(
+    `/api/v1/integrations/connections/${encodeURIComponent(connectionId)}/discord/pairings/${encodeURIComponent(pairingId)}/revoke`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function reconnectDiscordRuntime(connectionId: string): Promise<DiscordRuntimeStatus | undefined> {
+  return request<DiscordRuntimeStatus | undefined>(
+    `/api/v1/integrations/connections/${encodeURIComponent(connectionId)}/discord/reconnect`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
   );
 }
 
@@ -4039,6 +4316,12 @@ export async function fetchVoiceRuntimeStatus(): Promise<VoiceRuntimeStatus> {
   return request<VoiceRuntimeStatus>("/api/v1/voice/runtime");
 }
 
+export async function fetchVoiceTalkSessions(limit = 10): Promise<VoiceTalkSessionRecord[]> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  const response = await request<{ items: VoiceTalkSessionRecord[] }>(`/api/v1/voice/talk/sessions?${query.toString()}`);
+  return response.items;
+}
+
 export async function installVoiceRuntime(input: VoiceRuntimeInstallRequest = {}): Promise<VoiceRuntimeStatus> {
   return request<VoiceRuntimeStatus>("/api/v1/voice/runtime/install", {
     method: "POST",
@@ -4098,6 +4381,10 @@ export async function fetchDaemonStatus(): Promise<{
   host: string;
   state: "running" | "stopped";
   lastCommandAt?: string;
+  requestedState?: "running" | "stopped";
+  supported: boolean;
+  controllable: boolean;
+  controlMessage: string;
 }> {
   return request<{
     running: boolean;
@@ -4106,15 +4393,21 @@ export async function fetchDaemonStatus(): Promise<{
     host: string;
     state: "running" | "stopped";
     lastCommandAt?: string;
+    requestedState?: "running" | "stopped";
+    supported: boolean;
+    controllable: boolean;
+    controlMessage: string;
   }>("/api/v1/daemon/status");
 }
 
 export async function startDaemon(): Promise<{
   accepted: boolean;
+  reason: string;
   status: Awaited<ReturnType<typeof fetchDaemonStatus>>;
 }> {
   return request<{
     accepted: boolean;
+    reason: string;
     status: Awaited<ReturnType<typeof fetchDaemonStatus>>;
   }>("/api/v1/daemon/start", {
     method: "POST",
@@ -4124,10 +4417,12 @@ export async function startDaemon(): Promise<{
 
 export async function stopDaemon(): Promise<{
   accepted: boolean;
+  reason: string;
   status: Awaited<ReturnType<typeof fetchDaemonStatus>>;
 }> {
   return request<{
     accepted: boolean;
+    reason: string;
     status: Awaited<ReturnType<typeof fetchDaemonStatus>>;
   }>("/api/v1/daemon/stop", {
     method: "POST",
@@ -4137,10 +4432,12 @@ export async function stopDaemon(): Promise<{
 
 export async function restartDaemon(): Promise<{
   accepted: boolean;
+  reason: string;
   status: Awaited<ReturnType<typeof fetchDaemonStatus>>;
 }> {
   return request<{
     accepted: boolean;
+    reason: string;
     status: Awaited<ReturnType<typeof fetchDaemonStatus>>;
   }>("/api/v1/daemon/restart", {
     method: "POST",

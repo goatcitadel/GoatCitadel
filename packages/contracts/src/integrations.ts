@@ -108,6 +108,58 @@ export interface IntegrationConnectionUpdateInput {
   pluginVersion?: string;
   pluginEnabled?: boolean;
   lastSyncAt?: string;
+  lastError?: string | null;
+}
+
+export type DiscordRuntimeMode = "bridge" | "gateway";
+export type DiscordInboundDmPolicy = "pairing" | "open" | "disabled";
+export type DiscordGuildPolicy = "off" | "allowlist";
+
+export interface DiscordGuildAccessRule {
+  requireMention: boolean;
+  users?: string[];
+  channels?: string[];
+}
+
+export interface DiscordIntegrationConfig {
+  runtimeMode?: DiscordRuntimeMode;
+  botToken?: string;
+  botTokenEnv?: string;
+  webhookUrl?: string;
+  defaultChannelId?: string;
+  defaultGuildId?: string;
+  inboundDmPolicy?: DiscordInboundDmPolicy;
+  guildPolicy?: DiscordGuildPolicy;
+  guilds?: Record<string, DiscordGuildAccessRule>;
+}
+
+export type DiscordPairingStatus = "pending" | "approved" | "revoked";
+
+export interface DiscordPairingRecord {
+  pairingId: string;
+  connectionId: string;
+  userId: string;
+  displayName?: string;
+  code: string;
+  status: DiscordPairingStatus;
+  createdAt: string;
+  updatedAt: string;
+  approvedAt?: string;
+  revokedAt?: string;
+  lastInboundAt?: string;
+}
+
+export interface DiscordRuntimeStatus {
+  connectionId: string;
+  runtimeMode: DiscordRuntimeMode;
+  enabled: boolean;
+  ready: boolean;
+  connectedBotId?: string;
+  connectedBotTag?: string;
+  guildIds: string[];
+  lastReadyAt?: string;
+  lastInboundAt?: string;
+  lastReconnectAt?: string;
   lastError?: string;
 }
 

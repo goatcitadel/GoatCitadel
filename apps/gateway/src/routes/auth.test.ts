@@ -19,6 +19,8 @@ function baseAuthConfig(mode: AuthConfig["mode"]): AuthConfig {
   };
 }
 
+const COMPANION_SESSION_ID = "4b229ee9-bf83-4012-86c8-620f6e5306e0";
+
 async function buildApp(mode: AuthConfig["mode"]): Promise<FastifyInstance> {
   const app = Fastify();
   app.decorate("gateway", {
@@ -93,7 +95,144 @@ async function buildApp(mode: AuthConfig["mode"]): Promise<FastifyInstance> {
       revokedAt: "2026-03-10T12:10:00.000Z",
       metadata: {},
     }),
-    validateDeviceAccessToken: () => undefined,
+    exchangeCompanionSessionFromDeviceGrant: async (grantId: string, input: { clientName?: string; appVersion?: string }) => ({
+      contractId: "companion.android.v1",
+      sessionId: COMPANION_SESSION_ID,
+      grantId,
+      actorId: `companion:${COMPANION_SESSION_ID}`,
+      deviceLabel: "LAN laptop",
+      deviceType: "desktop",
+      platform: "windows",
+      accessToken: "companion-bearer",
+      accessTokenExpiresAt: "2026-03-10T12:20:00.000Z",
+      refreshToken: "refresh-token-1",
+      refreshTokenExpiresAt: "2026-03-11T12:10:00.000Z",
+      issuedAt: "2026-03-10T12:10:00.000Z",
+      signatureAlgorithm: "ed25519",
+      metadata: input,
+    }),
+    rotateCompanionSession: async () => ({
+      contractId: "companion.android.v1",
+      sessionId: COMPANION_SESSION_ID,
+      grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+      actorId: `companion:${COMPANION_SESSION_ID}`,
+      accessToken: "companion-bearer-next",
+      accessTokenExpiresAt: "2026-03-10T12:30:00.000Z",
+      refreshToken: "refresh-token-2",
+      refreshTokenExpiresAt: "2026-03-11T12:20:00.000Z",
+      issuedAt: "2026-03-10T12:20:00.000Z",
+      signatureAlgorithm: "ed25519",
+    }),
+    getCompanionSessionInfo: () => ({
+      contractId: "companion.android.v1",
+      sessionId: COMPANION_SESSION_ID,
+      grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+      actorId: `companion:${COMPANION_SESSION_ID}`,
+      deviceLabel: "LAN laptop",
+      deviceType: "desktop",
+      platform: "windows",
+      createdAt: "2026-03-10T12:10:00.000Z",
+      lastSeenAt: "2026-03-10T12:20:00.000Z",
+      accessTokenExpiresAt: "2026-03-10T12:30:00.000Z",
+      refreshTokenExpiresAt: "2026-03-11T12:20:00.000Z",
+      signatureAlgorithm: "ed25519",
+      metadata: {
+        clientName: "Android Companion",
+      },
+    }),
+    listCompanionSessions: () => ({
+      items: [
+        {
+          contractId: "companion.android.v1",
+          sessionId: COMPANION_SESSION_ID,
+          grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+          actorId: `companion:${COMPANION_SESSION_ID}`,
+          deviceLabel: "LAN laptop",
+          deviceType: "desktop",
+          platform: "windows",
+          createdAt: "2026-03-10T12:10:00.000Z",
+          lastSeenAt: "2026-03-10T12:20:00.000Z",
+          lastRotatedAt: "2026-03-10T12:20:00.000Z",
+          accessTokenExpiresAt: "2026-03-10T12:30:00.000Z",
+          refreshTokenExpiresAt: "2026-03-11T12:20:00.000Z",
+          signatureAlgorithm: "ed25519",
+          grantExpiresAt: "2026-04-09T11:55:00.000Z",
+          metadata: {
+            clientName: "Android Companion",
+          },
+        },
+      ],
+    }),
+    getCompanionSessionRecord: () => ({
+      contractId: "companion.android.v1",
+      sessionId: COMPANION_SESSION_ID,
+      grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+      actorId: `companion:${COMPANION_SESSION_ID}`,
+      deviceLabel: "LAN laptop",
+      deviceType: "desktop",
+      platform: "windows",
+      createdAt: "2026-03-10T12:10:00.000Z",
+      lastSeenAt: "2026-03-10T12:20:00.000Z",
+      lastRotatedAt: "2026-03-10T12:20:00.000Z",
+      accessTokenExpiresAt: "2026-03-10T12:30:00.000Z",
+      refreshTokenExpiresAt: "2026-03-11T12:20:00.000Z",
+      signatureAlgorithm: "ed25519",
+      grantExpiresAt: "2026-04-09T11:55:00.000Z",
+      metadata: {
+        clientName: "Android Companion",
+      },
+    }),
+    revokeCompanionSession: async () => ({
+      session: {
+        contractId: "companion.android.v1",
+        sessionId: COMPANION_SESSION_ID,
+        grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+        actorId: `companion:${COMPANION_SESSION_ID}`,
+        deviceLabel: "LAN laptop",
+        deviceType: "desktop",
+        platform: "windows",
+        createdAt: "2026-03-10T12:10:00.000Z",
+        lastSeenAt: "2026-03-10T12:20:00.000Z",
+        lastRotatedAt: "2026-03-10T12:20:00.000Z",
+        accessTokenExpiresAt: "2026-03-10T12:30:00.000Z",
+        refreshTokenExpiresAt: "2026-03-11T12:20:00.000Z",
+        revokedAt: "2026-03-10T12:25:00.000Z",
+        signatureAlgorithm: "ed25519",
+        grantExpiresAt: "2026-04-09T11:55:00.000Z",
+        metadata: {
+          clientName: "Android Companion",
+        },
+      },
+    }),
+    listCompanionAuditEvents: async () => ([
+      {
+        timestamp: "2026-03-10T12:20:00.000Z",
+        event: "auth.companion_request.accepted",
+        actorId: `companion:${COMPANION_SESSION_ID}`,
+        grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+        companionSessionId: COMPANION_SESSION_ID,
+        method: "POST",
+        path: "/api/v1/chat/sessions",
+        nonce: "nonce-1",
+        requestHash: "hash-1",
+      },
+    ]),
+    validateDeviceAccessToken: (token: string) => token === "device-bearer"
+      ? {
+          actorId: "device:ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+          deviceId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+          grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+        }
+      : undefined,
+    validateCompanionAccessToken: (token: string) => token === "companion-bearer"
+      ? {
+          actorId: `companion:${COMPANION_SESSION_ID}`,
+          deviceId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+          grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+          sessionId: COMPANION_SESSION_ID,
+        }
+      : undefined,
+    verifyCompanionRequestSignature: () => undefined,
   } as never);
   app.decorate("gatewayConfig", {
     assistant: {
@@ -254,6 +393,159 @@ describe("auth routes", () => {
         grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
         revokedAt: "2026-03-10T12:10:00.000Z",
       },
+    });
+  });
+
+  it("exchanges a device grant for a companion session bundle", async () => {
+    app = await buildApp("token");
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/companion/session/exchange",
+      headers: {
+        Authorization: "Bearer device-bearer",
+      },
+      payload: {
+        signingPublicKeyPem: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA7v0fakefakefakefakefakefakefakefakefak=\n-----END PUBLIC KEY-----",
+        clientName: "Android Companion",
+        appVersion: "0.1.0",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      contractId: "companion.android.v1",
+      sessionId: COMPANION_SESSION_ID,
+      grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+      accessToken: "companion-bearer",
+      refreshToken: "refresh-token-1",
+    });
+  });
+
+  it("refreshes a companion session without prior auth", async () => {
+    app = await buildApp("token");
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/companion/session/refresh",
+      payload: {
+        refreshToken: "refresh-token-1",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      contractId: "companion.android.v1",
+      sessionId: COMPANION_SESSION_ID,
+      accessToken: "companion-bearer-next",
+      refreshToken: "refresh-token-2",
+    });
+  });
+
+  it("returns companion session info for companion-authenticated requests", async () => {
+    app = await buildApp("token");
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/companion/session",
+      headers: {
+        Authorization: "Bearer companion-bearer",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      contractId: "companion.android.v1",
+      sessionId: COMPANION_SESSION_ID,
+      actorId: `companion:${COMPANION_SESSION_ID}`,
+      metadata: {
+        clientName: "Android Companion",
+      },
+    });
+  });
+
+  it("lists companion sessions for operator-authenticated requests", async () => {
+    app = await buildApp("token");
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/companion/sessions?view=all",
+      headers: {
+        Authorization: "Bearer test-token",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      items: [
+        {
+          sessionId: COMPANION_SESSION_ID,
+          grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+          lastRotatedAt: "2026-03-10T12:20:00.000Z",
+        },
+      ],
+    });
+  });
+
+  it("returns one companion session record for operator-authenticated requests", async () => {
+    app = await buildApp("token");
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/companion/sessions/${COMPANION_SESSION_ID}`,
+      headers: {
+        Authorization: "Bearer test-token",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      sessionId: COMPANION_SESSION_ID,
+      grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+      lastRotatedAt: "2026-03-10T12:20:00.000Z",
+    });
+  });
+
+  it("revokes one companion session for operator-authenticated requests", async () => {
+    app = await buildApp("token");
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/auth/companion/sessions/${COMPANION_SESSION_ID}/revoke`,
+      headers: {
+        Authorization: "Bearer test-token",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      session: {
+        sessionId: COMPANION_SESSION_ID,
+        revokedAt: "2026-03-10T12:25:00.000Z",
+      },
+    });
+  });
+
+  it("lists companion audit events for operator-authenticated requests", async () => {
+    app = await buildApp("token");
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/companion/audit?sessionId=${COMPANION_SESSION_ID}`,
+      headers: {
+        Authorization: "Bearer test-token",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      items: [
+        {
+          event: "auth.companion_request.accepted",
+          path: "/api/v1/chat/sessions",
+        },
+      ],
+    });
+  });
+
+  it("blocks companion admin routes for companion-authenticated requests", async () => {
+    app = await buildApp("token");
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/companion/sessions",
+      headers: {
+        Authorization: "Bearer companion-bearer",
+      },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({
+      error: "Companion session admin access requires operator authentication.",
     });
   });
 });

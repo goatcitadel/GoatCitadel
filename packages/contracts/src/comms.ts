@@ -33,6 +33,10 @@ export interface ChannelReactInput {
   taskId?: string;
 }
 
+export interface ChannelReplyInput extends ChannelSendInput {
+  replyToMessageId: string;
+}
+
 export interface ChannelUnsendInput {
   connectionId: string;
   messageId: string;
@@ -41,6 +45,26 @@ export interface ChannelUnsendInput {
   sessionId?: string;
   agentId?: string;
   taskId?: string;
+}
+
+export interface ChannelTypingInput {
+  connectionId: string;
+  target: string;
+  threadId?: string;
+  durationMs?: number;
+  sessionId?: string;
+  agentId?: string;
+  taskId?: string;
+}
+
+export interface ChannelTypingResult {
+  channelKey: string;
+  connectionId: string;
+  target: string;
+  supported: boolean;
+  status: "sent" | "unsupported";
+  reason?: string;
+  expiresAt?: string;
 }
 
 export interface GmailSendInput {

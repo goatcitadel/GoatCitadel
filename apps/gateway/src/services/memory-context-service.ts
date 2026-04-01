@@ -44,6 +44,59 @@ export class MemoryContextService {
     const shouldShortCircuit = !memoryConfig.enabled
       || !qmd.enabled
       || prompt.length < qmd.minPromptChars;
+    const queryHash = buildQueryHash(prompt);
+    if (shouldShortCircuit) {
+      const fallback = composeFallbackContext([], maxContextTokens);
+      const cacheKey = buildCacheKey({
+        scope: input.scope,
+        prompt,
+        sessionId: input.sessionId,
+        taskId: input.taskId,
+        runId: input.runId,
+        phaseId: input.phaseId,
+        maxContextTokens,
+        candidates: [],
+      });
+      const pack = this.storage.memoryContexts.upsert({
+        cacheKey,
+        scope: input.scope,
+        sessionId: input.sessionId,
+        taskId: input.taskId,
+        runId: input.runId,
+        phaseId: input.phaseId,
+        queryHash,
+        sourcesHash: buildSourcesHash([]),
+        contextText: fallback.contextText,
+        citations: fallback.citations,
+        quality: {
+          status: "fallback",
+          reason: "qmd_disabled_or_prompt_too_short",
+        },
+        originalTokenEstimate: 0,
+        distilledTokenEstimate: fallback.distilledTokenEstimate,
+        expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
+      });
+      this.storage.memoryQmdRuns.append({
+        scope: input.scope,
+        sessionId: input.sessionId,
+        taskId: input.taskId,
+        runId: input.runId,
+        phaseId: input.phaseId,
+        status: "fallback",
+        durationMs: Math.max(1, Date.now() - startedAt),
+        candidateCount: 0,
+        citationsCount: fallback.citations.length,
+        originalTokenEstimate: 0,
+        distilledTokenEstimate: fallback.distilledTokenEstimate,
+        savingsPercent: 0,
+      });
+      this.publishRealtime("memory_qmd_fallback", {
+        contextId: pack.contextId,
+        scope: input.scope,
+        reason: pack.quality.reason,
+      });
+      return pack;
+    }
 
     const sources = await this.collectSources(input);
     const candidates = rankMemoryCandidates(
@@ -56,7 +109,6 @@ export class MemoryContextService {
       { maxCandidates: 40 },
     );
 
-    const queryHash = buildQueryHash(prompt);
     const sourcesHash = buildSourcesHash(candidates);
     const cacheKey = buildCacheKey({
       scope: input.scope,
@@ -106,7 +158,7 @@ export class MemoryContextService {
 
     const originalTokenEstimate = estimateTokensFromText(candidates.map((candidate) => candidate.text).join("\n"));
 
-    if (shouldShortCircuit || candidates.length === 0) {
+    if (candidates.length === 0) {
       const fallback = composeFallbackContext(candidates, maxContextTokens);
       const pack = this.storage.memoryContexts.upsert({
         cacheKey,
@@ -121,7 +173,7 @@ export class MemoryContextService {
         citations: fallback.citations,
         quality: {
           status: "fallback",
-          reason: shouldShortCircuit ? "qmd_disabled_or_prompt_too_short" : "no_candidates",
+          reason: "no_candidates",
         },
         originalTokenEstimate,
         distilledTokenEstimate: fallback.distilledTokenEstimate,

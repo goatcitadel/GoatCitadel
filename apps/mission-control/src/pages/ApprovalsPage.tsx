@@ -9,6 +9,7 @@ import {
   resolveApprovalsBulk,
   resumeDurableRun,
   type ApprovalReplayResponse,
+  type ApprovalResolveResponse,
   type ApprovalsResponse,
 } from "../api/client";
 import { PageHeader } from "../components/PageHeader";
@@ -105,13 +106,12 @@ export function ApprovalsPage() {
       setSummary(null);
       const result = await resolveAction.run(async () => resolveApproval(approvalId, decision));
       if (result.executedAction) {
-        setError(
+        setSummary(
           `Approval ${approvalId} resolved and action ${result.executedAction.outcome}: ${result.executedAction.policyReason}`,
         );
       }
-      await load();
-      const replay = await fetchApprovalReplay(approvalId);
-      setReplayById((prev) => ({ ...prev, [approvalId]: replay }));
+      applyResolvedApprovalResult(result);
+      setError(null);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -127,7 +127,18 @@ export function ApprovalsPage() {
       }));
       const message = `Rejected ${result.resolvedCount} pending approvals. Skipped ${result.skippedCount}. Failed ${result.failedCount}.`;
       setSummary(message);
-      await load();
+      setError(null);
+      const resolvedApprovalIds = new Set(
+        result.items
+          .filter((item) => item.outcome === "resolved")
+          .map((item) => item.approvalId),
+      );
+      setData((current) => current
+        ? {
+          ...current,
+          items: current.items.filter((item) => !resolvedApprovalIds.has(item.approvalId)),
+        }
+        : current);
     } catch (err) {
       setSummary(null);
       setError((err as Error).message);
@@ -143,7 +154,37 @@ export function ApprovalsPage() {
     }
   };
 
+  const applyResolvedApprovalResult = (result: ApprovalResolveResponse) => {
+    setReplayById((prev) => ({ ...prev, [result.approval.approvalId]: result.replay }));
+    setData((current) => current
+      ? {
+        ...current,
+        items: current.items.filter((item) => item.approvalId !== result.approval.approvalId),
+      }
+      : current);
+    setDurableByApprovalId((prev) => {
+      if (!result.durableRunId) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [result.approval.approvalId]: {
+          runId: result.durableRunId,
+          status: result.approval.status,
+          updatedAt: result.approval.resolvedAt ?? result.approval.createdAt,
+        },
+      };
+    });
+  };
+
   const resolveApprovalRunId = async (approvalId: string): Promise<string | null> => {
+    const approval = data?.items.find((item) => item.approvalId === approvalId);
+    const localRunId = approval
+      ? findDurableRunId(approval.payload) ?? findDurableRunId(approval.preview)
+      : undefined;
+    if (localRunId) {
+      return localRunId;
+    }
     const replay = replayById[approvalId] ?? await fetchApprovalReplay(approvalId);
     if (!replayById[approvalId]) {
       setReplayById((prev) => ({ ...prev, [approvalId]: replay }));

@@ -1,0 +1,20 @@
+{
+  "contractId": "companion.android.v1",
+  "bootstrapRepo": "GoatCitadel-mobile",
+  "pairedSurfaceContractId": "a2ui.v1",
+  "primaryTarget": "android",
+  "sessionEndpoints": {
+    "exchange": "/api/v1/auth/companion/session/exchange",
+    "refresh": "/api/v1/auth/companion/session/refresh",
+    "sessionInfo": "/api/v1/auth/companion/session"
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "headers": {
+      "timestamp": "x-goatcitadel-companion-timestamp",
+      "nonce": "x-goatcitadel-companion-nonce",
+      "signature": "x-goatcitadel-companion-signature"
+    },
+    "payload": "METHOD\\nPATH\\nTIMESTAMP\\nNONCE\\nSHA256(CANONICAL_BODY)"
+  }
+}

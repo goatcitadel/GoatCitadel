@@ -169,6 +169,7 @@ describe("OfficeLabPage", () => {
       expect(text).toContain("Task Board");
       expect(text).toContain("System Log");
       expect(text).toContain("Reload office");
+      expect(text).toContain("A2UI proof target: move from a zone view to an agent selection, then issue a seat or tile command and confirm the readout plus Inspector panel both reflect the directed mutation.");
       expect(apiMocks.fetchAgents).toHaveBeenCalledWith("all", 300);
       expect(apiMocks.fetchApprovals).toHaveBeenCalledWith("pending");
       expect(apiMocks.connectEventStream).toHaveBeenCalled();

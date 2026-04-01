@@ -2,6 +2,8 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { SseTokenIssueResponse } from "@goatcitadel/contracts";
 import { enterRequestAttribution } from "../../../../packages/storage/src/request-attribution.js";
 import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.js";
+import { isSlackWebhookPath } from "../services/slack-webhook.js";
+import { isTelegramWebhookPath } from "../services/telegram-webhook.js";
 import fp from "fastify-plugin";
 
 declare module "fastify" {
@@ -11,9 +13,10 @@ declare module "fastify" {
 
   interface FastifyRequest {
     authActorId: string;
-    authActorSource: "none" | "token" | "basic" | "loopback" | "sse" | "device";
+    authActorSource: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion";
     authDeviceId?: string;
     authGrantId?: string;
+    authCompanionSessionId?: string;
   }
 }
 
@@ -43,6 +46,7 @@ export const authPlugin = fp(async (fastify) => {
   fastify.decorateRequest("authActorSource", "none");
   fastify.decorateRequest("authDeviceId", undefined);
   fastify.decorateRequest("authGrantId", undefined);
+  fastify.decorateRequest("authCompanionSessionId", undefined);
 
   fastify.decorate("issueSseToken", (scope: "events:stream", ttlMs = 2 * 60 * 1000) => {
     purgeExpiredSseTokens(sseTokens);
@@ -65,6 +69,7 @@ export const authPlugin = fp(async (fastify) => {
     setAuthActor(request, "anonymous", "none");
     request.authDeviceId = undefined;
     request.authGrantId = undefined;
+    request.authCompanionSessionId = undefined;
     if (request.method === "OPTIONS") {
       return;
     }
@@ -74,7 +79,10 @@ export const authPlugin = fp(async (fastify) => {
     if (request.url.startsWith("/api/v1/auth/device-requests")) {
       return;
     }
-    if (isNextcloudTalkWebhookPath(request.url)) {
+    if (request.url.split("?", 1)[0] === "/api/v1/auth/companion/session/refresh") {
+      return;
+    }
+    if (isNextcloudTalkWebhookPath(request.url) || isSlackWebhookPath(request.url) || isTelegramWebhookPath(request.url)) {
       return;
     }
 
@@ -115,6 +123,21 @@ export const authPlugin = fp(async (fastify) => {
           actorId: deviceGrant.actorId,
           deviceId: deviceGrant.deviceId,
           grantId: deviceGrant.grantId,
+        });
+        return;
+      }
+
+      const companionSession = fastify.gateway.validateCompanionAccessToken(providedBearerToken);
+      if (companionSession) {
+        setAuthActor(request, companionSession.actorId, "companion");
+        request.authDeviceId = companionSession.deviceId;
+        request.authGrantId = companionSession.grantId;
+        request.authCompanionSessionId = companionSession.sessionId;
+        enterRequestAttribution({
+          actorId: companionSession.actorId,
+          deviceId: companionSession.deviceId,
+          grantId: companionSession.grantId,
+          companionSessionId: companionSession.sessionId,
         });
         return;
       }
@@ -164,6 +187,46 @@ export const authPlugin = fp(async (fastify) => {
       }
       setAuthActor(request, `basic:${normalizeActorSuffix(username)}`, "basic");
       return;
+    }
+  });
+
+  fastify.addHook("preHandler", async (request, reply) => {
+    if (request.authActorSource !== "companion") {
+      return;
+    }
+    if (!isCompanionSignedMutationMethod(request.method)) {
+      return;
+    }
+    if (!request.authCompanionSessionId) {
+      return reply.code(401).send({
+        error: "Unauthorized",
+        authMode: "companion",
+      });
+    }
+
+    const timestamp = readHeaderToken(request.headers["x-goatcitadel-companion-timestamp"]);
+    const nonce = readHeaderToken(request.headers["x-goatcitadel-companion-nonce"]);
+    const signature = readHeaderToken(request.headers["x-goatcitadel-companion-signature"]);
+    if (!timestamp || !nonce || !signature) {
+      return reply.code(401).send({
+        error: "Missing companion request signature headers.",
+      });
+    }
+
+    try {
+      fastify.gateway.verifyCompanionRequestSignature({
+        sessionId: request.authCompanionSessionId,
+        method: request.method,
+        path: request.url,
+        timestamp,
+        nonce,
+        signature,
+        body: request.body,
+      });
+    } catch (error) {
+      return reply.code(401).send({
+        error: (error as Error).message,
+      });
     }
   });
 });
@@ -286,13 +349,17 @@ function enforceSseTokenCapacity(store: Map<string, SseTokenRecord>, maxItems: n
 }
 
 function setAuthActor(
-  request: { authActorId?: string; authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" },
+  request: { authActorId?: string; authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" },
   actorId: string,
-  source: "none" | "token" | "basic" | "loopback" | "sse" | "device",
+  source: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion",
 ): void {
   request.authActorId = actorId;
   request.authActorSource = source;
   enterRequestAttribution({ actorId });
+}
+
+function isCompanionSignedMutationMethod(method: string): boolean {
+  return method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
 }
 
 function hashForTimingCompare(value: string): Buffer {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   SkillMergedSourceResult,
   SkillListItem,
@@ -119,6 +119,8 @@ function groupByCategory<T>(items: T[], derive: (item: T) => string): Array<{ ca
 
 export function SkillsPage() {
   const { mode } = useUiPreferences();
+  const dirtyStateDraftSkillIdsRef = useRef<Set<string>>(new Set());
+  const dirtyNoteDraftSkillIdsRef = useRef<Set<string>>(new Set());
   const [skills, setSkills] = useState<SkillListItem[]>([]);
   const [policy, setPolicy] = useState<SkillActivationPolicyState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -146,8 +148,9 @@ export function SkillsPage() {
   const [importBusy, setImportBusy] = useState<null | "validate" | "install">(null);
   const [confirmHighRiskImport, setConfirmHighRiskImport] = useState(false);
 
-  const load = useCallback(async (options?: { background?: boolean }) => {
+  const load = useCallback(async (options?: { background?: boolean; includeStatic?: boolean }) => {
     const background = options?.background ?? false;
+    const includeStatic = options?.includeStatic ?? !background;
     if (background) {
       setIsRefreshing(true);
     } else {
@@ -156,17 +159,27 @@ export function SkillsPage() {
     try {
       const [skillsResponse, policyResponse, importHistoryResponse] = await Promise.all([
         fetchSkills(),
-        fetchSkillActivationPolicies(),
-        fetchSkillImportHistory(30),
+        includeStatic ? fetchSkillActivationPolicies() : Promise.resolve(null),
+        includeStatic ? fetchSkillImportHistory(30) : Promise.resolve(null),
       ]);
       setSkills(skillsResponse.items);
-      setPolicy({
-        guardedAutoThreshold: policyResponse.guardedAutoThreshold,
-        requireFirstUseConfirmation: policyResponse.requireFirstUseConfirmation,
-      });
-      setImportHistory(importHistoryResponse.items);
-      setStateDraftBySkill(Object.fromEntries(skillsResponse.items.map((skill) => [skill.skillId, skill.state])));
-      setNoteDraftBySkill(Object.fromEntries(skillsResponse.items.map((skill) => [skill.skillId, skill.note ?? ""])));
+      if (policyResponse) {
+        setPolicy({
+          guardedAutoThreshold: policyResponse.guardedAutoThreshold,
+          requireFirstUseConfirmation: policyResponse.requireFirstUseConfirmation,
+        });
+      }
+      if (importHistoryResponse) {
+        setImportHistory(importHistoryResponse.items);
+      }
+      setStateDraftBySkill((current) => Object.fromEntries(skillsResponse.items.map((skill) => [
+        skill.skillId,
+        dirtyStateDraftSkillIdsRef.current.has(skill.skillId) ? (current[skill.skillId] ?? skill.state) : skill.state,
+      ])));
+      setNoteDraftBySkill((current) => Object.fromEntries(skillsResponse.items.map((skill) => [
+        skill.skillId,
+        dirtyNoteDraftSkillIdsRef.current.has(skill.skillId) ? (current[skill.skillId] ?? skill.note ?? "") : (skill.note ?? ""),
+      ])));
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -186,7 +199,7 @@ export function SkillsPage() {
   useRefreshSubscription(
     "skills",
     async () => {
-      await load({ background: true });
+      await load({ background: true, includeStatic: false });
     },
     {
       enabled: !isInitialLoading,
@@ -212,7 +225,7 @@ export function SkillsPage() {
   const onReload = useCallback(async () => {
     try {
       await reloadSkills();
-      await load({ background: true });
+      await load({ background: true, includeStatic: false });
       setStatus("Skills reloaded.");
     } catch (err) {
       setError((err as Error).message);
@@ -251,7 +264,9 @@ export function SkillsPage() {
         state: draftState,
         note: draftNote.trim() || undefined,
       });
-      await load({ background: true });
+      dirtyStateDraftSkillIdsRef.current.delete(skill.skillId);
+      dirtyNoteDraftSkillIdsRef.current.delete(skill.skillId);
+      await load({ background: true, includeStatic: false });
       setStatus(`Updated ${skill.name} to ${draftState}.`);
       setError(null);
     } catch (err) {
@@ -324,7 +339,7 @@ export function SkillsPage() {
         ? `Validation passed (${validation.riskLevel} risk).`
         : "Validation completed with blocking errors.");
       setError(null);
-      await load({ background: true });
+      await load({ background: true, includeStatic: true });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -354,7 +369,7 @@ export function SkillsPage() {
           : "Skill installed. Reloaded and kept disabled by default.",
       );
       setError(null);
-      await load({ background: true });
+      await load({ background: true, includeStatic: true });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -824,10 +839,18 @@ export function SkillsPage() {
                         <td>
                           <GCSelect
                             value={draftState}
-                            onChange={(value) => setStateDraftBySkill((current) => ({
-                              ...current,
-                              [skill.skillId]: value as SkillRuntimeState,
-                            }))}
+                            onChange={(value) => {
+                              const nextState = value as SkillRuntimeState;
+                              setStateDraftBySkill((current) => ({
+                                ...current,
+                                [skill.skillId]: nextState,
+                              }));
+                              if (nextState === skill.state) {
+                                dirtyStateDraftSkillIdsRef.current.delete(skill.skillId);
+                              } else {
+                                dirtyStateDraftSkillIdsRef.current.add(skill.skillId);
+                              }
+                            }}
                             options={STATE_OPTIONS.map((option) => ({ value: option, label: option }))}
                           />
                         </td>
@@ -835,10 +858,18 @@ export function SkillsPage() {
                           <input
                             value={draftNote}
                             placeholder="Optional reason"
-                            onChange={(event) => setNoteDraftBySkill((current) => ({
-                              ...current,
-                              [skill.skillId]: event.target.value,
-                            }))}
+                            onChange={(event) => {
+                              const nextNote = event.target.value;
+                              setNoteDraftBySkill((current) => ({
+                                ...current,
+                                [skill.skillId]: nextNote,
+                              }));
+                              if (nextNote === (skill.note ?? "")) {
+                                dirtyNoteDraftSkillIdsRef.current.delete(skill.skillId);
+                              } else {
+                                dirtyNoteDraftSkillIdsRef.current.add(skill.skillId);
+                              }
+                            }}
                           />
                         </td>
                         <td>

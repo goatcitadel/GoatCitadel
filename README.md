@@ -79,6 +79,7 @@ This is a pnpm workspace monorepo.
 | Path | Purpose |
 | --- | --- |
 | [packages/contracts](packages/contracts) | Shared schemas and API contracts |
+| [packages/extensions-sdk](packages/extensions-sdk) | Author-facing SDK helpers for add-on and integration-plugin manifests |
 | [packages/gateway-core](packages/gateway-core) | Gateway support utilities |
 | [packages/memory-core](packages/memory-core) | Memory and context primitives |
 | [packages/mesh-core](packages/mesh-core) | Mesh coordination support |
@@ -305,6 +306,11 @@ pnpm verify:deep:core
 pnpm prompt:gates
 pnpm docs:check
 ```
+
+Package publication workflows that exist today:
+
+- `contracts-v*` tags publish `@goatcitadel/contracts`
+- `extensions-sdk-v*` tags publish `@goatcitadel/extensions-sdk`
 
 For coding workflow expectations, see [docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md](docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md).
 

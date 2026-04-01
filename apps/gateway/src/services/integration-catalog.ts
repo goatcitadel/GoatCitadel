@@ -4,12 +4,11 @@ import type {
   IntegrationFieldSchema,
 } from "@goatcitadel/contracts";
 
-const CORE_CHANNEL_KEYS = new Set([
+const BUILT_IN_CHANNEL_RUNTIME_KEYS = new Set([
   "discord",
   "slack",
   "telegram",
   "whatsapp",
-  "matrix",
   "google-chat",
   "mattermost",
   "signal",
@@ -24,28 +23,55 @@ const CORE_CHANNEL_KEYS = new Set([
 const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.discord": {
     catalogId: "channel.discord",
-    title: "Discord Connection",
-    description: "Connect a Discord bot token or webhook and default send target.",
+    title: "Discord",
+    description: "Gateway mode is the default for a real online Discord bot. Bridge remains available as an advanced webhook-only fallback.",
     allowAdvancedJson: true,
     fields: [
-      text("label", "Connection Label", { defaultValue: "Discord" }),
+      text("label", "Connection Label", {
+        defaultValue: "Discord",
+        description: "Friendly name shown inside GoatCitadel. Use something clear like Discord Beta or Ops Discord.",
+      }),
+      select("runtimeMode", "Runtime Mode", ["gateway", "bridge"], "gateway", {
+        advanced: true,
+      }),
       text("botTokenEnv", "Bot Token ENV Var", {
         placeholder: "DISCORD_BOT_TOKEN",
         secretRef: true,
+        description: "Preferred path. Name of the environment variable that stores your Discord bot token. Bot-token setups default to gateway mode so the bot can appear online and route inbound traffic.",
+      }),
+      text("defaultChannelId", "Default Channel ID", {
+        required: true,
+        placeholder: "123456789012345678",
+        description: "Primary fallback channel for approvals, diagnostics, and default sends. In Discord, enable Developer Mode, right-click the channel, then choose Copy Channel ID.",
       }),
       url("webhookUrl", "Webhook URL", {
         placeholder: "https://discord.com/api/webhooks/...",
         advanced: true,
+        description: "Advanced legacy bridge path. Webhook-only mode supports outbound sends and webhook-authored deletes, but not reactions, inbound routing, or online presence.",
       }),
-      text("defaultChannelId", "Default Channel ID", { required: true }),
-      text("defaultGuildId", "Default Guild ID", { advanced: true }),
+      text("defaultGuildId", "Default Guild ID", {
+        advanced: true,
+        placeholder: "987654321098765432",
+        description: "Optional seed guild for gateway allowlisting or bridge diagnostics. Most bridge users can leave this blank.",
+      }),
+      select("inboundDmPolicy", "Inbound DM Policy", ["pairing", "open", "disabled"], "pairing", {
+        advanced: true,
+      }),
+      select("guildPolicy", "Guild Policy", ["allowlist", "off"], "allowlist", {
+        advanced: true,
+      }),
+      json("guilds", "Guild Rules JSON", {
+        advanced: true,
+        defaultValue: "{}",
+        description: "Advanced gateway routing rules keyed by guild id. Example: {\"123\": {\"requireMention\": true, \"channels\": [\"456\"]}}",
+      }),
       bool("enabled", "Enabled", true),
     ],
   },
   "channel.slack": {
     catalogId: "channel.slack",
     title: "Slack Connection",
-    description: "Connect a Slack bot token and default destination.",
+    description: "Connect a Slack bot token, optional webhook fallback, and optional signing secret for inbound events.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "Slack" }),
@@ -58,6 +84,11 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       text("defaultThreadTs", "Default Thread TS", { advanced: true }),
       url("webhookUrl", "Incoming Webhook URL", {
         placeholder: "https://hooks.slack.com/services/...",
+        advanced: true,
+      }),
+      text("signingSecretEnv", "Signing Secret ENV Var", {
+        placeholder: "SLACK_SIGNING_SECRET",
+        secretRef: true,
         advanced: true,
       }),
       bool("enabled", "Enabled", true),
@@ -80,28 +111,10 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         required: true,
       }),
       select("parseMode", "Parse Mode", ["Markdown", "MarkdownV2", "HTML"], "Markdown"),
-      bool("enabled", "Enabled", true),
-    ],
-  },
-  "channel.matrix": {
-    catalogId: "channel.matrix",
-    title: "Matrix Connection",
-    description: "Connect a Matrix homeserver, access token, and default room.",
-    allowAdvancedJson: true,
-    fields: [
-      text("label", "Connection Label", { defaultValue: "Matrix" }),
-      url("homeserverUrl", "Homeserver URL", {
-        defaultValue: "https://matrix-client.matrix.org",
-        required: true,
-      }),
-      text("accessTokenEnv", "Access Token ENV Var", {
-        placeholder: "MATRIX_ACCESS_TOKEN",
-        required: true,
+      text("webhookSecretEnv", "Webhook Secret ENV Var", {
+        placeholder: "TELEGRAM_WEBHOOK_SECRET",
         secretRef: true,
-      }),
-      text("defaultRoomId", "Default Room ID", {
-        placeholder: "!room:matrix.org",
-        required: true,
+        advanced: true,
       }),
       bool("enabled", "Enabled", true),
     ],
@@ -386,17 +399,16 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   // Channels
   entry("channel", "tui", "Terminal/TUI", "Interactive terminal channel for local operations.", "native", ["local"], ["chat", "commands"]),
   entry("channel", "webchat", "Webchat", "Embedded web chat endpoint for browser clients.", "native", ["token", "basic"], ["chat", "sessions"]),
-  entry("channel", "discord", "Discord", "Discord bot/webhook bridge.", "beta", ["oauth", "bot-token"], ["chat", "threads", "attachments", "reactions", "unsend"]),
+  entry("channel", "discord", "Discord", "Discord bot integration with gateway mode by default and an advanced bridge fallback.", "beta", ["oauth", "bot-token"], ["chat", "threads", "attachments", "reactions", "unsend", "inbound"]),
   entry("channel", "signal", "Signal", "Signal messenger bridge.", "planned", ["device-link"], ["chat", "groups"]),
   entry("channel", "whatsapp", "WhatsApp", "WhatsApp business bridge.", "planned", ["oauth", "token"], ["chat", "attachments", "direct", "reactions"]),
-  entry("channel", "telegram", "Telegram", "Telegram bot integration.", "beta", ["bot-token"], ["chat", "threads", "attachments", "reactions", "unsend"]),
+  entry("channel", "telegram", "Telegram", "Telegram bot integration.", "beta", ["bot-token"], ["chat", "threads", "attachments", "reactions", "unsend", "typing"]),
   entry("channel", "slack", "Slack", "Slack app/bot integration.", "beta", ["oauth"], ["chat", "threads", "mentions", "attachments", "reactions", "unsend"]),
   entry("channel", "google-chat", "Google Chat", "Google Chat app and webhook integration.", "beta", ["oauth", "token"], ["chat", "spaces", "threads", "attachments"], { pluginId: "googlechat" }),
   entry("channel", "mattermost", "Mattermost", "Mattermost bot/webhook integration.", "planned", ["token"], ["chat", "channels", "direct", "attachments", "reactions", "unsend"]),
   entry("channel", "imessage", "iMessage", "iMessage bridge (platform dependent).", "planned", ["local-agent"], ["chat", "attachments", "reactions", "unsend", "replies"]),
   entry("channel", "teams", "Microsoft Teams", "Teams bot/webhook integration.", "beta", ["oauth", "webhook"], ["chat", "threads", "attachments"], { pluginId: "msteams" }),
   entry("channel", "nextcloud-talk", "Nextcloud Talk", "Nextcloud Talk bot bridge with signed webhooks and reactions.", "native", ["token"], ["chat", "rooms", "webhooks", "reactions"]),
-  entry("channel", "matrix", "Matrix", "Matrix room bot integration.", "beta", ["access-token"], ["chat", "rooms", "attachments", "reactions", "unsend"]),
   entry("channel", "line", "LINE", "LINE Messaging API integration.", "planned", ["token"], ["chat", "groups", "rooms", "direct"]),
   entry("channel", "zalo", "Zalo OA", "Zalo Official Account integration.", "planned", ["token"], ["chat", "official-account"]),
   entry("channel", "zalouser", "Zalo User", "Zalo user-session bridge integration.", "planned", ["token"], ["chat", "attachments", "direct"]),
@@ -430,8 +442,8 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
 
   // Automation tools
   entry("automation", "browser-chrome-control", "Browser Control", "Chrome/Chromium automation and capture flows.", "beta", ["local"], ["browse", "automation", "screenshots"]),
-  entry("automation", "canvas-a2ui", "Canvas + A2UI", "Visual canvas workspace and agent-to-ui interactions.", "planned", ["local"], ["visual-workspace"]),
-  entry("automation", "voice-wake-talk", "Voice Wake + Talk", "Wake-word and voice interaction pipeline.", "planned", ["local"], ["voice"]),
+  entry("automation", "canvas-a2ui", "Canvas + A2UI", "Visual canvas workspace and agent-to-ui interactions.", "planned", ["local"], ["scene-view", "selection", "inspect", "agent-apply"]),
+  entry("automation", "voice-wake-talk", "Voice Wake + Talk", "Wake-word and voice interaction pipeline.", "beta", ["local"], ["voice"]),
   entry("automation", "gmail", "Gmail", "Gmail read/send integration.", "planned", ["oauth"], ["read", "write"]),
   entry("automation", "cron", "Cron Jobs", "Scheduled task orchestration.", "native", ["local"], ["scheduling"]),
   entry("automation", "webhooks", "Webhooks", "Inbound/outbound webhook automation.", "native", ["token"], ["events", "automation"]),
@@ -461,10 +473,10 @@ export function resolveIntegrationCatalogMaturity(
 ): IntegrationCatalogEntry["maturity"] {
   const pluginId = (entry.pluginId ?? entry.key).trim().toLowerCase();
   if (entry.kind === "channel") {
-    if (CORE_CHANNEL_KEYS.has(entry.key)) {
-      return entry.maturity === "planned" ? "native" : entry.maturity;
-    }
     if (entry.maturity === "planned") {
+      if (BUILT_IN_CHANNEL_RUNTIME_KEYS.has(entry.key)) {
+        return "beta";
+      }
       return pluginIds.has(pluginId) ? "plugin" : "disabled";
     }
   }
@@ -622,6 +634,7 @@ function select(
   label: string,
   values: string[],
   defaultValue?: string,
+  options: Partial<IntegrationFieldSchema> = {},
 ): IntegrationFieldSchema {
   return {
     key,
@@ -629,5 +642,14 @@ function select(
     type: "select",
     options: values.map((value) => ({ value, label: value })),
     defaultValue,
+    ...options,
   };
+}
+
+function json(
+  key: string,
+  label: string,
+  options: Partial<IntegrationFieldSchema> = {},
+): IntegrationFieldSchema {
+  return { key, label, type: "json", ...options };
 }

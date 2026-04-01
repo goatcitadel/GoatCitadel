@@ -19,6 +19,7 @@ import { TaskSubagentRepository } from "./task-subagent-repo.js";
 import { RealtimeEventRepository } from "./realtime-event-repo.js";
 import { CronJobRepository } from "./cron-job-repo.js";
 import { IntegrationConnectionRepository } from "./integration-connection-repo.js";
+import { ChannelSetupDraftRepository } from "./channel-setup-draft-repo.js";
 import { MeshRepository } from "./mesh-repo.js";
 import { MemoryContextRepository } from "./memory-context-repo.js";
 import { MemoryQmdRunRepository } from "./memory-qmd-run-repo.js";
@@ -91,6 +92,7 @@ export class Storage {
   public readonly realtimeEvents: RealtimeEventRepository;
   public readonly cronJobs: CronJobRepository;
   public readonly integrationConnections: IntegrationConnectionRepository;
+  public readonly channelSetupDrafts: ChannelSetupDraftRepository;
   public readonly agentProfiles: AgentProfileRepository;
   public readonly mesh: MeshRepository;
   public readonly memoryContexts: MemoryContextRepository;
@@ -154,6 +156,7 @@ export class Storage {
     this.realtimeEvents = new RealtimeEventRepository(this.db);
     this.cronJobs = new CronJobRepository(this.db);
     this.integrationConnections = new IntegrationConnectionRepository(this.db);
+    this.channelSetupDrafts = new ChannelSetupDraftRepository(this.db);
     this.agentProfiles = new AgentProfileRepository(this.db);
     this.mesh = new MeshRepository(this.db);
     this.memoryContexts = new MemoryContextRepository(this.db);

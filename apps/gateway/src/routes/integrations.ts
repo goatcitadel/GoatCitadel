@@ -6,6 +6,16 @@ import {
   normalizeNextcloudTalkWebhookPayload,
   verifyNextcloudTalkSignature,
 } from "../services/nextcloud-talk-webhook.js";
+import {
+  deriveSlackWebhookIdempotencyKey,
+  normalizeSlackWebhookPayload,
+  verifySlackSignature,
+} from "../services/slack-webhook.js";
+import {
+  deriveTelegramWebhookIdempotencyKey,
+  normalizeTelegramWebhookPayload,
+  verifyTelegramWebhookSecretToken,
+} from "../services/telegram-webhook.js";
 
 const kindEnum = z.enum(["channel", "model_provider", "productivity", "automation", "platform"]);
 const CHANNEL_INBOUND_MAX_BYTES = 256 * 1024;
@@ -65,8 +75,46 @@ const connectionParamsSchema = z.object({
   connectionId: z.string().uuid(),
 });
 
+const discordPairingParamsSchema = z.object({
+  connectionId: z.string().uuid(),
+  pairingId: z.string().uuid(),
+});
+
 const catalogParamsSchema = z.object({
   catalogId: z.string().min(3),
+});
+
+const channelDraftParamsSchema = z.object({
+  draftId: z.string().uuid(),
+});
+
+const channelDraftListQuerySchema = z.object({
+  catalogId: z.string().min(3).optional(),
+  connectionId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+});
+
+const createChannelDraftSchema = z.object({
+  catalogId: z.string().min(3),
+  connectionId: z.string().uuid().optional(),
+  lifecycleMode: z.enum(["create", "edit", "repair", "rotate_secret", "retest"]).optional(),
+});
+
+const updateChannelDraftSchema = z.object({
+  label: z.string().min(1).max(120).optional(),
+  enabled: z.boolean().optional(),
+  draft: z.record(z.unknown()).optional(),
+  lastFailureCategory: z.enum([
+    "missing_input",
+    "malformed_value",
+    "credential_rejected",
+    "permission_mismatch",
+    "destination_mismatch",
+    "platform_unavailable",
+    "bridge_unavailable",
+    "deprecated_path",
+    "unknown",
+  ]).optional(),
 });
 
 const pluginInstallSchema = z.object({
@@ -114,9 +162,141 @@ const obsidianInboxCaptureSchema = z.object({
 
 type NextcloudTalkWebhookRequest = {
   nextcloudTalkRawBody?: Buffer;
+  slackRawBody?: Buffer;
+  telegramRawBody?: Buffer;
 };
 
 export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.get("/api/v1/channels/drafts", async (request, reply) => {
+    const parsed = channelDraftListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send({
+      items: fastify.gateway.listChannelSetupDrafts(parsed.data),
+    });
+  });
+
+  fastify.get("/api/v1/channels/setup-definitions", async (_request, reply) => {
+    return reply.send({
+      items: fastify.gateway.listChannelSetupDefinitions(),
+    });
+  });
+
+  fastify.get("/api/v1/channels/catalog/:catalogId/setup-definition", async (request, reply) => {
+    const params = catalogParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.getChannelSetupDefinition(params.data.catalogId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/channels/drafts", async (request, reply) => {
+    const parsed = createChannelDraftSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(fastify.gateway.createChannelSetupDraft(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.patch("/api/v1/channels/drafts/:draftId", async (request, reply) => {
+    const params = channelDraftParamsSchema.safeParse(request.params);
+    const parsed = updateChannelDraftSchema.safeParse(request.body);
+    if (!params.success || !parsed.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: parsed.success ? undefined : parsed.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(fastify.gateway.updateChannelSetupDraft(params.data.draftId, parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/channels/drafts/:draftId/validate", async (request, reply) => {
+    const params = channelDraftParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.validateChannelSetupDraft(params.data.draftId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/channels/drafts/:draftId/test", async (request, reply) => {
+    const params = channelDraftParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.gateway.testChannelSetupDraft(params.data.draftId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/channels/drafts/:draftId/finalize", async (request, reply) => {
+    const params = channelDraftParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.gateway.finalizeChannelSetupDraft(params.data.draftId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/channels/connections/:connectionId/repair-draft", async (request, reply) => {
+    const params = connectionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(fastify.gateway.createChannelSetupRepairDraft(params.data.connectionId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/channels/connections/:connectionId/rotate-secret-draft", async (request, reply) => {
+    const params = connectionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(fastify.gateway.createChannelSetupRotateSecretDraft(params.data.connectionId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/channels/connections/:connectionId/retest", async (request, reply) => {
+    const params = connectionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.gateway.retestChannelConnection(params.data.connectionId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
   fastify.get("/api/v1/integrations/catalog", async (request, reply) => {
     const parsed = catalogQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -186,6 +366,58 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ deleted });
   });
 
+  fastify.get("/api/v1/integrations/connections/:connectionId/discord/pairings", async (request, reply) => {
+    const params = connectionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.listDiscordPairings(params.data.connectionId));
+    } catch (error) {
+      const message = (error as Error).message;
+      return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
+    }
+  });
+
+  fastify.post("/api/v1/integrations/connections/:connectionId/discord/pairings/:pairingId/approve", async (request, reply) => {
+    const params = discordPairingParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.approveDiscordPairing(params.data.connectionId, params.data.pairingId));
+    } catch (error) {
+      const message = (error as Error).message;
+      return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
+    }
+  });
+
+  fastify.post("/api/v1/integrations/connections/:connectionId/discord/pairings/:pairingId/revoke", async (request, reply) => {
+    const params = discordPairingParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.revokeDiscordPairing(params.data.connectionId, params.data.pairingId));
+    } catch (error) {
+      const message = (error as Error).message;
+      return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
+    }
+  });
+
+  fastify.post("/api/v1/integrations/connections/:connectionId/discord/reconnect", async (request, reply) => {
+    const params = connectionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.gateway.reconnectDiscordRuntime(params.data.connectionId));
+    } catch (error) {
+      const message = (error as Error).message;
+      return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
+    }
+  });
+
   fastify.post(
     "/api/v1/channels/:channel/inbound",
     { bodyLimit: CHANNEL_INBOUND_MAX_BYTES },
@@ -218,6 +450,219 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       } catch (error) {
         return reply.code(400).send({ error: (error as Error).message });
       }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/integrations/connections/:connectionId/telegram/webhook",
+    {
+      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
+      preParsing: async (request, _reply, payload) => {
+        const rawBody = await readPayloadBuffer(payload);
+        (request as typeof request & NextcloudTalkWebhookRequest).telegramRawBody = rawBody;
+        return Readable.from(rawBody);
+      },
+    },
+    async (request, reply) => {
+      const contentLength = parseContentLength(request.headers["content-length"]);
+      if (contentLength !== undefined && contentLength > CHANNEL_INBOUND_MAX_BYTES) {
+        return reply.code(413).send({
+          error: `Inbound channel payload too large. Max ${CHANNEL_INBOUND_MAX_BYTES} bytes.`,
+        });
+      }
+
+      const params = connectionParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
+
+      let connection;
+      try {
+        connection = fastify.gateway.getIntegrationConnection(params.data.connectionId);
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
+      }
+      if (connection.key !== "telegram") {
+        return reply.code(400).send({ error: "Integration connection is not a Telegram connector" });
+      }
+
+      const rawBody = (request as typeof request & NextcloudTalkWebhookRequest).telegramRawBody;
+      if (!rawBody) {
+        return reply.code(400).send({ error: "Missing Telegram raw request body" });
+      }
+
+      const webhookSecret = resolveTelegramWebhookSecret(connection.config);
+      if (!webhookSecret) {
+        return reply.code(400).send({ error: "Telegram connection is missing a webhook secret" });
+      }
+
+      const secretTokenHeader = readHeaderValue(request.headers["x-telegram-bot-api-secret-token"]);
+      if (!verifyTelegramWebhookSecretToken(secretTokenHeader, webhookSecret)) {
+        return reply.code(401).send({ error: "Invalid Telegram webhook secret token" });
+      }
+
+      const normalized = normalizeTelegramWebhookPayload({
+        connectionId: params.data.connectionId,
+        payload: request.body,
+      });
+      if (normalized.kind === "ignore") {
+        return reply.send({
+          accepted: true,
+          ignored: true,
+          eventType: normalized.eventType,
+          reason: normalized.reason,
+        });
+      }
+
+      const idempotencyKey = deriveTelegramWebhookIdempotencyKey(params.data.connectionId, request.body, rawBody);
+      const ingestResult = await fastify.gateway.ingestChannelMessage("telegram", idempotencyKey, {
+        eventId: normalized.eventId,
+        account: normalized.account,
+        peer: normalized.peer,
+        room: normalized.room,
+        threadId: normalized.threadId,
+        actorId: normalized.actorId,
+        actorType: normalized.actorType,
+        content: normalized.content,
+        metadata: normalized.metadata,
+      });
+      fastify.gateway.setChatSessionBinding({
+        sessionId: ingestResult.session.sessionId,
+        transport: "integration",
+        connectionId: params.data.connectionId,
+        target: normalized.room ?? normalized.peer,
+        writable: true,
+      });
+
+      let responseTurnId: string | undefined;
+      if (!ingestResult.deduped) {
+        const response = await fastify.gateway.respondToExistingChatMessage(
+          ingestResult.session.sessionId,
+          normalized.eventId,
+          { deliveryReplyToMessageId: normalized.deliveryReplyToMessageId },
+        );
+        responseTurnId = response.turnId;
+      }
+
+      return reply.send({
+        accepted: true,
+        deduped: ingestResult.deduped,
+        replied: !ingestResult.deduped,
+        sessionId: ingestResult.session.sessionId,
+        turnId: responseTurnId,
+        eventType: normalized.eventType,
+      });
+    },
+  );
+
+  fastify.post(
+    "/api/v1/integrations/connections/:connectionId/slack/webhook",
+    {
+      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
+      preParsing: async (request, _reply, payload) => {
+        const rawBody = await readPayloadBuffer(payload);
+        (request as typeof request & NextcloudTalkWebhookRequest).slackRawBody = rawBody;
+        return Readable.from(rawBody);
+      },
+    },
+    async (request, reply) => {
+      const contentLength = parseContentLength(request.headers["content-length"]);
+      if (contentLength !== undefined && contentLength > CHANNEL_INBOUND_MAX_BYTES) {
+        return reply.code(413).send({
+          error: `Inbound channel payload too large. Max ${CHANNEL_INBOUND_MAX_BYTES} bytes.`,
+        });
+      }
+
+      const params = connectionParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
+
+      let connection;
+      try {
+        connection = fastify.gateway.getIntegrationConnection(params.data.connectionId);
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
+      }
+      if (connection.key !== "slack") {
+        return reply.code(400).send({ error: "Integration connection is not a Slack connector" });
+      }
+
+      const rawBody = (request as typeof request & NextcloudTalkWebhookRequest).slackRawBody;
+      if (!rawBody) {
+        return reply.code(400).send({ error: "Missing Slack raw request body" });
+      }
+
+      const signingSecret = readConfigSecret(connection.config, "signingSecret", "signingSecretEnv");
+      if (!signingSecret) {
+        return reply.code(400).send({ error: "Slack connection is missing a signing secret" });
+      }
+
+      const timestampHeader = readHeaderValue(request.headers["x-slack-request-timestamp"]);
+      const signatureHeader = readHeaderValue(request.headers["x-slack-signature"]);
+      if (!verifySlackSignature({
+        timestamp: timestampHeader,
+        signature: signatureHeader,
+        rawBody,
+        secret: signingSecret,
+      })) {
+        return reply.code(401).send({ error: "Invalid Slack webhook signature" });
+      }
+
+      const normalized = normalizeSlackWebhookPayload({
+        connectionId: params.data.connectionId,
+        payload: request.body,
+      });
+      if (normalized.kind === "challenge") {
+        return reply.send({ challenge: normalized.challenge });
+      }
+      if (normalized.kind === "ignore") {
+        return reply.send({
+          accepted: true,
+          ignored: true,
+          eventType: normalized.eventType,
+          reason: normalized.reason,
+        });
+      }
+
+      const idempotencyKey = deriveSlackWebhookIdempotencyKey(params.data.connectionId, request.body, rawBody);
+      const ingestResult = await fastify.gateway.ingestChannelMessage("slack", idempotencyKey, {
+        eventId: normalized.eventId,
+        account: normalized.account,
+        peer: normalized.peer,
+        room: normalized.room,
+        threadId: normalized.threadId,
+        actorId: normalized.actorId,
+        actorType: normalized.actorType,
+        content: normalized.content,
+        metadata: normalized.metadata,
+      });
+      fastify.gateway.setChatSessionBinding({
+        sessionId: ingestResult.session.sessionId,
+        transport: "integration",
+        connectionId: params.data.connectionId,
+        target: normalized.room ?? normalized.peer,
+        writable: true,
+      });
+
+      let responseTurnId: string | undefined;
+      if (!ingestResult.deduped) {
+        const response = await fastify.gateway.respondToExistingChatMessage(
+          ingestResult.session.sessionId,
+          normalized.eventId,
+          { deliveryReplyToMessageId: normalized.deliveryReplyToMessageId },
+        );
+        responseTurnId = response.turnId;
+      }
+
+      return reply.send({
+        accepted: true,
+        deduped: ingestResult.deduped,
+        replied: !ingestResult.deduped,
+        sessionId: ingestResult.session.sessionId,
+        turnId: responseTurnId,
+        eventType: normalized.eventType,
+      });
     },
   );
 
@@ -511,6 +956,12 @@ function resolveNextcloudTalkSecret(config: Record<string, unknown>): string | u
   return readConfigSecret(config, "token", "tokenEnv")
     ?? readConfigSecret(config, "botSecret", "botSecretEnv")
     ?? readConfigSecret(config, "secret", "secretEnv");
+}
+
+function resolveTelegramWebhookSecret(config: Record<string, unknown>): string | undefined {
+  return readConfigSecret(config, "webhookSecret", "webhookSecretEnv")
+    ?? readConfigSecret(config, "secretToken", "secretTokenEnv")
+    ?? readConfigSecret(config, "botSecret", "botSecretEnv");
 }
 
 function readConfigSecret(config: Record<string, unknown>, key: string, envKey: string): string | undefined {

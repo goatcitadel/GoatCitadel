@@ -183,6 +183,95 @@ describe("chat routes additional coverage", () => {
     expect(response.body).not.toContain("\"type\":\"done\"");
   });
 
+  it("streams progressive delegation chunks over SSE", async () => {
+    const runChatDelegationStream = vi.fn(async function* () {
+      yield {
+        type: "status" as const,
+        runId: "run-1",
+        taskId: "task-1",
+        message: "Delegation started.",
+      };
+      yield {
+        type: "step" as const,
+        runId: "run-1",
+        taskId: "task-1",
+        step: {
+          stepId: "step-1",
+          runId: "run-1",
+          role: "architect",
+          status: "running",
+          index: 0,
+          startedAt: "2026-03-11T20:00:00.000Z",
+        },
+      };
+      yield {
+        type: "done" as const,
+        runId: "run-1",
+        taskId: "task-1",
+        result: {
+          runId: "run-1",
+          taskId: "task-1",
+          steps: [],
+          stitchedOutput: "### Architect\nDone",
+          citations: [],
+        },
+      };
+    });
+    app = Fastify();
+    app.decorate("gateway", {
+      runChatDelegationStream,
+    } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/delegate/stream",
+      payload: {
+        objective: "Implement the fix",
+        roles: ["Architect"],
+        mode: "sequential",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/event-stream");
+    expect(response.body).toContain("\"type\":\"status\"");
+    expect(response.body).toContain("\"type\":\"step\"");
+    expect(response.body).toContain("\"type\":\"done\"");
+    expect(runChatDelegationStream).toHaveBeenCalledWith("sess-1", {
+      objective: "Implement the fix",
+      roles: ["Architect"],
+      mode: "sequential",
+    });
+  });
+
+  it("sanitizes delegation SSE failures without a fabricated done chunk", async () => {
+    const runChatDelegationStream = vi.fn(async function* () {
+      throw new Error("delegate exploded");
+    });
+    app = Fastify();
+    app.decorate("gateway", {
+      runChatDelegationStream,
+    } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/delegate/stream",
+      payload: {
+        objective: "Implement the fix",
+        roles: ["Architect"],
+        mode: "sequential",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("\"type\":\"error\"");
+    expect(response.body).toContain("Check gateway diagnostics and retry");
+    expect(response.body).not.toContain("delegate exploded");
+    expect(response.body).not.toContain("\"type\":\"done\"");
+  });
+
   it("rejects removed legacy chat write routes", async () => {
     app = Fastify();
     app.decorate("gateway", {} as never);

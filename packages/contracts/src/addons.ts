@@ -10,6 +10,12 @@ export interface AddonInstallCommand {
   note?: string;
 }
 
+export interface AddonAuthorManifest {
+  schemaVersion: 1;
+  addon: AddonCatalogEntry;
+  authorNotes?: string;
+}
+
 export interface AddonHealthCheckRecord {
   key: string;
   status: AddonHealthStatus;

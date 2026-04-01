@@ -33,8 +33,10 @@ describe("dispatchConnectorDelivery", () => {
       }),
       {
         commsSend,
+        commsReply: vi.fn(async () => ({})),
         commsReact,
         commsUnsend,
+        commsTyping: vi.fn(async () => createTypingResult()),
         invokeMcpTool,
         publishRealtime,
       },
@@ -74,8 +76,10 @@ describe("dispatchConnectorDelivery", () => {
       }),
       {
         commsSend,
+        commsReply: vi.fn(async () => ({})),
         commsReact: vi.fn(),
         commsUnsend: vi.fn(),
+        commsTyping: vi.fn(async () => createTypingResult()),
         invokeMcpTool: vi.fn(),
         publishRealtime: vi.fn(),
       },
@@ -105,8 +109,10 @@ describe("dispatchConnectorDelivery", () => {
       }),
       {
         commsSend,
+        commsReply: vi.fn(async () => ({})),
         commsReact: vi.fn(),
         commsUnsend: vi.fn(),
+        commsTyping: vi.fn(async () => createTypingResult()),
         invokeMcpTool: vi.fn(),
         publishRealtime: vi.fn(),
       },
@@ -137,8 +143,10 @@ describe("dispatchConnectorDelivery", () => {
         }),
         {
           commsSend,
+          commsReply: vi.fn(async () => ({})),
           commsReact: vi.fn(),
           commsUnsend: vi.fn(),
+          commsTyping: vi.fn(async () => createTypingResult()),
           invokeMcpTool: vi.fn(),
           publishRealtime: vi.fn(),
         },
@@ -147,8 +155,10 @@ describe("dispatchConnectorDelivery", () => {
 
   it("invokes MCP tools through MCP connectors", async () => {
     const commsSend = vi.fn(async (_input: ChannelSendInput) => ({}));
+    const commsReply = vi.fn(async () => ({}));
     const commsReact = vi.fn(async () => ({}));
     const commsUnsend = vi.fn(async () => ({}));
+    const commsTyping = vi.fn(async () => createTypingResult());
     const invokeMcpTool = vi.fn(async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
       ok: true,
       output: { toolResult: "ok" },
@@ -164,8 +174,10 @@ describe("dispatchConnectorDelivery", () => {
       }),
       {
         commsSend,
+        commsReply,
         commsReact,
         commsUnsend,
+        commsTyping,
         invokeMcpTool,
         publishRealtime,
       },
@@ -188,8 +200,10 @@ describe("dispatchConnectorDelivery", () => {
 
   it("emits realtime events for browser connectors", async () => {
     const commsSend = vi.fn(async (_input: ChannelSendInput) => ({}));
+    const commsReply = vi.fn(async () => ({}));
     const commsReact = vi.fn(async () => ({}));
     const commsUnsend = vi.fn(async () => ({}));
+    const commsTyping = vi.fn(async () => createTypingResult());
     const invokeMcpTool = vi.fn(async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
       ok: true,
       output: {},
@@ -205,8 +219,10 @@ describe("dispatchConnectorDelivery", () => {
       }),
       {
         commsSend,
+        commsReply,
         commsReact,
         commsUnsend,
+        commsTyping,
         invokeMcpTool,
         publishRealtime,
       },
@@ -225,8 +241,10 @@ describe("dispatchConnectorDelivery", () => {
 
   it("rejects action and capability mismatches", async () => {
     const commsSend = vi.fn(async (_input: ChannelSendInput) => ({}));
+    const commsReply = vi.fn(async () => ({}));
     const commsReact = vi.fn(async () => ({}));
     const commsUnsend = vi.fn(async () => ({}));
+    const commsTyping = vi.fn(async () => createTypingResult());
     const invokeMcpTool = vi.fn(async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
       ok: true,
       output: {},
@@ -242,8 +260,10 @@ describe("dispatchConnectorDelivery", () => {
         }),
         {
           commsSend,
+          commsReply,
           commsReact,
           commsUnsend,
+          commsTyping,
           invokeMcpTool,
           publishRealtime,
         },
@@ -270,8 +290,10 @@ describe("dispatchConnectorDelivery", () => {
       }),
       {
         commsSend: vi.fn(),
+        commsReply: vi.fn(async () => ({})),
         commsReact,
         commsUnsend: vi.fn(),
+        commsTyping: vi.fn(async () => createTypingResult()),
         invokeMcpTool: vi.fn(),
         publishRealtime: vi.fn(),
       },
@@ -308,8 +330,10 @@ describe("dispatchConnectorDelivery", () => {
       }),
       {
         commsSend: vi.fn(),
+        commsReply: vi.fn(async () => ({})),
         commsReact: vi.fn(),
         commsUnsend,
+        commsTyping: vi.fn(async () => createTypingResult()),
         invokeMcpTool: vi.fn(),
         publishRealtime: vi.fn(),
       },
@@ -323,6 +347,86 @@ describe("dispatchConnectorDelivery", () => {
     expect(result).toMatchObject({
       capabilityId: "interactive_actions",
       dispatchKind: "integration_channel_action",
+    });
+  });
+
+  it("routes explicit channel replies through integration connectors", async () => {
+    const commsReply = vi.fn(async () => ({
+      outcome: "executed",
+      auditEventId: "audit-reply",
+      policyReason: "allowed",
+      result: { deliveryId: "delivery-reply", status: "sent" },
+    } satisfies ToolInvokeResult));
+
+    const result = await dispatchConnectorDelivery(
+      createConnector("integration_connection", "integration:slack-1", "slack-1", ["outbound_messages"], {
+        key: "slack",
+      }),
+      createPayload("channel.reply", {
+        target: "#ops",
+        replyToMessageId: "1712345678.000200",
+        message: "reply body",
+      }),
+      {
+        commsSend: vi.fn(),
+        commsReply,
+        commsReact: vi.fn(),
+        commsUnsend: vi.fn(),
+        commsTyping: vi.fn(async () => createTypingResult()),
+        invokeMcpTool: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+    );
+
+    expect(commsReply).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: "slack-1",
+      target: "#ops",
+      replyToMessageId: "1712345678.000200",
+      message: "reply body",
+    }));
+    expect(result).toMatchObject({
+      capabilityId: "outbound_messages",
+      dispatchKind: "integration_channel_send",
+    });
+  });
+
+  it("routes typing indicators through interactive channel actions", async () => {
+    const commsTyping = vi.fn(async () => ({
+      channelKey: "discord",
+      connectionId: "discord-1",
+      target: "channel:123",
+      supported: true,
+      status: "sent" as const,
+    }));
+
+    const result = await dispatchConnectorDelivery(
+      createConnector("integration_connection", "integration:discord-1", "discord-1", ["interactive_actions"], {
+        key: "discord",
+      }),
+      createPayload("channel.typing", {
+        target: "channel:123",
+        durationMs: 4000,
+      }),
+      {
+        commsSend: vi.fn(),
+        commsReply: vi.fn(async () => ({})),
+        commsReact: vi.fn(),
+        commsUnsend: vi.fn(),
+        commsTyping,
+        invokeMcpTool: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+    );
+
+    expect(commsTyping).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: "discord-1",
+      target: "channel:123",
+      durationMs: 4000,
+    }));
+    expect(result).toMatchObject({
+      capabilityId: "interactive_actions",
+      dispatchKind: "integration_channel_action",
+      result: { supported: true, status: "sent" },
     });
   });
 });
@@ -358,5 +462,15 @@ function createPayload(
     connectorId: "unused-by-helper",
     action,
     payload,
+  };
+}
+
+function createTypingResult() {
+  return {
+    channelKey: "discord",
+    connectionId: "conn-1",
+    target: "#ops",
+    supported: false,
+    status: "unsupported" as const,
   };
 }

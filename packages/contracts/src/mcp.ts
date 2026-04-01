@@ -1,3 +1,5 @@
+import type { ChannelProbeReport } from "./channel-probes.js";
+
 export type McpTransport = "stdio" | "http" | "sse";
 export type McpServerStatus = "disconnected" | "connecting" | "connected" | "error";
 export type McpServerCategory =
@@ -143,4 +145,5 @@ export interface ConnectorDiagnosticReport {
   }>;
   recommendedNextAction?: string;
   checkedAt: string;
+  probe?: ChannelProbeReport;
 }

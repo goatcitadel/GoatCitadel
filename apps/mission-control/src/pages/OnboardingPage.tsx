@@ -478,6 +478,9 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
         ? await startDaemon()
         : await restartDaemon();
       setDaemonStatus(response.status);
+      if (!response.accepted) {
+        setError(response.reason);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -563,6 +566,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   const completedChecklistItems = state?.checklist.filter((item) => item.status === "complete").length ?? 0;
   const totalChecklistItems = state?.checklist.length ?? 0;
   const daemonReady = daemonStatus?.running === true;
+  const daemonControlSupported = daemonStatus?.controllable ?? false;
 
   if (loading) {
     return <p>Loading Launch Wizard...</p>;
@@ -584,7 +588,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       <article className="card">
         <h3>Launch Readiness</h3>
         <div className="token-row">
-          <span className={`token-chip ${daemonReady ? "token-chip-active" : ""}`}>Daemon {daemonReady ? "running" : "stopped"}</span>
+          <span className={`token-chip ${daemonReady ? "token-chip-active" : ""}`}>Gateway {daemonReady ? "running" : "unavailable"}</span>
           <span className={`token-chip ${completedChecklistItems === totalChecklistItems ? "token-chip-active" : ""}`}>
             Checklist {completedChecklistItems}/{totalChecklistItems}
           </span>
@@ -594,10 +598,10 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
           {daemonStatus?.host ? <span className="token-chip">Host {daemonStatus.host}</span> : null}
         </div>
         <div className="controls-row">
-          <button type="button" onClick={() => void handleDaemonAction("start")} disabled={daemonBusy !== null || daemonReady}>
-            {daemonBusy === "start" ? "Starting..." : daemonReady ? "Daemon running" : "Start daemon"}
+          <button type="button" onClick={() => void handleDaemonAction("start")} disabled={daemonBusy !== null || daemonReady || !daemonControlSupported}>
+            {daemonBusy === "start" ? "Starting..." : daemonReady ? "Gateway running" : "Start daemon"}
           </button>
-          <button type="button" onClick={() => void handleDaemonAction("restart")} disabled={daemonBusy !== null}>
+          <button type="button" onClick={() => void handleDaemonAction("restart")} disabled={daemonBusy !== null || !daemonControlSupported}>
             {daemonBusy === "restart" ? "Restarting..." : "Restart daemon"}
           </button>
           <button type="button" onClick={() => void load()}>
@@ -613,6 +617,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
         ) : (
           <p className="office-subtitle">Daemon status is unavailable right now.</p>
         )}
+        {daemonStatus?.controlMessage ? <p className="office-subtitle">{daemonStatus.controlMessage}</p> : null}
       </article>
 
       <article className="card">

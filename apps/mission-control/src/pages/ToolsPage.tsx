@@ -214,57 +214,70 @@ export function ToolsPage() {
     }
     setError(null);
     try {
+      const sessionsPromise = background
+        ? Promise.resolve<Awaited<ReturnType<typeof fetchChatSessions>> | null>(null)
+        : fetchChatSessions({ scope: "all", view: "all", limit: 500 });
+      const agentsPromise = background
+        ? Promise.resolve<Awaited<ReturnType<typeof fetchAgents>> | null>(null)
+        : fetchAgents("all", 300);
+      const settingsPromise = background
+        ? Promise.resolve<Awaited<ReturnType<typeof fetchSettings>> | null>(null)
+        : fetchSettings();
       const [catalogRes, grantsRes, sessionsRes, agentsRes, settingsRes] = await Promise.all([
         fetchToolCatalog(),
         fetchToolGrants({ limit: 500 }),
-        fetchChatSessions({ scope: "all", view: "all", limit: 500 }),
-        fetchAgents("all", 300),
-        fetchSettings(),
+        sessionsPromise,
+        agentsPromise,
+        settingsPromise,
       ]);
       setCatalog(catalogRes.items);
       setGrants(grantsRes.items);
-      setCurrentToolProfile(settingsRes.defaultToolProfile || "standard");
+      if (settingsRes) {
+        setCurrentToolProfile(settingsRes.defaultToolProfile || "standard");
+      }
       setSuccess(null);
-      const nextSessionOptions = sessionsRes.items.map((session) => ({
-        value: session.sessionId,
-        label: formatSessionOption(session),
-      }));
-      const nextAgentOptions = dedupeOptions([
-        { value: "operator", label: "operator (you)" },
-        ...agentsRes.items.map((agent) => ({
-          value: agent.agentId,
-          label: `${agent.name} (${agent.agentId})`,
-        })),
-      ]);
-      setSessionOptions(nextSessionOptions);
-      setAgentOptions(nextAgentOptions);
-      const defaultSession = nextSessionOptions[0]?.value;
-      const defaultAgent = nextAgentOptions.find((option) => option.value === "operator")?.value
-        ?? nextAgentOptions[0]?.value
-        ?? "operator";
-      setScopeRef((current) => {
-        if (scope === "session" && (current === "demo-session" || !current.trim()) && defaultSession) {
-          return defaultSession;
-        }
-        if (scope === "agent" && (current === "demo-session" || !current.trim())) {
-          return defaultAgent;
-        }
-        return current;
-      });
-      setEvaluateForm((current) => ({
-        ...current,
-        agentId: current.agentId === "operator" || !current.agentId.trim() ? defaultAgent : current.agentId,
-        sessionId: (current.sessionId === "demo-session" || !current.sessionId.trim()) && defaultSession
-          ? defaultSession
-          : current.sessionId,
-      }));
-      setDryRunForm((current) => ({
-        ...current,
-        agentId: current.agentId === "operator" || !current.agentId.trim() ? defaultAgent : current.agentId,
-        sessionId: (current.sessionId === "demo-session" || !current.sessionId.trim()) && defaultSession
-          ? defaultSession
-          : current.sessionId,
-      }));
+      if (sessionsRes && agentsRes) {
+        const nextSessionOptions = sessionsRes.items.map((session) => ({
+          value: session.sessionId,
+          label: formatSessionOption(session),
+        }));
+        const nextAgentOptions = dedupeOptions([
+          { value: "operator", label: "operator (you)" },
+          ...agentsRes.items.map((agent) => ({
+            value: agent.agentId,
+            label: `${agent.name} (${agent.agentId})`,
+          })),
+        ]);
+        setSessionOptions(nextSessionOptions);
+        setAgentOptions(nextAgentOptions);
+        const defaultSession = nextSessionOptions[0]?.value;
+        const defaultAgent = nextAgentOptions.find((option) => option.value === "operator")?.value
+          ?? nextAgentOptions[0]?.value
+          ?? "operator";
+        setScopeRef((current) => {
+          if (scope === "session" && (current === "demo-session" || !current.trim()) && defaultSession) {
+            return defaultSession;
+          }
+          if (scope === "agent" && (current === "demo-session" || !current.trim())) {
+            return defaultAgent;
+          }
+          return current;
+        });
+        setEvaluateForm((current) => ({
+          ...current,
+          agentId: current.agentId === "operator" || !current.agentId.trim() ? defaultAgent : current.agentId,
+          sessionId: (current.sessionId === "demo-session" || !current.sessionId.trim()) && defaultSession
+            ? defaultSession
+            : current.sessionId,
+        }));
+        setDryRunForm((current) => ({
+          ...current,
+          agentId: current.agentId === "operator" || !current.agentId.trim() ? defaultAgent : current.agentId,
+          sessionId: (current.sessionId === "demo-session" || !current.sessionId.trim()) && defaultSession
+            ? defaultSession
+            : current.sessionId,
+        }));
+      }
       if (catalogRes.items.length > 0) {
         const first = catalogRes.items[0]?.toolName;
         if (first) {

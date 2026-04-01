@@ -1,8 +1,11 @@
 import {
   ConflictError,
+  type ChannelReplyInput,
   ValidationError,
   type ChannelReactInput,
   type ChannelSendInput,
+  type ChannelTypingInput,
+  type ChannelTypingResult,
   type ChannelUnsendInput,
   type ConnectorCapabilityId,
   type ConnectorDeliveryWorkflowPayload,
@@ -18,13 +21,17 @@ export interface ConnectorDeliveryDispatchResult {
   result?: Record<string, unknown>;
 }
 
+type ConnectorActionResult = ToolInvokeResult | Record<string, unknown> | ChannelTypingResult;
+
 export async function dispatchConnectorDelivery(
   connector: ConnectorRecord,
   payload: ConnectorDeliveryWorkflowPayload,
   deps: {
     commsSend: (input: ChannelSendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
+    commsReply: (input: ChannelReplyInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsReact: (input: ChannelReactInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsUnsend: (input: ChannelUnsendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
+    commsTyping: (input: ChannelTypingInput) => Promise<ChannelTypingResult | Record<string, unknown>>;
     invokeMcpTool: (input: McpInvokeRequest) => Promise<McpInvokeResponse>;
     publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
   },
@@ -33,20 +40,22 @@ export async function dispatchConnectorDelivery(
 
   switch (connector.connectorType) {
     case "integration_connection":
-      if (!["channel.send", "channel.react", "channel.unsend"].includes(payload.action)) {
+      if (!["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"].includes(payload.action)) {
         throw new ValidationError({
           message: `Connector delivery action ${payload.action} is not supported for integration connectors.`,
         });
       }
-      if (payload.action === "channel.send") {
+      if (payload.action === "channel.send" || payload.action === "channel.reply") {
         requireConnectorCapability(connector, "outbound_messages", payload.action);
       } else {
         requireConnectorCapability(connector, "interactive_actions", payload.action);
       }
       return dispatchIntegrationChannelAction(connector, payload, {
         commsSend: deps.commsSend,
+        commsReply: deps.commsReply,
         commsReact: deps.commsReact,
         commsUnsend: deps.commsUnsend,
+        commsTyping: deps.commsTyping,
       });
 
     case "mcp_server":
@@ -100,15 +109,17 @@ async function dispatchIntegrationChannelAction(
   payload: ConnectorDeliveryWorkflowPayload,
   deps: {
     commsSend: (input: ChannelSendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
+    commsReply: (input: ChannelReplyInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsReact: (input: ChannelReactInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsUnsend: (input: ChannelUnsendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
+    commsTyping: (input: ChannelTypingInput) => Promise<ChannelTypingResult | Record<string, unknown>>;
   },
 ): Promise<ConnectorDeliveryDispatchResult> {
   const actionPayload = payload.payload ?? {};
   const target = optionalString(actionPayload.target)
     ? normalizeConnectorDeliveryTarget(connector, requireNonEmptyString(actionPayload.target, "payload.target"))
     : undefined;
-  let result: ToolInvokeResult | Record<string, unknown>;
+  let result: ConnectorActionResult;
   let dispatchKind: ConnectorDeliveryDispatchResult["dispatchKind"] = "integration_channel_send";
 
   if (payload.action === "channel.send") {
@@ -119,6 +130,20 @@ async function dispatchIntegrationChannelAction(
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
       message,
       attachments,
+      sessionId: optionalString(actionPayload.sessionId),
+      agentId: optionalString(actionPayload.agentId),
+      taskId: optionalString(actionPayload.taskId),
+    });
+  } else if (payload.action === "channel.reply") {
+    const message = requireNonEmptyString(actionPayload.message, "payload.message");
+    const attachments = normalizeAttachments(actionPayload.attachments);
+    result = await deps.commsReply({
+      connectionId: connector.sourceId,
+      target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
+      message,
+      attachments,
+      replyToMessageId: requireNonEmptyString(actionPayload.replyToMessageId, "payload.replyToMessageId"),
+      replyToPartIndex: optionalInteger(actionPayload.replyToPartIndex),
       sessionId: optionalString(actionPayload.sessionId),
       agentId: optionalString(actionPayload.agentId),
       taskId: optionalString(actionPayload.taskId),
@@ -136,6 +161,17 @@ async function dispatchIntegrationChannelAction(
       agentId: optionalString(actionPayload.agentId),
       taskId: optionalString(actionPayload.taskId),
     });
+  } else if (payload.action === "channel.typing") {
+    dispatchKind = "integration_channel_action";
+    result = await deps.commsTyping({
+      connectionId: connector.sourceId,
+      target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
+      threadId: optionalString(actionPayload.threadId),
+      durationMs: optionalInteger(actionPayload.durationMs),
+      sessionId: optionalString(actionPayload.sessionId),
+      agentId: optionalString(actionPayload.agentId),
+      taskId: optionalString(actionPayload.taskId),
+    });
   } else {
     dispatchKind = "integration_channel_action";
     result = await deps.commsUnsend({
@@ -149,7 +185,9 @@ async function dispatchIntegrationChannelAction(
     });
   }
   return {
-    capabilityId: payload.action === "channel.send" ? "outbound_messages" : "interactive_actions",
+    capabilityId: payload.action === "channel.send" || payload.action === "channel.reply"
+      ? "outbound_messages"
+      : "interactive_actions",
     dispatchKind,
     result: unwrapToolInvokeResult(result),
   };
@@ -352,7 +390,7 @@ function normalizeAttachments(value: unknown): ChannelSendInput["attachments"] |
   return attachments.length > 0 ? attachments : undefined;
 }
 
-function unwrapToolInvokeResult(result: ToolInvokeResult | Record<string, unknown>): Record<string, unknown> {
+function unwrapToolInvokeResult(result: ConnectorActionResult): Record<string, unknown> {
   if ("outcome" in result && typeof result.outcome === "string") {
     const invokeResult = result as ToolInvokeResult;
     if (invokeResult.outcome !== "executed") {
@@ -364,5 +402,5 @@ function unwrapToolInvokeResult(result: ToolInvokeResult | Record<string, unknow
       policyReason: invokeResult.policyReason,
     };
   }
-  return result as Record<string, unknown>;
+  return { ...result };
 }

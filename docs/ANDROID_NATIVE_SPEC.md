@@ -2,12 +2,12 @@
 
 ## Status
 
-Planning/specification only. No Android app code is added in this repository.
+Android app code is still outside this repository. The current separate-repo lane exists as `GoatCitadel-mobile`, but companion.android.v1 signed-session integration is not yet proven end to end.
 
 ## Repo decision
 
 Android ships as a separate repo:
-- recommended repo: `goatcitadel-android`
+- recommended repo: `GoatCitadel-mobile`
 
 This keeps mobile release cadence, signing, platform-specific CI, and dependency review separate from the core GoatCitadel monorepo.
 

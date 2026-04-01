@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createCronJob,
   deleteCronJob,
@@ -62,6 +62,11 @@ export function CronPage() {
     updatedAt: string;
   }>>([]);
   const [selectedRunDiff, setSelectedRunDiff] = useState<{ runId: string; diff: Record<string, unknown> } | null>(null);
+  const reviewQueueEnabledRef = useRef(reviewQueueEnabled);
+
+  useEffect(() => {
+    reviewQueueEnabledRef.current = reviewQueueEnabled;
+  }, [reviewQueueEnabled]);
 
   const load = useCallback(async (options?: { background?: boolean }) => {
     const background = options?.background ?? false;
@@ -71,12 +76,17 @@ export function CronPage() {
       setIsInitialLoading(true);
     }
     try {
+      const settingsPromise = background
+        ? Promise.resolve<Awaited<ReturnType<typeof fetchSettings>> | null>(null)
+        : fetchSettings();
       const [response, settings] = await Promise.all([
         fetchCronJobs(),
-        fetchSettings(),
+        settingsPromise,
       ]);
-      const nextReviewQueueEnabled = settings.features.cronReviewQueueV1Enabled;
-      setReviewQueueEnabled(nextReviewQueueEnabled);
+      const nextReviewQueueEnabled = settings?.features.cronReviewQueueV1Enabled ?? reviewQueueEnabledRef.current;
+      if (settings) {
+        setReviewQueueEnabled(nextReviewQueueEnabled);
+      }
       if (nextReviewQueueEnabled) {
         try {
           const review = await fetchCronReviewQueue(100);

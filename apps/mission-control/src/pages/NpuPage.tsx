@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   evaluateUiChangeRisk,
   fetchNpuModels,
@@ -28,6 +28,10 @@ interface NpuPageProps {
 type NpuStatusRecord = Awaited<ReturnType<typeof fetchNpuStatus>>;
 type NpuModelRecord = Awaited<ReturnType<typeof fetchNpuModels>>["items"][number];
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
 export function NpuPage({ settings }: NpuPageProps) {
   const [status, setStatus] = useState<NpuStatusRecord | null>(null);
   const [models, setModels] = useState<NpuModelRecord[]>([]);
@@ -48,6 +52,8 @@ export function NpuPage({ settings }: NpuPageProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const riskDebounceRef = useRef<number | null>(null);
+  const riskAbortRef = useRef<AbortController | null>(null);
 
   const loadModels = async (statusRes: NpuStatusRecord): Promise<void> => {
     if (!canLoadNpuModels(statusRes)) {
@@ -73,17 +79,22 @@ export function NpuPage({ settings }: NpuPageProps) {
       setIsInitialLoading(true);
     }
     setError(null);
-    return Promise.all([fetchNpuStatus(), fetchSettings()])
+    const settingsPromise = background
+      ? Promise.resolve<RuntimeSettingsResponse | null>(null)
+      : fetchSettings();
+    return Promise.all([fetchNpuStatus(), settingsPromise])
       .then(async ([statusRes, settingsRes]) => {
         setStatus(statusRes);
-        setNpuEnabled(settingsRes.npu.enabled);
-        setAutoStart(settingsRes.npu.autoStart);
-        setSidecarUrl(settingsRes.npu.sidecarUrl);
-        setBaseline({
-          enabled: settingsRes.npu.enabled,
-          autoStart: settingsRes.npu.autoStart,
-          sidecarUrl: settingsRes.npu.sidecarUrl,
-        });
+        if (settingsRes) {
+          setNpuEnabled(settingsRes.npu.enabled);
+          setAutoStart(settingsRes.npu.autoStart);
+          setSidecarUrl(settingsRes.npu.sidecarUrl);
+          setBaseline({
+            enabled: settingsRes.npu.enabled,
+            autoStart: settingsRes.npu.autoStart,
+            sidecarUrl: settingsRes.npu.sidecarUrl,
+          });
+        }
         await loadModels(statusRes);
       })
       .catch((err: Error) => setError(err.message))
@@ -117,34 +128,53 @@ export function NpuPage({ settings }: NpuPageProps) {
     if (!baseline) {
       return;
     }
-    void evaluateUiChangeRisk({
-      pageId: "npu",
-      changes: [
-        { field: "npu.enabled", from: baseline.enabled, to: npuEnabled },
-        { field: "npu.autoStart", from: baseline.autoStart, to: autoStart },
-        { field: "npu.sidecarUrl", from: baseline.sidecarUrl, to: sidecarUrl },
-      ],
-    })
-      .then((result) => {
-        setChangeReview({
-          overall: result.overall,
-          items: result.items.map((item) => ({
-            field: item.field,
-            level: item.level,
-            hint: item.hint,
-          })),
+    if (riskDebounceRef.current) {
+      window.clearTimeout(riskDebounceRef.current);
+      riskDebounceRef.current = null;
+    }
+    riskDebounceRef.current = window.setTimeout(() => {
+      riskAbortRef.current?.abort();
+      const controller = new AbortController();
+      riskAbortRef.current = controller;
+      void evaluateUiChangeRisk({
+        pageId: "npu",
+        changes: [
+          { field: "npu.enabled", from: baseline.enabled, to: npuEnabled },
+          { field: "npu.autoStart", from: baseline.autoStart, to: autoStart },
+          { field: "npu.sidecarUrl", from: baseline.sidecarUrl, to: sidecarUrl },
+        ],
+      }, { signal: controller.signal })
+        .then((result) => {
+          setChangeReview({
+            overall: result.overall,
+            items: result.items.map((item) => ({
+              field: item.field,
+              level: item.level,
+              hint: item.hint,
+            })),
+          });
+        })
+        .catch((err: unknown) => {
+          if (isAbortError(err)) {
+            return;
+          }
+          setChangeReview({
+            overall: "warning",
+            items: [{
+              field: "npu",
+              level: "warning",
+              hint: "Unable to fetch risk hints from gateway.",
+            }],
+          });
         });
-      })
-      .catch(() => {
-        setChangeReview({
-          overall: "warning",
-          items: [{
-            field: "npu",
-            level: "warning",
-            hint: "Unable to fetch risk hints from gateway.",
-          }],
-        });
-      });
+    }, 400);
+    return () => {
+      if (riskDebounceRef.current) {
+        window.clearTimeout(riskDebounceRef.current);
+        riskDebounceRef.current = null;
+      }
+      riskAbortRef.current?.abort();
+    };
   }, [baseline, npuEnabled, autoStart, sidecarUrl]);
 
   const onStart = async () => {

@@ -4,14 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, randomUUID, timingSafeEqual, verify } from "node:crypto";
 import { isVerboseLoggingEnabled } from "../runtime-ux.js";
-import { EventIngestService } from "@goatcitadel/gateway-core";
+import { EventIngestService, describeChannelCapabilities, resolveSessionRoute } from "@goatcitadel/gateway-core";
 import { MeshService } from "@goatcitadel/mesh-core";
 import {
   estimateTokensFromText,
   truncateByTokenEstimate,
 } from "@goatcitadel/memory-core";
+import { buildInstalledIntegrationPluginRecord, resolveIntegrationPluginInstallMetadata } from "./integration-plugin-author-contract.js";
+import { sendTelegramTypingIndicator } from "./telegram-typing.js";
 import { OrchestrationEngine } from "@goatcitadel/orchestration";
 import {
   ToolPolicyEngine,
@@ -35,6 +37,7 @@ import {
   chatModeRequiresProjectBinding,
   clampInt,
   ConflictError,
+  findProviderTemplate,
   GoatError,
   isChatTurnActiveStatus,
   isChatTurnTerminalStatus,
@@ -61,8 +64,21 @@ import type {
   BackupManifestRecord,
   BackupVerifyResponse,
   AuthRuntimeSettings,
+  CompanionAuditEventRecord,
+  CompanionSessionExchangeInput,
+  CompanionSessionExchangeResponse,
+  CompanionSessionAdminRecord,
+  CompanionSessionInfoResponse,
+  CompanionSessionListResponse,
+  CompanionSessionRefreshInput,
+  CompanionSessionRefreshResponse,
+  CompanionSessionRevokeResponse,
+  CompanionSignatureAlgorithm,
   AuthSettingsUpdateInput,
   FilesystemReadAccessMode,
+  FollowOnProofLaneArtifactIndex,
+  FollowOnProofLaneArtifactLaneId,
+  FollowOnProofLaneArtifactRecord,
   DeviceAccessRequestCreateInput,
   DeviceAccessRequestCreateResponse,
   DeviceAccessGrantRecord as DeviceAccessGrantContractRecord,
@@ -81,10 +97,28 @@ import type {
   CreateAssemblyRunInput,
   CalendarCreateEventInput,
   CalendarListQuery,
+  ChannelCapabilities,
+  ChannelRuntimeStatus,
   ChannelReactInput,
+  ChannelReplyInput,
   ChannelSendInput,
+  ChannelSetupDefinition,
+  ChannelSetupDraft,
+  ChannelSetupDraftCreateInput,
+  ChannelSetupDraftUpdateInput,
+  ChannelSetupFailureCategory,
+  ChannelSetupFinalizeResult,
+  ChannelSetupIssue,
+  ChannelProbeReport,
+  ChannelSetupTestResult,
+  ChannelSetupValidationLevel,
+  ChannelSetupValidationResult,
+  ChannelTypingInput,
+  ChannelTypingResult,
   ChannelUnsendInput,
   ChannelInboundMessageInput,
+  DiscordPairingRecord,
+  DiscordRuntimeStatus,
   ChatAttachmentRecord,
   ChatAttachmentMediaType,
   ChatAttachmentPreviewResponse,
@@ -359,8 +393,18 @@ import {
   INTEGRATION_CATALOG,
   resolveIntegrationCatalogMaturity,
 } from "./integration-catalog.js";
+import {
+  listChannelSetupDefinitions,
+  requireChannelSetupDefinition,
+} from "./channel-setup-definitions.js";
+import {
+  buildChannelSetupRecentTestSignature,
+  resolveReusableChannelSetupTestResult,
+  type ChannelSetupRecentTestCacheEntry,
+} from "./channel-setup-test-cache.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
+import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-diagnostic-checks.js";
 import { MemoryContextService } from "./memory-context-service.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
@@ -382,6 +426,7 @@ import {
 } from "../voice-runtime/installer.js";
 import { getManagedVoiceRuntimeStatus } from "../voice-runtime/status.js";
 import { normalizeMemoryForgetCriteria, serializePathWithinRoot } from "./security-utils.js";
+import { buildVoiceControlStartFailure } from "./voice-control-guard.js";
 import {
   COST_REPORT_HOURLY_JOB_ID,
   CronAutomationService,
@@ -394,6 +439,7 @@ import {
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
+import { DiscordRuntimeService } from "./discord-runtime-service.js";
 import {
   createDailyUpdateReview,
   renderUpdateReviewMarkdown,
@@ -412,6 +458,7 @@ import { ChatProjectService } from "./chat-project-service.js";
 import { DurableRunService } from "./durable-run-service.js";
 import { HooksService } from "./hooks-service.js";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
+import { parseChatModelCommandTarget } from "./chat-model-command.js";
 import { PromptPackService, normalizePromptTestCode, clampPromptScore } from "./prompt-pack-service.js";
 import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
@@ -420,7 +467,13 @@ import { evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
+import {
+  runDiscordBotLiveChecks,
+  runSlackBotLiveChecks,
+  runTelegramBotLiveChecks,
+} from "./channel-bot-live-probes.js";
 import { resolveChannelSendAttachments } from "./channel-attachment-payload.js";
+import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import {
   MCP_APPROVAL_DELIVERY_TOOL_NAME,
   MCP_APPROVAL_INBOX_URL,
@@ -432,6 +485,8 @@ import {
 export interface ApprovalResolveResult {
   approval: ApprovalRequest;
   executedAction?: ToolInvokeResult;
+  replay: ApprovalReplayResult;
+  durableRunId?: string;
 }
 
 export interface ApprovalReplayResult {
@@ -474,6 +529,43 @@ interface AuthDeviceGrantRecord {
   lastUsedAt?: string;
   revokedAt?: string;
   metadata: Record<string, unknown>;
+}
+
+interface CompanionSessionRecord {
+  sessionId: string;
+  grantId: string;
+  accessTokenHash: string;
+  accessTokenExpiresAt: string;
+  refreshTokenHash: string;
+  refreshTokenExpiresAt: string;
+  signingPublicKeyPem: string;
+  signatureAlgorithm: CompanionSignatureAlgorithm;
+  createdAt: string;
+  lastRotatedAt: string;
+  lastSeenAt?: string;
+  revokedAt?: string;
+  metadata: Record<string, unknown>;
+  deviceLabel: string;
+  deviceType: string;
+  platform?: string;
+  grantExpiresAt?: string;
+  grantRevokedAt?: string;
+}
+
+interface CompanionAccessValidationResult {
+  actorId: string;
+  deviceId: string;
+  grantId: string;
+  sessionId: string;
+}
+
+interface DiscordRouteSessionRecord {
+  connectionId: string;
+  target: string;
+  logicalSessionKey: string;
+  sessionId: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface FileUploadResult {
@@ -572,6 +664,8 @@ const MCP_SERVERS_SETTING_KEY = "mcp_servers_v1";
 const MCP_TOOLS_SETTING_KEY = "mcp_tools_v1";
 const MCP_TOOL_FIRST_APPROVAL_SETTING_KEY = "mcp_tool_first_approval_v1";
 const INTEGRATION_PLUGINS_SETTING_KEY = "integration_plugins_v1";
+const DISCORD_PAIRINGS_SETTING_KEY = "discord_pairings_v1";
+const DISCORD_ROUTE_SESSIONS_SETTING_KEY = "discord_route_sessions_v1";
 const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
 const DAEMON_LOG_TAIL_SETTING_KEY = "daemon_log_tail_v1";
 const VOICE_STATUS_SETTING_KEY = "voice_status_v1";
@@ -597,6 +691,17 @@ const DEVICE_ACCESS_REQUEST_TTL_MS = 10 * 60 * 1000;
 const DEVICE_ACCESS_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DEVICE_ACCESS_SECRET_BYTES = 24;
 const DEVICE_ACCESS_TOKEN_BYTES = 32;
+const COMPANION_CONTRACT_ID = "companion.android.v1";
+const COMPANION_SIGNATURE_ALGORITHM: CompanionSignatureAlgorithm = "ed25519";
+const COMPANION_ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
+const COMPANION_REFRESH_TOKEN_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const COMPANION_ACCESS_TOKEN_BYTES = 32;
+const COMPANION_REFRESH_TOKEN_BYTES = 32;
+const COMPANION_MAX_PUBLIC_KEY_PEM_LENGTH = 4_096;
+const COMPANION_REQUEST_NONCE_MAX_LENGTH = 160;
+const COMPANION_REQUEST_SIGNATURE_MAX_LENGTH = 1_024;
+const COMPANION_REQUEST_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const COMPANION_REQUEST_REPLAY_TTL_MS = 10 * 60 * 1000;
 
 const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
 
@@ -914,6 +1019,17 @@ interface ProactivePlannedAction {
   roles?: string[];
 }
 
+interface ChatDelegationProgressStatusEvent {
+  runId: string;
+  taskId: string;
+  message: string;
+}
+
+interface ChatDelegationProgressCallbacks {
+  onStatus?: (event: ChatDelegationProgressStatusEvent) => Promise<void> | void;
+  onStep?: (step: ChatDelegationStepRecord) => Promise<void> | void;
+}
+
 interface ImprovementReplayTriggerInput {
   sampleSize?: number;
 }
@@ -1070,6 +1186,47 @@ const CHAT_COMPACTION_TRIGGER_TOKENS = 2200;
 const CHAT_COMPACTION_SUMMARY_TOKEN_BUDGET = 360;
 const CHAT_PLANNER_MAX_STEPS = 8;
 const CHAT_PLANNER_MIN_STEPS = 3;
+const FOLLOW_ON_PARITY_ARTIFACTS_SETTING_KEY = "follow_on_parity_artifacts_v1";
+
+function normalizeFollowOnParityArtifactIndex(value: unknown): FollowOnProofLaneArtifactIndex {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const normalized: FollowOnProofLaneArtifactIndex = {};
+  for (const laneId of ["browser", "packaging", "a2ui", "voice", "companion", "extensions"] as const) {
+    const artifact = normalizeFollowOnParityArtifactRecord(laneId, (value as Record<string, unknown>)[laneId]);
+    if (artifact) {
+      normalized[laneId] = artifact;
+    }
+  }
+  return normalized;
+}
+
+function normalizeFollowOnParityArtifactRecord(
+  laneId: FollowOnProofLaneArtifactLaneId,
+  value: unknown,
+): FollowOnProofLaneArtifactRecord | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const generatedAt = typeof record.generatedAt === "string" ? record.generatedAt : undefined;
+  const summary = typeof record.summary === "string" ? record.summary : undefined;
+  const relativePath = typeof record.relativePath === "string" ? record.relativePath : undefined;
+  const fullPath = typeof record.fullPath === "string" ? record.fullPath : undefined;
+  const bytes = typeof record.bytes === "number" && Number.isFinite(record.bytes) ? record.bytes : undefined;
+  if (!generatedAt || !summary || !relativePath || !fullPath || bytes === undefined) {
+    return undefined;
+  }
+  return {
+    laneId,
+    generatedAt,
+    summary,
+    relativePath,
+    fullPath,
+    bytes,
+  };
+}
 
 export class GatewayService {
   private readonly storage: Storage;
@@ -1090,6 +1247,7 @@ export class GatewayService {
   private readonly cronAutomationService: CronAutomationService;
   private readonly addonsService: AddonsService;
   private readonly devDiagnostics: GatewayDevDiagnosticsService;
+  private readonly discordRuntimeService: DiscordRuntimeService;
   private readonly chatProjectService: ChatProjectService;
   private readonly durableRunService: DurableRunService;
   private readonly hooksService: HooksService;
@@ -1104,6 +1262,7 @@ export class GatewayService {
   private readonly activeChatTurnWrites = new Map<string, string>();
   private readonly activeChatTurns = new Map<string, ActiveChatTurnExecution>();
   private readonly activeChatTurnStreams = new Map<string, ActiveChatTurnStreamExecution>();
+  private readonly recentChannelSetupTests = new Map<string, ChannelSetupRecentTestCacheEntry>();
   private lastChatStreamPurgeAt = 0;
   private readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
   private readonly onboardingMarkerPath: string;
@@ -1216,6 +1375,25 @@ export class GatewayService {
     this.obsidianVaultService = new ObsidianVaultService(this.storage.systemSettings);
     this.skillImportService = new SkillImportService(config.rootDir, this.storage.systemSettings);
     this.addonsService = new AddonsService(config.rootDir);
+    this.discordRuntimeService = new DiscordRuntimeService({
+      listConnections: () => this.storage.integrationConnections.list(undefined, 1000),
+      findApprovedPairing: (connectionId, userId) => this.findApprovedDiscordPairing(connectionId, userId),
+      ensurePendingPairing: (connectionId, userId, displayName) =>
+        this.ensurePendingDiscordPairing(connectionId, userId, displayName),
+      touchPairing: (pairingId) => this.touchDiscordPairing(pairingId),
+      onInboundMessage: (input) => this.handleDiscordRuntimeInbound(input),
+      onSlashCommand: (input) => this.handleDiscordRuntimeSlashCommand(input),
+      listModelSuggestions: (query, limit) => this.listChatModelSuggestions(query, limit),
+      publishDiagnostic: (event, message, context) => {
+        this.recordDevDiagnostic({
+          level: context.error ? "warn" : "info",
+          category: "channels",
+          event,
+          message,
+          context,
+        });
+      },
+    });
     this.cronAutomationService = new CronAutomationService({
       storage: this.storage,
       persistCronJobsConfig: () => this.persistCronJobsConfig(),
@@ -1408,6 +1586,7 @@ export class GatewayService {
     if (this.closing) {
       return;
     }
+    await this.discordRuntimeService.sync();
     this.improvementService.markInterruptedDecisionReplayRuns();
     await this.loadCronJobsFromConfig();
     this.improvementService.ensureWeeklyImprovementCronJob();
@@ -1713,7 +1892,12 @@ export class GatewayService {
     const projectLinkBySessionId = this.storage.chatSessionProjects.listBySessionIds(sessionIds);
 
     let records = allSessions.map((session) => {
-      const meta = metaBySessionId.get(session.sessionId) ?? this.storage.chatSessionMeta.ensure(session.sessionId, undefined, workspaceId);
+      const meta = metaBySessionId.get(session.sessionId) ?? {
+        workspaceId,
+        includeInHistory: true,
+        pinned: false,
+        lifecycleStatus: "active" as const,
+      };
       const link = projectLinkBySessionId.get(session.sessionId);
       const project = link ? projectById.get(link.projectId) : undefined;
       return toChatSessionRecord(session, meta, project);
@@ -2040,7 +2224,7 @@ export class GatewayService {
   public async respondToExistingChatMessage(
     sessionId: string,
     userMessageId: string,
-    input: Partial<ChatSendMessageRequest> = {},
+    input: Partial<ChatSendMessageRequest> & { deliveryReplyToMessageId?: string } = {},
   ): Promise<ChatSendMessageResponse> {
     return this.withChatTurnWriteLease(sessionId, "integration-reply", async () => {
       await this.ensureChatMessageProjection(sessionId);
@@ -2073,14 +2257,15 @@ export class GatewayService {
       );
       const assistantContent = response.assistantMessage?.content?.trim();
       if (assistantContent) {
-        await this.commsSend({
+        this.ensureSessionInternalToolGrant(sessionId, "channel.send", "system-integration-reply");
+        this.requireExecutedToolResult("channel.send", await this.commsSend({
           connectionId: binding.connectionId,
           target: binding.target,
           message: assistantContent,
-          replyToMessageId: prepared.userEventId,
+          replyToMessageId: input.deliveryReplyToMessageId?.trim() || prepared.userEventId,
           sessionId,
           agentId: "assistant",
-        });
+        }));
       }
       return {
         ...response,
@@ -3016,9 +3201,10 @@ export class GatewayService {
     description: string;
   }> {
     return [
+      { command: "/new", usage: "/new [title]", description: "Start a fresh session." },
       { command: "/mode", usage: "/mode chat|cowork|code", description: "Switch session mode." },
       { command: "/plan", usage: "/plan [on|off]", description: "Show or set advisory planning mode." },
-      { command: "/model", usage: "/model <model-id>", description: "Override model for this session." },
+      { command: "/model", usage: "/model <model-id|provider-id/model-id>", description: "Override provider/model for this session." },
       { command: "/web", usage: "/web auto|off|quick|deep", description: "Set web retrieval behavior." },
       { command: "/memory", usage: "/memory auto|on|off", description: "Set memory behavior." },
       { command: "/think", usage: "/think minimal|standard|extended", description: "Set thinking depth." },
@@ -3049,6 +3235,83 @@ export class GatewayService {
     ];
   }
 
+  public async listChatModelSuggestions(
+    query: string,
+    limit = 25,
+  ): Promise<Array<{
+    model: string;
+    providerId: string;
+    providerLabel: string;
+  }>> {
+    const runtime = this.getSettings().llm;
+    const normalizedQuery = query.trim().toLowerCase();
+    let activeProviderRemoteModels: string[] = [];
+    if (runtime.activeProviderId) {
+      try {
+        activeProviderRemoteModels = dedupeStrings(
+          (await this.listLlmModels(runtime.activeProviderId)).map((item) => item.id),
+        );
+      } catch {
+        activeProviderRemoteModels = [];
+      }
+    }
+
+    const providers = [...runtime.providers].sort((left, right) => {
+      if (left.providerId === runtime.activeProviderId && right.providerId !== runtime.activeProviderId) {
+        return -1;
+      }
+      if (right.providerId === runtime.activeProviderId && left.providerId !== runtime.activeProviderId) {
+        return 1;
+      }
+      return left.label.localeCompare(right.label);
+    });
+    const results: Array<{
+      model: string;
+      providerId: string;
+      providerLabel: string;
+    }> = [];
+    const seen = new Set<string>();
+
+    for (const provider of providers) {
+      const template = findProviderTemplate(provider.providerId);
+      const candidates = dedupeStrings([
+        provider.defaultModel,
+        provider.providerId === runtime.activeProviderId ? runtime.activeModel : "",
+        ...(template?.knownModels ?? []),
+        ...(provider.providerId === runtime.activeProviderId ? activeProviderRemoteModels : []),
+      ].filter((value) => value.trim().length > 0));
+
+      candidates.sort((left, right) => {
+        const leftScore = scoreChatModelSuggestion(left, normalizedQuery);
+        const rightScore = scoreChatModelSuggestion(right, normalizedQuery);
+        if (leftScore !== rightScore) {
+          return rightScore - leftScore;
+        }
+        return left.localeCompare(right);
+      });
+
+      for (const model of candidates) {
+        if (seen.has(model)) {
+          continue;
+        }
+        if (normalizedQuery && !model.toLowerCase().includes(normalizedQuery)) {
+          continue;
+        }
+        seen.add(model);
+        results.push({
+          model,
+          providerId: provider.providerId,
+          providerLabel: provider.label,
+        });
+        if (results.length >= limit) {
+          return results;
+        }
+      }
+    }
+
+    return results;
+  }
+
   public async parseChatCommand(
     sessionId: string,
     commandText: string,
@@ -3059,6 +3322,7 @@ export class GatewayService {
     message: string;
     prefs?: ChatSessionPrefsRecord;
     research?: ResearchSummaryRecord;
+    session?: ChatSessionRecord;
   }> {
     this.getSession(sessionId);
     const parsed = parseSlashCommand(commandText);
@@ -3091,6 +3355,33 @@ export class GatewayService {
         command,
         args,
         message: help,
+      };
+    }
+
+    if (command === "/new") {
+      const sourcePrefs = this.getChatSessionPrefs(sessionId);
+      const sourceProjectId = this.storage.chatSessionProjects.get(sessionId)?.projectId;
+      const session = this.createChatSession({
+        workspaceId: this.storage.chatSessionMeta.ensure(sessionId).workspaceId,
+        title: args.join(" ").trim() || undefined,
+        projectId: sourceProjectId,
+      });
+      const {
+        sessionId: _sourceSessionId,
+        createdAt: _sourceCreatedAt,
+        updatedAt: _sourceUpdatedAt,
+        ...prefsPatch
+      } = sourcePrefs;
+      const prefs = this.updateChatSessionPrefs(session.sessionId, prefsPatch);
+      return {
+        ok: true,
+        command,
+        args,
+        prefs,
+        session,
+        message: session.title
+          ? `Started new session "${session.title}" (${session.sessionId.slice(-6)}).`
+          : `Started new session (${session.sessionId.slice(-6)}).`,
       };
     }
 
@@ -3131,12 +3422,16 @@ export class GatewayService {
     }
 
     if (command === "/model") {
-      const model = args.join(" ").trim();
-      if (!model) {
-        return { ok: false, command, args, message: "Usage: /model <model-id>" };
+      const target = parseChatModelCommandTarget(args.join(" "));
+      if (!target) {
+        return { ok: false, command, args, message: "Usage: /model <model-id|provider-id/model-id>" };
       }
-      const prefs = this.updateChatSessionPrefs(sessionId, { model });
-      return { ok: true, command, args, prefs, message: `Model set to ${prefs.model}.` };
+      const prefs = this.updateChatSessionPrefs(sessionId, {
+        providerId: target.providerId,
+        model: target.model,
+      });
+      const label = target.providerId ? `${target.providerId}/${prefs.model}` : prefs.model;
+      return { ok: true, command, args, prefs, message: `Model set to ${label}.` };
     }
 
     if (command === "/web") {
@@ -3673,6 +3968,7 @@ export class GatewayService {
   public async runChatDelegation(
     sessionId: string,
     input: ChatDelegateRequest,
+    callbacks?: ChatDelegationProgressCallbacks,
   ): Promise<ChatDelegateResponse> {
     this.getSession(sessionId);
     const objective = input.objective.trim();
@@ -3683,7 +3979,8 @@ export class GatewayService {
     if (roles.length === 0) {
       throw new Error("at least one role is required");
     }
-    const mode = input.mode ?? "sequential";
+    const requestedMode = input.mode ?? "sequential";
+    const mode = requestedMode === "parallel" ? "sequential" : requestedMode;
     const prefs = this.ensureGlmPrimaryDefaults(sessionId, this.storage.chatSessionPrefs.ensure(sessionId));
     const providerId = input.providerId ?? prefs.providerId;
     const model = input.model ?? prefs.model;
@@ -3711,11 +4008,28 @@ export class GatewayService {
       status: "running",
       citations: [],
     });
+    await callbacks?.onStatus?.({
+      runId,
+      taskId: task.taskId,
+      message: "Delegation started.",
+    });
     this.appendTaskActivity(task.taskId, {
       activityType: "comment",
       message: `Delegation started (${roles.join(" -> ")})`,
-      metadata: { runId, sessionId, mode },
+      metadata: { runId, sessionId, mode, requestedMode },
     });
+    if (requestedMode === "parallel") {
+      await callbacks?.onStatus?.({
+        runId,
+        taskId: task.taskId,
+        message: "Parallel delegation was requested but downgraded to sequential execution because parallel worker scheduling is not implemented yet.",
+      });
+      this.appendTaskActivity(task.taskId, {
+        activityType: "comment",
+        message: "Parallel delegation was requested but downgraded to sequential execution because parallel worker scheduling is not implemented yet.",
+        metadata: { runId, requestedMode, effectiveMode: mode },
+      });
+    }
 
     const stitchedSections: string[] = [];
     const citations: ChatCitationRecord[] = [];
@@ -3727,7 +4041,7 @@ export class GatewayService {
       const role = roles[index]!;
       const stepId = randomUUID();
       const startedAt = new Date().toISOString();
-      this.storage.chatDelegationSteps.create({
+      const runningStep = this.storage.chatDelegationSteps.create({
         stepId,
         runId,
         role,
@@ -3735,6 +4049,7 @@ export class GatewayService {
         status: "running",
         startedAt,
       });
+      await callbacks?.onStep?.(runningStep);
 
       const agentSessionId = `delegate:${runId}:${index + 1}`;
       this.registerTaskSubagent(task.taskId, {
@@ -3770,12 +4085,13 @@ export class GatewayService {
         });
         const output = extractCompletionText(completion).trim() || "(no output returned)";
         const finishedAt = new Date().toISOString();
-        this.storage.chatDelegationSteps.patch(stepId, {
+        const completedStep = this.storage.chatDelegationSteps.patch(stepId, {
           status: "completed",
           output,
           finishedAt,
           durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
         });
+        await callbacks?.onStep?.(completedStep);
         this.updateTaskSubagent(agentSessionId, {
           status: "completed",
           endedAt: finishedAt,
@@ -3813,12 +4129,13 @@ export class GatewayService {
         failures += 1;
         const finishedAt = new Date().toISOString();
         const message = (error as Error).message;
-        this.storage.chatDelegationSteps.patch(stepId, {
+        const failedStep = this.storage.chatDelegationSteps.patch(stepId, {
           status: "failed",
           error: message,
           finishedAt,
           durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
         });
+        await callbacks?.onStep?.(failedStep);
         this.updateTaskSubagent(agentSessionId, {
           status: "failed",
           endedAt: finishedAt,
@@ -3830,8 +4147,8 @@ export class GatewayService {
           metadata: { runId, stepId, error: message },
         });
         stitchedSections.push(`### ${toTitleCase(role)}\nFAILED: ${message}`);
-        if (mode === "parallel") {
-          continue;
+        if (mode === "sequential") {
+          break;
         }
       }
     }
@@ -3896,16 +4213,83 @@ export class GatewayService {
     message?: string;
     step?: ChatDelegationStepRecord;
     result?: ChatDelegateResponse;
+    error?: string;
   }> {
-    yield { type: "status", message: "Delegation started." };
-    try {
-      const result = await this.runChatDelegation(sessionId, input);
-      for (const step of result.steps) {
-        yield { type: "step", runId: result.runId, taskId: result.taskId, step };
+    const queue: Array<{
+      type: "status" | "step" | "done";
+      runId?: string;
+      taskId?: string;
+      message?: string;
+      step?: ChatDelegationStepRecord;
+      result?: ChatDelegateResponse;
+    }> = [];
+    let wake: (() => void) | null = null;
+    let finished = false;
+    let runError: unknown = null;
+    const push = (chunk: {
+      type: "status" | "step" | "done";
+      runId?: string;
+      taskId?: string;
+      message?: string;
+      step?: ChatDelegationStepRecord;
+      result?: ChatDelegateResponse;
+    }) => {
+      queue.push(chunk);
+      const notify = wake;
+      wake = null;
+      notify?.();
+    };
+
+    void this.runChatDelegation(sessionId, input, {
+      onStatus: async (event) => {
+        push({
+          type: "status",
+          runId: event.runId,
+          taskId: event.taskId,
+          message: event.message,
+        });
+      },
+      onStep: async (step) => {
+        push({
+          type: "step",
+          runId: step.runId,
+          step,
+        });
+      },
+    })
+      .then((result) => {
+        push({
+          type: "done",
+          runId: result.runId,
+          taskId: result.taskId,
+          result,
+        });
+      })
+      .catch((error) => {
+        runError = error;
+      })
+      .finally(() => {
+        finished = true;
+        const notify = wake;
+        wake = null;
+        notify?.();
+      });
+
+    while (!finished || queue.length > 0) {
+      if (queue.length === 0) {
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+        continue;
       }
-      yield { type: "done", runId: result.runId, taskId: result.taskId, result };
-    } catch (error) {
-      yield { type: "error", message: (error as Error).message };
+      const chunk = queue.shift();
+      if (chunk) {
+        yield chunk;
+      }
+    }
+
+    if (runError) {
+      throw runError;
     }
   }
 
@@ -4099,7 +4483,7 @@ export class GatewayService {
       sessionId,
       objective,
       roles,
-      mode: input.mode ?? "sequential",
+      mode: "sequential",
       confidence,
       reason: "Detected multi-role objective and generated delegation plan.",
       source: "manual",
@@ -4128,7 +4512,7 @@ export class GatewayService {
         return this.runChatDelegation(sessionId, {
           objective: objectiveFromSuggestion || input.objective,
           roles: rolesFromSuggestion.length > 0 ? rolesFromSuggestion : input.roles,
-          mode: input.mode ?? "sequential",
+          mode: "sequential",
           providerId: input.providerId,
           model: input.model,
         });
@@ -4137,7 +4521,7 @@ export class GatewayService {
     return this.runChatDelegation(sessionId, {
       objective: input.objective,
       roles: input.roles,
-      mode: input.mode ?? "sequential",
+      mode: "sequential",
       providerId: input.providerId,
       model: input.model,
     });
@@ -4488,6 +4872,22 @@ export class GatewayService {
     decision: "approve" | "reject",
   ): Promise<void> {
     const approval = this.storage.approvals.get(approvalId);
+    const approvalSessionId = typeof approval.payload.sessionId === "string"
+      ? approval.payload.sessionId
+      : undefined;
+    if (approvalSessionId && approvalSessionId !== sessionId) {
+      throw new Error(`Approval ${approvalId} does not belong to session ${sessionId}.`);
+    }
+    const existingInlineApproval = this.storage.chatInlineApprovals.get(approvalId);
+    if (existingInlineApproval && existingInlineApproval.sessionId !== sessionId) {
+      throw new Error(`Approval ${approvalId} does not belong to session ${sessionId}.`);
+    }
+    const turn = this.storage.chatToolRuns.listBySession(sessionId, 2000)
+      .find((toolRun) => toolRun.approvalId === approvalId);
+    const turnId = turn?.turnId ?? existingInlineApproval?.turnId;
+    if (!turnId) {
+      throw new Error(`Approval ${approvalId} is not attached to session ${sessionId}.`);
+    }
     if (approval.status !== "pending") {
       return;
     }
@@ -4496,13 +4896,11 @@ export class GatewayService {
       resolvedBy: "chat-operator",
       resolutionNote: decision === "approve" ? "Approved from chat inline control." : "Denied from chat inline control.",
     });
-    const turn = this.storage.chatToolRuns.listBySession(sessionId, 2000)
-      .find((toolRun) => toolRun.approvalId === approvalId);
     this.storage.chatInlineApprovals.upsert({
       approvalId,
       sessionId,
-      turnId: turn?.turnId ?? "unknown",
-      toolName: turn?.toolName,
+      turnId,
+      toolName: turn?.toolName ?? existingInlineApproval?.toolName,
       status: decision === "approve" ? "approved" : "denied",
       reason: decision === "approve" ? "approved by operator" : "denied by operator",
       resolvedBy: "chat-operator",
@@ -7494,8 +7892,10 @@ export class GatewayService {
     }
     const dispatch = await dispatchConnectorDelivery(connector, payload, {
       commsSend: (input) => this.commsSend(input),
+      commsReply: (input) => this.commsReply(input),
       commsReact: (input) => this.commsReact(input),
       commsUnsend: (input) => this.commsUnsend(input),
+      commsTyping: (input) => this.commsTyping(input),
       invokeMcpTool: (input) => this.invokeMcpTool(input),
       publishRealtime: (eventType, source, eventPayload) => this.publishRealtime(eventType, source, eventPayload),
     });
@@ -7643,16 +8043,15 @@ export class GatewayService {
       if (!binding.writable) {
         throw new Error("Session binding is not writable");
       }
-      const delivery = await this.commsSend({
+      this.ensureSessionInternalToolGrant(sessionId, "channel.send", "system-integration-compose");
+      this.requireExecutedToolResult("channel.send", await this.commsSend({
         connectionId: binding.connectionId,
         target: binding.target,
         message: prepared.content,
         sessionId,
         agentId: "operator",
-      });
-      const assistantContent = typeof delivery === "object"
-        ? `Delivered via integration ${binding.connectionId} to ${binding.target}.`
-        : "Delivered via integration.";
+      }));
+      const assistantContent = `Delivered via integration ${binding.connectionId} to ${binding.target}.`;
       const assistantMessageId = prepared.assistantMessageId;
       await this.ingestEvent(randomUUID(), {
         eventId: assistantMessageId,
@@ -8617,6 +9016,12 @@ export class GatewayService {
     return {
       approval,
       executedAction,
+      replay: {
+        approval,
+        events: this.storage.approvalEvents.listByApprovalId(approvalId),
+        pendingAction: this.storage.pendingApprovalActions.find(approvalId),
+      },
+      durableRunId: wakeRunId,
     };
   }
 
@@ -9423,6 +9828,23 @@ export class GatewayService {
     return result;
   }
 
+  public getLatestFollowOnParityArtifacts(): FollowOnProofLaneArtifactIndex {
+    const stored = this.storage.systemSettings.get<unknown>(FOLLOW_ON_PARITY_ARTIFACTS_SETTING_KEY)?.value;
+    return normalizeFollowOnParityArtifactIndex(stored);
+  }
+
+  public rememberFollowOnParityArtifact(record: FollowOnProofLaneArtifactRecord): FollowOnProofLaneArtifactRecord {
+    const normalized = normalizeFollowOnParityArtifactRecord(record.laneId, record);
+    if (!normalized) {
+      throw new ValidationError({ message: `Invalid follow-on parity artifact for lane ${record.laneId}` });
+    }
+    this.storage.systemSettings.set(FOLLOW_ON_PARITY_ARTIFACTS_SETTING_KEY, {
+      ...this.getLatestFollowOnParityArtifacts(),
+      [normalized.laneId]: normalized,
+    });
+    return normalized;
+  }
+
   public listFileTemplates(): FileTemplateRecord[] {
     const today = new Date().toISOString().slice(0, 10);
     return FILE_TEMPLATES.map((template) => ({
@@ -9590,14 +10012,29 @@ export class GatewayService {
     const status = input.status && input.status !== "all" ? input.status : undefined;
     const query = input.query?.trim().toLowerCase();
     const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 200)));
+    const clauses = ["1 = 1"];
+    const params: Record<string, string | number | null> = { limit };
+    if (namespace) {
+      clauses.push("namespace = @namespace");
+      params.namespace = namespace;
+    }
+    if (status) {
+      clauses.push("status = @status");
+      params.status = status;
+    }
+    if (query) {
+      clauses.push("LOWER(title || CHAR(10) || content || CHAR(10) || namespace) LIKE @query");
+      params.query = `%${query}%`;
+    }
 
     const rows = this.gatewaySql.prepare(`
       SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
              created_at, updated_at, forgotten_at
       FROM memory_items
+      WHERE ${clauses.join(" AND ")}
       ORDER BY updated_at DESC
-      LIMIT ?
-    `).all(limit * 4) as Array<{
+      LIMIT @limit
+    `).all(params) as Array<{
       item_id: string;
       namespace: string;
       title: string;
@@ -9612,19 +10049,7 @@ export class GatewayService {
       forgotten_at: string | null;
     }>;
 
-    const filtered = rows
-      .filter((row) => (namespace ? row.namespace === namespace : true))
-      .filter((row) => (status ? row.status === status : true))
-      .filter((row) => {
-        if (!query) {
-          return true;
-        }
-        const haystack = `${row.title}\n${row.content}\n${row.namespace}`.toLowerCase();
-        return haystack.includes(query);
-      })
-      .slice(0, limit);
-
-    return filtered.map((row) => this.mapMemoryItemRow(row));
+    return rows.map((row) => this.mapMemoryItemRow(row));
   }
 
   public patchMemoryItem(
@@ -10566,6 +10991,14 @@ export class GatewayService {
       grantId,
       revokedAt,
     });
+    this.gatewaySql.prepare(`
+      UPDATE companion_sessions
+      SET revoked_at = COALESCE(revoked_at, @revokedAt)
+      WHERE grant_id = @grantId
+    `).run({
+      grantId,
+      revokedAt,
+    });
 
     const grant = mapAuthDeviceGrantRow(
       (this.gatewaySql.prepare(`
@@ -10638,6 +11071,551 @@ export class GatewayService {
     };
   }
 
+  public async exchangeCompanionSessionFromDeviceGrant(
+    grantId: string,
+    input: CompanionSessionExchangeInput,
+  ): Promise<CompanionSessionExchangeResponse> {
+    const grant = this.getActiveAuthDeviceGrantById(grantId);
+    if (!grant) {
+      throw new NotFoundError("Device access grant not found.");
+    }
+
+    const signingPublicKeyPem = normalizeCompanionSigningPublicKeyPem(input.signingPublicKeyPem);
+    assertCompanionSigningPublicKeyPem(signingPublicKeyPem);
+
+    const now = Date.now();
+    const issuedAt = new Date(now).toISOString();
+    const accessTokenExpiresAt = new Date(now + COMPANION_ACCESS_TOKEN_TTL_MS).toISOString();
+    const refreshTokenExpiresAt = new Date(now + COMPANION_REFRESH_TOKEN_TTL_MS).toISOString();
+    const accessToken = `gcca_${randomBytes(COMPANION_ACCESS_TOKEN_BYTES).toString("base64url")}`;
+    const refreshToken = `gccr_${randomBytes(COMPANION_REFRESH_TOKEN_BYTES).toString("base64url")}`;
+    const sessionId = randomUUID();
+    const metadata = {
+      ...grant.metadata,
+      clientName: normalizeOptionalDeviceAccessText(input.clientName, 120),
+      appVersion: normalizeOptionalDeviceAccessText(input.appVersion, 80),
+      bootstrapRepo: "GoatCitadel-mobile",
+      contractId: COMPANION_CONTRACT_ID,
+    };
+
+    this.storage.runImmediateTransaction(() => {
+      this.gatewaySql.prepare(`
+        UPDATE companion_sessions
+        SET revoked_at = COALESCE(revoked_at, @revokedAt)
+        WHERE grant_id = @grantId
+          AND revoked_at IS NULL
+      `).run({
+        grantId,
+        revokedAt: issuedAt,
+      });
+
+      this.gatewaySql.prepare(`
+        INSERT INTO companion_sessions (
+          session_id,
+          grant_id,
+          access_token_hash,
+          access_token_expires_at,
+          refresh_token_hash,
+          refresh_token_expires_at,
+          signing_public_key_pem,
+          signature_algorithm,
+          created_at,
+          last_rotated_at,
+          metadata_json
+        ) VALUES (
+          @sessionId,
+          @grantId,
+          @accessTokenHash,
+          @accessTokenExpiresAt,
+          @refreshTokenHash,
+          @refreshTokenExpiresAt,
+          @signingPublicKeyPem,
+          @signatureAlgorithm,
+          @createdAt,
+          @lastRotatedAt,
+          @metadataJson
+        )
+      `).run({
+        sessionId,
+        grantId,
+        accessTokenHash: hashSensitiveToken(accessToken),
+        accessTokenExpiresAt,
+        refreshTokenHash: hashSensitiveToken(refreshToken),
+        refreshTokenExpiresAt,
+        signingPublicKeyPem,
+        signatureAlgorithm: COMPANION_SIGNATURE_ALGORITHM,
+        createdAt: issuedAt,
+        lastRotatedAt: issuedAt,
+        metadataJson: JSON.stringify(metadata),
+      });
+    });
+
+    await this.storage.audit.append("approvals", {
+      event: "auth.companion_session.exchange",
+      actorId: `companion:${sessionId}`,
+      deviceId: grant.grantId,
+      grantId: grant.grantId,
+      companionSessionId: sessionId,
+      contractId: COMPANION_CONTRACT_ID,
+      signatureAlgorithm: COMPANION_SIGNATURE_ALGORITHM,
+      deviceLabel: grant.deviceLabel,
+      deviceType: normalizeDeviceAccessDeviceType(grant.deviceType),
+      platform: grant.platform,
+      accessTokenExpiresAt,
+      refreshTokenExpiresAt,
+      metadata,
+    });
+
+    return {
+      contractId: COMPANION_CONTRACT_ID,
+      sessionId,
+      grantId: grant.grantId,
+      actorId: `companion:${sessionId}`,
+      deviceLabel: grant.deviceLabel,
+      deviceType: normalizeDeviceAccessDeviceType(grant.deviceType),
+      platform: grant.platform,
+      accessToken,
+      accessTokenExpiresAt,
+      refreshToken,
+      refreshTokenExpiresAt,
+      issuedAt,
+      signatureAlgorithm: COMPANION_SIGNATURE_ALGORITHM,
+    };
+  }
+
+  public async rotateCompanionSession(
+    input: CompanionSessionRefreshInput,
+  ): Promise<CompanionSessionRefreshResponse> {
+    const refreshToken = input.refreshToken.trim();
+    if (!refreshToken) {
+      throw new ValidationError({
+        message: "Refresh token is required.",
+      });
+    }
+
+    const session = this.getActiveCompanionSessionByRefreshToken(refreshToken);
+    if (!session) {
+      throw new NotFoundError("Companion session not found.");
+    }
+
+    const now = Date.now();
+    const issuedAt = new Date(now).toISOString();
+    const accessTokenExpiresAt = new Date(now + COMPANION_ACCESS_TOKEN_TTL_MS).toISOString();
+    const refreshTokenExpiresAt = new Date(now + COMPANION_REFRESH_TOKEN_TTL_MS).toISOString();
+    const nextAccessToken = `gcca_${randomBytes(COMPANION_ACCESS_TOKEN_BYTES).toString("base64url")}`;
+    const nextRefreshToken = `gccr_${randomBytes(COMPANION_REFRESH_TOKEN_BYTES).toString("base64url")}`;
+
+    const result = this.gatewaySql.prepare(`
+      UPDATE companion_sessions
+      SET access_token_hash = @accessTokenHash,
+          access_token_expires_at = @accessTokenExpiresAt,
+          refresh_token_hash = @refreshTokenHash,
+          refresh_token_expires_at = @refreshTokenExpiresAt,
+          last_rotated_at = @lastRotatedAt,
+          last_seen_at = @lastSeenAt
+      WHERE session_id = @sessionId
+        AND refresh_token_hash = @currentRefreshTokenHash
+        AND revoked_at IS NULL
+    `).run({
+      sessionId: session.sessionId,
+      currentRefreshTokenHash: hashSensitiveToken(refreshToken),
+      accessTokenHash: hashSensitiveToken(nextAccessToken),
+      accessTokenExpiresAt,
+      refreshTokenHash: hashSensitiveToken(nextRefreshToken),
+      refreshTokenExpiresAt,
+      lastRotatedAt: issuedAt,
+      lastSeenAt: issuedAt,
+    });
+    if (result.changes === 0) {
+      throw new ConflictError({
+        message: "Companion session refresh token has already been rotated.",
+      });
+    }
+
+    await this.storage.audit.append("approvals", {
+      event: "auth.companion_session.refresh",
+      actorId: `companion:${session.sessionId}`,
+      deviceId: session.grantId,
+      grantId: session.grantId,
+      companionSessionId: session.sessionId,
+      contractId: COMPANION_CONTRACT_ID,
+      accessTokenExpiresAt,
+      refreshTokenExpiresAt,
+    });
+
+    return {
+      contractId: COMPANION_CONTRACT_ID,
+      sessionId: session.sessionId,
+      grantId: session.grantId,
+      actorId: `companion:${session.sessionId}`,
+      accessToken: nextAccessToken,
+      accessTokenExpiresAt,
+      refreshToken: nextRefreshToken,
+      refreshTokenExpiresAt,
+      issuedAt,
+      signatureAlgorithm: session.signatureAlgorithm,
+    };
+  }
+
+  public getCompanionSessionInfo(sessionId: string): CompanionSessionInfoResponse {
+    const session = this.getActiveCompanionSessionById(sessionId);
+    if (!session) {
+      throw new NotFoundError("Companion session not found.");
+    }
+    return toCompanionSessionInfoResponse(session);
+  }
+
+  public listCompanionSessions(options?: {
+    view?: "active" | "all";
+    grantId?: string;
+    limit?: number;
+  }): CompanionSessionListResponse {
+    const view = options?.view === "all" ? "all" : "active";
+    const limit = clampInt(options?.limit, 50, 1, 200);
+    const grantId = options?.grantId?.trim();
+    const now = new Date().toISOString();
+    const query = grantId
+      ? `
+      SELECT
+        s.*,
+        g.device_label,
+        g.device_type,
+        g.platform,
+        g.expires_at AS grant_expires_at,
+        g.revoked_at AS grant_revoked_at
+      FROM companion_sessions s
+      INNER JOIN auth_device_grants g
+        ON g.grant_id = s.grant_id
+      WHERE s.grant_id = @grantId
+      ORDER BY s.created_at DESC, s.session_id DESC
+      LIMIT @limit
+    `
+      : `
+      SELECT
+        s.*,
+        g.device_label,
+        g.device_type,
+        g.platform,
+        g.expires_at AS grant_expires_at,
+        g.revoked_at AS grant_revoked_at
+      FROM companion_sessions s
+      INNER JOIN auth_device_grants g
+        ON g.grant_id = s.grant_id
+      ORDER BY s.created_at DESC, s.session_id DESC
+      LIMIT @limit
+    `;
+    const rows = this.gatewaySql.prepare(`
+      ${query}
+    `).all(grantId ? { grantId, limit } : { limit }) as Record<string, unknown>[];
+
+    return {
+      items: rows
+        .map(mapCompanionSessionRow)
+        .filter((session) => view === "all" || isCompanionSessionOperatorActive(session, now))
+        .map(toCompanionSessionAdminRecord),
+    };
+  }
+
+  public getCompanionSessionRecord(sessionId: string): CompanionSessionAdminRecord {
+    const session = this.getCompanionSessionById(sessionId);
+    if (!session) {
+      throw new NotFoundError("Companion session not found.");
+    }
+    return toCompanionSessionAdminRecord(session);
+  }
+
+  public async revokeCompanionSession(
+    sessionId: string,
+    revokedBy: string,
+  ): Promise<CompanionSessionRevokeResponse> {
+    const session = this.getCompanionSessionById(sessionId);
+    if (!session) {
+      throw new NotFoundError("Companion session not found.");
+    }
+
+    const revokedAt = new Date().toISOString();
+    this.gatewaySql.prepare(`
+      UPDATE companion_sessions
+      SET revoked_at = COALESCE(revoked_at, @revokedAt)
+      WHERE session_id = @sessionId
+    `).run({
+      sessionId,
+      revokedAt,
+    });
+
+    const updated = this.getCompanionSessionById(sessionId) ?? {
+      ...session,
+      revokedAt,
+    };
+    const record = toCompanionSessionAdminRecord(updated);
+
+    await this.storage.audit.append("approvals", {
+      event: "auth.companion_session.revoke",
+      actorId: `companion:${record.sessionId}`,
+      deviceId: record.grantId,
+      grantId: record.grantId,
+      companionSessionId: record.sessionId,
+      contractId: record.contractId,
+      revokedAt: record.revokedAt,
+      revokedBy,
+      deviceLabel: record.deviceLabel,
+      deviceType: record.deviceType,
+      platform: record.platform,
+    });
+
+    this.publishRealtime("auth_companion_session_revoked", "auth", {
+      sessionId: record.sessionId,
+      grantId: record.grantId,
+      actorId: record.actorId,
+      deviceLabel: record.deviceLabel,
+      deviceType: record.deviceType,
+      platform: record.platform,
+      revokedAt: record.revokedAt,
+      revokedBy,
+    });
+
+    return { session: record };
+  }
+
+  public async listCompanionAuditEvents(options?: {
+    sessionId?: string;
+    grantId?: string;
+    limit?: number;
+  }): Promise<CompanionAuditEventRecord[]> {
+    const sessionId = options?.sessionId?.trim();
+    const grantId = options?.grantId?.trim();
+    const limit = clampInt(options?.limit, 50, 1, 200);
+    const records = await this.storage.audit.list("approvals");
+
+    return records
+      .filter((record) => {
+        const event = typeof record.event === "string" ? record.event : "";
+        if (!event.startsWith("auth.companion_")) {
+          return false;
+        }
+        if (sessionId && record.companionSessionId !== sessionId) {
+          return false;
+        }
+        if (grantId && record.grantId !== grantId) {
+          return false;
+        }
+        return true;
+      })
+      .sort((left, right) => String(right.timestamp ?? "").localeCompare(String(left.timestamp ?? "")))
+      .slice(0, limit)
+      .map((record) => ({
+        timestamp: typeof record.timestamp === "string" ? record.timestamp : new Date(0).toISOString(),
+        event: normalizeCompanionAuditEvent(record.event),
+        actorId: typeof record.actorId === "string" ? record.actorId : undefined,
+        deviceId: typeof record.deviceId === "string" ? record.deviceId : undefined,
+        grantId: typeof record.grantId === "string" ? record.grantId : undefined,
+        companionSessionId: typeof record.companionSessionId === "string" ? record.companionSessionId : undefined,
+        contractId: record.contractId === COMPANION_CONTRACT_ID ? COMPANION_CONTRACT_ID : undefined,
+        method: typeof record.method === "string" ? record.method : undefined,
+        path: typeof record.path === "string" ? record.path : undefined,
+        nonce: typeof record.nonce === "string" ? record.nonce : undefined,
+        requestHash: typeof record.requestHash === "string" ? record.requestHash : undefined,
+        detail: typeof record.detail === "string" ? record.detail : undefined,
+        metadata: isRecord(record.metadata) ? record.metadata : undefined,
+      }));
+  }
+
+  public validateCompanionAccessToken(token: string): CompanionAccessValidationResult | undefined {
+    const tokenHash = hashSensitiveToken(token);
+    const now = new Date().toISOString();
+    const row = this.gatewaySql.prepare(`
+      SELECT
+        s.*,
+        g.device_label,
+        g.device_type,
+        g.platform,
+        g.expires_at AS grant_expires_at,
+        g.revoked_at AS grant_revoked_at
+      FROM companion_sessions s
+      INNER JOIN auth_device_grants g
+        ON g.grant_id = s.grant_id
+      WHERE s.access_token_hash = @tokenHash
+      LIMIT 1
+    `).get({
+      tokenHash,
+    }) as Record<string, unknown> | undefined;
+    if (!row) {
+      return undefined;
+    }
+
+    const session = mapCompanionSessionRow(row);
+    if (!isCompanionSessionCurrentlyActive(session, now)) {
+      this.gatewaySql.prepare(`
+        UPDATE companion_sessions
+        SET revoked_at = COALESCE(revoked_at, @revokedAt)
+        WHERE session_id = @sessionId
+      `).run({
+        sessionId: session.sessionId,
+        revokedAt: now,
+      });
+      return undefined;
+    }
+
+    this.gatewaySql.prepare(`
+      UPDATE companion_sessions
+      SET last_seen_at = @lastSeenAt
+      WHERE session_id = @sessionId
+    `).run({
+      sessionId: session.sessionId,
+      lastSeenAt: now,
+    });
+    this.gatewaySql.prepare(`
+      UPDATE auth_device_grants
+      SET last_used_at = @lastUsedAt
+      WHERE grant_id = @grantId
+    `).run({
+      grantId: session.grantId,
+      lastUsedAt: now,
+    });
+
+    return {
+      actorId: `companion:${session.sessionId}`,
+      deviceId: session.grantId,
+      grantId: session.grantId,
+      sessionId: session.sessionId,
+    };
+  }
+
+  public verifyCompanionRequestSignature(input: {
+    sessionId: string;
+    method: string;
+    path: string;
+    timestamp: string;
+    nonce: string;
+    signature: string;
+    body: unknown;
+  }): void {
+    const session = this.getActiveCompanionSessionById(input.sessionId);
+    if (!session) {
+      void this.storage.audit.append("approvals", {
+        event: "auth.companion_request.session_inactive",
+        actorId: `companion:${input.sessionId}`,
+        companionSessionId: input.sessionId,
+        detail: "Companion session is no longer active.",
+        method: input.method.toUpperCase(),
+        path: input.path,
+      });
+      throw new Error("Companion session is no longer active.");
+    }
+
+    const timestamp = Date.parse(input.timestamp);
+    if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > COMPANION_REQUEST_CLOCK_SKEW_MS) {
+      void this.storage.audit.append("approvals", {
+        event: "auth.companion_request.timestamp_invalid",
+        actorId: `companion:${session.sessionId}`,
+        deviceId: session.grantId,
+        grantId: session.grantId,
+        companionSessionId: session.sessionId,
+        contractId: COMPANION_CONTRACT_ID,
+        detail: "Companion request timestamp is outside the accepted skew window.",
+        method: input.method.toUpperCase(),
+        path: input.path,
+        nonce: input.nonce,
+      });
+      throw new Error("Companion request timestamp is outside the accepted skew window.");
+    }
+
+    const nonce = normalizeCompanionNonce(input.nonce);
+    const signature = normalizeCompanionSignature(input.signature);
+    const path = normalizeCompanionRequestPath(input.path);
+    const payload = buildCompanionSigningPayload({
+      method: input.method,
+      path,
+      timestamp: input.timestamp,
+      nonce,
+      body: input.body,
+    });
+    const method = input.method.toUpperCase();
+    const requestHash = createHash("sha256").update(payload, "utf8").digest("hex");
+    const signatureBuffer = decodeBase64Url(signature);
+    const publicKey = createPublicKey(session.signingPublicKeyPem);
+    if (!verify(null, Buffer.from(payload, "utf8"), publicKey, signatureBuffer)) {
+      void this.storage.audit.append("approvals", {
+        event: "auth.companion_request.signature_invalid",
+        actorId: `companion:${session.sessionId}`,
+        deviceId: session.grantId,
+        grantId: session.grantId,
+        companionSessionId: session.sessionId,
+        contractId: COMPANION_CONTRACT_ID,
+        detail: "Invalid companion request signature.",
+        method,
+        path,
+        nonce,
+        requestHash,
+      });
+      throw new Error("Invalid companion request signature.");
+    }
+
+    const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + COMPANION_REQUEST_REPLAY_TTL_MS).toISOString();
+    this.gatewaySql.prepare(`
+      DELETE FROM companion_request_replays
+      WHERE expires_at <= @now
+    `).run({ now });
+    try {
+      this.gatewaySql.prepare(`
+        INSERT INTO companion_request_replays (
+          session_id,
+          nonce,
+          method,
+          path,
+          request_hash,
+          created_at,
+          expires_at
+        ) VALUES (
+          @sessionId,
+          @nonce,
+          @method,
+          @path,
+          @requestHash,
+          @createdAt,
+          @expiresAt
+        )
+      `).run({
+        sessionId: session.sessionId,
+        nonce,
+        method,
+        path,
+        requestHash,
+        createdAt: now,
+        expiresAt,
+      });
+    } catch {
+      void this.storage.audit.append("approvals", {
+        event: "auth.companion_request.replay_rejected",
+        actorId: `companion:${session.sessionId}`,
+        deviceId: session.grantId,
+        grantId: session.grantId,
+        companionSessionId: session.sessionId,
+        contractId: COMPANION_CONTRACT_ID,
+        detail: "Companion request replay detected.",
+        method,
+        path,
+        nonce,
+        requestHash,
+      });
+      throw new Error("Companion request replay detected.");
+    }
+
+    void this.storage.audit.append("approvals", {
+      event: "auth.companion_request.accepted",
+      actorId: `companion:${session.sessionId}`,
+      deviceId: session.grantId,
+      grantId: session.grantId,
+      companionSessionId: session.sessionId,
+      contractId: COMPANION_CONTRACT_ID,
+      method,
+      path,
+      nonce,
+      requestHash,
+    });
+  }
+
   public listIntegrationCatalog(kind?: IntegrationKind): IntegrationCatalogEntry[] {
     const pluginIds = new Set(
       this.readIntegrationPlugins()
@@ -10664,6 +11642,348 @@ export class GatewayService {
     return schema;
   }
 
+  public getChannelSetupDefinition(catalogId: string): ChannelSetupDefinition {
+    return requireChannelSetupDefinition(catalogId).definition;
+  }
+
+  public listChannelSetupDefinitions(): ChannelSetupDefinition[] {
+    return listChannelSetupDefinitions();
+  }
+
+  public listChannelSetupDrafts(options?: {
+    catalogId?: string;
+    connectionId?: string;
+    limit?: number;
+  }): ChannelSetupDraft[] {
+    const limit = Math.max(1, Math.min(options?.limit ?? 20, 100));
+    if (options?.connectionId) {
+      return this.storage.channelSetupDrafts.listByConnection(options.connectionId, limit);
+    }
+    if (options?.catalogId) {
+      return this.storage.channelSetupDrafts.listByCatalog(options.catalogId, limit);
+    }
+    return listChannelSetupDefinitions()
+      .flatMap((definition) => this.storage.channelSetupDrafts.listByCatalog(definition.catalog.catalogId, limit))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .slice(0, limit);
+  }
+
+  public createChannelSetupDraft(input: ChannelSetupDraftCreateInput): ChannelSetupDraft {
+    const runtime = requireChannelSetupDefinition(input.catalogId);
+    let seedDraft: Record<string, unknown> = this.buildDefaultChannelSetupDraft(runtime.definition);
+    let hydration = undefined;
+    let label = runtime.definition.catalog.label;
+    let enabled = true;
+
+    if (input.connectionId) {
+      const connection = this.getIntegrationConnection(input.connectionId);
+      if (connection.catalogId !== input.catalogId) {
+        throw new Error(`Connection ${input.connectionId} does not belong to ${input.catalogId}.`);
+      }
+      const hydrated = runtime.hydrate(connection);
+      seedDraft = {
+        ...seedDraft,
+        ...hydrated.draft,
+      };
+      hydration = hydrated.hydration;
+      label = connection.label;
+      enabled = connection.enabled;
+    }
+
+    const created = this.storage.channelSetupDrafts.create({
+      ...input,
+      lifecycleMode: input.lifecycleMode ?? (input.connectionId ? "edit" : "create"),
+      label,
+      enabled,
+      draft: seedDraft,
+      hydration,
+      contentVersion: runtime.definition.wizard.contentVersion,
+      adapterVersion: runtime.definition.adapter.adapterVersion,
+      validationVersion: runtime.definition.validation.validationVersion,
+      testVersion: runtime.definition.testing.testVersion,
+    });
+
+    this.recordDevDiagnostic({
+      level: "info",
+      category: "integrations",
+      event: "channel_setup.draft.created",
+      message: `Created ${created.lifecycleMode} draft for ${created.catalogId}.`,
+      context: {
+        draftId: created.draftId,
+        catalogId: created.catalogId,
+        lifecycleMode: created.lifecycleMode,
+        connectionId: created.connectionId,
+        archetype: runtime.definition.wizard.archetype,
+        tier: runtime.definition.telemetry.tier,
+        contentVersion: runtime.definition.wizard.contentVersion,
+        validationVersion: runtime.definition.validation.validationVersion,
+        testVersion: runtime.definition.testing.testVersion,
+      },
+    });
+
+    return created;
+  }
+
+  public updateChannelSetupDraft(draftId: string, input: ChannelSetupDraftUpdateInput): ChannelSetupDraft {
+    const current = this.storage.channelSetupDrafts.get(draftId);
+    const runtime = requireChannelSetupDefinition(current.catalogId);
+    this.recentChannelSetupTests.delete(draftId);
+    const updated = this.storage.channelSetupDrafts.update(draftId, {
+      ...input,
+      contentVersion: runtime.definition.wizard.contentVersion,
+      adapterVersion: runtime.definition.adapter.adapterVersion,
+      validationVersion: runtime.definition.validation.validationVersion,
+      testVersion: runtime.definition.testing.testVersion,
+    });
+
+    this.recordDevDiagnostic({
+      level: "info",
+      category: "integrations",
+      event: "channel_setup.draft.updated",
+      message: `Updated draft ${draftId}.`,
+      context: {
+        catalogId: updated.catalogId,
+        lifecycleMode: updated.lifecycleMode,
+        archetype: runtime.definition.wizard.archetype,
+        tier: runtime.definition.telemetry.tier,
+        contentVersion: runtime.definition.wizard.contentVersion,
+        validationVersion: runtime.definition.validation.validationVersion,
+        testVersion: runtime.definition.testing.testVersion,
+        lastFailureCategory: updated.lastFailureCategory,
+      },
+    });
+
+    return updated;
+  }
+
+  public validateChannelSetupDraft(draftId: string): ChannelSetupValidationResult {
+    const draft = this.storage.channelSetupDrafts.get(draftId);
+    const runtime = requireChannelSetupDefinition(draft.catalogId);
+    const issues = runtime.validate(draft);
+    const result = this.buildChannelSetupValidationResult(
+      draft,
+      runtime.definition.validation.levels,
+      issues,
+    );
+    this.storage.channelSetupDrafts.update(draftId, {
+      lastValidatedAt: result.checkedAt,
+      lastFailureCategory: firstFailureCategory(result.issues),
+    });
+    this.recordDevDiagnostic({
+      level: result.status === "error" ? "warn" : "info",
+      category: "integrations",
+      event: result.status === "error" ? "channel_setup.validation.failed" : "channel_setup.validation.succeeded",
+      message: `Validated draft ${draftId} for ${draft.catalogId}.`,
+      context: {
+        draftId,
+        status: result.status,
+        issueCount: result.issues.length,
+        catalogId: draft.catalogId,
+        lifecycleMode: draft.lifecycleMode,
+        archetype: runtime.definition.wizard.archetype,
+        tier: runtime.definition.telemetry.tier,
+        validationVersion: runtime.definition.validation.validationVersion,
+        failureCategory: firstFailureCategory(result.issues),
+      },
+    });
+    return result;
+  }
+
+  public async testChannelSetupDraft(draftId: string): Promise<ChannelSetupTestResult> {
+    const draft = this.storage.channelSetupDrafts.get(draftId);
+    const validation = this.validateChannelSetupDraft(draftId);
+    if (validation.status === "error") {
+      this.recentChannelSetupTests.delete(draftId);
+      const blocked: ChannelSetupTestResult = {
+        draftId,
+        status: "error",
+        levels: ["structural", "semantic"],
+        issues: validation.issues,
+        checkedAt: new Date().toISOString(),
+        recommendedNextAction: "Resolve the required setup fields before running a live test.",
+      };
+      this.storage.channelSetupDrafts.update(draftId, {
+        lastTestedAt: blocked.checkedAt,
+        lastFailureCategory: firstFailureCategory(blocked.issues),
+      });
+      return blocked;
+    }
+
+    const runtime = requireChannelSetupDefinition(draft.catalogId);
+    const connection = this.buildEphemeralChannelConnection(draft, runtime.definition.adapter.secretFieldKeys);
+    const testSignature = buildChannelSetupRecentTestSignature(
+      draft,
+      connection,
+      runtime.definition.testing.testVersion,
+    );
+    const liveChecks = await this.runIntegrationConnectionLiveChecks(connection, { includeSandboxSend: true });
+    const checks = [
+      ...this.buildIntegrationConnectionChecks(connection),
+      ...liveChecks.checks,
+    ];
+    const issues = checks.flatMap((check) => mapDiagnosticCheckToChannelIssues(check));
+    const status = issues.some((issue) => issue.level === "error")
+      ? "error"
+      : issues.some((issue) => issue.level === "warn")
+        ? "warn"
+        : "ok";
+    const result: ChannelSetupTestResult = {
+      draftId,
+      status,
+      levels: runtime.definition.testing.levels,
+      issues,
+      checkedAt: new Date().toISOString(),
+      recommendedNextAction: status === "error"
+        ? "Review the failing checks, correct the draft, then run the test again."
+        : "Finalize the connection and send a sandbox message to confirm destination access.",
+      probe: liveChecks.probe,
+    };
+    this.storage.channelSetupDrafts.update(draftId, {
+      lastTestedAt: result.checkedAt,
+      lastFailureCategory: firstFailureCategory(result.issues),
+    });
+    if (result.status === "error") {
+      this.recentChannelSetupTests.delete(draftId);
+    } else {
+      this.recentChannelSetupTests.set(draftId, {
+        signature: testSignature,
+        result,
+      });
+    }
+    this.recordDevDiagnostic({
+      level: status === "error" ? "warn" : "info",
+      category: "integrations",
+      event: status === "error" ? "channel_setup.test.failed" : "channel_setup.test.succeeded",
+      message: `Tested draft ${draftId} for ${draft.catalogId}.`,
+      context: {
+        draftId,
+        status,
+        issueCount: issues.length,
+        catalogId: draft.catalogId,
+        lifecycleMode: draft.lifecycleMode,
+        archetype: runtime.definition.wizard.archetype,
+        tier: runtime.definition.telemetry.tier,
+        testVersion: runtime.definition.testing.testVersion,
+        failureCategory: firstFailureCategory(result.issues),
+      },
+    });
+    return result;
+  }
+
+  public async finalizeChannelSetupDraft(draftId: string): Promise<ChannelSetupFinalizeResult> {
+    const draft = this.storage.channelSetupDrafts.get(draftId);
+    const runtime = requireChannelSetupDefinition(draft.catalogId);
+    const validation = this.validateChannelSetupDraft(draftId);
+    if (validation.status === "error") {
+      throw new Error("Channel setup draft still has validation errors.");
+    }
+    const reusableTest = this.getReusableChannelSetupTestResult(draft);
+    if (reusableTest) {
+      this.recordDevDiagnostic({
+        level: "info",
+        category: "integrations",
+        event: "channel_setup.test.reused",
+        message: `Reused the most recent live test result for draft ${draftId}.`,
+        context: {
+          draftId,
+          status: reusableTest.status,
+          issueCount: reusableTest.issues.length,
+          catalogId: draft.catalogId,
+          lifecycleMode: draft.lifecycleMode,
+          archetype: runtime.definition.wizard.archetype,
+          tier: runtime.definition.telemetry.tier,
+          testVersion: runtime.definition.testing.testVersion,
+          checkedAt: reusableTest.checkedAt,
+        },
+      });
+    }
+    const test = reusableTest ?? await this.testChannelSetupDraft(draftId);
+    if (test.status !== "ok") {
+      throw new Error(
+        test.status === "warn"
+          ? "Channel setup draft still has warning-level live checks. Resolve warnings before finalizing."
+          : "Channel setup draft still has failing live checks.",
+      );
+    }
+
+    const payload = {
+      label: draft.label,
+      enabled: draft.enabled,
+      status: "connected" as const,
+      config: this.buildEphemeralChannelConnection(draft).config,
+      lastSyncAt: test.checkedAt,
+      lastError: null,
+    };
+
+    const connection = draft.connectionId
+      ? this.updateIntegrationConnection(draft.connectionId, payload)
+      : this.updateIntegrationConnection(
+        this.createIntegrationConnection({
+          catalogId: draft.catalogId,
+          label: payload.label,
+          enabled: payload.enabled,
+          status: payload.status,
+          config: payload.config,
+        }).connectionId,
+        {
+          lastSyncAt: payload.lastSyncAt,
+          lastError: payload.lastError,
+        },
+      );
+
+    this.recordDevDiagnostic({
+      level: "info",
+      category: "integrations",
+      event: "channel_setup.finalize.succeeded",
+      message: `Finalized channel setup for ${draft.catalogId}.`,
+      context: {
+        draftId,
+        connectionId: connection.connectionId,
+        lifecycleMode: draft.lifecycleMode,
+        catalogId: draft.catalogId,
+        archetype: runtime.definition.wizard.archetype,
+        tier: runtime.definition.telemetry.tier,
+        contentVersion: runtime.definition.wizard.contentVersion,
+      },
+    });
+
+    this.recentChannelSetupTests.delete(draftId);
+    this.storage.channelSetupDrafts.delete(draftId);
+
+    return {
+      connection,
+      validation,
+      test,
+    };
+  }
+
+  public createChannelSetupRepairDraft(connectionId: string): ChannelSetupDraft {
+    const connection = this.getIntegrationConnection(connectionId);
+    return this.createChannelSetupDraft({
+      catalogId: connection.catalogId,
+      connectionId,
+      lifecycleMode: "repair",
+    });
+  }
+
+  public createChannelSetupRotateSecretDraft(connectionId: string): ChannelSetupDraft {
+    const connection = this.getIntegrationConnection(connectionId);
+    return this.createChannelSetupDraft({
+      catalogId: connection.catalogId,
+      connectionId,
+      lifecycleMode: "rotate_secret",
+    });
+  }
+
+  public async retestChannelConnection(connectionId: string): Promise<ChannelSetupTestResult> {
+    const repairDraft = this.createChannelSetupDraft({
+      catalogId: this.getIntegrationConnection(connectionId).catalogId,
+      connectionId,
+      lifecycleMode: "retest",
+    });
+    return this.testChannelSetupDraft(repairDraft.draftId);
+  }
+
   public listConnectorRecords(connectorType?: ConnectorType): ConnectorRecord[] {
     return filterConnectorRecords(
       buildGatewayConnectorRecords({
@@ -10681,6 +12001,77 @@ export class GatewayService {
 
   public getIntegrationConnection(connectionId: string): IntegrationConnection {
     return this.storage.integrationConnections.get(connectionId);
+  }
+
+  public getIntegrationConnectionChannelCapabilities(connectionId: string): ChannelCapabilities {
+    const connection = this.storage.integrationConnections.get(connectionId);
+    if (!connection) {
+      throw new Error(`Unknown integration connection: ${connectionId}`);
+    }
+    if (connection.kind !== "channel") {
+      throw new Error(`Integration connection ${connectionId} is not a channel connection.`);
+    }
+    return describeChannelCapabilities(connection.key, connection.config);
+  }
+
+  public getIntegrationConnectionChannelRuntimeStatus(connectionId: string): ChannelRuntimeStatus {
+    const connection = this.storage.integrationConnections.get(connectionId);
+    if (!connection) {
+      throw new Error(`Unknown integration connection: ${connectionId}`);
+    }
+    if (connection.kind !== "channel") {
+      throw new Error(`Integration connection ${connectionId} is not a channel connection.`);
+    }
+    const capabilities = describeChannelCapabilities(connection.key, connection.config);
+    const baseReady = connection.enabled
+      && connection.status === "connected"
+      && capabilities.setupReady
+      && Boolean(connection.lastSyncAt)
+      && !connection.lastError;
+    const runtimeStatus: ChannelRuntimeStatus = {
+      connectionId: connection.connectionId,
+      channelKey: connection.key,
+      enabled: connection.enabled,
+      ready: Boolean(baseReady),
+      inboundModes: capabilities.inboundModes,
+      runtimePolicy: capabilities.runtimePolicy,
+      runtimePosture: capabilities.runtimePosture,
+      lastReadyAt: baseReady ? (connection.lastSyncAt ?? connection.updatedAt) : undefined,
+      lastError: connection.lastError,
+      metadata: {
+        setupReady: capabilities.setupReady,
+        setupDiagnostics: capabilities.setupDiagnostics,
+        supportNotes: capabilities.supportNotes,
+        connectionStatus: connection.status,
+        readinessSource: connection.key === "discord" ? "live_runtime" : "last_live_probe",
+        authoritative: connection.key === "discord" || Boolean(connection.lastSyncAt),
+      },
+    };
+
+    if (connection.key !== "discord") {
+      return runtimeStatus;
+    }
+
+    const discordRuntime = this.getDiscordRuntimeStatus(connectionId);
+    if (!discordRuntime) {
+      return runtimeStatus;
+    }
+
+    return {
+      ...runtimeStatus,
+      ready: discordRuntime.ready,
+      lastReadyAt: discordRuntime.lastReadyAt ?? runtimeStatus.lastReadyAt,
+      lastInboundAt: discordRuntime.lastInboundAt,
+      lastReconnectAt: discordRuntime.lastReconnectAt,
+      lastError: discordRuntime.lastError ?? runtimeStatus.lastError,
+      metadata: {
+        ...runtimeStatus.metadata,
+        connectedBotId: discordRuntime.connectedBotId,
+        connectedBotTag: discordRuntime.connectedBotTag,
+        guildIds: discordRuntime.guildIds,
+        runtimeMode: discordRuntime.runtimeMode,
+      },
+    };
   }
 
   public async runIntegrationConnectionDiagnostics(connectionId: string): Promise<ConnectorDiagnosticReport> {
@@ -10706,7 +12097,8 @@ export class GatewayService {
       message: connection.lastError ? `Last error: ${connection.lastError}` : "No recent errors recorded.",
     });
     checks.push(...this.buildIntegrationConnectionChecks(connection));
-    checks.push(...await this.runIntegrationConnectionLiveChecks(connection));
+    const liveChecks = await this.runIntegrationConnectionLiveChecks(connection, { includeSandboxSend: false });
+    checks.push(...liveChecks.checks);
     const report: ConnectorDiagnosticReport = {
       connectorType: "integration_connection",
       connectorId: connection.connectionId,
@@ -10718,6 +12110,7 @@ export class GatewayService {
       checks,
       recommendedNextAction: this.pickConnectorDiagnosticAction(checks),
       checkedAt: new Date().toISOString(),
+      probe: liveChecks.probe,
     };
     this.recordConnectorHealthRun(report);
     return report;
@@ -10747,6 +12140,7 @@ export class GatewayService {
       enabled: created.enabled,
       status: created.status,
     });
+    void this.syncDiscordRuntime();
 
     return created;
   }
@@ -10760,6 +12154,7 @@ export class GatewayService {
       status: updated.status,
       lastError: updated.lastError,
     });
+    void this.syncDiscordRuntime();
     return updated;
   }
 
@@ -10771,7 +12166,158 @@ export class GatewayService {
         connectionId,
       });
     }
+    void this.syncDiscordRuntime();
     return deleted;
+  }
+
+  public listDiscordPairings(connectionId: string): {
+    runtime?: DiscordRuntimeStatus;
+    items: DiscordPairingRecord[];
+  } {
+    const connection = this.getIntegrationConnection(connectionId);
+    this.assertDiscordConnection(connection);
+    return {
+      runtime: this.getDiscordRuntimeStatus(connectionId),
+      items: this.readDiscordPairings()
+        .filter((item) => item.connectionId === connectionId)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    };
+  }
+
+  public approveDiscordPairing(connectionId: string, pairingId: string): DiscordPairingRecord {
+    const connection = this.getIntegrationConnection(connectionId);
+    this.assertDiscordConnection(connection);
+    const pairings = this.readDiscordPairings();
+    const existing = pairings.find((item) => item.connectionId === connectionId && item.pairingId === pairingId);
+    if (!existing) {
+      throw new Error(`Unknown Discord pairing: ${pairingId}`);
+    }
+    const now = new Date().toISOString();
+    const next = pairings.map((item) => {
+      if (item.connectionId !== connectionId) {
+        return item;
+      }
+      if (item.pairingId === pairingId) {
+        return {
+          ...item,
+          status: "approved" as const,
+          approvedAt: now,
+          revokedAt: undefined,
+          updatedAt: now,
+        };
+      }
+      if (item.userId === existing.userId && item.status === "approved") {
+        return {
+          ...item,
+          status: "revoked" as const,
+          revokedAt: now,
+          updatedAt: now,
+        };
+      }
+      return item;
+    });
+    this.writeDiscordPairings(next);
+    return next.find((item) => item.pairingId === pairingId)!;
+  }
+
+  public revokeDiscordPairing(connectionId: string, pairingId: string): DiscordPairingRecord {
+    const connection = this.getIntegrationConnection(connectionId);
+    this.assertDiscordConnection(connection);
+    const pairings = this.readDiscordPairings();
+    const existing = pairings.find((item) => item.connectionId === connectionId && item.pairingId === pairingId);
+    if (!existing) {
+      throw new Error(`Unknown Discord pairing: ${pairingId}`);
+    }
+    const now = new Date().toISOString();
+    const revoked: DiscordPairingRecord = {
+      ...existing,
+      status: "revoked",
+      revokedAt: now,
+      updatedAt: now,
+    };
+    this.writeDiscordPairings(pairings.map((item) => item.pairingId === pairingId ? revoked : item));
+    return revoked;
+  }
+
+  public getDiscordRuntimeStatus(connectionId: string): DiscordRuntimeStatus | undefined {
+    return this.discordRuntimeService.getConnectionStatus(connectionId);
+  }
+
+  public async reconnectDiscordRuntime(connectionId: string): Promise<DiscordRuntimeStatus | undefined> {
+    const connection = this.getIntegrationConnection(connectionId);
+    this.assertDiscordConnection(connection);
+    return this.discordRuntimeService.reconnectConnection(connectionId);
+  }
+
+  private async emitDiscordTyping(
+    connection: IntegrationConnection,
+    input: ChannelTypingInput,
+  ): Promise<ChannelTypingResult> {
+    return this.discordRuntimeService.sendTyping(
+      connection.connectionId,
+      input.target,
+      input.durationMs,
+    );
+  }
+
+  private async emitTelegramTyping(
+    connection: IntegrationConnection,
+    input: ChannelTypingInput,
+  ): Promise<ChannelTypingResult> {
+    const token = this.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv")
+      ?? this.resolveConnectionSecret(connection.config, "token", "tokenEnv");
+    const chatId = input.target.trim() || this.readConnectionConfigValue(connection.config, "defaultChatId");
+    if (!token) {
+      return {
+        channelKey: "telegram",
+        connectionId: connection.connectionId,
+        target: input.target,
+        supported: false,
+        status: "unsupported",
+        reason: `${connection.label} is missing a Telegram bot token.`,
+      };
+    }
+    if (!chatId) {
+      return {
+        channelKey: "telegram",
+        connectionId: connection.connectionId,
+        target: input.target,
+        supported: false,
+        status: "unsupported",
+        reason: `${connection.label} is missing a Telegram chat target.`,
+      };
+    }
+    const telegramApiUrl = `https://api.telegram.org/bot${token}/sendChatAction`;
+    if (!this.isConnectionUrlAllowlisted(telegramApiUrl)) {
+      return {
+        channelKey: "telegram",
+        connectionId: connection.connectionId,
+        target: input.target,
+        supported: false,
+        status: "unsupported",
+        reason: "Telegram API host is not in the current outbound allowlist.",
+      };
+    }
+    try {
+      return await sendTelegramTypingIndicator({
+        connectionId: connection.connectionId,
+        target: input.target,
+        token,
+        chatId,
+        threadId: input.threadId,
+        durationMs: input.durationMs,
+        fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+      });
+    } catch (error) {
+      return {
+        channelKey: "telegram",
+        connectionId: connection.connectionId,
+        target: input.target,
+        supported: false,
+        status: "unsupported",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   public listIntegrationPlugins(): IntegrationPluginRecord[] {
@@ -10781,27 +12327,25 @@ export class GatewayService {
   public installIntegrationPlugin(input: IntegrationPluginInstallInput): IntegrationPluginRecord {
     const now = new Date().toISOString();
     const plugins = this.readIntegrationPlugins();
-    const nextId = sanitizePluginId(input.pluginId ?? input.source);
+    const installMetadata = resolveIntegrationPluginInstallMetadata(input.source);
+    const nextId = sanitizePluginId(input.pluginId ?? installMetadata.manifest?.pluginId ?? input.source);
     const existing = plugins.find((item) => item.pluginId === nextId);
     if (existing) {
-      const updated: IntegrationPluginRecord = {
-        ...existing,
-        updatedAt: now,
-      };
+      const updated = buildInstalledIntegrationPluginRecord({
+        now,
+        pluginId: nextId,
+        source: input.source,
+        existing,
+      });
       this.writeIntegrationPlugins(plugins.map((item) => item.pluginId === nextId ? updated : item));
       return updated;
     }
 
-    const created: IntegrationPluginRecord = {
+    const created = buildInstalledIntegrationPluginRecord({
+      now,
       pluginId: nextId,
-      label: toTitleCase(nextId),
-      version: "0.1.0",
-      description: `Installed from ${input.source}`,
-      enabled: true,
-      installedAt: now,
-      updatedAt: now,
-      capabilities: ["channel.adapter"],
-    };
+      source: input.source,
+    });
     this.writeIntegrationPlugins([created, ...plugins]);
     this.publishRealtime("system", "integrations", {
       type: "integration_plugin_installed",
@@ -11664,8 +13208,25 @@ export class GatewayService {
     return status;
   }
 
-  public startTalkSession(input?: { mode?: "push_to_talk" | "wake"; sessionId?: string }): VoiceTalkSessionRecord {
+  public async startTalkSession(input?: { mode?: "push_to_talk" | "wake"; sessionId?: string }): Promise<VoiceTalkSessionRecord> {
     const now = new Date().toISOString();
+    const [runtime, voiceStatus] = await Promise.all([
+      getManagedVoiceRuntimeStatus(this.storage.systemSettings),
+      this.getVoiceStatus(),
+    ]);
+    const failure = buildVoiceControlStartFailure({
+      action: "talk",
+      now,
+      runtime,
+      status: voiceStatus,
+    });
+    if (failure) {
+      this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, failure.stt);
+      if (failure.talk) {
+        this.storage.systemSettings.set("voice_talk_status_v1", failure.talk);
+      }
+      throw new Error(failure.message);
+    }
     const record: VoiceTalkSessionRecord = {
       talkSessionId: randomUUID(),
       mode: input?.mode ?? "push_to_talk",
@@ -11696,12 +13257,38 @@ export class GatewayService {
       mode: record.mode,
       updatedAt: now,
     });
+    this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
+      ...voiceStatus.stt,
+      state: "stopped",
+      provider: runtime.provider,
+      modelId: runtime.selectedModelId,
+      runtimeReady: runtime.readiness === "ready",
+      lastError: undefined,
+      updatedAt: now,
+    });
     this.publishRealtime("system", "voice", {
       type: "voice_talk_started",
       talkSessionId: record.talkSessionId,
       mode: record.mode,
     });
     return record;
+  }
+
+  public listVoiceTalkSessions(limit = 20): VoiceTalkSessionRecord[] {
+    const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit) || 20));
+    const rows = this.gatewaySql.prepare(`
+      SELECT payload_json
+      FROM voice_sessions
+      ORDER BY COALESCE(updated_at, created_at) DESC, rowid DESC
+      LIMIT ?
+    `).all(safeLimit) as Array<{ payload_json: string }>;
+    return rows.map((row) =>
+      safeJsonParse<VoiceTalkSessionRecord>(row.payload_json, {
+        talkSessionId: randomUUID(),
+        mode: "push_to_talk",
+        state: "stopped",
+        createdAt: new Date().toISOString(),
+      }));
   }
 
   public stopTalkSession(talkSessionId: string): VoiceTalkSessionRecord {
@@ -11745,14 +13332,41 @@ export class GatewayService {
     return stopped;
   }
 
-  public startVoiceWake(): VoiceStatus["wake"] {
+  public async startVoiceWake(): Promise<VoiceStatus["wake"]> {
+    const now = new Date().toISOString();
+    const [runtime, voiceStatus] = await Promise.all([
+      getManagedVoiceRuntimeStatus(this.storage.systemSettings),
+      this.getVoiceStatus(),
+    ]);
+    const failure = buildVoiceControlStartFailure({
+      action: "wake",
+      now,
+      runtime,
+      status: voiceStatus,
+    });
+    if (failure) {
+      this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, failure.stt);
+      if (failure.wake) {
+        this.storage.systemSettings.set(VOICE_WAKE_STATUS_SETTING_KEY, failure.wake);
+      }
+      throw new Error(failure.message);
+    }
     const status: VoiceStatus["wake"] = {
       enabled: true,
       state: "running",
       model: "openwakeword",
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
     };
     this.storage.systemSettings.set(VOICE_WAKE_STATUS_SETTING_KEY, status);
+    this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
+      ...voiceStatus.stt,
+      state: "stopped",
+      provider: runtime.provider,
+      modelId: runtime.selectedModelId,
+      runtimeReady: runtime.readiness === "ready",
+      lastError: undefined,
+      updatedAt: now,
+    });
     this.publishRealtime("system", "voice", {
       type: "voice_wake_started",
     });
@@ -11780,53 +13394,61 @@ export class GatewayService {
     host: string;
     state: "running" | "stopped";
     lastCommandAt?: string;
+    requestedState?: "running" | "stopped";
+    supported: boolean;
+    controllable: boolean;
+    controlMessage: string;
   } {
     const state = this.storage.systemSettings.get<{ state: "running" | "stopped"; lastCommandAt?: string }>("daemon_state_v1")?.value;
     return {
-      running: (state?.state ?? "running") === "running",
+      running: true,
       pid: process.pid,
       uptimeSeconds: Math.floor(process.uptime()),
       host: os.hostname(),
-      state: state?.state ?? "running",
+      state: "running",
       lastCommandAt: state?.lastCommandAt,
+      requestedState: state?.state,
+      supported: false,
+      controllable: false,
+      controlMessage: "This surface reports the current gateway process only. Start/stop/restart requires an external service manager and is not supported from Mission Control.",
     };
   }
 
-  public daemonStart(): { accepted: boolean; status: ReturnType<GatewayService["getDaemonStatus"]> } {
+  public daemonStart(): { accepted: boolean; reason: string; status: ReturnType<GatewayService["getDaemonStatus"]> } {
     const now = new Date().toISOString();
-    this.storage.systemSettings.set("daemon_state_v1", {
-      state: "running" as const,
-      lastCommandAt: now,
+    this.appendDaemonLog("warn", {
+      at: now,
+      message: "Rejected Mission Control daemon start request because no process manager integration is available.",
     });
-    this.appendDaemonLog("start", { at: now });
     return {
-      accepted: true,
+      accepted: false,
+      reason: "Mission Control cannot start the gateway process directly on this host.",
       status: this.getDaemonStatus(),
     };
   }
 
-  public daemonStop(): { accepted: boolean; status: ReturnType<GatewayService["getDaemonStatus"]> } {
+  public daemonStop(): { accepted: boolean; reason: string; status: ReturnType<GatewayService["getDaemonStatus"]> } {
     const now = new Date().toISOString();
-    this.storage.systemSettings.set("daemon_state_v1", {
-      state: "stopped" as const,
-      lastCommandAt: now,
+    this.appendDaemonLog("warn", {
+      at: now,
+      message: "Rejected Mission Control daemon stop request because no process manager integration is available.",
     });
-    this.appendDaemonLog("stop", { at: now });
     return {
-      accepted: true,
+      accepted: false,
+      reason: "Mission Control cannot stop the gateway process directly on this host.",
       status: this.getDaemonStatus(),
     };
   }
 
-  public daemonRestart(): { accepted: boolean; status: ReturnType<GatewayService["getDaemonStatus"]> } {
+  public daemonRestart(): { accepted: boolean; reason: string; status: ReturnType<GatewayService["getDaemonStatus"]> } {
     const now = new Date().toISOString();
-    this.storage.systemSettings.set("daemon_state_v1", {
-      state: "running" as const,
-      lastCommandAt: now,
+    this.appendDaemonLog("warn", {
+      at: now,
+      message: "Rejected Mission Control daemon restart request because no process manager integration is available.",
     });
-    this.appendDaemonLog("restart", { at: now });
     return {
-      accepted: true,
+      accepted: false,
+      reason: "Mission Control cannot restart the gateway process directly on this host.",
       status: this.getDaemonStatus(),
     };
   }
@@ -11869,6 +13491,13 @@ export class GatewayService {
     );
   }
 
+  public async commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+    if (!input.replyToMessageId?.trim()) {
+      throw new Error("replyToMessageId is required for channel replies.");
+    }
+    return this.commsSend(input);
+  }
+
   public async commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>> {
     return this.invokeAndUnwrap(
       {
@@ -11905,6 +13534,40 @@ export class GatewayService {
       },
       "comms_unsend",
     );
+  }
+
+  public async commsTyping(input: ChannelTypingInput): Promise<ChannelTypingResult> {
+    const connection = this.getIntegrationConnection(input.connectionId);
+    if (connection.kind !== "channel") {
+      throw new Error(`Integration connection ${input.connectionId} is not a channel connection.`);
+    }
+    const capabilities = describeChannelCapabilities(connection.key, connection.config);
+    if (!capabilities.supportedActions.includes("channel.typing")) {
+      return {
+        channelKey: connection.key,
+        connectionId: input.connectionId,
+        target: input.target,
+        supported: false,
+        status: "unsupported",
+        reason: `${connection.label} does not advertise typing support in the current runtime mode.`,
+      };
+    }
+
+    if (connection.key === "discord") {
+      return this.emitDiscordTyping(connection, input);
+    }
+    if (connection.key === "telegram") {
+      return this.emitTelegramTyping(connection, input);
+    }
+
+    return {
+      channelKey: connection.key,
+      connectionId: input.connectionId,
+      target: input.target,
+      supported: false,
+      status: "unsupported",
+      reason: `${connection.label} has not wired a typing adapter yet.`,
+    };
   }
 
   public async commsGmailRead(input: GmailReadQuery): Promise<ToolInvokeResult | Record<string, unknown>> {
@@ -13308,6 +14971,84 @@ export class GatewayService {
       : undefined;
   }
 
+  private buildDefaultChannelSetupDraft(definition: ChannelSetupDefinition): Record<string, unknown> {
+    const defaults: Record<string, unknown> = {};
+    for (const step of definition.wizard.steps) {
+      for (const field of step.fields ?? []) {
+        if (field.defaultValue !== undefined) {
+          defaults[field.key] = field.defaultValue;
+        }
+      }
+    }
+    return defaults;
+  }
+
+  private buildChannelSetupValidationResult(
+    draft: ChannelSetupDraft,
+    levels: ChannelSetupValidationLevel[],
+    issues: ChannelSetupIssue[],
+  ): ChannelSetupValidationResult {
+    const status = issues.some((issue) => issue.level === "error")
+      ? "error"
+      : issues.some((issue) => issue.level === "warn")
+        ? "warn"
+        : "ok";
+    return {
+      draftId: draft.draftId,
+      status,
+      levels,
+      issues,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  private getReusableChannelSetupTestResult(draft: ChannelSetupDraft): ChannelSetupTestResult | undefined {
+    const runtime = requireChannelSetupDefinition(draft.catalogId);
+    const connection = this.buildEphemeralChannelConnection(draft, runtime.definition.adapter.secretFieldKeys);
+    return resolveReusableChannelSetupTestResult({
+      cache: this.recentChannelSetupTests,
+      draft,
+      connection,
+      testVersion: runtime.definition.testing.testVersion,
+    });
+  }
+
+  private buildEphemeralChannelConnection(
+    draft: ChannelSetupDraft,
+    secretFieldKeys?: string[],
+  ): IntegrationConnection {
+    const runtime = requireChannelSetupDefinition(draft.catalogId);
+    const catalog = INTEGRATION_CATALOG.find((entry) => entry.catalogId === draft.catalogId);
+    if (!catalog) {
+      throw new Error(`Unknown integration catalog id: ${draft.catalogId}`);
+    }
+    const nextConfig = runtime.normalize(draft);
+    const currentConfig = draft.connectionId
+      ? this.getIntegrationConnection(draft.connectionId).config
+      : {};
+    const preservedSecrets = Object.fromEntries(
+      (secretFieldKeys ?? runtime.definition.adapter.secretFieldKeys)
+        .filter((key) => nextConfig[key] === undefined && currentConfig[key] !== undefined)
+        .map((key) => [key, currentConfig[key]]),
+    );
+    return {
+      connectionId: draft.connectionId ?? draft.draftId,
+      catalogId: catalog.catalogId,
+      kind: catalog.kind,
+      key: catalog.key,
+      label: draft.label?.trim() || catalog.label,
+      enabled: draft.enabled,
+      status: "connected",
+      config: {
+        ...currentConfig,
+        ...preservedSecrets,
+        ...nextConfig,
+      },
+      createdAt: draft.createdAt,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   private buildIntegrationConnectionChecks(
     connection: IntegrationConnection,
   ): ConnectorDiagnosticReport["checks"] {
@@ -13315,6 +15056,9 @@ export class GatewayService {
     const config = connection.config;
     const channelFeatures = connection.kind === "channel"
       ? describeChannelFeatureMetadata(connection.key, config)
+      : undefined;
+    const channelCapabilities = connection.kind === "channel"
+      ? describeChannelCapabilities(connection.key, config)
       : undefined;
     const requireSecretRef = (
       key: string,
@@ -13378,6 +15122,9 @@ export class GatewayService {
           ? `Supported attachment sources: ${channelFeatures?.supportedAttachmentSources.join(", ")}.`
           : "No rich attachment source is advertised for this connector.",
       });
+      if (channelCapabilities) {
+        checks.push(...buildChannelCapabilityDiagnosticChecks(channelCapabilities));
+      }
       switch (connection.key) {
         case "slack":
           checks.push({
@@ -13423,11 +15170,6 @@ export class GatewayService {
               ? "Telegram API host is allowlisted."
               : "Telegram API host is not allowlisted.",
           });
-          break;
-        case "matrix":
-          requireSecretRef("auth", "Matrix access token", "accessToken", "accessTokenEnv");
-          checkUrl("url", "Matrix homeserver URL", this.readConnectionConfigValue(config, "homeserverUrl"), true);
-          requireText("target", "Default Matrix room", resolveChannelConfigTarget(connection.key, config), "warn");
           break;
         case "google-chat":
           checkUrl("url", "Google Chat webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), true);
@@ -13538,9 +15280,12 @@ export class GatewayService {
 
   private async runIntegrationConnectionLiveChecks(
     connection: IntegrationConnection,
-  ): Promise<ConnectorDiagnosticReport["checks"]> {
+    options: {
+      includeSandboxSend: boolean;
+    },
+  ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ChannelProbeReport }> {
     if (connection.kind !== "channel") {
-      return [];
+      return { checks: [] };
     }
     const config = connection.config;
     switch (connection.key) {
@@ -13548,110 +15293,120 @@ export class GatewayService {
         const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
           ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
         if (!token) {
-          return [{
-            key: "auth_live",
-            status: this.readConnectionConfigValue(config, "webhookUrl") ? "warn" : "fail",
-            message: this.readConnectionConfigValue(config, "webhookUrl")
-              ? "Webhook-mode Slack connections cannot be probed non-destructively without a bot token."
-              : "Slack live auth probe skipped because no bot token is configured.",
-          }];
+          return {
+            checks: [{
+              key: "auth_live",
+              status: this.readConnectionConfigValue(config, "webhookUrl") ? "warn" : "fail",
+              message: this.readConnectionConfigValue(config, "webhookUrl")
+                ? "Webhook-mode Slack connections cannot be probed non-destructively without a bot token."
+                : "Slack live auth probe skipped because no bot token is configured.",
+            }],
+          };
         }
-        return [await this.runLiveProbeCheck("auth_live", "Slack auth probe", async () => {
-          const response = await this.fetchWithDiagnosticsTimeout("https://slack.com/api/auth.test", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          });
-          const payload = await this.readJsonRecord(response);
-          if (!response.ok || payload.ok === false) {
-            throw new Error(this.readProbeDetail(payload) ?? `HTTP ${response.status}`);
-          }
-        })];
+        return runSlackBotLiveChecks({
+          token,
+          channel: this.readConnectionConfigValue(config, "defaultChannel"),
+          threadTs: this.readConnectionConfigValue(config, "defaultThreadTs"),
+          includeSandboxSend: options.includeSandboxSend,
+          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+        });
       }
-      case "discord": {
-        const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
-          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
-        if (!token) {
-          return [{
-            key: "auth_live",
-            status: this.readConnectionConfigValue(config, "webhookUrl") ? "warn" : "fail",
-            message: this.readConnectionConfigValue(config, "webhookUrl")
-              ? "Webhook-mode Discord connections cannot be fully probed for reactions without a bot token."
-              : "Discord live auth probe skipped because no bot token is configured.",
-          }];
-        }
-        return [await this.runLiveProbeCheck("auth_live", "Discord auth probe", async () => {
-          const response = await this.fetchWithDiagnosticsTimeout("https://discord.com/api/v10/users/@me", {
-            headers: {
-              Authorization: `Bot ${token}`,
-            },
-          });
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-        })];
-      }
+      case "discord":
+        return this.runDiscordConnectionLiveChecks(connection, options.includeSandboxSend);
       case "telegram": {
         const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
           ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
         if (!token) {
-          return [];
+          return { checks: [] };
         }
-        return [await this.runLiveProbeCheck("auth_live", "Telegram auth probe", async () => {
-          const response = await this.fetchWithDiagnosticsTimeout(`https://api.telegram.org/bot${token}/getMe`);
-          const payload = await this.readJsonRecord(response);
-          if (!response.ok || payload.ok === false) {
-            throw new Error(this.readProbeDetail(payload) ?? `HTTP ${response.status}`);
-          }
-        })];
+        return runTelegramBotLiveChecks({
+          token,
+          chatId: this.readConnectionConfigValue(config, "defaultChatId"),
+          parseMode: this.readConnectionConfigValue(config, "parseMode"),
+          includeSandboxSend: options.includeSandboxSend,
+          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+        });
       }
-      case "matrix": {
-        const token = this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv")
-          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
-        const homeserverUrl = this.readConnectionConfigValue(config, "homeserverUrl");
-        if (!token || !homeserverUrl) {
-          return [];
-        }
-        return [await this.runLiveProbeCheck("auth_live", "Matrix auth probe", async () => {
-          const response = await this.fetchWithDiagnosticsTimeout(
-            `${homeserverUrl.replace(/\/+$/, "")}/_matrix/client/v3/account/whoami`,
-            {
-              headers: {
-                Authorization: `Bearer ${token}`,
-              },
-            },
-          );
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-        })];
-      }
+      case "google-chat":
+        return runWebhookDestinationLiveChecks({
+          channelKey: "google-chat",
+          webhookUrl: this.readConnectionConfigValue(config, "webhookUrl"),
+          includeSandboxSend: options.includeSandboxSend,
+          defaultThreadKey: this.readConnectionConfigValue(config, "defaultThreadKey"),
+          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+        });
+      case "teams":
+        return runWebhookDestinationLiveChecks({
+          channelKey: "teams",
+          webhookUrl: this.readConnectionConfigValue(config, "webhookUrl"),
+          includeSandboxSend: options.includeSandboxSend,
+          cardTitle: this.readConnectionConfigValue(config, "cardTitle"),
+          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+        });
       case "mattermost": {
         const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
           ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
         const serverUrl = this.readConnectionConfigValue(config, "serverUrl")
           ?? this.readConnectionConfigValue(config, "baseUrl");
         if (!token || !serverUrl) {
-          return [];
+          return { checks: [] };
         }
-        return [await this.runLiveProbeCheck("auth_live", "Mattermost auth probe", async () => {
-          const response = await this.fetchWithDiagnosticsTimeout(
-            `${serverUrl.replace(/\/+$/, "")}/api/v4/users/me`,
-            {
-              headers: {
-                Authorization: `Bearer ${token}`,
+        return {
+          checks: [await this.runLiveProbeCheck("auth_live", "Mattermost auth probe", async () => {
+            const response = await this.fetchWithDiagnosticsTimeout(
+              `${serverUrl.replace(/\/+$/, "")}/api/v4/users/me`,
+              {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
               },
-            },
-          );
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-        })];
+            );
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+          })],
+        };
       }
       default:
-        return [];
+        return { checks: [] };
     }
+  }
+
+  private async syncDiscordRuntime(): Promise<void> {
+    try {
+      await this.discordRuntimeService.sync();
+    } catch (error) {
+      this.recordDevDiagnostic({
+        level: "warn",
+        category: "channels",
+        event: "discord.runtime.sync_failed",
+        message: "Discord runtime sync failed.",
+        context: {
+          error: (error as Error).message,
+        },
+      });
+    }
+  }
+
+  private async runDiscordConnectionLiveChecks(
+    connection: IntegrationConnection,
+    includeSandboxSend: boolean,
+  ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
+    const config = connection.config;
+    const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
+      ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+    const runtimeMode = this.readConnectionConfigValue(config, "runtimeMode") === "gateway" ? "gateway" : "bridge";
+    return runDiscordBotLiveChecks({
+      token,
+      channelId: this.readConnectionConfigValue(config, "defaultChannelId"),
+      runtimeMode,
+      webhookUrl: this.readConnectionConfigValue(config, "webhookUrl"),
+      includeSandboxSend,
+      runtimeStatus: runtimeMode === "gateway"
+        ? this.getDiscordRuntimeStatus(connection.connectionId)
+        : undefined,
+      fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+    });
   }
 
   private async runLiveProbeCheck(
@@ -13688,27 +15443,6 @@ export class GatewayService {
     }
   }
 
-  private async readJsonRecord(response: Response): Promise<Record<string, unknown>> {
-    const text = await response.text();
-    if (!text.trim()) {
-      return {};
-    }
-    try {
-      return JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
-
-  private readProbeDetail(payload: Record<string, unknown>): string | undefined {
-    for (const candidate of [payload.error, payload.description, payload.message]) {
-      if (typeof candidate === "string" && candidate.trim().length > 0) {
-        return candidate.trim();
-      }
-    }
-    return undefined;
-  }
-
   private readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined {
     const value = config[key];
     if (typeof value !== "string") {
@@ -13725,6 +15459,331 @@ export class GatewayService {
     }
     const envName = this.readConnectionConfigValue(config, envKey);
     return envName ? process.env[envName] : undefined;
+  }
+
+  private readDiscordPairings(): DiscordPairingRecord[] {
+    return this.storage.systemSettings.get<DiscordPairingRecord[]>(DISCORD_PAIRINGS_SETTING_KEY)?.value ?? [];
+  }
+
+  private writeDiscordPairings(records: DiscordPairingRecord[]): void {
+    this.storage.systemSettings.set(DISCORD_PAIRINGS_SETTING_KEY, records);
+  }
+
+  private generateDiscordPairingCode(): string {
+    return randomBytes(3).toString("hex").toUpperCase();
+  }
+
+  private findApprovedDiscordPairing(connectionId: string, userId: string): DiscordPairingRecord | undefined {
+    return this.readDiscordPairings().find((item) =>
+      item.connectionId === connectionId
+      && item.userId === userId
+      && item.status === "approved");
+  }
+
+  private ensurePendingDiscordPairing(
+    connectionId: string,
+    userId: string,
+    displayName?: string,
+  ): DiscordPairingRecord {
+    const records = this.readDiscordPairings();
+    const now = new Date().toISOString();
+    const existing = records.find((item) =>
+      item.connectionId === connectionId
+      && item.userId === userId
+      && item.status === "pending");
+    if (existing) {
+      const updated: DiscordPairingRecord = {
+        ...existing,
+        displayName: displayName?.trim() || existing.displayName,
+        updatedAt: now,
+      };
+      this.writeDiscordPairings(records.map((item) => item.pairingId === updated.pairingId ? updated : item));
+      return updated;
+    }
+    const created: DiscordPairingRecord = {
+      pairingId: randomUUID(),
+      connectionId,
+      userId,
+      displayName: displayName?.trim() || undefined,
+      code: this.generateDiscordPairingCode(),
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.writeDiscordPairings([created, ...records]);
+    return created;
+  }
+
+  private touchDiscordPairing(pairingId: string): void {
+    const now = new Date().toISOString();
+    this.writeDiscordPairings(this.readDiscordPairings().map((item) =>
+      item.pairingId === pairingId
+        ? {
+          ...item,
+          lastInboundAt: now,
+          updatedAt: now,
+        }
+        : item));
+  }
+
+  private readDiscordRouteSessions(): DiscordRouteSessionRecord[] {
+    return this.storage.systemSettings.get<DiscordRouteSessionRecord[]>(DISCORD_ROUTE_SESSIONS_SETTING_KEY)?.value ?? [];
+  }
+
+  private writeDiscordRouteSessions(records: DiscordRouteSessionRecord[]): void {
+    this.storage.systemSettings.set(DISCORD_ROUTE_SESSIONS_SETTING_KEY, records);
+  }
+
+  private findDiscordRouteSession(input: {
+    connectionId: string;
+    target: string;
+  }): DiscordRouteSessionRecord | undefined {
+    return this.readDiscordRouteSessions().find((item) => (
+      item.connectionId === input.connectionId
+      && item.target === input.target
+    ));
+  }
+
+  private resolveDiscordInboundRoute(input: {
+    connectionId: string;
+    target: string;
+    peer?: string;
+    room?: string;
+    threadId?: string;
+  }): {
+    peer?: string;
+    room?: string;
+    threadId?: string;
+  } {
+    const routeSession = this.findDiscordRouteSession(input);
+    if (!routeSession?.logicalSessionKey) {
+      return {
+        peer: input.peer,
+        room: input.room ?? input.target,
+        threadId: input.threadId,
+      };
+    }
+    const room = input.room ?? input.target;
+    const threadIdBase = input.threadId?.trim()
+      ? `discord_${input.threadId.trim()}`
+      : "discord";
+    return {
+      room,
+      threadId: `${threadIdBase}_${routeSession.logicalSessionKey}`,
+    };
+  }
+
+  private ensureDiscordChatSession(input: {
+    connectionId: string;
+    target: string;
+    displayName?: string;
+    peer?: string;
+    room?: string;
+    threadId?: string;
+  }): ChatSessionRecord {
+    const route = this.resolveDiscordInboundRoute(input);
+    const resolution = resolveSessionRoute({
+      channel: "discord",
+      account: input.connectionId,
+      peer: route.peer,
+      room: route.room,
+      threadId: route.threadId,
+    });
+    const now = new Date().toISOString();
+    this.storage.sessions.upsert({
+      sessionId: resolution.sessionId,
+      sessionKey: resolution.sessionKey,
+      kind: resolution.kind,
+      channel: "discord",
+      account: input.connectionId,
+      displayName: input.displayName?.trim() || undefined,
+      timestamp: now,
+    });
+    this.operatorSummaryCache.invalidate();
+    this.storage.chatSessionMeta.ensure(resolution.sessionId, now, DEFAULT_WORKSPACE_ID);
+    this.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
+    this.ensureChatSessionRuntimeGrants(resolution.sessionId);
+    this.storage.chatSessionBindings.upsert({
+      sessionId: resolution.sessionId,
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      transport: "integration",
+      connectionId: input.connectionId,
+      target: input.target,
+      writable: true,
+    }, now);
+    return this.requireChatSession(resolution.sessionId);
+  }
+
+  private cloneChatSessionContext(sourceSessionId: string, targetSessionId: string): void {
+    if (sourceSessionId === targetSessionId) {
+      return;
+    }
+    const {
+      sessionId: _sourceSessionId,
+      createdAt: _sourceCreatedAt,
+      updatedAt: _sourceUpdatedAt,
+      ...prefsPatch
+    } = this.getChatSessionPrefs(sourceSessionId);
+    this.updateChatSessionPrefs(targetSessionId, prefsPatch);
+    const projectId = this.storage.chatSessionProjects.get(sourceSessionId)?.projectId;
+    if (projectId) {
+      this.assignChatSessionProject(targetSessionId, projectId);
+    }
+  }
+
+  private startNewDiscordRouteSession(input: {
+    connectionId: string;
+    target: string;
+    displayName?: string;
+    peer?: string;
+    room?: string;
+    threadId?: string;
+    title?: string;
+  }): ChatSessionRecord {
+    const sourceSession = this.ensureDiscordChatSession(input);
+    const records = this.readDiscordRouteSessions();
+    const now = new Date().toISOString();
+    const logicalSessionKey = randomUUID().replaceAll("-", "").slice(0, 12);
+    const nextRecord: DiscordRouteSessionRecord = {
+      connectionId: input.connectionId,
+      target: input.target,
+      logicalSessionKey,
+      sessionId: "",
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.writeDiscordRouteSessions([
+      nextRecord,
+      ...records.filter((item) => !(item.connectionId === input.connectionId && item.target === input.target)),
+    ]);
+    const createdSession = this.ensureDiscordChatSession(input);
+    nextRecord.sessionId = createdSession.sessionId;
+    this.writeDiscordRouteSessions([
+      nextRecord,
+      ...records.filter((item) => !(item.connectionId === input.connectionId && item.target === input.target)),
+    ]);
+    this.cloneChatSessionContext(sourceSession.sessionId, createdSession.sessionId);
+    if (input.title?.trim()) {
+      this.updateChatSession(createdSession.sessionId, { title: input.title.trim() });
+    }
+    return this.requireChatSession(createdSession.sessionId);
+  }
+
+  private async handleDiscordRuntimeSlashCommand(input: {
+    connectionId: string;
+    target: string;
+    actorId: string;
+    displayName?: string;
+    commandText: string;
+    sourceCommandId: string;
+    peer?: string;
+    room?: string;
+    threadId?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<string> {
+    const commandText = input.commandText.trim();
+    if (!commandText.startsWith("/")) {
+      return "Command must start with '/'.";
+    }
+    if (/^\/new(?:\s|$)/i.test(commandText)) {
+      const title = commandText.replace(/^\/new/i, "").trim();
+      const session = this.startNewDiscordRouteSession({
+        connectionId: input.connectionId,
+        target: input.target,
+        displayName: input.displayName,
+        peer: input.peer,
+        room: input.room,
+        threadId: input.threadId,
+        title,
+      });
+      return title
+        ? `Started a new session: ${title} (${session.sessionId.slice(-6)}).`
+        : `Started a new session (${session.sessionId.slice(-6)}).`;
+    }
+
+    const session = this.ensureDiscordChatSession({
+      connectionId: input.connectionId,
+      target: input.target,
+      displayName: input.displayName,
+      peer: input.peer,
+      room: input.room,
+      threadId: input.threadId,
+    });
+    const result = await this.parseChatCommand(session.sessionId, commandText);
+    return result.message;
+  }
+
+  private async handleDiscordRuntimeInbound(input: {
+    connectionId: string;
+    target: string;
+    actorId: string;
+    displayName?: string;
+    content: string;
+    sourceMessageId: string;
+    peer?: string;
+    room?: string;
+    threadId?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    const route = this.resolveDiscordInboundRoute(input);
+    const ingestResult = await this.ingestChannelMessage(
+      "discord",
+      `discord:${input.connectionId}:${input.sourceMessageId}`,
+      {
+        eventId: input.sourceMessageId,
+        account: input.connectionId,
+        peer: route.peer,
+        room: route.room,
+        threadId: route.threadId,
+        actorId: input.actorId,
+        actorType: "user",
+        content: input.content,
+        displayName: input.displayName,
+        metadata: input.metadata,
+      },
+    );
+    this.setChatSessionBinding({
+      sessionId: ingestResult.session.sessionId,
+      transport: "integration",
+      connectionId: input.connectionId,
+      target: input.target,
+      writable: true,
+    });
+    if (!ingestResult.deduped) {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          await this.respondToExistingChatMessage(ingestResult.session.sessionId, input.sourceMessageId);
+          return;
+        } catch (error) {
+          if (!(error instanceof ChatTurnWriteConflictError)) {
+            throw error;
+          }
+          if (attempt >= 3) {
+            this.recordDevDiagnostic({
+              level: "warn",
+              category: "channels",
+              event: "discord.gateway.reply_conflict",
+              message: "Discord inbound message was ingested, but reply generation conflicted with an active chat turn.",
+              context: {
+                connectionId: input.connectionId,
+                sessionId: ingestResult.session.sessionId,
+                sourceMessageId: input.sourceMessageId,
+                attempt,
+                error: error.message,
+              },
+            });
+            return;
+          }
+          await wait(attempt * 750);
+        }
+      }
+    }
+  }
+
+  private assertDiscordConnection(connection: IntegrationConnection): void {
+    if (connection.kind !== "channel" || connection.key !== "discord") {
+      throw new Error("Integration connection is not a Discord channel");
+    }
   }
 
   private hasConnectionEnvValue(config: Record<string, unknown>, key: string): boolean {
@@ -14208,11 +16267,16 @@ export class GatewayService {
     const current = this.storage.systemSettings.get<Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }>>(
       DAEMON_LOG_TAIL_SETTING_KEY,
     )?.value ?? [];
+    const level: "info" | "warn" | "error" = eventType === "error"
+      ? "error"
+      : eventType === "warn"
+        ? "warn"
+        : "info";
     const next = [
       ...current,
       {
         timestamp: new Date().toISOString(),
-        level: "info" as const,
+        level,
         message: `${eventType}: ${JSON.stringify(payload)}`,
       },
     ].slice(-400);
@@ -14232,6 +16296,7 @@ export class GatewayService {
       this.backgroundTasks.clear();
       await Promise.allSettled(tasks);
     }
+    await this.discordRuntimeService.close();
     await this.assemblyService.close();
     await this.npuSidecar.close();
     this.storage.close();
@@ -14254,6 +16319,59 @@ export class GatewayService {
       return result.result ?? {};
     }
     return result;
+  }
+
+  private ensureSessionInternalToolGrant(
+    sessionId: string,
+    toolName: string,
+    createdBy: string,
+  ): void {
+    const hasActiveAllow = this.listToolGrants("session", sessionId, 1000).some((grant) =>
+      isActiveToolGrant(grant)
+      && grant.decision === "allow"
+      && grantPatternMatches(grant.toolPattern, toolName)
+    );
+    if (hasActiveAllow) {
+      return;
+    }
+    this.policyEngine.createGrant({
+      toolPattern: toolName,
+      decision: "allow",
+      scope: "session",
+      scopeRef: sessionId,
+      grantType: "one_time",
+      createdBy,
+    });
+  }
+
+  private requireExecutedToolResult(
+    toolName: string,
+    result: ToolInvokeResult | Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (this.isToolInvokeResultPayload(result)) {
+      const detail = result.policyReason?.trim()
+        || `tool returned ${result.outcome}`;
+      throw new Error(`${toolName} failed: ${detail}`);
+    }
+    const deliveryStatus = typeof result.status === "string" ? result.status.trim().toLowerCase() : "";
+    if (deliveryStatus === "failed") {
+      const detail = typeof result.error === "string" && result.error.trim().length > 0
+        ? result.error.trim()
+        : "delivery failed";
+      throw new Error(`${toolName} failed: ${detail}`);
+    }
+    return result;
+  }
+
+  private isToolInvokeResultPayload(value: unknown): value is ToolInvokeResult {
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    const outcome = (value as { outcome?: unknown }).outcome;
+    return outcome === "executed"
+      || outcome === "blocked"
+      || outcome === "approval_required"
+      || outcome === "failed";
   }
 
   private async resolveDeviceAccessApproval(
@@ -14388,6 +16506,10 @@ export class GatewayService {
 
     return {
       approval: approval!,
+      replay: {
+        approval: approval!,
+        events: this.storage.approvalEvents.listByApprovalId(currentApproval.approvalId),
+      },
     };
   }
 
@@ -14492,6 +16614,109 @@ export class GatewayService {
       LIMIT 1
     `).get({ approvalId }) as Record<string, unknown> | undefined;
     return row ? mapAuthDeviceRequestRow(row) : undefined;
+  }
+
+  private getActiveAuthDeviceGrantById(grantId: string): AuthDeviceGrantRecord | undefined {
+    const now = new Date().toISOString();
+    const row = this.gatewaySql.prepare(`
+      SELECT *
+      FROM auth_device_grants
+      WHERE grant_id = @grantId
+      LIMIT 1
+    `).get({ grantId }) as Record<string, unknown> | undefined;
+    if (!row) {
+      return undefined;
+    }
+    const grant = mapAuthDeviceGrantRow(row);
+    if (grant.revokedAt) {
+      return undefined;
+    }
+    if (grant.expiresAt) {
+      const expiresAt = Date.parse(grant.expiresAt);
+      if (Number.isFinite(expiresAt) && expiresAt <= Date.parse(now)) {
+        return undefined;
+      }
+    }
+    return grant;
+  }
+
+  private getActiveCompanionSessionById(sessionId: string): CompanionSessionRecord | undefined {
+    const now = new Date().toISOString();
+    const session = this.getCompanionSessionById(sessionId);
+    if (!session) {
+      return undefined;
+    }
+    if (!isCompanionSessionCurrentlyActive(session, now)) {
+      this.gatewaySql.prepare(`
+        UPDATE companion_sessions
+        SET revoked_at = COALESCE(revoked_at, @revokedAt)
+        WHERE session_id = @sessionId
+      `).run({
+        sessionId,
+        revokedAt: now,
+      });
+      return undefined;
+    }
+    return session;
+  }
+
+  private getCompanionSessionById(sessionId: string): CompanionSessionRecord | undefined {
+    const row = this.gatewaySql.prepare(`
+      SELECT
+        s.*,
+        g.device_label,
+        g.device_type,
+        g.platform,
+        g.expires_at AS grant_expires_at,
+        g.revoked_at AS grant_revoked_at
+      FROM companion_sessions s
+      INNER JOIN auth_device_grants g
+        ON g.grant_id = s.grant_id
+      WHERE s.session_id = @sessionId
+      LIMIT 1
+    `).get({
+      sessionId,
+    }) as Record<string, unknown> | undefined;
+    if (!row) {
+      return undefined;
+    }
+    return mapCompanionSessionRow(row);
+  }
+
+  private getActiveCompanionSessionByRefreshToken(refreshToken: string): CompanionSessionRecord | undefined {
+    const now = new Date().toISOString();
+    const row = this.gatewaySql.prepare(`
+      SELECT
+        s.*,
+        g.device_label,
+        g.device_type,
+        g.platform,
+        g.expires_at AS grant_expires_at,
+        g.revoked_at AS grant_revoked_at
+      FROM companion_sessions s
+      INNER JOIN auth_device_grants g
+        ON g.grant_id = s.grant_id
+      WHERE s.refresh_token_hash = @refreshTokenHash
+      LIMIT 1
+    `).get({
+      refreshTokenHash: hashSensitiveToken(refreshToken),
+    }) as Record<string, unknown> | undefined;
+    if (!row) {
+      return undefined;
+    }
+    const session = mapCompanionSessionRow(row);
+    if (!isCompanionSessionRefreshable(session, now)) {
+      this.gatewaySql.prepare(`
+        UPDATE companion_sessions
+        SET revoked_at = COALESCE(revoked_at, @revokedAt)
+        WHERE session_id = @sessionId
+      `).run({
+        sessionId: session.sessionId,
+        revokedAt: now,
+      });
+      return undefined;
+    }
+    return session;
   }
 
   private async recordApprovalResolutionEffects(
@@ -16786,6 +19011,62 @@ function sanitizePluginId(value: string): string {
   return sanitized.slice(0, 80);
 }
 
+function mapDiagnosticCheckToChannelIssues(
+  check: ConnectorDiagnosticReport["checks"][number],
+): ChannelSetupIssue[] {
+  if (check.status === "pass") {
+    return [];
+  }
+  const failureCategory = inferFailureCategoryFromDiagnosticKey(check.key);
+  return [{
+    key: check.key,
+    level: check.status === "fail" ? "error" : "warn",
+    message: check.message,
+    failureCategory,
+    nextSteps: defaultNextStepsForFailureCategory(failureCategory),
+  }];
+}
+
+function inferFailureCategoryFromDiagnosticKey(key: string): ChannelSetupFailureCategory {
+  if (key.includes("token_auth") || key === "auth_live" || key.includes("auth")) {
+    return "credential_rejected";
+  }
+  if (key.includes("channel_access") || key.includes("sandbox_send") || key.includes("target")) {
+    return "destination_mismatch";
+  }
+  if (key.includes("runtime")) {
+    return "bridge_unavailable";
+  }
+  if (key.includes("cleanup")) {
+    return "permission_mismatch";
+  }
+  if (key.includes("url")) {
+    return "platform_unavailable";
+  }
+  return "unknown";
+}
+
+function defaultNextStepsForFailureCategory(category: ChannelSetupFailureCategory): string[] {
+  switch (category) {
+    case "credential_rejected":
+      return ["Replace the credential, then rerun the test."];
+    case "destination_mismatch":
+      return ["Confirm the destination id or handle, then rerun the test."];
+    case "permission_mismatch":
+      return ["Confirm the bot can view and send to the destination channel, then rerun the test."];
+    case "bridge_unavailable":
+      return ["Restart or reconnect the runtime, then rerun the test."];
+    case "platform_unavailable":
+      return ["Check the remote URL or platform availability, then retry."];
+    default:
+      return ["Review the warning details, update the draft, and retry."];
+  }
+}
+
+function firstFailureCategory(issues: ChannelSetupIssue[]): ChannelSetupFailureCategory | undefined {
+  return issues.find((issue) => issue.level === "error" || issue.level === "warn")?.failureCategory;
+}
+
 function toTitleCase(value: string): string {
   return value
     .split(/[-_.]/g)
@@ -17050,6 +19331,23 @@ function dedupeStrings(values: readonly string[]): string[] {
     out.push(trimmed);
   }
   return out;
+}
+
+function scoreChatModelSuggestion(model: string, query: string): number {
+  if (!query) {
+    return 1;
+  }
+  const normalized = model.toLowerCase();
+  if (normalized === query) {
+    return 4;
+  }
+  if (normalized.startsWith(query)) {
+    return 3;
+  }
+  if (normalized.includes(query)) {
+    return 2;
+  }
+  return 0;
 }
 
 function extractSpecialistObjectiveKeywords(content: string): string[] {
@@ -18830,6 +21128,29 @@ function mapAuthDeviceGrantRow(row: Record<string, unknown>): AuthDeviceGrantRec
   };
 }
 
+function mapCompanionSessionRow(row: Record<string, unknown>): CompanionSessionRecord {
+  return {
+    sessionId: String(row.session_id ?? ""),
+    grantId: String(row.grant_id ?? ""),
+    accessTokenHash: String(row.access_token_hash ?? ""),
+    accessTokenExpiresAt: String(row.access_token_expires_at ?? new Date().toISOString()),
+    refreshTokenHash: String(row.refresh_token_hash ?? ""),
+    refreshTokenExpiresAt: String(row.refresh_token_expires_at ?? new Date().toISOString()),
+    signingPublicKeyPem: String(row.signing_public_key_pem ?? ""),
+    signatureAlgorithm: row.signature_algorithm === "ed25519" ? "ed25519" : "ed25519",
+    createdAt: String(row.created_at ?? new Date().toISOString()),
+    lastRotatedAt: String(row.last_rotated_at ?? new Date().toISOString()),
+    lastSeenAt: typeof row.last_seen_at === "string" ? row.last_seen_at : undefined,
+    revokedAt: typeof row.revoked_at === "string" ? row.revoked_at : undefined,
+    metadata: safeJsonParse<Record<string, unknown>>(typeof row.metadata_json === "string" ? row.metadata_json : "{}", {}),
+    deviceLabel: String(row.device_label ?? "New device"),
+    deviceType: String(row.device_type ?? "unknown"),
+    platform: typeof row.platform === "string" ? row.platform : undefined,
+    grantExpiresAt: typeof row.grant_expires_at === "string" ? row.grant_expires_at : undefined,
+    grantRevokedAt: typeof row.grant_revoked_at === "string" ? row.grant_revoked_at : undefined,
+  };
+}
+
 function toDeviceAccessGrantRecord(grant: AuthDeviceGrantRecord): DeviceAccessGrantContractRecord {
   return {
     grantId: grant.grantId,
@@ -18893,11 +21214,227 @@ function mapDeviceAccessStatusResponse(record: AuthDeviceRequestRecord): DeviceA
   };
 }
 
+function toCompanionSessionInfoResponse(session: CompanionSessionRecord): CompanionSessionInfoResponse {
+  return {
+    contractId: COMPANION_CONTRACT_ID,
+    sessionId: session.sessionId,
+    grantId: session.grantId,
+    actorId: `companion:${session.sessionId}`,
+    deviceLabel: session.deviceLabel,
+    deviceType: normalizeDeviceAccessDeviceType(session.deviceType),
+    platform: session.platform,
+    createdAt: session.createdAt,
+    lastSeenAt: session.lastSeenAt,
+    accessTokenExpiresAt: session.accessTokenExpiresAt,
+    refreshTokenExpiresAt: session.refreshTokenExpiresAt,
+    signatureAlgorithm: session.signatureAlgorithm,
+    metadata: session.metadata,
+  };
+}
+
+function toCompanionSessionAdminRecord(session: CompanionSessionRecord): CompanionSessionAdminRecord {
+  return {
+    ...toCompanionSessionInfoResponse(session),
+    lastRotatedAt: session.lastRotatedAt,
+    revokedAt: session.revokedAt,
+    grantExpiresAt: session.grantExpiresAt,
+    grantRevokedAt: session.grantRevokedAt,
+  };
+}
+
 function normalizeDeviceAccessRequestStatus(value: unknown): DeviceAccessRequestStatus {
   if (value === "approved" || value === "rejected" || value === "expired") {
     return value;
   }
   return "pending";
+}
+
+function isCompanionSessionCurrentlyActive(session: CompanionSessionRecord, nowIso: string): boolean {
+  if (session.revokedAt || session.grantRevokedAt) {
+    return false;
+  }
+  const now = Date.parse(nowIso);
+  const accessExpiresAt = Date.parse(session.accessTokenExpiresAt);
+  if (!Number.isFinite(accessExpiresAt) || accessExpiresAt <= now) {
+    return false;
+  }
+  if (session.grantExpiresAt) {
+    const grantExpiresAt = Date.parse(session.grantExpiresAt);
+    if (Number.isFinite(grantExpiresAt) && grantExpiresAt <= now) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isCompanionSessionRefreshable(session: CompanionSessionRecord, nowIso: string): boolean {
+  if (session.revokedAt || session.grantRevokedAt) {
+    return false;
+  }
+  const now = Date.parse(nowIso);
+  const refreshExpiresAt = Date.parse(session.refreshTokenExpiresAt);
+  if (!Number.isFinite(refreshExpiresAt) || refreshExpiresAt <= now) {
+    return false;
+  }
+  if (session.grantExpiresAt) {
+    const grantExpiresAt = Date.parse(session.grantExpiresAt);
+    if (Number.isFinite(grantExpiresAt) && grantExpiresAt <= now) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isCompanionSessionOperatorActive(session: CompanionSessionRecord, nowIso: string): boolean {
+  if (session.revokedAt || session.grantRevokedAt) {
+    return false;
+  }
+  const now = Date.parse(nowIso);
+  const refreshExpiresAt = Date.parse(session.refreshTokenExpiresAt);
+  if (!Number.isFinite(refreshExpiresAt) || refreshExpiresAt <= now) {
+    return false;
+  }
+  if (session.grantExpiresAt) {
+    const grantExpiresAt = Date.parse(session.grantExpiresAt);
+    if (Number.isFinite(grantExpiresAt) && grantExpiresAt <= now) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function normalizeCompanionAuditEvent(value: unknown): CompanionAuditEventRecord["event"] {
+  switch (value) {
+    case "auth.companion_session.exchange":
+    case "auth.companion_session.refresh":
+    case "auth.companion_session.revoke":
+    case "auth.companion_request.accepted":
+    case "auth.companion_request.timestamp_invalid":
+    case "auth.companion_request.signature_invalid":
+    case "auth.companion_request.replay_rejected":
+    case "auth.companion_request.session_inactive":
+      return value;
+    default:
+      return "auth.companion_request.accepted";
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeCompanionSigningPublicKeyPem(value: string): string {
+  return value.replace(/\r\n/g, "\n").trim();
+}
+
+function assertCompanionSigningPublicKeyPem(value: string): void {
+  if (!value || value.length > COMPANION_MAX_PUBLIC_KEY_PEM_LENGTH) {
+    throw new ValidationError({
+      message: "Signing public key is missing or too large.",
+    });
+  }
+  let publicKey;
+  try {
+    publicKey = createPublicKey(value);
+  } catch {
+    throw new ValidationError({
+      message: "Signing public key must be a valid PEM-encoded Ed25519 public key.",
+    });
+  }
+  if (publicKey.asymmetricKeyType !== "ed25519") {
+    throw new ValidationError({
+      message: "Signing public key must use the Ed25519 algorithm.",
+    });
+  }
+}
+
+function normalizeCompanionNonce(value: string): string {
+  const normalized = value.trim();
+  if (
+    normalized.length < 8
+    || normalized.length > COMPANION_REQUEST_NONCE_MAX_LENGTH
+    || !/^[A-Za-z0-9._~-]+$/.test(normalized)
+  ) {
+    throw new Error("Companion request nonce is invalid.");
+  }
+  return normalized;
+}
+
+function normalizeCompanionSignature(value: string): string {
+  const normalized = value.trim();
+  if (
+    normalized.length < 16
+    || normalized.length > COMPANION_REQUEST_SIGNATURE_MAX_LENGTH
+    || !/^[A-Za-z0-9_-]+$/.test(normalized)
+  ) {
+    throw new Error("Companion request signature is invalid.");
+  }
+  return normalized;
+}
+
+function normalizeCompanionRequestPath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error("Companion request path is required.");
+  }
+  try {
+    const parsed = new URL(trimmed, "http://goatcitadel.local");
+    if (parsed.search) {
+      throw new Error("Companion signed mutations must not include query parameters.");
+    }
+    return parsed.pathname || "/";
+  } catch {
+    if (!trimmed.startsWith("/")) {
+      throw new Error("Companion request path must be absolute.");
+    }
+    if (trimmed.includes("?")) {
+      throw new Error("Companion signed mutations must not include query parameters.");
+    }
+    return trimmed.split("?", 1)[0] || "/";
+  }
+}
+
+function decodeBase64Url(value: string): Buffer {
+  try {
+    return Buffer.from(value, "base64url");
+  } catch {
+    throw new Error("Companion request signature encoding is invalid.");
+  }
+}
+
+function buildCompanionSigningPayload(input: {
+  method: string;
+  path: string;
+  timestamp: string;
+  nonce: string;
+  body: unknown;
+}): string {
+  const method = input.method.trim().toUpperCase();
+  const canonicalBody = canonicalizeCompanionBody(input.body);
+  const bodyHash = createHash("sha256").update(canonicalBody, "utf8").digest("hex");
+  return `${method}\n${input.path}\n${input.timestamp.trim()}\n${input.nonce}\n${bodyHash}`;
+}
+
+function canonicalizeCompanionBody(value: unknown): string {
+  if (value === undefined) {
+    return "";
+  }
+  return JSON.stringify(sortCompanionJsonValue(value));
+}
+
+function sortCompanionJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => sortCompanionJsonValue(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>)
+      .sort((left, right) => left.localeCompare(right))
+      .reduce<Record<string, unknown>>((acc, key) => {
+        acc[key] = sortCompanionJsonValue((value as Record<string, unknown>)[key]);
+        return acc;
+      }, {});
+  }
+  return value;
 }
 
 function normalizeRetentionPolicy(input: Partial<RetentionPolicy>): RetentionPolicy {

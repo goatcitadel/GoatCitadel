@@ -22,6 +22,10 @@ const talkParamsSchema = z.object({
   id: z.string().min(1),
 });
 
+const talkListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(100).default(20),
+});
+
 const modelParamsSchema = z.object({
   modelId: z.string().min(1),
 });
@@ -45,10 +49,20 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.gateway.startTalkSession(parsed.data));
+      return reply.code(201).send(await fastify.gateway.startTalkSession(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
+  });
+
+  fastify.get("/api/v1/voice/talk/sessions", async (request, reply) => {
+    const parsed = talkListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send({
+      items: fastify.gateway.listVoiceTalkSessions(parsed.data.limit),
+    });
   });
 
   fastify.post("/api/v1/voice/talk/sessions/:id/stop", async (request, reply) => {
@@ -64,7 +78,11 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/api/v1/voice/wake/start", async (_request, reply) => {
-    return reply.send(fastify.gateway.startVoiceWake());
+    try {
+      return reply.send(await fastify.gateway.startVoiceWake());
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
   });
 
   fastify.post("/api/v1/voice/wake/stop", async (_request, reply) => {
