@@ -12,6 +12,8 @@ const skillDir = path.join(bundledDir, "goatcitadel-native-safe-self-improvement
 const skillFile = path.join(skillDir, "SKILL.md");
 const mcpVetterDir = path.join(bundledDir, "mcp-vetter");
 const mcpVetterFile = path.join(mcpVetterDir, "SKILL.md");
+const agenticSkillArchitectDir = path.join(bundledDir, "agentic-skill-architect");
+const agenticSkillArchitectFile = path.join(agenticSkillArchitectDir, "SKILL.md");
 
 describe("goatcitadel-native-safe-self-improvement bundled skill", () => {
   it("parses normalized frontmatter metadata", async () => {
@@ -95,5 +97,39 @@ describe("mcp-vetter bundled skill", () => {
       text: "Fix the Office focus mode layout and add a regression test.",
     });
     expect(unrelated.selected.map((skill) => skill.name)).not.toContain("mcp-vetter");
+  });
+});
+
+describe("agentic-skill-architect bundled skill", () => {
+  it("parses frontmatter metadata and targeted activation keywords", async () => {
+    const raw = await fs.readFile(agenticSkillArchitectFile, "utf8");
+    const parsed = parseSkillMarkdown(raw);
+
+    expect(parsed.frontmatter.name).toBe("agentic-skill-architect");
+    expect(parsed.frontmatter.metadata?.version).toBe("0.1.0");
+    expect(parsed.frontmatter.metadata?.tags).toContain("agentic");
+    expect(parsed.frontmatter.metadata?.tools).toEqual(["fs.read", "memory.read"]);
+    expect(parsed.frontmatter.metadata?.keywords).toContain("design an agentic skill");
+    expect(parsed.frontmatter.metadata?.keywords).toContain("skill vs runtime");
+  });
+
+  it("loads from the bundled source and triggers for skill-boundary review prompts only", async () => {
+    const service = new SkillsService([{ source: "bundled", dir: bundledDir }]);
+    await service.reload();
+
+    const explicit = service.resolveActivation({
+      text: "Please use agentic-skill-architect to review this skill architecture.",
+    });
+    expect(explicit.selected.map((skill) => skill.name)).toContain("agentic-skill-architect");
+
+    const keyword = service.resolveActivation({
+      text: "Is this actually a skill or should this be a skill or infrastructure decision instead?",
+    });
+    expect(keyword.selected.map((skill) => skill.name)).toContain("agentic-skill-architect");
+
+    const unrelated = service.resolveActivation({
+      text: "Fix the gateway route bug and add a regression test for approvals.",
+    });
+    expect(unrelated.selected.map((skill) => skill.name)).not.toContain("agentic-skill-architect");
   });
 });

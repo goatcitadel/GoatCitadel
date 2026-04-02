@@ -26,7 +26,7 @@ vi.mock("../state/dev-diagnostics-store", () => ({
 }));
 vi.mock("../components/ActionButton", () => ({
   ActionButton: ({ label, onClick, disabled }: { label: string; onClick?: () => void; disabled?: boolean }) => (
-    <button disabled={disabled} onClick={onClick}>{label}</button>
+    <button type="button" disabled={disabled} onClick={onClick}>{label}</button>
   ),
 }));
 vi.mock("../components/CardSkeleton", () => ({

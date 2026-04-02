@@ -1,250 +1,143 @@
 # GoatCitadel
 
 > [!IMPORTANT]
-> GoatCitadel is in public beta. The current repository ships a working Mission Control UI, gateway, installer path, screenshot pipeline, and verification commands, but the product is still evolving quickly.
+> GoatCitadel is in public beta. This repo ships a working Mission Control UI, a Fastify gateway, a shared runtime/tooling stack, and verification workflows. It is not feature-complete, and parity claims are tracked explicitly instead of being implied.
 
-Current release line: `0.6.0-beta.2`
+[![Beta Line](https://img.shields.io/badge/release-0.6.0--beta.2-1ec8a5?style=for-the-badge)](./CHANGELOG.md)
+[![Mission Control](https://img.shields.io/badge/ui-Mission%20Control-0f172a?style=for-the-badge)](./apps/mission-control)
+[![Gateway](https://img.shields.io/badge/runtime-Fastify%20Gateway-123c52?style=for-the-badge)](./apps/gateway)
+[![Local First](https://img.shields.io/badge/posture-local--first-2dd4bf?style=for-the-badge)](./docs/INSTALL_SETUP_TESTING.md)
+[![pnpm Workspace](https://img.shields.io/badge/monorepo-pnpm-f69220?style=for-the-badge)](./package.json)
 
-GoatCitadel is a local-first AI command center for operating real assistant workflows instead of just chatting with a model. The current product combines a React/Vite browser UI, a Fastify gateway, shared orchestration/policy/memory packages, and optional local runtimes for voice and NPU-backed inference.
+GoatCitadel is a local-first AI operations console for people who need more than a chat box and less than an unreadable agent control panel. It combines:
+
+- a React/Vite operator UI called **Mission Control**
+- a Fastify **gateway** for auth, orchestration, tools, memory, integrations, approvals, and durable workflows
+- shared contracts, storage, policy, orchestration, and skills packages
+- optional local runtimes for voice and NPU-backed inference
 
 ![GoatCitadel Mission Control - Live shell](docs/screenshots/mission-control/operate-chat-live.png)
 
-## What exists today
+## Why this repo exists
 
-The current browser product is **Mission Control**. Its top-level shell is built around three spaces:
+Most AI products force a tradeoff:
 
-| Space | What is in it now |
+1. fast but shallow chat
+2. powerful but chaotic agent platforms
+
+GoatCitadel is trying to sit in the useful middle:
+
+- conversational when you need speed
+- explicit when you need trust
+- agentic when the task actually deserves orchestration
+- local-first where privacy, latency, or cost matter
+
+## What ships today
+
+### Mission Control spaces
+
+The current browser product is Mission Control. Its live routed shell is organized into three spaces:
+
+| Space | Current areas |
 | --- | --- |
 | **Operate** | `Chat`, `Cowork`, `Code`, `Tasks`, `Approvals` |
 | **Observe** | `Activity`, `Sessions`, `Artifacts`, `Costs`, `System`, `Quality` |
 | **Configure** | `Settings`, `Integrations`, `Tools`, `Agents` |
 
-Those spaces are not README fiction; they are the current routed structure in `apps/mission-control/src/content/page-registry.ts`.
+That structure is real, not aspirational. It is driven by the current page registry in [page-registry.ts](./apps/mission-control/src/content/page-registry.ts).
 
-### Current surfaces inside Mission Control
+### Current product capabilities
 
-- **Operate / Chat, Cowork, Code**: one conversation shell with mode-specific posture for lightweight chat, explicit collaboration, or coding-oriented work.
-- **Operate / Tasks**: task queue and deliverables view.
-- **Operate / Approvals**: review queue for risky or gated actions.
-- **Observe / Activity**: live feed, scheduler, and improvement tabs.
-- **Observe / Sessions**: recent runs and outcomes.
-- **Observe / Artifacts**: memory and file browsing in one place.
-- **Observe / Costs**: runtime and provider spend visibility.
-- **Observe / System**: machine and runtime health.
-- **Observe / Quality**: Prompt Lab and evaluation workflows.
-- **Configure / Settings**: general, providers, access, budget, runtime, workspaces, add-ons, onboarding.
-- **Configure / Integrations**: overview, channels, and MCP management.
-- **Configure / Tools**: tool access and permissions.
-- **Configure / Agents**: agent roster, Herd Live, Herd Lab, and Skills.
-
-## Current functionality
-
-- **One shell, three operator modes**: `Chat`, `Cowork`, and `Code` share the same conversation surface but use different posture and defaults.
-- **Approval-driven operations**: risky actions can pause for device approval, remote approval actions, or review queue handling instead of executing silently.
-- **Tasks, sessions, artifacts, and costs**: Mission Control is designed as an operations console, not a single-thread chat window.
-- **Prompt Lab and quality workflows**: evaluate prompts, inspect regressions, and track quality signals from the `Observe / Quality` space.
-- **Workspace-aware memory and file context**: browse memory and files from the same artifacts surface and apply workspace-scoped guidance.
-- **Native-first provider routing**: configure OpenAI, Anthropic-style, OpenAI-compatible, local, and routed provider endpoints from runtime settings.
-- **LLM cost estimation and repair tooling**: runtime usage can be priced in-app, and historical gaps can be repaired with `scripts/backfill-llm-costs.ts`.
-- **Tool policy and zero-trust controls**: tool profiles, read scopes, path jails, outbound allowlists, approval gates, and policy-engine ingestion contracts are built into the platform.
-- **Integrations and channels**: manage integrations, MCP servers, channel connectors, diagnostics, and message delivery tests from the Configure space.
-- **Agent operations**: browse agent roster, herd views, live activity, and skill inventory from one place.
-- **Optional local runtimes**: voice runtime support around `whisper.cpp` and an optional Python NPU sidecar live alongside the gateway.
-- **Gateway API docs**: interactive API docs are served from `/api/v1/docs`.
-
-## What you can do today
-
-- Start Mission Control and use the access gate for token/basic auth, loopback bypass, and remembered device grants.
-- Work in `Chat`, `Cowork`, or `Code` without leaving the shared shell.
-- Review risky operations from `Operate / Approvals` and follow approval events surfaced in the UI.
-- Monitor scheduler, improvement runs, sessions, artifacts, costs, system state, and prompt quality from the Observe space.
-- Configure providers, runtime posture, budgets, workspaces, onboarding, integrations, channels, MCP, tools, and agents from the Configure space.
-- Test model/provider wiring directly from settings before routing broader traffic through it.
-- Run local screenshot capture, prompt-pack gates, verification lanes, and gateway smoke checks from repo scripts.
-
-## Repository layout
-
-This is a pnpm workspace monorepo.
-
-### Apps
-
-| Path | Purpose |
+| Area | What exists now |
 | --- | --- |
-| [apps/gateway](apps/gateway) | Fastify gateway, API routes, auth, orchestration entrypoints, tooling, onboarding, admin, docs |
-| [apps/mission-control](apps/mission-control) | React/Vite Mission Control UI |
-| [apps/npu-sidecar](apps/npu-sidecar) | Optional Python sidecar for local NPU-backed inference |
+| **Conversation surfaces** | Shared `Chat`, `Cowork`, and `Code` shell with different operating posture and runtime defaults |
+| **Approvals and safety** | Approval queue, device-grant flows, remote approval actions, replayable audit, risky tool gating |
+| **Tasks and observability** | Activity feed, sessions, artifacts, costs, system state, Prompt Lab and quality views |
+| **Memory and context** | Workspace-aware context composition, memory browsing, write/forget/history flows, Dream maintenance controls |
+| **Providers and runtime** | Multi-provider routing, provider smoke tests, active-model switching, local-compatible runtime endpoints |
+| **Tool policy** | Read scopes, path jails, outbound allowlists, approval gates, policy-engine enforcement |
+| **Integrations and channels** | Integrations overview, channel management, MCP management, channel diagnostics and delivery tests |
+| **Durable workflows** | Durable run lifecycle, retries, cancellation, wake/resume, workflow recovery handling |
+| **Voice and local runtimes** | `whisper.cpp`-oriented voice runtime support and optional Python NPU sidecar |
+| **Authoring surface** | Add-on / integration-plugin reference scaffolds plus a workspace-local extensions SDK package |
 
-### Shared packages
+## What is new in the current beta line
 
-| Path | Purpose |
-| --- | --- |
-| [packages/contracts](packages/contracts) | Shared schemas and API contracts |
-| [packages/extensions-sdk](packages/extensions-sdk) | Author-facing SDK helpers for add-on and integration-plugin manifests |
-| [packages/gateway-core](packages/gateway-core) | Gateway support utilities |
-| [packages/memory-core](packages/memory-core) | Memory and context primitives |
-| [packages/mesh-core](packages/mesh-core) | Mesh coordination support |
-| [packages/orchestration](packages/orchestration) | Agent/workflow orchestration logic |
-| [packages/policy-engine](packages/policy-engine) | Tool policy, screenshot capture, and policy-related runtime logic |
-| [packages/skills](packages/skills) | Skill metadata and loading support |
-| [packages/storage](packages/storage) | SQLite-backed persistence and storage helpers |
+### Dream memory maintenance
 
-## Install and run
+The repo now includes a first-class Dream memory-maintenance lane:
 
-The repository currently supports two real paths:
+- workspace policy, status, run history, provenance, and recommendations APIs
+- `/dream` and `/dream status` command support in chat sessions
+- durable-run backed maintenance execution
+- Mission Control memory controls for policy editing, run-now, recommendation review, and provenance inspection
+- SQLite-backed persistence for maintenance policy/state/runs/changes/recommendations
 
-1. **Installer-first** for beta users.
-2. **Manual clone / dev setup** for contributors.
+### Signed inbound channel runtime for WhatsApp and LINE
 
-### Prerequisites
+The gateway now supports signed inbound webhook ingress for:
 
-- Git
-- Node.js `22+`
-- Corepack
-- Optional: Python `3.10+` for `apps/npu-sidecar`
+- **WhatsApp Cloud API**
+- **LINE Messaging API**
 
-### Installer-first
+That includes:
 
-Windows:
+- route-level signature verification
+- webhook challenge handling for WhatsApp
+- inbound normalization and idempotency keys
+- middleware exemptions so signed webhook routes can reach their own verification logic
+- guided setup coverage and capability reporting that stays truthful about parity state
 
-```powershell
-iwr https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1 -OutFile install.ps1
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
+### OpenClaw parity reporting got sharper
 
-macOS / Linux:
+The repo now exposes stronger parity truth instead of vague status:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.sh -o install.sh
-bash install.sh
-```
+- a live **OpenClaw completion program** report
+- proof artifact freshness and deployment-profile matching for browser, packaging, A2UI, voice, companion, and extensions lanes
+- stronger follow-on parity guidance in System
+- explicit unsafe-claim boundaries in docs and runtime reporting
 
-After install:
+### Extensions SDK release path is prepared
 
-```bash
-goatcitadel up
-goatcitadel onboard
-goatcitadel doctor --deep
-```
+The workspace SDK package now has a one-command publication workflow once GitHub Packages auth exists:
 
-Short alias:
+- repo-level dry-run and publish wrappers
+- package-level prepublish gate
+- automatic prerelease tag derivation such as `beta`
+- tarball cleanup so runtime output ships without compiled test noise
 
-```bash
-goat up
-goat onboard
-goat doctor --deep
-```
+## Truth in advertising
 
-PowerShell note:
+> [!NOTE]
+> GoatCitadel is intentionally tracking shipped capability separately from proof-complete parity.
 
-- use `goatcitadel` or `goat`
-- do not use `gc` because PowerShell already reserves it for `Get-Content`
+Safe claims today:
 
-### Manual clone / contributor setup
+- Mission Control is a real operator console, not a mock dashboard
+- the gateway already exposes broad runtime, admin, integrations, memory, and workflow surfaces
+- Dream memory-maintenance plumbing now exists end to end in-repo
+- WhatsApp and LINE now have signed inbound runtime paths in the gateway
+- the extensions SDK can be dry-run published cleanly
 
-```bash
-git clone https://github.com/goatcitadel/GoatCitadel.git
-cd GoatCitadel
-corepack enable
-corepack prepare pnpm@10.31.0 --activate
-pnpm install --frozen-lockfile
-pnpm config:sync
-```
+Not safe to over-claim yet:
 
-Create a local env file if you want cloud providers configured from the shell:
+- full OpenClaw parity across every tracked lane
+- public release completeness for all planned channels
+- mobile companion proof as complete from this repo alone
+- published SDK breadth as complete before real package publication
 
-```bash
-cp .env.example .env
-```
+Use these as the source of truth:
 
-Windows:
-
-```powershell
-Copy-Item .env.example .env -Force
-```
-
-At minimum, set whichever provider keys you actually plan to use:
-
-```env
-OPENAI_API_KEY=
-GLM_API_KEY=
-MOONSHOT_API_KEY=
-```
-
-Start the app:
-
-```bash
-pnpm dev
-```
-
-Split terminals if you want the gateway and UI separately:
-
-```bash
-pnpm dev:gateway
-pnpm dev:ui
-```
-
-Default local endpoints:
-
-- Mission Control: `http://localhost:5173`
-- Gateway health: `http://127.0.0.1:8787/health`
-- Gateway API docs: `http://127.0.0.1:8787/api/v1/docs`
-
-## Runtime and configuration notes
-
-- Shipped config lives under [config](config).
-- `.env.example` currently includes gateway host/port, provider keys, auth overrides, mesh toggles, and advanced voice runtime overrides.
-- The gateway enforces explicit auth posture for non-loopback exposure; the repo does not currently ship a Docker or Compose deployment path.
-- The default config catalog includes remote providers plus local/compatible endpoints such as Ollama, LM Studio, LocalAI, and the optional NPU sidecar.
-- Mission Control settings expose provider API styles, active model selection, auth storage mode, allowlist presets, and device access grant management.
-- Integrations currently cover overview, channel operations, and MCP administration in one routed surface.
-
-## Architecture overview
-
-GoatCitadel currently resolves into these major layers:
-
-| Layer | Where it lives | What it does |
-| --- | --- | --- |
-| UI | [apps/mission-control](apps/mission-control) | Mission Control shell, routing, pages, page tabs, visual operator workflows |
-| Gateway | [apps/gateway](apps/gateway) | API routes, auth, sessions, approvals, tasks, memory, integrations, admin, docs |
-| Contracts | [packages/contracts](packages/contracts) | Shared schemas, config validation, API payload contracts |
-| Orchestration and policy | [packages/orchestration](packages/orchestration), [packages/policy-engine](packages/policy-engine) | Agent coordination, tool policy, runtime controls |
-| Memory and storage | [packages/memory-core](packages/memory-core), [packages/storage](packages/storage) | Context composition, memory support, SQLite-backed persistence |
-| Optional local runtimes | [apps/npu-sidecar](apps/npu-sidecar), gateway voice runtime commands | Local NPU and voice support |
-
-### Gateway route coverage
-
-The current gateway registers route groups for:
-
-- auth
-- chat
-- tasks
-- approvals
-- sessions
-- dashboard/system state
-- memory/context
-- files
-- integrations
-- MCP
-- skills
-- agents
-- durable/daemon/admin utilities
-- onboarding
-- voice/media
-- docs
-
-That route breadth is why the product should be described as a control plane, not just a chat UI.
+- [CHANGELOG.md](./CHANGELOG.md)
+- [OPENCLAW_PARITY_STATUS.md](./docs/OPENCLAW_PARITY_STATUS.md)
+- [FOLLOW_ON_PARITY_REGISTER.md](./docs/FOLLOW_ON_PARITY_REGISTER.md)
+- [OPENCLAW_PARITY_COMPLETION_PROGRAM.md](./docs/OPENCLAW_PARITY_COMPLETION_PROGRAM.md)
 
 ## Screenshots
 
-The screenshots below were refreshed for the current app state on **March 29, 2026**. The gallery mixes the tracked Mission Control capture set with a current shell screenshot from the latest UI pass.
+The screenshots below reflect the current Mission Control shell rather than the older dashboard-era layout.
 
-```bash
-pnpm screenshots:capture
-```
-
-They reflect the current `Operate / Observe / Configure` shell, not the older dashboard-era layout.
-
-Full gallery: [docs/screenshots/mission-control](docs/screenshots/mission-control)
+Full gallery: [docs/screenshots/mission-control](./docs/screenshots/mission-control)
 
 ### Current shell
 
@@ -290,9 +183,178 @@ Full gallery: [docs/screenshots/mission-control](docs/screenshots/mission-contro
 | --- | --- |
 | ![Configure Agents Herd Live](docs/screenshots/mission-control/configure-agents-herd-live.png) | ![Configure Agents Skills](docs/screenshots/mission-control/configure-agents-skills.png) |
 
+## Repository layout
+
+This is a pnpm workspace monorepo.
+
+### Apps
+
+| Path | Purpose |
+| --- | --- |
+| [apps/gateway](./apps/gateway) | Fastify gateway, auth, orchestration entrypoints, integrations, memory, approvals, docs, admin APIs |
+| [apps/mission-control](./apps/mission-control) | React/Vite Mission Control UI |
+| [apps/npu-sidecar](./apps/npu-sidecar) | Optional Python sidecar for local NPU-backed inference |
+
+### Shared packages
+
+| Path | Purpose |
+| --- | --- |
+| [packages/contracts](./packages/contracts) | Shared schemas and API contracts |
+| [packages/extensions-sdk](./packages/extensions-sdk) | Author-facing SDK helpers for add-ons and integration plugins |
+| [packages/gateway-core](./packages/gateway-core) | Gateway support utilities and channel capability logic |
+| [packages/memory-core](./packages/memory-core) | Memory and context primitives |
+| [packages/mesh-core](./packages/mesh-core) | Mesh coordination support |
+| [packages/orchestration](./packages/orchestration) | Agent/workflow orchestration and turn-runtime interfaces |
+| [packages/policy-engine](./packages/policy-engine) | Tool policy, screenshot capture, and runtime guardrails |
+| [packages/skills](./packages/skills) | Skill metadata and loading support |
+| [packages/storage](./packages/storage) | SQLite-backed persistence and storage helpers |
+
+## Install and run
+
+There are two supported paths:
+
+1. installer-first for beta users
+2. manual clone / contributor setup
+
+### Prerequisites
+
+- Git
+- Node.js `22+`
+- Corepack
+- Optional: Python `3.10+` for [apps/npu-sidecar](./apps/npu-sidecar)
+
+### Installer-first
+
+Windows:
+
+```powershell
+iwr https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+macOS / Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.sh -o install.sh
+bash install.sh
+```
+
+After install:
+
+```bash
+goatcitadel up
+goatcitadel onboard
+goatcitadel doctor --deep
+```
+
+Short alias:
+
+```bash
+goat up
+goat onboard
+goat doctor --deep
+```
+
+PowerShell note:
+
+- use `goatcitadel` or `goat`
+- do not use `gc` because PowerShell already reserves it for `Get-Content`
+
+### Manual contributor setup
+
+```bash
+git clone https://github.com/goatcitadel/GoatCitadel.git
+cd GoatCitadel
+corepack enable
+corepack prepare pnpm@10.31.0 --activate
+pnpm install --frozen-lockfile
+pnpm config:sync
+```
+
+Optional local env file:
+
+```bash
+cp .env.example .env
+```
+
+Windows:
+
+```powershell
+Copy-Item .env.example .env -Force
+```
+
+Common provider keys:
+
+```env
+OPENAI_API_KEY=
+GLM_API_KEY=
+MOONSHOT_API_KEY=
+```
+
+Start the app:
+
+```bash
+pnpm dev
+```
+
+Split UI and gateway if you prefer:
+
+```bash
+pnpm dev:gateway
+pnpm dev:ui
+```
+
+Default endpoints:
+
+- Mission Control: `http://localhost:5173`
+- Gateway health: `http://127.0.0.1:8787/health`
+- Gateway API docs: `http://127.0.0.1:8787/api/v1/docs`
+
+## Runtime notes
+
+- shipped config lives under [config](./config)
+- `.env.example` includes gateway host/port, provider keys, auth overrides, mesh toggles, and advanced voice runtime overrides
+- the gateway enforces explicit auth posture for non-loopback exposure
+- the default config catalog includes remote providers plus local-compatible endpoints such as Ollama, LM Studio, LocalAI, and the optional NPU sidecar
+- Mission Control settings expose provider API styles, active model selection, auth storage mode, allowlist presets, workspace controls, and device access grants
+
+## Architecture overview
+
+| Layer | Where it lives | What it does |
+| --- | --- | --- |
+| UI | [apps/mission-control](./apps/mission-control) | Mission Control shell, routing, pages, operator workflows |
+| Gateway | [apps/gateway](./apps/gateway) | API routes, auth, sessions, approvals, tasks, memory, integrations, durable workflows, docs |
+| Contracts | [packages/contracts](./packages/contracts) | Shared schemas, config validation, parity/report contracts, API payloads |
+| Orchestration and policy | [packages/orchestration](./packages/orchestration), [packages/policy-engine](./packages/policy-engine) | Agent coordination, turn runtime, tool policy, runtime controls |
+| Memory and storage | [packages/memory-core](./packages/memory-core), [packages/storage](./packages/storage) | Context composition, Dream storage, SQLite-backed persistence |
+| Optional local runtimes | [apps/npu-sidecar](./apps/npu-sidecar) | Local NPU and voice-adjacent support |
+
+### Gateway route coverage
+
+The current gateway registers route groups for:
+
+- auth
+- chat
+- tasks
+- approvals
+- sessions
+- dashboard/system state
+- memory/context
+- files
+- integrations
+- MCP
+- skills
+- agents
+- durable/daemon/admin utilities
+- onboarding
+- voice/media
+- docs
+
+That breadth is why this repo should be understood as a control plane, not just a chat frontend.
+
 ## Verification commands
 
-Useful repo-level commands that exist today:
+Useful repo-level commands:
 
 ```bash
 pnpm test
@@ -307,11 +369,19 @@ pnpm prompt:gates
 pnpm docs:check
 ```
 
-Package publication workflows that exist today:
+SDK publication helpers:
 
-- `contracts-v*` tags publish `@goatcitadel/contracts`
-- `extensions-sdk-v*` tags publish `@goatcitadel/extensions-sdk`
+```bash
+pnpm release:extensions-sdk:dry-run
+pnpm release:extensions-sdk
+```
 
-For coding workflow expectations, see [docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md](docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md).
+## Related docs
 
-For install/setup details beyond this summary, see [docs/INSTALL_SETUP_TESTING.md](docs/INSTALL_SETUP_TESTING.md).
+- [CHANGELOG.md](./CHANGELOG.md)
+- [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md)
+- [docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md](./docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md)
+- [docs/COMMUNICATION_CHANNEL_SETUP_GUIDE.md](./docs/COMMUNICATION_CHANNEL_SETUP_GUIDE.md)
+- [docs/OPENCLAW_PARITY_STATUS.md](./docs/OPENCLAW_PARITY_STATUS.md)
+- [docs/FOLLOW_ON_PARITY_REGISTER.md](./docs/FOLLOW_ON_PARITY_REGISTER.md)
+- [docs/OPENCLAW_PARITY_COMPLETION_PROGRAM.md](./docs/OPENCLAW_PARITY_COMPLETION_PROGRAM.md)
