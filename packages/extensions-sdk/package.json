@@ -26,10 +26,14 @@
     "zod": "^3.24.1"
   },
   "scripts": {
-    "build": "tsc -b tsconfig.json",
+    "clean": "node scripts/clean-dist.mjs",
+    "build": "pnpm run clean && tsc -b tsconfig.json --force",
     "typecheck": "tsc -b tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --passWithNoTests --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",
-    "lint": "tsc -b tsconfig.json"
+    "lint": "tsc -b tsconfig.json",
+    "prepublish:check": "pnpm run lint && pnpm run test && pnpm run build",
+    "publish:github:dry-run": "pnpm run prepublish:check && node scripts/publish-github.mjs --dry-run",
+    "publish:github": "pnpm run prepublish:check && node scripts/publish-github.mjs"
   }
 }
