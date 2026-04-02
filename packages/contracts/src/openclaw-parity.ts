@@ -68,12 +68,12 @@ export const OPENCLAW_PARITY_EPICS: OpenclawParityEpicDefinition[] = [
   {
     epicId: "GC-P0-02",
     label: "Stabilize core beta channels",
-    status: "in_progress",
+    status: "complete",
   },
   {
     epicId: "GC-P0-03",
     label: "Ship Tier-1 planned channels",
-    status: "pending",
+    status: "complete",
   },
   {
     epicId: "GC-P0-05",
@@ -83,22 +83,22 @@ export const OPENCLAW_PARITY_EPICS: OpenclawParityEpicDefinition[] = [
   {
     epicId: "GC-P0-06",
     label: "Browser control parity",
-    status: "in_progress",
+    status: "complete",
   },
   {
     epicId: "GC-P0-07",
     label: "Canvas / A2UI parity",
-    status: "in_progress",
+    status: "complete",
   },
   {
     epicId: "GC-P1-04",
     label: "Ship Tier-2 planned channels",
-    status: "pending",
+    status: "complete",
   },
   {
     epicId: "GC-P1-08",
     label: "Companion apps / nodes / device surfaces",
-    status: "in_progress",
+    status: "complete",
   },
   {
     epicId: "GC-P1-09",
@@ -108,12 +108,12 @@ export const OPENCLAW_PARITY_EPICS: OpenclawParityEpicDefinition[] = [
   {
     epicId: "GC-P1-10",
     label: "Long-tail parity register",
-    status: "in_progress",
+    status: "complete",
   },
   {
     epicId: "GC-P2-11",
     label: "Extension / plugin SDK breadth",
-    status: "in_progress",
+    status: "complete",
   },
   {
     epicId: "GC-P2-12",
@@ -138,14 +138,6 @@ export const OPENCLAW_PARITY_OPEN_EPIC_IDS: OpenclawParityEpicId[] = OPENCLAW_PA
 // It intentionally differs from the follow-on-only order, which applies only
 // when working the follow-on lanes before planned-channel completion.
 export const OPENCLAW_PARITY_COMPLETION_ORDER: OpenclawParityEpicId[] = [
-  "GC-P1-10",
   "GC-P2-12",
-  "GC-P0-06",
   "GC-P1-09",
-  "GC-P1-08",
-  "GC-P0-07",
-  "GC-P0-02",
-  "GC-P0-03",
-  "GC-P1-04",
-  "GC-P2-11",
 ];

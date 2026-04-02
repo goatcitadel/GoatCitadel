@@ -76,6 +76,7 @@ import type {
   CompanionSignatureAlgorithm,
   AuthSettingsUpdateInput,
   FilesystemReadAccessMode,
+  FollowOnProfileCoverageRecord,
   FollowOnProofLaneArtifactIndex,
   FollowOnProofLaneArtifactLaneId,
   FollowOnProofLaneArtifactRecord,
@@ -480,11 +481,23 @@ import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 import {
   runDiscordBotLiveChecks,
+  runIMessageBridgeLiveChecks,
+  runLineBotLiveChecks,
+  runMattermostBotLiveChecks,
+  runSignalBridgeLiveChecks,
   runSlackBotLiveChecks,
   runTelegramBotLiveChecks,
+  runWhatsAppCloudLiveChecks,
+  runZaloBotLiveChecks,
+  runZaloUserBridgeLiveChecks,
 } from "./channel-bot-live-probes.js";
 import { resolveChannelSendAttachments } from "./channel-attachment-payload.js";
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
+import {
+  mergeLatestFollowOnParityArtifacts,
+  readLatestFollowOnParityArtifactsByProfile,
+  readLatestVoiceEvidenceArtifactsByProfile,
+} from "./follow-on-parity-artifacts.js";
 import {
   MCP_APPROVAL_DELIVERY_TOOL_NAME,
   MCP_APPROVAL_INBOX_URL,
@@ -1199,6 +1212,7 @@ const CHAT_COMPACTION_SUMMARY_TOKEN_BUDGET = 360;
 const CHAT_PLANNER_MAX_STEPS = 8;
 const CHAT_PLANNER_MIN_STEPS = 3;
 const FOLLOW_ON_PARITY_ARTIFACTS_SETTING_KEY = "follow_on_parity_artifacts_v1";
+const FOLLOW_ON_PARITY_ARTIFACT_FRESHNESS_WINDOW_DAYS = 7;
 
 function normalizeFollowOnParityArtifactIndex(value: unknown): FollowOnProofLaneArtifactIndex {
   if (!value || typeof value !== "object") {
@@ -1227,6 +1241,13 @@ function normalizeFollowOnParityArtifactRecord(
   const relativePath = typeof record.relativePath === "string" ? record.relativePath : undefined;
   const fullPath = typeof record.fullPath === "string" ? record.fullPath : undefined;
   const bytes = typeof record.bytes === "number" && Number.isFinite(record.bytes) ? record.bytes : undefined;
+  const proofState = (
+    record.proofState === "draft"
+    || record.proofState === "complete"
+    || record.proofState === "evidence"
+  )
+    ? record.proofState
+    : undefined;
   if (!generatedAt || !summary || !relativePath || !fullPath || bytes === undefined) {
     return undefined;
   }
@@ -1237,6 +1258,46 @@ function normalizeFollowOnParityArtifactRecord(
     relativePath,
     fullPath,
     bytes,
+    proofState,
+  };
+}
+
+function isCurrentFollowOnParityArtifact(
+  artifact: FollowOnProofLaneArtifactRecord | undefined,
+  now = new Date(),
+  acceptedProofStates?: Array<NonNullable<FollowOnProofLaneArtifactRecord["proofState"]>>,
+): boolean {
+  if (!artifact) {
+    return false;
+  }
+  if (acceptedProofStates && acceptedProofStates.length > 0) {
+    const proofState = artifact.proofState ?? "complete";
+    if (!acceptedProofStates.includes(proofState)) {
+      return false;
+    }
+  }
+  const generatedAt = Date.parse(artifact.generatedAt);
+  if (!Number.isFinite(generatedAt)) {
+    return false;
+  }
+  const ageDays = Math.floor((now.getTime() - generatedAt) / (1000 * 60 * 60 * 24));
+  return ageDays <= FOLLOW_ON_PARITY_ARTIFACT_FRESHNESS_WINDOW_DAYS;
+}
+
+function buildFollowOnProfileCoverage(input: {
+  currentProfiles: DeploymentProfile[];
+  staleProfiles?: DeploymentProfile[];
+}): FollowOnProfileCoverageRecord {
+  const knownProfiles: DeploymentProfile[] = ["local_dev", "trusted_local", "remote_hardened"];
+  const uniqueCurrent = knownProfiles.filter((profile) => input.currentProfiles.includes(profile));
+  const uniqueStale = knownProfiles.filter((profile) =>
+    !uniqueCurrent.includes(profile)
+    && Boolean(input.staleProfiles?.includes(profile)),
+  );
+  return {
+    currentProfiles: uniqueCurrent,
+    staleProfiles: uniqueStale,
+    missingProfiles: knownProfiles.filter((profile) => !uniqueCurrent.includes(profile) && !uniqueStale.includes(profile)),
   };
 }
 
@@ -9980,7 +10041,66 @@ export class GatewayService {
 
   public getLatestFollowOnParityArtifacts(): FollowOnProofLaneArtifactIndex {
     const stored = this.storage.systemSettings.get<unknown>(FOLLOW_ON_PARITY_ARTIFACTS_SETTING_KEY)?.value;
-    return normalizeFollowOnParityArtifactIndex(stored);
+    return mergeLatestFollowOnParityArtifacts(
+      normalizeFollowOnParityArtifactIndex(stored),
+      this.config.rootDir,
+      this.config.assistant.workspaceDir,
+      this.config.assistant.deploymentProfile,
+    );
+  }
+
+  public getPackagingProofCoverage(): FollowOnProfileCoverageRecord {
+    const now = new Date();
+    const byProfile = readLatestFollowOnParityArtifactsByProfile(
+      this.config.rootDir,
+      this.config.assistant.workspaceDir,
+      "packaging",
+    );
+    const currentProfiles: DeploymentProfile[] = [];
+    const staleProfiles: DeploymentProfile[] = [];
+    for (const profile of ["local_dev", "trusted_local", "remote_hardened"] as const) {
+      const artifact = byProfile[profile];
+      if (!artifact) {
+        continue;
+      }
+      if (isCurrentFollowOnParityArtifact(artifact, now, ["complete"])) {
+        currentProfiles.push(profile);
+      } else {
+        staleProfiles.push(profile);
+      }
+    }
+    return buildFollowOnProfileCoverage({ currentProfiles, staleProfiles });
+  }
+
+  public getVoiceProofCoverage(): FollowOnProfileCoverageRecord {
+    const now = new Date();
+    const bundleByProfile = readLatestFollowOnParityArtifactsByProfile(
+      this.config.rootDir,
+      this.config.assistant.workspaceDir,
+      "voice",
+    );
+    const evidenceByProfile = readLatestVoiceEvidenceArtifactsByProfile(
+      this.config.rootDir,
+      this.config.assistant.workspaceDir,
+    );
+    const currentProfiles: DeploymentProfile[] = [];
+    const staleProfiles: DeploymentProfile[] = [];
+    for (const profile of ["local_dev", "trusted_local", "remote_hardened"] as const) {
+      const bundle = bundleByProfile[profile];
+      const evidence = evidenceByProfile[profile];
+      if (!bundle && !evidence) {
+        continue;
+      }
+      if (
+        isCurrentFollowOnParityArtifact(bundle, now, ["draft", "complete"])
+        && isCurrentFollowOnParityArtifact(evidence, now, ["evidence"])
+      ) {
+        currentProfiles.push(profile);
+      } else {
+        staleProfiles.push(profile);
+      }
+    }
+    return buildFollowOnProfileCoverage({ currentProfiles, staleProfiles });
   }
 
   public rememberFollowOnParityArtifact(record: FollowOnProofLaneArtifactRecord): FollowOnProofLaneArtifactRecord {
@@ -15582,6 +15702,39 @@ export class GatewayService {
           fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
         });
       }
+      case "whatsapp": {
+        const accessToken = this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv")
+          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+        const phoneNumberId = this.readConnectionConfigValue(config, "phoneNumberId")
+          ?? this.readConnectionConfigValue(config, "senderId");
+        if (!accessToken || !phoneNumberId) {
+          return { checks: [] };
+        }
+        return runWhatsAppCloudLiveChecks({
+          accessToken,
+          phoneNumberId,
+          defaultTarget: this.readConnectionConfigValue(config, "defaultTarget"),
+          baseUrl: this.readConnectionConfigValue(config, "baseUrl"),
+          apiVersion: this.readConnectionConfigValue(config, "apiVersion"),
+          includeSandboxSend: options.includeSandboxSend,
+          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+        });
+      }
+      case "signal": {
+        const baseUrl = this.readConnectionConfigValue(config, "baseUrl")
+          ?? this.readConnectionConfigValue(config, "bridgeUrl");
+        if (!baseUrl) {
+          return { checks: [] };
+        }
+        return runSignalBridgeLiveChecks({
+          baseUrl,
+          accountId: this.readConnectionConfigValue(config, "accountId")
+            ?? this.readConnectionConfigValue(config, "account"),
+          defaultTarget: resolveChannelConfigTarget(connection.key, config),
+          includeSandboxSend: options.includeSandboxSend,
+          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+        });
+      }
       case "google-chat":
         return runWebhookDestinationLiveChecks({
           channelKey: "google-chat",
@@ -15606,21 +15759,75 @@ export class GatewayService {
         if (!token || !serverUrl) {
           return { checks: [] };
         }
-        return {
-          checks: [await this.runLiveProbeCheck("auth_live", "Mattermost auth probe", async () => {
-            const response = await this.fetchWithDiagnosticsTimeout(
-              `${serverUrl.replace(/\/+$/, "")}/api/v4/users/me`,
-              {
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                },
-              },
-            );
-            if (!response.ok) {
-              throw new Error(`HTTP ${response.status}`);
-            }
-          })],
-        };
+        return runMattermostBotLiveChecks({
+          serverUrl,
+          token,
+          defaultChannel: this.readConnectionConfigValue(config, "defaultChannel"),
+          defaultTeam: this.readConnectionConfigValue(config, "defaultTeam"),
+          includeSandboxSend: options.includeSandboxSend,
+          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+        });
+      }
+      case "imessage": {
+        const bridgeUrl = this.readConnectionConfigValue(config, "bridgeUrl")
+          ?? this.readConnectionConfigValue(config, "baseUrl")
+          ?? this.readConnectionConfigValue(config, "serverUrl");
+        const password = this.resolveConnectionSecret(config, "password", "passwordEnv")
+          ?? this.resolveConnectionSecret(config, "apiPassword", "apiPasswordEnv");
+        if (!bridgeUrl || !password) {
+          return { checks: [] };
+        }
+        return runIMessageBridgeLiveChecks({
+          bridgeUrl,
+          password,
+          defaultHandle: this.readConnectionConfigValue(config, "defaultHandle")
+            ?? this.readConnectionConfigValue(config, "defaultTarget"),
+          includeSandboxSend: options.includeSandboxSend,
+          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+        });
+      }
+      case "line": {
+        const channelAccessToken = this.resolveConnectionSecret(config, "channelAccessToken", "channelAccessTokenEnv")
+          ?? this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv")
+          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+        if (!channelAccessToken) {
+          return { checks: [] };
+        }
+        return runLineBotLiveChecks({
+          channelAccessToken,
+          defaultTarget: this.readConnectionConfigValue(config, "defaultTarget"),
+          includeSandboxSend: options.includeSandboxSend,
+          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+        });
+      }
+      case "zalo": {
+        const accessToken = this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv")
+          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+        if (!accessToken) {
+          return { checks: [] };
+        }
+        return runZaloBotLiveChecks({
+          accessToken,
+          defaultTarget: resolveChannelConfigTarget(connection.key, config),
+          includeSandboxSend: options.includeSandboxSend,
+          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+        });
+      }
+      case "zalouser": {
+        const baseUrl = this.readConnectionConfigValue(config, "baseUrl")
+          ?? this.readConnectionConfigValue(config, "bridgeUrl")
+          ?? this.readConnectionConfigValue(config, "serverUrl");
+        if (!baseUrl) {
+          return { checks: [] };
+        }
+        return runZaloUserBridgeLiveChecks({
+          baseUrl,
+          authorizationHeader: this.resolveZaloUserConnectionAuthorizationHeader(config),
+          profile: this.readConnectionConfigValue(config, "profile"),
+          defaultTarget: resolveChannelConfigTarget(connection.key, config),
+          includeSandboxSend: options.includeSandboxSend,
+          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
+        });
       }
       default:
         return { checks: [] };
@@ -15714,6 +15921,23 @@ export class GatewayService {
     }
     const envName = this.readConnectionConfigValue(config, envKey);
     return envName ? process.env[envName] : undefined;
+  }
+
+  private resolveZaloUserConnectionAuthorizationHeader(config: Record<string, unknown>): string | undefined {
+    const explicit = this.resolveConnectionSecret(config, "authorization", "authorizationEnv");
+    if (explicit) {
+      return explicit;
+    }
+    const bearer = this.resolveConnectionSecret(config, "authToken", "authTokenEnv")
+      ?? this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv");
+    if (bearer) {
+      return `Bearer ${bearer}`;
+    }
+    const basic = this.resolveConnectionSecret(config, "basicAuth", "basicAuthEnv");
+    if (basic) {
+      return /^Basic\s+/i.test(basic) ? basic : `Basic ${Buffer.from(basic, "utf8").toString("base64")}`;
+    }
+    return undefined;
   }
 
   private readDiscordPairings(): DiscordPairingRecord[] {

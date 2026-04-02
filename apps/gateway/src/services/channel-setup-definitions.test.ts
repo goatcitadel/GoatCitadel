@@ -518,6 +518,13 @@ describe("channel setup definitions", () => {
       "channel.telegram",
       "channel.google-chat",
       "channel.teams",
+      "channel.whatsapp",
+      "channel.signal",
+      "channel.mattermost",
+      "channel.imessage",
+      "channel.line",
+      "channel.zalo",
+      "channel.zalouser",
     ] as const;
 
     for (const catalogId of channels) {
@@ -526,10 +533,18 @@ describe("channel setup definitions", () => {
     }
   });
 
-  it("advertises live-auth but not live-send for Mattermost guided setup", () => {
-    const definition = requireChannelSetupDefinition("channel.mattermost");
+  it("advertises live-auth testing for the guided probe-backed channels", () => {
+    const channels = [
+      "channel.discord",
+      "channel.whatsapp",
+      "channel.mattermost",
+      "channel.imessage",
+      "channel.line",
+    ] as const;
 
-    expect(definition.definition.testing.levels).toContain("live-auth");
-    expect(definition.definition.testing.levels).not.toContain("live-send");
+    for (const catalogId of channels) {
+      const definition = requireChannelSetupDefinition(catalogId);
+      expect(definition.definition.testing.levels).toContain("live-auth");
+    }
   });
 });

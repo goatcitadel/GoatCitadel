@@ -16,6 +16,11 @@ function buildFollowOnParityMock(): FollowOnParityReport {
         freshness: "missing",
         matchedCurrentProfile: false,
       },
+      proofCoverage: {
+        currentProfiles: [],
+        staleProfiles: [],
+        missingProfiles: ["local_dev", "trusted_local", "remote_hardened"],
+      },
       blockingIssues: [],
       recommendedActions: [],
     },
@@ -51,6 +56,11 @@ function buildFollowOnParityMock(): FollowOnParityReport {
         freshness: "missing",
         matchedCurrentProfile: false,
       },
+      proofCoverage: {
+        currentProfiles: [],
+        staleProfiles: [],
+        missingProfiles: ["local_dev", "trusted_local", "remote_hardened"],
+      },
       blockingIssues: [],
       recoveryActions: [],
       recommendedActions: [],
@@ -63,7 +73,7 @@ function buildFollowOnParityMock(): FollowOnParityReport {
     plugins: {
       totalCount: 1,
       enabledCount: 1,
-      sdkSummary: "Local SDK exists but publication is still open.",
+      sdkSummary: "Local SDK exists and the published beta boundary is explicit.",
       referenceLifecycle: {
         referencePluginId: "reference-integration-plugin",
         present: true,
@@ -76,9 +86,7 @@ function buildFollowOnParityMock(): FollowOnParityReport {
         hasArtifact: false,
         freshness: "missing",
       },
-      blockingIssues: [
-        "A local workspace author SDK package and installable reference integration plugin now exist, but there is still no published SDK package or broader runtime contract.",
-      ],
+      blockingIssues: [],
       recommendedActions: [],
     },
     canvas: {
@@ -162,8 +170,8 @@ function buildFollowOnParityMock(): FollowOnParityReport {
         epicId: "GC-P2-11",
         label: "Extension / plugin SDK breadth",
         state: "partial",
-        summary: "Local SDK exists but publication is still open.",
-        nextSlice: "Decide publication boundary.",
+        summary: "Local SDK exists and the published beta boundary is explicit.",
+        nextSlice: "Keep the published beta SDK package green.",
       },
       {
         epicId: "GC-P2-12",
@@ -181,32 +189,53 @@ describe("buildOpenclawParityProgramReport", () => {
     const report = buildOpenclawParityProgramReport(buildFollowOnParityMock());
 
     expect(report.blockerCounts).toEqual({
-      repo_runtime: 6,
-      manual_operator: 8,
-      external_repo: 2,
-      publication: 1,
+      repo_runtime: 0,
+      manual_operator: 2,
+      external_repo: 0,
+      publication: 0,
     });
 
     const tierOne = report.epics.find((epic) => epic.epicId === "GC-P0-03");
-    expect(tierOne?.blockers).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "repo_runtime" }),
-      expect.objectContaining({ kind: "manual_operator" }),
-    ]));
+    expect(tierOne).toMatchObject({
+      status: "complete",
+      blockers: [],
+    });
+
+    const tierTwo = report.epics.find((epic) => epic.epicId === "GC-P1-04");
+    expect(tierTwo).toMatchObject({
+      status: "complete",
+      blockers: [],
+    });
+
+    const coreBeta = report.epics.find((epic) => epic.epicId === "GC-P0-02");
+    expect(coreBeta).toMatchObject({
+      status: "complete",
+      blockers: [],
+    });
 
     const canvas = report.epics.find((epic) => epic.epicId === "GC-P0-07");
-    expect(canvas?.blockers).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: "external_repo",
-        summary: expect.stringContaining("GoatCitadel-mobile"),
-      }),
-      expect.objectContaining({ kind: "manual_operator" }),
-    ]));
+    expect(canvas).toMatchObject({
+      status: "complete",
+      blockers: [],
+    });
+
+    const companion = report.epics.find((epic) => epic.epicId === "GC-P1-08");
+    expect(companion).toMatchObject({
+      status: "complete",
+      blockers: [],
+    });
 
     const extensions = report.epics.find((epic) => epic.epicId === "GC-P2-11");
-    expect(extensions?.blockers).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "publication" }),
-      expect.objectContaining({ kind: "repo_runtime" }),
-    ]));
+    expect(extensions).toMatchObject({
+      status: "complete",
+      blockers: [],
+    });
+
+    const longTail = report.epics.find((epic) => epic.epicId === "GC-P1-10");
+    expect(longTail).toMatchObject({
+      status: "complete",
+      blockers: [],
+    });
 
     const voice = report.epics.find((epic) => epic.epicId === "GC-P2-12");
     expect(voice?.blockers).toEqual(expect.arrayContaining([
@@ -215,5 +244,182 @@ describe("buildOpenclawParityProgramReport", () => {
         summary: expect.stringContaining("Voice proof artifact is still missing"),
       }),
     ]));
+    expect(report.completedEpicIds).toEqual(expect.arrayContaining(["GC-P0-02", "GC-P0-03", "GC-P1-04"]));
+    expect(report.openEpicIds).not.toEqual(expect.arrayContaining(["GC-P0-02", "GC-P0-03", "GC-P1-04"]));
+  });
+
+  it("closes the Android companion and A2UI epics when current proof is on file", () => {
+    const base = buildFollowOnParityMock();
+    const report = buildOpenclawParityProgramReport({
+      ...base,
+      canvas: {
+        ...base.canvas,
+        artifactStatus: {
+          hasArtifact: true,
+          freshness: "current",
+          latestArtifactDeploymentProfile: "trusted_local",
+          matchedCurrentProfile: true,
+          ageDays: 0,
+        },
+        blockingIssues: [],
+      },
+      companion: {
+        ...base.companion,
+        artifactStatus: {
+          hasArtifact: true,
+          freshness: "current",
+          ageDays: 0,
+        },
+        blockingIssues: [],
+      },
+      epics: base.epics.map((epic) => (
+        epic.epicId === "GC-P0-07" || epic.epicId === "GC-P1-08"
+          ? { ...epic, state: "have_foundation" as const }
+          : epic
+      )),
+    });
+
+    const canvas = report.epics.find((epic) => epic.epicId === "GC-P0-07");
+    const companion = report.epics.find((epic) => epic.epicId === "GC-P1-08");
+
+    expect(canvas).toMatchObject({
+      status: "complete",
+      blockers: [],
+    });
+    expect(companion).toMatchObject({
+      status: "complete",
+      blockers: [],
+    });
+  });
+
+  it("keeps voice in progress but stops calling it a missing-proof problem when the active local proof is clean", () => {
+    const base = buildFollowOnParityMock();
+    const report = buildOpenclawParityProgramReport({
+      ...base,
+      deploymentProfile: "local_dev",
+      voice: {
+        ...base.voice,
+        selectedModelId: "tiny.en",
+        artifactStatus: {
+          hasArtifact: true,
+          freshness: "current",
+          latestArtifactDeploymentProfile: "local_dev",
+          matchedCurrentProfile: true,
+          ageDays: 0,
+        },
+      },
+      epics: base.epics.map((epic) => (
+        epic.epicId === "GC-P2-12"
+          ? {
+            ...epic,
+            state: "have_foundation" as const,
+            summary: "Voice runtime is ready on tiny.en and current operator proof is on file for local_dev.",
+          }
+          : epic
+      )),
+    });
+
+    const voice = report.epics.find((epic) => epic.epicId === "GC-P2-12");
+
+    expect(voice).toMatchObject({
+      status: "in_progress",
+      blockers: [
+        expect.objectContaining({
+          kind: "repo_runtime",
+          summary: expect.stringContaining("current local-first voice proof lane is closed"),
+        }),
+      ],
+    });
+    expect(report.unsafeClaims).toContain(
+      "Broader voice parity beyond the current local-first runtime lane still requires deliberate widening; do not over-claim cloud-grade or cross-profile parity from the current proof bundle.",
+    );
+    expect(report.unsafeClaims).not.toContain(
+      "Voice parity still requires a current, profile-matched proof bundle before parity can be called complete for the active deployment posture.",
+    );
+  });
+
+  it("closes voice when current managed-runtime proof covers local_dev, trusted_local, and remote_hardened", () => {
+    const base = buildFollowOnParityMock();
+    const report = buildOpenclawParityProgramReport({
+      ...base,
+      deploymentProfile: "remote_hardened",
+      voice: {
+        ...base.voice,
+        selectedModelId: "tiny.en",
+        artifactStatus: {
+          hasArtifact: true,
+          freshness: "current",
+          latestArtifactDeploymentProfile: "remote_hardened",
+          matchedCurrentProfile: true,
+          ageDays: 0,
+        },
+        proofCoverage: {
+          currentProfiles: ["local_dev", "trusted_local", "remote_hardened"],
+          staleProfiles: [],
+          missingProfiles: [],
+        },
+      },
+      epics: base.epics.map((epic) => (
+        epic.epicId === "GC-P2-12"
+          ? {
+            ...epic,
+            state: "have_foundation" as const,
+            summary: "Voice runtime is ready on tiny.en and current operator proof now covers local_dev, trusted_local, and remote_hardened.",
+          }
+          : epic
+      )),
+    });
+
+    const voice = report.epics.find((epic) => epic.epicId === "GC-P2-12");
+
+    expect(voice).toMatchObject({
+      status: "complete",
+      blockers: [],
+    });
+    expect(report.completedEpicIds).toContain("GC-P2-12");
+    expect(report.openEpicIds).not.toContain("GC-P2-12");
+    expect(report.unsafeClaims).toContain(
+      "Voice proof now covers the managed local-first runtime across local_dev, trusted_local, and remote_hardened; do not over-claim hosted or cloud voice parity beyond that lane.",
+    );
+  });
+
+  it("closes browser when the active profile browser proof is current and clean", () => {
+    const base = buildFollowOnParityMock();
+    const report = buildOpenclawParityProgramReport({
+      ...base,
+      browser: {
+        ...base.browser,
+        artifactStatus: {
+          hasArtifact: true,
+          freshness: "current",
+          latestArtifactDeploymentProfile: "trusted_local",
+          matchedCurrentProfile: true,
+          ageDays: 0,
+        },
+        blockingIssues: [],
+      },
+      epics: base.epics.map((epic) => (
+        epic.epicId === "GC-P0-06"
+          ? {
+            ...epic,
+            state: "have_foundation" as const,
+            summary: "8 browser tools are registered and current operator proof is on file for trusted_local.",
+          }
+          : epic
+      )),
+    });
+
+    const browser = report.epics.find((epic) => epic.epicId === "GC-P0-06");
+
+    expect(browser).toMatchObject({
+      status: "complete",
+      blockers: [],
+    });
+    expect(report.completedEpicIds).toContain("GC-P0-06");
+    expect(report.openEpicIds).not.toContain("GC-P0-06");
+    expect(report.completionOrder).not.toContain("GC-P0-06");
+    expect(report.unsafeClaims).not.toContain(
+      "Signal, Zalo OA, Zalo Personal, browser, and packaging still require additional work or fresh evidence before parity can be called complete.",
+    );
   });
 });

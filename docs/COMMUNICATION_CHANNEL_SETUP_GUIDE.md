@@ -1,6 +1,6 @@
 # Communication Channel Setup Guide
 
-Last updated: 2026-04-01
+Last updated: 2026-04-02
 Target audience: beginner to intermediate operators
 
 This guide walks through GoatCitadel channel setup in the order that makes the most sense for public beta testing.
@@ -9,7 +9,7 @@ For parity status and tranche tracking, see [OPENCLAW_PARITY_STATUS.md](./OPENCL
 
 Guided Mission Control setup is currently available for `channel.discord`, `channel.slack`, `channel.telegram`, `channel.google-chat`, `channel.teams`, `channel.whatsapp`, `channel.signal`, `channel.mattermost`, `channel.imessage`, `channel.nextcloud-talk`, `channel.line`, `channel.zalo`, and `channel.zalouser`.
 
-Discord, Slack, Telegram, Google Chat, and Teams guided test/retest flows now run live probe coverage before finalize. Mattermost also runs a live auth probe before finalize. WhatsApp and LINE now have signed inbound webhook runtime support when their required secrets are configured, but guided setup still stops at draft/config validation and operator confirmation after finalize.
+Discord, Slack, Telegram, Google Chat, Teams, Mattermost, WhatsApp, Signal, LINE, iMessage, Zalo OA, and Zalo Personal guided test/retest flows now run live probe coverage before finalize. WhatsApp, Signal, Zalo OA, and Zalo Personal still rely on operator-controlled sandbox targets or bridge-native delivery confirmation for pre-finalize send checks.
 
 ## Guided Channel Setup At A Glance
 
@@ -20,14 +20,14 @@ Discord, Slack, Telegram, Google Chat, and Teams guided test/retest flows now ru
 | `channel.telegram` | BotFather token | auth plus sandbox send/delete | yes |
 | `channel.google-chat` | Incoming webhook | sandbox webhook probe | yes |
 | `channel.teams` | Incoming webhook | sandbox webhook probe | yes |
-| `channel.mattermost` | Bot token | structural, semantic, and live auth probe | yes |
-| `channel.whatsapp` | Cloud API access token + phone-number id | structural and semantic validation; signed inbound webhook runtime when app secret + verify token are configured | yes |
-| `channel.signal` | Bridge URL | structural and semantic validation | yes |
-| `channel.imessage` | BlueBubbles bridge URL + password | structural and semantic validation | yes |
+| `channel.mattermost` | Bot token | auth, channel resolution, sandbox send/delete | yes |
+| `channel.whatsapp` | Cloud API access token + phone-number id | sender auth plus sandbox send; signed inbound webhook runtime when app secret + verify token are configured | yes |
+| `channel.signal` | Bridge URL | sandbox send through the Signal bridge JSON-RPC path | yes |
+| `channel.imessage` | BlueBubbles bridge URL + password | bridge query plus sandbox send/unsend | yes |
 | `channel.nextcloud-talk` | Base URL + Talk token | structural and semantic validation | yes |
-| `channel.line` | Channel access token | structural and semantic validation; signed inbound webhook runtime when channel secret is configured | yes |
-| `channel.zalo` | Official Account access token | structural and semantic validation | yes |
-| `channel.zalouser` | zca bridge URL + optional bearer token | structural and semantic validation | yes |
+| `channel.line` | Channel access token | token auth plus sandbox push send; signed inbound webhook runtime when channel secret is configured | yes |
+| `channel.zalo` | Official Account access token | sandbox send through the OA send path | yes |
+| `channel.zalouser` | zca bridge URL + optional bearer token | sandbox send through the bridge text-send path | yes |
 
 Long-form walkthroughs below still focus on the current beta channels. The additional guided definitions above exist so operators can draft, edit, repair, and retest those planned channels inside Mission Control without dropping back to raw JSON.
 

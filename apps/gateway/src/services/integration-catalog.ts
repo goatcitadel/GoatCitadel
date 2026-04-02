@@ -415,18 +415,18 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   entry("channel", "tui", "Terminal/TUI", "Interactive terminal channel for local operations.", "native", ["local"], ["chat", "commands"]),
   entry("channel", "webchat", "Webchat", "Embedded web chat endpoint for browser clients.", "native", ["token", "basic"], ["chat", "sessions"]),
   entry("channel", "discord", "Discord", "Discord bot integration with gateway mode by default and an advanced bridge fallback.", "beta", ["oauth", "bot-token"], ["chat", "threads", "attachments", "reactions", "unsend", "inbound"]),
-  entry("channel", "signal", "Signal", "Signal messenger bridge.", "planned", ["device-link"], ["chat", "groups"]),
-  entry("channel", "whatsapp", "WhatsApp", "WhatsApp business bridge.", "planned", ["oauth", "token"], ["chat", "attachments", "direct", "reactions"]),
+  entry("channel", "signal", "Signal", "Signal messenger bridge.", "beta", ["device-link"], ["chat", "groups"]),
+  entry("channel", "whatsapp", "WhatsApp", "WhatsApp business bridge.", "beta", ["oauth", "token"], ["chat", "attachments", "direct", "reactions"]),
   entry("channel", "telegram", "Telegram", "Telegram bot integration.", "beta", ["bot-token"], ["chat", "threads", "attachments", "reactions", "unsend", "typing"]),
   entry("channel", "slack", "Slack", "Slack app/bot integration.", "beta", ["oauth"], ["chat", "threads", "mentions", "attachments", "reactions", "unsend"]),
   entry("channel", "google-chat", "Google Chat", "Google Chat app and webhook integration.", "beta", ["oauth", "token"], ["chat", "spaces", "threads", "attachments"], { pluginId: "googlechat" }),
-  entry("channel", "mattermost", "Mattermost", "Mattermost bot/webhook integration.", "planned", ["token"], ["chat", "channels", "direct", "attachments", "reactions", "unsend"]),
-  entry("channel", "imessage", "iMessage", "iMessage bridge (platform dependent).", "planned", ["local-agent"], ["chat", "attachments", "reactions", "unsend", "replies"]),
+  entry("channel", "mattermost", "Mattermost", "Mattermost bot/webhook integration.", "beta", ["token"], ["chat", "channels", "direct", "attachments", "reactions", "unsend"]),
+  entry("channel", "imessage", "iMessage", "iMessage bridge (platform dependent).", "beta", ["local-agent"], ["chat", "attachments", "reactions", "unsend", "replies"]),
   entry("channel", "teams", "Microsoft Teams", "Teams bot/webhook integration.", "beta", ["oauth", "webhook"], ["chat", "threads", "attachments"], { pluginId: "msteams" }),
   entry("channel", "nextcloud-talk", "Nextcloud Talk", "Nextcloud Talk bot bridge with signed webhooks and reactions.", "native", ["token"], ["chat", "rooms", "webhooks", "reactions"]),
-  entry("channel", "line", "LINE", "LINE Messaging API integration.", "planned", ["token"], ["chat", "groups", "rooms", "direct"]),
-  entry("channel", "zalo", "Zalo OA", "Zalo Official Account integration.", "planned", ["token"], ["chat", "official-account"]),
-  entry("channel", "zalouser", "Zalo User", "Zalo user-session bridge integration.", "planned", ["token"], ["chat", "attachments", "direct"]),
+  entry("channel", "line", "LINE", "LINE Messaging API integration.", "beta", ["token"], ["chat", "groups", "rooms", "direct"]),
+  entry("channel", "zalo", "Zalo OA", "Zalo Official Account integration.", "beta", ["token"], ["chat", "official-account"]),
+  entry("channel", "zalouser", "Zalo User", "Zalo user-session bridge integration.", "beta", ["token"], ["chat", "attachments", "direct"]),
 
   // Model providers
   entry("model_provider", "openai", "OpenAI", "Direct OpenAI provider support.", "native", ["api-key"], ["chat-completions"]),
@@ -457,7 +457,7 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
 
   // Automation tools
   entry("automation", "browser-chrome-control", "Browser Control", "Chrome/Chromium automation and capture flows.", "beta", ["local"], ["browse", "automation", "screenshots"]),
-  entry("automation", "canvas-a2ui", "Canvas + A2UI", "Visual canvas workspace and agent-to-ui interactions.", "planned", ["local"], ["scene-view", "selection", "inspect", "agent-apply"]),
+  entry("automation", "canvas-a2ui", "Canvas + A2UI", "Visual canvas workspace and agent-to-ui interactions.", "beta", ["local"], ["scene-view", "selection", "inspect", "agent-apply"]),
   entry("automation", "voice-wake-talk", "Voice Wake + Talk", "Wake-word and voice interaction pipeline.", "beta", ["local"], ["voice"]),
   entry("automation", "gmail", "Gmail", "Gmail read/send integration.", "planned", ["oauth"], ["read", "write"]),
   entry("automation", "cron", "Cron Jobs", "Scheduled task orchestration.", "native", ["local"], ["scheduling"]),
@@ -471,7 +471,7 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   // Platforms
   entry("platform", "macos-menubar-voice", "macOS Menu Bar + Voice", "Native macOS app integration target.", "planned", ["local-agent"], ["voice", "tray"]),
   entry("platform", "ios-canvas-camera-voice", "iOS Canvas/Camera/Voice", "Native iOS companion capabilities.", "planned", ["app-auth"], ["canvas", "camera", "voice"]),
-  entry("platform", "android-canvas-camera-screen", "Android Canvas/Camera/Screen", "Native Android companion capabilities.", "planned", ["app-auth"], ["canvas", "camera", "screen"]),
+  entry("platform", "android-canvas-camera-screen", "Android Canvas/Camera/Screen", "Native Android companion capabilities.", "beta", ["app-auth"], ["canvas", "camera", "screen"]),
   entry("platform", "windows-wsl2", "Windows (WSL2 Recommended)", "Windows host platform support.", "native", ["local"], ["desktop"]),
   entry("platform", "linux-native", "Linux Native", "Linux native platform support.", "native", ["local"], ["desktop"]),
 ];

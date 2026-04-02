@@ -129,24 +129,24 @@ describe("integration-catalog", () => {
     };
 
     expect(resolveIntegrationCatalogMaturity(plannedAliasEntry, new Set(["googlechat"]))).toBe("plugin");
-    expect(resolveIntegrationCatalogMaturity(whatsapp, new Set())).toBe("planned");
+    expect(resolveIntegrationCatalogMaturity(whatsapp, new Set())).toBe("beta");
     expect(resolveIntegrationCatalogRuntimeAvailability(whatsapp, new Set())).toBe("runnable");
   });
 
-  it("keeps built-in planned bridges truthful while still marking them runnable", () => {
-    const plannedBuiltInChannels = [
-      "channel.whatsapp",
+  it("keeps built-in channel runtimes truthful while still marking them runnable", () => {
+    const betaBuiltInChannels = [
       "channel.signal",
+      "channel.zalo",
+      "channel.zalouser",
+      "channel.whatsapp",
       "channel.mattermost",
       "channel.imessage",
       "channel.line",
-      "channel.zalo",
-      "channel.zalouser",
     ];
 
-    for (const catalogId of plannedBuiltInChannels) {
+    for (const catalogId of betaBuiltInChannels) {
       const entry = requireCatalogEntry(catalogId);
-      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("planned");
+      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("beta");
       expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("runnable");
     }
 

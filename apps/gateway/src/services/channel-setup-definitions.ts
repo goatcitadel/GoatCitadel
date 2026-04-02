@@ -1318,7 +1318,7 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph("GoatCitadel uses the WhatsApp Cloud API for outbound sends, replies, reactions, and rich media delivery to direct recipients. It can also ingest signed inbound webhook events when you configure the webhook secret pair."),
-            note("warning", "WhatsApp Cloud API delivery is still treated as planned parity work. Guided setup here helps operators configure the current bridge safely, but it does not change the maturity claim."),
+            note("warning", "WhatsApp Cloud API delivery is still treated as planned parity work. Guided setup now runs a live sender-auth probe and can post a sandbox message to the configured default recipient, but it does not change the maturity claim."),
           ],
         },
         {
@@ -1426,7 +1426,7 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate the draft",
           body: [
-            paragraph("Guided test validates the draft shape and target inputs. If you also configure the app secret plus verify token, the runtime can answer the Meta webhook challenge and accept signed inbound deliveries, but operator proof is still manual after finalize."),
+            paragraph("Guided test validates the sender identity live against the Cloud API and can post a sandbox message to the configured default recipient. If you also configure the app secret plus verify token, the runtime can answer the Meta webhook challenge and accept signed inbound deliveries, but operator proof is still manual after finalize."),
           ],
         },
       ],
@@ -1437,11 +1437,11 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
     },
     validation: {
       validationVersion: "2026.04.whatsapp.v1",
-      levels: ["structural", "semantic"],
+      levels: ["structural", "semantic", "live-auth"],
     },
     testing: {
       testVersion: "2026.04.whatsapp.v1",
-      levels: ["structural", "semantic", "manual-confirm"],
+      levels: ["structural", "semantic", "live-auth", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
     },
@@ -1581,7 +1581,7 @@ function createSignalDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph("GoatCitadel uses the configured Signal bridge for outbound sends to individual recipients or groups."),
-            note("warning", "Signal remains planned parity work. Guided setup here only covers the current outbound bridge shape."),
+            note("warning", "Signal ships as a narrow outbound bridge. Guided setup now runs a live sandbox send against that exact send path, but it does not imply richer actions beyond the current bridge lane."),
           ],
         },
         {
@@ -1621,6 +1621,14 @@ function createSignalDefinition(): ChannelSetupRuntimeDefinition {
             },
           ],
         },
+        {
+          id: "test",
+          kind: "test",
+          title: "Validate the draft",
+          body: [
+            paragraph("Guided test posts a sandbox send through the configured Signal JSON-RPC bridge path against the default recipient or group target. Manual confirmation still closes the loop because the bridge does not expose a safe cleanup path."),
+          ],
+        },
       ],
     },
     adapter: {
@@ -1633,7 +1641,7 @@ function createSignalDefinition(): ChannelSetupRuntimeDefinition {
     },
     testing: {
       testVersion: "2026.04.signal.v1",
-      levels: ["structural", "semantic", "manual-confirm"],
+      levels: ["structural", "semantic", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
     },
@@ -1728,7 +1736,7 @@ function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph("GoatCitadel uses Mattermost bot-token auth for outbound sends, replies, reactions, and unsend."),
-            note("warning", "Mattermost still counts as planned parity work. Guided setup here only exposes the current outbound bridge path plus auth validation."),
+            note("warning", "Mattermost still counts as planned parity work. Guided setup now runs live auth, channel access, and sandbox send/delete probes before finalize, but it does not change the maturity claim."),
           ],
         },
         {
@@ -1785,6 +1793,14 @@ function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
             },
           ],
         },
+        {
+          id: "test",
+          kind: "test",
+          title: "Validate the draft",
+          body: [
+            paragraph("Guided test authenticates the bot token live, resolves the configured channel target, and posts a sandbox message that is deleted automatically when cleanup permissions are available."),
+          ],
+        },
       ],
     },
     adapter: {
@@ -1797,7 +1813,7 @@ function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
     },
     testing: {
       testVersion: "2026.04.mattermost.v1",
-      levels: ["structural", "semantic", "live-auth", "manual-confirm"],
+      levels: ["structural", "semantic", "live-auth", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
     },
@@ -1919,7 +1935,7 @@ function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph("GoatCitadel uses a BlueBubbles-compatible bridge for outbound iMessage sends, replies, reactions, and unsend."),
-            note("warning", "BlueBubbles-specific edge cases still apply. New-handle attachment delivery can require chat creation support, and reactions or unsend depend on Private API support."),
+            note("warning", "BlueBubbles-specific edge cases still apply. Guided setup now runs a live bridge query plus a sandbox send/unsend cycle, but new-handle attachment delivery can still require chat creation support and reactions or unsend still depend on Private API support."),
           ],
         },
         {
@@ -1967,6 +1983,14 @@ function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
             },
           ],
         },
+        {
+          id: "test",
+          kind: "test",
+          title: "Validate the draft",
+          body: [
+            paragraph("Guided test queries the BlueBubbles bridge live, then sends and unsends a sandbox message against the configured default handle or chat target."),
+          ],
+        },
       ],
     },
     adapter: {
@@ -1975,11 +1999,11 @@ function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
     },
     validation: {
       validationVersion: "2026.04.imessage.v1",
-      levels: ["structural", "semantic"],
+      levels: ["structural", "semantic", "live-auth"],
     },
     testing: {
       testVersion: "2026.04.imessage.v1",
-      levels: ["structural", "semantic", "manual-confirm"],
+      levels: ["structural", "semantic", "live-auth", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
     },
@@ -2273,6 +2297,15 @@ function createLineDefinition(): ChannelSetupRuntimeDefinition {
       ],
       steps: [
         {
+          id: "overview",
+          kind: "intro",
+          title: "What this connection does",
+          body: [
+            paragraph("GoatCitadel uses the LINE Messaging API for outbound sends and can accept signed inbound webhook events when you configure the channel secret."),
+            note("warning", "LINE still counts as planned parity work. Guided setup now runs a live token-auth probe and can post a sandbox push message to the configured default target, but it does not change the maturity claim."),
+          ],
+        },
+        {
           id: "collect-values",
           kind: "field-collection",
           title: "Paste your connection values",
@@ -2329,6 +2362,14 @@ function createLineDefinition(): ChannelSetupRuntimeDefinition {
             },
           ],
         },
+        {
+          id: "test",
+          kind: "test",
+          title: "Validate the draft",
+          body: [
+            paragraph("Guided test validates the channel access token live and can post a sandbox push message to the configured default target. Inbound webhook routing still requires the optional channel secret."),
+          ],
+        },
       ],
     },
     adapter: {
@@ -2337,11 +2378,11 @@ function createLineDefinition(): ChannelSetupRuntimeDefinition {
     },
     validation: {
       validationVersion: "2026.04.line.v1",
-      levels: ["structural", "semantic"],
+      levels: ["structural", "semantic", "live-auth"],
     },
     testing: {
       testVersion: "2026.04.line.v1",
-      levels: ["structural", "semantic", "manual-confirm"],
+      levels: ["structural", "semantic", "live-auth", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
     },
@@ -2457,6 +2498,15 @@ function createZaloDefinition(): ChannelSetupRuntimeDefinition {
       ],
       steps: [
         {
+          id: "overview",
+          kind: "intro",
+          title: "What this connection does",
+          body: [
+            paragraph("GoatCitadel uses the Zalo Official Account send path for outbound text delivery to the configured recipient id."),
+            note("warning", "Zalo OA ships as a narrow outbound lane. Guided setup now runs a live sandbox send against the OA send endpoint, but it does not claim broader inbound or action parity."),
+          ],
+        },
+        {
           id: "collect-values",
           kind: "field-collection",
           title: "Paste your connection values",
@@ -2492,6 +2542,14 @@ function createZaloDefinition(): ChannelSetupRuntimeDefinition {
             },
           ],
         },
+        {
+          id: "test",
+          kind: "test",
+          title: "Validate the draft",
+          body: [
+            paragraph("Guided test posts a sandbox message through the Zalo Official Account send endpoint using the configured default recipient id. Manual confirmation is still required because the API path does not expose safe cleanup here."),
+          ],
+        },
       ],
     },
     adapter: {
@@ -2504,7 +2562,7 @@ function createZaloDefinition(): ChannelSetupRuntimeDefinition {
     },
     testing: {
       testVersion: "2026.04.zalo.v1",
-      levels: ["structural", "semantic", "manual-confirm"],
+      levels: ["structural", "semantic", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
     },
@@ -2608,6 +2666,15 @@ function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
       ],
       steps: [
         {
+          id: "overview",
+          kind: "intro",
+          title: "What this connection does",
+          body: [
+            paragraph("GoatCitadel uses a zca-compatible personal-session bridge for outbound text sends to direct or group targets."),
+            note("warning", "Zalo User remains a narrow bridge lane. Guided setup now runs a live sandbox send against the bridge text endpoint, but richer actions still depend on the separate bridge runtime and its current bounds."),
+          ],
+        },
+        {
           id: "collect-values",
           kind: "field-collection",
           title: "Paste your bridge values",
@@ -2661,6 +2728,14 @@ function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
             },
           ],
         },
+        {
+          id: "test",
+          kind: "test",
+          title: "Validate the draft",
+          body: [
+            paragraph("Guided test posts a sandbox text message through the configured zca bridge profile and default target. Manual confirmation is still required because cleanup is bridge-dependent and not safely automatable here."),
+          ],
+        },
       ],
     },
     adapter: {
@@ -2673,7 +2748,7 @@ function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
     },
     testing: {
       testVersion: "2026.04.zalouser.v1",
-      levels: ["structural", "semantic", "manual-confirm"],
+      levels: ["structural", "semantic", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
     },

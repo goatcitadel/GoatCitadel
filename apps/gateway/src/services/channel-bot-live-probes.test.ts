@@ -1,8 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   runDiscordBotLiveChecks,
+  runIMessageBridgeLiveChecks,
+  runLineBotLiveChecks,
+  runMattermostBotLiveChecks,
+  runSignalBridgeLiveChecks,
   runSlackBotLiveChecks,
   runTelegramBotLiveChecks,
+  runWhatsAppCloudLiveChecks,
+  runZaloBotLiveChecks,
+  runZaloUserBridgeLiveChecks,
 } from "./channel-bot-live-probes.js";
 
 describe("channel bot live probes", () => {
@@ -205,5 +212,221 @@ describe("channel bot live probes", () => {
         message: "Gateway runtime is not ready: Gateway login timed out",
       }),
     ]);
+  });
+
+  it("runs Mattermost auth, channel access, sandbox send, and cleanup probes", async () => {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "https://chat.example.com/api/v4/users/me") {
+        return new Response(JSON.stringify({ id: "bot-user-1" }), { status: 200 });
+      }
+      if (url === "https://chat.example.com/api/v4/teams/name/ops") {
+        return new Response(JSON.stringify({ id: "team-1" }), { status: 200 });
+      }
+      if (url === "https://chat.example.com/api/v4/teams/team-1/channels/name/town-square") {
+        return new Response(JSON.stringify({ id: "channel-1" }), { status: 200 });
+      }
+      if (url === "https://chat.example.com/api/v4/posts" && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: "post-1" }), { status: 201 });
+      }
+      if (url === "https://chat.example.com/api/v4/posts/post-1" && init?.method === "DELETE") {
+        return new Response("", { status: 200 });
+      }
+      throw new Error(`unexpected probe call: ${init?.method ?? "GET"} ${url}`);
+    });
+
+    const result = await runMattermostBotLiveChecks({
+      serverUrl: "https://chat.example.com",
+      token: "mattermost-token",
+      defaultChannel: "town-square",
+      defaultTeam: "ops",
+      includeSandboxSend: true,
+      checkedAt: "2026-04-02T12:00:00.000Z",
+      fetcher,
+    });
+
+    expect(result.probe.steps.map((step) => step.key)).toEqual([
+      "mattermost_token_auth",
+      "mattermost_channel_access",
+      "mattermost_sandbox_send",
+      "mattermost_sandbox_cleanup",
+    ]);
+    expect(result.checks.every((check) => check.status === "pass")).toBe(true);
+  });
+
+  it("runs WhatsApp auth and sandbox send probes", async () => {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("fields=id%2Cdisplay_phone_number%2Cverified_name")) {
+        return new Response(JSON.stringify({ id: "123456789012345" }), { status: 200 });
+      }
+      if (url === "https://graph.facebook.com/v23.0/123456789012345/messages" && init?.method === "POST") {
+        return new Response(JSON.stringify({ messages: [{ id: "wamid.12345" }] }), { status: 200 });
+      }
+      throw new Error(`unexpected probe call: ${init?.method ?? "GET"} ${url}`);
+    });
+
+    const result = await runWhatsAppCloudLiveChecks({
+      accessToken: "wa-token",
+      phoneNumberId: "123456789012345",
+      defaultTarget: "+15551234567",
+      includeSandboxSend: true,
+      checkedAt: "2026-04-02T12:00:00.000Z",
+      fetcher,
+    });
+
+    expect(result.probe.steps.map((step) => step.key)).toEqual([
+      "whatsapp_token_auth",
+      "whatsapp_sandbox_send",
+    ]);
+    expect(result.checks.every((check) => check.status === "pass")).toBe(true);
+  });
+
+  it("runs LINE auth and sandbox send probes", async () => {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "https://api.line.me/v2/bot/info") {
+        return new Response(JSON.stringify({ userId: "line-bot-1" }), { status: 200 });
+      }
+      if (url === "https://api.line.me/v2/bot/message/push" && init?.method === "POST") {
+        return new Response("", { status: 200, headers: { "x-line-request-id": "line-request-1" } });
+      }
+      throw new Error(`unexpected probe call: ${init?.method ?? "GET"} ${url}`);
+    });
+
+    const result = await runLineBotLiveChecks({
+      channelAccessToken: "line-token",
+      defaultTarget: "user-123",
+      includeSandboxSend: true,
+      checkedAt: "2026-04-02T12:00:00.000Z",
+      fetcher,
+    });
+
+    expect(result.probe.steps.map((step) => step.key)).toEqual([
+      "line_token_auth",
+      "line_sandbox_send",
+    ]);
+    expect(result.checks.every((check) => check.status === "pass")).toBe(true);
+  });
+
+  it("runs iMessage bridge auth, sandbox send, and cleanup probes", async () => {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "http://127.0.0.1:1234/api/v1/chat/query?password=bb-password") {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+      if (url === "http://127.0.0.1:1234/api/v1/chat/new?password=bb-password" && init?.method === "POST") {
+        return new Response(JSON.stringify({ data: { guid: "bb-msg-123" } }), { status: 200 });
+      }
+      if (url === "http://127.0.0.1:1234/api/v1/message/bb-msg-123/unsend?password=bb-password" && init?.method === "POST") {
+        return new Response(JSON.stringify({ data: { guid: "bb-msg-123" } }), { status: 200 });
+      }
+      throw new Error(`unexpected probe call: ${init?.method ?? "GET"} ${url}`);
+    });
+
+    const result = await runIMessageBridgeLiveChecks({
+      bridgeUrl: "http://127.0.0.1:1234",
+      password: "bb-password",
+      defaultHandle: "imessage:+15551234567",
+      includeSandboxSend: true,
+      checkedAt: "2026-04-02T12:00:00.000Z",
+      fetcher,
+    });
+
+    expect(result.probe.steps.map((step) => step.key)).toEqual([
+      "imessage_bridge_auth",
+      "imessage_sandbox_send",
+      "imessage_sandbox_cleanup",
+    ]);
+    expect(result.checks.every((check) => check.status === "pass")).toBe(true);
+  });
+
+  it("runs Signal bridge sandbox send probes against the JSON-RPC send path", async () => {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "https://signal.example.com/api/v1/rpc" && init?.method === "POST") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", result: { timestamp: 1712345678 } }), { status: 200 });
+      }
+      throw new Error(`unexpected probe call: ${init?.method ?? "GET"} ${url}`);
+    });
+
+    const result = await runSignalBridgeLiveChecks({
+      baseUrl: "https://signal.example.com",
+      accountId: "+15557654321",
+      defaultTarget: "group:group-123",
+      includeSandboxSend: true,
+      checkedAt: "2026-04-02T12:00:00.000Z",
+      fetcher,
+    });
+
+    expect(result.probe.steps).toEqual([
+      expect.objectContaining({ key: "signal_sandbox_send", status: "pass" }),
+    ]);
+    const sendCall = fetcher.mock.calls[0];
+    expect(sendCall?.[0]).toBe("https://signal.example.com/api/v1/rpc");
+    expect(JSON.parse(String(sendCall?.[1]?.body))).toMatchObject({
+      jsonrpc: "2.0",
+      method: "send",
+      params: {
+        groupId: "group-123",
+        account: "+15557654321",
+        message: "[GoatCitadel Signal probe 2026-04-02T12:00:00.000Z] Channel setup smoke check.",
+      },
+    });
+  });
+
+  it("runs Zalo OA sandbox send probes against the official account send path", async () => {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "https://bot-api.zaloplatforms.com/botzalo-token/sendMessage" && init?.method === "POST") {
+        return new Response(JSON.stringify({ ok: true, result: { message_id: "msg-123" } }), { status: 200 });
+      }
+      throw new Error(`unexpected probe call: ${init?.method ?? "GET"} ${url}`);
+    });
+
+    const result = await runZaloBotLiveChecks({
+      accessToken: "zalo-token",
+      defaultTarget: "zalo:chat-123",
+      includeSandboxSend: true,
+      checkedAt: "2026-04-02T12:00:00.000Z",
+      fetcher,
+    });
+
+    expect(result.probe.steps).toEqual([
+      expect.objectContaining({ key: "zalo_sandbox_send", status: "pass" }),
+    ]);
+    const sendCall = fetcher.mock.calls[0];
+    expect(sendCall?.[0]).toBe("https://bot-api.zaloplatforms.com/botzalo-token/sendMessage");
+    expect(JSON.parse(String(sendCall?.[1]?.body))).toEqual({
+      chat_id: "chat-123",
+      text: "[GoatCitadel Zalo probe 2026-04-02T12:00:00.000Z] Channel setup smoke check.",
+    });
+  });
+
+  it("runs Zalo User sandbox send probes against the zca text path", async () => {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "http://127.0.0.1:56789/work/messages/text" && init?.method === "POST") {
+        return new Response(JSON.stringify({ messageId: "zca-msg-123" }), { status: 200 });
+      }
+      throw new Error(`unexpected probe call: ${init?.method ?? "GET"} ${url}`);
+    });
+
+    const result = await runZaloUserBridgeLiveChecks({
+      baseUrl: "http://127.0.0.1:56789",
+      authorizationHeader: "Bearer zlu-token",
+      profile: "work",
+      defaultTarget: "group:g-987654321",
+      includeSandboxSend: true,
+      checkedAt: "2026-04-02T12:00:00.000Z",
+      fetcher,
+    });
+
+    expect(result.probe.steps).toEqual([
+      expect.objectContaining({ key: "zalouser_sandbox_send", status: "pass" }),
+    ]);
+    const sendCall = fetcher.mock.calls[0];
+    expect(sendCall?.[0]).toBe("http://127.0.0.1:56789/work/messages/text");
+    expect(sendCall?.[1]?.headers).toBeDefined();
+    const headers = new Headers(sendCall?.[1]?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer zlu-token");
+    expect(JSON.parse(String(sendCall?.[1]?.body))).toEqual({
+      threadId: "g-987654321",
+      message: "[GoatCitadel Zalo User probe 2026-04-02T12:00:00.000Z] Channel setup smoke check.",
+      isGroup: true,
+    });
   });
 });
