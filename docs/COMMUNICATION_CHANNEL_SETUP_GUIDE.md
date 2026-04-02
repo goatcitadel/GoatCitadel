@@ -1,17 +1,17 @@
 # Communication Channel Setup Guide
 
-Last updated: 2026-03-29
+Last updated: 2026-04-01
 Target audience: beginner to intermediate operators
 
 This guide walks through GoatCitadel channel setup in the order that makes the most sense for public beta testing.
 
 For parity status and tranche tracking, see [OPENCLAW_PARITY_STATUS.md](./OPENCLAW_PARITY_STATUS.md).
 
-Guided Mission Control setup is currently available for `channel.discord`, `channel.slack`, `channel.telegram`, `channel.google-chat`, and `channel.teams`.
+Guided Mission Control setup is currently available for `channel.discord`, `channel.slack`, `channel.telegram`, `channel.google-chat`, `channel.teams`, `channel.whatsapp`, `channel.signal`, `channel.mattermost`, `channel.imessage`, `channel.nextcloud-talk`, `channel.line`, `channel.zalo`, and `channel.zalouser`.
 
-Discord, Slack, Telegram, Google Chat, and Teams guided test/retest flows now run live probe coverage before finalize. Users should still confirm manually that sandbox posts land in the intended destination, especially for webhook-backed channels.
+Discord, Slack, Telegram, Google Chat, and Teams guided test/retest flows now run live probe coverage before finalize. Mattermost also runs a live auth probe before finalize. WhatsApp and LINE now have signed inbound webhook runtime support when their required secrets are configured, but guided setup still stops at draft/config validation and operator confirmation after finalize.
 
-## Guided Beta Channels At A Glance
+## Guided Channel Setup At A Glance
 
 | Channel | Recommended auth path | Guided test behavior | Manual confirmation still needed |
 |---|---|---|---|
@@ -20,6 +20,16 @@ Discord, Slack, Telegram, Google Chat, and Teams guided test/retest flows now ru
 | `channel.telegram` | BotFather token | auth plus sandbox send/delete | yes |
 | `channel.google-chat` | Incoming webhook | sandbox webhook probe | yes |
 | `channel.teams` | Incoming webhook | sandbox webhook probe | yes |
+| `channel.mattermost` | Bot token | structural, semantic, and live auth probe | yes |
+| `channel.whatsapp` | Cloud API access token + phone-number id | structural and semantic validation; signed inbound webhook runtime when app secret + verify token are configured | yes |
+| `channel.signal` | Bridge URL | structural and semantic validation | yes |
+| `channel.imessage` | BlueBubbles bridge URL + password | structural and semantic validation | yes |
+| `channel.nextcloud-talk` | Base URL + Talk token | structural and semantic validation | yes |
+| `channel.line` | Channel access token | structural and semantic validation; signed inbound webhook runtime when channel secret is configured | yes |
+| `channel.zalo` | Official Account access token | structural and semantic validation | yes |
+| `channel.zalouser` | zca bridge URL + optional bearer token | structural and semantic validation | yes |
+
+Long-form walkthroughs below still focus on the current beta channels. The additional guided definitions above exist so operators can draft, edit, repair, and retest those planned channels inside Mission Control without dropping back to raw JSON.
 
 ## Recommended Rollout Order
 
@@ -259,6 +269,71 @@ Official reference:
 - card formatting looks plain: expected if the destination strips parts of the adaptive-card payload
 - channel mismatch: recreate the webhook from the exact Teams channel you want GoatCitadel to target
 
+## WhatsApp (Cloud API)
+
+Official references:
+
+- https://developers.facebook.com/docs/whatsapp/cloud-api
+- https://developers.facebook.com/docs/graph-api/webhooks/getting-started
+
+### Step-by-step
+
+1. Create or select a Meta app with WhatsApp Cloud API access.
+2. Generate the Cloud API access token you want GoatCitadel to use for outbound delivery.
+3. Record the phone number id for the sending number.
+4. Record the Meta app secret and choose a webhook verify token you control.
+5. In GoatCitadel `Connections`, add `channel.whatsapp`.
+6. Set the outbound/runtime secrets:
+   - `accessTokenEnv=WHATSAPP_ACCESS_TOKEN`
+   - `appSecretEnv=WHATSAPP_APP_SECRET`
+   - `webhookVerifyTokenEnv=WHATSAPP_WEBHOOK_VERIFY_TOKEN`
+   - `phoneNumberId=<your_meta_phone_number_id>`
+7. Point the Meta webhook subscription at:
+   - `https://<your-gateway-host>/api/v1/integrations/connections/<connectionId>/whatsapp/webhook`
+8. Subscribe to message events, finalize the connection, and confirm manually that:
+   - the Meta challenge succeeds
+   - an inbound sandbox message lands in GoatCitadel
+   - outbound replies still use the expected phone number id
+
+### WhatsApp troubleshooting
+
+- Meta challenge fails: the verify token in Meta does not match GoatCitadel
+- inbound `401`: the `x-hub-signature-256` signature does not match the configured app secret
+- outbound works but inbound does not: the access token is valid, but the webhook secret pair is missing or stale
+- delivery statuses appear without messages: expected when Meta posts status-only payloads; send a real inbound text to validate routing
+- local-only gateway URL: Meta cannot call loopback or non-public HTTP endpoints; use a reachable HTTPS URL
+
+## LINE
+
+Official references:
+
+- https://developers.line.biz/en/docs/messaging-api/getting-started/
+- https://developers.line.biz/en/docs/messaging-api/receiving-messages/
+
+### Step-by-step
+
+1. Open the LINE Developers console and create or select a Messaging API channel.
+2. Copy the channel access token for outbound delivery.
+3. Copy the channel secret for signed webhook verification.
+4. In GoatCitadel `Connections`, add `channel.line`.
+5. Set:
+   - `channelAccessTokenEnv=LINE_CHANNEL_ACCESS_TOKEN`
+   - `channelSecretEnv=LINE_CHANNEL_SECRET`
+6. Set the webhook URL to:
+   - `https://<your-gateway-host>/api/v1/integrations/connections/<connectionId>/line/webhook`
+7. Enable webhooks in LINE, finalize the connection, and confirm manually that:
+   - LINE accepts the webhook endpoint
+   - an inbound sandbox message reaches GoatCitadel
+   - group or room replies route back to the expected thread target
+
+### LINE troubleshooting
+
+- inbound `401`: the `x-line-signature` value does not match the configured channel secret
+- no inbound events arrive: webhook delivery is disabled in the LINE console or pointed at the wrong connection id
+- direct messages work but group routing is wrong: validate the room/group source ids and resend from the intended thread
+- `404` from LINE webhook verification: the connection id in the URL is wrong or the route is not reachable from the public internet
+- local HTTP URL: LINE requires a reachable HTTPS endpoint for webhook delivery
+
 ## Validation Checklist Per Channel
 
 ## Channel Capabilities And Diagnostics
@@ -296,9 +371,14 @@ Channel maturity is now truth-based:
 - `beta`: implemented in the current runtime but still stabilizing
 - `plugin`: available through an installed plugin adapter
 - `disabled`: cataloged but not available in the current runtime
-- `planned`: roadmap only
+- `planned`: not parity-complete yet
 
-Built-in channel bridges that exist but are not yet parity-complete should resolve to `beta`, not `native`.
+Built-in channel bridges that exist but are not yet parity-complete now stay `planned` in the catalog.
+
+When GoatCitadel can still configure or exercise a partial/manual bridge path, the catalog also marks runtime availability separately as runnable. That split is intentional:
+
+- `maturity` answers "how complete is parity?"
+- runtime availability answers "can an operator wire this up in the current runtime?"
 
 - [ ] Connection create succeeds.
 - [ ] Health or connectivity check succeeds.

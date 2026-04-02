@@ -4,9 +4,11 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { IntegrationPluginRecord } from "@goatcitadel/contracts";
 import { authPlugin } from "../plugins/auth.js";
 import { idempotencyHeaderPlugin } from "../plugins/idempotency.js";
+import { buildLineWebhookSignature } from "../services/line-webhook.js";
 import { buildNextcloudTalkSignature } from "../services/nextcloud-talk-webhook.js";
 import { buildSlackSignature } from "../services/slack-webhook.js";
 import { verifyTelegramWebhookSecretToken } from "../services/telegram-webhook.js";
+import { buildWhatsAppWebhookSignature } from "../services/whatsapp-webhook.js";
 import { buildInstalledIntegrationPluginRecord } from "../services/integration-plugin-author-contract.js";
 import { integrationsRoutes } from "./integrations.js";
 
@@ -639,6 +641,364 @@ describe("integrations inbound route guards", () => {
       turnId: "turn-telegram-1",
       eventType: "message",
     }));
+  });
+
+  it("completes the WhatsApp webhook verification challenge", async () => {
+    app = Fastify();
+    app.decorate("gateway", {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        key: "whatsapp",
+        config: {
+          webhookVerifyToken: "whatsapp-verify-token",
+        },
+      })),
+    } as never);
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=whatsapp-verify-token&hub.challenge=challenge-123",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe("challenge-123");
+  });
+
+  it("accepts signed WhatsApp webhooks without standard auth or idempotency headers", async () => {
+    const getIntegrationConnection = vi.fn(() => ({
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      key: "whatsapp",
+      config: {
+        accessToken: "whatsapp-access-token",
+        appSecret: "whatsapp-app-secret",
+        webhookVerifyToken: "whatsapp-verify-token",
+        phoneNumberId: "123456789012345",
+        defaultTarget: "+15551234567",
+      },
+    }));
+    const ingestChannelMessage = vi.fn(async () => ({
+      accepted: true,
+      deduped: false,
+      session: { sessionId: "sess-whatsapp" },
+      transcriptOffset: 1,
+    }));
+    const setChatSessionBinding = vi.fn();
+    const respondToExistingChatMessage = vi.fn(async () => ({
+      sessionId: "sess-whatsapp",
+      userMessage: { messageId: "wamid.HBgLNDU2", content: "Need an operator check-in" },
+      assistantMessage: { messageId: "assistant-whatsapp-1", content: "handled" },
+      transport: "integration",
+      turnId: "turn-whatsapp-1",
+    }));
+    const payload = JSON.stringify({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          changes: [
+            {
+              field: "messages",
+              value: {
+                metadata: {
+                  phone_number_id: "123456789012345",
+                  display_phone_number: "+15551234567",
+                },
+                contacts: [
+                  {
+                    wa_id: "15558675309",
+                    profile: {
+                      name: "Ada Lovelace",
+                    },
+                  },
+                ],
+                messages: [
+                  {
+                    from: "15558675309",
+                    id: "wamid.HBgLNDU2",
+                    timestamp: "1712182068",
+                    type: "text",
+                    text: {
+                      body: "Need an operator check-in",
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const signature = buildWhatsAppWebhookSignature(payload, "whatsapp-app-secret");
+
+    app = Fastify();
+    app.decorate("gateway", {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection,
+      ingestChannelMessage,
+      setChatSessionBinding,
+      respondToExistingChatMessage,
+    } as never);
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/whatsapp/webhook",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": signature,
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(ingestChannelMessage).toHaveBeenCalledWith(
+      "whatsapp",
+      "whatsapp:11111111-1111-1111-1111-111111111111:wamid.HBgLNDU2",
+      expect.objectContaining({
+        eventId: "wamid.HBgLNDU2",
+        account: "11111111-1111-1111-1111-111111111111",
+        peer: "15558675309",
+        actorId: "15558675309",
+        content: "Need an operator check-in",
+        displayName: "Ada Lovelace",
+      }),
+    );
+    expect(setChatSessionBinding).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "sess-whatsapp",
+      transport: "integration",
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      target: "15558675309",
+      writable: true,
+    }));
+    expect(respondToExistingChatMessage).toHaveBeenCalledWith(
+      "sess-whatsapp",
+      "wamid.HBgLNDU2",
+      { deliveryReplyToMessageId: "wamid.HBgLNDU2" },
+    );
+    expect(response.json()).toEqual(expect.objectContaining({
+      accepted: true,
+      replied: true,
+      sessionId: "sess-whatsapp",
+      turnId: "turn-whatsapp-1",
+      eventType: "text",
+    }));
+  });
+
+  it("rejects unsigned WhatsApp webhooks", async () => {
+    app = Fastify();
+    app.decorate("gateway", {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        key: "whatsapp",
+        config: {
+          appSecret: "whatsapp-app-secret",
+          webhookVerifyToken: "whatsapp-verify-token",
+        },
+      })),
+    } as never);
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/whatsapp/webhook",
+      headers: {
+        "content-type": "application/json",
+      },
+      payload: JSON.stringify({ object: "whatsapp_business_account" }),
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("accepts signed LINE webhooks without standard auth or idempotency headers", async () => {
+    const getIntegrationConnection = vi.fn(() => ({
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      key: "line",
+      config: {
+        channelAccessToken: "line-channel-access-token",
+        channelSecret: "line-channel-secret",
+        defaultTarget: "U1234567890",
+      },
+    }));
+    const ingestChannelMessage = vi.fn(async () => ({
+      accepted: true,
+      deduped: false,
+      session: { sessionId: "sess-line" },
+      transcriptOffset: 1,
+    }));
+    const setChatSessionBinding = vi.fn();
+    const respondToExistingChatMessage = vi.fn(async () => ({
+      sessionId: "sess-line",
+      userMessage: { messageId: "325708", content: "Please open the Office Lab view" },
+      assistantMessage: { messageId: "assistant-line-1", content: "handled" },
+      transport: "integration",
+      turnId: "turn-line-1",
+    }));
+    const payload = JSON.stringify({
+      destination: "Ubot123",
+      events: [
+        {
+          type: "message",
+          mode: "active",
+          webhookEventId: "01HV5R0EVTQ6AY9QX4QFTRMNY9",
+          replyToken: "reply-token-1",
+          deliveryContext: {
+            isRedelivery: false,
+          },
+          source: {
+            type: "group",
+            groupId: "Cgroup123",
+            userId: "Uuser123",
+          },
+          message: {
+            id: "325708",
+            type: "text",
+            text: "Please open the Office Lab view",
+          },
+        },
+      ],
+    });
+    const signature = buildLineWebhookSignature(payload, "line-channel-secret");
+
+    app = Fastify();
+    app.decorate("gateway", {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection,
+      ingestChannelMessage,
+      setChatSessionBinding,
+      respondToExistingChatMessage,
+    } as never);
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/line/webhook",
+      headers: {
+        "content-type": "application/json",
+        "x-line-signature": signature,
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(ingestChannelMessage).toHaveBeenCalledWith(
+      "line",
+      "line:11111111-1111-1111-1111-111111111111:01HV5R0EVTQ6AY9QX4QFTRMNY9",
+      expect.objectContaining({
+        eventId: "325708",
+        account: "11111111-1111-1111-1111-111111111111",
+        room: "Cgroup123",
+        actorId: "Uuser123",
+        content: "Please open the Office Lab view",
+      }),
+    );
+    expect(setChatSessionBinding).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "sess-line",
+      transport: "integration",
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      target: "Cgroup123",
+      writable: true,
+    }));
+    expect(respondToExistingChatMessage).toHaveBeenCalledWith(
+      "sess-line",
+      "325708",
+      { deliveryReplyToMessageId: "325708" },
+    );
+    expect(response.json()).toEqual(expect.objectContaining({
+      accepted: true,
+      replied: true,
+      sessionId: "sess-line",
+      turnId: "turn-line-1",
+      eventType: "message",
+    }));
+  });
+
+  it("rejects unsigned LINE webhooks", async () => {
+    app = Fastify();
+    app.decorate("gateway", {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        key: "line",
+        config: {
+          channelSecret: "line-channel-secret",
+        },
+      })),
+    } as never);
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/line/webhook",
+      headers: {
+        "content-type": "application/json",
+      },
+      payload: JSON.stringify({ events: [] }),
+    });
+
+    expect(response.statusCode).toBe(401);
   });
 
   it("returns Slack url verification challenges without ingesting chat turns", async () => {

@@ -955,6 +955,7 @@ export class ChatAgentOrchestrator {
             memory: {
               enabled: input.memoryMode !== "off",
               mode: input.memoryMode === "off" ? "off" : "qmd",
+              turnId: input.turnId,
               sessionId: input.sessionId,
             },
             tools: toolSchema.tools.length > 0 ? toolSchema.tools : undefined,
@@ -2773,6 +2774,7 @@ export class ChatAgentOrchestrator {
         memory: {
           enabled: false,
           mode: "off",
+          turnId: input.input.turnId,
           sessionId: input.input.sessionId,
         },
         messages: [
@@ -2842,6 +2844,7 @@ export class ChatAgentOrchestrator {
         memory: {
           enabled: false,
           mode: "off",
+          turnId: input.input.turnId,
           sessionId: input.input.sessionId,
         },
         messages: [

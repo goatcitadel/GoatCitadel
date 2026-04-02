@@ -4,6 +4,7 @@ import {
   getIntegrationFormSchema,
   INTEGRATION_CATALOG,
   resolveIntegrationCatalogMaturity,
+  resolveIntegrationCatalogRuntimeAvailability,
 } from "./integration-catalog.js";
 
 describe("integration-catalog", () => {
@@ -36,8 +37,10 @@ describe("integration-catalog", () => {
     };
 
     expect(resolveIntegrationCatalogMaturity(plannedPluginChannel, new Set())).toBe("disabled");
+    expect(resolveIntegrationCatalogRuntimeAvailability(plannedPluginChannel, new Set())).toBe("blocked");
     expect(resolveIntegrationCatalogMaturity(plannedPluginChannel, new Set(["slack"]))).toBe("disabled");
     expect(resolveIntegrationCatalogMaturity(plannedPluginChannel, new Set(["custombridge"]))).toBe("plugin");
+    expect(resolveIntegrationCatalogRuntimeAvailability(plannedPluginChannel, new Set(["custombridge"]))).toBe("runnable");
   });
 
   it("exposes the required Signal bridge URL in the guided setup form", () => {
@@ -54,10 +57,31 @@ describe("integration-catalog", () => {
   it("requires a WhatsApp phone number id in the guided setup form", () => {
     const whatsappForm = getIntegrationFormSchema("channel.whatsapp");
     const phoneNumberIdField = whatsappForm?.fields.find((field) => field.key === "phoneNumberId");
+    const appSecretField = whatsappForm?.fields.find((field) => field.key === "appSecretEnv");
+    const verifyTokenField = whatsappForm?.fields.find((field) => field.key === "webhookVerifyTokenEnv");
 
     expect(phoneNumberIdField).toMatchObject({
       key: "phoneNumberId",
       required: true,
+    });
+    expect(appSecretField).toMatchObject({
+      key: "appSecretEnv",
+      secretRef: true,
+    });
+    expect(verifyTokenField).toMatchObject({
+      key: "webhookVerifyTokenEnv",
+      secretRef: true,
+    });
+  });
+
+  it("exposes a LINE channel secret field in the guided setup form", () => {
+    const lineForm = getIntegrationFormSchema("channel.line");
+    const channelSecretField = lineForm?.fields.find((field) => field.key === "channelSecretEnv");
+
+    expect(channelSecretField).toMatchObject({
+      key: "channelSecretEnv",
+      secretRef: true,
+      advanced: true,
     });
   });
 
@@ -105,11 +129,13 @@ describe("integration-catalog", () => {
     };
 
     expect(resolveIntegrationCatalogMaturity(plannedAliasEntry, new Set(["googlechat"]))).toBe("plugin");
-    expect(resolveIntegrationCatalogMaturity(whatsapp, new Set())).toBe("beta");
+    expect(resolveIntegrationCatalogMaturity(whatsapp, new Set())).toBe("planned");
+    expect(resolveIntegrationCatalogRuntimeAvailability(whatsapp, new Set())).toBe("runnable");
   });
 
-  it("treats built-in planned bridges as beta until parity work is complete", () => {
+  it("keeps built-in planned bridges truthful while still marking them runnable", () => {
     const plannedBuiltInChannels = [
+      "channel.whatsapp",
       "channel.signal",
       "channel.mattermost",
       "channel.imessage",
@@ -120,11 +146,13 @@ describe("integration-catalog", () => {
 
     for (const catalogId of plannedBuiltInChannels) {
       const entry = requireCatalogEntry(catalogId);
-      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("beta");
+      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("planned");
+      expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("runnable");
     }
 
     const nextcloudTalk = requireCatalogEntry("channel.nextcloud-talk");
     expect(resolveIntegrationCatalogMaturity(nextcloudTalk, new Set())).toBe("native");
+    expect(resolveIntegrationCatalogRuntimeAvailability(nextcloudTalk, new Set())).toBe("runnable");
 
     const imessage = requireCatalogEntry("channel.imessage");
     expect(imessage.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));

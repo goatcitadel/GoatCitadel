@@ -14,6 +14,7 @@ import {
   fetchExtensionStarterPack,
   fetchExtensionSdkBrief,
   fetchFollowOnParityReport,
+  fetchOpenclawParityReport,
   fetchPackagingProofLaneDraft,
   fetchVoiceProofLaneDraft,
   fetchSystemVitals,
@@ -26,6 +27,7 @@ import {
   type ExtensionSdkBriefDraft,
   type FollowOnParityReport,
   type FollowOnProofLaneArtifactRecord,
+  type OpenclawParityProgramReport,
   type PackagingProofLaneDraft,
   type A2UIProofLaneDraft,
   type VoiceProofLaneDraft,
@@ -42,6 +44,8 @@ import { pageCopy } from "../content/copy";
 
 export function SystemPage() {
   const [vitals, setVitals] = useState<SystemVitalsResponse | null>(null);
+  const [openclawParity, setOpenclawParity] = useState<OpenclawParityProgramReport | null>(null);
+  const [openclawParityError, setOpenclawParityError] = useState<string | null>(null);
   const [followOnParity, setFollowOnParity] = useState<FollowOnParityReport | null>(null);
   const [followOnParityError, setFollowOnParityError] = useState<string | null>(null);
   const [browserProofLane, setBrowserProofLane] = useState<BrowserProofLaneDraft | null>(null);
@@ -98,17 +102,59 @@ export function SystemPage() {
       }
       switch (artifact.laneId) {
         case "browser":
-          return { ...current, browser: { ...current.browser, latestArtifact: artifact } };
+          return {
+            ...current,
+            browser: {
+              ...current.browser,
+              latestArtifact: artifact,
+              artifactStatus: buildUiProfileArtifactStatus(current.generatedAt, current.deploymentProfile, artifact),
+            },
+          };
         case "packaging":
-          return { ...current, packaging: { ...current.packaging, latestArtifact: artifact } };
+          return {
+            ...current,
+            packaging: {
+              ...current.packaging,
+              latestArtifact: artifact,
+              proofStatus: buildUiProfileArtifactStatus(current.generatedAt, current.deploymentProfile, artifact),
+            },
+          };
         case "a2ui":
-          return { ...current, canvas: { ...current.canvas, latestArtifact: artifact } };
+          return {
+            ...current,
+            canvas: {
+              ...current.canvas,
+              latestArtifact: artifact,
+              artifactStatus: buildUiProfileArtifactStatus(current.generatedAt, current.deploymentProfile, artifact),
+            },
+          };
         case "voice":
-          return { ...current, voice: { ...current.voice, latestArtifact: artifact } };
+          return {
+            ...current,
+            voice: {
+              ...current.voice,
+              latestArtifact: artifact,
+              artifactStatus: buildUiProfileArtifactStatus(current.generatedAt, current.deploymentProfile, artifact),
+            },
+          };
         case "companion":
-          return { ...current, companion: { ...current.companion, latestArtifact: artifact } };
+          return {
+            ...current,
+            companion: {
+              ...current.companion,
+              latestArtifact: artifact,
+              artifactStatus: buildUiArtifactStatus(current.generatedAt, artifact),
+            },
+          };
         case "extensions":
-          return { ...current, plugins: { ...current.plugins, latestArtifact: artifact } };
+          return {
+            ...current,
+            plugins: {
+              ...current.plugins,
+              latestArtifact: artifact,
+              artifactStatus: buildUiArtifactStatus(current.generatedAt, artifact),
+            },
+          };
         default:
           return current;
       }
@@ -302,6 +348,12 @@ export function SystemPage() {
         setFollowOnParityError(null);
       })
       .catch((err: Error) => setFollowOnParityError(err.message));
+    void fetchOpenclawParityReport()
+      .then((report) => {
+        setOpenclawParity(report);
+        setOpenclawParityError(null);
+      })
+      .catch((err: Error) => setOpenclawParityError(err.message));
     void loadBrowserProofLane();
     void loadVoiceProofLane();
     void loadA2UIProofLane();
@@ -423,33 +475,67 @@ export function SystemPage() {
         </Panel>
       </div>
       <Panel
-        title="Follow-On Parity"
+        title="OpenClaw Parity"
         subtitle={(
           <>
-            Track browser, canvas, deployment, companion, plugin, and voice follow-on work from live runtime truth.
+            Track the full parity closeout program while keeping browser, canvas, deployment, companion, plugin, and voice follow-on work grounded in live runtime truth.
             <HelpHint
-              label="Follow-on parity help"
-              text="This report is intentionally conservative. It shows current foundations and next slices without claiming full parity completion."
+              label="OpenClaw parity help"
+              text="This surface is intentionally conservative. It shows the full parity program plus the live follow-on foundations without pretending external proof or publication work is already done."
             />
           </>
         )}
-        actions={followOnParity ? (
+        actions={openclawParity ? (
+          <div className="workflow-summary-strip">
+            <StatusChip tone="success">{openclawParity.completedEpicIds.length}/{openclawParity.epics.length} complete</StatusChip>
+            <StatusChip tone="warning">{openclawParity.openEpicIds.length} open</StatusChip>
+            <StatusChip tone="muted">next {openclawParity.nextEpicId ?? "none"}</StatusChip>
+          </div>
+        ) : followOnParity ? (
           <div className="workflow-summary-strip">
             <StatusChip tone="muted">{followOnParity.deploymentProfile}</StatusChip>
             <StatusChip tone="muted">auth {followOnParity.authMode}</StatusChip>
             <StatusChip tone={followOnParity.voice.runtimeReadiness === "ready" ? "success" : "warning"}>
               voice {followOnParity.voice.runtimeReadiness}
             </StatusChip>
-            <StatusChip tone={followOnParity.browser.controlToolCount > 0 ? "success" : "warning"}>
-              browser {followOnParity.browser.controlToolCount} control
-            </StatusChip>
           </div>
         ) : undefined}
       >
         {followOnParityError ? (
-          <p className="office-subtitle">Follow-on parity report unavailable: {followOnParityError}</p>
+          <>
+            {openclawParityError ? (
+              <p className="office-subtitle">OpenClaw parity program unavailable: {openclawParityError}</p>
+            ) : null}
+            <p className="office-subtitle">Follow-on parity report unavailable: {followOnParityError}</p>
+          </>
         ) : followOnParity ? (
           <>
+            <div className="workflow-status-stack">
+              {openclawParityError ? (
+                <p className="office-subtitle">OpenClaw parity program unavailable: {openclawParityError}</p>
+              ) : openclawParity ? (
+                <>
+                  <FieldHelp>
+                    Full-program status: {openclawParity.completedEpicIds.length} complete · {openclawParity.openEpicIds.length} open · next {openclawParity.nextEpicId ?? "none"}.
+                  </FieldHelp>
+                  <FieldHelp>
+                    Completion order: {openclawParity.completionOrder.join(" -> ")}
+                  </FieldHelp>
+                  <FieldHelp>
+                    Next program slice: {openclawParity.nextSlice}
+                  </FieldHelp>
+                  <FieldHelp>
+                    Blockers: repo runtime {openclawParity.blockerCounts.repo_runtime} · manual/operator {openclawParity.blockerCounts.manual_operator} · external repo {openclawParity.blockerCounts.external_repo} · publication {openclawParity.blockerCounts.publication}.
+                  </FieldHelp>
+                  {openclawParity.unsafeClaims.map((claim) => (
+                    <FieldHelp key={`openclaw-unsafe-${claim}`}>Unsafe to claim yet: {claim}</FieldHelp>
+                  ))}
+                </>
+              ) : null}
+              <FieldHelp>
+                Follow-on runtime posture: {followOnParity.deploymentProfile} · auth {followOnParity.authMode} · voice {followOnParity.voice.runtimeReadiness} · browser {followOnParity.browser.controlToolCount} control tool(s).
+              </FieldHelp>
+            </div>
             <div className="metric-grid">
               <Panel title="Browser" subtitle="Registered browser tools and catalog maturity." className="stat-card">
                 <p className="stat-card-value">{followOnParity.browser.totalToolCount}</p>
@@ -477,6 +563,9 @@ export function SystemPage() {
                   : "allowed none"} · {followOnParity.browser.stateToolRuntime.blockedTools.length > 0
                   ? `blocked ${followOnParity.browser.stateToolRuntime.blockedTools.join(", ")}`
                   : "blocked none"}.
+              </FieldHelp>
+              <FieldHelp>
+                Browser proof status: {formatProofArtifactStatus(followOnParity.browser.artifactStatus)}
               </FieldHelp>
               {followOnParity.browser.blockingIssues.map((issue) => (
                 <p key={`browser-issue-${issue}`} className="error">{issue}</p>
@@ -599,6 +688,9 @@ export function SystemPage() {
               <FieldHelp>
                 Canvas summary: {followOnParity.canvas.paritySummary}
               </FieldHelp>
+              <FieldHelp>
+                A2UI proof status: {formatProofArtifactStatus(followOnParity.canvas.artifactStatus)}
+              </FieldHelp>
               {followOnParity.canvas.contract ? (
                 <FieldHelp>
                   Canvas contract: {followOnParity.canvas.contract.contractId} · scopes {followOnParity.canvas.contract.scopes.join(", ")} · transports {followOnParity.canvas.contract.transports.join(", ")}.
@@ -658,6 +750,9 @@ export function SystemPage() {
               <FieldHelp>
                 Companion summary: {followOnParity.companion.paritySummary}
               </FieldHelp>
+              <FieldHelp>
+                Companion brief status: {formatArtifactStatus(followOnParity.companion.artifactStatus)}
+              </FieldHelp>
               {followOnParity.companion.contract ? (
                 <>
                   <FieldHelp>
@@ -709,6 +804,9 @@ export function SystemPage() {
             <div className="workflow-status-stack">
               <FieldHelp>
                 Extension summary: {followOnParity.plugins.sdkSummary}
+              </FieldHelp>
+              <FieldHelp>
+                Extension brief status: {formatArtifactStatus(followOnParity.plugins.artifactStatus)}
               </FieldHelp>
               <FieldHelp>
                 Reference plugin lifecycle: {followOnParity.plugins.referenceLifecycle.referencePluginId} · {followOnParity.plugins.referenceLifecycle.present ? "installed" : "missing"} · {followOnParity.plugins.referenceLifecycle.enabled ? "enabled" : "disabled"} · {followOnParity.plugins.referenceLifecycle.matchesReferenceSource ? "source aligned" : "source drifted"}.
@@ -799,6 +897,9 @@ export function SystemPage() {
               ) : null}
             </div>
             <div className="workflow-status-stack">
+              <FieldHelp>
+                Voice proof status: {formatProofArtifactStatus(followOnParity.voice.artifactStatus)}
+              </FieldHelp>
               {followOnParity.voice.blockingIssues.map((issue) => (
                 <p key={`voice-issue-${issue}`} className="error">{issue}</p>
               ))}
@@ -856,20 +957,36 @@ export function SystemPage() {
               ) : null}
             </div>
             <div className="workflow-status-stack">
-              {followOnParity.epics.map((epic) => (
-                <div key={epic.epicId}>
-                  <p className="office-subtitle">
-                    <strong>{epic.epicId} · {epic.label}</strong>{" "}
-                    <StatusChip tone={mapParityTone(epic.state)}>{epic.state.replaceAll("_", " ")}</StatusChip>
-                  </p>
-                  <p className="office-subtitle">{epic.summary}</p>
-                  <p className="office-subtitle">Next slice: {epic.nextSlice}</p>
-                </div>
+              {(openclawParity?.epics ?? followOnParity.epics).map((epic) => (
+                "status" in epic ? (
+                  <div key={epic.epicId}>
+                    <p className="office-subtitle">
+                      <strong>{epic.epicId} · {epic.label}</strong>{" "}
+                      <StatusChip tone={mapProgramParityTone(epic.status)}>{epic.status.replaceAll("_", " ")}</StatusChip>
+                    </p>
+                    <p className="office-subtitle">{epic.summary}</p>
+                    <p className="office-subtitle">Next slice: {epic.nextSlice}</p>
+                    {epic.blockers.map((entry, index) => (
+                      <FieldHelp key={`${epic.epicId}-blocker-${entry.kind}-${index}`}>
+                        Blocker [{formatProgramBlockerKind(entry.kind)}]: {entry.summary}
+                      </FieldHelp>
+                    ))}
+                  </div>
+                ) : (
+                  <div key={epic.epicId}>
+                    <p className="office-subtitle">
+                      <strong>{epic.epicId} · {epic.label}</strong>{" "}
+                      <StatusChip tone={mapParityTone(epic.state)}>{epic.state.replaceAll("_", " ")}</StatusChip>
+                    </p>
+                    <p className="office-subtitle">{epic.summary}</p>
+                    <p className="office-subtitle">Next slice: {epic.nextSlice}</p>
+                  </div>
+                )
               ))}
             </div>
           </>
         ) : (
-          <p className="office-subtitle">Loading follow-on parity report...</p>
+          <p className="office-subtitle">Loading parity reports...</p>
         )}
       </Panel>
       <Panel
@@ -920,6 +1037,82 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
+function buildUiArtifactStatus(
+  generatedAt: string,
+  artifact?: FollowOnProofLaneArtifactRecord,
+): FollowOnParityReport["companion"]["artifactStatus"] {
+  if (!artifact) {
+    return {
+      hasArtifact: false,
+      freshness: "missing",
+    };
+  }
+  const artifactGeneratedAtMs = Date.parse(artifact.generatedAt);
+  const reportGeneratedAtMs = Date.parse(generatedAt);
+  const ageDays = Number.isFinite(artifactGeneratedAtMs) && Number.isFinite(reportGeneratedAtMs)
+    ? Math.max(0, Math.floor((reportGeneratedAtMs - artifactGeneratedAtMs) / (24 * 60 * 60 * 1000)))
+    : undefined;
+  return {
+    hasArtifact: true,
+    freshness: typeof ageDays === "number" && ageDays > 7 ? "stale" : "current",
+    ageDays,
+  };
+}
+
+function buildUiProfileArtifactStatus(
+  generatedAt: string,
+  deploymentProfile: FollowOnParityReport["deploymentProfile"],
+  artifact?: FollowOnProofLaneArtifactRecord,
+): FollowOnParityReport["browser"]["artifactStatus"] {
+  if (!artifact) {
+    return {
+      hasArtifact: false,
+      freshness: "missing",
+      matchedCurrentProfile: false,
+    };
+  }
+  const baseStatus = buildUiArtifactStatus(generatedAt, artifact);
+  const latestArtifactDeploymentProfile = parseArtifactDeploymentProfile(artifact.relativePath);
+  return {
+    ...baseStatus,
+    latestArtifactDeploymentProfile,
+    matchedCurrentProfile: latestArtifactDeploymentProfile === deploymentProfile,
+  };
+}
+
+function parseArtifactDeploymentProfile(
+  relativePath: string,
+): FollowOnParityReport["deploymentProfile"] | undefined {
+  const match = relativePath.match(/-(local_dev|trusted_local|remote_hardened)-\d{4}-\d{2}-\d{2}T/);
+  const value = match?.[1];
+  if (value === "local_dev" || value === "trusted_local" || value === "remote_hardened") {
+    return value;
+  }
+  return undefined;
+}
+
+function formatArtifactStatus(
+  status: FollowOnParityReport["companion"]["artifactStatus"],
+): string {
+  if (!status.hasArtifact) {
+    return "missing";
+  }
+  return `${status.freshness}${typeof status.ageDays === "number" ? ` · ${status.ageDays} day(s) old` : ""}`;
+}
+
+function formatProofArtifactStatus(
+  status: FollowOnParityReport["browser"]["artifactStatus"],
+): string {
+  if (!status.hasArtifact) {
+    return "missing · no artifact recorded yet";
+  }
+  const ageNote = typeof status.ageDays === "number" ? ` · ${status.ageDays} day(s) old` : "";
+  const profileNote = status.latestArtifactDeploymentProfile
+    ? ` · latest profile ${status.latestArtifactDeploymentProfile} · ${status.matchedCurrentProfile ? "matches current profile" : "does not match current profile"}`
+    : "";
+  return `${status.freshness}${profileNote}${ageNote}`;
+}
+
 function mapParityTone(state: FollowOnParityReport["epics"][number]["state"]): "success" | "warning" | "critical" {
   if (state === "have_foundation") {
     return "success";
@@ -928,5 +1121,32 @@ function mapParityTone(state: FollowOnParityReport["epics"][number]["state"]): "
     return "warning";
   }
   return "critical";
+}
+
+function mapProgramParityTone(status: OpenclawParityProgramReport["epics"][number]["status"]): "success" | "warning" | "critical" {
+  if (status === "complete") {
+    return "success";
+  }
+  if (status === "in_progress") {
+    return "warning";
+  }
+  return "critical";
+}
+
+function formatProgramBlockerKind(
+  kind: OpenclawParityProgramReport["epics"][number]["blockers"][number]["kind"],
+): string {
+  switch (kind) {
+    case "repo_runtime":
+      return "repo runtime";
+    case "manual_operator":
+      return "manual/operator";
+    case "external_repo":
+      return "external repo";
+    case "publication":
+      return "publication";
+    default:
+      return kind;
+  }
 }
 

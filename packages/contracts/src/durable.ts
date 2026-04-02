@@ -25,7 +25,8 @@ export type DurableSupportedWorkflowKey =
   | "chat.turn.execute"
   | "approval.wait"
   | "connector.delivery"
-  | "hook.delivery";
+  | "hook.delivery"
+  | "memory.maintenance";
 
 export interface ApprovalWaitWorkflowPayload {
   version: "approval.wait.v1";

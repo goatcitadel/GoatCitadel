@@ -155,6 +155,12 @@ describe("dashboard follow-on parity route", () => {
           allowedTools: ["browser.storage.get"],
           blockedTools: [],
         },
+        artifactStatus: {
+          hasArtifact: true,
+          freshness: "current",
+          matchedCurrentProfile: false,
+          ageDays: 4,
+        },
         blockingIssues: [],
         recommendedActions: expect.arrayContaining([
           expect.stringContaining("browser proof-lane draft"),
@@ -176,6 +182,11 @@ describe("dashboard follow-on parity route", () => {
         talkState: "stopped",
         wakeState: "stopped",
         wakeEnabled: false,
+        artifactStatus: {
+          hasArtifact: false,
+          freshness: "missing",
+          matchedCurrentProfile: false,
+        },
         blockingIssues: [],
         recoveryActions: [],
         recommendedActions: expect.arrayContaining([
@@ -199,6 +210,10 @@ describe("dashboard follow-on parity route", () => {
           matchesReferenceSource: true,
           capabilities: [],
         },
+        artifactStatus: {
+          hasArtifact: false,
+          freshness: "missing",
+        },
         blockingIssues: expect.arrayContaining([
           expect.stringContaining("reference integration plugin"),
         ]),
@@ -215,6 +230,11 @@ describe("dashboard follow-on parity route", () => {
           transports: ["local_session", "companion_session"],
         },
         paritySummary: expect.stringContaining("Canvas + A2UI"),
+        artifactStatus: {
+          hasArtifact: false,
+          freshness: "missing",
+          matchedCurrentProfile: false,
+        },
         blockingIssues: expect.arrayContaining([
           expect.stringContaining("Android/companion runtime lane"),
         ]),
@@ -229,6 +249,10 @@ describe("dashboard follow-on parity route", () => {
           primaryTarget: "android",
           bootstrapRepo: "GoatCitadel-mobile",
           bootstrapStatus: "server_foundation",
+        },
+        artifactStatus: {
+          hasArtifact: false,
+          freshness: "missing",
         },
         authReadiness: expect.arrayContaining([
           expect.objectContaining({
@@ -269,6 +293,56 @@ describe("dashboard follow-on parity route", () => {
           label: "Long-tail parity register",
           state: "have_foundation",
           summary: expect.stringContaining("live runtime report"),
+        }),
+      ]),
+    });
+
+    const openclawResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/system/openclaw-parity",
+    });
+
+    expect(openclawResponse.statusCode).toBe(200);
+    expect(openclawResponse.json()).toMatchObject({
+      completedEpicIds: ["GC-P0-01", "GC-P0-05"],
+      openEpicIds: expect.arrayContaining(["GC-P0-02", "GC-P0-03", "GC-P1-04", "GC-P1-10"]),
+      completionOrder: [
+        "GC-P1-10",
+        "GC-P2-12",
+        "GC-P0-06",
+        "GC-P1-09",
+        "GC-P1-08",
+        "GC-P0-07",
+        "GC-P0-02",
+        "GC-P0-03",
+        "GC-P1-04",
+        "GC-P2-11",
+      ],
+      nextEpicId: "GC-P1-10",
+      nextSlice: expect.stringContaining("Keep this report"),
+      unsafeClaims: expect.arrayContaining([
+        expect.stringContaining("Slack, Telegram, Google Chat, Teams, and Discord"),
+        expect.stringContaining("WhatsApp, iMessage/BlueBubbles, and Signal"),
+        expect.stringContaining("Mattermost, LINE, Zalo OA, and Zalo Personal"),
+      ]),
+      epics: expect.arrayContaining([
+        expect.objectContaining({
+          epicId: "GC-P0-02",
+          label: "Stabilize core beta channels",
+          status: "in_progress",
+          summary: expect.stringContaining("Slack, Telegram, Google Chat, Teams, and Discord"),
+        }),
+        expect.objectContaining({
+          epicId: "GC-P0-03",
+          label: "Ship Tier-1 planned channels",
+          status: "pending",
+          summary: expect.stringContaining("WhatsApp, iMessage/BlueBubbles, and Signal"),
+        }),
+        expect.objectContaining({
+          epicId: "GC-P1-04",
+          label: "Ship Tier-2 planned channels",
+          status: "pending",
+          summary: expect.stringContaining("Mattermost, LINE, Zalo OA, and Zalo Personal"),
         }),
       ]),
     });

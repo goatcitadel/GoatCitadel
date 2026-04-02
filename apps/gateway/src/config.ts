@@ -42,6 +42,7 @@ export interface FeatureFlagsConfig {
   durableKernelV1Enabled: boolean;
   replayOverridesV1Enabled: boolean;
   memoryLifecycleAdminV1Enabled: boolean;
+  memoryMaintenanceV1Enabled: boolean;
   connectorDiagnosticsV1Enabled: boolean;
   computerUseGuardrailsV1Enabled: boolean;
   bankrBuiltinEnabled: boolean;
@@ -359,6 +360,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["durableKernelV1Enabled", process.env.GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED],
     ["replayOverridesV1Enabled", process.env.GOATCITADEL_FEATURE_REPLAY_OVERRIDES_V1_ENABLED],
     ["memoryLifecycleAdminV1Enabled", process.env.GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED],
+    ["memoryMaintenanceV1Enabled", process.env.GOATCITADEL_FEATURE_MEMORY_MAINTENANCE_V1_ENABLED],
     ["connectorDiagnosticsV1Enabled", process.env.GOATCITADEL_FEATURE_CONNECTOR_DIAGNOSTICS_V1_ENABLED],
     ["computerUseGuardrailsV1Enabled", process.env.GOATCITADEL_FEATURE_COMPUTER_USE_GUARDRAILS_V1_ENABLED],
     ["bankrBuiltinEnabled", process.env.GOATCITADEL_FEATURE_BANKR_BUILTIN_ENABLED],
@@ -531,6 +533,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       durableKernelV1Enabled: featuresInput.durableKernelV1Enabled ?? false,
       replayOverridesV1Enabled: featuresInput.replayOverridesV1Enabled ?? false,
       memoryLifecycleAdminV1Enabled: featuresInput.memoryLifecycleAdminV1Enabled ?? false,
+      memoryMaintenanceV1Enabled: featuresInput.memoryMaintenanceV1Enabled ?? false,
       connectorDiagnosticsV1Enabled: featuresInput.connectorDiagnosticsV1Enabled ?? false,
       computerUseGuardrailsV1Enabled: featuresInput.computerUseGuardrailsV1Enabled ?? true,
       bankrBuiltinEnabled: featuresInput.bankrBuiltinEnabled ?? false,

@@ -28,6 +28,44 @@ const contextParamsSchema = z.object({
   contextId: z.string().trim().min(1),
 });
 
+const workspaceQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  limit: z.coerce.number().int().positive().max(200).optional(),
+});
+
+const maintenancePolicyPatchSchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  enabled: z.boolean().optional(),
+  runMode: z.enum(["manual", "scheduled", "hybrid"]).optional(),
+  timingStrategy: z.enum(["fixed", "recommendation_first"]).optional(),
+  schedule: z.object({
+    frequency: z.enum(["daily", "weekly"]),
+    hour: z.number().int().min(0).max(23),
+    minute: z.number().int().min(0).max(59),
+    weekday: z.number().int().min(0).max(6).optional(),
+  }).nullable().optional(),
+  timeZone: z.string().trim().min(1).optional(),
+  minHoursSinceLastSuccess: z.number().int().min(0).max(24 * 365).optional(),
+  minChangedSessions: z.number().int().min(1).max(10_000).optional(),
+  providerId: z.string().trim().min(1).nullable().optional(),
+  model: z.string().trim().min(1).nullable().optional(),
+  executionTarget: z.enum(["auto", "local", "cloud"]).optional(),
+  unavailableModelPolicy: z.enum(["skip", "error"]).optional(),
+});
+
+const maintenanceRunNowSchema = z.object({
+  workspaceId: z.string().trim().min(1),
+  triggerSource: z.enum(["manual", "recommendation"]).optional(),
+});
+
+const maintenanceRunParamsSchema = z.object({
+  runId: z.string().trim().min(1),
+});
+
+const maintenanceRecommendationParamsSchema = z.object({
+  recommendationId: z.string().trim().min(1),
+});
+
 const listItemsQuerySchema = z.object({
   namespace: z.string().optional(),
   status: z.enum(["active", "forgotten", "all"]).optional(),
@@ -64,6 +102,13 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
   const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
     request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
 
+  const sendMaintenanceError = (reply: { code: (status: number) => { send: (body: { error: string }) => unknown } }, error: unknown) => {
+    const message = error instanceof Error ? error.message : "Memory maintenance request failed.";
+    const lower = message.toLowerCase();
+    const status = lower.includes("not found") ? 404 : 409;
+    return reply.code(status).send({ error: message });
+  };
+
   fastify.post("/api/v1/memory/context/compose", async (request, reply) => {
     const parsed = composeSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -81,6 +126,128 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send(fastify.gateway.getMemoryContext(params.data.contextId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/memory/maintenance/policy", async (request, reply) => {
+    const parsed = workspaceQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.getMemoryMaintenancePolicy(parsed.data.workspaceId));
+    } catch (error) {
+      return sendMaintenanceError(reply, error);
+    }
+  });
+
+  fastify.patch("/api/v1/memory/maintenance/policy", async (request, reply) => {
+    const parsed = maintenancePolicyPatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const { workspaceId, ...patch } = parsed.data;
+      return reply.send(fastify.gateway.patchMemoryMaintenancePolicy(workspaceId, patch));
+    } catch (error) {
+      return sendMaintenanceError(reply, error);
+    }
+  });
+
+  fastify.get("/api/v1/memory/maintenance/status", async (request, reply) => {
+    const parsed = workspaceQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.getMemoryMaintenanceStatus(parsed.data.workspaceId));
+    } catch (error) {
+      return sendMaintenanceError(reply, error);
+    }
+  });
+
+  fastify.get("/api/v1/memory/maintenance/runs", async (request, reply) => {
+    const parsed = workspaceQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send({
+        items: fastify.gateway.listMemoryMaintenanceRuns(parsed.data.workspaceId, parsed.data.limit ?? 50),
+      });
+    } catch (error) {
+      return sendMaintenanceError(reply, error);
+    }
+  });
+
+  const handleMaintenanceRunNow = async (
+    request: { body?: unknown },
+    reply: {
+      code: (status: number) => { send: (body: { error: unknown }) => unknown };
+      send: (body: unknown) => unknown;
+    },
+  ) => {
+    const parsed = maintenanceRunNowSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.runMemoryMaintenanceNow(parsed.data));
+    } catch (error) {
+      return sendMaintenanceError(reply, error);
+    }
+  };
+
+  fastify.post("/api/v1/memory/maintenance/run-now", handleMaintenanceRunNow);
+  fastify.post("/api/v1/memory/maintenance/run", handleMaintenanceRunNow);
+
+  fastify.get("/api/v1/memory/maintenance/runs/:runId/provenance", async (request, reply) => {
+    const parsed = maintenanceRunParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.getMemoryMaintenanceRunProvenance(parsed.data.runId));
+    } catch (error) {
+      return sendMaintenanceError(reply, error);
+    }
+  });
+
+  fastify.get("/api/v1/memory/maintenance/recommendations", async (request, reply) => {
+    const parsed = workspaceQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send({
+        items: fastify.gateway.listMemoryMaintenanceRecommendations(parsed.data.workspaceId, parsed.data.limit ?? 50),
+      });
+    } catch (error) {
+      return sendMaintenanceError(reply, error);
+    }
+  });
+
+  fastify.post("/api/v1/memory/maintenance/recommendations/:recommendationId/accept", async (request, reply) => {
+    const parsed = maintenanceRecommendationParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.acceptMemoryMaintenanceRecommendation(parsed.data.recommendationId));
+    } catch (error) {
+      return sendMaintenanceError(reply, error);
+    }
+  });
+
+  fastify.post("/api/v1/memory/maintenance/recommendations/:recommendationId/reject", async (request, reply) => {
+    const parsed = maintenanceRecommendationParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.rejectMemoryMaintenanceRecommendation(parsed.data.recommendationId));
+    } catch (error) {
+      return sendMaintenanceError(reply, error);
     }
   });
 

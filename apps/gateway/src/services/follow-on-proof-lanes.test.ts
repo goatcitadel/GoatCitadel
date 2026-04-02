@@ -33,6 +33,11 @@ function buildBaseReport(): FollowOnParityReport {
         allowedTools: ["browser.storage.get"],
         blockedTools: [],
       },
+      artifactStatus: {
+        hasArtifact: false,
+        freshness: "missing",
+        matchedCurrentProfile: false,
+      },
       blockingIssues: [],
       recommendedActions: [],
       automationCatalog: {
@@ -48,6 +53,11 @@ function buildBaseReport(): FollowOnParityReport {
       talkState: "stopped",
       wakeState: "stopped",
       wakeEnabled: false,
+      artifactStatus: {
+        hasArtifact: false,
+        freshness: "missing",
+        matchedCurrentProfile: false,
+      },
       blockingIssues: [],
       recoveryActions: [],
       recommendedActions: [],
@@ -74,6 +84,10 @@ function buildBaseReport(): FollowOnParityReport {
         source: "templates/integration-plugins/reference-integration-plugin",
         matchesReferenceSource: true,
         capabilities: ["reference.install", "lifecycle.smoke"],
+      },
+      artifactStatus: {
+        hasArtifact: false,
+        freshness: "missing",
       },
       blockingIssues: [],
       recommendedActions: [],
@@ -104,6 +118,11 @@ function buildBaseReport(): FollowOnParityReport {
         notes: ["Mission Control first."],
       },
       paritySummary: "Canvas + A2UI is ready for Mission Control operator proof.",
+      artifactStatus: {
+        hasArtifact: false,
+        freshness: "missing",
+        matchedCurrentProfile: false,
+      },
       blockingIssues: [],
       recommendedActions: [],
     },
@@ -147,6 +166,10 @@ function buildBaseReport(): FollowOnParityReport {
       authReadiness: [],
       prerequisiteReadiness: [],
       paritySummary: "Android-first companion lane is defined.",
+      artifactStatus: {
+        hasArtifact: false,
+        freshness: "missing",
+      },
       blockingIssues: [],
       recommendedActions: [],
     },

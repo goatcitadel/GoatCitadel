@@ -142,6 +142,13 @@ import type {
   MemoryItemRecord,
   MemoryLifecyclePatch,
   MemoryChangeEvent,
+  MemoryMaintenancePolicyPatchInput,
+  MemoryMaintenancePolicyRecord,
+  MemoryMaintenanceProvenanceRecord,
+  MemoryMaintenanceRecommendationRecord,
+  MemoryMaintenanceRunNowInput,
+  MemoryMaintenanceRunRecord,
+  MemoryMaintenanceStatusRecord,
   ConnectorRecord,
   ConnectorDiagnosticReport,
   CronReviewItem,
@@ -185,7 +192,7 @@ import type {
   CreateAssemblyRunInput,
   ModelReputation,
 } from "@goatcitadel/contracts";
-import type { FollowOnParityReport } from "@goatcitadel/contracts";
+import type { FollowOnParityReport, OpenclawParityProgramReport } from "@goatcitadel/contracts";
 import {
   createCorrelationId,
   recordClientDiagnostic,
@@ -1043,7 +1050,15 @@ export interface SystemVitalsResponse {
   processHeapUsedBytes: number;
 }
 
-export type { A2UIProofLaneDraft, BrowserProofLaneDraft, FollowOnParityReport, FollowOnProofLaneArtifactRecord, PackagingProofLaneDraft, VoiceProofLaneDraft };
+export type {
+  A2UIProofLaneDraft,
+  BrowserProofLaneDraft,
+  FollowOnParityReport,
+  FollowOnProofLaneArtifactRecord,
+  OpenclawParityProgramReport,
+  PackagingProofLaneDraft,
+  VoiceProofLaneDraft,
+};
 
 export interface CronJobsResponse {
   items: Array<{
@@ -1159,6 +1174,7 @@ export interface RuntimeSettingsResponse {
   };
   features: {
     durableKernelV1Enabled: boolean;
+    memoryMaintenanceV1Enabled: boolean;
     replayOverridesV1Enabled: boolean;
     memoryLifecycleAdminV1Enabled: boolean;
     connectorDiagnosticsV1Enabled: boolean;
@@ -1180,6 +1196,7 @@ export interface IntegrationCatalogEntry {
   label: string;
   description: string;
   maturity: "native" | "plugin" | "disabled" | "beta" | "planned";
+  runtimeAvailability?: "runnable" | "blocked";
   authMethods: string[];
   capabilities: string[];
   docsUrl?: string;
@@ -3032,6 +3049,10 @@ export async function fetchFollowOnParityReport(): Promise<FollowOnParityReport>
   return request<FollowOnParityReport>("/api/v1/system/follow-on-parity");
 }
 
+export async function fetchOpenclawParityReport(): Promise<OpenclawParityProgramReport> {
+  return request<OpenclawParityProgramReport>("/api/v1/system/openclaw-parity");
+}
+
 export async function fetchBrowserProofLaneDraft(): Promise<BrowserProofLaneDraft> {
   return request<BrowserProofLaneDraft>("/api/v1/system/follow-on-parity/browser-proof-lane");
 }
@@ -3698,6 +3719,80 @@ export async function forgetMemoryItem(itemId: string, actorId?: string): Promis
 export async function fetchMemoryItemHistory(itemId: string, limit = 200): Promise<{ items: MemoryChangeEvent[] }> {
   return request<{ items: MemoryChangeEvent[] }>(
     `/api/v1/memory/items/${encodeURIComponent(itemId)}/history?limit=${Math.max(1, Math.min(limit, 2000))}`,
+  );
+}
+
+export async function fetchMemoryMaintenancePolicy(workspaceId?: string): Promise<MemoryMaintenancePolicyRecord> {
+  const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
+  return request<MemoryMaintenancePolicyRecord>(`/api/v1/memory/maintenance/policy${query}`);
+}
+
+export async function patchMemoryMaintenancePolicy(
+  workspaceId: string | undefined,
+  patch: MemoryMaintenancePolicyPatchInput,
+): Promise<MemoryMaintenancePolicyRecord> {
+  const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
+  return request<MemoryMaintenancePolicyRecord>(`/api/v1/memory/maintenance/policy${query}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function fetchMemoryMaintenanceStatus(workspaceId?: string): Promise<MemoryMaintenanceStatusRecord> {
+  const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
+  return request<MemoryMaintenanceStatusRecord>(`/api/v1/memory/maintenance/status${query}`);
+}
+
+export async function fetchMemoryMaintenanceRuns(
+  workspaceId?: string,
+  limit = 50,
+): Promise<{ items: MemoryMaintenanceRunRecord[] }> {
+  const search = new URLSearchParams();
+  if (workspaceId) {
+    search.set("workspaceId", workspaceId);
+  }
+  search.set("limit", String(Math.max(1, Math.min(limit, 500))));
+  return request<{ items: MemoryMaintenanceRunRecord[] }>(`/api/v1/memory/maintenance/runs?${search.toString()}`);
+}
+
+export async function runMemoryMaintenanceNow(input: MemoryMaintenanceRunNowInput): Promise<MemoryMaintenanceRunRecord> {
+  return request<MemoryMaintenanceRunRecord>("/api/v1/memory/maintenance/run-now", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchMemoryMaintenanceRunProvenance(runId: string): Promise<MemoryMaintenanceProvenanceRecord> {
+  return request<MemoryMaintenanceProvenanceRecord>(
+    `/api/v1/memory/maintenance/runs/${encodeURIComponent(runId)}/provenance`,
+  );
+}
+
+export async function fetchMemoryMaintenanceRecommendations(
+  workspaceId?: string,
+  limit = 50,
+): Promise<{ items: MemoryMaintenanceRecommendationRecord[] }> {
+  const search = new URLSearchParams();
+  if (workspaceId) {
+    search.set("workspaceId", workspaceId);
+  }
+  search.set("limit", String(Math.max(1, Math.min(limit, 500))));
+  return request<{ items: MemoryMaintenanceRecommendationRecord[] }>(
+    `/api/v1/memory/maintenance/recommendations?${search.toString()}`,
+  );
+}
+
+export async function acceptMemoryMaintenanceRecommendation(recommendationId: string): Promise<MemoryMaintenanceRecommendationRecord> {
+  return request<MemoryMaintenanceRecommendationRecord>(
+    `/api/v1/memory/maintenance/recommendations/${encodeURIComponent(recommendationId)}/accept`,
+    { method: "POST" },
+  );
+}
+
+export async function rejectMemoryMaintenanceRecommendation(recommendationId: string): Promise<MemoryMaintenanceRecommendationRecord> {
+  return request<MemoryMaintenanceRecommendationRecord>(
+    `/api/v1/memory/maintenance/recommendations/${encodeURIComponent(recommendationId)}/reject`,
+    { method: "POST" },
   );
 }
 

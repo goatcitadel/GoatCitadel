@@ -39,9 +39,13 @@ interface BuildFollowOnParityReportInput {
   latestArtifacts?: FollowOnProofLaneArtifactIndex;
 }
 
-const PACKAGING_PROOF_FRESHNESS_WINDOW_DAYS = 7;
+const FOLLOW_ON_ARTIFACT_FRESHNESS_WINDOW_DAYS = 7;
 const REFERENCE_INTEGRATION_PLUGIN_ID = "reference-integration-plugin";
 const REFERENCE_INTEGRATION_PLUGIN_SOURCE = "templates/integration-plugins/reference-integration-plugin";
+const VOICE_OPERATOR_RUN_ACTION =
+  "Generate the voice proof-lane draft from System, then run the transcription, Talk Mode, and Wake Mode operator cycle.";
+const VOICE_CURRENT_PROOF_ACTION =
+  "Current voice proof artifact matches the active deployment profile; rerun the lane only after runtime, model, or deployment-profile changes.";
 
 const BROWSER_READ_TOOLS = new Set([
   "browser.search",
@@ -120,12 +124,60 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
     input.integrationPlugins,
     enabledPluginCount,
   );
-  const packagingProofStatus = buildPackagingProofStatus(
+  const browserArtifactStatus = buildProfileArtifactStatus(
+    generatedAt,
+    input.deploymentProfile,
+    input.latestArtifacts?.browser,
+  );
+  const packagingProofStatus = buildProfileArtifactStatus(
     generatedAt,
     input.deploymentProfile,
     input.latestArtifacts?.packaging,
   );
+  const canvasArtifactStatus = buildProfileArtifactStatus(
+    generatedAt,
+    input.deploymentProfile,
+    input.latestArtifacts?.a2ui,
+  );
+  const voiceArtifactStatus = buildProfileArtifactStatus(
+    generatedAt,
+    input.deploymentProfile,
+    input.latestArtifacts?.voice,
+  );
+  const companionArtifactStatus = buildArtifactStatus(
+    generatedAt,
+    input.latestArtifacts?.companion,
+  );
+  const pluginArtifactStatus = buildArtifactStatus(
+    generatedAt,
+    input.latestArtifacts?.extensions,
+  );
+  browserGuidance.recommendedActions.push(
+    ...buildArtifactRecommendations("browser proof artifact", browserArtifactStatus, input.deploymentProfile),
+  );
   packagingGuidance.recommendedActions.push(...buildPackagingProofRecommendations(packagingProofStatus, input.deploymentProfile));
+  canvasGuidance.recommendedActions.push(
+    ...buildArtifactRecommendations("A2UI proof artifact", canvasArtifactStatus, input.deploymentProfile),
+  );
+  companionGuidance.recommendedActions.push(
+    ...buildArtifactRecommendations("companion bootstrap brief", companionArtifactStatus),
+  );
+  pluginGuidance.recommendedActions.push(
+    ...buildArtifactRecommendations("extension SDK brief", pluginArtifactStatus),
+  );
+  voiceGuidance.recommendedActions.push(
+    ...buildArtifactRecommendations("voice proof artifact", voiceArtifactStatus, input.deploymentProfile),
+  );
+  if (
+    voiceArtifactStatus.hasArtifact
+    && voiceArtifactStatus.freshness === "current"
+    && voiceArtifactStatus.matchedCurrentProfile
+    && voiceGuidance.blockingIssues.length === 0
+    && voiceRecoveryActions.length === 0
+  ) {
+    voiceGuidance.recommendedActions = voiceGuidance.recommendedActions.filter((action) => action !== VOICE_OPERATOR_RUN_ACTION);
+    voiceGuidance.recommendedActions.push(VOICE_CURRENT_PROOF_ACTION);
+  }
 
   return {
     generatedAt,
@@ -151,6 +203,7 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
         allowedTools: allowedBrowserStateTools,
         blockedTools: blockedBrowserStateTools,
       },
+      artifactStatus: browserArtifactStatus,
       blockingIssues: browserGuidance.blockingIssues,
       recommendedActions: browserGuidance.recommendedActions,
       automationCatalog: browserCatalog,
@@ -163,6 +216,7 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
       wakeState: input.voiceStatus.wake.state,
       wakeEnabled: input.voiceStatus.wake.enabled,
       lastError: input.voiceRuntime.lastError ?? input.voiceStatus.stt.lastError,
+      artifactStatus: voiceArtifactStatus,
       blockingIssues: voiceGuidance.blockingIssues,
       recoveryActions: voiceRecoveryActions,
       recommendedActions: voiceGuidance.recommendedActions,
@@ -179,6 +233,7 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
       enabledCount: enabledPluginCount,
       sdkSummary: pluginGuidance.sdkSummary,
       referenceLifecycle: pluginGuidance.referenceLifecycle,
+      artifactStatus: pluginArtifactStatus,
       blockingIssues: pluginGuidance.blockingIssues,
       recommendedActions: pluginGuidance.recommendedActions,
       latestArtifact: input.latestArtifacts?.extensions,
@@ -188,6 +243,7 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
       platformTargets: canvasPlatformTargets,
       contract: a2uiContract,
       paritySummary: canvasGuidance.paritySummary,
+      artifactStatus: canvasArtifactStatus,
       blockingIssues: canvasGuidance.blockingIssues,
       recommendedActions: canvasGuidance.recommendedActions,
       latestArtifact: input.latestArtifacts?.a2ui,
@@ -198,6 +254,7 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
       authReadiness: companionAuthReadiness,
       prerequisiteReadiness: companionPrerequisiteReadiness,
       paritySummary: companionGuidance.paritySummary,
+      artifactStatus: companionArtifactStatus,
       blockingIssues: companionGuidance.blockingIssues,
       recommendedActions: companionGuidance.recommendedActions,
       latestArtifact: input.latestArtifacts?.companion,
@@ -304,7 +361,7 @@ function buildPackagingGuidance(
   };
 }
 
-function buildPackagingProofStatus(
+function buildProfileArtifactStatus(
   generatedAt: string,
   deploymentProfile: DeploymentProfile,
   latestArtifact?: FollowOnProofLaneArtifactRecord,
@@ -317,13 +374,13 @@ function buildPackagingProofStatus(
     };
   }
 
-  const artifactProfile = parsePackagingArtifactDeploymentProfile(latestArtifact);
+  const artifactProfile = parseArtifactDeploymentProfile(latestArtifact);
   const artifactGeneratedAtMs = Date.parse(latestArtifact.generatedAt);
   const reportGeneratedAtMs = Date.parse(generatedAt);
   const ageDays = Number.isFinite(artifactGeneratedAtMs) && Number.isFinite(reportGeneratedAtMs)
     ? Math.max(0, Math.floor((reportGeneratedAtMs - artifactGeneratedAtMs) / (24 * 60 * 60 * 1000)))
     : undefined;
-  const freshness = typeof ageDays === "number" && ageDays > PACKAGING_PROOF_FRESHNESS_WINDOW_DAYS
+  const freshness = typeof ageDays === "number" && ageDays > FOLLOW_ON_ARTIFACT_FRESHNESS_WINDOW_DAYS
     ? "stale"
     : "current";
 
@@ -334,6 +391,57 @@ function buildPackagingProofStatus(
     matchedCurrentProfile: artifactProfile === deploymentProfile,
     ageDays,
   };
+}
+
+function buildArtifactStatus(
+  generatedAt: string,
+  latestArtifact?: FollowOnProofLaneArtifactRecord,
+): FollowOnParityReport["companion"]["artifactStatus"] {
+  if (!latestArtifact) {
+    return {
+      hasArtifact: false,
+      freshness: "missing",
+    };
+  }
+
+  const artifactGeneratedAtMs = Date.parse(latestArtifact.generatedAt);
+  const reportGeneratedAtMs = Date.parse(generatedAt);
+  const ageDays = Number.isFinite(artifactGeneratedAtMs) && Number.isFinite(reportGeneratedAtMs)
+    ? Math.max(0, Math.floor((reportGeneratedAtMs - artifactGeneratedAtMs) / (24 * 60 * 60 * 1000)))
+    : undefined;
+  const freshness = typeof ageDays === "number" && ageDays > FOLLOW_ON_ARTIFACT_FRESHNESS_WINDOW_DAYS
+    ? "stale"
+    : "current";
+
+  return {
+    hasArtifact: true,
+    freshness,
+    ageDays,
+  };
+}
+
+function buildArtifactRecommendations(
+  label: string,
+  artifactStatus: FollowOnParityReport["companion"]["artifactStatus"] | FollowOnParityReport["browser"]["artifactStatus"],
+  deploymentProfile?: DeploymentProfile,
+): string[] {
+  const actions: string[] = [];
+  if (!artifactStatus.hasArtifact) {
+    actions.push(`No ${label} is recorded yet; export the next bundle from System before expanding parity claims.`);
+    return actions;
+  }
+  if (artifactStatus.freshness === "stale") {
+    actions.push(`Latest ${label} is ${artifactStatus.ageDays ?? "an unknown number of"} day(s) old; refresh it before relying on it.`);
+  }
+  if (
+    deploymentProfile
+    && "matchedCurrentProfile" in artifactStatus
+    && artifactStatus.latestArtifactDeploymentProfile
+    && !artifactStatus.matchedCurrentProfile
+  ) {
+    actions.push(`Latest ${label} targets ${artifactStatus.latestArtifactDeploymentProfile}; rerun the lane under ${deploymentProfile} so proof matches current runtime truth.`);
+  }
+  return actions;
 }
 
 function buildPackagingProofRecommendations(
@@ -354,10 +462,10 @@ function buildPackagingProofRecommendations(
   return actions;
 }
 
-function parsePackagingArtifactDeploymentProfile(
+function parseArtifactDeploymentProfile(
   artifact: FollowOnProofLaneArtifactRecord,
 ): DeploymentProfile | undefined {
-  const match = artifact.relativePath.match(/packaging-deployment-proof-bundle-(local_dev|trusted_local|remote_hardened)-/);
+  const match = artifact.relativePath.match(/-(local_dev|trusted_local|remote_hardened)-\d{4}-\d{2}-\d{2}T/);
   const parsed = match?.[1];
   if (parsed === "local_dev" || parsed === "trusted_local" || parsed === "remote_hardened") {
     return parsed;

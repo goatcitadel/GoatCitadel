@@ -11,6 +11,7 @@ import {
   enableIntegrationPlugin,
   evaluateUiChangeRisk,
   fetchChannelRuntimeStatus,
+  fetchChannelSetupDefinitions,
   fetchIntegrationCatalog,
   fetchIntegrationConnections,
   fetchDiscordPairings,
@@ -103,6 +104,7 @@ interface IntegrationsPageProps {
 export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
   const isChannelsView = view === "channels";
   const [catalog, setCatalog] = useState<IntegrationCatalogEntry[]>([]);
+  const [guidedChannelCatalogIdList, setGuidedChannelCatalogIdList] = useState<string[]>([]);
   const [connections, setConnections] = useState<IntegrationConnection[]>([]);
   const [connectorRecords, setConnectorRecords] = useState<ConnectorRecord[]>([]);
   const [plugins, setPlugins] = useState<Awaited<ReturnType<typeof fetchIntegrationPlugins>>["items"]>([]);
@@ -188,6 +190,7 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     const obsidianPromise = isChannelsView
       ? Promise.resolve<ObsidianIntegrationStatus | null>(null)
       : fetchObsidianIntegrationStatus();
+    const channelSetupDefinitionsPromise = fetchChannelSetupDefinitions().catch(() => null);
     const settingsPromise = background
       ? Promise.resolve<Awaited<ReturnType<typeof fetchSettings>> | null>(null)
       : fetchSettings();
@@ -203,13 +206,17 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
       settingsPromise,
       pluginsPromise,
       obsidianPromise,
+      channelSetupDefinitionsPromise,
     ])
-      .then(([catalogRes, connectionRes, connectorRes, settings, pluginRes, obsidianRes]) => {
+      .then(([catalogRes, connectionRes, connectorRes, settings, pluginRes, obsidianRes, channelSetupDefinitionsRes]) => {
         if (requestId !== requestSeq.current) {
           return;
         }
         const nextCatalog = catalogRes.items;
         setCatalog(nextCatalog);
+        setGuidedChannelCatalogIdList(
+          channelSetupDefinitionsRes?.items.map((item) => item.catalog.catalogId) ?? [],
+        );
         setConnections(connectionRes.items);
         setConnectorRecords(connectorRes.items);
         if (settings) {
@@ -321,7 +328,18 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     () => catalog.find((entry) => entry.catalogId === selectedCatalogId),
     [catalog, selectedCatalogId],
   );
-  const selectedCatalogIsRunnable = selectedCatalog?.maturity !== "planned";
+  const guidedChannelCatalogIds = useMemo(
+    () => new Set(guidedChannelCatalogIdList),
+    [guidedChannelCatalogIdList],
+  );
+  const selectedCatalogIsRunnable = selectedCatalog
+    ? selectedCatalog.runtimeAvailability
+      ? selectedCatalog.runtimeAvailability === "runnable"
+      : selectedCatalog.maturity !== "planned"
+    : false;
+  const selectedCatalogSetupPath = selectedCatalog
+    ? resolveChannelSetupPath(selectedCatalog, guidedChannelCatalogIds)
+    : "not_channel";
 
   const catalogOptions = useMemo(
     () => catalog.map((entry) => ({
@@ -344,6 +362,20 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     const disabled = connections.filter((item) => !item.enabled).length;
     return { total, connected, paused, error, disabled };
   }, [connections]);
+  const channelCatalogTruthSummary = useMemo(() => {
+    const summary = { guided: 0, manual: 0, blocked: 0 };
+    for (const entry of catalog) {
+      const setupPath = resolveChannelSetupPath(entry, guidedChannelCatalogIds);
+      if (setupPath === "guided") {
+        summary.guided += 1;
+      } else if (setupPath === "manual") {
+        summary.manual += 1;
+      } else if (setupPath === "blocked") {
+        summary.blocked += 1;
+      }
+    }
+    return summary;
+  }, [catalog, guidedChannelCatalogIds]);
 
   const filteredConnections = useMemo(() => {
     const query = connectionSearch.trim().toLowerCase();
@@ -527,8 +559,8 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
       setError("Select a catalog entry first.");
       return;
     }
-    if (selectedCatalog?.maturity === "planned") {
-      setError("This catalog entry is roadmap-only right now. Pick a runnable integration before creating a connection.");
+    if (!selectedCatalogIsRunnable) {
+      setError("This catalog entry is not runnable in the current runtime. Pick a runnable integration before creating a connection.");
       return;
     }
     let parsedConfig: Record<string, unknown>;
@@ -981,21 +1013,23 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     : "Connect only what you want live, validate risk before saving, and keep the catalog secondary.";
   const createConnectionTitle = isChannelsView ? "Create Channel Connection" : "Create Connection";
   const createConnectionSubtitle = isChannelsView
-    ? "Use guided setup for channel adapters first. Drop to JSON only when the channel schema does not cover your case."
+    ? "Use the simple connection form by default. Check each channel's setup path below to see whether it already has a guided wizard or still needs the manual path."
     : "Start in guided mode. Switch to advanced JSON only if you need unsupported fields.";
   const connectionsTitle = isChannelsView ? "Configured Channel Connections" : "Configured Connections";
   const connectionsSubtitle = isChannelsView
     ? "Search channel adapters by name, delivery state, or last error."
     : "Search by name, catalog, status, or error text.";
   const guidedModeSummary = isChannelsView
-    ? "Best for beginners. GoatCitadel shows normal labeled fields like connection label, target, and enabled state."
+    ? "Best for straightforward connection records. GoatCitadel shows labeled fields instead of raw JSON while you save the connection itself."
     : "Best for beginners. GoatCitadel shows normal labeled fields and safer defaults instead of raw config text.";
   const advancedModeSummary = isChannelsView
-    ? "Best for experts or support-led setup. You edit the raw connection config directly when a channel needs extra fields."
+    ? "Best for experts or support-led setup. You edit the raw connection config directly when the simple form does not expose a field you need."
     : "Best for experts. You edit the raw connection config directly when guided setup does not expose a field you need.";
   const selectedModeCallout = !showAdvancedJson
     ? `${guidedModeSummary} Use this unless you already know you need custom JSON.`
     : `${advancedModeSummary} This gives you more control, but it is easier to make mistakes.`;
+  const simpleFormLabel = isChannelsView ? "Simple form" : "Guided";
+  const simpleFormSelectionLabel = isChannelsView ? "Simple form mode is selected." : "Guided mode is selected.";
 
   return (
     <section className="workflow-page">
@@ -1208,7 +1242,41 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
           <div className="workflow-summary-strip">
             <StatusChip>Kind locked to channels</StatusChip>
             <StatusChip>{catalog.length} channel entries</StatusChip>
+            <StatusChip tone="success">{channelCatalogTruthSummary.guided} guided</StatusChip>
+            <StatusChip tone="warning">{channelCatalogTruthSummary.manual} manual only</StatusChip>
+            {channelCatalogTruthSummary.blocked > 0 ? (
+              <StatusChip tone="critical">{channelCatalogTruthSummary.blocked} blocked</StatusChip>
+            ) : null}
           </div>
+          {!isInitialLoading ? (
+            <div className="channel-setup-catalog">
+              {catalog.map((entry) => {
+                const selected = entry.catalogId === selectedCatalogId;
+                const setupPath = resolveChannelSetupPath(entry, guidedChannelCatalogIds);
+                return (
+                  <button
+                    key={entry.catalogId}
+                    type="button"
+                    className={`channel-setup-catalog-item${selected ? " selected" : ""}`}
+                    onClick={() => setSelectedCatalogId(entry.catalogId)}
+                  >
+                    <div className="channel-setup-catalog-top">
+                      <strong>{entry.label}</strong>
+                      <StatusChip tone={getChannelSetupPathTone(setupPath)}>
+                        {formatChannelSetupPath(setupPath)}
+                      </StatusChip>
+                    </div>
+                    <FieldHelp>{entry.description}</FieldHelp>
+                    <FieldHelp>
+                      Runtime: {formatRuntimeAvailability(entry.runtimeAvailability)}
+                      {" · "}
+                      Parity: {formatMaturity(entry.maturity)}
+                    </FieldHelp>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </Panel>
       )}
 
@@ -1292,10 +1360,25 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
                   Kind: {formatKind(selectedCatalog.kind)}
                 </p>
                 <p className="office-subtitle">{describeMaturity(selectedCatalog.maturity)}</p>
-                {selectedCatalog.maturity === "planned" ? (
+                <p className="office-subtitle">
+                  Runtime: {formatRuntimeAvailability(selectedCatalog.runtimeAvailability)}
+                </p>
+                {selectedCatalog.kind === "channel" ? (
+                  <p className="office-subtitle">
+                    Setup path: {formatChannelSetupPath(selectedCatalogSetupPath)}
+                  </p>
+                ) : null}
+                {selectedCatalog.runtimeAvailability === "blocked" ? (
                   <FieldHelp>
-                    This catalog entry is roadmap-only. It stays visible for planning, but GoatCitadel cannot create a runnable connection from it in the current runtime.
+                    This catalog entry stays visible for planning, but GoatCitadel cannot create a runnable connection from it in the current runtime yet.
                   </FieldHelp>
+                ) : selectedCatalog.maturity === "planned" ? (
+                  <FieldHelp>
+                    This catalog entry is runnable through the current runtime, but the parity program still classifies it as unfinished. Expect manual setup and follow-on proof work.
+                  </FieldHelp>
+                ) : null}
+                {selectedCatalog.kind === "channel" ? (
+                  <FieldHelp>{describeChannelSetupPath(selectedCatalogSetupPath)}</FieldHelp>
                 ) : null}
                 {selectedCatalog.docsUrl ? (
                   <p className="office-subtitle">
@@ -1324,7 +1407,7 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
                 className={`integrations-setup-mode-button${!showAdvancedJson ? " active" : ""}`}
                 onClick={() => setShowAdvancedJson(false)}
               >
-                <span className="integrations-setup-mode-label">Guided</span>
+                <span className="integrations-setup-mode-label">{simpleFormLabel}</span>
                 <span className="integrations-setup-mode-note">Recommended for most people</span>
               </button>
               <button
@@ -1339,7 +1422,7 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
               </div>
               <div className="integrations-setup-mode-guidance">
                 <article className={`integrations-setup-mode-card${!showAdvancedJson ? " selected" : ""}`}>
-                  <h4>Guided</h4>
+                  <h4>{simpleFormLabel}</h4>
                   <p>{guidedModeSummary}</p>
                   <span>Use this when you want the easiest path.</span>
                 </article>
@@ -1352,7 +1435,7 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
             </div>
             <p className="integrations-setup-mode-status">
               {!showAdvancedJson
-                ? (isFormSchemaLoading ? "Loading guided fields..." : "Guided mode is selected.")
+                ? (isFormSchemaLoading ? "Loading form fields..." : simpleFormSelectionLabel)
                 : "Advanced JSON mode is selected."}
             </p>
             <p className="office-subtitle">{selectedModeCallout}</p>
@@ -1945,11 +2028,17 @@ function evaluateLocalRisk(input: {
     });
   }
 
-  if (input.selectedCatalog?.maturity === "planned") {
+  if (input.selectedCatalog?.runtimeAvailability === "blocked") {
+    items.push({
+      field: "integration.runtimeAvailability",
+      level: "critical",
+      hint: "This integration is cataloged for planning, but it is not runnable in the current runtime.",
+    });
+  } else if (input.selectedCatalog?.maturity === "planned") {
     items.push({
       field: "integration.maturity",
       level: "warning",
-      hint: "Planned integrations may require additional setup before they work.",
+      hint: "This integration is still parity-incomplete. Expect manual setup and follow-on proof before claiming it as finished.",
     });
   }
 
@@ -2282,6 +2371,74 @@ function formatMaturity(maturity: IntegrationCatalogEntry["maturity"]): string {
       return "Planned";
     default:
       return maturity;
+  }
+}
+
+function formatRuntimeAvailability(availability: IntegrationCatalogEntry["runtimeAvailability"]): string {
+  switch (availability) {
+    case "runnable":
+      return "Runnable now";
+    case "blocked":
+      return "Blocked";
+    default:
+      return "Depends on catalog maturity";
+  }
+}
+
+type ChannelSetupPath = "guided" | "manual" | "blocked" | "not_channel";
+
+function resolveChannelSetupPath(
+  entry: IntegrationCatalogEntry,
+  guidedChannelCatalogIds: Set<string>,
+): ChannelSetupPath {
+  if (entry.kind !== "channel") {
+    return "not_channel";
+  }
+  if (entry.runtimeAvailability === "blocked") {
+    return "blocked";
+  }
+  if (guidedChannelCatalogIds.has(entry.catalogId)) {
+    return "guided";
+  }
+  return "manual";
+}
+
+function formatChannelSetupPath(path: ChannelSetupPath): string {
+  switch (path) {
+    case "guided":
+      return "Guided setup available";
+    case "manual":
+      return "Manual path only for now";
+    case "blocked":
+      return "Unavailable in current runtime";
+    default:
+      return "Not a channel";
+  }
+}
+
+function describeChannelSetupPath(path: ChannelSetupPath): string {
+  switch (path) {
+    case "guided":
+      return "This channel already has guided setup coverage in the dedicated Channel Setup workflow. Use the simple form here for straightforward connection records or edge-case edits.";
+    case "manual":
+      return "This channel is runnable, but the guided channel wizard does not cover it yet. Expect a more manual, proof-heavy setup path until the rollout catches up.";
+    case "blocked":
+      return "This channel is still visible for planning, but GoatCitadel does not expose a runnable guided or manual path for it in the current runtime.";
+    default:
+      return "";
+  }
+}
+
+function getChannelSetupPathTone(path: ChannelSetupPath): "success" | "warning" | "critical" | "muted" {
+  switch (path) {
+    case "guided":
+      return "success";
+    case "manual":
+      return "warning";
+    case "blocked":
+      return "critical";
+    default:
+      return "muted";
   }
 }
 

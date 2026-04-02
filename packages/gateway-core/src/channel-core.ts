@@ -276,6 +276,11 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   whatsapp: {
     supportedActions: ["channel.send", "channel.reply", "channel.react"],
     supportedAttachmentSources: ["url", "inline"],
+    resolveInboundModes: (config) =>
+      hasAnyConfigured(config, ["appSecret", "appSecretEnv"])
+        && hasAnyConfigured(config, ["webhookVerifyToken", "webhookVerifyTokenEnv", "verifyToken", "verifyTokenEnv"])
+        ? ["webhook"]
+        : ["none"],
     threadCapabilities: {
       direct: true,
       groups: true,
@@ -283,15 +288,26 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     },
     chunkingMode: "fallback",
     supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary: "WhatsApp Cloud API is normalized as a stateless outbound bridge. Rich outbound media and reactions are supported, but inbound routing and delete parity are still incomplete.",
+    resolveRuntimePosture: (config) => {
+      const hasWebhookIngress = hasAnyConfigured(config, ["appSecret", "appSecretEnv"])
+        && hasAnyConfigured(config, ["webhookVerifyToken", "webhookVerifyTokenEnv", "verifyToken", "verifyTokenEnv"]);
+      return {
+        outboundTransport: "api",
+        inboundTransport: hasWebhookIngress ? "webhook" : undefined,
+        lifecycle: "stateless",
+        inboundReadiness: hasWebhookIngress ? "ready" : "unsupported",
+        operatorSummary: hasWebhookIngress
+          ? "WhatsApp Cloud API is normalized as a stateless bridge with signed webhook ingress. Rich outbound media, reactions, and inbound message routing are available, but delete parity is still incomplete."
+          : "WhatsApp Cloud API is normalized as a stateless outbound bridge. Rich outbound media and reactions are supported, but inbound routing and delete parity are still incomplete.",
+      };
     },
-    supportNotes: [
+    resolveSupportNotes: (config) => [
       "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",
       "WhatsApp reactions are sent through the Cloud API, but unsend/delete is still not wired in this bridge.",
+      hasAnyConfigured(config, ["appSecret", "appSecretEnv"])
+        && hasAnyConfigured(config, ["webhookVerifyToken", "webhookVerifyTokenEnv", "verifyToken", "verifyTokenEnv"])
+        ? "WhatsApp inbound routing is enabled through the signed Cloud API webhook path when both the app secret and webhook verify token are configured."
+        : "WhatsApp inbound routing remains disabled until both the app secret and webhook verify token are configured.",
     ],
     requiredAnyOf: [["phoneNumberId"], ["accessTokenEnv", "accessToken", "tokenEnv", "token"]],
   },
@@ -386,7 +402,10 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   },
   line: {
     supportedActions: ["channel.send"],
-    inboundModes: ["none"],
+    resolveInboundModes: (config) =>
+      hasAnyConfigured(config, ["channelSecret", "channelSecretEnv", "secret", "secretEnv"])
+        ? ["webhook"]
+        : ["none"],
     threadCapabilities: {
       rooms: true,
       direct: true,
@@ -394,12 +413,23 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     },
     chunkingMode: "fallback",
     supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary: "LINE is normalized as a stateless outbound bridge. It can send through the channel access token, but inbound routing is not available in the current runtime.",
+    resolveRuntimePosture: (config) => {
+      const hasWebhookIngress = hasAnyConfigured(config, ["channelSecret", "channelSecretEnv", "secret", "secretEnv"]);
+      return {
+        outboundTransport: "api",
+        inboundTransport: hasWebhookIngress ? "webhook" : undefined,
+        lifecycle: "stateless",
+        inboundReadiness: hasWebhookIngress ? "ready" : "unsupported",
+        operatorSummary: hasWebhookIngress
+          ? "LINE is normalized as a stateless bridge with signed webhook ingress. It can send through the channel access token and route inbound message events without a persistent runtime."
+          : "LINE is normalized as a stateless outbound bridge. It can send through the channel access token, but inbound routing is not available in the current runtime.",
+      };
     },
+    resolveSupportNotes: (config) => [
+      hasAnyConfigured(config, ["channelSecret", "channelSecretEnv", "secret", "secretEnv"])
+        ? "LINE inbound routing is enabled through the signed Messaging API webhook path when a channel secret is configured."
+        : "LINE inbound routing remains disabled until a channel secret is configured.",
+    ],
     requiredAnyOf: [["channelAccessTokenEnv", "channelAccessToken", "accessTokenEnv", "accessToken"]],
   },
   zalo: {

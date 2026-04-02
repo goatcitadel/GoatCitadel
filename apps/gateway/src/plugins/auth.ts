@@ -1,9 +1,11 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { SseTokenIssueResponse } from "@goatcitadel/contracts";
 import { enterRequestAttribution } from "../../../../packages/storage/src/request-attribution.js";
+import { isLineWebhookPath } from "../services/line-webhook.js";
 import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.js";
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
 import { isTelegramWebhookPath } from "../services/telegram-webhook.js";
+import { isWhatsAppWebhookPath } from "../services/whatsapp-webhook.js";
 import fp from "fastify-plugin";
 
 declare module "fastify" {
@@ -82,7 +84,13 @@ export const authPlugin = fp(async (fastify) => {
     if (request.url.split("?", 1)[0] === "/api/v1/auth/companion/session/refresh") {
       return;
     }
-    if (isNextcloudTalkWebhookPath(request.url) || isSlackWebhookPath(request.url) || isTelegramWebhookPath(request.url)) {
+    if (
+      isLineWebhookPath(request.url)
+      || isNextcloudTalkWebhookPath(request.url)
+      || isSlackWebhookPath(request.url)
+      || isTelegramWebhookPath(request.url)
+      || isWhatsAppWebhookPath(request.url)
+    ) {
       return;
     }
 

@@ -121,4 +121,44 @@ describe("describeChannelCapabilities", () => {
       "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path.",
     ]));
   });
+
+  it("advertises WhatsApp webhook ingress when the verification secret pair is configured", () => {
+    const capabilities = describeChannelCapabilities("whatsapp", {
+      accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
+      phoneNumberId: "123456789012345",
+      defaultTarget: "+15551234567",
+      appSecretEnv: "WHATSAPP_APP_SECRET",
+      webhookVerifyTokenEnv: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+    });
+
+    expect(capabilities.inboundModes).toEqual(["webhook"]);
+    expect(capabilities.runtimePosture).toMatchObject({
+      outboundTransport: "api",
+      inboundTransport: "webhook",
+      lifecycle: "stateless",
+      inboundReadiness: "ready",
+    });
+    expect(capabilities.supportNotes).toEqual(expect.arrayContaining([
+      "WhatsApp inbound routing is enabled through the signed Cloud API webhook path when both the app secret and webhook verify token are configured.",
+    ]));
+  });
+
+  it("advertises LINE webhook ingress when the channel secret is configured", () => {
+    const capabilities = describeChannelCapabilities("line", {
+      channelAccessTokenEnv: "LINE_CHANNEL_ACCESS_TOKEN",
+      channelSecretEnv: "LINE_CHANNEL_SECRET",
+      defaultTarget: "U1234567890",
+    });
+
+    expect(capabilities.inboundModes).toEqual(["webhook"]);
+    expect(capabilities.runtimePosture).toMatchObject({
+      outboundTransport: "api",
+      inboundTransport: "webhook",
+      lifecycle: "stateless",
+      inboundReadiness: "ready",
+    });
+    expect(capabilities.supportNotes).toEqual(expect.arrayContaining([
+      "LINE inbound routing is enabled through the signed Messaging API webhook path when a channel secret is configured.",
+    ]));
+  });
 });

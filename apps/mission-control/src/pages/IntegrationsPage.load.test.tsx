@@ -17,6 +17,7 @@ const apiMocks = vi.hoisted(() => ({
   enableIntegrationPlugin: vi.fn(),
   evaluateUiChangeRisk: vi.fn(),
   fetchChannelRuntimeStatus: vi.fn(),
+  fetchChannelSetupDefinitions: vi.fn(),
   fetchConnectorRecords: vi.fn(),
   fetchDiscordPairings: vi.fn(),
   fetchIntegrationCatalog: vi.fn(),
@@ -51,6 +52,7 @@ vi.mock("../api/client", async () => {
     enableIntegrationPlugin: apiMocks.enableIntegrationPlugin,
     evaluateUiChangeRisk: apiMocks.evaluateUiChangeRisk,
     fetchChannelRuntimeStatus: apiMocks.fetchChannelRuntimeStatus,
+    fetchChannelSetupDefinitions: apiMocks.fetchChannelSetupDefinitions,
     fetchConnectorRecords: apiMocks.fetchConnectorRecords,
     fetchDiscordPairings: apiMocks.fetchDiscordPairings,
     fetchIntegrationCatalog: apiMocks.fetchIntegrationCatalog,
@@ -113,6 +115,28 @@ function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   return button;
 }
 
+function rendererText(renderer: ReactTestRenderer): string {
+  const collectText = (value: unknown): string => {
+    if (typeof value === "string" || typeof value === "number") {
+      return String(value);
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => collectText(item)).join(" ");
+    }
+    if (!value || typeof value !== "object") {
+      return "";
+    }
+    if ("children" in value) {
+      return collectText((value as { children?: unknown }).children);
+    }
+    if ("props" in value) {
+      return collectText((value as { props?: { children?: unknown } }).props?.children);
+    }
+    return "";
+  };
+  return collectText(renderer.toJSON());
+}
+
 function baseCatalogEntry() {
   return {
     catalogId: "integration.discord",
@@ -123,6 +147,7 @@ function baseCatalogEntry() {
     authMethods: ["bot_token"],
     capabilities: ["messages"],
     maturity: "native" as const,
+    runtimeAvailability: "runnable" as const,
     docsUrl: null,
   };
 }
@@ -158,6 +183,7 @@ describe("IntegrationsPage load discipline", () => {
     apiMocks.fetchIntegrationCatalog.mockResolvedValue({ items: [baseCatalogEntry()] });
     apiMocks.fetchIntegrationConnections.mockResolvedValue({ items: [] });
     apiMocks.fetchConnectorRecords.mockResolvedValue({ items: [] });
+    apiMocks.fetchChannelSetupDefinitions.mockResolvedValue({ items: [] });
     apiMocks.fetchSettings.mockResolvedValue({
       features: {
         connectorDiagnosticsV1Enabled: true,
@@ -254,6 +280,151 @@ describe("IntegrationsPage load discipline", () => {
       await flush();
 
       expect(apiMocks.evaluateUiChangeRisk).toHaveBeenCalledTimes(1);
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("allows runnable planned entries to be created", async () => {
+    apiMocks.fetchIntegrationCatalog.mockResolvedValue({
+      items: [{
+        ...baseCatalogEntry(),
+        catalogId: "channel.whatsapp",
+        key: "whatsapp",
+        label: "WhatsApp",
+        description: "WhatsApp Cloud bridge",
+        maturity: "planned" as const,
+        runtimeAvailability: "runnable" as const,
+      }],
+    });
+    apiMocks.createIntegrationConnection.mockResolvedValue({
+      connectionId: "connection-1",
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<IntegrationsPage />);
+      });
+      await flush();
+
+      await act(async () => {
+        findButton(renderer.root, "Save Connection").props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.createIntegrationConnection).toHaveBeenCalledWith(expect.objectContaining({
+        catalogId: "channel.whatsapp",
+      }));
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("keeps blocked planned entries non-runnable", async () => {
+    apiMocks.fetchIntegrationCatalog.mockResolvedValue({
+      items: [{
+        ...baseCatalogEntry(),
+        catalogId: "automation.image-gen",
+        key: "image-gen",
+        label: "Image Generation",
+        description: "Planned image generation route",
+        kind: "automation" as const,
+        maturity: "planned" as const,
+        runtimeAvailability: "blocked" as const,
+      }],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<IntegrationsPage />);
+      });
+      await flush();
+
+      expect(findButton(renderer.root, "Save Connection").props.disabled).toBe(true);
+      expect(apiMocks.createIntegrationConnection).not.toHaveBeenCalled();
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("shows guided vs manual-only setup truth for channels", async () => {
+    apiMocks.fetchIntegrationCatalog.mockResolvedValue({
+      items: [
+        {
+          ...baseCatalogEntry(),
+          catalogId: "channel.discord",
+          key: "discord",
+          label: "Discord",
+        },
+        {
+          ...baseCatalogEntry(),
+          catalogId: "channel.whatsapp",
+          key: "whatsapp",
+          label: "WhatsApp",
+          description: "WhatsApp Cloud bridge",
+          maturity: "planned" as const,
+          runtimeAvailability: "runnable" as const,
+        },
+      ],
+    });
+    apiMocks.fetchChannelSetupDefinitions.mockResolvedValue({
+      items: [
+        {
+          catalog: {
+            catalogId: "channel.discord",
+            key: "discord",
+            label: "Discord",
+          },
+        },
+      ],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<IntegrationsPage view="channels" />);
+      });
+      await flush();
+
+      expect(rendererText(renderer)).toMatch(/1\s+guided/);
+      expect(rendererText(renderer)).toMatch(/1\s+manual only/);
+      expect(rendererText(renderer)).toMatch(/Setup path:\s+Guided setup available/);
+
+      await act(async () => {
+        findButton(renderer.root, "WhatsApp").props.onClick();
+      });
+      await flush();
+
+      expect(rendererText(renderer)).toMatch(/Setup path:\s+Manual path only for now/);
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("shows blocked channels as unavailable in the current runtime", async () => {
+    apiMocks.fetchIntegrationCatalog.mockResolvedValue({
+      items: [{
+        ...baseCatalogEntry(),
+        catalogId: "channel.signal",
+        key: "signal",
+        label: "Signal",
+        description: "Signal bridge",
+        maturity: "planned" as const,
+        runtimeAvailability: "blocked" as const,
+      }],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<IntegrationsPage view="channels" />);
+      });
+      await flush();
+
+      expect(rendererText(renderer)).toMatch(/Setup path:\s+Unavailable in current runtime/);
+      expect(rendererText(renderer)).toContain("GoatCitadel cannot create a runnable connection");
     } finally {
       renderer.unmount();
     }

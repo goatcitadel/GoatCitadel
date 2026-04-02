@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  acceptMemoryMaintenanceRecommendation,
   clearGatewayAuthState,
+  fetchMemoryMaintenancePolicy,
+  fetchMemoryMaintenanceRuns,
   getGatewayAuthStorageMode,
   isTrustedGatewayHost,
+  patchMemoryMaintenancePolicy,
   persistGatewayAuthState,
   readStoredGatewayAuthState,
+  rejectMemoryMaintenanceRecommendation,
+  runMemoryMaintenanceNow,
   setGatewayAuthStorageMode,
   streamAgentChatMessage,
 } from "./client";
@@ -218,5 +224,91 @@ describe("isTrustedGatewayHost", () => {
       { content: "coverage" },
       () => undefined,
     )).rejects.toThrow(/buffer limit/);
+  });
+
+  it("targets the memory-maintenance read endpoints with workspace-scoped query params", async () => {
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      return new Response(JSON.stringify({ items: [], workspaceId: "workspace-alpha" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: fetchMock,
+    });
+
+    await fetchMemoryMaintenancePolicy("workspace-alpha");
+    await fetchMemoryMaintenanceRuns("workspace-alpha", 25);
+
+    const calls = fetchMock.mock.calls as unknown as Array<[string | URL, RequestInit | undefined]>;
+    expect(calls).toHaveLength(2);
+    const firstCall = calls[0];
+    const secondCall = calls[1];
+    if (!firstCall || !secondCall) {
+      throw new Error("Expected memory-maintenance read calls to be recorded.");
+    }
+    const firstUrl = new URL(String(firstCall[0]));
+    const secondUrl = new URL(String(secondCall[0]));
+
+    expect(firstUrl.pathname).toBe("/api/v1/memory/maintenance/policy");
+    expect(firstUrl.searchParams.get("workspaceId")).toBe("workspace-alpha");
+    expect(secondUrl.pathname).toBe("/api/v1/memory/maintenance/runs");
+    expect(secondUrl.searchParams.get("workspaceId")).toBe("workspace-alpha");
+    expect(secondUrl.searchParams.get("limit")).toBe("25");
+  });
+
+  it("targets the memory-maintenance mutation endpoints with the expected verbs and payloads", async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: fetchMock,
+    });
+
+    await patchMemoryMaintenancePolicy("workspace-alpha", { enabled: true, minChangedSessions: 5 });
+    await runMemoryMaintenanceNow({ workspaceId: "workspace-alpha", triggerSource: "manual" });
+    await acceptMemoryMaintenanceRecommendation("recommendation-1");
+    await rejectMemoryMaintenanceRecommendation("recommendation-2");
+
+    const calls = fetchMock.mock.calls as unknown as Array<[string | URL, RequestInit | undefined]>;
+    expect(calls).toHaveLength(4);
+    const patchCall = calls[0];
+    const runCall = calls[1];
+    const acceptCall = calls[2];
+    const rejectCall = calls[3];
+    if (!patchCall || !runCall || !acceptCall || !rejectCall) {
+      throw new Error("Expected memory-maintenance mutation calls to be recorded.");
+    }
+    const patchUrl = new URL(String(patchCall[0]));
+    const patchInit = patchCall[1] ?? {};
+    const runUrl = new URL(String(runCall[0]));
+    const runInit = runCall[1] ?? {};
+    const acceptUrl = new URL(String(acceptCall[0]));
+    const acceptInit = acceptCall[1] ?? {};
+    const rejectUrl = new URL(String(rejectCall[0]));
+    const rejectInit = rejectCall[1] ?? {};
+
+    expect(patchUrl.pathname).toBe("/api/v1/memory/maintenance/policy");
+    expect(patchUrl.searchParams.get("workspaceId")).toBe("workspace-alpha");
+    expect(patchInit.method).toBe("PATCH");
+    expect(String(patchInit.body ?? "")).toContain("\"enabled\":true");
+    expect(String(patchInit.body ?? "")).toContain("\"minChangedSessions\":5");
+
+    expect(runUrl.pathname).toBe("/api/v1/memory/maintenance/run-now");
+    expect(runInit.method).toBe("POST");
+    expect(String(runInit.body ?? "")).toContain("\"workspaceId\":\"workspace-alpha\"");
+    expect(String(runInit.body ?? "")).toContain("\"triggerSource\":\"manual\"");
+
+    expect(acceptUrl.pathname).toBe("/api/v1/memory/maintenance/recommendations/recommendation-1/accept");
+    expect(acceptInit.method).toBe("POST");
+    expect(rejectUrl.pathname).toBe("/api/v1/memory/maintenance/recommendations/recommendation-2/reject");
+    expect(rejectInit.method).toBe("POST");
   });
 });

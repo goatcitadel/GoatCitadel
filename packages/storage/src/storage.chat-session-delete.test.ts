@@ -81,6 +81,8 @@ describe("Storage.deleteChatSessionData", () => {
     assert.equal(countRows(storage, "prompt_pack_runs", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "prompt_pack_scores", "run_id = 'pack-run-sess-1'"), 0);
     assert.equal(countRows(storage, "memory_context_packs", "session_id = 'sess-1'"), 0);
+    assert.equal(countRows(storage, "context_manifests", "session_id = 'sess-1'"), 0);
+    assert.equal(countRows(storage, "context_manifest_entries", "manifest_id = 'manifest-sess-1'"), 0);
     assert.equal(countRows(storage, "memory_qmd_runs", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "chat_execution_plans", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "chat_execution_plan_steps", "plan_id = 'plan-sess-1'"), 0);
@@ -148,6 +150,28 @@ function seedChatSession(storage: Storage, sessionId: string): void {
     sessionId,
     turnId: `turn-${sessionId}`,
     status: "pending",
+    createdAt: now,
+  });
+  storage.contextManifests.ensure({
+    scope: "chat_turn",
+    turnId: `turn-${sessionId}`,
+    sessionId,
+    createdAt: now,
+  });
+  storage.db.prepare(`
+    UPDATE context_manifests
+    SET manifest_id = @manifestId
+    WHERE turn_id = @turnId
+  `).run({
+    manifestId: `manifest-${sessionId}`,
+    turnId: `turn-${sessionId}`,
+  });
+  storage.contextManifests.appendEntry({
+    manifestId: `manifest-${sessionId}`,
+    kind: "system_message",
+    entryIndex: 0,
+    sourceRef: "system:0",
+    contentText: "system instructions",
     createdAt: now,
   });
   storage.researchRuns.create({

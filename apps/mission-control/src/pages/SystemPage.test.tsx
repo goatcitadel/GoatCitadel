@@ -10,6 +10,7 @@ const apiMocks = vi.hoisted(() => ({
   exportPackagingProofLaneDraft: vi.fn(),
   fetchExtensionStarterPack: vi.fn(),
   fetchExtensionSdkBrief: vi.fn(),
+  fetchOpenclawParityReport: vi.fn(),
   fetchSystemVitals: vi.fn(),
   fetchFollowOnParityReport: vi.fn(),
   fetchA2UIProofLaneDraft: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock("../api/client", () => ({
   exportPackagingProofLaneDraft: apiMocks.exportPackagingProofLaneDraft,
   fetchExtensionStarterPack: apiMocks.fetchExtensionStarterPack,
   fetchExtensionSdkBrief: apiMocks.fetchExtensionSdkBrief,
+  fetchOpenclawParityReport: apiMocks.fetchOpenclawParityReport,
   fetchSystemVitals: apiMocks.fetchSystemVitals,
   fetchFollowOnParityReport: apiMocks.fetchFollowOnParityReport,
   fetchA2UIProofLaneDraft: apiMocks.fetchA2UIProofLaneDraft,
@@ -49,6 +51,139 @@ vi.mock("../api/client", () => ({
 }));
 
 import { SystemPage } from "./SystemPage";
+
+function buildOpenclawParityProgramMock() {
+  return {
+    generatedAt: "2026-03-29T00:00:00.000Z",
+    completedEpicIds: ["GC-P0-01", "GC-P0-05"],
+    openEpicIds: ["GC-P0-02", "GC-P0-03", "GC-P0-06", "GC-P1-04", "GC-P1-10", "GC-P2-12"],
+    completionOrder: [
+      "GC-P1-10",
+      "GC-P2-12",
+      "GC-P0-06",
+      "GC-P1-09",
+      "GC-P1-08",
+      "GC-P0-07",
+      "GC-P0-02",
+      "GC-P0-03",
+      "GC-P1-04",
+      "GC-P2-11",
+    ],
+    nextEpicId: "GC-P1-10",
+    nextSlice: "Keep the parity report, proof-lane contract, and markdown register aligned as each remaining tranche lands.",
+    unsafeClaims: [
+      "Slack, Telegram, Google Chat, Teams, and Discord are not yet safe to claim as fully stabilized inbound/outbound channels.",
+      "Tier-1 planned channels remain unfinished: WhatsApp, iMessage/BlueBubbles, and Signal.",
+      "Tier-2 planned channels remain unfinished: Mattermost, LINE, Zalo OA, and Zalo Personal.",
+    ],
+    blockerCounts: {
+      repo_runtime: 5,
+      manual_operator: 4,
+      external_repo: 0,
+      publication: 0,
+    },
+    epics: [
+      {
+        epicId: "GC-P0-01",
+        label: "Shared channel runtime semantics",
+        status: "complete",
+        summary: "Shared channel runtime semantics are already routed through the common capability/action contract used by the current shipped channel surfaces.",
+        nextSlice: "Keep the shared channel-core contract as the only truth source while remaining beta and planned channels finish against it.",
+        blockers: [],
+      },
+      {
+        epicId: "GC-P0-02",
+        label: "Stabilize core beta channels",
+        status: "in_progress",
+        summary: "Core beta channels exist, but Slack, Telegram, Google Chat, Teams, and Discord still need inbound/runtime hardening plus channel-by-channel operator proof before they are safe to claim as fully stabilized.",
+        nextSlice: "Close the remaining inbound/runtime gaps for each beta channel, then rerun channel-specific setup, diagnostics, and smoke proof before promoting the claim.",
+        blockers: [
+          {
+            kind: "repo_runtime",
+            summary: "Slack, Telegram, Google Chat, Teams, and Discord still need the last inbound/runtime hardening tranche before the full stabilization claim is defensible.",
+          },
+          {
+            kind: "manual_operator",
+            summary: "Core beta channels still need a fresh operator proof pass after the final hardening tranche; code-complete alone does not close the claim.",
+          },
+        ],
+      },
+      {
+        epicId: "GC-P0-03",
+        label: "Ship Tier-1 planned channels",
+        status: "pending",
+        summary: "Tier-1 planned channels are still open: WhatsApp, iMessage/BlueBubbles, and Signal need to move from partial bridge seams to full parity support.",
+        nextSlice: "Ship Tier-1 channels one at a time with capability truth, setup UX, diagnostics, tests, and operator proof before marking any of them complete.",
+        blockers: [
+          {
+            kind: "repo_runtime",
+            summary: "WhatsApp, iMessage/BlueBubbles, and Signal still lack the full inbound normalization and action/runtime parity needed to leave planned status.",
+          },
+          {
+            kind: "manual_operator",
+            summary: "Tier-1 channels still need repeatable operator proof before catalog maturity can be promoted truthfully.",
+          },
+        ],
+      },
+      {
+        epicId: "GC-P1-04",
+        label: "Ship Tier-2 planned channels",
+        status: "pending",
+        summary: "Tier-2 planned channels remain open: Mattermost, LINE, Zalo OA, and Zalo Personal are still pending implementation and proof.",
+        nextSlice: "Reuse the Tier-1 completion template for Tier-2 channels so catalog maturity, diagnostics, tests, and operator proof stay aligned.",
+        blockers: [
+          {
+            kind: "repo_runtime",
+            summary: "Mattermost, LINE, Zalo OA, and Zalo Personal still have partial outbound seams but not the full parity bar for inbound/runtime behavior.",
+          },
+          {
+            kind: "manual_operator",
+            summary: "Tier-2 channels still need repeatable operator proof before any completion claim is safe.",
+          },
+        ],
+      },
+      {
+        epicId: "GC-P0-06",
+        label: "Browser control parity",
+        status: "in_progress",
+        summary: "8 browser tools are registered.",
+        nextSlice: "Add browser parity diagnostics.",
+        blockers: [
+          {
+            kind: "repo_runtime",
+            summary: "Browser control catalog maturity is not yet at a shipped operator-ready level.",
+          },
+        ],
+      },
+      {
+        epicId: "GC-P1-10",
+        label: "Long-tail parity register",
+        status: "in_progress",
+        summary: "Follow-on parity now resolves to a live runtime report instead of existing only as placeholder rows.",
+        nextSlice: "Keep the parity report, proof-lane contract, and markdown register aligned as each remaining tranche lands.",
+        blockers: [
+          {
+            kind: "repo_runtime",
+            summary: "The shared contracts, live reports, and roadmap docs still have to stay in lockstep as later parity tranches land.",
+          },
+        ],
+      },
+      {
+        epicId: "GC-P2-12",
+        label: "Voice Wake / Talk Mode parity",
+        status: "in_progress",
+        summary: "Voice runtime is ready, but the current proof bundle still needs to be refreshed before parity can be called complete.",
+        nextSlice: "Generate the System-page voice proof lane, run the transcription + talk + wake cycle, and use the first recorded bundle to tighten operator recovery workflows.",
+        blockers: [
+          {
+            kind: "manual_operator",
+            summary: "Voice proof still depends on a current, reproducible operator run under the active deployment posture before parity can be called complete.",
+          },
+        ],
+      },
+    ],
+  };
+}
 
 function collectText(node: ReactTestRendererJSON | ReactTestRendererJSON[] | string | null): string {
   if (node == null) {
@@ -133,6 +268,7 @@ describe("SystemPage", () => {
         },
       ],
     });
+    apiMocks.fetchOpenclawParityReport.mockResolvedValue(buildOpenclawParityProgramMock());
     apiMocks.fetchVoiceProofLaneDraft.mockResolvedValue({
       generatedAt: "2026-03-29T00:04:00.000Z",
       deploymentProfile: "trusted_local",
@@ -255,6 +391,12 @@ describe("SystemPage", () => {
           allowedTools: ["browser.cookies.get", "browser.storage.get"],
           blockedTools: [],
         },
+        artifactStatus: {
+          hasArtifact: true,
+          freshness: "current",
+          matchedCurrentProfile: false,
+          ageDays: 0,
+        },
         blockingIssues: [],
         recommendedActions: [
           "Generate the browser proof-lane draft from System, then run the operator pass from Mission Control or the tool surface.",
@@ -282,6 +424,11 @@ describe("SystemPage", () => {
         wakeState: "stopped",
         wakeEnabled: false,
         lastError: undefined,
+        artifactStatus: {
+          hasArtifact: false,
+          freshness: "missing",
+          matchedCurrentProfile: false,
+        },
         blockingIssues: [],
         recoveryActions: [],
         recommendedActions: [
@@ -310,6 +457,10 @@ describe("SystemPage", () => {
           source: "templates/integration-plugins/reference-integration-plugin",
           matchesReferenceSource: true,
           capabilities: ["reference.install", "lifecycle.smoke"],
+        },
+        artifactStatus: {
+          hasArtifact: false,
+          freshness: "missing",
         },
         blockingIssues: [
           "A local workspace author SDK package and installable reference integration plugin now exist, but there is still no published SDK package or broader runtime contract.",
@@ -351,6 +502,11 @@ describe("SystemPage", () => {
           ],
         },
         paritySummary: "A2UI contract a2ui.v1 now defines ui_canvas + platform_canvas scope for Canvas + A2UI via mission_control, with 1 declared canvas-capable platform target(s).",
+        artifactStatus: {
+          hasArtifact: false,
+          freshness: "missing",
+          matchedCurrentProfile: false,
+        },
         blockingIssues: [
           "Canvas/A2UI catalog maturity is planned, which is still below an operator-ready surface.",
           "A2UI contract v1 exists, but there is still no shipped runtime behind the companion-session lane.",
@@ -474,6 +630,10 @@ describe("SystemPage", () => {
           },
         ],
         paritySummary: "companion.android.v1 defines an Android-first separate_repo bootstrap lane for 2 declared companion-capable platform target(s), and the gateway now has server-foundation session/signing support while the existing GoatCitadel-mobile runtime still lacks first signed-session proof.",
+        artifactStatus: {
+          hasArtifact: false,
+          freshness: "missing",
+        },
         blockingIssues: [
           "Companion gateway foundation is now present, but the existing GoatCitadel-mobile runtime still needs companion.android.v1 signed-session wiring and end-to-end proof.",
         ],
@@ -593,10 +753,18 @@ describe("SystemPage", () => {
       await flush();
 
       const text = rendererText(renderer);
-      expect(text).toContain("Follow-On Parity");
-      expect(text).toContain("browser 4 control");
-      expect(text).toContain("voice ready");
+      expect(text).toContain("OpenClaw Parity");
+      expect(text).toContain("2 / 7 complete");
+      expect(text).toContain("6 open");
+      expect(text).toContain("next GC-P1-10");
+      expect(text).toContain("Full-program status: 2 complete · 6 open · next GC-P1-10");
+      expect(text).toContain("Completion order: GC-P1-10 -> GC-P2-12 -> GC-P0-06 -> GC-P1-09 -> GC-P1-08 -> GC-P0-07 -> GC-P0-02 -> GC-P0-03 -> GC-P1-04 -> GC-P2-11");
+      expect(text).toContain("Blockers: repo runtime 5 · manual/operator 4 · external repo 0 · publication 0");
+      expect(text).toContain("Unsafe to claim yet: Slack, Telegram, Google Chat, Teams, and Discord are not yet safe to claim as fully stabilized inbound/outbound channels.");
+      expect(text).toContain("Unsafe to claim yet: Tier-1 planned channels remain unfinished: WhatsApp, iMessage/BlueBubbles, and Signal.");
+      expect(text).toContain("Follow-on runtime posture: trusted_local · auth token · voice ready · browser 4 control tool(s).");
       expect(text).toContain("Voice next action: Generate the voice proof-lane draft from System, then run the transcription, Talk Mode, and Wake Mode operator cycle.");
+      expect(text).toContain("Voice proof status: current · latest profile trusted_local · matches current profile · 0 day(s) old");
       expect(text).toContain("Generate voice proof draft");
       expect(text).toContain("Export voice proof artifact");
       expect(text).toContain("Voice proof lane: Voice proof lane is ready with runtime ready, model base.en, talk stopped, and wake disabled.");
@@ -609,6 +777,7 @@ describe("SystemPage", () => {
       expect(text).toContain("allowed browser.cookies.get, browser.storage.get");
       expect(text).toContain("blocked none");
       expect(text).toContain("Browser next action: Generate the browser proof-lane draft from System, then run the operator pass from Mission Control or the tool surface.");
+      expect(text).toContain("Browser proof status: current");
       expect(text).toContain("Generate browser proof draft");
       expect(text).toContain("Export browser proof artifact");
       expect(text).toContain("Browser proof lane: Browser proof lane is ready for trusted_local with 4 read tool(s) and 4 control tool(s).");
@@ -619,8 +788,7 @@ describe("SystemPage", () => {
       expect(text).toContain("Artifact bytes 448 · generated 2026-03-29T00:05:00.000Z");
       expect(text).toContain("Packaging posture is trusted_local with auth mode token");
       expect(text).toContain("Packaging summary: Packaging is currently operating in trusted_local posture, which is useful for operator validation but not the full hardened deployment lane.");
-      expect(text).toContain("Packaging proof status: missing");
-      expect(text).toContain("no artifact recorded yet");
+      expect(text).toContain("Packaging proof status: current · latest profile trusted_local · matches current profile · 0 day(s) old");
       expect(text).toContain("Generate packaging proof draft");
       expect(text).toContain("Export packaging proof artifact");
       expect(text).toContain("Packaging proof lane: Packaging proof lane is ready with trusted_local, token auth, and 2 allowlisted host(s).");
@@ -631,6 +799,7 @@ describe("SystemPage", () => {
       expect(text).toContain("Saved packaging proof artifact: artifacts/follow-on-parity/packaging/2026-03-29/packaging-deployment-proof-bundle-trusted_local-2026-03-29T00-06-00-000Z.md");
       expect(text).toContain("Artifact bytes 472 · generated 2026-03-29T00:06:00.000Z");
       expect(text).toContain("Canvas summary: A2UI contract a2ui.v1 now defines ui_canvas + platform_canvas scope for Canvas + A2UI via mission_control, with 1 declared canvas-capable platform target(s).");
+      expect(text).toContain("A2UI proof status: current · latest profile trusted_local · matches current profile · 0 day(s) old");
       expect(text).toContain("Canvas contract: a2ui.v1 · scopes ui_canvas, platform_canvas · transports local_session, companion_session");
       expect(text).toContain("Generate A2UI proof draft");
       expect(text).toContain("Export A2UI proof artifact");
@@ -640,6 +809,7 @@ describe("SystemPage", () => {
       expect(text).toContain("Saved A2UI proof artifact: artifacts/follow-on-parity/a2ui/2026-03-29/a2ui-proof-bundle-trusted_local-2026-03-29T00-05-30-000Z.md");
       expect(text).toContain("Artifact bytes 512 · generated 2026-03-29T00:05:30.000Z");
       expect(text).toContain("Companion summary: companion.android.v1 defines an Android-first separate_repo bootstrap lane for 2 declared companion-capable platform target(s), and the gateway now has server-foundation session/signing support while the existing GoatCitadel-mobile runtime still lacks first signed-session proof.");
+      expect(text).toContain("Companion brief status: current · 0 day(s) old");
       expect(text).toContain("Companion contract: companion.android.v1 · target android · repo GoatCitadel-mobile · status server_foundation");
       expect(text).toContain("Companion bootstrap: dashboard, chat, approvals, tasks, settings, event_feed · transports foreground_sse, push_refresh, manual_refresh");
       expect(text).toContain("Companion prerequisites: device_pairing, token_rotation, request_signing, sse_resume, per_device_audit");
@@ -655,6 +825,7 @@ describe("SystemPage", () => {
       expect(text).toContain("Saved companion bootstrap brief: artifacts/follow-on-parity/companion/2026-03-29/companion-bootstrap-brief-2026-03-29T00-07-00-000Z.md");
       expect(text).toContain("Artifact bytes 512 · generated 2026-03-29T00:07:00.000Z");
       expect(text).toContain("Extension summary: 1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; a local workspace author SDK package and installable reference integration plugin are now present, but the published SDK/runtime story is still partial.");
+      expect(text).toContain("Extension brief status: current · 0 day(s) old");
       expect(text).toContain("Reference plugin lifecycle: reference-integration-plugin");
       expect(text).toContain("installed · enabled · source aligned");
       expect(text).toContain("Reference plugin source: templates/integration-plugins/reference-integration-plugin");
@@ -675,7 +846,12 @@ describe("SystemPage", () => {
       expect(text).toContain("Export extension starter pack");
       expect(text).toContain("Saved extension starter pack: artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z");
       expect(text).toContain("Starter pack files 6 · total bytes 4096");
+      expect(text).toContain("GC-P0-02 · Stabilize core beta channels");
+      expect(text).toContain("Blocker [ repo runtime ]: Slack, Telegram, Google Chat, Teams, and Discord still need the last inbound/runtime hardening tranche before the full stabilization claim is defensible.");
+      expect(text).toContain("GC-P0-03 · Ship Tier-1 planned channels");
+      expect(text).toContain("Blocker [ manual/operator ]: Tier-1 channels still need repeatable operator proof before catalog maturity can be promoted truthfully.");
       expect(text).toContain("GC-P0-06 · Browser control parity");
+      expect(text).toContain("Blocker [ repo runtime ]: Browser control catalog maturity is not yet at a shipped operator-ready level.");
       expect(text).toContain("Next slice: Add browser parity diagnostics.");
       expect(text).toContain("Next slice: Generate the System-page voice proof lane, run the transcription + talk + wake cycle, and use the first recorded bundle to tighten operator recovery workflows.");
       expect(text).toContain("Android Canvas/Camera/Screen (planned), iOS Canvas/Camera/Voice (planned)");
@@ -685,6 +861,7 @@ describe("SystemPage", () => {
   });
 
   it("keeps the page usable when the follow-on parity report fails", async () => {
+    apiMocks.fetchOpenclawParityReport.mockRejectedValue(new Error("program unavailable"));
     apiMocks.fetchFollowOnParityReport.mockRejectedValue(new Error("report unavailable"));
     apiMocks.fetchA2UIProofLaneDraft.mockResolvedValue({
       generatedAt: "2026-03-29T00:05:30.000Z",
@@ -757,6 +934,7 @@ describe("SystemPage", () => {
 
       const text = rendererText(renderer);
       expect(text).toContain("Host Vitals");
+      expect(text).toContain("OpenClaw parity program unavailable: program unavailable");
       expect(text).toContain("Follow-on parity report unavailable: report unavailable");
     } finally {
       renderer.unmount();

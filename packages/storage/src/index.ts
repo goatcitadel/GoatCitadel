@@ -22,6 +22,7 @@ import { IntegrationConnectionRepository } from "./integration-connection-repo.j
 import { ChannelSetupDraftRepository } from "./channel-setup-draft-repo.js";
 import { MeshRepository } from "./mesh-repo.js";
 import { MemoryContextRepository } from "./memory-context-repo.js";
+import { ContextManifestRepository } from "./context-manifest-repo.js";
 import { MemoryQmdRunRepository } from "./memory-qmd-run-repo.js";
 import { AgentProfileRepository } from "./agent-profile-repo.js";
 import { ToolGrantRepository } from "./tool-grant-repo.js";
@@ -59,6 +60,7 @@ import { GatewaySqlRepository } from "./gateway-sql-repo.js";
 import { AssemblyRepository } from "./assembly-repo.js";
 import { WorkspaceHookRepository } from "./workspace-hook-repo.js";
 import { HookRunRepository } from "./hook-run-repo.js";
+import { MemoryMaintenanceRepository } from "./memory-maintenance-repo.js";
 
 export interface StorageOptions extends SqliteOptions {
   transcriptsDir: string;
@@ -96,6 +98,7 @@ export class Storage {
   public readonly agentProfiles: AgentProfileRepository;
   public readonly mesh: MeshRepository;
   public readonly memoryContexts: MemoryContextRepository;
+  public readonly contextManifests: ContextManifestRepository;
   public readonly memoryQmdRuns: MemoryQmdRunRepository;
   public readonly toolGrants: ToolGrantRepository;
   public readonly toolAccessDecisions: ToolAccessDecisionRepository;
@@ -129,6 +132,7 @@ export class Storage {
   public readonly workspaces: WorkspaceRepository;
   public readonly workspaceHooks: WorkspaceHookRepository;
   public readonly hookRuns: HookRunRepository;
+  public readonly memoryMaintenance: MemoryMaintenanceRepository;
   public readonly durableRuns: DurableRunRepository;
   public readonly gatewaySql: GatewaySqlRepository;
   public readonly assembly: AssemblyRepository;
@@ -160,6 +164,7 @@ export class Storage {
     this.agentProfiles = new AgentProfileRepository(this.db);
     this.mesh = new MeshRepository(this.db);
     this.memoryContexts = new MemoryContextRepository(this.db);
+    this.contextManifests = new ContextManifestRepository(this.db);
     this.memoryQmdRuns = new MemoryQmdRunRepository(this.db);
     this.toolGrants = new ToolGrantRepository(this.db);
     this.toolAccessDecisions = new ToolAccessDecisionRepository(this.db);
@@ -193,6 +198,7 @@ export class Storage {
     this.workspaces = new WorkspaceRepository(this.db);
     this.workspaceHooks = new WorkspaceHookRepository(this.db);
     this.hookRuns = new HookRunRepository(this.db);
+    this.memoryMaintenance = new MemoryMaintenanceRepository(this.db);
     this.durableRuns = new DurableRunRepository(this.db);
     this.gatewaySql = new GatewaySqlRepository(this.db);
     this.assembly = new AssemblyRepository(this.db);
@@ -280,6 +286,7 @@ export class Storage {
         "chat_reflection_attempts",
         "prompt_pack_runs",
         "memory_context_packs",
+        "context_manifests",
         "memory_qmd_runs",
         "chat_execution_plans",
         "chat_conversation_summaries",
@@ -417,6 +424,7 @@ export * from "./prompt-pack-score-repo.js";
 export * from "./workspace-repo.js";
 export * from "./workspace-hook-repo.js";
 export * from "./hook-run-repo.js";
+export * from "./memory-maintenance-repo.js";
 export * from "./durable-run-repo.js";
 export * from "./safe-json.js";
 export * from "./gateway-sql-repo.js";

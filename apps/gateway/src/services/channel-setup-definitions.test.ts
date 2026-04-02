@@ -48,6 +48,14 @@ describe("channel setup definitions", () => {
       "channel.telegram",
       "channel.google-chat",
       "channel.teams",
+      "channel.whatsapp",
+      "channel.signal",
+      "channel.mattermost",
+      "channel.imessage",
+      "channel.nextcloud-talk",
+      "channel.line",
+      "channel.zalo",
+      "channel.zalouser",
     ]));
   });
 
@@ -316,6 +324,193 @@ describe("channel setup definitions", () => {
     }));
   });
 
+  it("requires WhatsApp auth, phone number id, and a default recipient", () => {
+    const definition = requireChannelSetupDefinition("channel.whatsapp");
+    const issues = definition.validate(createDraft("channel.whatsapp", {}));
+
+    expect(issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: "whatsapp_auth_missing",
+        failureCategory: "missing_input",
+      }),
+      expect.objectContaining({
+        fieldKey: "phoneNumberId",
+        failureCategory: "missing_input",
+      }),
+      expect.objectContaining({
+        fieldKey: "defaultTarget",
+        failureCategory: "missing_input",
+      }),
+    ]));
+  });
+
+  it("preserves WhatsApp webhook secret env references during edit flows", () => {
+    const definition = requireChannelSetupDefinition("channel.whatsapp");
+    const hydrated = definition.hydrate(createConnection({
+      catalogId: "channel.whatsapp",
+      key: "whatsapp",
+      label: "WhatsApp Primary",
+      config: {
+        accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
+        appSecretEnv: "WHATSAPP_APP_SECRET",
+        webhookVerifyTokenEnv: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+        phoneNumberId: "123456789012345",
+        defaultTarget: "+15551234567",
+      },
+    }));
+    const draft = {
+      ...createDraft("channel.whatsapp", hydrated.draft, "edit"),
+      hydration: hydrated.hydration,
+    };
+
+    expect(definition.validate(draft)).toEqual([]);
+    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
+      accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
+      appSecretEnv: "WHATSAPP_APP_SECRET",
+      webhookVerifyTokenEnv: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+      phoneNumberId: "123456789012345",
+      defaultTarget: "+15551234567",
+    }));
+  });
+
+  it("rejects incomplete Signal bridge drafts", () => {
+    const definition = requireChannelSetupDefinition("channel.signal");
+    const issues = definition.validate(createDraft("channel.signal", {
+      baseUrl: "not-a-url",
+    }));
+
+    expect(issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        fieldKey: "baseUrl",
+        failureCategory: "malformed_value",
+      }),
+      expect.objectContaining({
+        fieldKey: "defaultRecipient",
+        failureCategory: "missing_input",
+      }),
+    ]));
+  });
+
+  it("preserves env-backed Mattermost auth during edit flows", () => {
+    const definition = requireChannelSetupDefinition("channel.mattermost");
+    const hydrated = definition.hydrate(createConnection({
+      catalogId: "channel.mattermost",
+      key: "mattermost",
+      label: "Mattermost Primary",
+      config: {
+        serverUrl: "https://chat.example.com",
+        botTokenEnv: "MATTERMOST_BOT_TOKEN",
+        defaultChannel: "town-square",
+        defaultTeam: "goatcitadel",
+      },
+    }));
+    const draft = {
+      ...createDraft("channel.mattermost", hydrated.draft, "edit"),
+      hydration: hydrated.hydration,
+    };
+
+    expect(definition.validate(draft)).toEqual([]);
+    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
+      serverUrl: "https://chat.example.com",
+      botTokenEnv: "MATTERMOST_BOT_TOKEN",
+      defaultChannel: "town-square",
+      defaultTeam: "goatcitadel",
+    }));
+  });
+
+  it("preserves env-backed iMessage bridge auth during edit flows", () => {
+    const definition = requireChannelSetupDefinition("channel.imessage");
+    const hydrated = definition.hydrate(createConnection({
+      catalogId: "channel.imessage",
+      key: "imessage",
+      label: "iMessage Primary",
+      config: {
+        bridgeUrl: "http://127.0.0.1:3001",
+        passwordEnv: "IMESSAGE_PASSWORD",
+        defaultHandle: "imessage:+15551234567",
+      },
+    }));
+    const draft = {
+      ...createDraft("channel.imessage", hydrated.draft, "edit"),
+      hydration: hydrated.hydration,
+    };
+
+    expect(definition.validate(draft)).toEqual([]);
+    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
+      bridgeUrl: "http://127.0.0.1:3001",
+      passwordEnv: "IMESSAGE_PASSWORD",
+      defaultHandle: "imessage:+15551234567",
+    }));
+  });
+
+  it("preserves env-backed Nextcloud Talk auth during edit flows", () => {
+    const definition = requireChannelSetupDefinition("channel.nextcloud-talk");
+    const hydrated = definition.hydrate(createConnection({
+      catalogId: "channel.nextcloud-talk",
+      key: "nextcloud-talk",
+      label: "Nextcloud Talk Primary",
+      config: {
+        baseUrl: "https://cloud.example.com",
+        tokenEnv: "NEXTCLOUD_TALK_TOKEN",
+        defaultRoomId: "ops-room",
+      },
+    }));
+    const draft = {
+      ...createDraft("channel.nextcloud-talk", hydrated.draft, "edit"),
+      hydration: hydrated.hydration,
+    };
+
+    expect(definition.validate(draft)).toEqual([]);
+    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
+      baseUrl: "https://cloud.example.com",
+      tokenEnv: "NEXTCLOUD_TALK_TOKEN",
+      defaultRoomId: "ops-room",
+    }));
+  });
+
+  it("preserves LINE channel secret env references during edit flows", () => {
+    const definition = requireChannelSetupDefinition("channel.line");
+    const hydrated = definition.hydrate(createConnection({
+      catalogId: "channel.line",
+      key: "line",
+      label: "LINE Primary",
+      config: {
+        channelAccessTokenEnv: "LINE_CHANNEL_ACCESS_TOKEN",
+        channelSecretEnv: "LINE_CHANNEL_SECRET",
+        defaultTarget: "U1234567890",
+      },
+    }));
+    const draft = {
+      ...createDraft("channel.line", hydrated.draft, "edit"),
+      hydration: hydrated.hydration,
+    };
+
+    expect(definition.validate(draft)).toEqual([]);
+    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
+      channelAccessTokenEnv: "LINE_CHANNEL_ACCESS_TOKEN",
+      channelSecretEnv: "LINE_CHANNEL_SECRET",
+      defaultTarget: "U1234567890",
+    }));
+  });
+
+  it("rejects malformed Zalo User bridge drafts", () => {
+    const definition = requireChannelSetupDefinition("channel.zalouser");
+    const issues = definition.validate(createDraft("channel.zalouser", {
+      baseUrl: "zca.local",
+    }));
+
+    expect(issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        fieldKey: "baseUrl",
+        failureCategory: "malformed_value",
+      }),
+      expect.objectContaining({
+        fieldKey: "defaultTarget",
+        failureCategory: "missing_input",
+      }),
+    ]));
+  });
+
   it("advertises live-send testing for the guided smoke-probe channels", () => {
     const channels = [
       "channel.discord",
@@ -329,5 +524,12 @@ describe("channel setup definitions", () => {
       const definition = requireChannelSetupDefinition(catalogId);
       expect(definition.definition.testing.levels).toContain("live-send");
     }
+  });
+
+  it("advertises live-auth but not live-send for Mattermost guided setup", () => {
+    const definition = requireChannelSetupDefinition("channel.mattermost");
+
+    expect(definition.definition.testing.levels).toContain("live-auth");
+    expect(definition.definition.testing.levels).not.toContain("live-send");
   });
 });

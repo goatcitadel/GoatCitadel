@@ -336,6 +336,16 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "companion_session_runtime_schema",
     up: createCompanionSessionRuntimeSchema,
   },
+  {
+    version: 46,
+    name: "memory_maintenance_schema",
+    up: createMemoryMaintenanceSchema,
+  },
+  {
+    version: 47,
+    name: "context_manifest_schema",
+    up: createContextManifestSchema,
+  },
 ];
 
 function createBaseSchema(db: DatabaseSync): void {
@@ -2715,6 +2725,154 @@ function createWorkspaceHookRuntimeSchema(db: DatabaseSync): void {
       ON hook_runs(workspace_id, created_at DESC, run_id DESC);
     CREATE INDEX IF NOT EXISTS idx_hook_runs_durable
       ON hook_runs(durable_run_id, created_at DESC);
+  `);
+}
+
+function createMemoryMaintenanceSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workspace_memory_maintenance_policies (
+      workspace_id TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      run_mode TEXT NOT NULL,
+      timing_strategy TEXT NOT NULL,
+      schedule_json TEXT,
+      time_zone TEXT NOT NULL,
+      min_hours_since_last_success INTEGER NOT NULL DEFAULT 24,
+      min_changed_sessions INTEGER NOT NULL DEFAULT 3,
+      provider_id TEXT,
+      model TEXT,
+      execution_target TEXT NOT NULL,
+      unavailable_model_policy TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workspace_memory_maintenance_policies_enabled
+      ON workspace_memory_maintenance_policies(enabled, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS workspace_memory_maintenance_state (
+      workspace_id TEXT PRIMARY KEY,
+      last_eligibility_at TEXT,
+      last_successful_run_at TEXT,
+      changed_session_count INTEGER NOT NULL DEFAULT 0,
+      active_run_id TEXT,
+      last_recommendation_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workspace_memory_maintenance_state_active_run
+      ON workspace_memory_maintenance_state(active_run_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS memory_maintenance_runs (
+      run_id TEXT PRIMARY KEY,
+      durable_run_id TEXT UNIQUE,
+      workspace_id TEXT NOT NULL,
+      trigger_source TEXT NOT NULL,
+      status TEXT NOT NULL,
+      provider_id TEXT,
+      model TEXT,
+      policy_snapshot_json TEXT NOT NULL,
+      source_session_count INTEGER NOT NULL DEFAULT 0,
+      changed_artifact_count INTEGER NOT NULL DEFAULT 0,
+      summary TEXT,
+      error_text TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_memory_maintenance_runs_workspace_created
+      ON memory_maintenance_runs(workspace_id, created_at DESC, run_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_maintenance_runs_workspace_status_created
+      ON memory_maintenance_runs(workspace_id, status, created_at DESC, run_id DESC);
+
+    CREATE TABLE IF NOT EXISTS memory_maintenance_run_sources (
+      source_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      source_ref TEXT NOT NULL,
+      modified_at TEXT,
+      excerpt TEXT,
+      token_estimate INTEGER,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(run_id) REFERENCES memory_maintenance_runs(run_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_memory_maintenance_run_sources_run
+      ON memory_maintenance_run_sources(run_id, created_at ASC, source_id ASC);
+
+    CREATE TABLE IF NOT EXISTS memory_maintenance_run_changes (
+      change_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      change_kind TEXT NOT NULL,
+      target_kind TEXT NOT NULL,
+      target_ref TEXT NOT NULL,
+      before_ref TEXT,
+      after_ref TEXT,
+      summary TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(run_id) REFERENCES memory_maintenance_runs(run_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_memory_maintenance_run_changes_run
+      ON memory_maintenance_run_changes(run_id, created_at ASC, change_id ASC);
+
+    CREATE TABLE IF NOT EXISTS memory_maintenance_recommendations (
+      recommendation_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      proposed_patch_json TEXT NOT NULL,
+      rationale TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      applied_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_memory_maintenance_recommendations_workspace_status
+      ON memory_maintenance_recommendations(workspace_id, status, updated_at DESC, recommendation_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_maintenance_recommendations_workspace_created
+      ON memory_maintenance_recommendations(workspace_id, created_at DESC, recommendation_id DESC);
+  `);
+}
+
+function createContextManifestSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS context_manifests (
+      manifest_id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      turn_id TEXT NOT NULL UNIQUE,
+      session_id TEXT,
+      task_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_context_manifests_session
+      ON context_manifests(session_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_context_manifests_turn
+      ON context_manifests(turn_id);
+
+    CREATE TABLE IF NOT EXISTS context_manifest_entries (
+      entry_id TEXT PRIMARY KEY,
+      manifest_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      entry_index INTEGER NOT NULL,
+      title TEXT,
+      source_ref TEXT,
+      content_text TEXT,
+      content_hash TEXT NOT NULL,
+      metadata_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(manifest_id) REFERENCES context_manifests(manifest_id) ON DELETE CASCADE,
+      UNIQUE(manifest_id, kind, source_ref, content_hash)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_context_manifest_entries_manifest
+      ON context_manifest_entries(manifest_id, entry_index ASC, created_at ASC);
   `);
 }
 

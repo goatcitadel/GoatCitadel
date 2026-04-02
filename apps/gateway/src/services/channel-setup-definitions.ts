@@ -60,6 +60,14 @@ const RUNTIME_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = {
   "channel.telegram": createTelegramDefinition(),
   "channel.google-chat": createGoogleChatDefinition(),
   "channel.teams": createTeamsDefinition(),
+  "channel.whatsapp": createWhatsAppDefinition(),
+  "channel.signal": createSignalDefinition(),
+  "channel.mattermost": createMattermostDefinition(),
+  "channel.imessage": createIMessageDefinition(),
+  "channel.nextcloud-talk": createNextcloudTalkDefinition(),
+  "channel.line": createLineDefinition(),
+  "channel.zalo": createZaloDefinition(),
+  "channel.zalouser": createZaloUserDefinition(),
 };
 
 export function getChannelSetupDefinition(catalogId: string): ChannelSetupDefinition | undefined {
@@ -1287,6 +1295,1484 @@ function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
   };
 }
 
+function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
+  const catalog = requireCatalog("channel.whatsapp");
+  const definition: ChannelSetupDefinition = {
+    catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
+    wizard: {
+      archetype: "platform_api_resource_ids",
+      contentVersion: "2026.04.whatsapp.v1",
+      estimatedMinutes: 8,
+      difficulty: "intermediate",
+      manualModePolicy: "available-secondary",
+      introSummary: "Connect a WhatsApp Cloud API sender identity with a phone-number id, access token, and a default direct recipient target.",
+      prerequisites: [
+        "A Meta developer app with WhatsApp Cloud API access.",
+        "A sender phone-number id that is already provisioned in your Meta app.",
+        "A sandbox recipient or test number for manual confirmation.",
+      ],
+      steps: [
+        {
+          id: "overview",
+          kind: "intro",
+          title: "What this connection does",
+          body: [
+            paragraph("GoatCitadel uses the WhatsApp Cloud API for outbound sends, replies, reactions, and rich media delivery to direct recipients. It can also ingest signed inbound webhook events when you configure the webhook secret pair."),
+            note("warning", "WhatsApp Cloud API delivery is still treated as planned parity work. Guided setup here helps operators configure the current bridge safely, but it does not change the maturity claim."),
+          ],
+        },
+        {
+          id: "collect-values",
+          kind: "field-collection",
+          title: "Paste your connection values",
+          fields: [
+            {
+              key: "accessTokenEnv",
+              label: "Access token env var",
+              type: "text",
+              required: false,
+              explanation: "Preferred path. Name of the environment variable that stores your WhatsApp Cloud API access token.",
+              whyNeeded: "Used to authenticate outbound API calls without storing the raw token in the connection draft.",
+              whereToFind: [paragraph("Create or reuse an env var such as WHATSAPP_ACCESS_TOKEN and store the actual Cloud API token there.")],
+              looksLike: "WHATSAPP_ACCESS_TOKEN",
+              commonMistakes: ["Pasting the actual token here instead of the env var name."],
+              canChangeLater: true,
+              placeholder: "WHATSAPP_ACCESS_TOKEN",
+            },
+            {
+              key: "accessToken",
+              label: "Access token (manual fallback)",
+              type: "secret",
+              required: false,
+              explanation: "Optional direct token entry if env-backed secret storage is not ready yet.",
+              looksLike: "A long Meta access token string.",
+              sensitive: true,
+              canChangeLater: true,
+              placeholder: "Paste only if you cannot use an env var",
+            },
+            {
+              key: "phoneNumberId",
+              label: "Phone number ID",
+              type: "id",
+              required: true,
+              explanation: "The Cloud API sender phone-number id for this WhatsApp identity.",
+              whyNeeded: "Required for all outbound Cloud API calls.",
+              whereToFind: [paragraph("Copy the phone-number id from the WhatsApp Cloud API sender configuration in the Meta developer console.")],
+              looksLike: "123456789012345",
+              commonMistakes: ["Copying the display phone number instead of the numeric phone-number id."],
+              canChangeLater: true,
+            },
+            {
+              key: "defaultTarget",
+              label: "Default recipient",
+              type: "text",
+              required: true,
+              explanation: "Fallback direct recipient for manual sends and validation follow-up checks.",
+              whyNeeded: "Used when the operator does not provide an explicit recipient target.",
+              whereToFind: [paragraph("Use an E.164 phone number such as +15551234567.")],
+              looksLike: "+15551234567",
+              commonMistakes: ["Using a group JID. The current Cloud API sender is wired for direct recipients only."],
+              canChangeLater: true,
+            },
+            {
+              key: "appSecretEnv",
+              label: "App secret env var",
+              type: "text",
+              required: false,
+              explanation: "Optional but recommended if you want signed inbound webhook routing.",
+              whyNeeded: "Meta signs WhatsApp webhook deliveries with your app secret. Without it GoatCitadel stays outbound only.",
+              whereToFind: [paragraph("Copy the app secret from the Meta developer app settings and store it in an env var such as WHATSAPP_APP_SECRET.")],
+              looksLike: "WHATSAPP_APP_SECRET",
+              commonMistakes: ["Using the access token here instead of the app secret."],
+              canChangeLater: true,
+              placeholder: "WHATSAPP_APP_SECRET",
+            },
+            {
+              key: "appSecret",
+              label: "App secret (manual fallback)",
+              type: "secret",
+              required: false,
+              explanation: "Optional direct app-secret entry if env-backed storage is not ready yet.",
+              sensitive: true,
+              canChangeLater: true,
+              placeholder: "Paste only if you cannot use an env var",
+            },
+            {
+              key: "webhookVerifyTokenEnv",
+              label: "Webhook verify-token env var",
+              type: "text",
+              required: false,
+              explanation: "Optional but recommended if you want GoatCitadel to answer the Meta webhook verification challenge.",
+              whyNeeded: "The verify token is compared during GET webhook subscription validation before Meta begins signed POST deliveries.",
+              whereToFind: [paragraph("Choose your own random token value, store it in an env var such as WHATSAPP_WEBHOOK_VERIFY_TOKEN, and use the same value when configuring the Meta webhook subscription.")],
+              looksLike: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+              canChangeLater: true,
+              placeholder: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+            },
+            {
+              key: "webhookVerifyToken",
+              label: "Webhook verify token (manual fallback)",
+              type: "secret",
+              required: false,
+              explanation: "Optional direct verify-token entry if env-backed storage is not ready yet.",
+              sensitive: true,
+              canChangeLater: true,
+              placeholder: "Paste only if you cannot use an env var",
+            },
+          ],
+        },
+        {
+          id: "test",
+          kind: "test",
+          title: "Validate the draft",
+          body: [
+            paragraph("Guided test validates the draft shape and target inputs. If you also configure the app secret plus verify token, the runtime can answer the Meta webhook challenge and accept signed inbound deliveries, but operator proof is still manual after finalize."),
+          ],
+        },
+      ],
+    },
+    adapter: {
+      adapterVersion: "2026.04.whatsapp.v1",
+      secretFieldKeys: ["accessToken", "appSecret", "webhookVerifyToken"],
+    },
+    validation: {
+      validationVersion: "2026.04.whatsapp.v1",
+      levels: ["structural", "semantic"],
+    },
+    testing: {
+      testVersion: "2026.04.whatsapp.v1",
+      levels: ["structural", "semantic", "manual-confirm"],
+      safePreFinalize: true,
+      supportsManualConfirmation: true,
+    },
+    troubleshooting: {
+      commonFailures: COMMON_FAILURES.token ?? [],
+    },
+    telemetry: {
+      tier: "tier_1",
+      namespace: "channel_setup.whatsapp",
+    },
+    lifecycle: {
+      supportedModes: ["create", "edit", "repair", "rotate_secret", "retest"],
+      supportsDrafts: true,
+      supportsEdit: true,
+      supportsRepair: true,
+      supportsRotateSecret: true,
+      supportsRetest: true,
+    },
+    volatility: {
+      officialDocsUrl: "https://developers.facebook.com/docs/whatsapp/cloud-api",
+      lastReviewedAt: "2026-04-01",
+      volatility: "medium",
+      deprecationRisk: "low",
+      preferredPathLabel: "Cloud API access token + phone-number id",
+    },
+  };
+
+  return {
+    definition,
+    hydrate(connection) {
+      const config = connection.config;
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [
+        ["accessToken", "accessTokenEnv", "token", "tokenEnv"],
+        ["appSecret", "appSecretEnv", "webhookSecret", "webhookSecretEnv"],
+        ["webhookVerifyToken", "webhookVerifyTokenEnv", "verifyToken", "verifyTokenEnv"],
+      ]);
+      return {
+        draft: {
+          accessTokenEnv: readString(config, "accessTokenEnv") ?? readString(config, "tokenEnv"),
+          appSecretEnv: readString(config, "appSecretEnv") ?? readString(config, "webhookSecretEnv"),
+          webhookVerifyTokenEnv: readString(config, "webhookVerifyTokenEnv") ?? readString(config, "verifyTokenEnv"),
+          phoneNumberId: readString(config, "phoneNumberId"),
+          defaultTarget: readString(config, "defaultTarget"),
+        },
+        hydration: {
+          status: hasConfiguredSecret ? "opaque-secret" : "clean",
+          fieldState: {
+            accessToken: readString(config, "accessToken") || readString(config, "accessTokenEnv") || readString(config, "token") || readString(config, "tokenEnv")
+              ? "configured"
+              : "missing",
+            accessTokenEnv: readString(config, "accessTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
+            appSecret: readString(config, "appSecret") || readString(config, "appSecretEnv") || readString(config, "webhookSecret") || readString(config, "webhookSecretEnv")
+              ? "configured"
+              : "unknown",
+            appSecretEnv: readString(config, "appSecretEnv") || readString(config, "webhookSecretEnv") ? "configured" : "unknown",
+            webhookVerifyToken: readString(config, "webhookVerifyToken") || readString(config, "webhookVerifyTokenEnv") || readString(config, "verifyToken") || readString(config, "verifyTokenEnv")
+              ? "configured"
+              : "unknown",
+            webhookVerifyTokenEnv: readString(config, "webhookVerifyTokenEnv") || readString(config, "verifyTokenEnv") ? "configured" : "unknown",
+            phoneNumberId: readString(config, "phoneNumberId") ? "configured" : "missing",
+            defaultTarget: readString(config, "defaultTarget") ? "configured" : "missing",
+          },
+          warnings: hasConfiguredSecret
+            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            : [],
+          rawLegacyConfig: config,
+        },
+      };
+    },
+    normalize(draft) {
+      const preservedAccessToken = readLegacyString(draft, "accessToken", "token");
+      const preservedAccessTokenEnv = readLegacyString(draft, "accessTokenEnv", "tokenEnv");
+      const preservedAppSecret = readLegacyString(draft, "appSecret", "webhookSecret");
+      const preservedAppSecretEnv = readLegacyString(draft, "appSecretEnv", "webhookSecretEnv");
+      const preservedVerifyToken = readLegacyString(draft, "webhookVerifyToken", "verifyToken");
+      const preservedVerifyTokenEnv = readLegacyString(draft, "webhookVerifyTokenEnv", "verifyTokenEnv");
+      return compactRecord({
+        accessTokenEnv: readString(draft.draft, "accessTokenEnv") ?? preservedAccessTokenEnv,
+        accessToken: readString(draft.draft, "accessToken") ?? preservedAccessToken,
+        appSecretEnv: readString(draft.draft, "appSecretEnv") ?? preservedAppSecretEnv,
+        appSecret: readString(draft.draft, "appSecret") ?? preservedAppSecret,
+        webhookVerifyTokenEnv: readString(draft.draft, "webhookVerifyTokenEnv") ?? preservedVerifyTokenEnv,
+        webhookVerifyToken: readString(draft.draft, "webhookVerifyToken") ?? preservedVerifyToken,
+        phoneNumberId: readString(draft.draft, "phoneNumberId"),
+        defaultTarget: readString(draft.draft, "defaultTarget"),
+      });
+    },
+    validate(draft) {
+      const issues: ChannelSetupIssue[] = [];
+      const hasConfiguredToken = Boolean(
+        readString(draft.draft, "accessToken")
+        || readString(draft.draft, "accessTokenEnv")
+        || draft.hydration?.fieldState.accessToken === "configured"
+        || draft.hydration?.fieldState.accessTokenEnv === "configured",
+      );
+      const phoneNumberId = readString(draft.draft, "phoneNumberId");
+      if (!hasConfiguredToken) {
+        issues.push({
+          key: "whatsapp_auth_missing",
+          level: "error",
+          message: "Provide either a WhatsApp access token or an env-backed token reference.",
+          failureCategory: "missing_input",
+        });
+      }
+      if (!phoneNumberId) {
+        issues.push(requiredFieldIssue("phoneNumberId", "Phone number ID is required."));
+      } else if (!/^\d{6,}$/.test(phoneNumberId)) {
+        issues.push(malformedFieldIssue("phoneNumberId", "Phone number ID should look like a numeric WhatsApp sender id."));
+      }
+      if (!readString(draft.draft, "defaultTarget")) {
+        issues.push(requiredFieldIssue("defaultTarget", "Default recipient is required."));
+      }
+      return issues;
+    },
+  };
+}
+
+function createSignalDefinition(): ChannelSetupRuntimeDefinition {
+  const catalog = requireCatalog("channel.signal");
+  const definition: ChannelSetupDefinition = {
+    catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
+    wizard: {
+      archetype: "bridge_dependent",
+      contentVersion: "2026.04.signal.v1",
+      estimatedMinutes: 8,
+      difficulty: "intermediate",
+      manualModePolicy: "available-secondary",
+      introSummary: "Configure a Signal bridge endpoint, optional account id, and a default recipient for outbound sends.",
+      prerequisites: [
+        "A running Signal bridge endpoint that GoatCitadel can reach.",
+        "A sandbox recipient or group for manual send confirmation.",
+      ],
+      steps: [
+        {
+          id: "overview",
+          kind: "intro",
+          title: "What this connection does",
+          body: [
+            paragraph("GoatCitadel uses the configured Signal bridge for outbound sends to individual recipients or groups."),
+            note("warning", "Signal remains planned parity work. Guided setup here only covers the current outbound bridge shape."),
+          ],
+        },
+        {
+          id: "collect-values",
+          kind: "field-collection",
+          title: "Paste your bridge values",
+          fields: [
+            {
+              key: "baseUrl",
+              label: "Bridge URL",
+              type: "url",
+              required: true,
+              explanation: "HTTP or HTTPS base URL for the Signal bridge GoatCitadel should call.",
+              whyNeeded: "Required for every outbound send.",
+              whereToFind: [paragraph("Use the reachable base URL for your Signal bridge, such as a local signal-cli REST or JSON-RPC proxy.")],
+              looksLike: "http://127.0.0.1:8080",
+              commonMistakes: ["Using a browser dashboard URL instead of the API base URL."],
+              canChangeLater: true,
+            },
+            {
+              key: "accountId",
+              label: "Account ID",
+              type: "text",
+              required: false,
+              explanation: "Optional sender account identifier when the bridge exposes multiple Signal accounts.",
+              looksLike: "+15551234567",
+              canChangeLater: true,
+            },
+            {
+              key: "defaultRecipient",
+              label: "Default recipient",
+              type: "text",
+              required: true,
+              explanation: "Fallback direct recipient or group target for manual sends.",
+              looksLike: "+15551234567 or group identifier",
+              canChangeLater: true,
+            },
+          ],
+        },
+      ],
+    },
+    adapter: {
+      adapterVersion: "2026.04.signal.v1",
+      secretFieldKeys: [],
+    },
+    validation: {
+      validationVersion: "2026.04.signal.v1",
+      levels: ["structural", "semantic"],
+    },
+    testing: {
+      testVersion: "2026.04.signal.v1",
+      levels: ["structural", "semantic", "manual-confirm"],
+      safePreFinalize: true,
+      supportsManualConfirmation: true,
+    },
+    troubleshooting: {
+      commonFailures: [],
+    },
+    telemetry: {
+      tier: "tier_1",
+      namespace: "channel_setup.signal",
+    },
+    lifecycle: {
+      supportedModes: ["create", "edit", "repair", "rotate_secret", "retest"],
+      supportsDrafts: true,
+      supportsEdit: true,
+      supportsRepair: true,
+      supportsRotateSecret: true,
+      supportsRetest: true,
+    },
+    volatility: {
+      officialDocsUrl: "https://github.com/bbernhard/signal-cli-rest-api",
+      lastReviewedAt: "2026-04-01",
+      volatility: "high",
+      deprecationRisk: "medium",
+      preferredPathLabel: "Signal bridge URL",
+    },
+  };
+
+  return {
+    definition,
+    hydrate(connection) {
+      const config = connection.config;
+      return {
+        draft: {
+          baseUrl: readString(config, "baseUrl") ?? readString(config, "bridgeUrl"),
+          accountId: readString(config, "accountId"),
+          defaultRecipient: readString(config, "defaultRecipient"),
+        },
+        hydration: {
+          status: "clean",
+          fieldState: {
+            baseUrl: readString(config, "baseUrl") || readString(config, "bridgeUrl") ? "configured" : "missing",
+            accountId: readString(config, "accountId") ? "configured" : "unknown",
+            defaultRecipient: readString(config, "defaultRecipient") ? "configured" : "missing",
+          },
+          warnings: [],
+          rawLegacyConfig: config,
+        },
+      };
+    },
+    normalize(draft) {
+      return compactRecord({
+        baseUrl: readString(draft.draft, "baseUrl") ?? readLegacyString(draft, "baseUrl", "bridgeUrl"),
+        accountId: readString(draft.draft, "accountId"),
+        defaultRecipient: readString(draft.draft, "defaultRecipient"),
+      });
+    },
+    validate(draft) {
+      const issues: ChannelSetupIssue[] = [];
+      const baseUrl = readString(draft.draft, "baseUrl") ?? readLegacyString(draft, "baseUrl", "bridgeUrl");
+      if (!baseUrl) {
+        issues.push(requiredFieldIssue("baseUrl", "Bridge URL is required."));
+      } else if (!looksLikeHttpUrl(baseUrl)) {
+        issues.push(malformedFieldIssue("baseUrl", "Bridge URL should start with http:// or https://."));
+      }
+      if (!readString(draft.draft, "defaultRecipient")) {
+        issues.push(requiredFieldIssue("defaultRecipient", "Default recipient is required."));
+      }
+      return issues;
+    },
+  };
+}
+
+function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
+  const catalog = requireCatalog("channel.mattermost");
+  const definition: ChannelSetupDefinition = {
+    catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
+    wizard: {
+      archetype: "workspace_server_token",
+      contentVersion: "2026.04.mattermost.v1",
+      estimatedMinutes: 8,
+      difficulty: "intermediate",
+      manualModePolicy: "available-secondary",
+      introSummary: "Connect Mattermost using a reachable server URL, a bot token, and a default channel target.",
+      prerequisites: [
+        "A Mattermost workspace with a bot account or bot token.",
+        "A sandbox channel where the bot can post.",
+      ],
+      steps: [
+        {
+          id: "overview",
+          kind: "intro",
+          title: "What this connection does",
+          body: [
+            paragraph("GoatCitadel uses Mattermost bot-token auth for outbound sends, replies, reactions, and unsend."),
+            note("warning", "Mattermost still counts as planned parity work. Guided setup here only exposes the current outbound bridge path plus auth validation."),
+          ],
+        },
+        {
+          id: "collect-values",
+          kind: "field-collection",
+          title: "Paste your connection values",
+          fields: [
+            {
+              key: "serverUrl",
+              label: "Server URL",
+              type: "url",
+              required: true,
+              explanation: "Reachable Mattermost server base URL.",
+              looksLike: "https://chat.example.com",
+              canChangeLater: true,
+            },
+            {
+              key: "botTokenEnv",
+              label: "Bot token env var",
+              type: "text",
+              required: false,
+              explanation: "Preferred path. Name of the env var that stores the Mattermost bot token.",
+              looksLike: "MATTERMOST_BOT_TOKEN",
+              canChangeLater: true,
+              placeholder: "MATTERMOST_BOT_TOKEN",
+            },
+            {
+              key: "botToken",
+              label: "Bot token (manual fallback)",
+              type: "secret",
+              required: false,
+              explanation: "Optional direct bot-token entry if env-backed storage is not ready yet.",
+              sensitive: true,
+              canChangeLater: true,
+              placeholder: "Paste only if you cannot use an env var",
+            },
+            {
+              key: "defaultChannel",
+              label: "Default channel",
+              type: "text",
+              required: true,
+              explanation: "Fallback Mattermost channel slug or id.",
+              looksLike: "town-square or channel-id",
+              canChangeLater: true,
+            },
+            {
+              key: "defaultTeam",
+              label: "Default team",
+              type: "text",
+              required: false,
+              explanation: "Optional team slug for channel resolution when channel names are ambiguous.",
+              looksLike: "goatcitadel",
+              canChangeLater: true,
+            },
+          ],
+        },
+      ],
+    },
+    adapter: {
+      adapterVersion: "2026.04.mattermost.v1",
+      secretFieldKeys: ["botToken"],
+    },
+    validation: {
+      validationVersion: "2026.04.mattermost.v1",
+      levels: ["structural", "semantic", "live-auth"],
+    },
+    testing: {
+      testVersion: "2026.04.mattermost.v1",
+      levels: ["structural", "semantic", "live-auth", "manual-confirm"],
+      safePreFinalize: true,
+      supportsManualConfirmation: true,
+    },
+    troubleshooting: {
+      commonFailures: COMMON_FAILURES.token ?? [],
+    },
+    telemetry: {
+      tier: "tier_2",
+      namespace: "channel_setup.mattermost",
+    },
+    lifecycle: {
+      supportedModes: ["create", "edit", "repair", "rotate_secret", "retest"],
+      supportsDrafts: true,
+      supportsEdit: true,
+      supportsRepair: true,
+      supportsRotateSecret: true,
+      supportsRetest: true,
+    },
+    volatility: {
+      officialDocsUrl: "https://developers.mattermost.com/integrate/reference/server/server-reference/",
+      lastReviewedAt: "2026-04-01",
+      volatility: "medium",
+      deprecationRisk: "low",
+      preferredPathLabel: "Bot token + default channel",
+    },
+  };
+
+  return {
+    definition,
+    hydrate(connection) {
+      const config = connection.config;
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["botToken", "botTokenEnv", "token", "tokenEnv"]]);
+      return {
+        draft: {
+          serverUrl: readString(config, "serverUrl"),
+          botTokenEnv: readString(config, "botTokenEnv") ?? readString(config, "tokenEnv"),
+          defaultChannel: readString(config, "defaultChannel"),
+          defaultTeam: readString(config, "defaultTeam"),
+        },
+        hydration: {
+          status: hasConfiguredSecret ? "opaque-secret" : "clean",
+          fieldState: {
+            serverUrl: readString(config, "serverUrl") ? "configured" : "missing",
+            botToken: readString(config, "botToken") || readString(config, "botTokenEnv") || readString(config, "token") || readString(config, "tokenEnv")
+              ? "configured"
+              : "missing",
+            botTokenEnv: readString(config, "botTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
+            defaultChannel: readString(config, "defaultChannel") ? "configured" : "missing",
+            defaultTeam: readString(config, "defaultTeam") ? "configured" : "unknown",
+          },
+          warnings: hasConfiguredSecret
+            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            : [],
+          rawLegacyConfig: config,
+        },
+      };
+    },
+    normalize(draft) {
+      const preservedBotToken = readLegacyString(draft, "botToken", "token");
+      const preservedBotTokenEnv = readLegacyString(draft, "botTokenEnv", "tokenEnv");
+      return compactRecord({
+        serverUrl: readString(draft.draft, "serverUrl"),
+        botTokenEnv: readString(draft.draft, "botTokenEnv") ?? preservedBotTokenEnv,
+        botToken: readString(draft.draft, "botToken") ?? preservedBotToken,
+        defaultChannel: readString(draft.draft, "defaultChannel"),
+        defaultTeam: readString(draft.draft, "defaultTeam"),
+      });
+    },
+    validate(draft) {
+      const issues: ChannelSetupIssue[] = [];
+      const serverUrl = readString(draft.draft, "serverUrl");
+      const hasConfiguredToken = Boolean(
+        readString(draft.draft, "botToken")
+        || readString(draft.draft, "botTokenEnv")
+        || draft.hydration?.fieldState.botToken === "configured"
+        || draft.hydration?.fieldState.botTokenEnv === "configured",
+      );
+      if (!serverUrl) {
+        issues.push(requiredFieldIssue("serverUrl", "Server URL is required."));
+      } else if (!looksLikeHttpUrl(serverUrl)) {
+        issues.push(malformedFieldIssue("serverUrl", "Server URL should start with http:// or https://."));
+      }
+      if (!hasConfiguredToken) {
+        issues.push({
+          key: "mattermost_auth_missing",
+          level: "error",
+          message: "Provide either a Mattermost bot token or an env-backed bot-token reference.",
+          failureCategory: "missing_input",
+        });
+      }
+      if (!readString(draft.draft, "defaultChannel")) {
+        issues.push(requiredFieldIssue("defaultChannel", "Default channel is required."));
+      }
+      return issues;
+    },
+  };
+}
+
+function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
+  const catalog = requireCatalog("channel.imessage");
+  const definition: ChannelSetupDefinition = {
+    catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
+    wizard: {
+      archetype: "bridge_dependent",
+      contentVersion: "2026.04.imessage.v1",
+      estimatedMinutes: 10,
+      difficulty: "advanced",
+      manualModePolicy: "available-secondary",
+      introSummary: "Configure a BlueBubbles-compatible iMessage bridge URL, bridge password, and a default handle or chat target.",
+      prerequisites: [
+        "A reachable BlueBubbles bridge with outbound send support.",
+        "A Mac-side BlueBubbles installation already paired with the account you intend to send from.",
+        "A sandbox handle or chat target for manual validation.",
+      ],
+      steps: [
+        {
+          id: "overview",
+          kind: "intro",
+          title: "What this connection does",
+          body: [
+            paragraph("GoatCitadel uses a BlueBubbles-compatible bridge for outbound iMessage sends, replies, reactions, and unsend."),
+            note("warning", "BlueBubbles-specific edge cases still apply. New-handle attachment delivery can require chat creation support, and reactions or unsend depend on Private API support."),
+          ],
+        },
+        {
+          id: "collect-values",
+          kind: "field-collection",
+          title: "Paste your bridge values",
+          fields: [
+            {
+              key: "bridgeUrl",
+              label: "Bridge URL",
+              type: "url",
+              required: true,
+              explanation: "Reachable BlueBubbles bridge base URL.",
+              looksLike: "http://127.0.0.1:3001",
+              canChangeLater: true,
+            },
+            {
+              key: "passwordEnv",
+              label: "Bridge password env var",
+              type: "text",
+              required: false,
+              explanation: "Preferred path. Name of the env var that stores the BlueBubbles bridge password.",
+              looksLike: "IMESSAGE_PASSWORD",
+              canChangeLater: true,
+              placeholder: "IMESSAGE_PASSWORD",
+            },
+            {
+              key: "password",
+              label: "Bridge password (manual fallback)",
+              type: "secret",
+              required: false,
+              explanation: "Optional direct bridge-password entry if env-backed storage is not ready yet.",
+              sensitive: true,
+              canChangeLater: true,
+              placeholder: "Paste only if you cannot use an env var",
+            },
+            {
+              key: "defaultHandle",
+              label: "Default handle",
+              type: "text",
+              required: true,
+              explanation: "Fallback iMessage handle or chat identifier for manual sends.",
+              looksLike: "imessage:+15551234567 or chat_guid:iMessage;-;+15551234567",
+              canChangeLater: true,
+            },
+          ],
+        },
+      ],
+    },
+    adapter: {
+      adapterVersion: "2026.04.imessage.v1",
+      secretFieldKeys: ["password"],
+    },
+    validation: {
+      validationVersion: "2026.04.imessage.v1",
+      levels: ["structural", "semantic"],
+    },
+    testing: {
+      testVersion: "2026.04.imessage.v1",
+      levels: ["structural", "semantic", "manual-confirm"],
+      safePreFinalize: true,
+      supportsManualConfirmation: true,
+    },
+    troubleshooting: {
+      commonFailures: [],
+    },
+    telemetry: {
+      tier: "tier_1",
+      namespace: "channel_setup.imessage",
+    },
+    lifecycle: {
+      supportedModes: ["create", "edit", "repair", "rotate_secret", "retest"],
+      supportsDrafts: true,
+      supportsEdit: true,
+      supportsRepair: true,
+      supportsRotateSecret: true,
+      supportsRetest: true,
+    },
+    volatility: {
+      officialDocsUrl: "https://bluebubbles.app/",
+      lastReviewedAt: "2026-04-01",
+      volatility: "high",
+      deprecationRisk: "medium",
+      preferredPathLabel: "BlueBubbles bridge URL + password",
+    },
+  };
+
+  return {
+    definition,
+    hydrate(connection) {
+      const config = connection.config;
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["password", "passwordEnv", "apiPassword", "apiPasswordEnv"]]);
+      return {
+        draft: {
+          bridgeUrl: readString(config, "bridgeUrl") ?? readString(config, "baseUrl") ?? readString(config, "serverUrl"),
+          passwordEnv: readString(config, "passwordEnv") ?? readString(config, "apiPasswordEnv"),
+          defaultHandle: readString(config, "defaultHandle"),
+        },
+        hydration: {
+          status: hasConfiguredSecret ? "opaque-secret" : "clean",
+          fieldState: {
+            bridgeUrl: readString(config, "bridgeUrl") || readString(config, "baseUrl") || readString(config, "serverUrl")
+              ? "configured"
+              : "missing",
+            password: readString(config, "password") || readString(config, "passwordEnv") || readString(config, "apiPassword") || readString(config, "apiPasswordEnv")
+              ? "configured"
+              : "missing",
+            passwordEnv: readString(config, "passwordEnv") || readString(config, "apiPasswordEnv") ? "configured" : "unknown",
+            defaultHandle: readString(config, "defaultHandle") ? "configured" : "missing",
+          },
+          warnings: hasConfiguredSecret
+            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            : [],
+          rawLegacyConfig: config,
+        },
+      };
+    },
+    normalize(draft) {
+      const preservedPassword = readLegacyString(draft, "password", "apiPassword");
+      const preservedPasswordEnv = readLegacyString(draft, "passwordEnv", "apiPasswordEnv");
+      return compactRecord({
+        bridgeUrl: readString(draft.draft, "bridgeUrl") ?? readLegacyString(draft, "bridgeUrl", "baseUrl", "serverUrl"),
+        passwordEnv: readString(draft.draft, "passwordEnv") ?? preservedPasswordEnv,
+        password: readString(draft.draft, "password") ?? preservedPassword,
+        defaultHandle: readString(draft.draft, "defaultHandle"),
+      });
+    },
+    validate(draft) {
+      const issues: ChannelSetupIssue[] = [];
+      const bridgeUrl = readString(draft.draft, "bridgeUrl") ?? readLegacyString(draft, "bridgeUrl", "baseUrl", "serverUrl");
+      const hasConfiguredPassword = Boolean(
+        readString(draft.draft, "password")
+        || readString(draft.draft, "passwordEnv")
+        || draft.hydration?.fieldState.password === "configured"
+        || draft.hydration?.fieldState.passwordEnv === "configured",
+      );
+      if (!bridgeUrl) {
+        issues.push(requiredFieldIssue("bridgeUrl", "Bridge URL is required."));
+      } else if (!looksLikeHttpUrl(bridgeUrl)) {
+        issues.push(malformedFieldIssue("bridgeUrl", "Bridge URL should start with http:// or https://."));
+      }
+      if (!hasConfiguredPassword) {
+        issues.push({
+          key: "imessage_auth_missing",
+          level: "error",
+          message: "Provide either an iMessage bridge password or an env-backed password reference.",
+          failureCategory: "missing_input",
+        });
+      }
+      if (!readString(draft.draft, "defaultHandle")) {
+        issues.push(requiredFieldIssue("defaultHandle", "Default handle is required."));
+      }
+      return issues;
+    },
+  };
+}
+
+function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
+  const catalog = requireCatalog("channel.nextcloud-talk");
+  const definition: ChannelSetupDefinition = {
+    catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
+    wizard: {
+      archetype: "workspace_server_token",
+      contentVersion: "2026.04.nextcloud-talk.v1",
+      estimatedMinutes: 8,
+      difficulty: "intermediate",
+      manualModePolicy: "available-secondary",
+      introSummary: "Connect Nextcloud Talk using the public base URL, the shared bot token, and a default fallback room id.",
+      prerequisites: [
+        "A reachable Nextcloud Talk instance.",
+        "A Talk bot token or shared webhook secret already provisioned for the integration.",
+        "A fallback room id for manual sends.",
+      ],
+      steps: [
+        {
+          id: "overview",
+          kind: "intro",
+          title: "What this connection does",
+          body: [
+            paragraph("GoatCitadel uses the Nextcloud Talk bot API plus signed webhooks for inbound events, outbound replies, and reactions."),
+            note("info", "Nextcloud Talk already has runtime support in the gateway. This guided definition brings its setup flow into parity with the other visible channel setup wizards."),
+          ],
+        },
+        {
+          id: "collect-values",
+          kind: "field-collection",
+          title: "Paste your connection values",
+          fields: [
+            {
+              key: "baseUrl",
+              label: "Base URL",
+              type: "url",
+              required: true,
+              explanation: "Public base URL for the Nextcloud instance that hosts Talk.",
+              looksLike: "https://cloud.example.com",
+              canChangeLater: true,
+            },
+            {
+              key: "tokenEnv",
+              label: "Token env var",
+              type: "text",
+              required: false,
+              explanation: "Preferred path. Name of the env var that stores the shared Nextcloud Talk bot token or webhook secret.",
+              looksLike: "NEXTCLOUD_TALK_TOKEN",
+              canChangeLater: true,
+              placeholder: "NEXTCLOUD_TALK_TOKEN",
+            },
+            {
+              key: "token",
+              label: "Token (manual fallback)",
+              type: "secret",
+              required: false,
+              explanation: "Optional direct token entry if env-backed storage is not ready yet.",
+              sensitive: true,
+              canChangeLater: true,
+              placeholder: "Paste only if you cannot use an env var",
+            },
+            {
+              key: "defaultRoomId",
+              label: "Default room ID",
+              type: "text",
+              required: true,
+              explanation: "Fallback room for manual sends and operator-delivery routing.",
+              looksLike: "room-id",
+              canChangeLater: true,
+            },
+          ],
+        },
+      ],
+    },
+    adapter: {
+      adapterVersion: "2026.04.nextcloud-talk.v1",
+      secretFieldKeys: ["token"],
+    },
+    validation: {
+      validationVersion: "2026.04.nextcloud-talk.v1",
+      levels: ["structural", "semantic"],
+    },
+    testing: {
+      testVersion: "2026.04.nextcloud-talk.v1",
+      levels: ["structural", "semantic", "manual-confirm"],
+      safePreFinalize: true,
+      supportsManualConfirmation: true,
+    },
+    troubleshooting: {
+      commonFailures: [],
+    },
+    telemetry: {
+      tier: "tier_2",
+      namespace: "channel_setup.nextcloud_talk",
+    },
+    lifecycle: {
+      supportedModes: ["create", "edit", "repair", "rotate_secret", "retest"],
+      supportsDrafts: true,
+      supportsEdit: true,
+      supportsRepair: true,
+      supportsRotateSecret: true,
+      supportsRetest: true,
+    },
+    volatility: {
+      officialDocsUrl: "https://nextcloud-talk.readthedocs.io/en/latest/bots/",
+      lastReviewedAt: "2026-04-01",
+      volatility: "medium",
+      deprecationRisk: "low",
+      preferredPathLabel: "Base URL + Talk token",
+    },
+  };
+
+  return {
+    definition,
+    hydrate(connection) {
+      const config = connection.config;
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["token", "tokenEnv", "botSecret", "botSecretEnv", "secret", "secretEnv"]]);
+      return {
+        draft: {
+          baseUrl: readString(config, "baseUrl"),
+          tokenEnv: readString(config, "tokenEnv") ?? readString(config, "botSecretEnv") ?? readString(config, "secretEnv"),
+          defaultRoomId: readString(config, "defaultRoomId"),
+        },
+        hydration: {
+          status: hasConfiguredSecret ? "opaque-secret" : "clean",
+          fieldState: {
+            baseUrl: readString(config, "baseUrl") ? "configured" : "missing",
+            token: readString(config, "token") || readString(config, "tokenEnv") || readString(config, "botSecret") || readString(config, "botSecretEnv") || readString(config, "secret") || readString(config, "secretEnv")
+              ? "configured"
+              : "missing",
+            tokenEnv: readString(config, "tokenEnv") || readString(config, "botSecretEnv") || readString(config, "secretEnv") ? "configured" : "unknown",
+            defaultRoomId: readString(config, "defaultRoomId") ? "configured" : "missing",
+          },
+          warnings: hasConfiguredSecret
+            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            : [],
+          rawLegacyConfig: config,
+        },
+      };
+    },
+    normalize(draft) {
+      const preservedToken = readLegacyString(draft, "token", "botSecret", "secret");
+      const preservedTokenEnv = readLegacyString(draft, "tokenEnv", "botSecretEnv", "secretEnv");
+      return compactRecord({
+        baseUrl: readString(draft.draft, "baseUrl"),
+        tokenEnv: readString(draft.draft, "tokenEnv") ?? preservedTokenEnv,
+        token: readString(draft.draft, "token") ?? preservedToken,
+        defaultRoomId: readString(draft.draft, "defaultRoomId"),
+      });
+    },
+    validate(draft) {
+      const issues: ChannelSetupIssue[] = [];
+      const baseUrl = readString(draft.draft, "baseUrl");
+      const hasConfiguredToken = Boolean(
+        readString(draft.draft, "token")
+        || readString(draft.draft, "tokenEnv")
+        || draft.hydration?.fieldState.token === "configured"
+        || draft.hydration?.fieldState.tokenEnv === "configured",
+      );
+      if (!baseUrl) {
+        issues.push(requiredFieldIssue("baseUrl", "Base URL is required."));
+      } else if (!looksLikeHttpUrl(baseUrl)) {
+        issues.push(malformedFieldIssue("baseUrl", "Base URL should start with http:// or https://."));
+      }
+      if (!hasConfiguredToken) {
+        issues.push({
+          key: "nextcloud_talk_auth_missing",
+          level: "error",
+          message: "Provide either a Nextcloud Talk token or an env-backed token reference.",
+          failureCategory: "missing_input",
+        });
+      }
+      if (!readString(draft.draft, "defaultRoomId")) {
+        issues.push(requiredFieldIssue("defaultRoomId", "Default room ID is required."));
+      }
+      return issues;
+    },
+  };
+}
+
+function createLineDefinition(): ChannelSetupRuntimeDefinition {
+  const catalog = requireCatalog("channel.line");
+  const definition: ChannelSetupDefinition = {
+    catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
+    wizard: {
+      archetype: "bot_token_target",
+      contentVersion: "2026.04.line.v1",
+      estimatedMinutes: 6,
+      difficulty: "intermediate",
+      manualModePolicy: "available-secondary",
+      introSummary: "Connect LINE with a channel access token and a default user, room, or group target.",
+      prerequisites: [
+        "A LINE Messaging API channel with a valid channel access token.",
+        "A sandbox target identifier for manual confirmation.",
+      ],
+      steps: [
+        {
+          id: "collect-values",
+          kind: "field-collection",
+          title: "Paste your connection values",
+          fields: [
+            {
+              key: "channelAccessTokenEnv",
+              label: "Channel access token env var",
+              type: "text",
+              required: false,
+              explanation: "Preferred path. Name of the env var that stores the LINE channel access token.",
+              looksLike: "LINE_CHANNEL_ACCESS_TOKEN",
+              canChangeLater: true,
+              placeholder: "LINE_CHANNEL_ACCESS_TOKEN",
+            },
+            {
+              key: "channelAccessToken",
+              label: "Channel access token (manual fallback)",
+              type: "secret",
+              required: false,
+              explanation: "Optional direct token entry if env-backed storage is not ready yet.",
+              sensitive: true,
+              canChangeLater: true,
+              placeholder: "Paste only if you cannot use an env var",
+            },
+            {
+              key: "channelSecretEnv",
+              label: "Channel secret env var",
+              type: "text",
+              required: false,
+              explanation: "Optional but recommended if you want signed inbound webhook routing.",
+              whyNeeded: "LINE signs webhook deliveries with the channel secret. Without it GoatCitadel stays outbound only.",
+              looksLike: "LINE_CHANNEL_SECRET",
+              canChangeLater: true,
+              placeholder: "LINE_CHANNEL_SECRET",
+            },
+            {
+              key: "channelSecret",
+              label: "Channel secret (manual fallback)",
+              type: "secret",
+              required: false,
+              explanation: "Optional direct channel-secret entry if env-backed storage is not ready yet.",
+              sensitive: true,
+              canChangeLater: true,
+              placeholder: "Paste only if you cannot use an env var",
+            },
+            {
+              key: "defaultTarget",
+              label: "Default target",
+              type: "text",
+              required: true,
+              explanation: "Fallback LINE user, room, or group id.",
+              looksLike: "userId, groupId, or roomId",
+              canChangeLater: true,
+            },
+          ],
+        },
+      ],
+    },
+    adapter: {
+      adapterVersion: "2026.04.line.v1",
+      secretFieldKeys: ["channelAccessToken", "channelSecret"],
+    },
+    validation: {
+      validationVersion: "2026.04.line.v1",
+      levels: ["structural", "semantic"],
+    },
+    testing: {
+      testVersion: "2026.04.line.v1",
+      levels: ["structural", "semantic", "manual-confirm"],
+      safePreFinalize: true,
+      supportsManualConfirmation: true,
+    },
+    troubleshooting: {
+      commonFailures: COMMON_FAILURES.token ?? [],
+    },
+    telemetry: {
+      tier: "tier_2",
+      namespace: "channel_setup.line",
+    },
+    lifecycle: {
+      supportedModes: ["create", "edit", "repair", "rotate_secret", "retest"],
+      supportsDrafts: true,
+      supportsEdit: true,
+      supportsRepair: true,
+      supportsRotateSecret: true,
+      supportsRetest: true,
+    },
+    volatility: {
+      officialDocsUrl: "https://developers.line.biz/en/docs/messaging-api/",
+      lastReviewedAt: "2026-04-01",
+      volatility: "medium",
+      deprecationRisk: "low",
+      preferredPathLabel: "Channel access token",
+    },
+  };
+
+  return {
+    definition,
+    hydrate(connection) {
+      const config = connection.config;
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [
+        ["channelAccessToken", "channelAccessTokenEnv", "accessToken", "accessTokenEnv", "token", "tokenEnv"],
+        ["channelSecret", "channelSecretEnv", "secret", "secretEnv"],
+      ]);
+      return {
+        draft: {
+          channelAccessTokenEnv: readString(config, "channelAccessTokenEnv") ?? readString(config, "accessTokenEnv") ?? readString(config, "tokenEnv"),
+          channelSecretEnv: readString(config, "channelSecretEnv") ?? readString(config, "secretEnv"),
+          defaultTarget: readString(config, "defaultTarget"),
+        },
+        hydration: {
+          status: hasConfiguredSecret ? "opaque-secret" : "clean",
+          fieldState: {
+            channelAccessToken: readString(config, "channelAccessToken") || readString(config, "channelAccessTokenEnv") || readString(config, "accessToken") || readString(config, "accessTokenEnv") || readString(config, "token") || readString(config, "tokenEnv")
+              ? "configured"
+              : "missing",
+            channelAccessTokenEnv: readString(config, "channelAccessTokenEnv") || readString(config, "accessTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
+            channelSecret: readString(config, "channelSecret") || readString(config, "channelSecretEnv") || readString(config, "secret") || readString(config, "secretEnv")
+              ? "configured"
+              : "unknown",
+            channelSecretEnv: readString(config, "channelSecretEnv") || readString(config, "secretEnv") ? "configured" : "unknown",
+            defaultTarget: readString(config, "defaultTarget") ? "configured" : "missing",
+          },
+          warnings: hasConfiguredSecret
+            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            : [],
+          rawLegacyConfig: config,
+        },
+      };
+    },
+    normalize(draft) {
+      const preservedToken = readLegacyString(draft, "channelAccessToken", "accessToken", "token");
+      const preservedTokenEnv = readLegacyString(draft, "channelAccessTokenEnv", "accessTokenEnv", "tokenEnv");
+      const preservedChannelSecret = readLegacyString(draft, "channelSecret", "secret");
+      const preservedChannelSecretEnv = readLegacyString(draft, "channelSecretEnv", "secretEnv");
+      return compactRecord({
+        channelAccessTokenEnv: readString(draft.draft, "channelAccessTokenEnv") ?? preservedTokenEnv,
+        channelAccessToken: readString(draft.draft, "channelAccessToken") ?? preservedToken,
+        channelSecretEnv: readString(draft.draft, "channelSecretEnv") ?? preservedChannelSecretEnv,
+        channelSecret: readString(draft.draft, "channelSecret") ?? preservedChannelSecret,
+        defaultTarget: readString(draft.draft, "defaultTarget"),
+      });
+    },
+    validate(draft) {
+      const issues: ChannelSetupIssue[] = [];
+      const hasConfiguredToken = Boolean(
+        readString(draft.draft, "channelAccessToken")
+        || readString(draft.draft, "channelAccessTokenEnv")
+        || draft.hydration?.fieldState.channelAccessToken === "configured"
+        || draft.hydration?.fieldState.channelAccessTokenEnv === "configured",
+      );
+      if (!hasConfiguredToken) {
+        issues.push({
+          key: "line_auth_missing",
+          level: "error",
+          message: "Provide either a LINE channel access token or an env-backed token reference.",
+          failureCategory: "missing_input",
+        });
+      }
+      if (!readString(draft.draft, "defaultTarget")) {
+        issues.push(requiredFieldIssue("defaultTarget", "Default target is required."));
+      }
+      return issues;
+    },
+  };
+}
+
+function createZaloDefinition(): ChannelSetupRuntimeDefinition {
+  const catalog = requireCatalog("channel.zalo");
+  const definition: ChannelSetupDefinition = {
+    catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
+    wizard: {
+      archetype: "platform_api_resource_ids",
+      contentVersion: "2026.04.zalo.v1",
+      estimatedMinutes: 6,
+      difficulty: "intermediate",
+      manualModePolicy: "available-secondary",
+      introSummary: "Connect a Zalo Official Account sender with an access token and a default recipient id.",
+      prerequisites: [
+        "A Zalo Official Account bot token.",
+        "A sandbox Zalo recipient id for manual confirmation.",
+      ],
+      steps: [
+        {
+          id: "collect-values",
+          kind: "field-collection",
+          title: "Paste your connection values",
+          fields: [
+            {
+              key: "accessTokenEnv",
+              label: "Access token env var",
+              type: "text",
+              required: false,
+              explanation: "Preferred path. Name of the env var that stores the Zalo access token.",
+              looksLike: "ZALO_ACCESS_TOKEN",
+              canChangeLater: true,
+              placeholder: "ZALO_ACCESS_TOKEN",
+            },
+            {
+              key: "accessToken",
+              label: "Access token (manual fallback)",
+              type: "secret",
+              required: false,
+              explanation: "Optional direct token entry if env-backed storage is not ready yet.",
+              sensitive: true,
+              canChangeLater: true,
+              placeholder: "Paste only if you cannot use an env var",
+            },
+            {
+              key: "defaultRecipientId",
+              label: "Default recipient ID",
+              type: "text",
+              required: true,
+              explanation: "Fallback Zalo recipient id for manual sends.",
+              looksLike: "zalo-user-id",
+              canChangeLater: true,
+            },
+          ],
+        },
+      ],
+    },
+    adapter: {
+      adapterVersion: "2026.04.zalo.v1",
+      secretFieldKeys: ["accessToken"],
+    },
+    validation: {
+      validationVersion: "2026.04.zalo.v1",
+      levels: ["structural", "semantic"],
+    },
+    testing: {
+      testVersion: "2026.04.zalo.v1",
+      levels: ["structural", "semantic", "manual-confirm"],
+      safePreFinalize: true,
+      supportsManualConfirmation: true,
+    },
+    troubleshooting: {
+      commonFailures: COMMON_FAILURES.token ?? [],
+    },
+    telemetry: {
+      tier: "tier_2",
+      namespace: "channel_setup.zalo",
+    },
+    lifecycle: {
+      supportedModes: ["create", "edit", "repair", "rotate_secret", "retest"],
+      supportsDrafts: true,
+      supportsEdit: true,
+      supportsRepair: true,
+      supportsRotateSecret: true,
+      supportsRetest: true,
+    },
+    volatility: {
+      officialDocsUrl: "https://developers.zalo.me/docs/api/official-account-api/thong-tin-chung-ve-official-account-api",
+      lastReviewedAt: "2026-04-01",
+      volatility: "medium",
+      deprecationRisk: "medium",
+      preferredPathLabel: "Official Account access token",
+    },
+  };
+
+  return {
+    definition,
+    hydrate(connection) {
+      const config = connection.config;
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["accessToken", "accessTokenEnv", "token", "tokenEnv"]]);
+      return {
+        draft: {
+          accessTokenEnv: readString(config, "accessTokenEnv") ?? readString(config, "tokenEnv"),
+          defaultRecipientId: readString(config, "defaultRecipientId"),
+        },
+        hydration: {
+          status: hasConfiguredSecret ? "opaque-secret" : "clean",
+          fieldState: {
+            accessToken: readString(config, "accessToken") || readString(config, "accessTokenEnv") || readString(config, "token") || readString(config, "tokenEnv")
+              ? "configured"
+              : "missing",
+            accessTokenEnv: readString(config, "accessTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
+            defaultRecipientId: readString(config, "defaultRecipientId") ? "configured" : "missing",
+          },
+          warnings: hasConfiguredSecret
+            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            : [],
+          rawLegacyConfig: config,
+        },
+      };
+    },
+    normalize(draft) {
+      const preservedAccessToken = readLegacyString(draft, "accessToken", "token");
+      const preservedAccessTokenEnv = readLegacyString(draft, "accessTokenEnv", "tokenEnv");
+      return compactRecord({
+        accessTokenEnv: readString(draft.draft, "accessTokenEnv") ?? preservedAccessTokenEnv,
+        accessToken: readString(draft.draft, "accessToken") ?? preservedAccessToken,
+        defaultRecipientId: readString(draft.draft, "defaultRecipientId"),
+      });
+    },
+    validate(draft) {
+      const issues: ChannelSetupIssue[] = [];
+      const hasConfiguredToken = Boolean(
+        readString(draft.draft, "accessToken")
+        || readString(draft.draft, "accessTokenEnv")
+        || draft.hydration?.fieldState.accessToken === "configured"
+        || draft.hydration?.fieldState.accessTokenEnv === "configured",
+      );
+      if (!hasConfiguredToken) {
+        issues.push({
+          key: "zalo_auth_missing",
+          level: "error",
+          message: "Provide either a Zalo access token or an env-backed token reference.",
+          failureCategory: "missing_input",
+        });
+      }
+      if (!readString(draft.draft, "defaultRecipientId")) {
+        issues.push(requiredFieldIssue("defaultRecipientId", "Default recipient ID is required."));
+      }
+      return issues;
+    },
+  };
+}
+
+function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
+  const catalog = requireCatalog("channel.zalouser");
+  const definition: ChannelSetupDefinition = {
+    catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
+    wizard: {
+      archetype: "bridge_dependent",
+      contentVersion: "2026.04.zalouser.v1",
+      estimatedMinutes: 8,
+      difficulty: "advanced",
+      manualModePolicy: "available-secondary",
+      introSummary: "Configure a zca bridge URL, optional bearer token, optional profile, and a default Zalo personal-session target.",
+      prerequisites: [
+        "A reachable zca bridge endpoint.",
+        "A sandbox personal or group target for manual confirmation.",
+      ],
+      steps: [
+        {
+          id: "collect-values",
+          kind: "field-collection",
+          title: "Paste your bridge values",
+          fields: [
+            {
+              key: "baseUrl",
+              label: "Bridge URL",
+              type: "url",
+              required: true,
+              explanation: "Reachable base URL for the zca personal-session bridge.",
+              looksLike: "http://127.0.0.1:56789",
+              canChangeLater: true,
+            },
+            {
+              key: "authTokenEnv",
+              label: "Bearer token env var",
+              type: "text",
+              required: false,
+              explanation: "Optional env var name for the zca bearer token when the bridge is not local or open.",
+              looksLike: "ZALOUSER_AUTH_TOKEN",
+              canChangeLater: true,
+              placeholder: "ZALOUSER_AUTH_TOKEN",
+            },
+            {
+              key: "authToken",
+              label: "Bearer token (manual fallback)",
+              type: "secret",
+              required: false,
+              explanation: "Optional direct bearer-token entry if env-backed storage is not ready yet.",
+              sensitive: true,
+              canChangeLater: true,
+              placeholder: "Paste only if you cannot use an env var",
+            },
+            {
+              key: "profile",
+              label: "Profile",
+              type: "text",
+              required: false,
+              explanation: "Optional zca profile name when the bridge exposes multiple sessions.",
+              looksLike: "work",
+              canChangeLater: true,
+            },
+            {
+              key: "defaultTarget",
+              label: "Default recipient",
+              type: "text",
+              required: true,
+              explanation: "Fallback personal-session recipient or group target.",
+              looksLike: "user:u-123456789 or group:g-987654321",
+              canChangeLater: true,
+            },
+          ],
+        },
+      ],
+    },
+    adapter: {
+      adapterVersion: "2026.04.zalouser.v1",
+      secretFieldKeys: ["authToken"],
+    },
+    validation: {
+      validationVersion: "2026.04.zalouser.v1",
+      levels: ["structural", "semantic"],
+    },
+    testing: {
+      testVersion: "2026.04.zalouser.v1",
+      levels: ["structural", "semantic", "manual-confirm"],
+      safePreFinalize: true,
+      supportsManualConfirmation: true,
+    },
+    troubleshooting: {
+      commonFailures: [],
+    },
+    telemetry: {
+      tier: "tier_2",
+      namespace: "channel_setup.zalouser",
+    },
+    lifecycle: {
+      supportedModes: ["create", "edit", "repair", "rotate_secret", "retest"],
+      supportsDrafts: true,
+      supportsEdit: true,
+      supportsRepair: true,
+      supportsRotateSecret: true,
+      supportsRetest: true,
+    },
+    volatility: {
+      lastReviewedAt: "2026-04-01",
+      volatility: "high",
+      deprecationRisk: "medium",
+      preferredPathLabel: "zca bridge URL + optional bearer token",
+    },
+  };
+
+  return {
+    definition,
+    hydrate(connection) {
+      const config = connection.config;
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["authToken", "authTokenEnv", "authorization", "authorizationEnv", "accessToken", "accessTokenEnv", "basicAuth", "basicAuthEnv"]]);
+      return {
+        draft: {
+          baseUrl: readString(config, "baseUrl") ?? readString(config, "bridgeUrl") ?? readString(config, "serverUrl"),
+          authTokenEnv: readString(config, "authTokenEnv") ?? readString(config, "authorizationEnv") ?? readString(config, "accessTokenEnv"),
+          profile: readString(config, "profile"),
+          defaultTarget: readString(config, "defaultTarget"),
+        },
+        hydration: {
+          status: hasConfiguredSecret ? "opaque-secret" : "clean",
+          fieldState: {
+            baseUrl: readString(config, "baseUrl") || readString(config, "bridgeUrl") || readString(config, "serverUrl")
+              ? "configured"
+              : "missing",
+            authToken: readString(config, "authToken") || readString(config, "authTokenEnv") || readString(config, "authorization") || readString(config, "authorizationEnv") || readString(config, "accessToken") || readString(config, "accessTokenEnv") || readString(config, "basicAuth") || readString(config, "basicAuthEnv")
+              ? "configured"
+              : "unknown",
+            authTokenEnv: readString(config, "authTokenEnv") || readString(config, "authorizationEnv") || readString(config, "accessTokenEnv") || readString(config, "basicAuthEnv")
+              ? "configured"
+              : "unknown",
+            profile: readString(config, "profile") ? "configured" : "unknown",
+            defaultTarget: readString(config, "defaultTarget") ? "configured" : "missing",
+          },
+          warnings: hasConfiguredSecret
+            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            : [],
+          rawLegacyConfig: config,
+        },
+      };
+    },
+    normalize(draft) {
+      const explicitAuthToken = readString(draft.draft, "authToken");
+      const explicitAuthTokenEnv = readString(draft.draft, "authTokenEnv");
+      const legacyAuthorization = !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "authorization") : undefined;
+      const legacyAuthorizationEnv = !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "authorizationEnv") : undefined;
+      const legacyAccessToken = !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "accessToken") : undefined;
+      const legacyAccessTokenEnv = !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "accessTokenEnv") : undefined;
+      const legacyBasicAuth = !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "basicAuth") : undefined;
+      const legacyBasicAuthEnv = !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "basicAuthEnv") : undefined;
+      return compactRecord({
+        baseUrl: readString(draft.draft, "baseUrl") ?? readLegacyString(draft, "baseUrl", "bridgeUrl", "serverUrl"),
+        authTokenEnv: explicitAuthTokenEnv ?? readLegacyString(draft, "authTokenEnv"),
+        authToken: explicitAuthToken ?? readLegacyString(draft, "authToken"),
+        authorization: legacyAuthorization,
+        authorizationEnv: legacyAuthorizationEnv,
+        accessToken: legacyAccessToken,
+        accessTokenEnv: legacyAccessTokenEnv,
+        basicAuth: legacyBasicAuth,
+        basicAuthEnv: legacyBasicAuthEnv,
+        profile: readString(draft.draft, "profile"),
+        defaultTarget: readString(draft.draft, "defaultTarget"),
+      });
+    },
+    validate(draft) {
+      const issues: ChannelSetupIssue[] = [];
+      const baseUrl = readString(draft.draft, "baseUrl") ?? readLegacyString(draft, "baseUrl", "bridgeUrl", "serverUrl");
+      if (!baseUrl) {
+        issues.push(requiredFieldIssue("baseUrl", "Bridge URL is required."));
+      } else if (!looksLikeHttpUrl(baseUrl)) {
+        issues.push(malformedFieldIssue("baseUrl", "Bridge URL should start with http:// or https://."));
+      }
+      if (!readString(draft.draft, "defaultTarget")) {
+        issues.push(requiredFieldIssue("defaultTarget", "Default recipient is required."));
+      }
+      return issues;
+    },
+  };
+}
+
 function requireCatalog(catalogId: string): IntegrationCatalogEntry {
   const catalog = INTEGRATION_CATALOG.find((entry) => entry.catalogId === catalogId);
   if (!catalog) {
@@ -1341,6 +2827,10 @@ function troubleshoot(id: string, title: string, body: string) {
 function readString(config: Record<string, unknown>, key: string): string | undefined {
   const value = config[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function looksLikeHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
 }
 
 function hasAnyConfiguredSecret(

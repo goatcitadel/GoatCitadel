@@ -17,6 +17,7 @@ import {
   buildExtensionStarterPackFiles,
 } from "../services/extension-starter-pack.js";
 import { buildFollowOnParityReport } from "../services/follow-on-parity-report.js";
+import { buildOpenclawParityProgramReport } from "../services/openclaw-parity-report.js";
 import { buildPackagingProofLaneArtifactPath, buildPackagingProofLaneDraft } from "../services/packaging-proof-lane.js";
 import { buildVoiceProofLaneArtifactPath, buildVoiceProofLaneDraft } from "../services/voice-proof-lane.js";
 
@@ -117,6 +118,7 @@ const updateSettingsSchema = z.object({
     durableKernelV1Enabled: z.boolean().optional(),
     replayOverridesV1Enabled: z.boolean().optional(),
     memoryLifecycleAdminV1Enabled: z.boolean().optional(),
+    memoryMaintenanceV1Enabled: z.boolean().optional(),
     connectorDiagnosticsV1Enabled: z.boolean().optional(),
     computerUseGuardrailsV1Enabled: z.boolean().optional(),
     bankrBuiltinEnabled: z.boolean().optional(),
@@ -196,6 +198,8 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     });
   };
 
+  const loadOpenclawParityReport = async () => buildOpenclawParityProgramReport(await loadFollowOnParityReport());
+
   fastify.get("/api/v1/dashboard/state", async (_request, reply) => {
     return reply.send(fastify.gateway.getDashboardState());
   });
@@ -206,6 +210,10 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/system/follow-on-parity", async (_request, reply) => {
     return reply.send(await loadFollowOnParityReport());
+  });
+
+  fastify.get("/api/v1/system/openclaw-parity", async (_request, reply) => {
+    return reply.send(await loadOpenclawParityReport());
   });
 
   fastify.get("/api/v1/system/follow-on-parity/browser-proof-lane", async (_request, reply) => {

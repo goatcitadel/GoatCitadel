@@ -241,6 +241,7 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
       },
       features: {
         durableKernelV1Enabled: false,
+        memoryMaintenanceV1Enabled: false,
         replayOverridesV1Enabled: false,
         memoryLifecycleAdminV1Enabled: false,
         connectorDiagnosticsV1Enabled: false,

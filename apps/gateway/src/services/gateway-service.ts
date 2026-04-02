@@ -14,7 +14,7 @@ import {
 } from "@goatcitadel/memory-core";
 import { buildInstalledIntegrationPluginRecord, resolveIntegrationPluginInstallMetadata } from "./integration-plugin-author-contract.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
-import { OrchestrationEngine } from "@goatcitadel/orchestration";
+import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
 import {
   ToolPolicyEngine,
   assertExistingPathRealpathAllowed,
@@ -169,8 +169,16 @@ import type {
   DocsIngestInput,
   EmbeddingIndexInput,
   EmbeddingQueryInput,
+  ContextManifestDetail,
   MemoryContextComposeRequest,
   MemoryContextPack,
+  MemoryMaintenancePolicyPatchInput,
+  MemoryMaintenancePolicyRecord,
+  MemoryMaintenanceProvenanceRecord,
+  MemoryMaintenanceRecommendationRecord,
+  MemoryMaintenanceRunNowInput,
+  MemoryMaintenanceRunRecord,
+  MemoryMaintenanceStatusRecord,
   MemoryQmdStatsResponse,
   MemorySearchQuery,
   MemoryWriteInput,
@@ -392,6 +400,7 @@ import {
   getIntegrationFormSchema,
   INTEGRATION_CATALOG,
   resolveIntegrationCatalogMaturity,
+  resolveIntegrationCatalogRuntimeAvailability,
 } from "./integration-catalog.js";
 import {
   listChannelSetupDefinitions,
@@ -408,7 +417,8 @@ import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-dia
 import { MemoryContextService } from "./memory-context-service.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
-import { ChatAgentOrchestrator, normalizeAgentInputFromSend } from "./chat-agent-orchestrator.js";
+import { normalizeAgentInputFromSend } from "./chat-agent-orchestrator.js";
+import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
 import { ObsidianVaultService } from "./obsidian-vault-service.js";
 import { SkillImportService } from "./skill-import-service.js";
@@ -462,6 +472,7 @@ import { parseChatModelCommandTarget } from "./chat-model-command.js";
 import { PromptPackService, normalizePromptTestCode, clampPromptScore } from "./prompt-pack-service.js";
 import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
+import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { ReplayExecutionSkippedError } from "./replay-execution.js";
 import { evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
@@ -651,6 +662,7 @@ export interface RuntimeSettings {
     durableKernelV1Enabled: boolean;
     replayOverridesV1Enabled: boolean;
     memoryLifecycleAdminV1Enabled: boolean;
+    memoryMaintenanceV1Enabled: boolean;
     connectorDiagnosticsV1Enabled: boolean;
     computerUseGuardrailsV1Enabled: boolean;
     bankrBuiltinEnabled: boolean;
@@ -1240,7 +1252,7 @@ export class GatewayService {
   private readonly meshService: MeshService;
   private readonly npuSidecar: NpuSidecarService;
   private readonly approvalExplainer: ApprovalExplainerService;
-  private readonly chatAgentOrchestrator: ChatAgentOrchestrator;
+  private readonly turnRuntime: TurnRuntime;
   private readonly researchService: ResearchService;
   private readonly obsidianVaultService: ObsidianVaultService;
   private readonly skillImportService: SkillImportService;
@@ -1255,6 +1267,7 @@ export class GatewayService {
   private readonly promptPackService: PromptPackService;
   private readonly chatProactiveService: ChatProactiveService;
   private readonly improvementService: ImprovementService;
+  private readonly memoryMaintenanceService: MemoryMaintenanceService;
   private readonly realtime = new EventEmitter();
   private readonly backgroundTasks = new Set<Promise<void>>();
   private readonly warnedOutsideRootPathFingerprints = new Set<string>();
@@ -1356,7 +1369,7 @@ export class GatewayService {
         this.publishRealtime("approval_explained", "approvals", { ...payload });
       },
     );
-    this.chatAgentOrchestrator = new ChatAgentOrchestrator({
+    this.turnRuntime = new GatewayTurnRuntime({
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
       createChatCompletion: (request) => this.createChatCompletion(request),
@@ -1473,6 +1486,10 @@ export class GatewayService {
       retryChatTurn: (sessionId, turnId, overrides) => this.retryChatTurnInScratchSession(sessionId, turnId, overrides),
       backgroundTasks: this.backgroundTasks,
       get closing() { return self.closing; },
+    });
+    this.memoryMaintenanceService = new MemoryMaintenanceService(serviceCtx, {
+      createDurableRun: (input) => this.createDurableRun(input),
+      getDurableRun: (runId) => this.getDurableRun(runId),
     });
   }
 
@@ -2464,6 +2481,18 @@ export class GatewayService {
     await this.runMemoryFlushSchedulerIfDue();
     await this.runCostReportSchedulerIfDue();
     await this.runUpdateReviewSchedulerIfDue();
+    await this.memoryMaintenanceService.runDueEvaluation();
+  }
+
+  private scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void {
+    if (this.closing || parentTurnId) {
+      return;
+    }
+    const task = this.memoryMaintenanceService.noteSuccessfulRootTurn(sessionId).catch((error) => {
+      console.error("[goatcitadel] memory maintenance post-turn evaluation failed", error);
+    });
+    this.backgroundTasks.add(task);
+    task.finally(() => this.backgroundTasks.delete(task));
   }
 
   private async runPrivateBetaBackupSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
@@ -3207,6 +3236,8 @@ export class GatewayService {
       { command: "/model", usage: "/model <model-id|provider-id/model-id>", description: "Override provider/model for this session." },
       { command: "/web", usage: "/web auto|off|quick|deep", description: "Set web retrieval behavior." },
       { command: "/memory", usage: "/memory auto|on|off", description: "Set memory behavior." },
+      { command: "/dream", usage: "/dream", description: "Run workspace memory maintenance now." },
+      { command: "/dream", usage: "/dream status", description: "Show workspace memory maintenance status." },
       { command: "/think", usage: "/think minimal|standard|extended", description: "Set thinking depth." },
       { command: "/tool", usage: "/tool safe_auto|manual", description: "Set tool autonomy mode." },
       { command: "/proactive", usage: "/proactive off|suggest|auto_safe", description: "Set proactive mode." },
@@ -3450,6 +3481,46 @@ export class GatewayService {
       }
       const prefs = this.updateChatSessionPrefs(sessionId, { memoryMode });
       return { ok: true, command, args, prefs, message: `Memory mode set to ${prefs.memoryMode}.` };
+    }
+
+    if (command === "/dream") {
+      const workspaceId = this.normalizeWorkspaceId(this.storage.chatSessionMeta.ensure(sessionId).workspaceId);
+      const subcommand = (args[0] ?? "").toLowerCase();
+      if (!subcommand) {
+        const run = this.runMemoryMaintenanceNow({ workspaceId, triggerSource: "manual" });
+        return {
+          ok: true,
+          command,
+          args,
+          message: `Memory maintenance queued for ${workspaceId} (${run.runId}).`,
+        };
+      }
+      if (subcommand === "status") {
+        const status = this.getMemoryMaintenanceStatus(workspaceId);
+        const providerId = status.policy.providerId ?? this.getSettings().llm.activeProviderId;
+        const model = status.policy.model ?? this.getSettings().llm.activeModel;
+        const providerMode = status.policy.providerId || status.policy.model ? "pinned" : "active default";
+        const scheduleSummary = status.policy.schedule
+          ? `${status.policy.schedule.frequency} ${String(status.policy.schedule.hour).padStart(2, "0")}:${String(status.policy.schedule.minute).padStart(2, "0")} ${status.policy.timeZone}`
+          : "manual only";
+        return {
+          ok: true,
+          command,
+          args,
+          message: [
+            `Workspace: ${workspaceId}`,
+            `Enabled: ${status.policy.enabled ? "yes" : "no"}`,
+            `Mode: ${status.policy.runMode} / ${status.policy.timingStrategy}`,
+            `Provider/model: ${providerId}/${model} (${providerMode})`,
+            `Execution target: ${status.policy.executionTarget} (${status.policy.unavailableModelPolicy} if unavailable)`,
+            `Schedule: ${scheduleSummary}`,
+            `Changed sessions: ${status.state.changedSessionCount}`,
+            `Last run: ${status.lastRun ? `${status.lastRun.status} at ${status.lastRun.updatedAt}` : "none"}`,
+            `Next due: ${status.nextDueAt ?? "not scheduled"}`,
+          ].join("\n"),
+        };
+      }
+      return { ok: false, command, args, message: "Usage: /dream | /dream status" };
     }
 
     if (command === "/think") {
@@ -4738,16 +4809,20 @@ export class GatewayService {
 
   public resumeDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
     const run = this.durableRunService.resumeDurableRun(runId, actorId);
+    this.memoryMaintenanceService.syncFromDurableRun(run);
     this.durableRunService.requestRunProcessing(runId);
     return run;
   }
 
   public cancelDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    return this.durableRunService.cancelDurableRun(runId, actorId);
+    const run = this.durableRunService.cancelDurableRun(runId, actorId);
+    this.memoryMaintenanceService.syncFromDurableRun(run);
+    return run;
   }
 
   public retryDurableRun(runId: string, reason = "manual_retry", actorId = "operator"): DurableRunRecord {
     const run = this.durableRunService.retryDurableRun(runId, reason, actorId);
+    this.memoryMaintenanceService.syncFromDurableRun(run);
     if (run.status === "queued") {
       this.durableRunService.requestRunProcessing(runId);
     }
@@ -4765,6 +4840,51 @@ export class GatewayService {
       },
     });
     return run;
+  }
+
+  public getMemoryMaintenancePolicy(workspaceId?: string): MemoryMaintenancePolicyRecord {
+    return this.memoryMaintenanceService.getPolicy(workspaceId);
+  }
+
+  public patchMemoryMaintenancePolicy(
+    workspaceId: string | undefined,
+    patch: MemoryMaintenancePolicyPatchInput,
+  ): MemoryMaintenancePolicyRecord {
+    return this.memoryMaintenanceService.patchPolicy(workspaceId, patch);
+  }
+
+  public getMemoryMaintenanceStatus(workspaceId?: string): MemoryMaintenanceStatusRecord {
+    return this.memoryMaintenanceService.getStatus(workspaceId);
+  }
+
+  public listMemoryMaintenanceRuns(workspaceId?: string, limit = 50): MemoryMaintenanceRunRecord[] {
+    return this.memoryMaintenanceService.listRuns(workspaceId, limit);
+  }
+
+  public runMemoryMaintenanceNow(input: MemoryMaintenanceRunNowInput): MemoryMaintenanceRunRecord {
+    return this.memoryMaintenanceService.runNow(input);
+  }
+
+  public getMemoryMaintenanceRunProvenance(runId: string): MemoryMaintenanceProvenanceRecord {
+    return this.memoryMaintenanceService.getRunProvenance(runId);
+  }
+
+  public listMemoryMaintenanceRecommendations(
+    workspaceId?: string,
+    limit = 50,
+  ): MemoryMaintenanceRecommendationRecord[] {
+    return this.memoryMaintenanceService.listRecommendations(workspaceId, limit);
+  }
+
+  public acceptMemoryMaintenanceRecommendation(recommendationId: string): {
+    recommendation: MemoryMaintenanceRecommendationRecord;
+    policy: MemoryMaintenancePolicyRecord;
+  } {
+    return this.memoryMaintenanceService.acceptRecommendation(recommendationId);
+  }
+
+  public rejectMemoryMaintenanceRecommendation(recommendationId: string): MemoryMaintenanceRecommendationRecord {
+    return this.memoryMaintenanceService.rejectRecommendation(recommendationId);
   }
 
   public wakeDurableRun(
@@ -6066,6 +6186,7 @@ export class GatewayService {
           sourceRef: assistantMessageId,
           trace: hydratedTrace,
         });
+        this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, prepared.parentTurnId);
         if ((hydratedTrace.completion?.status ?? "complete") === "complete" && hydratedTrace.status === "completed") {
           yield {
             type: "done",
@@ -6087,7 +6208,7 @@ export class GatewayService {
       let hasStreamedDelta = false;
       let approvalRequired = false;
       const streamCitations: ChatCitationRecord[] = [];
-      for await (const chunk of this.chatAgentOrchestrator.runStream({
+      for await (const chunk of this.turnRuntime.runStream({
         sessionId,
         turnId,
         userMessageId: prepared.userEventId,
@@ -6337,6 +6458,7 @@ export class GatewayService {
           sourceRef: assistantMessageId,
           trace: hydratedTrace,
         });
+        this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, prepared.parentTurnId);
       }
 
       const completedTrace = this.storage.chatTurnTraces.get(turnId);
@@ -6431,7 +6553,7 @@ export class GatewayService {
       const controller = this.beginActiveChatTurnExecution(sessionId, prepared.turnId, "agent-send");
       try {
         let turnId = prepared.turnId;
-        let turnResult = await this.chatAgentOrchestrator.run({
+        let turnResult = await this.turnRuntime.run({
           sessionId,
           turnId,
           userMessageId: prepared.userEventId,
@@ -6493,7 +6615,7 @@ export class GatewayService {
 
           const retryHistory = prepared.history;
           const retryPrompt = `${prepared.content}\n\nRetry guidance: last attempt was incomplete. Use a different approach or tool and be explicit about limits.`;
-          const retryResult = await this.chatAgentOrchestrator.run({
+          const retryResult = await this.turnRuntime.run({
             sessionId,
             turnId: retryTurnId,
             userMessageId: prepared.userEventId,
@@ -7397,7 +7519,18 @@ export class GatewayService {
     };
   }
 
+  private parseMemoryMaintenanceWorkflowPayload(run: DurableRunRecord) {
+    return this.memoryMaintenanceService.parseWorkflowPayload(run);
+  }
+
   private resolveDurableRunHookWorkspaceId(run: DurableRunRecord): string {
+    if (run.workflowKey === "memory.maintenance") {
+      const payload = this.parseMemoryMaintenanceWorkflowPayload(run);
+      if (payload?.workspaceId) {
+        return this.normalizeWorkspaceId(payload.workspaceId);
+      }
+      return DEFAULT_WORKSPACE_ID;
+    }
     if (run.workflowKey === "hook.delivery") {
       const payload = this.parseHookDeliveryWorkflowPayload(run);
       if (payload?.workspaceId) {
@@ -7725,6 +7858,9 @@ export class GatewayService {
 
   private async executeDurableWorkflowRun(run: DurableRunRecord): Promise<void> {
     switch (run.workflowKey) {
+      case "memory.maintenance":
+        this.completeDurableWorkflowRun(run.runId, await this.memoryMaintenanceService.executeDurableRun(run));
+        return;
       case "chat.turn.execute":
         await this.executeDurableChatTurnRun(run);
         return;
@@ -7744,6 +7880,10 @@ export class GatewayService {
 
   private isDurableWorkflowRecoverable(run: DurableRunRecord): { recoverable: boolean; reason?: string } {
     switch (run.workflowKey) {
+      case "memory.maintenance":
+        return this.parseMemoryMaintenanceWorkflowPayload(run)
+          ? { recoverable: true }
+          : { recoverable: false, reason: "Durable memory maintenance payload is invalid or incomplete." };
       case "chat.turn.execute":
         break;
       case "approval.wait":
@@ -7790,6 +7930,16 @@ export class GatewayService {
   }
 
   private async markDurableWorkflowUnrecoverable(run: DurableRunRecord, reason: string): Promise<void> {
+    if (run.workflowKey === "memory.maintenance") {
+      this.memoryMaintenanceService.syncFromDurableRun(run);
+      this.publishRealtime("system", "durable", {
+        type: "durable_workflow_unrecoverable",
+        runId: run.runId,
+        workflowKey: run.workflowKey,
+        reason,
+      });
+      return;
+    }
     if (run.workflowKey === "approval.wait" || run.workflowKey === "connector.delivery") {
       this.publishRealtime("system", "durable", {
         type: "durable_workflow_unrecoverable",
@@ -10001,6 +10151,84 @@ export class GatewayService {
     return this.memoryContextService.stats(from, to);
   }
 
+  public getTurnContextManifest(turnId: string): ContextManifestDetail | undefined {
+    const normalizedTurnId = turnId.trim();
+    if (!normalizedTurnId) {
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "turnId" });
+    }
+    return this.storage.contextManifests.maybeGetDetailByTurn(normalizedTurnId);
+  }
+
+  private persistContextManifestForCompletionRequest(input: {
+    request: ChatCompletionRequest;
+    memoryContext?: MemoryContextPack;
+  }): void {
+    const turnId = input.request.memory?.turnId?.trim();
+    if (!turnId) {
+      return;
+    }
+
+    const manifest = this.storage.contextManifests.ensure({
+      scope: "chat_turn",
+      turnId,
+      sessionId: input.request.memory?.sessionId?.trim(),
+      taskId: input.request.memory?.taskId?.trim(),
+    });
+    const memoryContextSystemMessage = input.memoryContext
+      ? buildMemoryContextSystemMessage(input.memoryContext)
+      : undefined;
+    let entryIndex = 0;
+
+    for (const [messageIndex, message] of input.request.messages.entries()) {
+      if (message.role !== "system" || typeof message.content !== "string") {
+        continue;
+      }
+      const contentText = message.content.trim();
+      if (!contentText) {
+        continue;
+      }
+      if (memoryContextSystemMessage && contentText === memoryContextSystemMessage) {
+        continue;
+      }
+      this.storage.contextManifests.appendEntry({
+        manifestId: manifest.manifestId,
+        kind: "system_message",
+        entryIndex,
+        title: contentText.split(/\r?\n/u, 1)[0]?.slice(0, 120) || "System message",
+        sourceRef: `system:${messageIndex}`,
+        contentText,
+        metadata: {
+          role: message.role,
+          messageIndex,
+        },
+      });
+      entryIndex += 1;
+    }
+
+    if (!input.memoryContext) {
+      return;
+    }
+
+    this.storage.contextManifests.appendEntry({
+      manifestId: manifest.manifestId,
+      kind: "memory_context",
+      entryIndex,
+      title: "Memory context",
+      sourceRef: input.memoryContext.contextId,
+      contentText: input.memoryContext.contextText,
+      metadata: {
+        scope: input.memoryContext.scope,
+        status: input.memoryContext.quality.status,
+        reason: input.memoryContext.quality.reason,
+        citationsCount: input.memoryContext.citations.length,
+        originalTokenEstimate: input.memoryContext.originalTokenEstimate,
+        distilledTokenEstimate: input.memoryContext.distilledTokenEstimate,
+        createdAt: input.memoryContext.createdAt,
+        expiresAt: input.memoryContext.expiresAt,
+      },
+    });
+  }
+
   public listMemoryItems(input: {
     namespace?: string;
     status?: MemoryItemRecord["status"] | "all";
@@ -11626,6 +11854,7 @@ export class GatewayService {
       return {
         ...entry,
         maturity: resolveIntegrationCatalogMaturity(entry, pluginIds),
+        runtimeAvailability: resolveIntegrationCatalogRuntimeAvailability(entry, pluginIds),
       };
     });
     if (!kind) {
@@ -14038,7 +14267,7 @@ export class GatewayService {
           prompt,
           sessionId: memoryInput?.sessionId,
           taskId: memoryInput?.taskId,
-          workspace: memoryInput?.workspace,
+          workspace: this.resolveMemoryWorkspaceRelativeDir(memoryInput?.workspace, memoryInput?.sessionId),
           maxContextTokens: memoryInput?.maxContextTokens,
           forceRefresh: memoryInput?.forceRefresh,
         });
@@ -14121,6 +14350,10 @@ export class GatewayService {
     if (llmRequestHook.patch) {
       hookableRequest = this.applyLlmRequestHookPatch(hookableRequest, llmRequestHook.patch);
     }
+    this.persistContextManifestForCompletionRequest({
+      request: hookableRequest,
+      memoryContext,
+    });
 
     const runtime = this.llmService.getRuntimeConfig({
       includeKeychainForActiveProvider: true,
@@ -14335,7 +14568,7 @@ export class GatewayService {
           prompt,
           sessionId: memoryInput?.sessionId,
           taskId: memoryInput?.taskId,
-          workspace: memoryInput?.workspace,
+          workspace: this.resolveMemoryWorkspaceRelativeDir(memoryInput?.workspace, memoryInput?.sessionId),
           maxContextTokens: memoryInput?.maxContextTokens,
           forceRefresh: memoryInput?.forceRefresh,
         });
@@ -14354,6 +14587,10 @@ export class GatewayService {
         ],
       }
       : request;
+    this.persistContextManifestForCompletionRequest({
+      request: withContext,
+      memoryContext,
+    });
 
     const runtime = this.llmService.getRuntimeConfig({
       includeKeychainForActiveProvider: true,
@@ -14805,6 +15042,7 @@ export class GatewayService {
       durableKernelV1Enabled: patch.durableKernelV1Enabled ?? current.durableKernelV1Enabled,
       replayOverridesV1Enabled: patch.replayOverridesV1Enabled ?? current.replayOverridesV1Enabled,
       memoryLifecycleAdminV1Enabled: patch.memoryLifecycleAdminV1Enabled ?? current.memoryLifecycleAdminV1Enabled,
+      memoryMaintenanceV1Enabled: patch.memoryMaintenanceV1Enabled ?? current.memoryMaintenanceV1Enabled,
       connectorDiagnosticsV1Enabled: patch.connectorDiagnosticsV1Enabled ?? current.connectorDiagnosticsV1Enabled,
       computerUseGuardrailsV1Enabled: patch.computerUseGuardrailsV1Enabled ?? current.computerUseGuardrailsV1Enabled,
       bankrBuiltinEnabled: patch.bankrBuiltinEnabled ?? current.bankrBuiltinEnabled,
@@ -14827,6 +15065,7 @@ export class GatewayService {
       durableKernelV1Enabled: stored?.durableKernelV1Enabled ?? fromConfig.durableKernelV1Enabled,
       replayOverridesV1Enabled: stored?.replayOverridesV1Enabled ?? fromConfig.replayOverridesV1Enabled,
       memoryLifecycleAdminV1Enabled: stored?.memoryLifecycleAdminV1Enabled ?? fromConfig.memoryLifecycleAdminV1Enabled,
+      memoryMaintenanceV1Enabled: stored?.memoryMaintenanceV1Enabled ?? fromConfig.memoryMaintenanceV1Enabled,
       connectorDiagnosticsV1Enabled: stored?.connectorDiagnosticsV1Enabled ?? fromConfig.connectorDiagnosticsV1Enabled,
       computerUseGuardrailsV1Enabled: stored?.computerUseGuardrailsV1Enabled ?? fromConfig.computerUseGuardrailsV1Enabled,
       bankrBuiltinEnabled: stored?.bankrBuiltinEnabled ?? fromConfig.bankrBuiltinEnabled,
@@ -16903,6 +17142,24 @@ export class GatewayService {
       throw new Error("workspaceId contains unsupported characters");
     }
     return normalized;
+  }
+
+  private getWorkspaceMemoryRelativeDir(workspaceId: string): string {
+    return workspaceId === DEFAULT_WORKSPACE_ID ? "memory" : `workspaces/${workspaceId}/memory`;
+  }
+
+  private resolveMemoryWorkspaceRelativeDir(explicitWorkspace?: string, sessionId?: string): string {
+    const explicit = explicitWorkspace?.trim();
+    if (explicit) {
+      return explicit;
+    }
+    const sessionKey = sessionId?.trim();
+    if (!sessionKey) {
+      return "memory";
+    }
+    const meta = this.storage.chatSessionMeta.get(sessionKey);
+    const workspaceId = this.normalizeWorkspaceId(meta?.workspaceId ?? DEFAULT_WORKSPACE_ID);
+    return this.getWorkspaceMemoryRelativeDir(workspaceId);
   }
 
   private resolveChatCompletionHookWorkspaceId(request: ChatCompletionRequest): string {

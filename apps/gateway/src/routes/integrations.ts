@@ -2,6 +2,11 @@ import { Readable } from "node:stream";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import {
+  deriveLineWebhookIdempotencyKey,
+  normalizeLineWebhookPayload,
+  verifyLineWebhookSignature,
+} from "../services/line-webhook.js";
+import {
   deriveNextcloudTalkWebhookIdempotencyKey,
   normalizeNextcloudTalkWebhookPayload,
   verifyNextcloudTalkSignature,
@@ -16,6 +21,11 @@ import {
   normalizeTelegramWebhookPayload,
   verifyTelegramWebhookSecretToken,
 } from "../services/telegram-webhook.js";
+import {
+  deriveWhatsAppWebhookIdempotencyKey,
+  normalizeWhatsAppWebhookPayload,
+  verifyWhatsAppWebhookSignature,
+} from "../services/whatsapp-webhook.js";
 
 const kindEnum = z.enum(["channel", "model_provider", "productivity", "automation", "platform"]);
 const CHANNEL_INBOUND_MAX_BYTES = 256 * 1024;
@@ -164,6 +174,8 @@ type NextcloudTalkWebhookRequest = {
   nextcloudTalkRawBody?: Buffer;
   slackRawBody?: Buffer;
   telegramRawBody?: Buffer;
+  whatsappRawBody?: Buffer;
+  lineRawBody?: Buffer;
 };
 
 export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
@@ -555,6 +567,142 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
+  fastify.get("/api/v1/integrations/connections/:connectionId/whatsapp/webhook", async (request, reply) => {
+    const params = connectionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+
+    let connection;
+    try {
+      connection = fastify.gateway.getIntegrationConnection(params.data.connectionId);
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+    if (connection.key !== "whatsapp") {
+      return reply.code(400).send({ error: "Integration connection is not a WhatsApp connector" });
+    }
+
+    const verifyToken = resolveWhatsAppVerifyToken(connection.config);
+    if (!verifyToken) {
+      return reply.code(400).send({ error: "WhatsApp connection is missing a webhook verify token" });
+    }
+
+    const query = request.query as Record<string, unknown>;
+    const mode = readQueryString(query, "hub.mode");
+    const providedVerifyToken = readQueryString(query, "hub.verify_token");
+    const challenge = readQueryString(query, "hub.challenge");
+    if (mode !== "subscribe" || !challenge) {
+      return reply.code(400).send({ error: "Invalid WhatsApp webhook verification query" });
+    }
+    if (providedVerifyToken !== verifyToken) {
+      return reply.code(401).send({ error: "Invalid WhatsApp webhook verify token" });
+    }
+
+    return reply.type("text/plain").send(challenge);
+  });
+
+  fastify.post(
+    "/api/v1/integrations/connections/:connectionId/whatsapp/webhook",
+    {
+      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
+      preParsing: async (request, _reply, payload) => {
+        const rawBody = await readPayloadBuffer(payload);
+        (request as typeof request & NextcloudTalkWebhookRequest).whatsappRawBody = rawBody;
+        return Readable.from(rawBody);
+      },
+    },
+    async (request, reply) => {
+      const contentLength = parseContentLength(request.headers["content-length"]);
+      if (contentLength !== undefined && contentLength > CHANNEL_INBOUND_MAX_BYTES) {
+        return reply.code(413).send({
+          error: `Inbound channel payload too large. Max ${CHANNEL_INBOUND_MAX_BYTES} bytes.`,
+        });
+      }
+
+      const params = connectionParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
+
+      let connection;
+      try {
+        connection = fastify.gateway.getIntegrationConnection(params.data.connectionId);
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
+      }
+      if (connection.key !== "whatsapp") {
+        return reply.code(400).send({ error: "Integration connection is not a WhatsApp connector" });
+      }
+
+      const rawBody = (request as typeof request & NextcloudTalkWebhookRequest).whatsappRawBody;
+      if (!rawBody) {
+        return reply.code(400).send({ error: "Missing WhatsApp raw request body" });
+      }
+
+      const appSecret = resolveWhatsAppAppSecret(connection.config);
+      if (!appSecret) {
+        return reply.code(400).send({ error: "WhatsApp connection is missing an app secret" });
+      }
+
+      const signatureHeader = readHeaderValue(request.headers["x-hub-signature-256"]);
+      if (!verifyWhatsAppWebhookSignature(signatureHeader, rawBody, appSecret)) {
+        return reply.code(401).send({ error: "Invalid WhatsApp webhook signature" });
+      }
+
+      const normalized = normalizeWhatsAppWebhookPayload({
+        connectionId: params.data.connectionId,
+        payload: request.body,
+      });
+      if (normalized.kind === "ignore") {
+        return reply.send({
+          accepted: true,
+          ignored: true,
+          eventType: normalized.eventType,
+          reason: normalized.reason,
+        });
+      }
+
+      const idempotencyKey = deriveWhatsAppWebhookIdempotencyKey(params.data.connectionId, request.body, rawBody);
+      const ingestResult = await fastify.gateway.ingestChannelMessage("whatsapp", idempotencyKey, {
+        eventId: normalized.eventId,
+        account: normalized.account,
+        peer: normalized.peer,
+        actorId: normalized.actorId,
+        actorType: normalized.actorType,
+        displayName: normalized.displayName,
+        content: normalized.content,
+        metadata: normalized.metadata,
+      });
+      fastify.gateway.setChatSessionBinding({
+        sessionId: ingestResult.session.sessionId,
+        transport: "integration",
+        connectionId: params.data.connectionId,
+        target: normalized.peer,
+        writable: true,
+      });
+
+      let responseTurnId: string | undefined;
+      if (!ingestResult.deduped) {
+        const response = await fastify.gateway.respondToExistingChatMessage(
+          ingestResult.session.sessionId,
+          normalized.eventId,
+          { deliveryReplyToMessageId: normalized.deliveryReplyToMessageId },
+        );
+        responseTurnId = response.turnId;
+      }
+
+      return reply.send({
+        accepted: true,
+        deduped: ingestResult.deduped,
+        replied: !ingestResult.deduped,
+        sessionId: ingestResult.session.sessionId,
+        turnId: responseTurnId,
+        eventType: normalized.eventType,
+      });
+    },
+  );
+
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/slack/webhook",
     {
@@ -632,6 +780,107 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
         peer: normalized.peer,
         room: normalized.room,
         threadId: normalized.threadId,
+        actorId: normalized.actorId,
+        actorType: normalized.actorType,
+        content: normalized.content,
+        metadata: normalized.metadata,
+      });
+      fastify.gateway.setChatSessionBinding({
+        sessionId: ingestResult.session.sessionId,
+        transport: "integration",
+        connectionId: params.data.connectionId,
+        target: normalized.room ?? normalized.peer,
+        writable: true,
+      });
+
+      let responseTurnId: string | undefined;
+      if (!ingestResult.deduped) {
+        const response = await fastify.gateway.respondToExistingChatMessage(
+          ingestResult.session.sessionId,
+          normalized.eventId,
+          { deliveryReplyToMessageId: normalized.deliveryReplyToMessageId },
+        );
+        responseTurnId = response.turnId;
+      }
+
+      return reply.send({
+        accepted: true,
+        deduped: ingestResult.deduped,
+        replied: !ingestResult.deduped,
+        sessionId: ingestResult.session.sessionId,
+        turnId: responseTurnId,
+        eventType: normalized.eventType,
+      });
+    },
+  );
+
+  fastify.post(
+    "/api/v1/integrations/connections/:connectionId/line/webhook",
+    {
+      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
+      preParsing: async (request, _reply, payload) => {
+        const rawBody = await readPayloadBuffer(payload);
+        (request as typeof request & NextcloudTalkWebhookRequest).lineRawBody = rawBody;
+        return Readable.from(rawBody);
+      },
+    },
+    async (request, reply) => {
+      const contentLength = parseContentLength(request.headers["content-length"]);
+      if (contentLength !== undefined && contentLength > CHANNEL_INBOUND_MAX_BYTES) {
+        return reply.code(413).send({
+          error: `Inbound channel payload too large. Max ${CHANNEL_INBOUND_MAX_BYTES} bytes.`,
+        });
+      }
+
+      const params = connectionParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
+
+      let connection;
+      try {
+        connection = fastify.gateway.getIntegrationConnection(params.data.connectionId);
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
+      }
+      if (connection.key !== "line") {
+        return reply.code(400).send({ error: "Integration connection is not a LINE connector" });
+      }
+
+      const rawBody = (request as typeof request & NextcloudTalkWebhookRequest).lineRawBody;
+      if (!rawBody) {
+        return reply.code(400).send({ error: "Missing LINE raw request body" });
+      }
+
+      const channelSecret = resolveLineChannelSecret(connection.config);
+      if (!channelSecret) {
+        return reply.code(400).send({ error: "LINE connection is missing a channel secret" });
+      }
+
+      const signatureHeader = readHeaderValue(request.headers["x-line-signature"]);
+      if (!verifyLineWebhookSignature(signatureHeader, rawBody, channelSecret)) {
+        return reply.code(401).send({ error: "Invalid LINE webhook signature" });
+      }
+
+      const normalized = normalizeLineWebhookPayload({
+        connectionId: params.data.connectionId,
+        payload: request.body,
+      });
+      if (normalized.kind === "ignore") {
+        return reply.send({
+          accepted: true,
+          ignored: true,
+          eventType: normalized.eventType,
+          reason: normalized.reason,
+        });
+      }
+
+      const idempotencyKey = deriveLineWebhookIdempotencyKey(params.data.connectionId, request.body, rawBody);
+      const ingestResult = await fastify.gateway.ingestChannelMessage("line", idempotencyKey, {
+        eventId: normalized.eventId,
+        account: normalized.account,
+        peer: normalized.peer,
+        room: normalized.room,
         actorId: normalized.actorId,
         actorType: normalized.actorType,
         content: normalized.content,
@@ -964,6 +1213,21 @@ function resolveTelegramWebhookSecret(config: Record<string, unknown>): string |
     ?? readConfigSecret(config, "botSecret", "botSecretEnv");
 }
 
+function resolveWhatsAppAppSecret(config: Record<string, unknown>): string | undefined {
+  return readConfigSecret(config, "appSecret", "appSecretEnv")
+    ?? readConfigSecret(config, "webhookSecret", "webhookSecretEnv");
+}
+
+function resolveWhatsAppVerifyToken(config: Record<string, unknown>): string | undefined {
+  return readConfigSecret(config, "webhookVerifyToken", "webhookVerifyTokenEnv")
+    ?? readConfigSecret(config, "verifyToken", "verifyTokenEnv");
+}
+
+function resolveLineChannelSecret(config: Record<string, unknown>): string | undefined {
+  return readConfigSecret(config, "channelSecret", "channelSecretEnv")
+    ?? readConfigSecret(config, "secret", "secretEnv");
+}
+
 function readConfigSecret(config: Record<string, unknown>, key: string, envKey: string): string | undefined {
   const direct = config[key];
   if (typeof direct === "string" && direct.trim().length > 0) {
@@ -975,4 +1239,9 @@ function readConfigSecret(config: Record<string, unknown>, key: string, envKey: 
   }
   const resolved = process.env[envName.trim()];
   return resolved?.trim() ? resolved.trim() : undefined;
+}
+
+function readQueryString(query: Record<string, unknown>, key: string): string | undefined {
+  const value = query[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }

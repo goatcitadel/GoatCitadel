@@ -108,4 +108,44 @@ describe("memory routes", () => {
     expect(valid.statusCode).toBe(200);
     expect(getMemoryContext).toHaveBeenCalledWith("ctx-1");
   });
+
+  it("accepts memory maintenance run-now on both the canonical and compatibility paths", async () => {
+    const runMemoryMaintenanceNow = vi.fn(() => ({
+      runId: "mmrun_123",
+      workspaceId: "default",
+      triggerSource: "manual",
+      status: "queued",
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      runMemoryMaintenanceNow,
+    } as never);
+    await app.register(memoryRoutes);
+
+    const canonical = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/maintenance/run-now",
+      payload: {
+        workspaceId: "default",
+        triggerSource: "manual",
+      },
+    });
+    const compatibility = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/maintenance/run",
+      payload: {
+        workspaceId: "default",
+      },
+    });
+
+    expect(canonical.statusCode).toBe(200);
+    expect(compatibility.statusCode).toBe(200);
+    expect(runMemoryMaintenanceNow).toHaveBeenNthCalledWith(1, {
+      workspaceId: "default",
+      triggerSource: "manual",
+    });
+    expect(runMemoryMaintenanceNow).toHaveBeenNthCalledWith(2, {
+      workspaceId: "default",
+    });
+  });
 });

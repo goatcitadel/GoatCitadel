@@ -54,6 +54,7 @@ export type IntegrationKind =
   | "platform";
 
 export type IntegrationMaturity = "native" | "plugin" | "disabled" | "beta" | "planned";
+export type IntegrationRuntimeAvailability = "runnable" | "blocked";
 export type IntegrationConnectionStatus = "connected" | "disconnected" | "error" | "paused";
 
 export interface IntegrationCatalogEntry {
@@ -63,6 +64,7 @@ export interface IntegrationCatalogEntry {
   label: string;
   description: string;
   maturity: IntegrationMaturity;
+  runtimeAvailability?: IntegrationRuntimeAvailability;
   authMethods: string[];
   capabilities: string[];
   docsUrl?: string;

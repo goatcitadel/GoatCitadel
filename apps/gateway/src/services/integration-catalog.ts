@@ -170,6 +170,16 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         placeholder: "123456789012345",
         required: true,
       }),
+      text("appSecretEnv", "App Secret ENV Var", {
+        placeholder: "WHATSAPP_APP_SECRET",
+        secretRef: true,
+        advanced: true,
+      }),
+      text("webhookVerifyTokenEnv", "Webhook Verify Token ENV Var", {
+        placeholder: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+        secretRef: true,
+        advanced: true,
+      }),
       text("defaultTarget", "Default Recipient", {
         placeholder: "+15551234567",
         required: true,
@@ -286,6 +296,11 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         placeholder: "LINE_CHANNEL_ACCESS_TOKEN",
         required: true,
         secretRef: true,
+      }),
+      text("channelSecretEnv", "Channel Secret ENV Var", {
+        placeholder: "LINE_CHANNEL_SECRET",
+        secretRef: true,
+        advanced: true,
       }),
       text("defaultTarget", "Default Target", {
         placeholder: "userId, groupId, or roomId",
@@ -475,7 +490,7 @@ export function resolveIntegrationCatalogMaturity(
   if (entry.kind === "channel") {
     if (entry.maturity === "planned") {
       if (BUILT_IN_CHANNEL_RUNTIME_KEYS.has(entry.key)) {
-        return "beta";
+        return "planned";
       }
       return pluginIds.has(pluginId) ? "plugin" : "disabled";
     }
@@ -484,6 +499,20 @@ export function resolveIntegrationCatalogMaturity(
     return "plugin";
   }
   return entry.maturity;
+}
+
+export function resolveIntegrationCatalogRuntimeAvailability(
+  entry: IntegrationCatalogEntry,
+  pluginIds: ReadonlySet<string>,
+): "runnable" | "blocked" {
+  const resolvedMaturity = resolveIntegrationCatalogMaturity(entry, pluginIds);
+  if (resolvedMaturity === "native" || resolvedMaturity === "beta" || resolvedMaturity === "plugin") {
+    return "runnable";
+  }
+  if (entry.kind === "channel" && entry.maturity === "planned" && BUILT_IN_CHANNEL_RUNTIME_KEYS.has(entry.key)) {
+    return "runnable";
+  }
+  return "blocked";
 }
 
 function entry(

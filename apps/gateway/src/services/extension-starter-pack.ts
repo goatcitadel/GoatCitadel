@@ -156,6 +156,6 @@ function buildExtensionStarterPackRelativePaths(starterRoot: string): string[] {
 }
 
 async function readRepoTextFile(relativePath: string): Promise<string> {
-  const absolutePath = path.resolve(process.cwd(), "../../", relativePath);
+  const absolutePath = path.resolve(process.cwd(), relativePath);
   return fs.readFile(absolutePath, "utf8");
 }

@@ -196,6 +196,17 @@ export interface FollowOnProofLaneArtifactRecord {
   bytes: number;
 }
 
+export interface FollowOnArtifactStatus {
+  hasArtifact: boolean;
+  freshness: "missing" | "stale" | "current";
+  ageDays?: number;
+}
+
+export interface FollowOnProfileArtifactStatus extends FollowOnArtifactStatus {
+  latestArtifactDeploymentProfile?: DeploymentProfile;
+  matchedCurrentProfile: boolean;
+}
+
 export type FollowOnProofLaneArtifactIndex = Partial<
   Record<FollowOnProofLaneArtifactLaneId, FollowOnProofLaneArtifactRecord>
 >;
@@ -208,13 +219,7 @@ export interface FollowOnParityReport {
     allowLoopbackBypass: boolean;
     networkAllowlistCount: number;
     postureSummary: string;
-    proofStatus: {
-      hasArtifact: boolean;
-      freshness: "missing" | "stale" | "current";
-      latestArtifactDeploymentProfile?: DeploymentProfile;
-      matchedCurrentProfile: boolean;
-      ageDays?: number;
-    };
+    proofStatus: FollowOnProfileArtifactStatus;
     blockingIssues: string[];
     recommendedActions: string[];
     latestArtifact?: FollowOnProofLaneArtifactRecord;
@@ -230,6 +235,7 @@ export interface FollowOnParityReport {
       allowedTools: string[];
       blockedTools: string[];
     };
+    artifactStatus: FollowOnProfileArtifactStatus;
     blockingIssues: string[];
     recommendedActions: string[];
     automationCatalog?: FollowOnParityTargetRecord;
@@ -242,6 +248,7 @@ export interface FollowOnParityReport {
     wakeState: VoiceRuntimeState;
     wakeEnabled: boolean;
     lastError?: string;
+    artifactStatus: FollowOnProfileArtifactStatus;
     blockingIssues: string[];
     recoveryActions: string[];
     recommendedActions: string[];
@@ -265,6 +272,7 @@ export interface FollowOnParityReport {
       matchesReferenceSource: boolean;
       capabilities: string[];
     };
+    artifactStatus: FollowOnArtifactStatus;
     blockingIssues: string[];
     recommendedActions: string[];
     latestArtifact?: FollowOnProofLaneArtifactRecord;
@@ -274,6 +282,7 @@ export interface FollowOnParityReport {
     platformTargets: FollowOnParityTargetRecord[];
     contract?: A2UIContract;
     paritySummary: string;
+    artifactStatus: FollowOnProfileArtifactStatus;
     blockingIssues: string[];
     recommendedActions: string[];
     latestArtifact?: FollowOnProofLaneArtifactRecord;
@@ -284,6 +293,7 @@ export interface FollowOnParityReport {
     authReadiness: FollowOnParityReadinessRecord<CompanionAuthRequirement>[];
     prerequisiteReadiness: FollowOnParityReadinessRecord<CompanionServerPrerequisite>[];
     paritySummary: string;
+    artifactStatus: FollowOnArtifactStatus;
     blockingIssues: string[];
     recommendedActions: string[];
     latestArtifact?: FollowOnProofLaneArtifactRecord;

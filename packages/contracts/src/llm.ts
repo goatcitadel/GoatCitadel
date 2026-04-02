@@ -92,6 +92,7 @@ export interface ChatCompletionRequest {
   memory?: {
     enabled?: boolean;
     mode?: "qmd" | "off";
+    turnId?: string;
     sessionId?: string;
     taskId?: string;
     workspace?: string;
