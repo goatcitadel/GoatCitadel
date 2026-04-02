@@ -53,7 +53,7 @@ That structure is real, not aspirational. It is driven by the current page regis
 | **Conversation surfaces** | Shared `Chat`, `Cowork`, and `Code` shell with different operating posture and runtime defaults |
 | **Approvals and safety** | Approval queue, device-grant flows, remote approval actions, replayable audit, risky tool gating |
 | **Tasks and observability** | Activity feed, sessions, artifacts, costs, system state, Prompt Lab and quality views |
-| **Memory and context** | Workspace-aware context composition, memory browsing, write/forget/history flows, Dream maintenance controls |
+| **Memory and context** | Workspace-aware context composition, memory browsing, write/forget/history flows, and memory-maintenance controls |
 | **Providers and runtime** | Multi-provider routing, provider smoke tests, active-model switching, local-compatible runtime endpoints |
 | **Tool policy** | Read scopes, path jails, outbound allowlists, approval gates, policy-engine enforcement |
 | **Integrations and channels** | Integrations overview, channel management, MCP management, channel diagnostics and delivery tests |
@@ -63,12 +63,12 @@ That structure is real, not aspirational. It is driven by the current page regis
 
 ## What is new in the current beta line
 
-### Dream memory maintenance
+### Memory maintenance
 
-The repo now includes a first-class Dream memory-maintenance lane:
+The repo now includes a first-class memory-maintenance lane:
 
 - workspace policy, status, run history, provenance, and recommendations APIs
-- `/dream` and `/dream status` command support in chat sessions
+- dedicated maintenance commands in chat sessions
 - durable-run backed maintenance execution
 - Mission Control memory controls for policy editing, run-now, recommendation review, and provenance inspection
 - SQLite-backed persistence for maintenance policy/state/runs/changes/recommendations
@@ -88,11 +88,11 @@ That includes:
 - middleware exemptions so signed webhook routes can reach their own verification logic
 - guided setup coverage and capability reporting that stays truthful about parity state
 
-### OpenClaw parity reporting got sharper
+### Parity reporting got sharper
 
 The repo now exposes stronger parity truth instead of vague status:
 
-- a live **OpenClaw completion program** report
+- a live parity completion-program report
 - proof artifact freshness and deployment-profile matching for browser, packaging, A2UI, voice, companion, and extensions lanes
 - stronger follow-on parity guidance in System
 - explicit unsafe-claim boundaries in docs and runtime reporting
@@ -115,13 +115,13 @@ Safe claims today:
 
 - Mission Control is a real operator console, not a mock dashboard
 - the gateway already exposes broad runtime, admin, integrations, memory, and workflow surfaces
-- Dream memory-maintenance plumbing now exists end to end in-repo
+- memory-maintenance plumbing now exists end to end in-repo
 - WhatsApp and LINE now have signed inbound runtime paths in the gateway
 - the extensions SDK can be dry-run published cleanly
 
 Not safe to over-claim yet:
 
-- full OpenClaw parity across every tracked lane
+- full parity across every tracked lane
 - public release completeness for all planned channels
 - mobile companion proof as complete from this repo alone
 - published SDK breadth as complete before real package publication
@@ -129,9 +129,8 @@ Not safe to over-claim yet:
 Use these as the source of truth:
 
 - [CHANGELOG.md](./CHANGELOG.md)
-- [OPENCLAW_PARITY_STATUS.md](./docs/OPENCLAW_PARITY_STATUS.md)
-- [FOLLOW_ON_PARITY_REGISTER.md](./docs/FOLLOW_ON_PARITY_REGISTER.md)
-- [OPENCLAW_PARITY_COMPLETION_PROGRAM.md](./docs/OPENCLAW_PARITY_COMPLETION_PROGRAM.md)
+- parity status and completion documentation in [docs](./docs)
+- follow-on parity tracking in [docs](./docs)
 
 ## Screenshots
 
@@ -326,7 +325,7 @@ Default endpoints:
 | Gateway | [apps/gateway](./apps/gateway) | API routes, auth, sessions, approvals, tasks, memory, integrations, durable workflows, docs |
 | Contracts | [packages/contracts](./packages/contracts) | Shared schemas, config validation, parity/report contracts, API payloads |
 | Orchestration and policy | [packages/orchestration](./packages/orchestration), [packages/policy-engine](./packages/policy-engine) | Agent coordination, turn runtime, tool policy, runtime controls |
-| Memory and storage | [packages/memory-core](./packages/memory-core), [packages/storage](./packages/storage) | Context composition, Dream storage, SQLite-backed persistence |
+| Memory and storage | [packages/memory-core](./packages/memory-core), [packages/storage](./packages/storage) | Context composition, maintenance storage, and SQLite-backed persistence |
 | Optional local runtimes | [apps/npu-sidecar](./apps/npu-sidecar) | Local NPU and voice-adjacent support |
 
 ### Gateway route coverage
@@ -382,6 +381,5 @@ pnpm release:extensions-sdk
 - [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md)
 - [docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md](./docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md)
 - [docs/COMMUNICATION_CHANNEL_SETUP_GUIDE.md](./docs/COMMUNICATION_CHANNEL_SETUP_GUIDE.md)
-- [docs/OPENCLAW_PARITY_STATUS.md](./docs/OPENCLAW_PARITY_STATUS.md)
 - [docs/FOLLOW_ON_PARITY_REGISTER.md](./docs/FOLLOW_ON_PARITY_REGISTER.md)
-- [docs/OPENCLAW_PARITY_COMPLETION_PROGRAM.md](./docs/OPENCLAW_PARITY_COMPLETION_PROGRAM.md)
+- [docs](./docs)
