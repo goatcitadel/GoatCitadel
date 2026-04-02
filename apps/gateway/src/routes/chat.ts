@@ -934,6 +934,25 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       fastify.gateway.resumeAgentChatTurnStream(params.data.sessionId, params.data.turnId, sinceEventId, signal));
   });
 
+  fastify.get("/api/v1/chat/sessions/:sessionId/turns/:turnId/context-manifest", async (request, reply) => {
+    const params = turnParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const detail = fastify.gateway.getTurnContextManifestForSession(
+        params.data.sessionId,
+        params.data.turnId,
+      );
+      if (!detail) {
+        return reply.code(404).send({ error: "Context manifest not found" });
+      }
+      return reply.send(detail);
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
   fastify.post("/api/v1/chat/sessions/:sessionId/turns/:turnId/select", async (request, reply) => {
     const params = turnParamsSchema.safeParse(request.params);
     if (!params.success) {

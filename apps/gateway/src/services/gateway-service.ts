@@ -10159,6 +10159,22 @@ export class GatewayService {
     return this.storage.contextManifests.maybeGetDetailByTurn(normalizedTurnId);
   }
 
+  public getTurnContextManifestForSession(sessionId: string, turnId: string): ContextManifestDetail | undefined {
+    const normalizedSessionId = sessionId.trim();
+    const normalizedTurnId = turnId.trim();
+    if (!normalizedSessionId) {
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "sessionId" });
+    }
+    if (!normalizedTurnId) {
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "turnId" });
+    }
+    const trace = this.storage.chatTurnTraces.get(normalizedTurnId);
+    if (trace.sessionId !== normalizedSessionId) {
+      throw new Error(`Chat turn ${normalizedTurnId} does not belong to session ${normalizedSessionId}`);
+    }
+    return this.storage.contextManifests.maybeGetDetailByTurn(normalizedTurnId);
+  }
+
   private persistContextManifestForCompletionRequest(input: {
     request: ChatCompletionRequest;
     memoryContext?: MemoryContextPack;

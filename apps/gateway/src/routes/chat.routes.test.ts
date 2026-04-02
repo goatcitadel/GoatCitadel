@@ -518,6 +518,67 @@ describe("chat routes additional coverage", () => {
     });
   });
 
+  it("returns persisted turn context manifests", async () => {
+    const getTurnContextManifestForSession = vi.fn(() => ({
+      manifest: {
+        manifestId: "manifest-1",
+        scope: "chat_turn",
+        turnId: "turn-9",
+        sessionId: "sess-1",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        updatedAt: "2026-04-01T00:00:01.000Z",
+        entryCount: 2,
+      },
+      entries: [
+        {
+          entryId: "entry-1",
+          manifestId: "manifest-1",
+          kind: "system_message",
+          entryIndex: 0,
+          sourceRef: "system:0",
+          contentText: "System instructions",
+          contentHash: "hash-1",
+          metadata: {},
+          createdAt: "2026-04-01T00:00:00.000Z",
+        },
+        {
+          entryId: "entry-2",
+          manifestId: "manifest-1",
+          kind: "memory_context",
+          entryIndex: 1,
+          sourceRef: "memory-1",
+          contentText: "Relevant memory context",
+          contentHash: "hash-2",
+          metadata: { status: "generated" },
+          createdAt: "2026-04-01T00:00:01.000Z",
+        },
+      ],
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      getTurnContextManifestForSession,
+    } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-9/context-manifest",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getTurnContextManifestForSession).toHaveBeenCalledWith("sess-1", "turn-9");
+    expect(response.json()).toMatchObject({
+      manifest: {
+        manifestId: "manifest-1",
+        turnId: "turn-9",
+      },
+      entries: [
+        { kind: "system_message" },
+        { kind: "memory_context" },
+      ],
+    });
+  });
+
   it("returns 409 for branch-write conflicts on agent send", async () => {
     const agentSendChatMessage = vi.fn(async () => {
       const error = new Error("chat turn conflict");
