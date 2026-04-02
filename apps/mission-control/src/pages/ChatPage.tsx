@@ -9,6 +9,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import {
+  applyChatModePresetToPatch,
   CHAT_MODE_PRESETS,
   getChatTurnRecoveryActionLabel,
   getChatTurnRecoveryActionSummary,
@@ -213,6 +214,32 @@ type ChatHistoryView = "active" | "archived";
 
 function normalizeComparableAssistantContent(value: string | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+export function resolveOptimisticChatPrefs(
+  current: ChatSessionPrefsRecord,
+  patch: ChatSessionPrefsPatch,
+): ChatSessionPrefsRecord {
+  const normalizedPatch = applyChatModePresetToPatch(patch);
+  return {
+    ...current,
+    mode: normalizedPatch.mode ?? current.mode,
+    planningMode: normalizedPatch.planningMode ?? current.planningMode,
+    providerId: normalizedPatch.providerId ?? current.providerId,
+    model: normalizedPatch.model ?? current.model,
+    webMode: normalizedPatch.webMode ?? current.webMode,
+    memoryMode: normalizedPatch.memoryMode ?? current.memoryMode,
+    thinkingLevel: normalizedPatch.thinkingLevel ?? current.thinkingLevel,
+    toolAutonomy: normalizedPatch.toolAutonomy ?? current.toolAutonomy,
+    visionFallbackModel: normalizedPatch.visionFallbackModel ?? current.visionFallbackModel,
+    orchestrationEnabled: normalizedPatch.orchestrationEnabled ?? current.orchestrationEnabled,
+    orchestrationIntensity: normalizedPatch.orchestrationIntensity ?? current.orchestrationIntensity,
+    orchestrationVisibility: normalizedPatch.orchestrationVisibility ?? current.orchestrationVisibility,
+    orchestrationProviderPreference: normalizedPatch.orchestrationProviderPreference ?? current.orchestrationProviderPreference,
+    orchestrationReviewDepth: normalizedPatch.orchestrationReviewDepth ?? current.orchestrationReviewDepth,
+    orchestrationParallelism: normalizedPatch.orchestrationParallelism ?? current.orchestrationParallelism,
+    codeAutoApply: normalizedPatch.codeAutoApply ?? current.codeAutoApply,
+  };
 }
 
 export function shouldApplyFetchedMessagesAfterStream(
@@ -482,6 +509,7 @@ export function ChatPage({
   const lastLoadedSessionIdRef = useRef<string | null>(null);
   const messageMutationVersionRef = useRef(0);
   const lastLocalPrefMutationAtRef = useRef(0);
+  const prefMutationSequenceRef = useRef(0);
   const latestMessagesRef = useRef<ChatMessagesResponse["items"]>([]);
   const selectedSessionIdRef = useRef<string | null>(null);
   const loadCoreGenerationRef = useRef(0);
@@ -2359,10 +2387,26 @@ export function ChatPage({
   const handlePrefPatch = useCallback(async (patch: ChatSessionPrefsPatch) => {
     if (!selectedSession) return;
     lastLocalPrefMutationAtRef.current = Date.now();
+    const previousPrefs = prefsRef.current;
+    const optimisticPrefs = previousPrefs ? resolveOptimisticChatPrefs(previousPrefs, patch) : null;
+    const mutationId = prefMutationSequenceRef.current + 1;
+    prefMutationSequenceRef.current = mutationId;
+    if (optimisticPrefs) {
+      prefsRef.current = optimisticPrefs;
+      setPrefs(optimisticPrefs);
+    }
     try {
       const updated = await updateChatSessionPrefs(selectedSession.sessionId, patch);
+      if (prefMutationSequenceRef.current !== mutationId) {
+        return;
+      }
+      prefsRef.current = updated;
       setPrefs(updated);
     } catch (err) {
+      if (prefMutationSequenceRef.current === mutationId && previousPrefs) {
+        prefsRef.current = previousPrefs;
+        setPrefs(previousPrefs);
+      }
       setError((err as Error).message);
     }
   }, [selectedSession]);

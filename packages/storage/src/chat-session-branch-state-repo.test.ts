@@ -45,4 +45,17 @@ describe("ChatSessionBranchStateRepository", () => {
     assert.equal(repo.setActiveLeafIfCurrent("sess-1", "turn-1", "turn-3", "2026-03-07T00:02:00.000Z"), false);
     assert.equal(repo.get("sess-1")?.activeLeafTurnId, "turn-2");
   });
+
+  it("treats duplicate writes of the same active leaf as idempotent", () => {
+    const repo = createRepo();
+
+    assert.equal(repo.setActiveLeafIfCurrent("sess-1", undefined, "turn-1", "2026-03-07T00:00:00.000Z"), true);
+    assert.equal(repo.setActiveLeafIfCurrent("sess-1", undefined, "turn-1", "2026-03-07T00:01:00.000Z"), true);
+    assert.equal(repo.get("sess-1")?.activeLeafTurnId, "turn-1");
+    assert.equal(repo.get("sess-1")?.updatedAt, "2026-03-07T00:01:00.000Z");
+
+    assert.equal(repo.setActiveLeafIfCurrent("sess-1", "turn-0", "turn-1", "2026-03-07T00:02:00.000Z"), true);
+    assert.equal(repo.get("sess-1")?.activeLeafTurnId, "turn-1");
+    assert.equal(repo.get("sess-1")?.updatedAt, "2026-03-07T00:02:00.000Z");
+  });
 });

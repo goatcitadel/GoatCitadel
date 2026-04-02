@@ -3,12 +3,13 @@ import type { ChatMessageRecord } from "@goatcitadel/contracts";
 import {
   formatSessionLabel,
   looksMachineSessionLabel,
+  resolveOptimisticChatPrefs,
   shouldShowLearnedMemoryPanel,
   shouldShowSuggestionsPanel,
   shouldApplyFetchedMessagesAfterStream,
   shouldShowTracePanel,
 } from "./ChatPage";
-import type { ChatThreadResponse } from "@goatcitadel/contracts";
+import type { ChatSessionPrefsRecord, ChatThreadResponse } from "@goatcitadel/contracts";
 
 function makeMessage(
   messageId: string,
@@ -48,6 +49,33 @@ function makeSession(
     lastActivityAt: "2026-03-06T00:00:00.000Z",
     tokenTotal: 0,
     costUsdTotal: 0,
+    ...overrides,
+  };
+}
+
+function makePrefs(
+  overrides: Partial<ChatSessionPrefsRecord> = {},
+): ChatSessionPrefsRecord {
+  return {
+    sessionId: "sess-1",
+    mode: "chat",
+    planningMode: "off",
+    providerId: "openai",
+    model: "gpt-4.1-mini",
+    webMode: "auto",
+    memoryMode: "auto",
+    thinkingLevel: "standard",
+    toolAutonomy: "safe_auto",
+    visionFallbackModel: undefined,
+    orchestrationEnabled: true,
+    orchestrationIntensity: "minimal",
+    orchestrationVisibility: "summarized",
+    orchestrationProviderPreference: "speed",
+    orchestrationReviewDepth: "off",
+    orchestrationParallelism: "auto",
+    codeAutoApply: "manual",
+    createdAt: "2026-03-06T00:00:00.000Z",
+    updatedAt: "2026-03-06T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -145,6 +173,25 @@ describe("shouldApplyFetchedMessagesAfterStream", () => {
     ];
 
     expect(shouldApplyFetchedMessagesAfterStream(current, fetched, null)).toBe(true);
+  });
+});
+
+describe("resolveOptimisticChatPrefs", () => {
+  it("preserves the active provider/model across a mode switch and applies a follow-up model change immediately", () => {
+    const afterModeSwitch = resolveOptimisticChatPrefs(makePrefs(), { mode: "cowork" });
+
+    expect(afterModeSwitch.mode).toBe("cowork");
+    expect(afterModeSwitch.providerId).toBe("openai");
+    expect(afterModeSwitch.model).toBe("gpt-4.1-mini");
+    expect(afterModeSwitch.orchestrationParallelism).toBe("parallel");
+    expect(afterModeSwitch.orchestrationVisibility).toBe("expandable");
+    expect(afterModeSwitch.thinkingLevel).toBe("extended");
+
+    const afterModelChange = resolveOptimisticChatPrefs(afterModeSwitch, { model: "gpt-5.4" });
+
+    expect(afterModelChange.mode).toBe("cowork");
+    expect(afterModelChange.providerId).toBe("openai");
+    expect(afterModelChange.model).toBe("gpt-5.4");
   });
 });
 

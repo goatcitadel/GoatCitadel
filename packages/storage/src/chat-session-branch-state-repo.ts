@@ -79,6 +79,18 @@ export class ChatSessionBranchStateRepository {
     nextActiveLeafTurnId: string,
     now = new Date().toISOString(),
   ): boolean {
+    const current = this.get(sessionId);
+    if (current?.activeLeafTurnId === nextActiveLeafTurnId) {
+      if (current.updatedAt !== now) {
+        this.upsertStmt.run({
+          sessionId,
+          activeLeafTurnId: nextActiveLeafTurnId,
+          updatedAt: now,
+        });
+      }
+      return true;
+    }
+
     if (!expectedActiveLeafTurnId) {
       const result = this.insertIfMissingStmt.run({
         sessionId,
