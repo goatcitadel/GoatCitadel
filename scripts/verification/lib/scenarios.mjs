@@ -312,7 +312,7 @@ export async function runDeepEcosystemLane(context, options = {}) {
       title: "Doctor deep audit",
       subsystem: "ecosystem",
     }, async () => {
-      const result = await runCommand(pnpmCommand(), ["doctor", "--", "--deep", "--audit-only"], {
+      const result = await runCommand(pnpmCommand(), ["doctor:audit"], {
         cwd: repoRoot,
         artifactRoot: path.join(context.artifactRoot, "diagnostics"),
         logName: "ecosystem-doctor-deep",

@@ -4,12 +4,13 @@ import path from "node:path";
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 
-const defaultRepoUrl = process.env.GOATCITADEL_REPO_URL || "https://github.com/spurnout/GoatCitadel.git";
+const defaultRepoUrl = process.env.GOATCITADEL_REPO_URL || "https://github.com/goatcitadel/GoatCitadel.git";
 const preferredBaseDir = path.join(os.homedir(), ".GoatCitadel");
 const legacyBaseDir = path.join(os.homedir(), ".goatcitadel");
 const pnpmVersion = "10.31.0";
 const workspaceBootstrapBuildPackages = [
   "@goatcitadel/contracts",
+  "@goatcitadel/extensions-sdk",
 ];
 const managedMutableConfigPaths = [
   "config/assistant.config.json",
@@ -97,7 +98,7 @@ async function main() {
   if (command === "verify") {
     const lane = rest[0] || "fast";
     const laneArgs = rest.slice(1);
-    const supportedLanes = new Set(["fast", "all", "review", "soak", "deep:core", "deep:ecosystem"]);
+    const supportedLanes = new Set(["fast", "install", "all", "review", "soak", "deep:core", "deep:ecosystem"]);
     if (!supportedLanes.has(lane)) {
       throw new Error(`Unsupported verify lane: ${lane}`);
     }
@@ -197,10 +198,12 @@ function installOrUpdate() {
   console.log("GoatCitadel install complete.");
   console.log(`Install directory: ${appDir}`);
   console.log("Run:");
+  console.log("  goatcitadel verify install");
   console.log("  goatcitadel up");
   console.log("  goatcitadel onboard");
   console.log("  goatcitadel doctor --deep");
   console.log("  goatcitadel voice status");
+  console.log("  goat verify install");
   console.log("  goat up");
   console.log("  goat onboard");
   console.log("  goat doctor --deep");
@@ -371,10 +374,13 @@ function buildWorkspaceBootstrapPackages() {
 }
 
 function workspacePackageNeedsBuild(workspacePackage) {
-  if (workspacePackage !== "@goatcitadel/contracts") {
-    return false;
+  if (workspacePackage === "@goatcitadel/contracts") {
+    return !fs.existsSync(path.join(appDir, "packages", "contracts", "dist", "index.js"));
   }
-  return !fs.existsSync(path.join(appDir, "packages", "contracts", "dist", "index.js"));
+  if (workspacePackage === "@goatcitadel/extensions-sdk") {
+    return !fs.existsSync(path.join(appDir, "packages", "extensions-sdk", "dist", "index.js"));
+  }
+  return false;
 }
 
 function maybeShowVersion(cmd, cmdArgs) {
@@ -503,7 +509,7 @@ Commands:
   tui        Run terminal Mission Control
   tools      Tool access CLI (catalog/grants/invoke)
   voice      Managed local voice runtime (install/status/models/select/remove)
-  verify     Unattended verification lanes (fast/all/review/soak/deep:core/deep:ecosystem)
+  verify     Unattended verification lanes (fast/install/all/review/soak/deep:core/deep:ecosystem)
   admin      Backup/retention admin CLI
   smoke      Run smoke tests
   npu        Run local NPU sidecar (Python)

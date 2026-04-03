@@ -1,5 +1,5 @@
 param(
-  [string]$RepoUrl = "https://github.com/spurnout/GoatCitadel.git",
+  [string]$RepoUrl = "https://github.com/goatcitadel/GoatCitadel.git",
   [string]$InstallDir = "",
   [ValidateSet("git")]
   [string]$InstallMethod = "git",
@@ -132,6 +132,7 @@ $BinDir = Join-Path $BaseDir "bin"
 $PnpmVersion = "10.31.0"
 $WorkspaceBootstrapBuildPackages = @(
   "@goatcitadel/contracts"
+  "@goatcitadel/extensions-sdk"
 )
 $ManagedMutableConfigPaths = @(
   "config/assistant.config.json",
@@ -279,10 +280,12 @@ Write-Host "Install directory: $AppDir"
 Write-Host "Launcher: $launcherCmdPath"
 Write-Host ""
 Write-Host "Run:"
+Write-Host "  goatcitadel verify install"
 Write-Host "  goatcitadel up"
 Write-Host "  goatcitadel onboard"
 Write-Host "  goatcitadel doctor --deep"
 Write-Host "  goatcitadel voice status"
+Write-Host "  goat verify install"
 Write-Host "  goat onboard"
 Write-Host "  goat up"
 Write-Host "  goat doctor --deep"

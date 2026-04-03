@@ -4,13 +4,14 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const contractsDist = path.resolve("packages/contracts/dist/index.js");
-if (!fs.existsSync(contractsDist)) {
-  console.log("[dev] contracts not built — running bootstrap build...");
+const extensionsSdkDist = path.resolve("packages/extensions-sdk/dist/index.js");
+if (!fs.existsSync(contractsDist) || !fs.existsSync(extensionsSdkDist)) {
+  console.log("[dev] bootstrap packages not built — running bootstrap build...");
   const bootstrapResult = process.platform === "win32"
-    ? spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "pnpm --filter @goatcitadel/contracts build"], {
+    ? spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "pnpm --filter @goatcitadel/contracts --filter @goatcitadel/extensions-sdk build"], {
         stdio: "inherit",
       })
-    : spawnSync("pnpm", ["--filter", "@goatcitadel/contracts", "build"], {
+    : spawnSync("pnpm", ["--filter", "@goatcitadel/contracts", "--filter", "@goatcitadel/extensions-sdk", "build"], {
         stdio: "inherit",
       });
   if (bootstrapResult.error) {

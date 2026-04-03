@@ -241,6 +241,7 @@ bash install.sh
 After install:
 
 ```bash
+goatcitadel verify install
 goatcitadel up
 goatcitadel onboard
 goatcitadel doctor --deep
@@ -249,6 +250,7 @@ goatcitadel doctor --deep
 Short alias:
 
 ```bash
+goat verify install
 goat up
 goat onboard
 goat doctor --deep
@@ -360,7 +362,8 @@ pnpm test
 pnpm smoke
 pnpm -r typecheck
 pnpm -r build
-pnpm doctor -- --deep
+pnpm doctor:deep
+pnpm verify:install
 pnpm screenshots:capture
 pnpm verify:fast
 pnpm verify:deep:core

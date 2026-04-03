@@ -21,6 +21,8 @@
     "onboarding:tui": "pnpm --filter @goatcitadel/gateway onboarding:tui",
     "tui": "pnpm --filter @goatcitadel/gateway tui",
     "doctor": "pnpm --filter @goatcitadel/gateway run doctor",
+    "doctor:deep": "pnpm --filter @goatcitadel/gateway run doctor --deep",
+    "doctor:audit": "pnpm --filter @goatcitadel/gateway run doctor --deep --audit-only",
     "tools": "pnpm --filter @goatcitadel/gateway tools",
     "admin": "pnpm --filter @goatcitadel/gateway admin",
     "brand:derive": "node scripts/brand/derive-assets.mjs",
@@ -42,6 +44,7 @@
     "verify:soak": "node scripts/verification/run.mjs soak",
     "verify:review": "node scripts/verification/run.mjs review",
     "verify:all": "node scripts/verification/run.mjs all",
+    "verify:install": "node scripts/verify-install.mjs",
     "security:trivy": "node scripts/trivy-scan.mjs .",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck"

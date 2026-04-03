@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="https://github.com/spurnout/GoatCitadel.git"
+REPO_URL="https://github.com/goatcitadel/GoatCitadel.git"
 BASE_DIR="${HOME}/.GoatCitadel"
 APP_DIR="${BASE_DIR}/app"
 BIN_DIR="${BASE_DIR}/bin"
@@ -12,6 +12,7 @@ VOICE_MODEL="base.en"
 PNPM_VERSION="10.31.0"
 WORKSPACE_BOOTSTRAP_BUILD_PACKAGES=(
   "@goatcitadel/contracts"
+  "@goatcitadel/extensions-sdk"
 )
 MANAGED_MUTABLE_CONFIG_PATHS=(
   "config/assistant.config.json"
@@ -32,7 +33,7 @@ Usage:
   install.sh [options]
 
 Options:
-  --repo <url>              Repository URL (default: https://github.com/spurnout/GoatCitadel.git)
+  --repo <url>              Repository URL (default: https://github.com/goatcitadel/GoatCitadel.git)
   --install-dir <path>      Base install directory (default: ~/.GoatCitadel)
   --install-method <name>   Install method (supported: git)
   --no-path-update          Do not modify shell profile PATH
@@ -41,8 +42,8 @@ Options:
   --help                    Show this help
 
 Examples:
-  curl -fsSL https://raw.githubusercontent.com/spurnout/GoatCitadel/main/install.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/spurnout/GoatCitadel/main/install.sh | bash -s -- --install-method git
+  curl -fsSL https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.sh | bash -s -- --install-method git
 EOF
 }
 
@@ -238,10 +239,12 @@ echo "Install directory: ${APP_DIR}"
 echo "Launcher: ${BIN_DIR}/goatcitadel"
 echo ""
 echo "Run:"
+echo "  ${BIN_DIR}/goatcitadel verify install"
 echo "  ${BIN_DIR}/goatcitadel up"
 echo "  ${BIN_DIR}/goatcitadel onboard"
 echo "  ${BIN_DIR}/goatcitadel doctor --deep"
 echo "  ${BIN_DIR}/goatcitadel voice status"
+echo "  ${BIN_DIR}/goat verify install"
 echo "  ${BIN_DIR}/goat up"
 echo "  ${BIN_DIR}/goat onboard"
 echo "  ${BIN_DIR}/goat doctor --deep"

@@ -59,14 +59,14 @@ corepack --version
 Safer download-and-run flow:
 
 ```powershell
-iwr https://raw.githubusercontent.com/spurnout/GoatCitadel/main/install.ps1 -OutFile install.ps1
+iwr https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1 -OutFile install.ps1
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 Power-user one-liner:
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/spurnout/GoatCitadel/main/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1 | iex
 ```
 
 Custom install root:
@@ -86,14 +86,14 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -SkipVoice
 Safer download-and-run flow:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/spurnout/GoatCitadel/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.sh -o install.sh
 bash install.sh
 ```
 
 Power-user one-liner:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/spurnout/GoatCitadel/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.sh | bash
 ```
 
 Custom install root:
@@ -112,6 +112,7 @@ bash install.sh --voice-model small.en
 
 ```bash
 goatcitadel help
+goatcitadel verify install
 goatcitadel up
 goatcitadel onboard
 goatcitadel doctor --deep
@@ -122,6 +123,7 @@ Short alias:
 
 ```bash
 goat help
+goat verify install
 goat up
 goat onboard
 goat doctor --deep
@@ -144,7 +146,7 @@ goatcitadel update
 ## Path B: Manual / Dev Install
 
 ```bash
-git clone https://github.com/spurnout/GoatCitadel.git
+git clone https://github.com/goatcitadel/GoatCitadel.git
 cd GoatCitadel
 corepack enable
 corepack prepare pnpm@10.31.0 --activate
@@ -159,10 +161,17 @@ The default clone keeps the shipped Office runtime assets in-repo. The full Offi
 Use repo scripts directly from a clone:
 
 ```bash
-pnpm doctor -- --deep
-pnpm onboarding:tui
+pnpm verify:install
 pnpm dev
+pnpm doctor:deep
+pnpm onboarding:tui
 ```
+
+Notes:
+
+- `pnpm verify:install` boots an isolated temporary gateway + Mission Control stack on open ports, so it works even if another GoatCitadel session is already running.
+- `pnpm doctor:deep` is the repo-script form of doctor and avoids pnpm's built-in `doctor` command collision.
+- `pnpm doctor:deep` is most useful after you already have GoatCitadel running.
 
 Do not assume the `goatcitadel` launcher exists in a raw clone unless you installed it separately.
 
