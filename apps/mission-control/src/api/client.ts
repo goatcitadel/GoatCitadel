@@ -243,6 +243,25 @@ export interface GatewayAccessPreflightResult {
   onboardingState?: OnboardingStartupState;
   rejectedStoredAuth?: boolean;
   bootstrapTokenRejected?: boolean;
+  startupTiming?: GatewayStartupTiming;
+}
+
+export interface GatewayStartupPhaseTiming {
+  key: "health" | "auth" | "shell";
+  label: string;
+  status: "success" | "error" | "skipped";
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  detail: string;
+}
+
+export interface GatewayStartupTiming {
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  outcome: GatewayAccessPreflightStatus;
+  phases: GatewayStartupPhaseTiming[];
 }
 
 interface ParsedApiError {
@@ -721,27 +740,60 @@ export function consumeGatewayAccessBootstrapFromLocation(): GatewayBootstrapRes
 export async function preflightGatewayAccess(
   options: { bootstrap?: GatewayBootstrapResult } = {},
 ): Promise<GatewayAccessPreflightResult> {
-  const health = await probeGatewayHealth();
-  if (!health.ok) {
-    return {
-      status: "unreachable",
-      message: "Mission Control cannot reach the gateway yet.",
-      healthDetail: health.detail,
-    };
-  }
-
+  const startupStartedAt = createIsoTimestamp();
+  const startupStartedMs = getMonotonicNow();
   const hadStoredAuth = Boolean(readStoredGatewayAuthState());
   const usedBootstrap = Boolean(options.bootstrap?.consumed);
+  const phases: GatewayStartupPhaseTiming[] = [];
+
+  const skippedHealthPhase = createStartupPhase({
+    key: "health",
+    label: "Health check",
+    status: "skipped",
+    startedAt: startupStartedAt,
+    finishedAt: startupStartedAt,
+    durationMs: 0,
+    detail: "Skipped during startup because the authenticated startup probe also proves gateway reachability.",
+  });
+  phases.push(skippedHealthPhase);
+  recordStartupPhaseDiagnostic(skippedHealthPhase);
+
+  const authStartedAt = createIsoTimestamp();
+  const authStartedMs = getMonotonicNow();
 
   try {
     const onboardingState = await request<OnboardingStartupState>("/api/v1/onboarding/startup");
+    const authPhase = createStartupPhase({
+      key: "auth",
+      label: "Access check",
+      status: "success",
+      startedAt: authStartedAt,
+      finishedAt: createIsoTimestamp(),
+      durationMs: getDurationMs(authStartedMs),
+      detail: "Authenticated startup probe succeeded.",
+    });
+    phases.push(authPhase);
+    recordStartupPhaseDiagnostic(authPhase);
     return {
       status: "ready",
       message: "Gateway reachability and access checks passed.",
-      healthDetail: health.detail,
+      healthDetail: authPhase.detail,
       onboardingState,
+      startupTiming: createStartupTiming("ready", startupStartedAt, startupStartedMs, phases),
     };
   } catch (error) {
+    const authPhase = createStartupPhase({
+      key: "auth",
+      label: "Access check",
+      status: "error",
+      startedAt: authStartedAt,
+      finishedAt: createIsoTimestamp(),
+      durationMs: getDurationMs(authStartedMs),
+      detail: summarizeStartupProbeFailure(error),
+    });
+    phases.push(authPhase);
+    recordStartupPhaseDiagnostic(authPhase);
+
     if (isApiRequestError(error)) {
       if (error.status === 401 || error.status === 403) {
         if (hadStoredAuth || usedBootstrap) {
@@ -754,10 +806,11 @@ export async function preflightGatewayAccess(
             : hadStoredAuth
               ? "Saved gateway credentials were rejected. Enter the current gateway credentials."
               : "Gateway credentials are required to continue.",
-          healthDetail: health.detail,
+          healthDetail: authPhase.detail,
           authMode: error.authMode,
           rejectedStoredAuth: hadStoredAuth,
           bootstrapTokenRejected: usedBootstrap,
+          startupTiming: createStartupTiming("needs-auth", startupStartedAt, startupStartedMs, phases),
         };
       }
 
@@ -765,33 +818,102 @@ export async function preflightGatewayAccess(
         return {
           status: "misconfigured",
           message: readApiErrorMessage(error.body) || "Gateway auth is configured incorrectly on the server.",
-          healthDetail: health.detail,
+          healthDetail: authPhase.detail,
           authMode: error.authMode,
+          startupTiming: createStartupTiming("misconfigured", startupStartedAt, startupStartedMs, phases),
         };
       }
 
       if (error.kind === "network") {
         return {
           status: "unreachable",
-          message: "Gateway health responded, but authenticated API access still failed.",
-          healthDetail: error.message,
+          message: "Mission Control cannot reach the gateway yet.",
+          healthDetail: authPhase.detail,
+          startupTiming: createStartupTiming("unreachable", startupStartedAt, startupStartedMs, phases),
         };
       }
 
       return {
         status: "misconfigured",
         message: readApiErrorMessage(error.body) || error.message,
-        healthDetail: health.detail,
+        healthDetail: authPhase.detail,
         authMode: error.authMode,
+        startupTiming: createStartupTiming("misconfigured", startupStartedAt, startupStartedMs, phases),
       };
     }
 
     return {
       status: "misconfigured",
       message: (error as Error).message,
-      healthDetail: health.detail,
+      healthDetail: authPhase.detail,
+      startupTiming: createStartupTiming("misconfigured", startupStartedAt, startupStartedMs, phases),
     };
   }
+}
+
+function createIsoTimestamp(): string {
+  return new Date().toISOString();
+}
+
+function getMonotonicNow(): number {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+function getDurationMs(startedAtMs: number): number {
+  return Math.max(0, Math.round(getMonotonicNow() - startedAtMs));
+}
+
+function createStartupPhase(phase: GatewayStartupPhaseTiming): GatewayStartupPhaseTiming {
+  return phase;
+}
+
+function createStartupTiming(
+  outcome: GatewayAccessPreflightStatus,
+  startedAt: string,
+  startedAtMs: number,
+  phases: GatewayStartupPhaseTiming[],
+): GatewayStartupTiming {
+  return {
+    startedAt,
+    finishedAt: createIsoTimestamp(),
+    durationMs: getDurationMs(startedAtMs),
+    outcome,
+    phases,
+  };
+}
+
+function recordStartupPhaseDiagnostic(phase: GatewayStartupPhaseTiming): void {
+  recordClientDiagnostic({
+    level: phase.status === "error" ? "error" : "info",
+    category: "startup",
+    event: `startup.${phase.key}.${phase.status}`,
+    message: `${phase.label} ${phase.status} in ${phase.durationMs} ms`,
+    context: {
+      key: phase.key,
+      label: phase.label,
+      status: phase.status,
+      detail: phase.detail,
+      durationMs: phase.durationMs,
+      startedAt: phase.startedAt,
+      finishedAt: phase.finishedAt,
+    },
+  });
+}
+
+function summarizeStartupProbeFailure(error: unknown): string {
+  if (isApiRequestError(error)) {
+    if (error.kind === "network") {
+      return `Gateway startup probe failed before a response was received: ${error.message}`;
+    }
+    if (error.status === 401 || error.status === 403) {
+      return `Authenticated startup probe reached the gateway, but credentials were rejected (${error.status}).`;
+    }
+    return `Authenticated startup probe failed with HTTP ${error.status ?? "unknown"}.`;
+  }
+  return `Gateway startup probe failed: ${(error as Error).message}`;
 }
 
 function migrateLegacyGatewayAuthStorage(): void {
@@ -847,85 +969,6 @@ function readApiErrorMessage(body: unknown): string | undefined {
   return typeof candidate === "string" && candidate.trim()
     ? candidate.trim()
     : undefined;
-}
-
-async function probeGatewayHealth(): Promise<{ ok: boolean; detail: string }> {
-  const correlationId = createCorrelationId();
-  recordClientDiagnostic({
-    level: "info",
-    category: "api",
-    event: "request.start",
-    message: "GET /health",
-    correlationId,
-    route: "/health",
-  });
-
-  try {
-    const response = await fetch(`${API_BASE}/health`, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        "x-goatcitadel-correlation-id": correlationId,
-        "x-goatcitadel-origin-surface": "app",
-      },
-    });
-    const responseCorrelationId = response.headers.get("x-goatcitadel-correlation-id") ?? correlationId;
-    setDevDiagnosticsActiveCorrelationId(responseCorrelationId);
-
-    if (!response.ok) {
-      const detail = `Health probe failed with HTTP ${response.status}.`;
-      setDevDiagnosticsGatewayReachable(false);
-      setDevDiagnosticsLastRequestError(`GET /health: ${response.status}`);
-      recordClientDiagnostic({
-        level: "error",
-        category: "api",
-        event: "request.error",
-        message: `GET /health failed (${response.status})`,
-        correlationId: responseCorrelationId,
-        route: "/health",
-        context: {
-          status: response.status,
-        },
-      });
-      return { ok: false, detail };
-    }
-
-    setDevDiagnosticsGatewayReachable(true);
-    setDevDiagnosticsLastRequestError(undefined);
-    recordClientDiagnostic({
-      level: "info",
-      category: "api",
-      event: "request.finish",
-      message: "GET /health completed",
-      correlationId: responseCorrelationId,
-      route: "/health",
-      context: {
-        status: response.status,
-      },
-    });
-    return {
-      ok: true,
-      detail: `Gateway health check OK (${response.status}).`,
-    };
-  } catch (error) {
-    setDevDiagnosticsGatewayReachable(false);
-    setDevDiagnosticsLastRequestError("GET /health: network error");
-    recordClientDiagnostic({
-      level: "error",
-      category: "api",
-      event: "request.network_error",
-      message: "GET /health failed before a response was received",
-      correlationId,
-      route: "/health",
-      context: {
-        error: (error as Error).message,
-      },
-    });
-    return {
-      ok: false,
-      detail: `Gateway health probe failed: ${(error as Error).message}`,
-    };
-  }
 }
 
 export interface SessionsResponse {

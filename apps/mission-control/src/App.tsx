@@ -10,6 +10,7 @@ import {
   resolveApprovalWithRemoteToken,
   type EventStreamConnectionState,
   type GatewayAccessPreflightResult,
+  type GatewayStartupPhaseTiming,
   type RealtimeEvent,
 } from "./api/shell-client";
 import type { DashboardStateResponse } from "./api/client";
@@ -54,6 +55,7 @@ import {
   setDevDiagnosticsCurrentEffectsMode,
   setDevDiagnosticsCurrentRoute,
   setDevDiagnosticsGatewayReachable,
+  setDevDiagnosticsStartupSummary,
   setDevDiagnosticsSseState,
 } from "./state/dev-diagnostics-store";
 
@@ -80,6 +82,13 @@ const SystemPage = lazyPage(() => import("./pages/SystemPage"), "SystemPage");
 const TasksPage = lazyPage(() => import("./pages/TasksPage"), "TasksPage");
 const ToolsPage = lazyPage(() => import("./pages/ToolsPage"), "ToolsPage");
 const GATEWAY_ACCESS_AUTO_RETRY_MS = 300;
+
+function getStartupMonotonicNow(): number {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+  return Date.now();
+}
 
 export function deriveShellApprovalCount(
   operateStatus: DashboardStateResponse | null,
@@ -344,7 +353,10 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    const startupStartedAt = new Date().toISOString();
+    const startupStartedMs = getStartupMonotonicNow();
     setGatewayAccessBusy(true);
+    setDevDiagnosticsStartupSummary(undefined);
     setGatewayAccess({
       status: "checking",
       message: "Verifying gateway reachability and access policy.",
@@ -357,6 +369,35 @@ export function App() {
           return;
         }
         setGatewayAccess(result);
+        const phases: GatewayStartupPhaseTiming[] = [...(result.startupTiming?.phases ?? [])];
+        if (result.status === "ready") {
+          phases.push({
+            key: "shell",
+            label: "Shell ready",
+            status: "success",
+            startedAt: startupStartedAt,
+            finishedAt: new Date().toISOString(),
+            durationMs: Math.max(0, Math.round(getStartupMonotonicNow() - startupStartedMs)),
+            detail: "Mission Control rendered the primary shell after the startup probe completed.",
+          });
+        }
+        setDevDiagnosticsStartupSummary({
+          startedAt: result.startupTiming?.startedAt ?? startupStartedAt,
+          finishedAt: new Date().toISOString(),
+          durationMs: Math.max(0, Math.round(getStartupMonotonicNow() - startupStartedMs)),
+          outcome: result.status,
+          phases,
+        });
+        recordClientDiagnostic({
+          level: result.status === "ready" ? "info" : "warn",
+          category: "startup",
+          event: `startup.complete.${result.status}`,
+          message: `Startup completed with outcome ${result.status}.`,
+          context: {
+            durationMs: Math.max(0, Math.round(getStartupMonotonicNow() - startupStartedMs)),
+            phases,
+          },
+        });
         if (result.status !== "ready") {
           setStreamState("closed");
           setOnboardingComplete(null);
@@ -377,6 +418,32 @@ export function App() {
         if (cancelled) {
           return;
         }
+        const durationMs = Math.max(0, Math.round(getStartupMonotonicNow() - startupStartedMs));
+        setDevDiagnosticsStartupSummary({
+          startedAt: startupStartedAt,
+          finishedAt: new Date().toISOString(),
+          durationMs,
+          outcome: "misconfigured",
+          phases: [{
+            key: "shell",
+            label: "Shell ready",
+            status: "error",
+            startedAt: startupStartedAt,
+            finishedAt: new Date().toISOString(),
+            durationMs,
+            detail: "Mission Control startup crashed before the shell could become interactive.",
+          }],
+        });
+        recordClientDiagnostic({
+          level: "error",
+          category: "startup",
+          event: "startup.complete.error",
+          message: "Startup crashed before Mission Control could finish booting.",
+          context: {
+            durationMs,
+            error: (error as Error).message,
+          },
+        });
         setGatewayAccess({
           status: "misconfigured",
           message: (error as Error).message,

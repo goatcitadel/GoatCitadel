@@ -381,6 +381,34 @@ describe("App gateway access gate", () => {
     expect(connectEventStreamMock).toHaveBeenCalledTimes(1);
   }, 15_000);
 
+  it("shows startup copy before the first preflight resolves and then transitions into the shell", async () => {
+    const { App } = await import("./App");
+    let resolvePreflight: ((value: ReturnType<typeof createReadyPreflightResult>) => void) | undefined;
+    preflightGatewayAccessMock.mockImplementation(() => new Promise((resolve) => {
+      resolvePreflight = resolve as (value: ReturnType<typeof createReadyPreflightResult>) => void;
+    }));
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<App />);
+    });
+    await flush();
+
+    let text = renderTreeText(renderer!);
+    expect(text).toContain("Starting Mission Control");
+    expect(text).toContain("Mission Control startup");
+    expect(text).not.toContain("Mission Control access gate");
+
+    await act(async () => {
+      resolvePreflight?.(createReadyPreflightResult());
+      await Promise.resolve();
+    });
+    await flush();
+
+    text = await waitForTreeText(renderer!, "chat-ready:chat:locked");
+    expect(text).toContain("chat-ready:chat:locked");
+  }, 15_000);
+
   it("automatically retries startup preflight while the gateway is temporarily unreachable", async () => {
     vi.useFakeTimers();
     try {

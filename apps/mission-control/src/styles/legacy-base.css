@@ -4409,6 +4409,63 @@ body {
   flex: 1 1 240px;
 }
 
+.dev-diagnostics-startup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(115, 205, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.dev-diagnostics-startup-header,
+.dev-diagnostics-startup-meta,
+.dev-diagnostics-startup-phase-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dev-diagnostics-startup-header h4 {
+  margin: 4px 0 0;
+}
+
+.dev-diagnostics-startup-meta,
+.dev-diagnostics-startup-phase-detail {
+  color: var(--muted);
+  font-size: 0.78rem;
+  flex-wrap: wrap;
+}
+
+.dev-diagnostics-startup-phases {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dev-diagnostics-startup-phase {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.dev-diagnostics-startup-phase.is-success {
+  border: 1px solid rgba(82, 226, 183, 0.2);
+}
+
+.dev-diagnostics-startup-phase.is-error {
+  border: 1px solid rgba(255, 130, 145, 0.22);
+}
+
+.dev-diagnostics-startup-phase.is-skipped {
+  border: 1px solid rgba(115, 205, 255, 0.16);
+}
+
 .dev-diagnostics-layout {
   display: grid;
   grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);

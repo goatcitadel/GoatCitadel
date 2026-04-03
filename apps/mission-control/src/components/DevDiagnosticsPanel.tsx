@@ -18,6 +18,7 @@ const CATEGORY_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "chat", label: "Chat" },
   { value: "orchestration", label: "Orchestration" },
   { value: "gateway", label: "Gateway" },
+  { value: "startup", label: "Startup" },
   { value: "tools", label: "Tools" },
   { value: "voice", label: "Voice" },
   { value: "addons", label: "Add-ons" },
@@ -124,6 +125,35 @@ export function DevDiagnosticsPanel({
         <div><span>Session</span><strong>{diagnosticsState.activeChatSessionId ?? "n/a"}</strong></div>
         <div><span>Effects</span><strong>{diagnosticsState.currentEffectsMode ?? "n/a"}</strong></div>
       </div>
+      {diagnosticsState.startupSummary ? (
+        <div className="dev-diagnostics-startup">
+          <div className="dev-diagnostics-startup-header">
+            <div>
+              <span className="dev-diagnostics-kicker">Startup</span>
+              <h4>Latest startup run</h4>
+            </div>
+            <strong>{diagnosticsState.startupSummary.durationMs} ms</strong>
+          </div>
+          <div className="dev-diagnostics-startup-meta">
+            <span>Outcome: {diagnosticsState.startupSummary.outcome}</span>
+            <span>Started: {new Date(diagnosticsState.startupSummary.startedAt).toLocaleTimeString()}</span>
+          </div>
+          <div className="dev-diagnostics-startup-phases">
+            {diagnosticsState.startupSummary.phases.map((phase) => (
+              <div key={phase.key} className={`dev-diagnostics-startup-phase is-${phase.status}`}>
+                <div className="dev-diagnostics-startup-phase-row">
+                  <strong>{phase.label}</strong>
+                  <span>{phase.durationMs} ms</span>
+                </div>
+                <div className="dev-diagnostics-startup-phase-row dev-diagnostics-startup-phase-detail">
+                  <span>{phase.status}</span>
+                  <span>{phase.detail}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="dev-diagnostics-toolbar">
         <select value={category} onChange={(event) => setCategory(event.target.value)}>
           {CATEGORY_OPTIONS.map((option) => (

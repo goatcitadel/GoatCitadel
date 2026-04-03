@@ -236,7 +236,7 @@ describe("Mission Control remote access bootstrap", () => {
     expect(readStoredGatewayAuthState()).toBeUndefined();
   });
 
-  it("classifies an unreachable health probe before Mission Control starts", async () => {
+  it("classifies an unreachable startup probe before Mission Control starts", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => {
       throw new Error("connect ECONNREFUSED");
     }) as typeof fetch);
@@ -245,6 +245,40 @@ describe("Mission Control remote access bootstrap", () => {
 
     expect(result.status).toBe("unreachable");
     expect(result.healthDetail).toMatch(/ECONNREFUSED/);
+  });
+
+  it("uses the authenticated startup probe without a separate health request", async () => {
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/api/v1/onboarding/startup")) {
+        return new Response(JSON.stringify({
+          completed: true,
+        }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        });
+      }
+      throw new Error(`unexpected path: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as typeof fetch);
+
+    const result = await preflightGatewayAccess();
+
+    expect(result.status).toBe("ready");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/api/v1/onboarding/startup");
+    expect(result.startupTiming?.phases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: "health",
+        status: "skipped",
+      }),
+      expect.objectContaining({
+        key: "auth",
+        status: "success",
+      }),
+    ]));
   });
 
   it("sanitizes access tokens out of dev diagnostics route state and emitted events", () => {

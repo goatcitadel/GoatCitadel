@@ -18,6 +18,25 @@ interface DevDiagnosticsState {
   gatewayReachable?: boolean;
   sseState?: EventStreamConnectionState;
   latestTraceSummary?: Record<string, unknown>;
+  startupSummary?: DevDiagnosticsStartupSummary;
+}
+
+export interface DevDiagnosticsStartupPhase {
+  key: string;
+  label: string;
+  status: "success" | "error" | "skipped";
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  detail: string;
+}
+
+export interface DevDiagnosticsStartupSummary {
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  outcome: string;
+  phases: DevDiagnosticsStartupPhase[];
 }
 
 interface DevDiagnosticsBridge {
@@ -176,6 +195,17 @@ export function setDevDiagnosticsLatestTraceSummary(summary: Record<string, unkn
   notify();
 }
 
+export function setDevDiagnosticsStartupSummary(summary: DevDiagnosticsStartupSummary | undefined): void {
+  if (!state.enabled) {
+    return;
+  }
+  state = {
+    ...state,
+    startupSummary: summary,
+  };
+  notify();
+}
+
 export function recordClientDiagnostic(input: {
   level: DevDiagnosticsLevel;
   category: DevDiagnosticsCategory | string;
@@ -311,6 +341,7 @@ export function buildDevDiagnosticsBundle(gatewayItems: DevDiagnosticsEvent[] = 
     gatewayReachable: state.gatewayReachable,
     sseState: state.sseState,
     latestTraceSummary: state.latestTraceSummary,
+    startupSummary: state.startupSummary,
     browserDiagnostics: clientItems,
     gatewayDiagnostics: gatewayItems.slice(0, MAX_COPY_ITEMS),
   };
