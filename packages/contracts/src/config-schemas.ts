@@ -63,6 +63,7 @@ export const LlmProviderConfigSchema = z
 export const LlmConfigFileSchema = z
   .object({
     activeProviderId: z.string(),
+    activeModel: z.string().optional(),
     providers: z.array(LlmProviderConfigSchema),
   })
   .passthrough();

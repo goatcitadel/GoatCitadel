@@ -59,6 +59,40 @@ describe("LlmService", () => {
     expect(exported.providers[0]?.apiKey).toBeUndefined();
   });
 
+  it("restores and exports the configured active model for the active provider", () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      activeModel: "gpt-5.4",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+        {
+          providerId: "glm",
+          label: "GLM",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "glm-5",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+
+    expect(service.getRuntimeConfig()).toMatchObject({
+      activeProviderId: "openai",
+      activeModel: "gpt-5.4",
+    });
+    expect(service.exportConfigFile()).toMatchObject({
+      activeProviderId: "openai",
+      activeModel: "gpt-5.4",
+    });
+  });
+
   it("keeps provider-specific versioned base paths (z.ai v4) intact", () => {
     const config: LlmConfigFile = {
       activeProviderId: "glm",
@@ -554,14 +588,12 @@ describe("LlmService", () => {
     }) as unknown as typeof fetch;
 
     try {
-      await expect(service.previewModels({
+      const result = await service.previewModels({
         providerId: "minimax",
         baseUrl: "https://api.minimax.io/v1",
-      })).resolves.toSatisfy((result) =>
-        result.source === "fallback"
-        && Array.isArray(result.items)
-        && result.items.some((item) => item.id === "MiniMax-M2.7")
-      );
+      });
+      expect(result.source).toBe("fallback");
+      expect(result.items.some((item) => item.id === "MiniMax-M2.7")).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -607,7 +639,13 @@ describe("LlmService", () => {
         baseUrl: "https://api.z.ai/api/paas/v4",
         apiKeyEnv: "GLM_API_KEY",
       });
-      expect(result.items.map((item) => item.id)).toEqual(["glm-5", "glm-5-turbo"]);
+      expect(result.items.map((item) => item.id)).toEqual([
+        "glm-5",
+        "glm-5-turbo",
+        "glm-5-air",
+        "glm-5-flash",
+        "glm-5v-turbo",
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1514,6 +1552,51 @@ describe("LlmService", () => {
     expect(chunks).toHaveLength(1);
     expect(chunks[0]?.id).toBe("chunk_multiline");
     expect(((chunks[0]?.choices as Array<Record<string, unknown>>)[0]?.delta as Record<string, unknown>)?.content).toBe("hello from multiline sse");
+  });
+
+  it("merges the OpenAI shortlist into preview results even when /models is partial", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({
+        data: [{ id: "gpt-5.4-mini" }, { id: "gpt-4.1-mini" }],
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    )) as unknown as typeof fetch;
+
+    try {
+      const result = await service.previewModels({
+        providerId: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      });
+      expect(result.source).toBe("remote");
+      expect(result.items.map((item) => item.id)).toEqual([
+        "gpt-5.4-mini",
+        "gpt-4.1-mini",
+        "gpt-5.4",
+        "gpt-5-mini",
+        "gpt-4o-mini",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("estimates missing usage cost for chat completions responses", async () => {

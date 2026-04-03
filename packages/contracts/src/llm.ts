@@ -27,6 +27,7 @@ export interface LlmProviderConfig {
 
 export interface LlmConfigFile {
   activeProviderId: string;
+  activeModel?: string;
   providers: LlmProviderConfig[];
 }
 

@@ -68,6 +68,11 @@ interface SecretStatusCacheEntry {
   cachedAt: number;
 }
 
+function normalizeConfiguredActiveModel(model: string | undefined): string | undefined {
+  const trimmed = model?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 const DISALLOWED_BASE_HOSTS = new Set([
   "0.0.0.0",
   "169.254.169.254",
@@ -102,7 +107,9 @@ export class LlmService {
     }
 
     this.activeProviderId = active.providerId;
-    this.activeModel = active.defaultModel;
+    this.activeModel = active.providerId === config.activeProviderId.trim()
+      ? normalizeConfiguredActiveModel(config.activeModel) ?? active.defaultModel
+      : active.defaultModel;
   }
 
   public updateNetworkAllowlist(allowlist: string[]): void {
@@ -297,6 +304,7 @@ export class LlmService {
   public exportConfigFile(): LlmConfigFile {
     return {
       activeProviderId: this.activeProviderId,
+      activeModel: this.activeModel,
       providers: Array.from(this.providers.values()).map((provider) => ({
         ...provider,
         apiKey: undefined,
@@ -328,12 +336,16 @@ export class LlmService {
       provider,
       apiKey: explicitPreviewApiKey || this.resolveApiKey(provider),
     };
+    const fallbackCatalog = buildFallbackModelCatalog(
+      provider.providerId,
+      provider.defaultModel,
+    );
 
     try {
       const result = await this.fetchModelsForResolvedProvider(resolved);
       if (result.items.length > 0) {
         return {
-          items: result.items,
+          items: mergeModelCatalogs(result.items, fallbackCatalog),
           source: result.source,
         };
       }
@@ -1144,29 +1156,46 @@ function buildFallbackModelCatalog(
 
 function normalizeModelRecords(payload: unknown): LlmModelRecord[] {
   const records = extractModelRecordArray(payload);
-  return records
-    .map((record) => {
-      const id = extractModelId(record);
-      if (!id) {
-        return undefined;
-      }
-      return {
-        id,
-        ownedBy: typeof record.owned_by === "string"
-          ? record.owned_by
-          : typeof record.ownedBy === "string"
-            ? record.ownedBy
+  const normalized: LlmModelRecord[] = [];
+  for (const record of records) {
+    const id = extractModelId(record);
+    if (!id) {
+      continue;
+    }
+    normalized.push({
+      id,
+      ownedBy: typeof record.owned_by === "string"
+        ? record.owned_by
+        : typeof record.ownedBy === "string"
+          ? record.ownedBy
+          : undefined,
+      created: typeof record.created === "number"
+        ? record.created
+        : typeof record.created_at === "number"
+          ? record.created_at
+          : typeof record.createdAt === "number"
+            ? record.createdAt
             : undefined,
-        created: typeof record.created === "number"
-          ? record.created
-          : typeof record.created_at === "number"
-            ? record.created_at
-            : typeof record.createdAt === "number"
-              ? record.createdAt
-              : undefined,
-      } satisfies LlmModelRecord;
-    })
-    .filter((record): record is LlmModelRecord => Boolean(record));
+    });
+  }
+  return normalized;
+}
+
+function mergeModelCatalogs(primary: LlmModelRecord[], fallback: LlmModelRecord[]): LlmModelRecord[] {
+  const merged: LlmModelRecord[] = [];
+  const seen = new Set<string>();
+  for (const record of [...primary, ...fallback]) {
+    const id = record.id.trim();
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    merged.push({
+      ...record,
+      id,
+    });
+  }
+  return merged;
 }
 
 function extractModelRecordArray(payload: unknown): Array<Record<string, unknown>> {

@@ -2679,7 +2679,7 @@ export class GatewayService {
 
   public getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord {
     this.getSession(sessionId);
-    const prefs = this.ensureGlmPrimaryDefaults(sessionId, this.storage.chatSessionPrefs.ensure(sessionId));
+    const prefs = this.ensureChatSessionModelDefaults(sessionId, this.storage.chatSessionPrefs.ensure(sessionId));
     return this.hydrateChatPrefsWithAutonomy(sessionId, prefs);
   }
 
@@ -2694,7 +2694,7 @@ export class GatewayService {
       this.patchSessionAutonomyPrefs(sessionId, autonomyPatch);
     }
     const updated = this.storage.chatSessionPrefs.patch(sessionId, basePatch);
-    const normalized = this.ensureGlmPrimaryDefaults(sessionId, updated);
+    const normalized = this.ensureChatSessionModelDefaults(sessionId, updated);
     const hydrated = this.hydrateChatPrefsWithAutonomy(sessionId, normalized);
     this.publishRealtime("chat_session_updated", "chat", {
       type: "chat_session_prefs_updated",
@@ -2704,7 +2704,7 @@ export class GatewayService {
     return hydrated;
   }
 
-  private ensureGlmPrimaryDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord {
+  private ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord {
     if (prefs.providerId && prefs.model) {
       return prefs;
     }
@@ -3424,6 +3424,13 @@ export class GatewayService {
       includeKeychainForActiveProvider: true,
       useCache: true,
     });
+    const active = runtime.providers.find((provider) => provider.providerId === runtime.activeProviderId);
+    if (active?.hasApiKey) {
+      return {
+        providerId: active.providerId,
+        model: runtime.activeModel || active.defaultModel,
+      };
+    }
     const glm = runtime.providers.find((provider) => provider.providerId === "glm" && provider.hasApiKey);
     if (glm) {
       return {
@@ -3438,10 +3445,10 @@ export class GatewayService {
         model: kimi.defaultModel,
       };
     }
-    const active = runtime.providers.find((provider) => provider.providerId === runtime.activeProviderId);
+    const fallbackActive = runtime.providers.find((provider) => provider.providerId === runtime.activeProviderId);
     return {
-      providerId: active?.providerId ?? runtime.activeProviderId,
-      model: runtime.activeModel,
+      providerId: fallbackActive?.providerId ?? runtime.activeProviderId,
+      model: runtime.activeModel || fallbackActive?.defaultModel,
     };
   }
 
@@ -3474,7 +3481,7 @@ export class GatewayService {
     const active = runtime.providers.find((provider) => provider.providerId === runtime.activeProviderId);
     return {
       providerId: active?.providerId ?? runtime.activeProviderId,
-      model: runtime.activeModel,
+      model: runtime.activeModel || active?.defaultModel,
     };
   }
 
@@ -4350,7 +4357,7 @@ export class GatewayService {
     }
     const requestedMode = input.mode ?? "sequential";
     const mode = requestedMode === "parallel" ? "sequential" : requestedMode;
-    const prefs = this.ensureGlmPrimaryDefaults(sessionId, this.storage.chatSessionPrefs.ensure(sessionId));
+    const prefs = this.ensureChatSessionModelDefaults(sessionId, this.storage.chatSessionPrefs.ensure(sessionId));
     const providerId = input.providerId ?? prefs.providerId;
     const model = input.model ?? prefs.model;
     const sessionWorkspaceId = this.normalizeWorkspaceId(this.storage.chatSessionMeta.ensure(sessionId).workspaceId);
@@ -5551,7 +5558,7 @@ export class GatewayService {
       this.patchSessionAutonomyPrefs(sessionId, splitPrefs.autonomyPatch);
     }
     const prefsPatched = this.storage.chatSessionPrefs.patch(sessionId, splitPrefs.basePatch);
-    const prefs = this.ensureGlmPrimaryDefaults(sessionId, prefsPatched);
+    const prefs = this.ensureChatSessionModelDefaults(sessionId, prefsPatched);
     const autonomy = this.getSessionAutonomyPrefs(sessionId);
     const normalized = normalizeAgentInputFromSend(input);
     const projectId = this.storage.chatSessionProjects.get(sessionId)?.projectId;
