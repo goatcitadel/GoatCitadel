@@ -58,6 +58,8 @@ const STEP_TITLES = [
   "Review & Apply",
 ] as const;
 
+type OnboardingRuntimeState = Awaited<ReturnType<typeof fetchOnboardingState>>;
+
 const QUICKSTART_PRESETS = [
   {
     id: "solo-local",
@@ -118,12 +120,76 @@ function isAbortError(error: unknown): boolean {
   return (error as { name?: string } | null)?.name === "AbortError";
 }
 
+function readOnboardingActiveProvider(
+  state: OnboardingRuntimeState | null,
+  providerId: string,
+): OnboardingRuntimeState["settings"]["llm"]["providers"][number] | undefined {
+  return state?.settings.llm.providers.find((provider) => provider.providerId === providerId);
+}
+
+function hasUnsavedOnboardingDraft(params: {
+  state: OnboardingRuntimeState | null;
+  authMode: "none" | "token" | "basic";
+  allowLoopbackBypass: boolean;
+  authToken: string;
+  basicUsername: string;
+  basicPassword: string;
+  activeProviderId: string;
+  activeModel: string;
+  providerLabel: string;
+  providerBaseUrl: string;
+  providerApiStyle: ProviderApiStyle;
+  providerDefaultModel: string;
+  providerApiKey: string;
+  providerApiKeyEnv: string;
+  defaultToolProfile: string;
+  budgetMode: RuntimeSettingsResponse["budgetMode"];
+  networkAllowlistText: string;
+  meshEnabled: boolean;
+  meshMode: "lan" | "wan" | "tailnet";
+  meshNodeId: string;
+  meshMdns: boolean;
+  meshStaticPeers: string;
+  meshRequireMtls: boolean;
+  meshTailnetEnabled: boolean;
+  markComplete: boolean;
+}): boolean {
+  const activeProvider = readOnboardingActiveProvider(params.state, params.activeProviderId);
+  return Boolean(
+    !params.state
+    || params.authMode !== params.state.settings.auth.mode
+    || params.allowLoopbackBypass !== params.state.settings.auth.allowLoopbackBypass
+    || params.authToken.trim().length > 0
+    || params.basicUsername.trim().length > 0
+    || params.basicPassword.length > 0
+    || params.activeProviderId !== params.state.settings.llm.activeProviderId
+    || params.activeModel !== params.state.settings.llm.activeModel
+    || params.providerLabel !== (activeProvider?.label ?? "")
+    || params.providerBaseUrl !== (activeProvider?.baseUrl ?? "")
+    || params.providerApiStyle !== (activeProvider?.apiStyle ?? "openai-responses")
+    || params.providerDefaultModel !== (activeProvider?.defaultModel ?? "")
+    || params.providerApiKey.trim().length > 0
+    || params.providerApiKeyEnv !== ""
+    || params.defaultToolProfile !== params.state.settings.defaultToolProfile
+    || params.budgetMode !== params.state.settings.budgetMode
+    || params.networkAllowlistText !== params.state.settings.networkAllowlist.join("\n")
+    || params.meshEnabled !== params.state.settings.mesh.enabled
+    || params.meshMode !== params.state.settings.mesh.mode
+    || params.meshNodeId !== params.state.settings.mesh.nodeId
+    || params.meshMdns !== params.state.settings.mesh.mdns
+    || params.meshStaticPeers !== params.state.settings.mesh.staticPeers.join("\n")
+    || params.meshRequireMtls !== params.state.settings.mesh.requireMtls
+    || params.meshTailnetEnabled !== params.state.settings.mesh.tailnetEnabled
+    || params.markComplete !== !params.state.completed,
+  );
+}
+
 export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {}) {
   const [loading, setLoading] = useState(true);
   const [applying, setApplying] = useState(false);
   const [step, setStep] = useState<StepId>(0);
   const [error, setError] = useState<string | null>(null);
-  const [state, setState] = useState<Awaited<ReturnType<typeof fetchOnboardingState>> | null>(null);
+  const [state, setState] = useState<OnboardingRuntimeState | null>(null);
   const [daemonStatus, setDaemonStatus] = useState<Awaited<ReturnType<typeof fetchDaemonStatus>> | null>(null);
   const [daemonBusy, setDaemonBusy] = useState<"start" | "restart" | null>(null);
   const [installTokenInfo, setInstallTokenInfo] = useState<Awaited<ReturnType<typeof resolveGatewayInstallToken>> | null>(null);
@@ -180,6 +246,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   const previewAbortRef = useRef<AbortController | null>(null);
   const riskDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const riskAbortRef = useRef<AbortController | null>(null);
+  const hasUnsavedDraftRef = useRef(false);
 
   const providerOptions = useMemo<SelectOption[]>(() => {
     const fromState = runtimeProviderCatalog.map((provider) => ({
@@ -213,7 +280,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     return [...new Set(values)].map((value) => ({ value, label: value }));
   }, [providerLabel, state]);
 
-  const hydrateFromState = useCallback((next: Awaited<ReturnType<typeof fetchOnboardingState>>) => {
+  const hydrateFromState = useCallback((next: OnboardingRuntimeState) => {
     setAuthMode(next.settings.auth.mode);
     setAllowLoopbackBypass(next.settings.auth.allowLoopbackBypass);
     setDefaultToolProfile(next.settings.defaultToolProfile);
@@ -240,7 +307,64 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     setMeshTailnetEnabled(next.settings.mesh.tailnetEnabled);
   }, []);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    hasUnsavedDraftRef.current = hasUnsavedOnboardingDraft({
+      state,
+      authMode,
+      allowLoopbackBypass,
+      authToken,
+      basicUsername,
+      basicPassword,
+      activeProviderId,
+      activeModel,
+      providerLabel,
+      providerBaseUrl,
+      providerApiStyle,
+      providerDefaultModel,
+      providerApiKey,
+      providerApiKeyEnv,
+      defaultToolProfile,
+      budgetMode,
+      networkAllowlistText,
+      meshEnabled,
+      meshMode,
+      meshNodeId,
+      meshMdns,
+      meshStaticPeers,
+      meshRequireMtls,
+      meshTailnetEnabled,
+      markComplete,
+    });
+  }, [
+    activeModel,
+    activeProviderId,
+    allowLoopbackBypass,
+    authMode,
+    authToken,
+    basicPassword,
+    basicUsername,
+    budgetMode,
+    defaultToolProfile,
+    markComplete,
+    meshEnabled,
+    meshMdns,
+    meshMode,
+    meshNodeId,
+    meshRequireMtls,
+    meshStaticPeers,
+    meshTailnetEnabled,
+    networkAllowlistText,
+    providerApiKey,
+    providerApiKeyEnv,
+    providerApiStyle,
+    providerBaseUrl,
+    providerDefaultModel,
+    providerLabel,
+    state,
+  ]);
+
+  const load = useCallback(async (options: { preserveDrafts?: boolean } = {}) => {
+    const preserveDrafts = options.preserveDrafts ?? false;
     setLoading(true);
     setError(null);
     try {
@@ -250,7 +374,9 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       ]);
       setState(next);
       setDaemonStatus(daemon);
-      hydrateFromState(next);
+      if (!preserveDrafts || !hasUnsavedDraftRef.current) {
+        hydrateFromState(next);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -285,16 +411,14 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     "system",
     async (signal) => {
       const haystack = `${signal.reason} ${signal.eventType ?? ""} ${signal.source ?? ""}`.toLowerCase();
-      if (!/\b(onboarding|settings)\b/.test(haystack) && signal.eventType !== "fallback_poll") {
+      if (!/\b(onboarding|settings)\b/.test(haystack)) {
         return;
       }
-      await load();
+      await load({ preserveDrafts: true });
     },
     {
       enabled: true,
       coalesceMs: 900,
-      staleMs: 20000,
-      pollIntervalMs: 20000,
     },
   );
 
