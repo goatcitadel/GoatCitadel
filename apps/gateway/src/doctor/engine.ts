@@ -5,6 +5,7 @@ import process from "node:process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { syncUnifiedConfig } from "../config-sync-lib.js";
+import { repoHasConfigMarker } from "../config-files.js";
 import type {
   DoctorCheckResult,
   DoctorOperatorLinks,
@@ -1134,7 +1135,7 @@ function resolveDoctorRootDir(rootDir?: string): string {
 }
 
 function commandLooksLikeRepoRoot(candidate: string): boolean {
-  return existsSync(path.join(candidate, "config", "assistant.config.json"))
+  return repoHasConfigMarker(candidate)
     && existsSync(path.join(candidate, "package.json"));
 }
 

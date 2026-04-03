@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
+import { repoHasConfigMarker } from "./config-files.js";
 import { syncUnifiedConfig } from "./config-sync-lib.js";
 
 async function main() {
@@ -10,6 +10,9 @@ async function main() {
   lines.push(`root: ${rootDir}`);
   lines.push(`unified: ${result.unifiedPath}`);
   lines.push(`created unified: ${result.createdUnified ? "yes" : "no"}`);
+  lines.push(
+    `materialized examples: ${result.materializedExamples.length > 0 ? result.materializedExamples.join(", ") : "none"}`,
+  );
   lines.push(
     `synced sections: ${result.syncedSections.length > 0 ? result.syncedSections.join(", ") : "none"}`,
   );
@@ -30,7 +33,7 @@ function detectRootDir(): string {
   ];
 
   for (const candidate of candidates) {
-    if (fs.existsSync(path.join(candidate, "config", "assistant.config.json"))) {
+    if (repoHasConfigMarker(candidate)) {
       return candidate;
     }
   }

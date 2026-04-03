@@ -61,9 +61,6 @@ function Preserve-ManagedConfigForUpdate {
   )
 
   $dirtyTrackedPaths = Get-DirtyTrackedPaths -RepositoryPath $RepositoryPath
-  if ($dirtyTrackedPaths.Count -eq 0) {
-    return $null
-  }
 
   $managedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   foreach ($managedPath in $ManagedPaths) {
@@ -75,25 +72,29 @@ function Preserve-ManagedConfigForUpdate {
     throw "Update blocked because the installed checkout has non-config tracked changes: $($unexpected -join ', ')"
   }
 
+  $existingConfigPaths = @($ManagedPaths | Where-Object { Test-Path (Join-Path $RepositoryPath $_) })
+  if ($existingConfigPaths.Count -eq 0) {
+    return $null
+  }
+
   $backupRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("goatcitadel-update-" + [guid]::NewGuid())
   New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
-  foreach ($relativePath in $dirtyTrackedPaths) {
+  foreach ($relativePath in $existingConfigPaths) {
     $sourcePath = Join-Path $RepositoryPath $relativePath
-    if (-not (Test-Path $sourcePath)) {
-      continue
-    }
     $backupPath = Join-Path $backupRoot $relativePath
     $backupDir = Split-Path -Parent $backupPath
     if (-not [string]::IsNullOrWhiteSpace($backupDir)) {
       New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
     }
     Copy-Item -Path $sourcePath -Destination $backupPath -Force
+  }
+  foreach ($relativePath in $dirtyTrackedPaths) {
     Invoke-NativeOrThrow -FilePath "git" -Arguments @("-C", $RepositoryPath, "restore", "--source=HEAD", "--", $relativePath) -FailureMessage "Failed to temporarily restore managed config before update"
   }
 
   return [pscustomobject]@{
     BackupRoot = $backupRoot
-    Paths = $dirtyTrackedPaths
+    Paths = $existingConfigPaths
   }
 }
 
@@ -134,13 +135,14 @@ $WorkspaceBootstrapBuildPackages = @(
   "@goatcitadel/contracts"
   "@goatcitadel/extensions-sdk"
 )
-$ManagedMutableConfigPaths = @(
+$ManagedLocalConfigPaths = @(
   "config/assistant.config.json",
   "config/tool-policy.json",
   "config/budgets.json",
   "config/llm-providers.json",
   "config/cron-jobs.json",
-  "config/goatcitadel.json"
+  "config/goatcitadel.json",
+  "config/private-beta.profile.json"
 )
 $preservedManagedConfig = $null
 
@@ -159,7 +161,7 @@ New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 if (Test-Path (Join-Path $AppDir ".git")) {
   Write-Host "Updating existing GoatCitadel install in $AppDir..."
   Invoke-NativeOrThrow -FilePath "git" -Arguments @("-C", $AppDir, "fetch", "--all", "--prune") -FailureMessage "Failed to fetch latest GoatCitadel changes"
-  $preservedManagedConfig = Preserve-ManagedConfigForUpdate -RepositoryPath $AppDir -ManagedPaths $ManagedMutableConfigPaths
+  $preservedManagedConfig = Preserve-ManagedConfigForUpdate -RepositoryPath $AppDir -ManagedPaths $ManagedLocalConfigPaths
   Invoke-NativeOrThrow -FilePath "git" -Arguments @("-C", $AppDir, "pull", "--ff-only") -FailureMessage "Failed to fast-forward GoatCitadel install"
   Restore-PreservedManagedConfig -RepositoryPath $AppDir -PreservedState $preservedManagedConfig
 } else {
@@ -185,12 +187,15 @@ foreach ($workspacePackage in $WorkspaceBootstrapBuildPackages) {
   Write-Host "Building bootstrap package $workspacePackage..."
   Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $AppDir, "--filter", $workspacePackage, "build") -FailureMessage "Failed to build required GoatCitadel workspace package $workspacePackage"
 }
+Write-Host "Materializing local config from tracked examples..."
+Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $AppDir, "config:sync") -FailureMessage "Failed to materialize GoatCitadel config from tracked examples"
+$privateBetaExample = Join-Path $AppDir "config\private-beta.profile.example.json"
+$privateBetaConfig = Join-Path $AppDir "config\private-beta.profile.json"
+if ((Test-Path $privateBetaExample) -and -not (Test-Path $privateBetaConfig)) {
+  Copy-Item -Path $privateBetaExample -Destination $privateBetaConfig -Force
+}
 Write-Host "Installing Playwright Chromium runtime..."
 Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $AppDir, "--filter", "@goatcitadel/policy-engine", "exec", "playwright", "install", "chromium") -FailureMessage "Failed to install required Playwright Chromium runtime"
-if ($null -ne $preservedManagedConfig) {
-  Write-Host "Re-syncing preserved GoatCitadel config after update..."
-  Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $AppDir, "config:sync") -FailureMessage "Failed to sync preserved GoatCitadel config after update"
-}
 if (-not $SkipVoice) {
   Write-Host "Installing managed local voice runtime ($VoiceModel)..."
   try {

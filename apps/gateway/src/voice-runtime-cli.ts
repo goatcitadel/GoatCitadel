@@ -1,8 +1,8 @@
-import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { loadLocalEnvFile } from "./env-file.js";
 import { loadGatewayConfig } from "./config.js";
+import { repoHasConfigMarker } from "./config-files.js";
 import { Storage } from "@goatcitadel/storage";
 import { installManagedVoiceRuntime, removeManagedVoiceModel, selectManagedVoiceModel } from "./voice-runtime/installer.js";
 import { getManagedVoiceRuntimeStatus } from "./voice-runtime/status.js";
@@ -90,7 +90,7 @@ function resolveRootDir(): string {
     path.resolve(process.cwd(), "../.."),
   ];
   for (const candidate of candidates) {
-    if (fs.existsSync(path.join(candidate, "config", "assistant.config.json"))) {
+    if (repoHasConfigMarker(candidate)) {
       return candidate;
     }
   }

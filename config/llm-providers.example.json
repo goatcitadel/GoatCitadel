@@ -125,13 +125,6 @@
       "baseUrl": "http://127.0.0.1:11440/v1",
       "apiStyle": "openai-chat-completions",
       "defaultModel": "phi-3.5-mini-instruct"
-    },
-    {
-      "providerId": "genie-ir20",
-      "label": "Genie IR20 (Tailnet)",
-      "baseUrl": "http://100.64.0.4:8910/v1",
-      "apiStyle": "openai-chat-completions",
-      "defaultModel": "IBM-Granite"
     }
   ]
 }

@@ -85,8 +85,7 @@
       "api.perplexity.ai",
       "router.huggingface.co",
       "127.0.0.1",
-      "localhost",
-      "100.64.0.4"
+      "localhost"
     ],
     "riskyShellPatterns": [
       "rm",

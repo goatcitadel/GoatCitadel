@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { repoHasConfigMarker } from "./config-files.js";
 
 export interface EnvFileLoadResult {
   path?: string;
@@ -57,9 +58,8 @@ export function detectEnvFilePath(options?: { rootDir?: string }): string | unde
 
   const deduped = Array.from(new Set(rootCandidates));
   for (const root of deduped) {
-    const configPath = path.join(root, "config", "assistant.config.json");
     const envPath = path.join(root, ".env");
-    if (fs.existsSync(configPath) && fs.existsSync(envPath)) {
+    if (repoHasConfigMarker(root) && fs.existsSync(envPath)) {
       return envPath;
     }
   }

@@ -1,6 +1,6 @@
 import fp from "fastify-plugin";
 import path from "node:path";
-import fs from "node:fs";
+import { repoHasConfigMarker } from "../config-files.js";
 import { loadGatewayConfig } from "../config.js";
 import { GatewayService } from "../services/gateway-service.js";
 import type { GatewayRuntimeConfig } from "../config.js";
@@ -43,7 +43,7 @@ function detectRootDir(): string {
   ];
 
   for (const candidate of candidates) {
-    if (fs.existsSync(path.join(candidate, "config", "assistant.config.json"))) {
+    if (repoHasConfigMarker(candidate)) {
       return candidate;
     }
   }

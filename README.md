@@ -272,6 +272,8 @@ pnpm install --frozen-lockfile
 pnpm config:sync
 ```
 
+`pnpm config:sync` materializes local `config/*.json` files from the tracked `config/*.example.json` templates and rebuilds `config/goatcitadel.json` for the clone.
+
 Optional local env file:
 
 ```bash
@@ -313,7 +315,8 @@ Default endpoints:
 
 ## Runtime notes
 
-- shipped config lives under [config](./config)
+- tracked config templates live under [config](./config) as `*.example.json`
+- real local runtime config is materialized into `config/*.json` during install/setup and is kept out of Git
 - `.env.example` includes gateway host/port, provider keys, auth overrides, mesh toggles, and advanced voice runtime overrides
 - the gateway enforces explicit auth posture for non-loopback exposure
 - the default config catalog includes remote providers plus local-compatible endpoints such as Ollama, LM Studio, LocalAI, and the optional NPU sidecar

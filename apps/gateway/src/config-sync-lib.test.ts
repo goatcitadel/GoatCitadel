@@ -24,6 +24,7 @@ describe("syncUnifiedConfig", () => {
 
     const result = await syncUnifiedConfig(root, { createUnifiedIfMissing: true });
     expect(result.createdUnified).toBe(true);
+    expect(result.materializedExamples).toEqual([]);
 
     const unifiedRaw = await readFile(path.join(root, "config", "goatcitadel.json"), "utf8");
     const unified = JSON.parse(unifiedRaw) as Record<string, unknown>;
@@ -73,6 +74,7 @@ describe("syncUnifiedConfig", () => {
     const result = await syncUnifiedConfig(root);
     expect(result.syncedSections).toContain("assistant.config.json");
     expect(result.syncedSections).toContain("budgets.json");
+    expect(result.materializedExamples).toEqual([]);
 
     const assistantRaw = await readFile(path.join(root, "config", "assistant.config.json"), "utf8");
     const assistant = JSON.parse(assistantRaw) as { defaultToolProfile?: string };
@@ -114,6 +116,7 @@ describe("syncUnifiedConfig", () => {
     const content = await readFile(splitPath, "utf8");
 
     expect(result.syncedSections).toEqual([]);
+    expect(result.materializedExamples).toEqual([]);
     expect(after.mtimeMs).toBe(before.mtimeMs);
     expect(content.includes("\r\n")).toBe(true);
     expect(warnSpy).not.toHaveBeenCalled();
@@ -154,9 +157,29 @@ describe("syncUnifiedConfig", () => {
     const content = await readFile(splitPath, "utf8");
 
     expect(result.syncedSections).toEqual([]);
+    expect(result.materializedExamples).toEqual([]);
     expect(after.mtimeMs).toBe(before.mtimeMs);
     expect(content.endsWith("\n")).toBe(false);
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("materializes missing split files from example templates before building unified config", async () => {
+    const root = await makeTempRoot();
+    await writeExampleSplitFiles(root);
+
+    const result = await syncUnifiedConfig(root, { createUnifiedIfMissing: true });
+
+    expect(result.createdUnified).toBe(true);
+    expect(result.materializedExamples).toEqual([
+      "assistant.config.json",
+      "tool-policy.json",
+      "budgets.json",
+      "llm-providers.json",
+      "cron-jobs.json",
+    ]);
+
+    await expect(readFile(path.join(root, "config", "assistant.config.json"), "utf8")).resolves.toContain("\"defaultToolProfile\"");
+    await expect(readFile(path.join(root, "config", "goatcitadel.json"), "utf8")).resolves.toContain("\"version\"");
   });
 });
 
@@ -245,6 +268,95 @@ async function seedSplitFiles(root: string): Promise<void> {
   );
   await writeFile(
     path.join(configDir, "cron-jobs.json"),
+    JSON.stringify(
+      {
+        jobs: [],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+}
+
+async function writeExampleSplitFiles(root: string): Promise<void> {
+  const configDir = path.join(root, "config");
+  await writeFile(
+    path.join(configDir, "assistant.config.example.json"),
+    JSON.stringify(
+      {
+        environment: "local",
+        defaultToolProfile: "minimal",
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(configDir, "tool-policy.example.json"),
+    JSON.stringify(
+      {
+        profiles: { minimal: ["session.status"] },
+        tools: { profile: "minimal", allow: [], deny: [] },
+        agents: {},
+        sandbox: {
+          writeJailRoots: ["./workspace"],
+          readOnlyRoots: ["./config"],
+          networkAllowlist: [],
+          riskyShellPatterns: [],
+          requireApprovalForRiskyShell: true,
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(configDir, "budgets.example.json"),
+    JSON.stringify(
+      {
+        mode: "balanced",
+        daily: {
+          tokensWarning: 100,
+          tokensHardCap: 200,
+          usdWarning: 1,
+          usdHardCap: 2,
+        },
+        session: {
+          tokensHardCap: 50,
+          turnMaxInputTokens: 10,
+          turnMaxOutputTokens: 20,
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(configDir, "llm-providers.example.json"),
+    JSON.stringify(
+      {
+        activeProviderId: "local",
+        providers: [
+          {
+            providerId: "local",
+            label: "Local",
+            baseUrl: "http://127.0.0.1:1234/v1",
+            apiStyle: "openai-chat-completions",
+            defaultModel: "local-model",
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  await writeFile(
+    path.join(configDir, "cron-jobs.example.json"),
     JSON.stringify(
       {
         jobs: [],

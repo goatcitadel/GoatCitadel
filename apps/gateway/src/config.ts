@@ -11,6 +11,7 @@ import {
   clampInt,
 } from "@goatcitadel/contracts";
 import { ZodError, type ZodType } from "zod";
+import { materializeConfigFilesFromExamples } from "./config-files.js";
 import { syncUnifiedConfig } from "./config-sync-lib.js";
 import { isVerboseLoggingEnabled } from "./runtime-ux.js";
 
@@ -181,8 +182,9 @@ export interface GatewayRuntimeConfig {
 
 export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntimeConfig> {
   const syncResult = await syncUnifiedConfig(rootDir, { createUnifiedIfMissing: true });
-  if (syncResult.createdUnified || syncResult.syncedSections.length > 0) {
+  if (syncResult.createdUnified || syncResult.materializedExamples.length > 0 || syncResult.syncedSections.length > 0) {
     const changes = [
+      ...syncResult.materializedExamples.map((name) => `materialized ${name} from example`),
       syncResult.createdUnified ? "created config/goatcitadel.json" : undefined,
       ...syncResult.syncedSections.map((name) => `synced ${name}`),
     ].filter(Boolean);
@@ -553,6 +555,16 @@ async function readFileWithDefault(filePath: string, fallback: string): Promise<
     return await fs.readFile(filePath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      const configDir = path.dirname(filePath);
+      const filename = path.basename(filePath);
+      await materializeConfigFilesFromExamples(configDir, [filename]);
+      try {
+        return await fs.readFile(filePath, "utf8");
+      } catch (retryError) {
+        if ((retryError as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw retryError;
+        }
+      }
       return fallback;
     }
     throw error;

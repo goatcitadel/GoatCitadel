@@ -14,13 +14,14 @@ WORKSPACE_BOOTSTRAP_BUILD_PACKAGES=(
   "@goatcitadel/contracts"
   "@goatcitadel/extensions-sdk"
 )
-MANAGED_MUTABLE_CONFIG_PATHS=(
+MANAGED_LOCAL_CONFIG_PATHS=(
   "config/assistant.config.json"
   "config/tool-policy.json"
   "config/budgets.json"
   "config/llm-providers.json"
   "config/cron-jobs.json"
   "config/goatcitadel.json"
+  "config/private-beta.profile.json"
 )
 PRESERVED_MANAGED_CONFIG_DIR=""
 PRESERVED_MANAGED_CONFIG_PATHS=()
@@ -101,7 +102,7 @@ require_cmd() {
 
 is_managed_mutable_path() {
   local path="$1"
-  for managed in "${MANAGED_MUTABLE_CONFIG_PATHS[@]}"; do
+  for managed in "${MANAGED_LOCAL_CONFIG_PATHS[@]}"; do
     if [[ "${managed}" == "${path}" ]]; then
       return 0
     fi
@@ -111,9 +112,6 @@ is_managed_mutable_path() {
 
 preserve_managed_config_for_update() {
   mapfile -t dirty_paths < <(git -C "${APP_DIR}" status --porcelain --untracked-files=no | awk 'NF { print substr($0, 4) }')
-  if [[ "${#dirty_paths[@]}" -eq 0 ]]; then
-    return 0
-  fi
 
   local unexpected=()
   local path
@@ -127,11 +125,23 @@ preserve_managed_config_for_update() {
     exit 1
   fi
 
+  local existing_paths=()
+  for path in "${MANAGED_LOCAL_CONFIG_PATHS[@]}"; do
+    if [[ -f "${APP_DIR}/${path}" ]]; then
+      existing_paths+=("${path}")
+    fi
+  done
+  if [[ "${#existing_paths[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
   PRESERVED_MANAGED_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/goatcitadel-update.XXXXXX")"
-  PRESERVED_MANAGED_CONFIG_PATHS=("${dirty_paths[@]}")
-  for path in "${dirty_paths[@]}"; do
+  PRESERVED_MANAGED_CONFIG_PATHS=("${existing_paths[@]}")
+  for path in "${existing_paths[@]}"; do
     mkdir -p "${PRESERVED_MANAGED_CONFIG_DIR}/$(dirname "${path}")"
     cp "${APP_DIR}/${path}" "${PRESERVED_MANAGED_CONFIG_DIR}/${path}"
+  done
+  for path in "${dirty_paths[@]}"; do
     git -C "${APP_DIR}" restore --source=HEAD -- "${path}"
   done
 }
@@ -179,12 +189,13 @@ for workspace_package in "${WORKSPACE_BOOTSTRAP_BUILD_PACKAGES[@]}"; do
   echo "Building bootstrap package ${workspace_package}..."
   pnpm --dir "${APP_DIR}" --filter "${workspace_package}" build
 done
+echo "Materializing local config from tracked examples..."
+pnpm --dir "${APP_DIR}" config:sync
+if [[ -f "${APP_DIR}/config/private-beta.profile.example.json" && ! -f "${APP_DIR}/config/private-beta.profile.json" ]]; then
+  cp "${APP_DIR}/config/private-beta.profile.example.json" "${APP_DIR}/config/private-beta.profile.json"
+fi
 echo "Installing Playwright Chromium runtime..."
 pnpm --dir "${APP_DIR}" --filter "@goatcitadel/policy-engine" exec playwright install chromium
-if [[ -n "${PRESERVED_MANAGED_CONFIG_DIR}" ]]; then
-  echo "Re-syncing preserved GoatCitadel config after update..."
-  pnpm --dir "${APP_DIR}" config:sync
-fi
 if [[ "${SKIP_VOICE}" != "1" ]]; then
   echo "Installing managed local voice runtime (${VOICE_MODEL})..."
   if ! pnpm --dir "${APP_DIR}" --filter "@goatcitadel/gateway" run voice:runtime install --model "${VOICE_MODEL}"; then

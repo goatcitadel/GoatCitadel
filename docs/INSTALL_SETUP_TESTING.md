@@ -154,6 +154,8 @@ pnpm install --frozen-lockfile
 pnpm config:sync
 ```
 
+`pnpm config:sync` materializes local `config/*.json` files from the tracked `config/*.example.json` templates and rebuilds `config/goatcitadel.json` if needed.
+
 The default clone keeps the shipped Office runtime assets in-repo. The full Office source provenance bundle is published separately so code-first contributors do not need to pull heavy source kits. See [docs/office-source-manifest.json](/f:/code/personal-ai/docs/office-source-manifest.json) and the corresponding release bundle when you need the original source assets.
 
 ### Manual path commands
@@ -176,6 +178,13 @@ Notes:
 Do not assume the `goatcitadel` launcher exists in a raw clone unless you installed it separately.
 
 ## Configure Providers and Auth
+
+Tracked repo config now ships as templates:
+
+- tracked: `config/*.example.json`
+- local runtime copies: `config/*.json`
+
+Fresh installs and raw clones materialize the local runtime copies during setup via `goatcitadel install`, `goatcitadel update`, or `pnpm config:sync`.
 
 Create a local env file for repo-based development or to simplify provider setup:
 

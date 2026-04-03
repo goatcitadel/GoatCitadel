@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { repoHasConfigMarker } from "./config-files.js";
 import { loadLocalEnvFile } from "./env-file.js";
 import { loadGatewayConfig } from "./config.js";
 import { GatewayService } from "./services/gateway-service.js";
@@ -188,7 +188,7 @@ function resolveRootDir(): string {
   ];
 
   for (const candidate of candidates) {
-    if (fs.existsSync(path.join(candidate, "config", "assistant.config.json"))) {
+    if (repoHasConfigMarker(candidate)) {
       return candidate;
     }
   }

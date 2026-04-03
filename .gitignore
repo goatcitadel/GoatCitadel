@@ -1,6 +1,8 @@
 node_modules
 dist
 .env
+config/*.json
+!config/*.example.json
 .data
 .vscode
 *.log

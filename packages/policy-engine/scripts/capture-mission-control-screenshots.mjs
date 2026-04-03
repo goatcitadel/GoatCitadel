@@ -179,6 +179,7 @@ async function prepareRuntimeRoot() {
   await fs.mkdir(outputDir, { recursive: true });
   await fs.mkdir(path.join(runtimeRoot, "data"), { recursive: true });
   await fs.cp(path.join(repoRoot, "config"), path.join(runtimeRoot, "config"), { recursive: true });
+  await materializeCopiedConfigExamples();
   if (existsSync(path.join(repoRoot, "skills"))) {
     await fs.cp(path.join(repoRoot, "skills"), path.join(runtimeRoot, "skills"), { recursive: true });
   }
@@ -190,6 +191,31 @@ async function prepareRuntimeRoot() {
     );
   }
   await forceScreenshotRuntimeAuthModeNone();
+}
+
+async function materializeCopiedConfigExamples() {
+  const configDir = path.join(runtimeRoot, "config");
+  const managedConfigs = [
+    "assistant.config.json",
+    "tool-policy.json",
+    "budgets.json",
+    "llm-providers.json",
+    "cron-jobs.json",
+    "goatcitadel.json",
+    "private-beta.profile.json",
+  ];
+
+  for (const filename of managedConfigs) {
+    const actualPath = path.join(configDir, filename);
+    if (existsSync(actualPath)) {
+      continue;
+    }
+    const examplePath = path.join(configDir, filename.replace(/\.json$/u, ".example.json"));
+    if (!existsSync(examplePath)) {
+      continue;
+    }
+    await fs.copyFile(examplePath, actualPath);
+  }
 }
 
 async function forceScreenshotRuntimeAuthModeNone() {

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { materializeConfigFilesFromExamples, SPLIT_CONFIG_FILENAMES } from "./config-files.js";
 import { isVerboseLoggingEnabled } from "./runtime-ux.js";
 
 const UNIFIED_FILENAME = "goatcitadel.json";
@@ -20,6 +21,7 @@ const SECTION_TARGETS: SectionTarget[] = [
 export interface UnifiedConfigSyncResult {
   unifiedPath: string;
   createdUnified: boolean;
+  materializedExamples: string[];
   syncedSections: string[];
 }
 
@@ -34,6 +36,7 @@ export async function syncUnifiedConfig(
   const configDir = path.join(rootDir, "config");
   const unifiedPath = path.join(configDir, UNIFIED_FILENAME);
   const createUnifiedIfMissing = options.createUnifiedIfMissing ?? false;
+  const materializedExamples = await materializeConfigFilesFromExamples(configDir, SPLIT_CONFIG_FILENAMES);
   let createdUnified = false;
   let unifiedRaw: string;
   let unifiedMtimeMs = 0;
@@ -50,6 +53,7 @@ export async function syncUnifiedConfig(
       return {
         unifiedPath,
         createdUnified: false,
+        materializedExamples,
         syncedSections: [],
       };
     }
@@ -85,6 +89,7 @@ export async function syncUnifiedConfig(
   return {
     unifiedPath,
     createdUnified,
+    materializedExamples,
     syncedSections,
   };
 }

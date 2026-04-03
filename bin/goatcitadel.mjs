@@ -12,13 +12,14 @@ const workspaceBootstrapBuildPackages = [
   "@goatcitadel/contracts",
   "@goatcitadel/extensions-sdk",
 ];
-const managedMutableConfigPaths = [
+const managedLocalConfigPaths = [
   "config/assistant.config.json",
   "config/tool-policy.json",
   "config/budgets.json",
   "config/llm-providers.json",
   "config/cron-jobs.json",
   "config/goatcitadel.json",
+  "config/private-beta.profile.json",
 ];
 
 const args = process.argv.slice(2);
@@ -160,16 +161,15 @@ function installOrUpdate() {
     env: runtimeProcessEnv,
   });
   buildWorkspaceBootstrapPackages();
+  console.log("Materializing local config from tracked examples...");
+  runPnpm(["--dir", appDir, "config:sync"], {
+    env: runtimeProcessEnv,
+  });
+  materializeInstallerConfigExamples(appDir);
   console.log("Installing Playwright Chromium runtime...");
   runPnpm(["--dir", appDir, "--filter", "@goatcitadel/policy-engine", "exec", "playwright", "install", "chromium"], {
     env: runtimeProcessEnv,
   });
-  if (preservedManagedConfig) {
-    console.log("Re-syncing preserved GoatCitadel config after update...");
-    runPnpm(["--dir", appDir, "config:sync"], {
-      env: runtimeProcessEnv,
-    });
-  }
   if (!installArgs.skipVoice) {
     console.log(`Installing managed local voice runtime (${installArgs.voiceModel})...`);
     try {
@@ -306,27 +306,29 @@ function preserveManagedConfigForUpdate(gitCmd, repositoryPath) {
     .map((line) => line.trimEnd())
     .filter(Boolean)
     .map((line) => line.slice(3).trim());
-  if (dirtyPaths.length === 0) {
-    return null;
-  }
-  const unexpected = dirtyPaths.filter((item) => !managedMutableConfigPaths.includes(item));
+  const unexpected = dirtyPaths.filter((item) => !managedLocalConfigPaths.includes(item));
   if (unexpected.length > 0) {
     throw new Error(`Update blocked because the installed checkout has non-config tracked changes: ${unexpected.join(", ")}`);
   }
+  const existingConfigPaths = managedLocalConfigPaths.filter((relativePath) =>
+    fs.existsSync(path.join(repositoryPath, relativePath)),
+  );
+  if (existingConfigPaths.length === 0) {
+    return null;
+  }
   const backupRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-update-"));
-  for (const relativePath of dirtyPaths) {
+  for (const relativePath of existingConfigPaths) {
     const sourcePath = path.join(repositoryPath, relativePath);
-    if (!fs.existsSync(sourcePath)) {
-      continue;
-    }
     const backupPath = path.join(backupRoot, relativePath);
     fs.mkdirSync(path.dirname(backupPath), { recursive: true });
     fs.copyFileSync(sourcePath, backupPath);
+  }
+  for (const relativePath of dirtyPaths) {
     run(gitCmd, ["-C", repositoryPath, "restore", "--source=HEAD", "--", relativePath]);
   }
   return {
     backupRoot,
-    paths: dirtyPaths,
+    paths: existingConfigPaths,
   };
 }
 
@@ -342,6 +344,19 @@ function restorePreservedManagedConfig(repositoryPath, preservedState) {
     const destinationPath = path.join(repositoryPath, relativePath);
     fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
     fs.copyFileSync(backupPath, destinationPath);
+  }
+}
+
+function materializeInstallerConfigExamples(repositoryPath) {
+  const configDir = path.join(repositoryPath, "config");
+  const optionalTemplates = ["private-beta.profile"];
+  for (const stem of optionalTemplates) {
+    const actualPath = path.join(configDir, `${stem}.json`);
+    const examplePath = path.join(configDir, `${stem}.example.json`);
+    if (fs.existsSync(actualPath) || !fs.existsSync(examplePath)) {
+      continue;
+    }
+    fs.copyFileSync(examplePath, actualPath);
   }
 }
 

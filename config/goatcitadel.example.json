@@ -55,9 +55,8 @@
       }
     },
     "mesh": {
-      "enabled": true,
+      "enabled": false,
       "mode": "lan",
-      "nodeId": "bld-main",
       "discovery": {
         "mdns": true,
         "staticPeers": []
@@ -104,12 +103,15 @@
     "durable": {
       "enabled": false,
       "diagnosticsEnabled": false,
+      "executionEnabled": false,
+      "chatAutoPromoteEnabled": false,
       "maxAttemptsDefault": 3
     },
     "features": {
       "durableKernelV1Enabled": false,
       "replayOverridesV1Enabled": false,
       "memoryLifecycleAdminV1Enabled": false,
+      "memoryMaintenanceV1Enabled": false,
       "connectorDiagnosticsV1Enabled": false,
       "computerUseGuardrailsV1Enabled": true,
       "bankrBuiltinEnabled": false,
@@ -209,8 +211,7 @@
         "api.perplexity.ai",
         "router.huggingface.co",
         "127.0.0.1",
-        "localhost",
-        "100.64.0.4"
+        "localhost"
       ],
       "riskyShellPatterns": [
         "rm",
@@ -366,13 +367,6 @@
         "baseUrl": "http://127.0.0.1:11440/v1",
         "apiStyle": "openai-chat-completions",
         "defaultModel": "phi-3.5-mini-instruct"
-      },
-      {
-        "providerId": "genie-ir20",
-        "label": "Genie IR20 (Tailnet)",
-        "baseUrl": "http://100.64.0.4:8910/v1",
-        "apiStyle": "openai-chat-completions",
-        "defaultModel": "IBM-Granite"
       }
     ]
   },
