@@ -3295,12 +3295,12 @@ body {
   --mc-shell-pad: 18px;
   --mc-shell-gap: 18px;
   --mc-shell-card-pad: 18px 20px;
-  --mc-surface-pad: 16px 18px;
-  --mc-surface-pad-compact: 12px 14px;
-  --mc-surface-pad-spacious: 24px 26px;
+  --mc-surface-pad: 18px 20px;
+  --mc-surface-pad-compact: 14px 16px;
+  --mc-surface-pad-spacious: 26px 28px;
   --mc-list-pad: 10px 12px;
   --mc-section-gap: 18px;
-  --mc-toolbar-pad: 14px 16px;
+  --mc-toolbar-pad: 16px 18px;
 }
 
 [data-density="default"] .card,
