@@ -174,7 +174,7 @@ describe("Mission Control remote access bootstrap", () => {
           },
         });
       }
-      if (url.pathname.endsWith("/api/v1/onboarding/state")) {
+      if (url.pathname.endsWith("/api/v1/onboarding/startup")) {
         return new Response(JSON.stringify({
           error: "Unauthorized",
           authMode: "token",

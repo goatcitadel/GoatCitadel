@@ -39,6 +39,25 @@ describe("onboarding routes", () => {
     expect(getOnboardingState).toHaveBeenCalledTimes(1);
   });
 
+  it("returns lightweight onboarding startup state", async () => {
+    const getOnboardingStartupState = vi.fn(() => ({
+      completed: true,
+      completedAt: "2026-04-03T00:00:00.000Z",
+      completedBy: "mission-control",
+    }));
+    app = Fastify();
+    app.decorate("gateway", { getOnboardingStartupState } as never);
+    await app.register(onboardingRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/onboarding/startup",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getOnboardingStartupState).toHaveBeenCalledTimes(1);
+  });
+
   it("validates bootstrap payloads", async () => {
     const bootstrapOnboarding = vi.fn();
     app = Fastify();

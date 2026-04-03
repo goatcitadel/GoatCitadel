@@ -50,6 +50,10 @@ const completeSchema = z.object({
 });
 
 export const onboardingRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.get("/api/v1/onboarding/startup", async (_request, reply) => {
+    return reply.send(fastify.gateway.getOnboardingStartupState());
+  });
+
   fastify.get("/api/v1/onboarding/state", async (_request, reply) => {
     return reply.send(fastify.gateway.getOnboardingState());
   });

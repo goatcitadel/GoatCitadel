@@ -221,6 +221,7 @@ import type {
   OnboardingBootstrapResult,
   OnboardingChecklistItem,
   OnboardingState,
+  OnboardingStartupState,
   MeshJoinRequest,
   MeshJoinResult,
   MeshLeaseAcquireRequest,
@@ -11640,6 +11641,14 @@ export class GatewayService {
     }
 
     return mapDeviceAccessStatusResponse(current);
+  }
+
+  public getOnboardingStartupState(): OnboardingStartupState {
+    return {
+      completed: Boolean(this.onboardingMarker.completedAt),
+      completedAt: this.onboardingMarker.completedAt,
+      completedBy: this.onboardingMarker.completedBy,
+    };
   }
 
   public listDeviceAccessGrants(): DeviceAccessGrantContractRecord[] {

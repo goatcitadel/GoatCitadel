@@ -49,6 +49,12 @@ export interface OnboardingState {
   };
 }
 
+export interface OnboardingStartupState {
+  completed: boolean;
+  completedAt?: string;
+  completedBy?: string;
+}
+
 export interface OnboardingBootstrapInput {
   defaultToolProfile?: ToolProfile;
   budgetMode?: "saver" | "balanced" | "power";

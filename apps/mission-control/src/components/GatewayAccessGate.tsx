@@ -50,6 +50,7 @@ export function GatewayAccessGate({
   onRetry,
 }: GatewayAccessGateProps) {
   const shellState = deriveShellGatewayAccessState(access);
+  const isChecking = access.status === "checking";
   const [authMode, setAuthMode] = useState<AccessAuthMode>("token");
   const [token, setToken] = useState("");
   const [username, setUsername] = useState("");
@@ -136,6 +137,11 @@ export function GatewayAccessGate({
 
   const storedAuthPresent = Boolean(readStoredGatewayAuthState());
   const needsAuth = access.status === "needs-auth";
+  const headerKicker = isChecking ? "Mission Control startup" : "Remote gateway handshake";
+  const headerTitle = isChecking ? "Starting Mission Control" : "Mission Control access gate";
+  const headerSubtitle = isChecking
+    ? "Connecting to the gateway, validating access, and warming up live control surfaces."
+    : "Mission Control is waiting for a verified gateway session before it starts live data and control surfaces.";
 
   const handleConnect = async () => {
     setFormError(null);
@@ -192,10 +198,10 @@ export function GatewayAccessGate({
       <div className="panel panel-pad-spacious panel-accent gateway-access-card">
         <div className="gateway-access-header">
           <div className="gateway-access-copy">
-            <p className="shell-topbar-kicker">Remote gateway handshake</p>
-            <h1 className="gateway-access-title">Mission Control access gate</h1>
+            <p className="shell-topbar-kicker">{headerKicker}</p>
+            <h1 className="gateway-access-title">{headerTitle}</h1>
             <p className="office-subtitle gateway-access-subtitle">
-              Mission Control is waiting for a verified gateway session before it starts live data and control surfaces.
+              {headerSubtitle}
             </p>
           </div>
           <StatusChip tone={shellState.tone}>{shellState.label}</StatusChip>
@@ -206,10 +212,12 @@ export function GatewayAccessGate({
             <span className="sidebar-footer-label">Gateway target</span>
             <p className="gateway-access-mono">{gatewayBaseUrl}</p>
           </div>
-          <div>
-            <span className="sidebar-footer-label">Stored credentials</span>
-            <p className="gateway-access-note">{storedAuthPresent ? "Present on this browser." : "None stored yet."}</p>
-          </div>
+          {!isChecking ? (
+            <div>
+              <span className="sidebar-footer-label">Stored credentials</span>
+              <p className="gateway-access-note">{storedAuthPresent ? "Present on this browser." : "None stored yet."}</p>
+            </div>
+          ) : null}
         </div>
 
         <div className="gateway-access-status">
@@ -331,7 +339,7 @@ export function GatewayAccessGate({
             </>
           ) : (
             <button type="button" onClick={() => void onRetry()} disabled={busy}>
-              {busy ? "Re-checking..." : "Retry gateway check"}
+              {busy ? (isChecking ? "Checking..." : "Re-checking...") : "Retry gateway check"}
             </button>
           )}
 
@@ -348,7 +356,7 @@ export function GatewayAccessGate({
             </button>
           ) : null}
 
-          {storedAuthPresent ? (
+          {storedAuthPresent && !isChecking ? (
             <button
               type="button"
               className="danger"

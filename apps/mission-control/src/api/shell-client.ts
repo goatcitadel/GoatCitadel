@@ -4,7 +4,7 @@ import type {
   DeviceAccessRequestCreateInput,
   DeviceAccessRequestCreateResponse,
   DeviceAccessRequestStatusResponse,
-  OnboardingState,
+  OnboardingStartupState,
   RealtimeEvent,
   SseTokenIssueResponse,
   WorkspaceRecord,
@@ -55,7 +55,7 @@ export interface GatewayAccessPreflightResult {
   message: string;
   healthDetail: string;
   authMode?: GatewayAuthState["mode"];
-  onboardingState?: OnboardingState;
+  onboardingState?: OnboardingStartupState;
   rejectedStoredAuth?: boolean;
   bootstrapTokenRejected?: boolean;
 }
@@ -279,7 +279,7 @@ export async function preflightGatewayAccess(
   const usedBootstrap = Boolean(options.bootstrap?.consumed);
 
   try {
-    const onboardingState = await request<OnboardingState>("/api/v1/onboarding/state");
+    const onboardingState = await request<OnboardingStartupState>("/api/v1/onboarding/startup");
     return {
       status: "ready",
       message: "Gateway reachability and access checks passed.",
