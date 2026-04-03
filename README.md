@@ -245,6 +245,7 @@ goatcitadel verify install
 goatcitadel up
 goatcitadel onboard
 goatcitadel doctor --deep
+goatcitadel uninstall --force
 ```
 
 Short alias:
@@ -254,6 +255,7 @@ goat verify install
 goat up
 goat onboard
 goat doctor --deep
+goat uninstall --force
 ```
 
 PowerShell note:

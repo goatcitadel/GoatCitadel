@@ -2,7 +2,8 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import readline from "node:readline/promises";
 
 const defaultRepoUrl = process.env.GOATCITADEL_REPO_URL || "https://github.com/goatcitadel/GoatCitadel.git";
 const preferredBaseDir = path.join(os.homedir(), ".GoatCitadel");
@@ -33,12 +34,13 @@ const args = process.argv.slice(2);
 const command = args[0] || "help";
 const rawRest = args.slice(1);
 const runtimeArgs = extractVerboseFlag(rawRest);
-const installArgs = command === "install" || command === "update"
+const installArgs = command === "install" || command === "update" || command === "uninstall"
   ? parseInstallArgs(rawRest)
   : { passthrough: runtimeArgs.passthrough, verbose: runtimeArgs.verbose };
 const repoUrl = installArgs.repoUrl || defaultRepoUrl;
 const baseDir = resolveBaseDir(installArgs.installDir);
 const appDir = path.join(baseDir, "app");
+const binDir = path.join(baseDir, "bin");
 const rest = installArgs.passthrough;
 const taskTitle = resolveTaskTitle(command);
 const verboseEnv = installArgs.verbose ? { GOATCITADEL_VERBOSE: "1" } : {};
@@ -58,6 +60,11 @@ async function main() {
 
   if (command === "install" || command === "update") {
     installOrUpdate();
+    return;
+  }
+
+  if (command === "uninstall") {
+    await uninstallInstall();
     return;
   }
 
@@ -231,6 +238,7 @@ function parseInstallArgs(argv) {
   let repoUrlOverride;
   let skipVoice = false;
   let voiceModel = "base.en";
+  let force = false;
   let verbose = false;
   const passthrough = [];
   for (let index = 0; index < argv.length; index += 1) {
@@ -263,6 +271,10 @@ function parseInstallArgs(argv) {
       index += 1;
       continue;
     }
+    if (value === "--force" || value === "--yes" || value === "-y") {
+      force = true;
+      continue;
+    }
     if (value === "--verbose" || value === "-verbose") {
       verbose = true;
       continue;
@@ -274,6 +286,7 @@ function parseInstallArgs(argv) {
     repoUrl: repoUrlOverride,
     skipVoice,
     voiceModel,
+    force,
     verbose,
     passthrough,
   };
@@ -381,6 +394,145 @@ function doctor(extraArgs = []) {
   runPnpm(["--dir", appDir, "--filter", "@goatcitadel/gateway", "run", "doctor", ...extraArgs], {
     env: runtimeProcessEnv,
   });
+}
+
+async function uninstallInstall() {
+  const force = Boolean(installArgs.force);
+  const installed = fs.existsSync(baseDir);
+  if (!installed) {
+    console.log(`No GoatCitadel install found at ${baseDir}.`);
+    await removeLauncherPathRegistration();
+    return;
+  }
+
+  if (!force) {
+    const confirmed = await confirmUninstall(baseDir);
+    if (!confirmed) {
+      console.log("Uninstall cancelled.");
+      return;
+    }
+  }
+
+  await removeLauncherPathRegistration();
+  scheduleInstallRemoval(baseDir);
+  console.log(`Scheduled GoatCitadel uninstall for ${baseDir}`);
+  console.log("Open a new shell after uninstall so PATH changes take effect.");
+}
+
+async function confirmUninstall(targetDir) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error("Uninstall requires a TTY confirmation prompt or --force.");
+  }
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  try {
+    const answer = await rl.question(`Remove GoatCitadel completely from ${targetDir}? Type 'yes' to continue: `);
+    return answer.trim().toLowerCase() === "yes";
+  } finally {
+    rl.close();
+  }
+}
+
+async function removeLauncherPathRegistration() {
+  const normalizedBinDir = normalizePathForCompare(binDir);
+  if (process.platform === "win32") {
+    const currentShellPath = process.env.Path ?? process.env.PATH ?? "";
+    const nextShellPath = removePathEntry(currentShellPath, normalizedBinDir, ";");
+    process.env.Path = nextShellPath;
+    process.env.PATH = nextShellPath;
+    run("powershell", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `$current = [Environment]::GetEnvironmentVariable('Path','User'); ` +
+      `$parts = @(); ` +
+      `if (-not [string]::IsNullOrWhiteSpace($current)) { ` +
+      `$parts = $current -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } } ` +
+      `$target = ${toPowershellSingleQuoted(binDir)}; ` +
+      `$next = @($parts | Where-Object { $_ -ne $target }) -join ';'; ` +
+      `[Environment]::SetEnvironmentVariable('Path', $next, 'User')`,
+    ], {
+      stdio: "ignore",
+    });
+    return;
+  }
+
+  const profileFiles = [
+    path.join(os.homedir(), ".zshrc"),
+    path.join(os.homedir(), ".bashrc"),
+    path.join(os.homedir(), ".profile"),
+  ];
+  const pathLine = `export PATH="${binDir}:$PATH"`;
+  for (const profileFile of profileFiles) {
+    if (!fs.existsSync(profileFile)) {
+      continue;
+    }
+    const original = fs.readFileSync(profileFile, "utf8");
+    const block = `# GoatCitadel\n${pathLine}`;
+    let updated = original
+      .replace(block, "")
+      .replace(block.replace(/\n/g, "\r\n"), "")
+      .replace(/\n{3,}/g, "\n\n");
+    if (updated !== original) {
+      updated = updated.trimEnd();
+      fs.writeFileSync(profileFile, updated ? `${updated}\n` : "", "utf8");
+    }
+  }
+}
+
+function scheduleInstallRemoval(targetDir) {
+  const cleanupScriptPath = path.join(os.tmpdir(), `goatcitadel-uninstall-${process.pid}-${Date.now()}.mjs`);
+  const cleanupScript = `import fs from "node:fs/promises";
+import path from "node:path";
+
+const target = ${JSON.stringify(targetDir)};
+const scriptPath = ${JSON.stringify(cleanupScriptPath)};
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function main() {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await fs.rm(target, { recursive: true, force: true });
+      break;
+    } catch {
+      await delay(1000 * (attempt + 1));
+    }
+  }
+  try {
+    await fs.rm(scriptPath, { force: true });
+  } catch {}
+}
+
+  await delay(1500);
+await main();
+`;
+  fs.writeFileSync(cleanupScriptPath, cleanupScript, "utf8");
+  const child = spawn(process.execPath, [cleanupScriptPath], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.unref();
+}
+
+function removePathEntry(currentPath, targetEntry, separator) {
+  return currentPath
+    .split(separator)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => normalizePathForCompare(part) !== targetEntry)
+    .join(separator);
+}
+
+function normalizePathForCompare(value) {
+  return path.resolve(value).replace(/[\\/]+$/, "").toLowerCase();
+}
+
+function toPowershellSingleQuoted(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 function ensureWorkspaceRuntimeBuilds() {
@@ -528,6 +680,7 @@ Usage:
 Commands:
   install    Install GoatCitadel from GitHub [--install-dir <path>] [--repo <url>] [--skip-voice] [--voice-model <id>] [--verbose]
   update     Update existing install from GitHub [--install-dir <path>] [--repo <url>] [--skip-voice] [--voice-model <id>] [--verbose]
+  uninstall  Remove a local GoatCitadel install [--install-dir <path>] [--force]
   up         Start gateway + mission control [--verbose]
   gateway    Start gateway only [--verbose]
   ui         Start mission control UI only
@@ -555,6 +708,8 @@ function resolveTaskTitle(currentCommand) {
       return "Install";
     case "update":
       return "Update";
+    case "uninstall":
+      return "Uninstall";
     case "up":
       return "Dev";
     case "gateway":

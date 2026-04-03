@@ -117,6 +117,7 @@ goatcitadel up
 goatcitadel onboard
 goatcitadel doctor --deep
 goatcitadel voice status
+goatcitadel uninstall --force
 ```
 
 Short alias:
@@ -127,6 +128,7 @@ goat verify install
 goat up
 goat onboard
 goat doctor --deep
+goat uninstall --force
 ```
 
 PowerShell note:
@@ -142,6 +144,32 @@ PowerShell note:
 ```bash
 goatcitadel update
 ```
+
+### Remove an install completely
+
+Interactive:
+
+```bash
+goatcitadel uninstall
+```
+
+Non-interactive:
+
+```bash
+goatcitadel uninstall --force
+```
+
+Short alias:
+
+```bash
+goat uninstall --force
+```
+
+Notes:
+
+- uninstall removes the configured GoatCitadel base directory, including `app`, `bin`, tools, and local runtime data
+- it also removes the launcher PATH registration added by the installer
+- open a new shell after uninstall so PATH changes take effect
 
 ## Path B: Manual / Dev Install
 
