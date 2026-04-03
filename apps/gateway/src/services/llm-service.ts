@@ -36,6 +36,11 @@ interface ResolvedProvider {
   apiKey?: string;
 }
 
+interface ModelDiscoveryResult {
+  items: LlmModelRecord[];
+  source: "remote" | "fallback";
+}
+
 export interface LlmServiceOptions {
   networkAllowlist?: string[];
   secretStore?: SecretStoreService;
@@ -301,7 +306,8 @@ export class LlmService {
 
   public async listModels(providerId?: string): Promise<LlmModelRecord[]> {
     const resolved = this.resolveProvider(providerId);
-    return this.fetchModelsForResolvedProvider(resolved);
+    const result = await this.fetchModelsForResolvedProvider(resolved);
+    return result.items;
   }
 
   public async previewModels(input: LlmModelPreviewRequest): Promise<LlmModelPreviewResponse> {
@@ -324,11 +330,11 @@ export class LlmService {
     };
 
     try {
-      const items = await this.fetchModelsForResolvedProvider(resolved);
-      if (items.length > 0) {
+      const result = await this.fetchModelsForResolvedProvider(resolved);
+      if (result.items.length > 0) {
         return {
-          items,
-          source: "remote",
+          items: result.items,
+          source: result.source,
         };
       }
     } catch (error) {
@@ -966,43 +972,44 @@ export class LlmService {
     });
   }
 
-  private async fetchModelsForResolvedProvider(resolved: ResolvedProvider): Promise<LlmModelRecord[]> {
+  private async fetchModelsForResolvedProvider(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
-    const response = await fetch(`${resolved.provider.baseUrl}/models`, {
-      method: "GET",
-      headers: this.buildHeaders(resolved, "models"),
-      signal: AbortSignal.timeout(15000),
-      redirect: "manual",
-    });
+    const fallback = buildFallbackModelCatalog(
+      resolved.provider.providerId,
+      resolved.provider.defaultModel,
+    );
 
-    if (isRedirect(response.status)) {
-      throw new Error(`model listing blocked redirect (${response.status})`);
-    }
+    try {
+      const response = await fetch(`${resolved.provider.baseUrl}/models`, {
+        method: "GET",
+        headers: this.buildHeaders(resolved, "models"),
+        signal: AbortSignal.timeout(15000),
+        redirect: "manual",
+      });
 
-    if (!response.ok) {
-      const fallback = fallbackModelCatalog(
-        resolved.provider.providerId,
-        resolved.provider.defaultModel,
-        response.status,
-      );
-      if (fallback) {
-        return fallback;
+      if (isRedirect(response.status)) {
+        throw new Error(`model listing blocked redirect (${response.status})`);
       }
-      throw new Error(await buildHttpError("model listing", response));
-    }
 
-    const json = (await response.json()) as { data?: Array<Record<string, unknown>> };
-    const items = (json.data ?? []).map((record) => ({
-      id: String(record.id ?? ""),
-      ownedBy: record.owned_by ? String(record.owned_by) : undefined,
-      created: typeof record.created === "number" ? record.created : undefined,
-    })).filter((record) => Boolean(record.id));
-    return items.length > 0
-      ? items
-      : buildFallbackModelCatalog(
-        resolved.provider.providerId,
-        resolved.provider.defaultModel,
-      );
+      if (!response.ok) {
+        if (fallback.length > 0) {
+          return { items: fallback, source: "fallback" };
+        }
+        throw new Error(await buildHttpError("model listing", response));
+      }
+
+      const json = (await response.json()) as unknown;
+      const items = normalizeModelRecords(json);
+      if (items.length > 0) {
+        return { items, source: "remote" };
+      }
+      return { items: fallback, source: "fallback" };
+    } catch (error) {
+      if (fallback.length > 0) {
+        return { items: fallback, source: "fallback" };
+      }
+      throw error;
+    }
   }
 }
 
@@ -1113,19 +1120,6 @@ function canonicalizeProviderUrl(providerId: string, baseUrl: string): string {
   return baseUrl;
 }
 
-function fallbackModelCatalog(
-  providerId: string,
-  defaultModel: string,
-  status: number,
-): LlmModelRecord[] | undefined {
-  if (status !== 404 && status !== 405) {
-    return undefined;
-  }
-
-  const fallback = buildFallbackModelCatalog(providerId, defaultModel);
-  return fallback.length > 0 ? fallback : undefined;
-}
-
 function buildFallbackModelCatalog(
   providerId: string,
   defaultModel: string | undefined,
@@ -1146,6 +1140,68 @@ function buildFallbackModelCatalog(
   }
 
   return Array.from(ids, (id) => ({ id }));
+}
+
+function normalizeModelRecords(payload: unknown): LlmModelRecord[] {
+  const records = extractModelRecordArray(payload);
+  return records
+    .map((record) => {
+      const id = extractModelId(record);
+      if (!id) {
+        return undefined;
+      }
+      return {
+        id,
+        ownedBy: typeof record.owned_by === "string"
+          ? record.owned_by
+          : typeof record.ownedBy === "string"
+            ? record.ownedBy
+            : undefined,
+        created: typeof record.created === "number"
+          ? record.created
+          : typeof record.created_at === "number"
+            ? record.created_at
+            : typeof record.createdAt === "number"
+              ? record.createdAt
+              : undefined,
+      } satisfies LlmModelRecord;
+    })
+    .filter((record): record is LlmModelRecord => Boolean(record));
+}
+
+function extractModelRecordArray(payload: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) {
+    return payload.filter(isPlainRecord);
+  }
+  if (!isPlainRecord(payload)) {
+    return [];
+  }
+
+  const candidates = [payload.data, payload.items, payload.models];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter(isPlainRecord);
+    }
+  }
+
+  return [];
+}
+
+function extractModelId(record: Record<string, unknown>): string | undefined {
+  const candidates = [record.id, record.name, record.model];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function shouldAppendV1(providerId: string, baseUrl: string): boolean {

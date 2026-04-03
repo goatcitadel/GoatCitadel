@@ -124,6 +124,7 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
       "openai/gpt-5.4",
       "anthropic/claude-sonnet-4",
       "google/gemini-2.5-flash",
+      "zai/glm-5v-turbo",
     ],
   },
   {
@@ -155,7 +156,7 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://api.z.ai/api/paas/v4",
     defaultModel: "glm-5",
     apiStyle: "openai-chat-completions",
-    knownModels: ["glm-5", "glm-5-air", "glm-5-flash", "glm-5-turbo"],
+    knownModels: ["glm-5", "glm-5-air", "glm-5-flash", "glm-5-turbo", "glm-5v-turbo"],
   },
   {
     providerId: "moonshot",

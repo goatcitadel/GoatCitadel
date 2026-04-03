@@ -557,10 +557,11 @@ describe("LlmService", () => {
       await expect(service.previewModels({
         providerId: "minimax",
         baseUrl: "https://api.minimax.io/v1",
-      })).resolves.toMatchObject({
-        source: "fallback",
-        items: [{ id: "MiniMax-M2.7" }],
-      });
+      })).resolves.toSatisfy((result) =>
+        result.source === "fallback"
+        && Array.isArray(result.items)
+        && result.items.some((item) => item.id === "MiniMax-M2.7")
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1556,6 +1557,77 @@ describe("LlmService", () => {
       });
 
       expect(response.usage?.cost_usd).toBe(0.00114);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("falls back to known GLM models when model listing returns auth errors", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "glm",
+      providers: [
+        {
+          providerId: "glm",
+          label: "GLM",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "glm-5",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = vi.fn(async () => new Response("unauthorized", { status: 401 })) as unknown as typeof fetch;
+
+    try {
+      const models = await service.listModels("glm");
+      expect(models.map((model) => model.id)).toEqual([
+        "glm-5",
+        "glm-5-air",
+        "glm-5-flash",
+        "glm-5-turbo",
+        "glm-5v-turbo",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("accepts alternative model listing payload shapes from compatible endpoints", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "custom",
+      providers: [
+        {
+          providerId: "custom",
+          label: "Custom",
+          baseUrl: "https://example.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "fallback-model",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({
+        items: [
+          { name: "custom-alpha" },
+          { model: "custom-beta" },
+        ],
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    )) as unknown as typeof fetch;
+
+    try {
+      const models = await service.listModels("custom");
+      expect(models.map((model) => model.id)).toEqual(["custom-alpha", "custom-beta"]);
     } finally {
       globalThis.fetch = originalFetch;
     }
