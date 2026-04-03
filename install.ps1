@@ -131,9 +131,16 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
 $AppDir = Join-Path $BaseDir "app"
 $BinDir = Join-Path $BaseDir "bin"
 $PnpmVersion = "10.31.0"
-$WorkspaceBootstrapBuildPackages = @(
+$WorkspaceRuntimeBuildPackages = @(
   "@goatcitadel/contracts"
   "@goatcitadel/extensions-sdk"
+  "@goatcitadel/memory-core"
+  "@goatcitadel/storage"
+  "@goatcitadel/gateway-core"
+  "@goatcitadel/mesh-core"
+  "@goatcitadel/orchestration"
+  "@goatcitadel/skills"
+  "@goatcitadel/policy-engine"
 )
 $ManagedLocalConfigPaths = @(
   "config/assistant.config.json",
@@ -183,8 +190,8 @@ if (-not (Test-Path $lockfilePath)) {
   throw "Install source is missing pnpm-lock.yaml; this build cannot be installed with --frozen-lockfile."
 }
 Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $AppDir, "install", "--frozen-lockfile") -FailureMessage "Failed to install GoatCitadel workspace dependencies"
-foreach ($workspacePackage in $WorkspaceBootstrapBuildPackages) {
-  Write-Host "Building bootstrap package $workspacePackage..."
+foreach ($workspacePackage in $WorkspaceRuntimeBuildPackages) {
+  Write-Host "Building runtime package $workspacePackage..."
   Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $AppDir, "--filter", $workspacePackage, "build") -FailureMessage "Failed to build required GoatCitadel workspace package $workspacePackage"
 }
 Write-Host "Materializing local config from tracked examples..."

@@ -39,7 +39,7 @@ export async function startVerificationStack(context, options = {}) {
   let uiPort;
   let uiUrl;
   try {
-    await waitForHttp(`${gatewayUrl}/health`, "Gateway health");
+    await waitForHttp(`${gatewayUrl}/health`, "Gateway health", 180000, gateway);
     if (options.includeUi !== false) {
       uiPort = await resolveAvailablePort(Number(options.uiPort ?? 5173));
       uiUrl = `http://127.0.0.1:${uiPort}`;
@@ -67,7 +67,7 @@ export async function startVerificationStack(context, options = {}) {
         ],
         uiEnv,
       );
-      await waitForHttp(uiUrl, "Mission Control UI");
+      await waitForHttp(uiUrl, "Mission Control UI", 180000, ui);
     }
     return {
       runtimeRoot,
@@ -94,9 +94,14 @@ export async function stopVerificationStack(stack) {
   }
 }
 
-export async function waitForHttp(url, label, timeoutMs = 180000) {
+export async function waitForHttp(url, label, timeoutMs = 180000, handle = null) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (handle?.child?.exitCode !== null) {
+      const stdoutPath = handle.stdoutPath ? ` stdout: ${handle.stdoutPath}` : "";
+      const stderrPath = handle.stderrPath ? ` stderr: ${handle.stderrPath}` : "";
+      throw new Error(`${label} process exited before becoming ready.${stdoutPath}${stderrPath}`);
+    }
     try {
       const response = await fetch(url);
       if (response.ok) {
@@ -194,10 +199,17 @@ export function delay(ms) {
 }
 
 async function resolveAvailablePort(preferredPort) {
+  if (!Number.isFinite(preferredPort) || preferredPort <= 0) {
+    return await resolveEphemeralPort();
+  }
   const preferredIsFree = await isPortFree(preferredPort);
   if (preferredIsFree) {
     return preferredPort;
   }
+  return await resolveEphemeralPort();
+}
+
+async function resolveEphemeralPort() {
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
     server.unref();

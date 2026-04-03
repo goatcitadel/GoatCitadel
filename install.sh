@@ -10,9 +10,16 @@ NO_PATH_UPDATE="0"
 SKIP_VOICE="0"
 VOICE_MODEL="base.en"
 PNPM_VERSION="10.31.0"
-WORKSPACE_BOOTSTRAP_BUILD_PACKAGES=(
+WORKSPACE_RUNTIME_BUILD_PACKAGES=(
   "@goatcitadel/contracts"
   "@goatcitadel/extensions-sdk"
+  "@goatcitadel/memory-core"
+  "@goatcitadel/storage"
+  "@goatcitadel/gateway-core"
+  "@goatcitadel/mesh-core"
+  "@goatcitadel/orchestration"
+  "@goatcitadel/skills"
+  "@goatcitadel/policy-engine"
 )
 MANAGED_LOCAL_CONFIG_PATHS=(
   "config/assistant.config.json"
@@ -185,8 +192,8 @@ corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
 echo "Installing workspace dependencies..."
 pnpm --dir "${APP_DIR}" install --frozen-lockfile
-for workspace_package in "${WORKSPACE_BOOTSTRAP_BUILD_PACKAGES[@]}"; do
-  echo "Building bootstrap package ${workspace_package}..."
+for workspace_package in "${WORKSPACE_RUNTIME_BUILD_PACKAGES[@]}"; do
+  echo "Building runtime package ${workspace_package}..."
   pnpm --dir "${APP_DIR}" --filter "${workspace_package}" build
 done
 echo "Materializing local config from tracked examples..."

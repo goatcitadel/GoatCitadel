@@ -8,9 +8,16 @@ const defaultRepoUrl = process.env.GOATCITADEL_REPO_URL || "https://github.com/g
 const preferredBaseDir = path.join(os.homedir(), ".GoatCitadel");
 const legacyBaseDir = path.join(os.homedir(), ".goatcitadel");
 const pnpmVersion = "10.31.0";
-const workspaceBootstrapBuildPackages = [
+const workspaceRuntimeBuildPackages = [
   "@goatcitadel/contracts",
   "@goatcitadel/extensions-sdk",
+  "@goatcitadel/memory-core",
+  "@goatcitadel/storage",
+  "@goatcitadel/gateway-core",
+  "@goatcitadel/mesh-core",
+  "@goatcitadel/orchestration",
+  "@goatcitadel/skills",
+  "@goatcitadel/policy-engine",
 ];
 const managedLocalConfigPaths = [
   "config/assistant.config.json",
@@ -60,20 +67,22 @@ async function main() {
   }
 
   if (command === "up") {
-    ensureWorkspaceBootstrapBuilds();
+    ensureWorkspaceRuntimeBuilds();
     runPnpm(["--dir", appDir, "dev", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "gateway") {
+    ensureWorkspaceRuntimeBuilds();
     runPnpm(["--dir", appDir, "dev:gateway", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "ui") {
-    ensureWorkspaceBootstrapBuilds();
+    ensureWorkspaceRuntimeBuilds();
     runPnpm(["--dir", appDir, "dev:ui", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "onboard") {
+    ensureWorkspaceRuntimeBuilds();
     runPnpm(["--dir", appDir, "onboarding:tui", ...rest], {
       env: {
         ...runtimeProcessEnv,
@@ -83,20 +92,24 @@ async function main() {
     return;
   }
   if (command === "tui") {
+    ensureWorkspaceRuntimeBuilds();
     runPnpm(["--dir", appDir, "tui", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "tools") {
+    ensureWorkspaceRuntimeBuilds();
     runPnpm(["--dir", appDir, "tools", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "voice") {
+    ensureWorkspaceRuntimeBuilds();
     runPnpm(["--dir", appDir, "--filter", "@goatcitadel/gateway", "run", "voice:runtime", ...rest], {
       env: runtimeProcessEnv,
     });
     return;
   }
   if (command === "verify") {
+    ensureWorkspaceRuntimeBuilds();
     const lane = rest[0] || "fast";
     const laneArgs = rest.slice(1);
     const supportedLanes = new Set(["fast", "install", "all", "review", "soak", "deep:core", "deep:ecosystem"]);
@@ -112,10 +125,12 @@ async function main() {
     return;
   }
   if (command === "admin") {
+    ensureWorkspaceRuntimeBuilds();
     runPnpm(["--dir", appDir, "admin", ...rest], { env: runtimeProcessEnv });
     return;
   }
   if (command === "smoke") {
+    ensureWorkspaceRuntimeBuilds();
     runPnpm(["--dir", appDir, "smoke", ...rest], { env: runtimeProcessEnv });
     return;
   }
@@ -160,7 +175,7 @@ function installOrUpdate() {
   runPnpm(["--dir", appDir, "install", "--frozen-lockfile"], {
     env: runtimeProcessEnv,
   });
-  buildWorkspaceBootstrapPackages();
+  buildWorkspaceRuntimePackages();
   console.log("Materializing local config from tracked examples...");
   runPnpm(["--dir", appDir, "config:sync"], {
     env: runtimeProcessEnv,
@@ -362,14 +377,15 @@ function materializeInstallerConfigExamples(repositoryPath) {
 
 function doctor(extraArgs = []) {
   console.log("Running GoatCitadel doctor...");
+  ensureWorkspaceRuntimeBuilds();
   runPnpm(["--dir", appDir, "--filter", "@goatcitadel/gateway", "run", "doctor", ...extraArgs], {
     env: runtimeProcessEnv,
   });
 }
 
-function ensureWorkspaceBootstrapBuilds() {
+function ensureWorkspaceRuntimeBuilds() {
   let builtAny = false;
-  for (const workspacePackage of workspaceBootstrapBuildPackages) {
+  for (const workspacePackage of workspaceRuntimeBuildPackages) {
     if (workspacePackageNeedsBuild(workspacePackage)) {
       if (!builtAny) {
         console.log("Preparing GoatCitadel workspace packages...");
@@ -381,21 +397,16 @@ function ensureWorkspaceBootstrapBuilds() {
   }
 }
 
-function buildWorkspaceBootstrapPackages() {
-  for (const workspacePackage of workspaceBootstrapBuildPackages) {
-    console.log(`Building bootstrap package ${workspacePackage}...`);
+function buildWorkspaceRuntimePackages() {
+  for (const workspacePackage of workspaceRuntimeBuildPackages) {
+    console.log(`Building runtime package ${workspacePackage}...`);
     runPnpm(["--dir", appDir, "--filter", workspacePackage, "build"]);
   }
 }
 
 function workspacePackageNeedsBuild(workspacePackage) {
-  if (workspacePackage === "@goatcitadel/contracts") {
-    return !fs.existsSync(path.join(appDir, "packages", "contracts", "dist", "index.js"));
-  }
-  if (workspacePackage === "@goatcitadel/extensions-sdk") {
-    return !fs.existsSync(path.join(appDir, "packages", "extensions-sdk", "dist", "index.js"));
-  }
-  return false;
+  const packageDirName = workspacePackage.replace("@goatcitadel/", "");
+  return !fs.existsSync(path.join(appDir, "packages", packageDirName, "dist", "index.js"));
 }
 
 function maybeShowVersion(cmd, cmdArgs) {

@@ -13,6 +13,8 @@ async function main() {
   try {
     stack = await startVerificationStack(context, {
       includeUi: true,
+      gatewayPort: 0,
+      uiPort: 0,
     });
 
     await runScenario(context, {
