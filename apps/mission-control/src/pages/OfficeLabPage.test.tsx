@@ -156,7 +156,7 @@ describe("OfficeLabPage", () => {
       await flush();
 
       const text = rendererText(renderer);
-      expect(text).toContain("Citadel Lab");
+      expect(text).toContain("Herd Lab");
       expect(text).toContain("Command Deck");
       expect(text).toContain("Build Bay");
       expect(text).toContain("Research Lab");
