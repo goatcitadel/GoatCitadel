@@ -348,31 +348,50 @@ async function promptProviderAndModel(
 
   const template = PROVIDER_TEMPLATES.find((item) => item.providerId === providerChoice);
   const activeProvider = initialState.settings.llm.providers.find((provider) => provider.providerId === initialState.settings.llm.activeProviderId);
-  const providerId = (await input({
-    message: "Provider ID",
-    default: providerChoice === "custom"
-      ? (activeProvider?.providerId ?? "custom-provider")
-      : (template?.providerId ?? activeProvider?.providerId ?? "glm"),
-  })).trim();
+  let providerId = providerChoice === "custom"
+    ? (activeProvider?.providerId ?? "custom-provider")
+    : (template?.providerId ?? activeProvider?.providerId ?? "glm");
+  let providerLabel = providerChoice === "custom"
+    ? (activeProvider?.label ?? providerId)
+    : (template?.label ?? activeProvider?.label ?? providerId);
+  let providerBaseUrl = providerChoice === "custom"
+    ? (activeProvider?.baseUrl ?? "http://127.0.0.1:1234/v1")
+    : (template?.baseUrl ?? activeProvider?.baseUrl ?? "http://127.0.0.1:1234/v1");
 
-  console.log(renderBulletList([
-    "Provider ID is the stable machine name GoatCitadel uses internally, for example `glm` or `moonshot`.",
-    "If you picked a built-in template, keeping the default is usually correct.",
-  ]));
+  if (providerChoice === "custom") {
+    console.log();
+    console.log(renderBox("Custom provider details", [
+      "Custom providers need an internal ID, a display name, and the base URL of the compatible API endpoint.",
+      "If you are just using OpenAI, GLM, Moonshot, or another built-in template, you should not need this path.",
+    ], "info"));
 
-  const providerLabel = (await input({
-    message: "Provider label",
-    default: providerChoice === "custom"
-      ? (activeProvider?.label ?? providerId)
-      : (template?.label ?? activeProvider?.label ?? providerId),
-  })).trim();
+    providerId = (await input({
+      message: "Internal provider ID",
+      default: providerId,
+    })).trim();
 
-  const providerBaseUrl = (await input({
-    message: "Provider base URL",
-    default: providerChoice === "custom"
-      ? (activeProvider?.baseUrl ?? "http://127.0.0.1:1234/v1")
-      : (template?.baseUrl ?? activeProvider?.baseUrl ?? "http://127.0.0.1:1234/v1"),
-  })).trim();
+    console.log(renderBulletList([
+      "This is the stable internal name GoatCitadel stores in config, for example `glm` or `moonshot`.",
+      "Change it only if you intentionally want a custom alias for a non-built-in provider.",
+    ]));
+
+    providerLabel = (await input({
+      message: "Display name",
+      default: providerLabel,
+    })).trim();
+
+    providerBaseUrl = (await input({
+      message: "API base URL",
+      default: providerBaseUrl,
+    })).trim();
+  } else {
+    console.log();
+    console.log(renderBox("Built-in provider defaults", [
+      `GoatCitadel will use the built-in ${providerLabel} configuration.`,
+      `Endpoint: ${providerBaseUrl}`,
+      "You can rename aliases or change endpoints later in Settings or the config files if you need advanced customization.",
+    ], "info"));
+  }
 
   const suggestedEnvVar = template?.envVar
     || activeProvider?.apiKeyRef
@@ -395,16 +414,28 @@ async function promptProviderAndModel(
       default: true,
     })
     : false;
+  let providerApiKeyEnv = suggestedEnvVar;
+  if (suggestedEnvVar) {
+    console.log(renderBulletList([
+      `If you skip saving the key, GoatCitadel will look for ${suggestedEnvVar} on future restarts.`,
+      "That env var name is just the lookup key. It is not the secret value itself.",
+    ]));
+  }
 
-  const providerApiKeyEnv = (await input({
-    message: "Provider API key env var (optional)",
-    default: suggestedEnvVar,
-  })).trim();
-
-  console.log(renderBulletList([
-    "The env var name is just the lookup key GoatCitadel should read later.",
-    "It is not the secret value itself.",
-  ]));
+  if (suggestedEnvVar) {
+    const customizeEnvVar = await confirm({
+      message: `Use a custom env var name instead of ${suggestedEnvVar}? (optional advanced)`,
+      default: false,
+    });
+    if (customizeEnvVar) {
+      providerApiKeyEnv = (await input({
+        message: "Provider API key env var",
+        default: suggestedEnvVar,
+      })).trim() || suggestedEnvVar;
+    }
+  } else {
+    providerApiKeyEnv = "";
+  }
 
   let preview = await requestJson<{ items: Array<{ id: string; label?: string }>; source: "remote" | "fallback"; warning?: string }>(
     gatewayBaseUrl,
@@ -475,21 +506,16 @@ async function promptProviderAndModel(
       continue;
     }
 
-    const providerDefaultModel = (await input({
-      message: "Provider default model",
-      default: fallbackDefaultModel,
-    })).trim();
-
     if (modelChoice === MANUAL_MODEL_ENTRY) {
       const manualModel = (await input({
         message: "Model id",
-        default: providerDefaultModel,
+        default: fallbackDefaultModel,
       })).trim();
       return {
         providerId,
         providerLabel,
         providerBaseUrl,
-        providerDefaultModel,
+        providerDefaultModel: manualModel,
         activeModel: manualModel,
         providerApiKey: providerApiKey.trim(),
         saveProviderApiKeyToSecureStore,
@@ -497,12 +523,14 @@ async function promptProviderAndModel(
       };
     }
 
+    const resolvedModel = modelChoice === USE_DEFAULT_MODEL ? fallbackDefaultModel : modelChoice;
+
     return {
       providerId,
       providerLabel,
       providerBaseUrl,
-      providerDefaultModel,
-      activeModel: modelChoice === USE_DEFAULT_MODEL ? providerDefaultModel : modelChoice,
+      providerDefaultModel: resolvedModel,
+      activeModel: resolvedModel,
       providerApiKey: providerApiKey.trim(),
       saveProviderApiKeyToSecureStore,
       providerApiKeyEnv,

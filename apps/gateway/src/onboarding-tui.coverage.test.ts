@@ -7,16 +7,16 @@ const promptQueues = {
   confirm: [] as boolean[],
 };
 
-const inputMock = vi.fn(async (config?: { default?: string }) => {
+const inputMock = vi.fn(async (config?: { default?: string; message?: string }) => {
   const next = promptQueues.input.shift();
   return next ?? config?.default ?? "";
 });
 const passwordMock = vi.fn(async () => promptQueues.password.shift() ?? "");
-const selectMock = vi.fn(async (config?: { default?: string }) => {
+const selectMock = vi.fn(async (config?: { default?: string; message?: string }) => {
   const next = promptQueues.select.shift();
   return next ?? config?.default ?? "";
 });
-const confirmMock = vi.fn(async (config?: { default?: boolean }) => {
+const confirmMock = vi.fn(async (config?: { default?: boolean; message?: string }) => {
   const next = promptQueues.confirm.shift();
   return next ?? config?.default ?? false;
 });
@@ -153,6 +153,11 @@ describe("onboarding tui entrypoint coverage", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(selectMock).toHaveBeenCalled();
     expect(confirmMock).toHaveBeenCalled();
+    const promptedMessages = inputMock.mock.calls.map(([config]) => config?.message);
+    expect(promptedMessages).not.toContain("Provider ID");
+    expect(promptedMessages).not.toContain("Provider label");
+    expect(promptedMessages).not.toContain("Provider API key env var");
+    expect(promptedMessages).not.toContain("Provider default model");
     expect(errorSpy).not.toHaveBeenCalledWith("Onboarding wizard failed.");
   });
 
