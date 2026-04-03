@@ -29,6 +29,12 @@ function GlobalFreshnessPillInner({ streamState }: { streamState: EventStreamCon
       <span><strong>{label}</strong></span>
       <span className="global-freshness-sep">|</span>
       <span>Last update: {lastUpdated}</span>
+      {streamStatus.gatewayNodeId ? (
+        <>
+          <span className="global-freshness-sep">|</span>
+          <span>Gateway: {streamStatus.gatewayNodeId}</span>
+        </>
+      ) : null}
       {streamStatus.reconnectAttempts > 0 ? (
         <>
           <span className="global-freshness-sep">|</span>

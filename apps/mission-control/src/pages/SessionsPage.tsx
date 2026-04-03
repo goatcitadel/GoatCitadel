@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { TableVirtuoso, Virtuoso } from "react-virtuoso";
 import {
+  fetchRuntimeLifecycle,
   fetchSessionSummary,
   fetchSessionTimeline,
   fetchSessions,
+  type RuntimeLifecycleResponse,
   type SessionSummary,
   type SessionTimelineItem,
   type SessionsResponse,
@@ -26,6 +28,7 @@ export function SessionsPage() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [timeline, setTimeline] = useState<SessionTimelineItem[]>([]);
+  const [lifecycle, setLifecycle] = useState<RuntimeLifecycleResponse | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [viewMode, setViewMode] = useState<"split" | "table">("split");
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +73,7 @@ export function SessionsPage() {
     if (!selectedSessionId) {
       setSummary(null);
       setTimeline([]);
+      setLifecycle(null);
       return;
     }
     const requestId = ++detailsRequestSeq.current;
@@ -77,13 +81,15 @@ export function SessionsPage() {
     void Promise.all([
       fetchSessionSummary(selectedSessionId),
       fetchSessionTimeline(selectedSessionId, 160),
+      fetchRuntimeLifecycle({ sessionId: selectedSessionId }),
     ])
-      .then(([summaryRes, timelineRes]) => {
+      .then(([summaryRes, timelineRes, lifecycleRes]) => {
         if (requestId !== detailsRequestSeq.current) {
           return;
         }
         setSummary(summaryRes);
         setTimeline(timelineRes.items);
+        setLifecycle(lifecycleRes);
       })
       .catch((err: Error) => {
         if (requestId === detailsRequestSeq.current) {
@@ -288,6 +294,20 @@ export function SessionsPage() {
                 <p className="office-subtitle session-detail-copy">
                   Timeline events: {summary?.transcriptEventCount ?? 0}
                 </p>
+                {lifecycle ? (
+                  <div className="replay-box">
+                    <h4>Canonical linkage</h4>
+                    <p className="office-subtitle session-detail-copy">
+                      Turns: {lifecycle.linked.turnIds.length}
+                      {" | "}
+                      Approvals: {lifecycle.linked.approvalIds.length}
+                      {" | "}
+                      Runs: {lifecycle.linked.runIds.length}
+                      {" | "}
+                      Tasks: {lifecycle.linked.taskIds.length}
+                    </p>
+                  </div>
+                ) : null}
                 <h4>Recent Timeline</h4>
                 {timeline.length === 0 ? <p className="office-subtitle">No transcript events yet.</p> : (
                   <div className="virtual-list-shell compact">

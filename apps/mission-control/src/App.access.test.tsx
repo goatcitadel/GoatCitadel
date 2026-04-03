@@ -203,6 +203,25 @@ async function flush(): Promise<void> {
   });
 }
 
+async function waitForTreeText(
+  renderer: ReactTestRenderer,
+  expected: string,
+  attempts = 20,
+): Promise<string> {
+  let text = renderTreeText(renderer);
+  for (let index = 0; index < attempts; index += 1) {
+    if (text.includes(expected)) {
+      return text;
+    }
+    await act(async () => {
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 10));
+    });
+    await flush();
+    text = renderTreeText(renderer);
+  }
+  return text;
+}
+
 function createReadyPreflightResult() {
   return {
     status: "ready" as const,
@@ -341,11 +360,11 @@ describe("App gateway access gate", () => {
     });
     await flush();
 
-    const text = renderTreeText(renderer!);
+    const text = await waitForTreeText(renderer!, "Mission Control access gate");
     expect(text).toContain("Mission Control access gate");
     expect(text).toContain("Gateway credentials are required to continue.");
     expect(connectEventStreamMock).not.toHaveBeenCalled();
-  });
+  }, 15_000);
 
   it("starts Mission Control normally after a ready preflight result", async () => {
     const { App } = await import("./App");
@@ -357,10 +376,10 @@ describe("App gateway access gate", () => {
     });
     await flush();
 
-    const text = renderTreeText(renderer!);
+    const text = await waitForTreeText(renderer!, "chat-ready:chat:locked");
     expect(text).toContain("chat-ready:chat:locked");
     expect(connectEventStreamMock).toHaveBeenCalledTimes(1);
-  });
+  }, 15_000);
 
   it("automatically retries startup preflight while the gateway is temporarily unreachable", async () => {
     vi.useFakeTimers();

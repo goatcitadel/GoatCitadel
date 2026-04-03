@@ -19,6 +19,11 @@ function buildBaseReport(): FollowOnParityReport {
         freshness: "missing",
         matchedCurrentProfile: false,
       },
+      proofCoverage: {
+        currentProfiles: [],
+        staleProfiles: [],
+        missingProfiles: ["local_dev", "trusted_local", "remote_hardened"],
+      },
       blockingIssues: [],
       recommendedActions: [],
     },
@@ -57,6 +62,11 @@ function buildBaseReport(): FollowOnParityReport {
         hasArtifact: false,
         freshness: "missing",
         matchedCurrentProfile: false,
+      },
+      proofCoverage: {
+        currentProfiles: [],
+        staleProfiles: [],
+        missingProfiles: ["local_dev", "trusted_local", "remote_hardened"],
       },
       blockingIssues: [],
       recoveryActions: [],

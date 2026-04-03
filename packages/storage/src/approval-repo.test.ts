@@ -119,4 +119,45 @@ describe("ApprovalRepository", () => {
       });
     });
   });
+
+  it("persists explicit approval linkage separately from the public payload", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "dir" },
+      preview: { command: "dir" },
+      linkage: {
+        sessionId: "session-1",
+        taskId: "task-1",
+        durableRunId: "run-1",
+        correlationId: "corr-1",
+      },
+    });
+
+    assert.deepEqual(created.linkage, {
+      sessionId: "session-1",
+      taskId: "task-1",
+      durableRunId: "run-1",
+      correlationId: "corr-1",
+    });
+    assert.deepEqual(created.payload, { command: "dir" });
+    assert.deepEqual(created.preview, { command: "dir" });
+
+    const merged = repo.mergeLinkage(created.approvalId, {
+      traceId: "trace-1",
+      toolName: "shell_command",
+    });
+
+    assert.deepEqual(merged.linkage, {
+      sessionId: "session-1",
+      taskId: "task-1",
+      durableRunId: "run-1",
+      correlationId: "corr-1",
+      traceId: "trace-1",
+      toolName: "shell_command",
+    });
+    assert.deepEqual(merged.payload, { command: "dir" });
+    assert.deepEqual(merged.preview, { command: "dir" });
+  });
 });

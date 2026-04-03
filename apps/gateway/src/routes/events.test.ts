@@ -30,6 +30,13 @@ describe("events stream route", () => {
       listRealtimeEventsAfterSequence: () => [],
       getRealtimeEventSequenceBounds: () => ({ oldestSequence: 10, newestSequence: 12 }),
       subscribeRealtime: () => () => undefined,
+      openRealtimeStreamLease: () => ({
+        leaseId: "lease-1",
+        clientId: "client-1",
+        gatewayNodeId: "node-1",
+      }),
+      touchRealtimeStreamLease: () => undefined,
+      closeRealtimeStreamLease: () => undefined,
     } as never);
     await app.register(eventsRoutes);
 
@@ -68,6 +75,13 @@ describe("events stream route", () => {
       listRealtimeEventsAfterSequence: () => [],
       getRealtimeEventSequenceBounds: () => ({ oldestSequence: 42, newestSequence: 42 }),
       subscribeRealtime: () => () => undefined,
+      openRealtimeStreamLease: () => ({
+        leaseId: "lease-2",
+        clientId: "client-2",
+        gatewayNodeId: "node-2",
+      }),
+      touchRealtimeStreamLease: () => undefined,
+      closeRealtimeStreamLease: () => undefined,
     } as never);
     await app.register(eventsRoutes);
 
@@ -81,6 +95,8 @@ describe("events stream route", () => {
     const text = new TextDecoder().decode(chunk.value ?? new Uint8Array());
     expect(text.includes("id: 42")).toBe(true);
     expect(text.includes("\"sequence\":42")).toBe(true);
+    expect(text.includes("event: stream-ready")).toBe(true);
+    expect(text.includes("\"leaseId\":\"lease-2\"")).toBe(true);
     await reader!.cancel();
   });
 
@@ -92,6 +108,13 @@ describe("events stream route", () => {
       listRealtimeEventsAfterSequence: () => [],
       getRealtimeEventSequenceBounds: () => ({ oldestSequence: 100, newestSequence: 150 }),
       subscribeRealtime: () => () => undefined,
+      openRealtimeStreamLease: () => ({
+        leaseId: "lease-3",
+        clientId: "client-3",
+        gatewayNodeId: "node-3",
+      }),
+      touchRealtimeStreamLease: () => undefined,
+      closeRealtimeStreamLease: () => undefined,
     } as never);
     await app.register(eventsRoutes);
 

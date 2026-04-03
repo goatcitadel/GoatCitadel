@@ -163,10 +163,17 @@ describe("buildFollowOnParityReport", () => {
       matchesReferenceSource: true,
       capabilities: [],
     });
+    expect(report.plugins.blockingIssues).toEqual([]);
+    expect(report.plugins.sdkSummary).toContain("@goatcitadel/extensions-sdk@0.6.0-beta.2");
     expect(report.epics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         epicId: "GC-P1-10",
         state: "have_foundation",
+      }),
+      expect.objectContaining({
+        epicId: "GC-P2-11",
+        state: "have_foundation",
+        summary: expect.stringContaining("@goatcitadel/extensions-sdk@0.6.0-beta.2"),
       }),
     ]));
   });
@@ -437,5 +444,199 @@ describe("buildFollowOnParityReport", () => {
     expect(report.voice.recommendedActions).not.toContain(
       "Generate the voice proof-lane draft from System, then run the transcription, Talk Mode, and Wake Mode operator cycle.",
     );
+  });
+
+  it("treats packaging drafts outside completed proof coverage as stale for the active profile", () => {
+    const report = buildFollowOnParityReport({
+      ...buildReadyReportInput(),
+      generatedAt: "2026-04-02T18:45:00.000Z",
+      deploymentProfile: "local_dev",
+      latestArtifacts: {
+        packaging: {
+          laneId: "packaging",
+          generatedAt: "2026-04-02T18:35:25.775Z",
+          summary: "Packaging proof lane is partially blocked until the runtime is operating in remote_hardened and the hardened posture is fully configured.",
+          relativePath: "artifacts/follow-on-parity/packaging/2026-04-02/packaging-deployment-proof-bundle-local_dev-2026-04-02T18-35-25-775Z.md",
+          fullPath: "workspace/artifacts/follow-on-parity/packaging/2026-04-02/packaging-deployment-proof-bundle-local_dev-2026-04-02T18-35-25-775Z.md",
+          bytes: 1600,
+          proofState: "draft",
+        },
+      } as any,
+      packagingProofCoverage: {
+        currentProfiles: ["trusted_local", "remote_hardened"],
+        staleProfiles: ["local_dev"],
+        missingProfiles: [],
+      },
+    });
+
+    expect(report.packaging.proofStatus).toEqual({
+      hasArtifact: true,
+      freshness: "stale",
+      latestArtifactDeploymentProfile: "local_dev",
+      matchedCurrentProfile: false,
+      ageDays: 0,
+    });
+    expect(report.packaging.proofCoverage).toEqual({
+      currentProfiles: ["trusted_local", "remote_hardened"],
+      staleProfiles: ["local_dev"],
+      missingProfiles: [],
+    });
+  });
+
+  it("surfaces widened voice coverage once current evidence spans all three deployment profiles", () => {
+    const report = buildFollowOnParityReport({
+      ...buildReadyReportInput(),
+      generatedAt: "2026-04-02T18:46:00.000Z",
+      deploymentProfile: "remote_hardened",
+      latestArtifacts: {
+        voice: {
+          laneId: "voice",
+          generatedAt: "2026-04-02T18:35:27.041Z",
+          summary: "Voice proof lane is ready with runtime ready, model tiny.en, talk stopped, and wake disabled.",
+          relativePath: "artifacts/follow-on-parity/voice/2026-04-02/voice-proof-bundle-remote_hardened-2026-04-02T18-35-27-041Z.md",
+          fullPath: "workspace/artifacts/follow-on-parity/voice/2026-04-02/voice-proof-bundle-remote_hardened-2026-04-02T18-35-27-041Z.md",
+          bytes: 1967,
+          proofState: "draft",
+        },
+      } as any,
+      voiceProofCoverage: {
+        currentProfiles: ["local_dev", "trusted_local", "remote_hardened"],
+        staleProfiles: [],
+        missingProfiles: [],
+      },
+      voiceStatus: {
+        stt: {
+          state: "stopped",
+          provider: "whisper.cpp",
+          runtimeReady: true,
+          modelId: "tiny.en",
+          updatedAt: "2026-04-02T18:35:27.000Z",
+        },
+        talk: {
+          state: "stopped",
+          updatedAt: "2026-04-02T18:35:27.000Z",
+        },
+        wake: {
+          enabled: false,
+          state: "stopped",
+          model: "openwakeword",
+          updatedAt: "2026-04-02T18:35:27.000Z",
+        },
+      } as any,
+      voiceRuntime: {
+        provider: "whisper.cpp",
+        source: "managed",
+        readiness: "ready",
+        binaryReady: true,
+        ffmpegReady: true,
+        selectedModelId: "tiny.en",
+        installedModels: [],
+        catalog: [],
+      } as any,
+    });
+
+    const voiceEpic = report.epics.find((epic) => epic.epicId === "GC-P2-12");
+    expect(report.voice.proofCoverage.currentProfiles).toEqual([
+      "local_dev",
+      "trusted_local",
+      "remote_hardened",
+    ]);
+    expect(voiceEpic).toMatchObject({
+      state: "have_foundation",
+      summary: expect.stringContaining("current operator proof now covers local_dev, trusted_local, and remote_hardened"),
+    });
+  });
+
+  it("acknowledges a current clean browser proof artifact instead of always asking for another proof run", () => {
+    const report = buildFollowOnParityReport({
+      ...buildReadyReportInput(),
+      generatedAt: "2026-04-02T04:40:00.000Z",
+      deploymentProfile: "trusted_local",
+      latestArtifacts: {
+        browser: {
+          laneId: "browser",
+          generatedAt: "2026-04-02T04:39:42.799Z",
+          summary: "Browser proof lane is ready for trusted_local with 4 read tool(s) and 4 control tool(s).",
+          relativePath: "artifacts/follow-on-parity/browser/2026-04-02/browser-control-proof-bundle-trusted_local-2026-04-02T04-39-42-799Z.md",
+          fullPath: "workspace/artifacts/follow-on-parity/browser/2026-04-02/browser-control-proof-bundle-trusted_local-2026-04-02T04-39-42-799Z.md",
+          bytes: 2048,
+        },
+      } as any,
+    });
+
+    expect(report.browser.artifactStatus).toEqual({
+      hasArtifact: true,
+      freshness: "current",
+      latestArtifactDeploymentProfile: "trusted_local",
+      matchedCurrentProfile: true,
+      ageDays: 0,
+    });
+    expect(report.browser.recommendedActions).toContain(
+      "Current browser proof artifact matches the active deployment profile; rerun the lane only after browser tooling, guardrails, or deployment-profile posture changes.",
+    );
+    expect(report.browser.recommendedActions).not.toContain(
+      "Generate the browser proof-lane draft from System, then run the operator pass from Mission Control or the tool surface.",
+    );
+    const browserEpic = report.epics.find((epic) => epic.epicId === "GC-P0-06");
+    expect(browserEpic).toMatchObject({
+      state: "have_foundation",
+      summary: expect.stringContaining("current operator proof is on file for trusted_local"),
+    });
+  });
+
+  it("clears Android proof blockers when current companion and A2UI artifacts are on file", () => {
+    const report = buildFollowOnParityReport({
+      ...buildReadyReportInput(),
+      generatedAt: "2026-04-02T15:35:00.000Z",
+      deploymentProfile: "local_dev",
+      latestArtifacts: {
+        a2ui: {
+          laneId: "a2ui",
+          generatedAt: "2026-04-02T15:29:00.000Z",
+          summary: "Android A2UI proof bundle recorded from GoatCitadel-mobile.",
+          relativePath: "artifacts/follow-on-parity/a2ui/2026-04-02/a2ui-proof-bundle-local_dev-2026-04-02T15-29-00-000Z.md",
+          fullPath: "workspace/artifacts/follow-on-parity/a2ui/2026-04-02/a2ui-proof-bundle-local_dev-2026-04-02T15-29-00-000Z.md",
+          bytes: 2048,
+        },
+        companion: {
+          laneId: "companion",
+          generatedAt: "2026-04-02T15:28:30.000Z",
+          summary: "Android companion runtime proof bundle recorded from GoatCitadel-mobile.",
+          relativePath: "artifacts/follow-on-parity/companion/2026-04-02/companion-bootstrap-brief-2026-04-02T15-28-30-000Z.md",
+          fullPath: "workspace/artifacts/follow-on-parity/companion/2026-04-02/companion-bootstrap-brief-2026-04-02T15-28-30-000Z.md",
+          bytes: 2048,
+        },
+      } as any,
+    });
+
+    expect(report.canvas.artifactStatus).toEqual({
+      hasArtifact: true,
+      freshness: "current",
+      latestArtifactDeploymentProfile: "local_dev",
+      matchedCurrentProfile: true,
+      ageDays: 0,
+    });
+    expect(report.companion.artifactStatus).toEqual({
+      hasArtifact: true,
+      freshness: "current",
+      ageDays: 0,
+    });
+    expect(report.canvas.blockingIssues).not.toContain(
+      "A2UI contract v1 exists and the gateway session path is proven, but the Android/companion runtime lane still lacks platform proof.",
+    );
+    expect(report.companion.blockingIssues).not.toContain(
+      "Gateway session/signing proof is complete, but the existing GoatCitadel-mobile runtime still needs Android UI/runtime proof on companion.android.v1.",
+    );
+
+    const canvasEpic = report.epics.find((epic) => epic.epicId === "GC-P0-07");
+    const companionEpic = report.epics.find((epic) => epic.epicId === "GC-P1-08");
+    expect(canvasEpic).toMatchObject({
+      state: "have_foundation",
+      summary: expect.stringContaining("Android proof is current"),
+    });
+    expect(companionEpic).toMatchObject({
+      state: "have_foundation",
+      summary: expect.stringContaining("current Android runtime/UI proof"),
+    });
   });
 });

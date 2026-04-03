@@ -1,6 +1,20 @@
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "edited";
 export type ApprovalExplanationStatus = "not_requested" | "pending" | "completed" | "failed";
 
+export interface ApprovalLinkage {
+  sessionId?: string;
+  turnId?: string;
+  taskId?: string;
+  workspaceId?: string;
+  durableRunId?: string;
+  correlationId?: string;
+  traceId?: string;
+  connectorId?: string;
+  tokenId?: string;
+  toolName?: string;
+  actionType?: string;
+}
+
 export interface ApprovalExplanation {
   summary: string;
   riskExplanation: string;
@@ -17,6 +31,7 @@ export interface ApprovalRequest {
   status: ApprovalStatus;
   payload: Record<string, unknown>;
   preview: Record<string, unknown>;
+  linkage?: ApprovalLinkage;
   createdAt: string;
   expiresAt?: string;
   resolvedAt?: string;
@@ -32,6 +47,7 @@ export interface ApprovalCreateInput {
   riskLevel: ApprovalRequest["riskLevel"];
   payload: Record<string, unknown>;
   preview: Record<string, unknown>;
+  linkage?: ApprovalLinkage;
   expiresAt?: string | null;
 }
 
@@ -87,10 +103,18 @@ export interface PendingApprovalAction {
   approvalId: string;
   actionType: "tool.invoke";
   request: Record<string, unknown>;
+  linkage?: ApprovalLinkage;
   createdAt: string;
   resolvedAt?: string;
   resolutionStatus?: "pending" | "executed" | "rejected" | "failed";
   result?: Record<string, unknown>;
+}
+
+export interface ApprovalReplaySnapshot {
+  approval: ApprovalRequest;
+  events: ApprovalReplayEvent[];
+  pendingAction?: PendingApprovalAction;
+  durableRunId?: string;
 }
 
 export type RemoteActionTokenState = "pending" | "consumed" | "expired";

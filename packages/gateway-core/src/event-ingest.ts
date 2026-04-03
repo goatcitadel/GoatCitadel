@@ -132,6 +132,7 @@ export class EventIngestService {
         costUsd: options.payload.usage?.costUsd,
         timestamp: now,
       });
+      this.storage.transcriptOutbox.enqueue(transcriptEvent, now);
 
       this.storage.idempotency.markProcessed(
         options.endpoint,
@@ -140,7 +141,10 @@ export class EventIngestService {
         now,
       );
       this.storage.db.exec("COMMIT");
-      const transcriptOffset = await appendTranscriptEventBestEffort(this.storage, transcriptEvent);
+      const { targetOffset: transcriptOffset } = await flushTranscriptOutboxSession(this.storage, {
+        sessionId: route.sessionId,
+        targetEventId: transcriptEvent.eventId,
+      });
       return {
         accepted: true,
         deduped: false,
@@ -155,6 +159,21 @@ export class EventIngestService {
       }
       throw error;
     }
+  }
+
+  public async flushPendingTranscriptOutbox(limit = 200): Promise<number> {
+    const sessionIds = new Set(
+      this.storage.transcriptOutbox.listPending(limit).map((record) => record.sessionId),
+    );
+    let deliveredCount = 0;
+    for (const sessionId of sessionIds) {
+      const result = await flushTranscriptOutboxSession(this.storage, {
+        sessionId,
+        limit,
+      });
+      deliveredCount += result.deliveredCount;
+    }
+    return deliveredCount;
   }
 }
 
@@ -188,18 +207,43 @@ function toChatMessageRecord(event: TranscriptEvent): ChatMessageRecord {
   };
 }
 
-async function appendTranscriptEventBestEffort(
+async function flushTranscriptOutboxSession(
   storage: Storage,
-  event: TranscriptEvent,
-): Promise<number> {
-  try {
-    return await storage.transcripts.append(event);
-  } catch (error) {
-    console.warn("[goatcitadel] transcript append failed after event commit", {
-      sessionId: event.sessionId,
-      eventId: event.eventId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return 0;
+  input: {
+    sessionId: string;
+    targetEventId?: string;
+    limit?: number;
+  },
+): Promise<{ deliveredCount: number; targetOffset: number }> {
+  const pending = storage.transcriptOutbox.listPending(input.limit ?? 100, input.sessionId);
+  let deliveredCount = 0;
+  let targetOffset = 0;
+
+  for (const record of pending) {
+    try {
+      const offset = await storage.transcripts.append(record.event);
+      storage.transcriptOutbox.markDelivered(record.eventId, {
+        deliveredAt: new Date().toISOString(),
+        transcriptOffset: offset,
+      });
+      deliveredCount += 1;
+      if (record.eventId === input.targetEventId) {
+        targetOffset = offset;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const updated = storage.transcriptOutbox.markFailed(record.eventId, {
+        lastAttemptAt: new Date().toISOString(),
+        lastError: message,
+      });
+      console.warn("[goatcitadel] transcript append failed after event commit", {
+        sessionId: record.sessionId,
+        eventId: record.eventId,
+        attemptCount: updated?.attemptCount ?? record.attemptCount + 1,
+        error: message,
+      });
+      break;
+    }
   }
+  return { deliveredCount, targetOffset };
 }

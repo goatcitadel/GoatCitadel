@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   ExtensionStarterPackArtifactRecord,
   ExtensionStarterPackDraft,
@@ -11,6 +12,7 @@ const EXTENSION_CONTRACT_PATH = "docs/PLUGIN_SDK_CONTRACT.md";
 const EXTENSION_ADDON_TEMPLATE_ROOT = "templates/addons/reference-separate-repo-addon";
 const EXTENSION_PLUGIN_TEMPLATE_ROOT = "templates/integration-plugins/reference-integration-plugin";
 const EXTENSION_STARTER_ARTIFACT_ROOT = "artifacts/follow-on-parity/extensions/starter-pack";
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 
 export interface ExtensionStarterPackFileDraft {
   relativePath: string;
@@ -53,7 +55,7 @@ export function buildExtensionStarterPackDraft(report: FollowOnParityReport): Ex
     "",
     "## Notes",
     "",
-    "- This starter pack is a repo-native handoff bundle, not a published SDK package.",
+    "- This starter pack complements the published beta SDK package; it is the repo-native handoff bundle for the current contract doc and scaffolds.",
     "- Replace placeholder metadata, URLs, install commands, and runtime details before external use.",
     "- Keep the reference plugin lifecycle smoke-tested against the scaffolded source path.",
   ].join("\n");
@@ -156,6 +158,6 @@ function buildExtensionStarterPackRelativePaths(starterRoot: string): string[] {
 }
 
 async function readRepoTextFile(relativePath: string): Promise<string> {
-  const absolutePath = path.resolve(process.cwd(), relativePath);
+  const absolutePath = path.resolve(REPO_ROOT, relativePath);
   return fs.readFile(absolutePath, "utf8");
 }

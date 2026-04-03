@@ -50,6 +50,9 @@ const BOOTSTRAP_FEATURES: CompanionBootstrapFeature[] = [
 
 export function buildCompanionContract(
   platformTargets: FollowOnParityTargetRecord[],
+  options: {
+    androidRuntimeProven?: boolean;
+  } = {},
 ): CompanionContract | undefined {
   const androidTarget = platformTargets.find((target) => target.catalogId === ANDROID_TARGET_ID);
   if (!androidTarget) {
@@ -81,7 +84,9 @@ export function buildCompanionContract(
     notes: [
       "Android is the first companion bootstrap target and should ship from the separate GoatCitadel-mobile repo, not this monorepo.",
       "Foreground SSE with resume is the primary realtime lane; push refresh and manual refresh cover background/mobile constraints.",
-      "Live gateway proof now covers companion session exchange, refresh rotation, signed mutation verification, replay protection, and SSE resume; the remaining gap is Android runtime/UI proof in the separate mobile repo.",
+      options.androidRuntimeProven
+        ? "Live gateway proof now covers companion session exchange, refresh rotation, signed mutation verification, replay protection, and SSE resume, and Android runtime/UI proof is now on file for the separate mobile repo."
+        : "Live gateway proof now covers companion session exchange, refresh rotation, signed mutation verification, replay protection, and SSE resume; the remaining gap is Android runtime/UI proof in the separate mobile repo.",
     ],
   };
 }

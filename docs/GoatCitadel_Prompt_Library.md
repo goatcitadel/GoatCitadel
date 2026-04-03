@@ -1227,3 +1227,20 @@ Need: timeline, root causes, corrective actions, prevention experiments, owner/d
 ```
 **Expected output:** actionable retrospective.  
 **If blocked, do this next:** include incident timeline notes.
+
+## Deep engineering audits (86-87)
+
+### 86) Omega++ structural truth audit
+**When to use:** a normal bug/prod review already happened and you want the strongest repo-specific audit for conceptual honesty, state ownership, event truth, replay/auditability, operator trust, maintainability, and future connector/platform scaling. This version is designed to resist shallow analysis by forcing concrete repo evidence across Mission Control, gateway, contracts, and storage, resolving moved files to their current equivalents, and turning unprovable claims into explicit proof obligations instead of hand-waving.  
+**Prompt:** use [CODEX_OMEGA_AUDIT_PROMPT.md](./CODEX_OMEGA_AUDIT_PROMPT.md).  
+**Expected output:** ranked structural findings, authority and state/event truth maps, proof obligations, lifecycle formalization candidates, a minimum structural cleanup plan, support-risk analysis, consolidation recommendations, and a hard verdict on platform integrity. Missing canonical architecture/state/event docs should be called out as findings, not silently normalized away.  
+**If blocked, do this next:** tell Codex to inspect `README.md`, `docs/VISION_STATUS_MATRIX.md`, `apps/mission-control/src/content/page-registry.ts`, `apps/mission-control/src/api/client.ts`, `apps/gateway/src/routes`, `apps/gateway/src/services/gateway-service.ts`, `packages/contracts`, and `packages/storage` first.
+
+### 87) Production + Omega combo pass
+**When to use:** you want both "is this broken?" and "is this honest and scalable?" in sequence.  
+**Prompt order:**
+1. [CLAUDE_PROD_REVIEW_PROMPT.md](./CLAUDE_PROD_REVIEW_PROMPT.md)
+2. [CODEX_OMEGA_AUDIT_PROMPT.md](./CODEX_OMEGA_AUDIT_PROMPT.md)
+
+**Expected output:** first a conventional production-risk review, then a structural truth/state/event/platform audit that avoids repeating the first pass and ends with a smallest-high-leverage cleanup plan.  
+**If blocked, do this next:** run the production prompt first and feed its top unresolved findings into the Omega++ pass as prior context.

@@ -292,7 +292,7 @@ describe("buildOpenclawParityProgramReport", () => {
     });
   });
 
-  it("keeps voice in progress but stops calling it a missing-proof problem when the active local proof is clean", () => {
+  it("closes voice once the local-first proof lane is current and clean", () => {
     const base = buildFollowOnParityMock();
     const report = buildOpenclawParityProgramReport({
       ...base,
@@ -306,6 +306,11 @@ describe("buildOpenclawParityProgramReport", () => {
           latestArtifactDeploymentProfile: "local_dev",
           matchedCurrentProfile: true,
           ageDays: 0,
+        },
+        proofCoverage: {
+          currentProfiles: ["local_dev"],
+          staleProfiles: [],
+          missingProfiles: ["trusted_local", "remote_hardened"],
         },
       },
       epics: base.epics.map((epic) => (
@@ -322,14 +327,11 @@ describe("buildOpenclawParityProgramReport", () => {
     const voice = report.epics.find((epic) => epic.epicId === "GC-P2-12");
 
     expect(voice).toMatchObject({
-      status: "in_progress",
-      blockers: [
-        expect.objectContaining({
-          kind: "repo_runtime",
-          summary: expect.stringContaining("current local-first voice proof lane is closed"),
-        }),
-      ],
+      status: "complete",
+      blockers: [],
     });
+    expect(report.completedEpicIds).toContain("GC-P2-12");
+    expect(report.openEpicIds).not.toContain("GC-P2-12");
     expect(report.unsafeClaims).toContain(
       "Broader voice parity beyond the current local-first runtime lane still requires deliberate widening; do not over-claim cloud-grade or cross-profile parity from the current proof bundle.",
     );

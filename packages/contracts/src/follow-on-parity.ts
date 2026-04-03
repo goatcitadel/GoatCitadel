@@ -194,6 +194,7 @@ export interface FollowOnProofLaneArtifactRecord {
   relativePath: string;
   fullPath: string;
   bytes: number;
+  proofState?: "draft" | "complete" | "evidence";
 }
 
 export interface FollowOnArtifactStatus {
@@ -205,6 +206,12 @@ export interface FollowOnArtifactStatus {
 export interface FollowOnProfileArtifactStatus extends FollowOnArtifactStatus {
   latestArtifactDeploymentProfile?: DeploymentProfile;
   matchedCurrentProfile: boolean;
+}
+
+export interface FollowOnProfileCoverageRecord {
+  currentProfiles: DeploymentProfile[];
+  staleProfiles: DeploymentProfile[];
+  missingProfiles: DeploymentProfile[];
 }
 
 export type FollowOnProofLaneArtifactIndex = Partial<
@@ -220,6 +227,7 @@ export interface FollowOnParityReport {
     networkAllowlistCount: number;
     postureSummary: string;
     proofStatus: FollowOnProfileArtifactStatus;
+    proofCoverage: FollowOnProfileCoverageRecord;
     blockingIssues: string[];
     recommendedActions: string[];
     latestArtifact?: FollowOnProofLaneArtifactRecord;
@@ -249,6 +257,7 @@ export interface FollowOnParityReport {
     wakeEnabled: boolean;
     lastError?: string;
     artifactStatus: FollowOnProfileArtifactStatus;
+    proofCoverage: FollowOnProfileCoverageRecord;
     blockingIssues: string[];
     recoveryActions: string[];
     recommendedActions: string[];

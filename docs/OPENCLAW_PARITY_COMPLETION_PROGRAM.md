@@ -21,6 +21,7 @@ Until the external OpenClaw research matrix is refreshed in-repo, these three do
 - `GC-P1-04` Ship Tier-2 planned channels
 - `GC-P1-10` Long-tail parity register
 - `GC-P2-11` Extension / plugin SDK breadth
+- `GC-P2-12` Voice Wake / Talk Mode parity
 
 ## Unfinished Epic Checklist
 
@@ -67,27 +68,11 @@ Proof artifact:
 - `docs/PACKAGING_DEPLOYMENT_PARITY_CHECKLIST.md`
 - `templates/verification/packaging-deployment-proof-bundle.md`
 
-### `GC-P2-12` Voice Wake / Talk Mode parity
-
-Current gap:
-- The current voice lane is local-first and operational, and a current `local_dev` proof bundle is on file; the remaining gap is broader hardening or any deliberate future widening beyond that first truthful lane.
-
-Completion checklist:
-- Keep the System-generated voice proof lane current for the active deployment profile.
-- Use the embedded recovery actions to harden runtime repair, model repair, stale talk cleanup, and wake cleanup when the local-first lane changes.
-- Re-test blocked starts, recovery behavior, and steady-state operation after each hardening tranche.
-- Only add non-`local_dev` reruns when you are deliberately widening the supported voice posture instead of treating them as baseline proof debt.
-
-Proof artifact:
-- `docs/testing/VOICE_VALIDATION_CHECKLIST.md`
-- `templates/verification/voice-proof-bundle.md`
-
 ## Completion Order
 
 This is the full-program closeout order. It is intentionally broader than the follow-on-only order in `docs/FOLLOW_ON_PARITY_REGISTER.md`.
 
-1. `GC-P2-12` Voice Wake / Talk Mode parity
-2. `GC-P1-09` Packaging and remote deployment parity
+1. `GC-P1-09` Packaging and remote deployment parity
 
 ## Done Means
 

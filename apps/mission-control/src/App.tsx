@@ -101,8 +101,8 @@ function PageLoadingFallback({ label }: { label: string }) {
 }
 
 const refreshTopicRules: Array<{ topic: RefreshTopic; keywords: string[] }> = [
-  { topic: "dashboard", keywords: ["dashboard", "operator", "summit", "cron", "memory", "settings", "system", "onboarding", "llm", "approval"] },
-  { topic: "promptLab", keywords: ["prompt_pack", "promptlab", "prompt_lab", "prompt-pack"] },
+  { topic: "surface", keywords: ["dashboard", "surface", "operator", "summit", "cron", "memory", "settings", "system", "onboarding", "llm", "approval"] },
+  { topic: "quality", keywords: ["prompt_pack", "promptlab", "prompt_lab", "prompt-pack", "quality"] },
   { topic: "chat", keywords: ["chat", "message", "session", "delegate", "proactive", "learned_memory", "llm", "provider", "model", "onboarding", "settings"] },
   { topic: "approvals", keywords: ["approval", "gatehouse"] },
   { topic: "tools", keywords: ["tool", "grant", "policy"] },
@@ -129,8 +129,24 @@ function deriveRefreshTopics(event: RealtimeEvent): RefreshTopic[] {
   if (event.payload.kind === "replay_gap") {
     return [...new Set(refreshTopicRules.map((rule) => rule.topic))];
   }
-  const haystack = `${event.eventType} ${event.source}`.toLowerCase();
   const topics = new Set<RefreshTopic>();
+  if (event.links?.approvalId) {
+    topics.add("approvals");
+    topics.add("surface");
+  }
+  if (event.links?.sessionId) {
+    topics.add("chat");
+    topics.add("surface");
+  }
+  if (event.links?.taskId) {
+    topics.add("tasks");
+    topics.add("surface");
+  }
+  if (event.source === "system") {
+    topics.add("system");
+    topics.add("surface");
+  }
+  const haystack = `${event.eventType} ${event.source}`.toLowerCase();
 
   for (const rule of refreshTopicRules) {
     if (rule.keywords.some((keyword) => haystack.includes(keyword))) {
@@ -509,7 +525,7 @@ export function App() {
     void loadOperateStatus();
   }, [gatewayAccess.status, loadOperateStatus]);
 
-  useRefreshSubscription("dashboard", () => loadOperateStatus(), {
+  useRefreshSubscription("surface", () => loadOperateStatus(), {
     enabled: gatewayAccess.status === "ready",
     coalesceMs: 900,
     staleMs: 20000,

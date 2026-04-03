@@ -59,6 +59,7 @@ interface ActiveRunState {
 
 type TestResultFilter =
   | "all"
+  | "approval_paused"
   | "run_failed"
   | "score_failed"
   | "needs_score"
@@ -224,7 +225,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   }, [load]);
 
   useRefreshSubscription(
-    "promptLab",
+    "quality",
     async () => {
       await load({ background: true });
       await Promise.all([
@@ -316,6 +317,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
 
   const testOutcomeSummary = useMemo(() => {
     let runFailureCount = 0;
+    let approvalPausedCount = 0;
     let scoreFailureCount = 0;
     let needsScoreCount = 0;
     let notRunCount = 0;
@@ -327,7 +329,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         latestScoreByTest.get(test.testId),
         passThreshold,
       );
-      if (category === "run_failed") {
+      if (category === "approval_paused") {
+        approvalPausedCount += 1;
+      } else if (category === "run_failed") {
         runFailureCount += 1;
       } else if (category === "score_failed") {
         scoreFailureCount += 1;
@@ -341,6 +345,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     }
 
     return {
+      approvalPausedCount,
       runFailureCount,
       scoreFailureCount,
       needsScoreCount,
@@ -1132,6 +1137,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
                 onChange={(value) => setTestResultFilter(value as TestResultFilter)}
                 options={[
                   { value: "all", label: `All (${tests.length})` },
+                  { value: "approval_paused", label: `Approval paused (${testOutcomeSummary.approvalPausedCount})` },
                   { value: "run_failed", label: `Run failures (${testOutcomeSummary.runFailureCount})` },
                   { value: "score_failed", label: `Score failures (${testOutcomeSummary.scoreFailureCount})` },
                   { value: "needs_score", label: `Needs score (${testOutcomeSummary.needsScoreCount})` },
@@ -1512,6 +1518,7 @@ function parseBenchmarkProviders(value: string): Array<{ providerId: string; mod
 function formatRunStatus(status?: PromptPackRunRecord["status"]): string {
   if (!status) return "Not run";
   if (status === "completed") return "Run completed";
+  if (status === "approval_paused") return "Waiting for approval";
   if (status === "failed") return "Run failed";
   return status;
 }
@@ -1573,6 +1580,7 @@ function formatDateTime(value?: string): string {
 function statusChipClass(status?: PromptPackRunRecord["status"]): string {
   if (!status) return "run-not-run";
   if (status === "completed") return "run-completed";
+  if (status === "approval_paused") return "run-paused";
   if (status === "failed") return "run-failed";
   return "run-not-run";
 }
@@ -1584,6 +1592,9 @@ function classifyTestResultCategory(
 ): Exclude<TestResultFilter, "all"> {
   if (!run) {
     return "not_run";
+  }
+  if (run.status === "approval_paused") {
+    return "approval_paused";
   }
   if (run.status === "failed") {
     return "run_failed";
@@ -1610,6 +1621,7 @@ function matchesTestResultFilter(
 }
 
 function formatResultCategory(category: Exclude<TestResultFilter, "all">): string {
+  if (category === "approval_paused") return "Approval paused";
   if (category === "run_failed") return "Run failure";
   if (category === "score_failed") return "Score failure";
   if (category === "needs_score") return "Needs score";
@@ -1618,6 +1630,7 @@ function formatResultCategory(category: Exclude<TestResultFilter, "all">): strin
 }
 
 function resultCategoryClass(category: Exclude<TestResultFilter, "all">): string {
+  if (category === "approval_paused") return "result-run-paused";
   if (category === "run_failed") return "result-run-failed";
   if (category === "score_failed") return "result-score-failed";
   if (category === "needs_score") return "result-needs-score";

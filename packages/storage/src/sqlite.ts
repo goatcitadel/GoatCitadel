@@ -346,6 +346,23 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "context_manifest_schema",
     up: createContextManifestSchema,
   },
+  {
+    version: 48,
+    name: "transcript_outbox_schema",
+    up: createTranscriptOutboxSchema,
+  },
+  {
+    version: 49,
+    name: "realtime_stream_lease_schema",
+    up: createRealtimeStreamLeaseSchema,
+  },
+  {
+    version: 50,
+    name: "approval_linkage_json_schema",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "approvals", "linkage_json", "TEXT");
+    },
+  },
 ];
 
 function createBaseSchema(db: DatabaseSync): void {
@@ -390,6 +407,7 @@ function createBaseSchema(db: DatabaseSync): void {
       kind TEXT NOT NULL,
       risk_level TEXT NOT NULL,
       status TEXT NOT NULL,
+      linkage_json TEXT,
       payload_json TEXT NOT NULL,
       preview_json TEXT NOT NULL,
       explanation_status TEXT NOT NULL DEFAULT 'not_requested',
@@ -2873,6 +2891,54 @@ function createContextManifestSchema(db: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_context_manifest_entries_manifest
       ON context_manifest_entries(manifest_id, entry_index ASC, created_at ASC);
+  `);
+}
+
+function createTranscriptOutboxSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS transcript_outbox (
+      event_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      event_json TEXT NOT NULL,
+      enqueued_at TEXT NOT NULL,
+      delivered_at TEXT,
+      transcript_offset INTEGER,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TEXT,
+      last_error TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_transcript_outbox_pending
+      ON transcript_outbox(delivered_at, enqueued_at ASC, event_id ASC);
+    CREATE INDEX IF NOT EXISTS idx_transcript_outbox_session_pending
+      ON transcript_outbox(session_id, delivered_at, enqueued_at ASC, event_id ASC);
+  `);
+}
+
+function createRealtimeStreamLeaseSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS realtime_stream_leases (
+      lease_id TEXT PRIMARY KEY,
+      stream_name TEXT NOT NULL,
+      client_id TEXT NOT NULL,
+      gateway_node_id TEXT NOT NULL,
+      requested_cursor INTEGER,
+      last_sent_sequence INTEGER,
+      state TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_heartbeat_at TEXT NOT NULL,
+      last_event_at TEXT,
+      closed_at TEXT,
+      close_reason TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_realtime_stream_leases_stream_state_updated
+      ON realtime_stream_leases(stream_name, state, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_realtime_stream_leases_client_state_updated
+      ON realtime_stream_leases(client_id, state, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_realtime_stream_leases_node_state_updated
+      ON realtime_stream_leases(gateway_node_id, state, updated_at DESC);
   `);
 }
 

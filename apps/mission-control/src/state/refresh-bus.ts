@@ -1,4 +1,6 @@
 export type RefreshTopic =
+  | "surface"
+  | "quality"
   | "dashboard"
   | "chat"
   | "promptLab"

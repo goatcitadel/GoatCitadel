@@ -50,14 +50,30 @@ export function ActivityPage() {
       </div>
       <Panel
         title="Realtime Activity Stream"
-        subtitle="Newest events stay pinned at the top so you can watch state change as runs, agents, approvals, and integrations move."
+        subtitle="Newest events stay pinned at the top so you can watch the retained signal lane as runs, agents, approvals, and integrations move."
       >
+        <div className="status-banner">
+          This feed is the retained realtime stream for operators. Durable history remains in the session, approval, task, and run detail views.
+        </div>
         <div className="virtual-list-shell tall">
           <Virtuoso
             data={events}
             itemContent={(_index, event) => (
               <div className="virtual-list-item">
-                <strong>{event.eventType}</strong> ({event.source}) {new Date(event.timestamp).toLocaleString()}
+                <div className="workflow-summary-strip">
+                  <strong>{event.eventType}</strong>
+                  <StatusChip tone="muted">{event.source}</StatusChip>
+                  {event.eventClass ? <StatusChip tone="muted">{event.eventClass}</StatusChip> : null}
+                  {event.eventAuthority ? <StatusChip tone="live">{event.eventAuthority}</StatusChip> : null}
+                </div>
+                <p className="office-subtitle">{new Date(event.timestamp).toLocaleString()}</p>
+                {event.links ? (
+                  <p className="office-subtitle">
+                    {Object.entries(event.links)
+                      .map(([key, value]) => `${key}: ${value}`)
+                      .join(" | ")}
+                  </p>
+                ) : null}
                 <pre>{JSON.stringify(event.payload, null, 2)}</pre>
               </div>
             )}

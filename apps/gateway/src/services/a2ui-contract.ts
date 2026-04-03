@@ -21,6 +21,9 @@ const PLATFORM_CAPABILITY_MAP: Partial<Record<string, A2UICapability>> = {
 export function buildA2UIContract(
   automationCatalog: FollowOnParityTargetRecord | undefined,
   platformTargets: FollowOnParityTargetRecord[],
+  options: {
+    androidRuntimeProven?: boolean;
+  } = {},
 ): A2UIContract | undefined {
   if (!automationCatalog && platformTargets.length === 0) {
     return undefined;
@@ -50,7 +53,11 @@ export function buildA2UIContract(
         }
       }
     }
-    notes.push("Platform canvas targets inherit a2ui.v1 through companion_session, but no companion runtime is shipped yet.");
+    notes.push(
+      options.androidRuntimeProven
+        ? "Platform canvas targets inherit a2ui.v1 through companion_session, and Android proof is now on file for the current signed-session runtime."
+        : "Platform canvas targets inherit a2ui.v1 through companion_session, but no companion runtime is shipped yet.",
+    );
   }
 
   return {

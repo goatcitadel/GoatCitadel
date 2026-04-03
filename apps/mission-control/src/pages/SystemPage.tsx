@@ -41,6 +41,19 @@ import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
 import { pageCopy } from "../content/copy";
+import {
+  buildUiArtifactStatus,
+  buildUiProfileArtifactStatus,
+  normalizeA2UIProofLaneDraft,
+  normalizeBrowserProofLaneDraft,
+  normalizeExtensionSdkBriefDraft,
+  normalizeExtensionStarterPackDraft,
+  normalizeFollowOnParityReport,
+  normalizeOpenclawParityProgramReport,
+  normalizePackagingProofLaneDraft,
+  normalizeSystemVitals,
+  normalizeVoiceProofLaneDraft,
+} from "./system-page-normalizers";
 
 export function SystemPage() {
   const [vitals, setVitals] = useState<SystemVitalsResponse | null>(null);
@@ -165,7 +178,7 @@ export function SystemPage() {
     setBrowserProofLaneBusy(true);
     try {
       const draft = await fetchBrowserProofLaneDraft();
-      setBrowserProofLane(draft);
+      setBrowserProofLane(normalizeBrowserProofLaneDraft(draft));
       setBrowserProofLaneError(null);
     } catch (err) {
       setBrowserProofLaneError((err as Error).message);
@@ -191,7 +204,7 @@ export function SystemPage() {
     setPackagingProofLaneBusy(true);
     try {
       const draft = await fetchPackagingProofLaneDraft();
-      setPackagingProofLane(draft);
+      setPackagingProofLane(normalizePackagingProofLaneDraft(draft));
       setPackagingProofLaneError(null);
     } catch (err) {
       setPackagingProofLaneError((err as Error).message);
@@ -217,7 +230,7 @@ export function SystemPage() {
     setVoiceProofLaneBusy(true);
     try {
       const draft = await fetchVoiceProofLaneDraft();
-      setVoiceProofLane(draft);
+      setVoiceProofLane(normalizeVoiceProofLaneDraft(draft));
       setVoiceProofLaneError(null);
     } catch (err) {
       setVoiceProofLaneError((err as Error).message);
@@ -243,7 +256,7 @@ export function SystemPage() {
     setA2UIProofLaneBusy(true);
     try {
       const draft = await fetchA2UIProofLaneDraft();
-      setA2UIProofLane(draft);
+      setA2UIProofLane(normalizeA2UIProofLaneDraft(draft));
       setA2UIProofLaneError(null);
     } catch (err) {
       setA2UIProofLaneError((err as Error).message);
@@ -282,7 +295,7 @@ export function SystemPage() {
     setExtensionBriefBusy(true);
     try {
       const draft = await fetchExtensionSdkBrief();
-      setExtensionBrief(draft);
+      setExtensionBrief(normalizeExtensionSdkBriefDraft(draft));
       setExtensionBriefError(null);
     } catch (err) {
       setExtensionBriefError((err as Error).message);
@@ -308,7 +321,7 @@ export function SystemPage() {
     setExtensionStarterPackBusy(true);
     try {
       const draft = await fetchExtensionStarterPack();
-      setExtensionStarterPack(draft);
+      setExtensionStarterPack(normalizeExtensionStarterPackDraft(draft));
       setExtensionStarterPackError(null);
     } catch (err) {
       setExtensionStarterPackError((err as Error).message);
@@ -337,20 +350,20 @@ export function SystemPage() {
       fetchDaemonLogs(100),
     ])
       .then(([nextVitals, nextDaemonStatus, nextDaemonLogs]) => {
-        setVitals(nextVitals);
+        setVitals(normalizeSystemVitals(nextVitals));
         setDaemonStatus(nextDaemonStatus);
         setDaemonLogs(nextDaemonLogs.items);
       })
       .catch((err: Error) => setError(err.message));
     void fetchFollowOnParityReport()
       .then((report) => {
-        setFollowOnParity(report);
+        setFollowOnParity(normalizeFollowOnParityReport(report));
         setFollowOnParityError(null);
       })
       .catch((err: Error) => setFollowOnParityError(err.message));
     void fetchOpenclawParityReport()
       .then((report) => {
-        setOpenclawParity(report);
+        setOpenclawParity(normalizeOpenclawParityProgramReport(report));
         setOpenclawParityError(null);
       })
       .catch((err: Error) => setOpenclawParityError(err.message));
@@ -1035,60 +1048,6 @@ function formatBytes(bytes: number): string {
     return `${(bytes / 1024).toFixed(2)} KB`;
   }
   return `${bytes} B`;
-}
-
-function buildUiArtifactStatus(
-  generatedAt: string,
-  artifact?: FollowOnProofLaneArtifactRecord,
-): FollowOnParityReport["companion"]["artifactStatus"] {
-  if (!artifact) {
-    return {
-      hasArtifact: false,
-      freshness: "missing",
-    };
-  }
-  const artifactGeneratedAtMs = Date.parse(artifact.generatedAt);
-  const reportGeneratedAtMs = Date.parse(generatedAt);
-  const ageDays = Number.isFinite(artifactGeneratedAtMs) && Number.isFinite(reportGeneratedAtMs)
-    ? Math.max(0, Math.floor((reportGeneratedAtMs - artifactGeneratedAtMs) / (24 * 60 * 60 * 1000)))
-    : undefined;
-  return {
-    hasArtifact: true,
-    freshness: typeof ageDays === "number" && ageDays > 7 ? "stale" : "current",
-    ageDays,
-  };
-}
-
-function buildUiProfileArtifactStatus(
-  generatedAt: string,
-  deploymentProfile: FollowOnParityReport["deploymentProfile"],
-  artifact?: FollowOnProofLaneArtifactRecord,
-): FollowOnParityReport["browser"]["artifactStatus"] {
-  if (!artifact) {
-    return {
-      hasArtifact: false,
-      freshness: "missing",
-      matchedCurrentProfile: false,
-    };
-  }
-  const baseStatus = buildUiArtifactStatus(generatedAt, artifact);
-  const latestArtifactDeploymentProfile = parseArtifactDeploymentProfile(artifact.relativePath);
-  return {
-    ...baseStatus,
-    latestArtifactDeploymentProfile,
-    matchedCurrentProfile: latestArtifactDeploymentProfile === deploymentProfile,
-  };
-}
-
-function parseArtifactDeploymentProfile(
-  relativePath: string,
-): FollowOnParityReport["deploymentProfile"] | undefined {
-  const match = relativePath.match(/-(local_dev|trusted_local|remote_hardened)-\d{4}-\d{2}-\d{2}T/);
-  const value = match?.[1];
-  if (value === "local_dev" || value === "trusted_local" || value === "remote_hardened") {
-    return value;
-  }
-  return undefined;
 }
 
 function formatArtifactStatus(

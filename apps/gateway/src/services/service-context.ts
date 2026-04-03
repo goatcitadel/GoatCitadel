@@ -1,5 +1,6 @@
 import type { Storage } from "@goatcitadel/storage";
 import type { ToolPolicyEngine } from "@goatcitadel/policy-engine";
+import type { RealtimeEvent } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { LlmService } from "./llm-service.js";
 import type { RuntimeSettings } from "./gateway-service.js";
@@ -18,7 +19,12 @@ export interface ServiceContext {
   readonly policyEngine: ToolPolicyEngine;
 
   /** Thin delegate – appends a realtime event and emits it. */
-  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
+  publishRealtime(
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
+  ): void;
 
   /** Throws if the given feature flag is disabled. */
   requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;

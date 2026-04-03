@@ -118,7 +118,7 @@ export const OPENCLAW_PARITY_EPICS: OpenclawParityEpicDefinition[] = [
   {
     epicId: "GC-P2-12",
     label: "Voice Wake / Talk Mode parity",
-    status: "in_progress",
+    status: "complete",
   },
 ];
 
@@ -138,6 +138,5 @@ export const OPENCLAW_PARITY_OPEN_EPIC_IDS: OpenclawParityEpicId[] = OPENCLAW_PA
 // It intentionally differs from the follow-on-only order, which applies only
 // when working the follow-on lanes before planned-channel completion.
 export const OPENCLAW_PARITY_COMPLETION_ORDER: OpenclawParityEpicId[] = [
-  "GC-P2-12",
   "GC-P1-09",
 ];

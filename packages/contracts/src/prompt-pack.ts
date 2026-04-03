@@ -29,7 +29,7 @@ export interface PromptPackRunRecord {
   packId: string;
   testId: string;
   sessionId?: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "approval_paused";
   providerId?: string;
   model?: string;
   mode?: ChatMode;
@@ -162,6 +162,7 @@ export interface PromptPackBenchmarkModelSummary {
   averageTotalScore: number;
   passRate: number;
   runFailures: number;
+  approvalPausedCount: number;
   noOutputCount: number;
   topFailureSignals: Array<{
     signal: string;

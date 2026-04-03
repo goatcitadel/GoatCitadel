@@ -11,13 +11,12 @@ Local workspace SDK package for GoatCitadel add-on and integration-plugin author
 
 ## Current Boundary
 
-- this package exists in the workspace and is ready to be published
-- it is not yet published as an external package
+- this package exists in the workspace and is also published to GitHub Packages as `@goatcitadel/extensions-sdk@0.6.0-beta.2` on the `beta` tag
 - broader runtime contracts still live in the main GoatCitadel repo contracts and gateway surfaces
 
 ## Release Workflow
 
-Once GitHub Packages auth exists on the operator machine:
+For the next release, once GitHub Packages auth exists on the operator machine:
 
 1. Log in once:
    ```bash

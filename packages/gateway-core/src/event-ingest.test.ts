@@ -47,6 +47,23 @@ describe("EventIngestService", () => {
       budgetState: "ok",
     };
 
+    const transcriptEvent = {
+      eventId: "evt-1",
+      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
+      timestamp: "2026-03-22T00:00:00.000Z",
+      actionId: "action-1",
+      idempotencyKey: "idem-1",
+      type: "message.user",
+      actorType: "user",
+      actorId: "operator",
+      payload: {
+        message: {
+          role: "user",
+          content: "hello",
+        },
+      },
+    } as TranscriptEvent;
     const storage = {
       db: {
         exec: vi.fn((sql: string) => {
@@ -87,6 +104,18 @@ describe("EventIngestService", () => {
           return 42;
         }),
       },
+      transcriptOutbox: {
+        enqueue: vi.fn(() => undefined),
+        listPending: vi.fn(() => [{
+          eventId: transcriptEvent.eventId,
+          sessionId: transcriptEvent.sessionId,
+          event: transcriptEvent,
+          enqueuedAt: transcriptEvent.timestamp,
+          attemptCount: 0,
+        }]),
+        markDelivered: vi.fn(() => undefined),
+        markFailed: vi.fn(() => undefined),
+      },
       chatMessages: {
         upsert: vi.fn(),
       },
@@ -106,7 +135,9 @@ describe("EventIngestService", () => {
     expect(result.deduped).toBe(false);
     expect(result.transcriptOffset).toBe(42);
     expect(storage.chatMessages.upsert).toHaveBeenCalledTimes(1);
+    expect(storage.transcriptOutbox.enqueue).toHaveBeenCalledTimes(1);
     expect(storage.transcripts.append).toHaveBeenCalledTimes(1);
+    expect(storage.transcriptOutbox.markDelivered).toHaveBeenCalledTimes(1);
     expect(inTransaction).toBe(false);
   });
 
@@ -128,6 +159,23 @@ describe("EventIngestService", () => {
       budgetState: "ok",
     };
 
+    const transcriptEvent = {
+      eventId: "evt-1",
+      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
+      timestamp: "2026-03-22T00:00:00.000Z",
+      actionId: "action-1",
+      idempotencyKey: "idem-1",
+      type: "message.user",
+      actorType: "user",
+      actorId: "operator",
+      payload: {
+        message: {
+          role: "user",
+          content: "hello",
+        },
+      },
+    } as TranscriptEvent;
     const storage = {
       db: {
         exec: vi.fn(),
@@ -147,6 +195,25 @@ describe("EventIngestService", () => {
         append: vi.fn(async () => {
           throw new Error("disk unavailable");
         }),
+      },
+      transcriptOutbox: {
+        enqueue: vi.fn(() => undefined),
+        listPending: vi.fn(() => [{
+          eventId: transcriptEvent.eventId,
+          sessionId: transcriptEvent.sessionId,
+          event: transcriptEvent,
+          enqueuedAt: transcriptEvent.timestamp,
+          attemptCount: 0,
+        }]),
+        markDelivered: vi.fn(() => undefined),
+        markFailed: vi.fn(() => ({
+          eventId: transcriptEvent.eventId,
+          sessionId: transcriptEvent.sessionId,
+          event: transcriptEvent,
+          enqueuedAt: transcriptEvent.timestamp,
+          attemptCount: 1,
+          lastError: "disk unavailable",
+        })),
       },
       chatMessages: {
         upsert: vi.fn(),
@@ -168,8 +235,64 @@ describe("EventIngestService", () => {
     expect(result.accepted).toBe(true);
     expect(result.deduped).toBe(false);
     expect(result.transcriptOffset).toBe(0);
+    expect(storage.transcriptOutbox.enqueue).toHaveBeenCalledTimes(1);
+    expect(storage.transcriptOutbox.markFailed).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledTimes(1);
 
     warnSpy.mockRestore();
+  });
+
+  it("flushes pending transcript outbox items on demand", async () => {
+    const sessionEvent = {
+      eventId: "evt-2",
+      sessionId: "sess_123",
+      sessionKey: "chat:local:operator",
+      timestamp: "2026-03-22T00:00:00.000Z",
+      actionId: "action-2",
+      idempotencyKey: "idem-2",
+      type: "message.user",
+      actorType: "user",
+      actorId: "operator",
+      payload: {
+        message: {
+          role: "user",
+          content: "recover me",
+        },
+      },
+    } as TranscriptEvent;
+    const storage = {
+      transcriptOutbox: {
+        listPending: vi
+          .fn()
+          .mockReturnValueOnce([{
+            eventId: sessionEvent.eventId,
+            sessionId: sessionEvent.sessionId,
+            event: sessionEvent,
+            enqueuedAt: sessionEvent.timestamp,
+            attemptCount: 0,
+          }])
+          .mockReturnValueOnce([{
+            eventId: sessionEvent.eventId,
+            sessionId: sessionEvent.sessionId,
+            event: sessionEvent,
+            enqueuedAt: sessionEvent.timestamp,
+            attemptCount: 0,
+          }]),
+        markDelivered: vi.fn(() => undefined),
+      },
+      transcripts: {
+        append: vi.fn(async () => 17),
+      },
+      costLedger: {
+        insert: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const service = new EventIngestService(storage);
+    const delivered = await service.flushPendingTranscriptOutbox();
+
+    expect(delivered).toBe(1);
+    expect(storage.transcripts.append).toHaveBeenCalledTimes(1);
+    expect(storage.transcriptOutbox.markDelivered).toHaveBeenCalledTimes(1);
   });
 });

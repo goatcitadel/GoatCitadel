@@ -652,6 +652,11 @@
   color: #8e3444;
 }
 
+.theme-citadel-light .prompt-lab-chip.run-paused,
+.theme-citadel-light .prompt-lab-chip.result-run-paused {
+  color: #8e5618;
+}
+
 .theme-citadel-light .prompt-lab-chip.score-missing,
 .theme-citadel-light .prompt-lab-chip.result-score-failed,
 .theme-citadel-light .prompt-lab-chip.result-needs-score {

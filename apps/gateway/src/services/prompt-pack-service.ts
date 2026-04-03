@@ -347,10 +347,14 @@ export class PromptPackService {
       const missingOutput = responseText.trim().length === 0;
       const failedByTrace = traceStatus === "failed";
       const approvalPending = traceStatus === "waiting_for_approval";
-      const status: PromptPackRunRecord["status"] = (missingOutput || failedByTrace || approvalPending) ? "failed" : "completed";
-      const error = status === "failed"
+      const status: PromptPackRunRecord["status"] = approvalPending
+        ? "approval_paused"
+        : (missingOutput || failedByTrace)
+          ? "failed"
+          : "completed";
+      const error = status === "failed" || status === "approval_paused"
         ? (approvalPending
-          ? "Turn paused for approval; prompt-pack run marked failed for deterministic scoring."
+          ? "Turn paused for approval."
           : (missingOutput
             ? "No assistant output generated."
             : "Assistant turn finished in failed state."))
@@ -1840,7 +1844,8 @@ function summarizePromptPackBenchmarkItems(
   }
   return Array.from(byModel.entries()).map(([key, group]) => {
     const [providerId, model] = key.split("::");
-    const runFailures = group.filter((item) => item.runStatus !== "completed").length;
+    const runFailures = group.filter((item) => item.runStatus === "failed" || item.runStatus === "missing_run").length;
+    const approvalPausedCount = group.filter((item) => item.runStatus === "approval_paused").length;
     const scoredItems = group.filter((item) => item.totalScore !== undefined);
     const scoreSum = scoredItems.reduce((sum, item) => sum + (item.totalScore ?? 0), 0);
     const avgScore = scoredItems.length > 0 ? scoreSum / scoredItems.length : 0;
@@ -1865,6 +1870,7 @@ function summarizePromptPackBenchmarkItems(
       averageTotalScore: Number(avgScore.toFixed(2)),
       passRate: scoredItems.length > 0 ? Number((passCount / scoredItems.length).toFixed(4)) : 0,
       runFailures,
+      approvalPausedCount,
       noOutputCount,
       topFailureSignals,
     };
@@ -1872,8 +1878,11 @@ function summarizePromptPackBenchmarkItems(
 }
 
 function summarizePromptPackRunFailure(run: PromptPackRunRecord): string | undefined {
-  if (run.status !== "failed") {
+  if (run.status !== "failed" && run.status !== "approval_paused") {
     return undefined;
+  }
+  if (run.status === "approval_paused") {
+    return run.error ?? "approval_paused";
   }
   if (run.error) {
     return run.error.slice(0, 400);
@@ -2975,6 +2984,8 @@ export function buildPromptPackReportSummary(
       failedRuns += 1;
       runFailureCount += 1;
       failingCodes.push(test.code);
+      continue;
+    } else if (latestRun?.status === "approval_paused") {
       continue;
     }
 

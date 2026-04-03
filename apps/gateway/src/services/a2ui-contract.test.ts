@@ -7,14 +7,14 @@ describe("buildA2UIContract", () => {
       {
         catalogId: "automation.canvas-a2ui",
         label: "Canvas + A2UI",
-        maturity: "planned",
+        maturity: "beta",
         capabilities: ["scene-view", "selection", "inspect", "agent-apply"],
       },
       [
         {
           catalogId: "platform.android-canvas-camera-screen",
           label: "Android Canvas/Camera/Screen",
-          maturity: "planned",
+          maturity: "beta",
           capabilities: ["canvas", "camera", "screen"],
         },
         {
@@ -24,6 +24,7 @@ describe("buildA2UIContract", () => {
           capabilities: ["canvas", "camera", "voice"],
         },
       ],
+      { androidRuntimeProven: true },
     );
 
     expect(contract).toEqual({
@@ -36,7 +37,7 @@ describe("buildA2UIContract", () => {
       platformCapabilities: ["scene_view", "camera_input", "screen_input", "voice_input"],
       notes: [
         "Mission Control is the first operator surface for a2ui.v1 proof and review.",
-        "Platform canvas targets inherit a2ui.v1 through companion_session, but no companion runtime is shipped yet.",
+        "Platform canvas targets inherit a2ui.v1 through companion_session, and Android proof is now on file for the current signed-session runtime.",
       ],
     });
   });

@@ -32,8 +32,8 @@ function createRepo(): RealtimeEventRepository {
 describe("RealtimeEventRepository", () => {
   it("stores and paginates realtime events", () => {
     const repo = createRepo();
-    const first = repo.append("task_created", "tasks", { taskId: "t1" }, "2026-02-27T10:00:00.000Z");
-    const second = repo.append("task_updated", "tasks", { taskId: "t1" }, "2026-02-27T11:00:00.000Z");
+    const first = repo.append("task_created", "tasks", { taskId: "t1" }, undefined, "2026-02-27T10:00:00.000Z");
+    const second = repo.append("task_updated", "tasks", { taskId: "t1" }, undefined, "2026-02-27T11:00:00.000Z");
 
     const latest = repo.list(10);
     assert.equal(latest.length, 2);
@@ -48,9 +48,9 @@ describe("RealtimeEventRepository", () => {
 
   it("does not drop events sharing the same timestamp across cursor pages", () => {
     const repo = createRepo();
-    repo.append("task_created", "tasks", { taskId: "a" }, "2026-02-27T12:00:00.000Z");
-    repo.append("task_updated", "tasks", { taskId: "b" }, "2026-02-27T12:00:00.000Z");
-    repo.append("task_updated", "tasks", { taskId: "c" }, "2026-02-27T11:59:00.000Z");
+    repo.append("task_created", "tasks", { taskId: "a" }, undefined, "2026-02-27T12:00:00.000Z");
+    repo.append("task_updated", "tasks", { taskId: "b" }, undefined, "2026-02-27T12:00:00.000Z");
+    repo.append("task_updated", "tasks", { taskId: "c" }, undefined, "2026-02-27T11:59:00.000Z");
 
     const firstPage = repo.list(1);
     const cursor = String(firstPage[0]!.sequence);
@@ -62,9 +62,9 @@ describe("RealtimeEventRepository", () => {
 
   it("replays events after a sequence cursor in ascending order", () => {
     const repo = createRepo();
-    const first = repo.append("task_created", "tasks", { taskId: "a" }, "2026-02-27T10:00:00.000Z");
-    const second = repo.append("task_updated", "tasks", { taskId: "b" }, "2026-02-27T11:00:00.000Z");
-    const third = repo.append("task_updated", "tasks", { taskId: "c" }, "2026-02-27T12:00:00.000Z");
+    const first = repo.append("task_created", "tasks", { taskId: "a" }, undefined, "2026-02-27T10:00:00.000Z");
+    const second = repo.append("task_updated", "tasks", { taskId: "b" }, undefined, "2026-02-27T11:00:00.000Z");
+    const third = repo.append("task_updated", "tasks", { taskId: "c" }, undefined, "2026-02-27T12:00:00.000Z");
 
     const replay = repo.listAfterSequence(first.sequence, 10);
     assert.deepEqual(
@@ -82,7 +82,7 @@ describe("RealtimeEventRepository", () => {
       actorId: "device:grant-1",
       deviceId: "grant-1",
       grantId: "grant-1",
-    }, () => repo.append("task_updated", "tasks", { taskId: "a" }, "2026-02-27T12:30:00.000Z"));
+    }, () => repo.append("task_updated", "tasks", { taskId: "a" }, undefined, "2026-02-27T12:30:00.000Z"));
 
     assert.equal(event.correlationId, "corr-123");
     assert.equal(event.traceId, "trace-456");
@@ -90,5 +90,75 @@ describe("RealtimeEventRepository", () => {
     assert.equal(event.payload.actorId, "device:grant-1");
     assert.equal(event.payload.deviceId, "grant-1");
     assert.equal(event.payload.grantId, "grant-1");
+  });
+
+  it("round-trips top-level event metadata without leaking the storage envelope", () => {
+    const repo = createRepo();
+    const event = repo.append(
+      "approval_created",
+      "gateway",
+      { summary: "Needs review" },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: {
+          approvalId: "approval-1",
+          sessionId: "session-1",
+          runId: "run-1",
+        },
+      },
+      "2026-02-27T13:00:00.000Z",
+    );
+
+    assert.equal(event.eventClass, "domain_fact");
+    assert.equal(event.eventAuthority, "retained_stream");
+    assert.deepEqual(event.links, {
+      approvalId: "approval-1",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    assert.equal(event.payload.summary, "Needs review");
+    assert.equal("__gcEventClass" in event.payload, false);
+    assert.equal("__gcEventAuthority" in event.payload, false);
+    assert.equal("__gcEventLinks" in event.payload, false);
+
+    const stored = repo.list(1)[0];
+    assert.equal(stored?.eventId, event.eventId);
+    assert.equal(stored?.eventClass, "domain_fact");
+    assert.equal(stored?.eventAuthority, "retained_stream");
+    assert.deepEqual(stored?.links, {
+      approvalId: "approval-1",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    assert.equal(stored?.payload.summary, "Needs review");
+    assert.equal(stored?.payload.__gcEventClass, undefined);
+    assert.equal(stored?.payload.__gcEventAuthority, undefined);
+    assert.equal(stored?.payload.__gcEventLinks, undefined);
+  });
+
+  it("infers retained stream metadata and links when publishers omit options", () => {
+    const repo = createRepo();
+    const event = repo.append(
+      "approval_created",
+      "approvals",
+      {
+        approvalId: "approval-9",
+        sessionId: "session-9",
+        taskId: "task-9",
+        durableRunId: "run-9",
+      },
+      undefined,
+      "2026-02-27T14:00:00.000Z",
+    );
+
+    assert.equal(event.eventClass, "domain_fact");
+    assert.equal(event.eventAuthority, "retained_stream");
+    assert.deepEqual(event.links, {
+      approvalId: "approval-9",
+      sessionId: "session-9",
+      runId: "run-9",
+      taskId: "task-9",
+    });
   });
 });

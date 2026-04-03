@@ -18,12 +18,30 @@ export type RealtimeEventType =
   | "orchestration_event"
   | "system";
 
+export type RealtimeEventClass = "domain_fact" | "operational_signal" | "ui_notification";
+export type RealtimeEventAuthority = "retained_stream" | "durable_history" | "derived_projection";
+
+export interface RealtimeEventLinks {
+  sessionId?: string;
+  turnId?: string;
+  runId?: string;
+  approvalId?: string;
+  taskId?: string;
+  workspaceId?: string;
+  connectorId?: string;
+  tokenId?: string;
+  messageId?: string;
+}
+
 export interface RealtimeEvent {
   eventId: string;
   sequence: number;
   eventType: RealtimeEventType | string;
   source: string;
   timestamp: string;
+  eventClass?: RealtimeEventClass;
+  eventAuthority?: RealtimeEventAuthority;
+  links?: RealtimeEventLinks;
   correlationId?: string;
   traceId?: string;
   originSurface?: string;

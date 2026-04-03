@@ -398,7 +398,7 @@ describe("mission-control hardening", () => {
     });
     await flush();
 
-    let refresh = testState.refreshRegistrations.get("promptLab");
+    let refresh = testState.refreshRegistrations.get("quality");
     expect(refresh?.options.enabled).toBe(true);
     expect(refresh?.options.pollIntervalMs).toBe(15000);
 
@@ -410,10 +410,10 @@ describe("mission-control hardening", () => {
     expect(findButton(renderer!.root, "Pack B").props.className).toContain("active");
     expect(findButton(renderer!.root, "Pack A").props.className ?? "").not.toContain("active");
 
-    refresh = testState.refreshRegistrations.get("promptLab");
+    refresh = testState.refreshRegistrations.get("quality");
     await act(async () => {
       await refresh?.callback({
-        topic: "promptLab",
+        topic: "quality",
         timestamp: Date.now(),
         reason: "test-refresh",
         source: "test",

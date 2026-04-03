@@ -7,7 +7,7 @@ describe("buildCompanionContract", () => {
       {
         catalogId: "platform.android-canvas-camera-screen",
         label: "Android Canvas/Camera/Screen",
-        maturity: "planned",
+        maturity: "beta",
         capabilities: ["canvas", "camera", "screen"],
       },
       {
@@ -16,7 +16,7 @@ describe("buildCompanionContract", () => {
         maturity: "planned",
         capabilities: ["canvas", "camera", "voice"],
       },
-    ]);
+    ], { androidRuntimeProven: true });
 
     expect(contract).toEqual({
       contractId: "companion.android.v1",
@@ -57,7 +57,7 @@ describe("buildCompanionContract", () => {
       notes: [
         "Android is the first companion bootstrap target and should ship from the separate GoatCitadel-mobile repo, not this monorepo.",
         "Foreground SSE with resume is the primary realtime lane; push refresh and manual refresh cover background/mobile constraints.",
-        "Live gateway proof now covers companion session exchange, refresh rotation, signed mutation verification, replay protection, and SSE resume; the remaining gap is Android runtime/UI proof in the separate mobile repo.",
+        "Live gateway proof now covers companion session exchange, refresh rotation, signed mutation verification, replay protection, and SSE resume, and Android runtime/UI proof is now on file for the separate mobile repo.",
       ],
     });
   });

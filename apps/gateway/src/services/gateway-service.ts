@@ -241,6 +241,7 @@ import type {
   OrchestrationRun,
   PendingApprovalAction,
   RealtimeEvent,
+  RuntimeLifecycleResponse,
   RetentionPolicy,
   RetentionPruneResult,
   PromptPackRecord,
@@ -517,6 +518,7 @@ export interface ApprovalReplayResult {
   approval: ApprovalRequest;
   events: ApprovalReplayEvent[];
   pendingAction?: PendingApprovalAction;
+  durableRunId?: string;
 }
 
 interface AuthDeviceRequestRecord {
@@ -1664,6 +1666,22 @@ export class GatewayService {
     if (this.closing) {
       return;
     }
+    const closedLeaseCount = this.storage.realtimeStreamLeases.closeOpenForNode({
+      gatewayNodeId: this.config.assistant.mesh.nodeId,
+      closeReason: "process_restart",
+    });
+    if (closedLeaseCount > 0) {
+      console.warn("[goatcitadel] closed stale realtime stream leases after restart", {
+        gatewayNodeId: this.config.assistant.mesh.nodeId,
+        closedLeaseCount,
+      });
+    }
+    const flushedTranscriptCount = await this.eventIngestService.flushPendingTranscriptOutbox();
+    if (flushedTranscriptCount > 0) {
+      console.info("[goatcitadel] flushed pending transcript outbox entries", {
+        flushedTranscriptCount,
+      });
+    }
     await this.discordRuntimeService.sync();
     this.improvementService.markInterruptedDecisionReplayRuns();
     await this.loadCronJobsFromConfig();
@@ -1713,6 +1731,39 @@ export class GatewayService {
     return this.storage.realtimeEvents.getSequenceBounds();
   }
 
+  public openRealtimeStreamLease(input: {
+    streamName: string;
+    clientId: string;
+    requestedCursor?: number;
+    connectedAt?: string;
+  }) {
+    return this.storage.realtimeStreamLeases.open({
+      streamName: input.streamName,
+      clientId: input.clientId,
+      gatewayNodeId: this.config.assistant.mesh.nodeId,
+      requestedCursor: input.requestedCursor,
+      openedAt: input.connectedAt,
+    });
+  }
+
+  public touchRealtimeStreamLease(input: {
+    leaseId: string;
+    at?: string;
+    requestedCursor?: number;
+    lastSentSequence?: number;
+    lastEventAt?: string;
+  }) {
+    return this.storage.realtimeStreamLeases.touch(input);
+  }
+
+  public closeRealtimeStreamLease(input: {
+    leaseId: string;
+    closedAt?: string;
+    closeReason?: string;
+  }) {
+    return this.storage.realtimeStreamLeases.close(input);
+  }
+
   public async ingestEvent(
     idempotencyKey: string,
     payload: GatewayEventInput,
@@ -1732,6 +1783,13 @@ export class GatewayService {
       messageRole: payload.message.role,
       taskId: payload.taskId,
       deduped: result.deduped,
+    }, {
+      eventClass: "domain_fact",
+      eventAuthority: "retained_stream",
+      links: {
+        sessionId: result.session.sessionId,
+        taskId: payload.taskId,
+      },
     });
 
     if (!result.deduped) {
@@ -1914,6 +1972,184 @@ export class GatewayService {
       tokenOutput: event.tokenOutput,
       costUsd: event.costUsd,
     }));
+  }
+
+  public async getRuntimeLifecycle(input: {
+    sessionId?: string;
+    turnId?: string;
+    runId?: string;
+    approvalId?: string;
+    taskId?: string;
+  }): Promise<RuntimeLifecycleResponse> {
+    const linked = {
+      sessionIds: new Set<string>(),
+      turnIds: new Set<string>(),
+      runIds: new Set<string>(),
+      approvalIds: new Set<string>(),
+      taskIds: new Set<string>(),
+      workspaceIds: new Set<string>(),
+    };
+
+    let sessionId = normalizeLifecycleId(input.sessionId);
+    const turnId = normalizeLifecycleId(input.turnId);
+    let runId = normalizeLifecycleId(input.runId);
+    let approvalId = normalizeLifecycleId(input.approvalId);
+    let taskId = normalizeLifecycleId(input.taskId);
+
+    let approval: ApprovalRequest | undefined;
+    if (approvalId) {
+      approval = this.storage.approvals.get(approvalId);
+      collectLifecycleLinksFromUnknown(linked, approval.linkage);
+      collectLifecycleLinksFromUnknown(linked, approval.payload);
+      collectLifecycleLinksFromUnknown(linked, approval.preview);
+      sessionId ??= approval.linkage?.sessionId;
+      taskId ??= approval.linkage?.taskId;
+      runId ??= approval.linkage?.durableRunId ?? this.findApprovalWaitDurableRunId(approvalId);
+    }
+
+    let durableRun: DurableRunRecord | undefined;
+    if (runId) {
+      durableRun = this.storage.durableRuns.getRun(runId);
+      collectLifecycleLinksFromUnknown(linked, durableRun.payload);
+      collectLifecycleLinksFromUnknown(linked, durableRun.metadata);
+      sessionId ??= findLifecycleString(durableRun.payload, ["sessionId"]);
+      taskId ??= findLifecycleString(durableRun.payload, ["taskId"]);
+    }
+
+    let task: TaskRecord | undefined;
+    if (taskId) {
+      task = this.storage.tasks.find(taskId);
+      if (task) {
+        linked.taskIds.add(task.taskId);
+        if (task.workspaceId) {
+          linked.workspaceIds.add(task.workspaceId);
+        }
+      }
+    }
+
+    const turns = turnId
+      ? [this.storage.chatTurnTraces.get(turnId)]
+      : sessionId
+        ? this.listHydratedChatTurnTraces(sessionId, 200)
+        : [];
+    for (const turn of turns) {
+      linked.sessionIds.add(turn.sessionId);
+      linked.turnIds.add(turn.turnId);
+      if (turn.durable?.runId) {
+        linked.runIds.add(turn.durable.runId);
+      }
+      for (const toolRun of turn.toolRuns ?? []) {
+        if (toolRun.approvalId) {
+          linked.approvalIds.add(toolRun.approvalId);
+        }
+      }
+    }
+    if (!sessionId && turns[0]?.sessionId) {
+      sessionId = turns[0].sessionId;
+    }
+
+    if (!runId && linked.runIds.size > 0) {
+      const linkedRunId = Array.from(linked.runIds)[0];
+      if (linkedRunId) {
+        runId = linkedRunId;
+        durableRun ??= this.storage.durableRuns.getRun(linkedRunId);
+        collectLifecycleLinksFromUnknown(linked, durableRun.payload);
+        collectLifecycleLinksFromUnknown(linked, durableRun.metadata);
+      }
+    }
+    if (!approvalId && linked.approvalIds.size > 0) {
+      const linkedApprovalId = Array.from(linked.approvalIds)[0];
+      if (linkedApprovalId) {
+        approvalId = linkedApprovalId;
+        approval ??= this.storage.approvals.get(linkedApprovalId);
+        collectLifecycleLinksFromUnknown(linked, approval.linkage);
+      }
+    }
+    if (!taskId && linked.taskIds.size > 0) {
+      const linkedTaskId = Array.from(linked.taskIds)[0];
+      if (linkedTaskId) {
+        taskId = linkedTaskId;
+        task ??= this.storage.tasks.find(linkedTaskId);
+      }
+    }
+    if (approval?.approvalId) {
+      linked.approvalIds.add(approval.approvalId);
+    }
+    if (durableRun?.runId) {
+      linked.runIds.add(durableRun.runId);
+    }
+
+    let session: SessionMeta | undefined;
+    let sessionSummary: SessionSummary | undefined;
+    if (sessionId) {
+      session = this.getSession(sessionId);
+      sessionSummary = await this.getSessionSummary(sessionId);
+      linked.sessionIds.add(session.sessionId);
+    }
+
+    const toolRuns = turns.flatMap((turn) => turn.toolRuns ?? []);
+    for (const toolRun of toolRuns) {
+      linked.turnIds.add(toolRun.turnId);
+      linked.sessionIds.add(toolRun.sessionId);
+      if (toolRun.approvalId) {
+        linked.approvalIds.add(toolRun.approvalId);
+      }
+    }
+
+    if (approval?.linkage?.workspaceId) {
+      linked.workspaceIds.add(approval.linkage.workspaceId);
+    }
+    if (approval?.linkage?.taskId) {
+      linked.taskIds.add(approval.linkage.taskId);
+    }
+    if (approval?.linkage?.durableRunId) {
+      linked.runIds.add(approval.linkage.durableRunId);
+    }
+
+    return {
+      query: {
+        sessionId,
+        turnId,
+        runId,
+        approvalId,
+        taskId,
+      },
+      linked: {
+        sessionIds: Array.from(linked.sessionIds),
+        turnIds: Array.from(linked.turnIds),
+        runIds: Array.from(linked.runIds),
+        approvalIds: Array.from(linked.approvalIds),
+        taskIds: Array.from(linked.taskIds),
+        workspaceIds: Array.from(linked.workspaceIds),
+      },
+      session,
+      sessionSummary,
+      task,
+      approval,
+      durableRun,
+      turns: turns.map((turn) => ({
+        turnId: turn.turnId,
+        sessionId: turn.sessionId,
+        userMessageId: turn.userMessageId,
+        parentTurnId: turn.parentTurnId,
+        assistantMessageId: turn.assistantMessageId,
+        status: turn.status,
+        mode: turn.mode,
+        startedAt: turn.startedAt,
+        finishedAt: turn.finishedAt,
+        durableRunId: turn.durable?.runId,
+      })),
+      toolRuns: toolRuns.map((toolRun) => ({
+        toolRunId: toolRun.toolRunId,
+        turnId: toolRun.turnId,
+        sessionId: toolRun.sessionId,
+        toolName: toolRun.toolName,
+        status: toolRun.status,
+        approvalId: toolRun.approvalId,
+        startedAt: toolRun.startedAt,
+        finishedAt: toolRun.finishedAt,
+      })),
+    };
   }
 
   public listChatProjects(
@@ -8782,6 +9018,16 @@ export class GatewayService {
       throw error;
     }
 
+    let approvalForResult: ApprovalRequest | undefined;
+    if (result.outcome === "approval_required" && result.approvalId) {
+      approvalForResult = this.primeApprovalLifecycle(result.approvalId, this.buildApprovalLinkage({
+        sessionId: hookableRequest.sessionId,
+        taskId: hookableRequest.taskId,
+        toolName: hookableRequest.toolName,
+        actionType: "tool.invoke",
+      }));
+    }
+
     this.publishRealtime("tool_invoked", "policy", {
       toolName: hookableRequest.toolName,
       sessionId: hookableRequest.sessionId,
@@ -8791,6 +9037,15 @@ export class GatewayService {
       policyReason: result.policyReason,
       approvalId: result.approvalId,
       auditEventId: result.auditEventId,
+    }, {
+      eventClass: "operational_signal",
+      eventAuthority: "retained_stream",
+      links: {
+        sessionId: hookableRequest.sessionId,
+        taskId: hookableRequest.taskId,
+        approvalId: result.approvalId,
+        runId: approvalForResult?.linkage?.durableRunId,
+      },
     });
 
     if (result.outcome === "approval_required" && result.approvalId) {
@@ -8936,7 +9191,8 @@ export class GatewayService {
       }
       : input;
 
-    const approval = this.storage.approvals.create(hookableInput);
+    let approval = this.storage.approvals.create(hookableInput);
+    approval = this.primeApprovalLifecycle(approval.approvalId, this.buildApprovalLinkage(hookableInput.linkage));
 
     this.storage.approvalEvents.append({
       approvalId: approval.approvalId,
@@ -8962,9 +9218,12 @@ export class GatewayService {
       kind: approval.kind,
       riskLevel: approval.riskLevel,
       status: approval.status,
+    }, {
+      eventClass: "domain_fact",
+      eventAuthority: "retained_stream",
+      links: this.buildApprovalRealtimeLinks(approval),
     });
 
-    this.ensureApprovalWaitDurableRun(approval);
     this.scheduleApprovalExplanation(approval);
 
     return approval;
@@ -9008,6 +9267,14 @@ export class GatewayService {
       connectorId: input.connectorId,
       expiresAt: created.expiresAt,
       tokenId: created.tokenId,
+    }, {
+      eventClass: "operational_signal",
+      eventAuthority: "retained_stream",
+      links: {
+        approvalId,
+        connectorId: input.connectorId,
+        tokenId: created.tokenId,
+      },
     });
     this.enqueueApprovalRemoteTokenDelivery(approval, connector, {
       token,
@@ -9148,7 +9415,18 @@ export class GatewayService {
       approval,
       events: this.storage.approvalEvents.listByApprovalId(approvalId),
       pendingAction: this.storage.pendingApprovalActions.find(approvalId),
+      durableRunId: this.findApprovalWaitDurableRunId(approvalId),
     };
+  }
+
+  private findApprovalWaitDurableRunId(approvalId: string): string | undefined {
+    const row = this.gatewaySql.prepare(`
+      SELECT run_id
+      FROM approval_wait_runs
+      WHERE approval_id = @approvalId
+      LIMIT 1
+    `).get({ approvalId }) as { run_id: string } | undefined;
+    return row?.run_id;
   }
 
   public async resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<ApprovalResolveResult> {
@@ -9203,6 +9481,7 @@ export class GatewayService {
     });
 
     if (wakeRunId) {
+      approval = this.storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: wakeRunId });
       this.durableRunService.requestRunProcessing(wakeRunId);
     }
 
@@ -9426,6 +9705,49 @@ export class GatewayService {
       traceId: typeof attribution?.traceId === "string" ? attribution.traceId : undefined,
       originSurface: typeof attribution?.originSurface === "string" ? attribution.originSurface : undefined,
     };
+  }
+
+  private buildApprovalLinkage(
+    linkage?: ApprovalRequest["linkage"],
+  ): ApprovalRequest["linkage"] | undefined {
+    const requestAttribution = this.getCurrentRequestAttribution();
+    const normalized = Object.fromEntries(
+      Object.entries({
+        ...linkage,
+        correlationId: linkage?.correlationId ?? requestAttribution.correlationId,
+        traceId: linkage?.traceId ?? requestAttribution.traceId,
+      }).filter(([, value]) => typeof value === "string" && value.trim().length > 0),
+    );
+    return Object.keys(normalized).length > 0 ? normalized : undefined;
+  }
+
+  private buildApprovalRealtimeLinks(
+    approval: ApprovalRequest,
+  ): NonNullable<RealtimeEvent["links"]> {
+    return {
+      approvalId: approval.approvalId,
+      sessionId: approval.linkage?.sessionId,
+      taskId: approval.linkage?.taskId,
+      runId: approval.linkage?.durableRunId,
+      workspaceId: approval.linkage?.workspaceId,
+      connectorId: approval.linkage?.connectorId,
+      tokenId: approval.linkage?.tokenId,
+    };
+  }
+
+  private primeApprovalLifecycle(
+    approvalId: string,
+    linkage?: ApprovalRequest["linkage"],
+  ): ApprovalRequest {
+    let approval = this.storage.approvals.get(approvalId);
+    if (linkage) {
+      approval = this.storage.approvals.mergeLinkage(approvalId, linkage);
+    }
+    const waitRun = this.ensureApprovalWaitDurableRun(approval);
+    if (waitRun?.runId && approval.linkage?.durableRunId !== waitRun.runId) {
+      approval = this.storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: waitRun.runId });
+    }
+    return approval;
   }
 
   private requireConnectorRecord(connectorId: string): ConnectorRecord {
@@ -17224,11 +17546,20 @@ export class GatewayService {
       decision: input.decision,
       resolvedBy: input.resolvedBy,
       executedOutcome: executedAction?.outcome,
+    }, {
+      eventClass: "domain_fact",
+      eventAuthority: "retained_stream",
+      links: this.buildApprovalRealtimeLinks(approval),
     });
   }
 
-  private publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): RealtimeEvent {
-    const event = this.storage.realtimeEvents.append(eventType, source, payload);
+  private publishRealtime(
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
+  ): RealtimeEvent {
+    const event = this.storage.realtimeEvents.append(eventType, source, payload, options);
     this.realtime.emit("event", event);
     return event;
   }
@@ -17254,6 +17585,10 @@ export class GatewayService {
           type: "approval_explainer_error",
           approvalId: approval.approvalId,
           error: (error as Error).message,
+        }, {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: this.buildApprovalRealtimeLinks(approval),
         });
       })
       .finally(() => {
@@ -22218,6 +22553,63 @@ function inferToolArtifactExtension(contentType?: string): string {
     return ".md";
   }
   return ".txt";
+}
+
+function normalizeLifecycleId(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function collectLifecycleLinksFromUnknown(
+  linked: {
+    sessionIds: Set<string>;
+    turnIds: Set<string>;
+    runIds: Set<string>;
+    approvalIds: Set<string>;
+    taskIds: Set<string>;
+    workspaceIds: Set<string>;
+  },
+  payload: unknown,
+): void {
+  const sessionId = findLifecycleString(payload, ["sessionId"]);
+  const turnId = findLifecycleString(payload, ["turnId"]);
+  const runId = findLifecycleString(payload, ["runId", "durableRunId", "durable_run_id"]);
+  const approvalId = findLifecycleString(payload, ["approvalId"]);
+  const taskId = findLifecycleString(payload, ["taskId"]);
+  const workspaceId = findLifecycleString(payload, ["workspaceId"]);
+
+  if (sessionId) linked.sessionIds.add(sessionId);
+  if (turnId) linked.turnIds.add(turnId);
+  if (runId) linked.runIds.add(runId);
+  if (approvalId) linked.approvalIds.add(approvalId);
+  if (taskId) linked.taskIds.add(taskId);
+  if (workspaceId) linked.workspaceIds.add(workspaceId);
+}
+
+function findLifecycleString(payload: unknown, keys: string[]): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const stack: unknown[] = [payload];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    const record = current as Record<string, unknown>;
+    for (const key of keys) {
+      const candidate = record[key];
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
+    for (const value of Object.values(record)) {
+      if (value && typeof value === "object") {
+        stack.push(value);
+      }
+    }
+  }
+  return undefined;
 }
 
 function wait(ms: number): Promise<void> {

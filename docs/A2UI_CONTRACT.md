@@ -63,11 +63,9 @@ The first operator surface is `mission_control`.
 
 `a2ui.v1` does not claim:
 
-- a shipped companion runtime
-- a shipped A2UI runtime behind the proof lane
 - production-grade mobile/session transport
 - full parity between Mission Control canvas work and device surfaces
 
 ## Next Safe Slice
 
-Use the exported Mission-Control-first A2UI proof artifact in `artifacts/follow-on-parity/a2ui/` to file the first Office Lab handoff and directed-move run, then bind `companion_session` work to `companion.android.v1` when the separate Android runtime starts shipping real signed sessions.
+Keep the exported Mission-Control-first A2UI proof artifact in `artifacts/follow-on-parity/a2ui/` current alongside the April 2, 2026 Android Canvas proof bundle, and only reopen the lane when the contract, deployment profile, or operator flow changes.

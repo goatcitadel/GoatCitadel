@@ -195,6 +195,12 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       voiceStatus,
       voiceRuntime,
       latestArtifacts: loadLatestFollowOnParityArtifacts(),
+      packagingProofCoverage: typeof fastify.gateway.getPackagingProofCoverage === "function"
+        ? fastify.gateway.getPackagingProofCoverage()
+        : undefined,
+      voiceProofCoverage: typeof fastify.gateway.getVoiceProofCoverage === "function"
+        ? fastify.gateway.getVoiceProofCoverage()
+        : undefined,
     });
   };
 

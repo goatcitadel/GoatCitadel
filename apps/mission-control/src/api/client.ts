@@ -15,7 +15,7 @@ import type {
   DiscordPairingRecord,
   DiscordRuntimeStatus,
   ApprovalBulkResolveResult,
-  ApprovalReplayEvent,
+  ApprovalReplaySnapshot,
   ApprovalRequest,
   A2UIProofLaneDraft,
   ExtensionStarterPackArtifactRecord,
@@ -91,7 +91,6 @@ import type {
   OnboardingBootstrapInput,
   OnboardingBootstrapResult,
   OnboardingState,
-  PendingApprovalAction,
   IntegrationFormSchema,
   IntegrationPluginRecord,
   McpInvokeResponse,
@@ -102,6 +101,7 @@ import type {
   McpToolRecord,
   MediaCreateJobRequest,
   MediaJobRecord,
+  RuntimeLifecycleResponse,
   SessionMeta,
   SessionSummary,
   SessionTimelineItem,
@@ -202,7 +202,7 @@ import {
 } from "../state/dev-diagnostics-store";
 
 export type { GuidanceDocumentRecord };
-export type { SessionSummary, SessionTimelineItem };
+export type { RuntimeLifecycleResponse, SessionSummary, SessionTimelineItem };
 export type { ObsidianIntegrationConfig, ObsidianIntegrationStatus };
 export type { ExtensionSdkBriefDraft };
 export type { ExtensionStarterPackArtifactRecord, ExtensionStarterPackDraft };
@@ -216,6 +216,7 @@ const MAX_SSE_EVENT_PREVIEW_CHARS = 180;
 const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
 const EVENT_CURSOR_STORAGE_KEY = "goatcitadel.events.cursor.v1";
+const EVENT_CLIENT_ID_STORAGE_KEY = "goatcitadel.events.client.v1";
 
 export interface GatewayAuthState {
   mode?: "none" | "token" | "basic";
@@ -935,11 +936,7 @@ export interface ApprovalsResponse {
   items: ApprovalRequest[];
 }
 
-export interface ApprovalReplayResponse {
-  approval: ApprovalRequest;
-  events: ApprovalReplayEvent[];
-  pendingAction?: PendingApprovalAction;
-}
+export type ApprovalReplayResponse = ApprovalReplaySnapshot;
 
 export interface ApprovalResolveResponse {
   approval: ApprovalRequest;
@@ -1020,6 +1017,19 @@ export interface RealtimeEvent {
   eventType: string;
   source: string;
   timestamp: string;
+  eventClass?: "domain_fact" | "operational_signal" | "ui_notification";
+  eventAuthority?: "retained_stream" | "durable_history" | "derived_projection";
+  links?: {
+    sessionId?: string;
+    turnId?: string;
+    runId?: string;
+    approvalId?: string;
+    taskId?: string;
+    workspaceId?: string;
+    connectorId?: string;
+    tokenId?: string;
+    messageId?: string;
+  };
   correlationId?: string;
   traceId?: string;
   originSurface?: string;
@@ -1295,6 +1305,22 @@ export async function fetchSessionTimeline(sessionId: string, limit = 200): Prom
   return request<{ items: SessionTimelineItem[] }>(
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/timeline?limit=${Math.max(1, Math.min(limit, 1000))}`,
   );
+}
+
+export async function fetchRuntimeLifecycle(input: {
+  sessionId?: string;
+  turnId?: string;
+  runId?: string;
+  approvalId?: string;
+  taskId?: string;
+}): Promise<RuntimeLifecycleResponse> {
+  const query = new URLSearchParams();
+  if (input.sessionId) query.set("sessionId", input.sessionId);
+  if (input.turnId) query.set("turnId", input.turnId);
+  if (input.runId) query.set("runId", input.runId);
+  if (input.approvalId) query.set("approvalId", input.approvalId);
+  if (input.taskId) query.set("taskId", input.taskId);
+  return request<RuntimeLifecycleResponse>(`/api/v1/runtime/lifecycle?${query.toString()}`);
 }
 
 export interface ChatProjectsResponse {
@@ -4566,6 +4592,9 @@ export interface EventStreamStatus {
   reconnectAttempts: number;
   lastEventAt?: string;
   lastErrorAt?: string;
+  leaseId?: string;
+  clientId?: string;
+  gatewayNodeId?: string;
 }
 
 interface EventStreamSubscriber {
@@ -4583,6 +4612,9 @@ let eventConnectInFlight = false;
 let reconnectAttempts = 0;
 let lastEventAt: string | undefined;
 let lastErrorAt: string | undefined;
+let activeEventStreamLeaseId: string | undefined;
+let activeEventStreamClientId: string | undefined;
+let activeEventStreamGatewayNodeId: string | undefined;
 
 export function connectEventStream(
   onEvent: (event: RealtimeEvent) => void,
@@ -4605,12 +4637,18 @@ export function connectEventStream(
       reconnectAttempts = 0;
       lastEventAt = undefined;
       lastErrorAt = undefined;
+      activeEventStreamLeaseId = undefined;
+      activeEventStreamClientId = undefined;
+      activeEventStreamGatewayNodeId = undefined;
     }
   };
 }
 
 async function buildEventStreamUrl(): Promise<string> {
   const url = new URL(`${API_BASE}/api/v1/events/stream`);
+  const clientId = getOrCreateRealtimeClientId();
+  activeEventStreamClientId = clientId;
+  url.searchParams.set("clientId", clientId);
   const lastCursor = readStoredRealtimeCursor();
   if (lastCursor !== undefined) {
     url.searchParams.set("afterCursor", String(lastCursor));
@@ -4731,12 +4769,36 @@ async function ensureEventStreamConnected(): Promise<void> {
     if (sharedEventSource !== source) {
       return;
     }
+    activeEventStreamLeaseId = undefined;
     clearStoredRealtimeCursor();
     lastErrorAt = new Date().toISOString();
     const replayGapEvent = buildReplayGapRealtimeEvent(evt.data);
     notifyEventStreamStatusToAll();
     for (const subscriber of eventStreamSubscribers) {
       subscriber.onEvent(replayGapEvent);
+    }
+  });
+
+  source.addEventListener("stream-ready", (evt) => {
+    if (sharedEventSource !== source) {
+      return;
+    }
+    try {
+      const payload = JSON.parse(evt.data) as {
+        leaseId?: string;
+        clientId?: string;
+        gatewayNodeId?: string;
+      };
+      activeEventStreamLeaseId = typeof payload.leaseId === "string" ? payload.leaseId : undefined;
+      activeEventStreamClientId = typeof payload.clientId === "string"
+        ? payload.clientId
+        : activeEventStreamClientId;
+      activeEventStreamGatewayNodeId = typeof payload.gatewayNodeId === "string"
+        ? payload.gatewayNodeId
+        : undefined;
+      notifyEventStreamStatusToAll();
+    } catch {
+      // ignore malformed readiness payloads
     }
   });
 
@@ -4906,6 +4968,9 @@ function buildEventStreamStatus(): EventStreamStatus {
     reconnectAttempts,
     lastEventAt,
     lastErrorAt,
+    leaseId: activeEventStreamLeaseId,
+    clientId: activeEventStreamClientId,
+    gatewayNodeId: activeEventStreamGatewayNodeId,
   };
 }
 
@@ -4935,6 +5000,19 @@ function clearStoredRealtimeCursor(): void {
   window.localStorage.removeItem(EVENT_CURSOR_STORAGE_KEY);
 }
 
+function getOrCreateRealtimeClientId(): string {
+  if (typeof window === "undefined") {
+    return crypto.randomUUID();
+  }
+  const existing = window.localStorage.getItem(EVENT_CLIENT_ID_STORAGE_KEY)?.trim();
+  if (existing) {
+    return existing;
+  }
+  const next = crypto.randomUUID();
+  window.localStorage.setItem(EVENT_CLIENT_ID_STORAGE_KEY, next);
+  return next;
+}
+
 function buildReplayGapRealtimeEvent(rawPayload: string): RealtimeEvent {
   let payload: Record<string, unknown> = {};
   try {
@@ -4948,6 +5026,8 @@ function buildReplayGapRealtimeEvent(rawPayload: string): RealtimeEvent {
     eventType: "system",
     source: "events",
     timestamp: new Date().toISOString(),
+    eventClass: "ui_notification",
+    eventAuthority: "retained_stream",
     correlationId: undefined,
     traceId: undefined,
     originSurface: "mission-control-web",

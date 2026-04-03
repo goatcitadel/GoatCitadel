@@ -38,7 +38,7 @@ That means:
 - the current mobile runtime now includes companion-session bootstrap/storage, signed mutation request headers, and a foreground SSE-with-resume event lane wired against this contract
 - the repo includes an Android bootstrap template path to keep the contract baseline explicit
 - a March 31, 2026 local live-gateway proof now exists for approved-device bearer exchange into a signed companion session, signed mutations, SSE replay/resume, and refresh rotation against a non-loopback local address
-- no Android runtime/UI proof bundle exists yet for the current mobile runtime
+- an April 2, 2026 Android runtime/UI proof bundle now exists for the current mobile runtime under `F:\code\personal-ai-mobile-app\artifacts\android\2026-04-02\`
 
 ## Realtime and Session Lanes
 
@@ -118,11 +118,9 @@ Those pair with `a2ui.v1` instead of replacing it. The companion contract define
 `companion.android.v1` does not claim:
 
 - the existing GoatCitadel-mobile app already implements this contract end to end
-- a production mobile transport implementation exercised end to end from the Android runtime/UI
-- signed request execution already proven from the Android runtime/UI
 - iOS runtime parity
 - full Mission Control feature parity on day one
 
 ## Next Safe Slice
 
-Use `companion.android.v1` as the contract baseline for the separate `GoatCitadel-mobile` repo, reconcile it against `templates/companion/goatcitadel-android/`, then turn the existing live gateway/session proof into the first Android runtime/UI proof bundle before expanding surface breadth.
+Keep `companion.android.v1` as the contract baseline for the separate `GoatCitadel-mobile` repo, keep the April 2, 2026 Android runtime/UI proof bundle current when signed-session semantics change, and only broaden surface breadth when the runtime truth actually expands.

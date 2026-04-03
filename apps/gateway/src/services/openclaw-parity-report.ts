@@ -65,6 +65,7 @@ function buildUnsafeClaims(
   followOnParity: FollowOnParityReport,
 ): string[] {
   const claims = [...BASE_UNSAFE_CLAIMS];
+  const localFirstVoiceCloseout = hasLocalFirstVoiceCloseout(followOnParity);
   const fullVoiceCoverage = hasFullVoiceProofCoverage(followOnParity);
   const voiceProofCurrent = (
     followOnParity.voice.artifactStatus.hasArtifact
@@ -78,7 +79,7 @@ function buildUnsafeClaims(
     claims.push(
       "Voice proof now covers the managed local-first runtime across local_dev, trusted_local, and remote_hardened; do not over-claim hosted or cloud voice parity beyond that lane.",
     );
-  } else if (voiceProofCurrent) {
+  } else if (localFirstVoiceCloseout || voiceProofCurrent) {
     claims.push(
       "Broader voice parity beyond the current local-first runtime lane still requires deliberate widening; do not over-claim cloud-grade or cross-profile parity from the current proof bundle.",
     );
@@ -241,10 +242,10 @@ function resolveProgramEpicStatus(
       }
       return definition.status;
     case "GC-P2-12":
-      if (hasFullVoiceProofCoverage(followOnParity)) {
+      if (hasLocalFirstVoiceCloseout(followOnParity)) {
         return "complete";
       }
-      return definition.status;
+      return "in_progress";
     default:
       return definition.status;
   }
@@ -308,13 +309,7 @@ function buildFollowOnEpicBlockers(
         ),
       ];
     case "GC-P2-12":
-      if (
-        followOnParity.voice.artifactStatus.hasArtifact
-        && followOnParity.voice.artifactStatus.freshness === "current"
-        && followOnParity.voice.artifactStatus.matchedCurrentProfile
-        && followOnParity.voice.blockingIssues.length === 0
-        && followOnParity.voice.recoveryActions.length === 0
-      ) {
+      if (hasLocalFirstVoiceCloseout(followOnParity)) {
         const remainingProfiles = [
           ...followOnParity.voice.proofCoverage.staleProfiles,
           ...followOnParity.voice.proofCoverage.missingProfiles,
@@ -347,14 +342,18 @@ function buildFollowOnEpicBlockers(
 
 function hasFullVoiceProofCoverage(followOnParity: FollowOnParityReport): boolean {
   return (
-    followOnParity.voice.artifactStatus.hasArtifact
-    && followOnParity.voice.artifactStatus.freshness === "current"
-    && followOnParity.voice.artifactStatus.matchedCurrentProfile
-    && followOnParity.voice.blockingIssues.length === 0
-    && followOnParity.voice.recoveryActions.length === 0
+    hasLocalFirstVoiceCloseout(followOnParity)
     && followOnParity.voice.proofCoverage.currentProfiles.includes("local_dev")
     && followOnParity.voice.proofCoverage.currentProfiles.includes("trusted_local")
     && followOnParity.voice.proofCoverage.currentProfiles.includes("remote_hardened")
+  );
+}
+
+function hasLocalFirstVoiceCloseout(followOnParity: FollowOnParityReport): boolean {
+  return (
+    followOnParity.voice.blockingIssues.length === 0
+    && followOnParity.voice.recoveryActions.length === 0
+    && followOnParity.voice.proofCoverage.currentProfiles.includes("local_dev")
   );
 }
 

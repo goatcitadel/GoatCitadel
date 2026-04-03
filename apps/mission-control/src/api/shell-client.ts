@@ -1090,6 +1090,8 @@ function buildReplayGapRealtimeEvent(rawPayload: string): RealtimeEvent {
     eventType: "system",
     source: "events",
     timestamp: new Date().toISOString(),
+    eventClass: "ui_notification",
+    eventAuthority: "retained_stream",
     originSurface: "mission-control-web",
     payload: {
       kind: "replay_gap",

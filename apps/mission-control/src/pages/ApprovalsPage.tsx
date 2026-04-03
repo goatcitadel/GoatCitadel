@@ -5,12 +5,14 @@ import {
   fetchDevDiagnostics,
   fetchDurableRun,
   fetchDurableRunTimeline,
+  fetchRuntimeLifecycle,
   resolveApproval,
   resolveApprovalsBulk,
   resumeDurableRun,
   type ApprovalReplayResponse,
   type ApprovalResolveResponse,
   type ApprovalsResponse,
+  type RuntimeLifecycleResponse,
 } from "../api/client";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
@@ -32,37 +34,11 @@ interface ApprovalDurableStatus {
   updatedAt: string;
 }
 
-function findDurableRunId(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-  const stack: unknown[] = [payload];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current || typeof current !== "object") {
-      continue;
-    }
-    const record = current as Record<string, unknown>;
-    for (const [key, value] of Object.entries(record)) {
-      if (
-        typeof value === "string"
-        && value.trim().length >= 8
-        && /(runid|run_id|durablerunid|durable_run_id)$/i.test(key)
-      ) {
-        return value.trim();
-      }
-      if (value && typeof value === "object") {
-        stack.push(value);
-      }
-    }
-  }
-  return undefined;
-}
-
 export function ApprovalsPage() {
   const embedded = useEmbeddedPageChrome();
   const [data, setData] = useState<ApprovalsResponse | null>(null);
   const [replayById, setReplayById] = useState<Record<string, ApprovalReplayResponse>>({});
+  const [lifecycleByApprovalId, setLifecycleByApprovalId] = useState<Record<string, RuntimeLifecycleResponse>>({});
   const [durableByApprovalId, setDurableByApprovalId] = useState<Record<string, ApprovalDurableStatus | null>>({});
   const [durableBusyByApprovalId, setDurableBusyByApprovalId] = useState<Record<string, boolean>>({});
   const [tracePreviewByApprovalId, setTracePreviewByApprovalId] = useState<Record<string, string[]>>({});
@@ -175,40 +151,44 @@ export function ApprovalsPage() {
         },
       };
     });
-  };
-
-  const resolveApprovalRunId = async (approvalId: string): Promise<string | null> => {
-    const approval = data?.items.find((item) => item.approvalId === approvalId);
-    const localRunId = approval
-      ? findDurableRunId(approval.payload) ?? findDurableRunId(approval.preview)
-      : undefined;
-    if (localRunId) {
-      return localRunId;
-    }
-    const replay = replayById[approvalId] ?? await fetchApprovalReplay(approvalId);
-    if (!replayById[approvalId]) {
-      setReplayById((prev) => ({ ...prev, [approvalId]: replay }));
-    }
-    const runId =
-      findDurableRunId(replay.pendingAction?.request)
-      ?? findDurableRunId(replay.approval.payload)
-      ?? findDurableRunId(replay.approval.preview);
-    return runId ?? null;
+    setLifecycleByApprovalId((prev) => ({
+      ...prev,
+      [result.approval.approvalId]: {
+        query: {
+          approvalId: result.approval.approvalId,
+          sessionId: result.approval.linkage?.sessionId,
+          turnId: result.approval.linkage?.turnId,
+          runId: result.durableRunId ?? result.approval.linkage?.durableRunId,
+          taskId: result.approval.linkage?.taskId,
+        },
+        linked: {
+          sessionIds: result.approval.linkage?.sessionId ? [result.approval.linkage.sessionId] : [],
+          turnIds: result.approval.linkage?.turnId ? [result.approval.linkage.turnId] : [],
+          runIds: result.durableRunId ? [result.durableRunId] : result.approval.linkage?.durableRunId ? [result.approval.linkage.durableRunId] : [],
+          approvalIds: [result.approval.approvalId],
+          taskIds: result.approval.linkage?.taskId ? [result.approval.linkage.taskId] : [],
+          workspaceIds: result.approval.linkage?.workspaceId ? [result.approval.linkage.workspaceId] : [],
+        },
+        approval: result.approval,
+        turns: [],
+        toolRuns: [],
+      },
+    }));
   };
 
   const loadDurableStatus = async (approvalId: string) => {
     setDurableBusyByApprovalId((prev) => ({ ...prev, [approvalId]: true }));
     try {
-      const runId = await resolveApprovalRunId(approvalId);
+      const lifecycle = await fetchRuntimeLifecycle({ approvalId });
+      setLifecycleByApprovalId((prev) => ({ ...prev, [approvalId]: lifecycle }));
+      const runId = lifecycle.query.runId ?? lifecycle.linked.runIds[0] ?? null;
       if (!runId) {
         setDurableByApprovalId((prev) => ({ ...prev, [approvalId]: null }));
-        setError("No durable run id found in this approval payload yet.");
+        setError("No durable run is linked to this approval yet.");
         return;
       }
-      const [run, timeline] = await Promise.all([
-        fetchDurableRun(runId),
-        fetchDurableRunTimeline(runId, 120),
-      ]);
+      const run = lifecycle.durableRun ?? await fetchDurableRun(runId);
+      const timeline = await fetchDurableRunTimeline(runId, 120);
       const blockingEvent = [...timeline.items]
         .reverse()
         .find((event) => event.eventType === "run_paused" || event.eventType === "run_waiting");
@@ -325,12 +305,23 @@ export function ApprovalsPage() {
       ) : null}
       {data.items.map((approval) => {
         const replay = replayById[approval.approvalId];
+        const lifecycle = lifecycleByApprovalId[approval.approvalId];
         const durable = durableByApprovalId[approval.approvalId];
         const durableBusy = Boolean(durableBusyByApprovalId[approval.approvalId]);
         const tracePreview = tracePreviewByApprovalId[approval.approvalId];
-        const traceMetadata = findTraceMetadata(replay?.pendingAction?.request)
-          ?? findTraceMetadata(approval.payload)
-          ?? findTraceMetadata(approval.preview);
+        const traceMetadata = approval.linkage?.correlationId || approval.linkage?.traceId
+          ? {
+            correlationId: approval.linkage?.correlationId,
+            traceId: approval.linkage?.traceId,
+          }
+          : replay?.approval.linkage?.correlationId || replay?.approval.linkage?.traceId
+            ? {
+              correlationId: replay.approval.linkage?.correlationId,
+              traceId: replay.approval.linkage?.traceId,
+            }
+            : findTraceMetadata(replay?.pendingAction?.request)
+              ?? findTraceMetadata(approval.payload)
+              ?? findTraceMetadata(approval.preview);
         const explanationLabel =
           approval.explanationStatus === "pending"
             ? "Pending explanation"
@@ -407,6 +398,20 @@ export function ApprovalsPage() {
                     <li key={`${approval.approvalId}-${item}`}>{item}</li>
                   ))}
                 </ul>
+              </div>
+            ) : null}
+            {lifecycle ? (
+              <div className="replay-box">
+                <h4>Canonical linkage</h4>
+                <p className="office-subtitle">
+                  Session: {lifecycle.query.sessionId ?? lifecycle.linked.sessionIds[0] ?? "unlinked"}
+                  {" | "}
+                  Turns: {lifecycle.linked.turnIds.length > 0 ? lifecycle.linked.turnIds.join(", ") : "none"}
+                  {" | "}
+                  Task: {lifecycle.query.taskId ?? lifecycle.linked.taskIds[0] ?? "none"}
+                  {" | "}
+                  Run: {lifecycle.query.runId ?? lifecycle.linked.runIds[0] ?? "none"}
+                </p>
               </div>
             ) : null}
             <div className="actions">

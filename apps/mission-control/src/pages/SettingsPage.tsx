@@ -1034,17 +1034,17 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     setShowAdvanced(true);
   };
 
-  if (!settings) {
-    return <p>Loading Forge settings...</p>;
-  }
-
-  const blockSaves = changeReview.overall === "critical" && !criticalConfirmed;
-  const installedVoiceModelIds = new Set(voiceRuntime?.installedModels.map((item) => item.modelId) ?? []);
   const voiceRecoveryActions = useMemo(() => buildVoiceRecoveryActions(voiceStatus, voiceRuntime), [voiceStatus, voiceRuntime]);
   const voiceOperatorGuidance = useMemo(
     () => buildVoiceOperatorGuidance(voiceStatus, voiceRuntime),
     [voiceStatus, voiceRuntime],
   );
+  const blockSaves = changeReview.overall === "critical" && !criticalConfirmed;
+  const installedVoiceModelIds = new Set(voiceRuntime?.installedModels.map((item) => item.modelId) ?? []);
+
+  if (!settings) {
+    return <p>Loading Forge settings...</p>;
+  }
 
   return (
     <section>

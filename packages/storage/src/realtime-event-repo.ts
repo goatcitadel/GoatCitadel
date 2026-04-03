@@ -4,6 +4,10 @@ import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 import { getRequestAttribution } from "./request-attribution.js";
 
+const REALTIME_EVENT_CLASS_KEY = "__gcEventClass";
+const REALTIME_EVENT_AUTHORITY_KEY = "__gcEventAuthority";
+const REALTIME_EVENT_LINKS_KEY = "__gcEventLinks";
+
 interface RealtimeEventRow {
   event_id: string;
   sequence: number;
@@ -96,11 +100,13 @@ export class RealtimeEventRepository {
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
     createdAt = new Date().toISOString(),
   ): RealtimeEvent {
+    const normalizedOptions = normalizeRealtimeEventOptions(eventType, source, payload, options);
     const attribution = getRequestAttribution();
     const attributedPayload = {
-      ...payload,
+      ...embedRealtimeEnvelope(payload, normalizedOptions),
       correlationId: payload.correlationId ?? attribution?.correlationId,
       traceId: payload.traceId ?? attribution?.traceId,
       originSurface: payload.originSurface ?? attribution?.originSurface,
@@ -139,7 +145,7 @@ export class RealtimeEventRepository {
       source,
       timestamp: createdAt,
       ...extractRealtimeMetadata(attributedPayload),
-      payload: attributedPayload,
+      payload: stripRealtimeEnvelope(attributedPayload),
     };
   }
 
@@ -246,17 +252,173 @@ function mapRealtimeEventRow(row: RealtimeEventRow): RealtimeEvent {
     source: row.source,
     timestamp: row.created_at,
     ...extractRealtimeMetadata(payload),
-    payload,
+    payload: stripRealtimeEnvelope(payload),
   };
 }
 
 function extractRealtimeMetadata(payload: Record<string, unknown>): Pick<
   RealtimeEvent,
-  "correlationId" | "traceId" | "originSurface"
+  "eventClass" | "eventAuthority" | "links" | "correlationId" | "traceId" | "originSurface"
 > {
+  const links = payload[REALTIME_EVENT_LINKS_KEY];
   return {
+    eventClass: typeof payload[REALTIME_EVENT_CLASS_KEY] === "string"
+      ? payload[REALTIME_EVENT_CLASS_KEY] as RealtimeEvent["eventClass"]
+      : undefined,
+    eventAuthority: typeof payload[REALTIME_EVENT_AUTHORITY_KEY] === "string"
+      ? payload[REALTIME_EVENT_AUTHORITY_KEY] as RealtimeEvent["eventAuthority"]
+      : undefined,
+    links: links && typeof links === "object" && !Array.isArray(links)
+      ? Object.fromEntries(
+        Object.entries(links).filter(([, value]) => typeof value === "string" && value.trim().length > 0),
+      )
+      : undefined,
     correlationId: typeof payload.correlationId === "string" ? payload.correlationId : undefined,
     traceId: typeof payload.traceId === "string" ? payload.traceId : undefined,
     originSurface: typeof payload.originSurface === "string" ? payload.originSurface : undefined,
   };
+}
+
+function embedRealtimeEnvelope(
+  payload: Record<string, unknown>,
+  options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = {
+    ...stripRealtimeEnvelope(payload),
+  };
+  if (options?.eventClass) {
+    next[REALTIME_EVENT_CLASS_KEY] = options.eventClass;
+  }
+  if (options?.eventAuthority) {
+    next[REALTIME_EVENT_AUTHORITY_KEY] = options.eventAuthority;
+  }
+  if (options?.links) {
+    const links = Object.fromEntries(
+      Object.entries(options.links).filter(([, value]) => typeof value === "string" && value.trim().length > 0),
+    );
+    if (Object.keys(links).length > 0) {
+      next[REALTIME_EVENT_LINKS_KEY] = links;
+    }
+  }
+  return next;
+}
+
+function normalizeRealtimeEventOptions(
+  eventType: string,
+  source: string,
+  payload: Record<string, unknown>,
+  options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
+): Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links"> | undefined {
+  const inferred = inferRealtimeEventMetadata(eventType, source, payload);
+  const normalizedLinks = normalizeRealtimeLinks({
+    ...(inferred.links ?? {}),
+    ...(options?.links ?? {}),
+  });
+  const next = {
+    eventClass: options?.eventClass ?? inferred.eventClass,
+    eventAuthority: options?.eventAuthority ?? inferred.eventAuthority,
+    links: normalizedLinks,
+  };
+  return next.eventClass || next.eventAuthority || next.links ? next : undefined;
+}
+
+function stripRealtimeEnvelope(payload: Record<string, unknown>): Record<string, unknown> {
+  if (
+    !(REALTIME_EVENT_CLASS_KEY in payload)
+    && !(REALTIME_EVENT_AUTHORITY_KEY in payload)
+    && !(REALTIME_EVENT_LINKS_KEY in payload)
+  ) {
+    return payload;
+  }
+  const next = { ...payload };
+  delete next[REALTIME_EVENT_CLASS_KEY];
+  delete next[REALTIME_EVENT_AUTHORITY_KEY];
+  delete next[REALTIME_EVENT_LINKS_KEY];
+  return next;
+}
+
+function inferRealtimeEventMetadata(
+  eventType: string,
+  source: string,
+  payload: Record<string, unknown>,
+): Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links"> {
+  const links = normalizeRealtimeLinks({
+    approvalId: pickString(payload, ["approvalId"]),
+    sessionId: pickString(payload, ["sessionId"]),
+    turnId: pickString(payload, ["turnId"]),
+    runId: pickString(payload, ["runId", "durableRunId", "durable_run_id"]),
+    taskId: pickString(payload, ["taskId"]),
+    workspaceId: pickString(payload, ["workspaceId"]),
+    connectorId: pickString(payload, ["connectorId"]),
+    tokenId: pickString(payload, ["tokenId"]),
+    messageId: pickString(payload, ["messageId"]),
+  });
+  return {
+    eventClass: inferRealtimeEventClass(eventType, source),
+    eventAuthority: inferRealtimeEventAuthority(eventType, source),
+    links,
+  };
+}
+
+function inferRealtimeEventClass(eventType: string, source: string): RealtimeEvent["eventClass"] {
+  const haystack = `${eventType} ${source}`.toLowerCase();
+  if (
+    haystack.includes("approval_remote_action_ready")
+    || haystack.includes("auth_device_request_created")
+    || haystack.includes("replay_gap")
+  ) {
+    return "ui_notification";
+  }
+  if (
+    haystack.includes("system")
+    || haystack.includes("cron")
+    || haystack.includes("durable")
+    || haystack.includes("connector")
+    || haystack.includes("integration")
+    || haystack.includes("memory")
+  ) {
+    return "operational_signal";
+  }
+  return "domain_fact";
+}
+
+function inferRealtimeEventAuthority(eventType: string, source: string): RealtimeEvent["eventAuthority"] {
+  const haystack = `${eventType} ${source}`.toLowerCase();
+  if (haystack.includes("projection") || haystack.includes("summary")) {
+    return "derived_projection";
+  }
+  return "retained_stream";
+}
+
+function normalizeRealtimeLinks(links?: RealtimeEvent["links"]): RealtimeEvent["links"] {
+  if (!links) {
+    return undefined;
+  }
+  const normalized = Object.fromEntries(
+    Object.entries(links).filter(([, value]) => typeof value === "string" && value.trim().length > 0),
+  ) as Record<string, string>;
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function pickString(payload: Record<string, unknown>, keys: string[]): string | undefined {
+  const stack: unknown[] = [payload];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    const record = current as Record<string, unknown>;
+    for (const key of keys) {
+      const candidate = record[key];
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
+    for (const value of Object.values(record)) {
+      if (value && typeof value === "object") {
+        stack.push(value);
+      }
+    }
+  }
+  return undefined;
 }

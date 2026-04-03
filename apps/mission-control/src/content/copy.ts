@@ -77,19 +77,19 @@ export const appCopy = {
   navItems: [
     { id: "addons", label: "Add-ons", code: "ADD" },
     { id: "onboarding", label: "Launch Wizard", code: "NEW" },
-    { id: "dashboard", label: "Dashboard", code: "SUM" },
+    { id: "dashboard", label: "Surface", code: "SUM" },
     { id: "system", label: "System", code: "ENG" },
     { id: "files", label: "Files", code: "FS" },
     { id: "memory", label: "Memory", code: "MEM" },
     { id: "agents", label: "Agents", code: "AGT" },
     { id: "office", label: "Office", code: "OFC" },
-    { id: "officeLab", label: "Office Lab", code: "LAB" },
+    { id: "officeLab", label: "Herd Lab", code: "LAB" },
     { id: "activity", label: "Activity", code: "ACT" },
     { id: "cron", label: "Scheduler", code: "CRN" },
-    { id: "sessions", label: "Runs", code: "SES" },
+    { id: "sessions", label: "Sessions", code: "SES" },
     { id: "chat", label: "Chat", code: "CHT" },
-    { id: "assembly", label: "Assembly", code: "AOM" },
-    { id: "promptLab", label: "Prompt Lab", code: "PLB" },
+    { id: "assembly", label: "Cowork", code: "AOM" },
+    { id: "promptLab", label: "Quality", code: "PLB" },
     { id: "improvement", label: "Improvement", code: "IMP" },
     { id: "skills", label: "Skills", code: "SKL" },
     { id: "costs", label: "Costs", code: "USD" },
@@ -112,19 +112,19 @@ export const appCopy = {
   nextStepByTab: {
     addons: "Install optional extras only after reviewing trust, source, and runtime notes.",
     onboarding: "Finish setup once, then move into Summit or Chat.",
-    dashboard: "Start here for a quick health check, then jump where work is blocked.",
+    dashboard: "Start on Surface when you want the fastest path into Chat, Cowork, or Code.",
     system: "If anything feels slow, check vitals here first.",
     files: "Create or update a file, then review path and risk hints before saving.",
     memory: "Use this when replies feel off-context or forgetful.",
     agents: "Tune your crew roles so each agent has a clear job.",
     office: "Pick an agent station to see what it is doing right now.",
-    officeLab: "Use the 2D citadel office to watch deck load, approvals, and live crew activity.",
+    officeLab: "Use Herd Lab to watch deck load, approvals, and live crew activity in the 2D operations view.",
     activity: "Keep this open while you test actions in other tabs.",
     cron: "Review scheduled jobs and confirm recent runs look healthy.",
-    sessions: "Choose a run and inspect timeline, usage, and outcomes.",
+    sessions: "Choose a session and inspect timeline, usage, and outcomes.",
     chat: "Pick a project, open a session, and send a message.",
-    assembly: "Frame the problem, pick 2-5 models, and watch the deliberation stages converge or split cleanly.",
-    promptLab: "Run your test pack, then score quality and reliability.",
+    assembly: "Use Cowork when the task needs decomposition, orchestration, checkpoints, or multi-model debate.",
+    promptLab: "Use Quality to run prompt tests, review regressions, and compare reliability over time.",
     improvement: "Review weekly replay findings, then apply or revert low-risk tunes.",
     skills: "Decide which skills are always on, guarded, or off.",
     costs: "Watch spend and switch to a lighter mode when needed.",
@@ -142,19 +142,20 @@ export const appCopy = {
 
 export const pageCopy: Record<PageId, PageCopy> = {
   dashboard: {
-    title: "Dashboard",
-    subtitle: "A quick snapshot of system health, workload, and spend.",
+    title: "Surface",
+    subtitle: "Choose the right work surface for fast chat, structured orchestration, or focused implementation.",
     guide: {
-      what: "Summit helps you quickly see what needs your attention.",
-      when: "Open this first when you start your day or come back after a break.",
+      what: "Surface is the main entry point into Chat, Cowork, and Code.",
+      when: "Open this first when you want to choose the right execution mode before diving into the work.",
       actions: [
-        "Check if approvals are blocking work.",
-        "Review task and session pressure.",
-        "Jump directly to the page that needs attention.",
+        "Jump into Chat for a fast answer or drafting loop.",
+        "Switch to Cowork when the task needs orchestration, checkpoints, or multiple roles.",
+        "Use Code when correctness, diffs, and validation matter most.",
       ],
       terms: [
-        { term: "Pending approvals", meaning: "Risky actions waiting for your decision." },
-        { term: "Active subagents", meaning: "Subagent sessions currently running task work." },
+        { term: "Chat", meaning: "Fast conversation and lightweight help." },
+        { term: "Cowork", meaning: "Structured agentic work with visible workflow state." },
+        { term: "Code", meaning: "Implementation-focused help with tighter engineering discipline." },
       ],
     },
   },
@@ -258,10 +259,10 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   officeLab: {
-    title: "Citadel Lab",
+    title: "Herd Lab",
     subtitle: "A separate 2D pixel-style office view mapped onto GoatCitadel decks and live agent activity.",
     guide: {
-      what: "Office Lab is the non-3D office surface: deck-based, pixel-inspired, and fed by the same live GoatCitadel runtime data.",
+      what: "Herd Lab is the non-3D office surface: deck-based, pixel-inspired, and fed by the same live GoatCitadel runtime data.",
       when: "Use this when you want a clearer 2D operations floor instead of the immersive 3D office.",
       actions: [
         "Scan which deck is carrying live load or waiting on approvals.",
@@ -301,14 +302,14 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   sessions: {
-    title: "Runs",
-    subtitle: "Session health, activity timeline, and spend for active conversations.",
+    title: "Sessions",
+    subtitle: "Session health, transcript timeline, and spend for active conversations.",
     guide: {
-      what: "Summarizes current sessions and lets you inspect each run in detail.",
+      what: "Summarizes current sessions and lets you inspect each session in detail.",
       when: "Use this to monitor conversation quality and investigate issues.",
       actions: [
         "Filter by health and search.",
-        "Select a run from the list.",
+        "Select a session from the list.",
         "Inspect summary and timeline details.",
       ],
       terms: [
@@ -338,15 +339,15 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   assembly: {
-    title: "Assembly",
-    subtitle: "Run structured multi-model deliberation with visible disagreement, bounded budgets, and replayable stages.",
+    title: "Cowork",
+    subtitle: "Run structured agentic workflows with visible stages, checkpoints, and deliberate model coordination.",
     guide: {
-      what: "Assembly turns a problem into staged deliberation across 2-5 models so you can inspect proposals, blind reviews, adversarial challenges, convergence, and synthesis without losing the minority position.",
-      when: "Use this when a problem deserves more than one model pass and you want a first-class orchestration surface instead of an ad hoc chat thread.",
+      what: "Cowork is the home for deeper agentic work: task decomposition, research + synthesis, model coordination, and checkpointed execution.",
+      when: "Use this when the task deserves more than a simple chat loop and you want first-class orchestration instead of an ad hoc thread.",
       actions: [
         "Start with a concise problem statement and a domain preset.",
-        "Pick a small but meaningfully diverse participant set.",
-        "Turn on adversarial mode only when you need explicit challenge and defense rounds.",
+        "Pick a small but meaningfully diverse participant set when you need multi-model debate.",
+        "Use checkpoints and approvals when the workflow needs human judgment between steps.",
         "Watch the stage timeline, then export the result to artifact, task, or chat when it is stable enough.",
       ],
       terms: [
@@ -357,10 +358,10 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   promptLab: {
-    title: "Prompt Lab",
-    subtitle: "Run prompt tests, spot weak replies quickly, and track quality over time.",
+    title: "Quality",
+    subtitle: "Run prompt tests, spot weak replies quickly, and track regressions over time.",
     guide: {
-      what: "Prompt Lab lets you test changes quickly before bigger runs.",
+      what: "Quality is the evaluation lane for prompt tests, benchmark runs, and regression review.",
       when: "Use this when tuning models, tools, or prompt policies against a fixed test set.",
       actions: [
         "Import markdown prompt packs with [TEST-##] blocks.",

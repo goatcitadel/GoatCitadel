@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
@@ -9,6 +10,7 @@ const listQuerySchema = z.object({
 const streamQuerySchema = z.object({
   replay: z.coerce.number().int().nonnegative().max(500).default(50),
   afterCursor: z.string().optional(),
+  clientId: z.string().trim().min(1).max(128).optional(),
 });
 
 const STREAM_REPLAY_LIMIT = 500;
@@ -80,6 +82,13 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
 
     const requestedCursor = parseSequenceCursor(parsed.data.afterCursor)
       ?? parseSequenceCursor(readLastEventId(request.headers["last-event-id"]));
+    const clientId = parsed.data.clientId?.trim() || randomUUID();
+    const lease = fastify.gateway.openRealtimeStreamLease({
+      streamName: "events",
+      clientId,
+      requestedCursor,
+      connectedAt: new Date().toISOString(),
+    });
     const bounds = fastify.gateway.getRealtimeEventSequenceBounds();
     if (
       requestedCursor !== undefined
@@ -92,6 +101,10 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         oldestCursor: bounds.oldestSequence,
         newestCursor: bounds.newestSequence,
       });
+      fastify.gateway.closeRealtimeStreamLease({
+        leaseId: lease.leaseId,
+        closeReason: "replay_gap",
+      });
       raw.end();
       reply.hijack();
       return;
@@ -103,31 +116,58 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     for (const event of replay) {
       send(event, event.sequence);
     }
+    const latestReplayEvent = replay[replay.length - 1];
+    fastify.gateway.touchRealtimeStreamLease({
+      leaseId: lease.leaseId,
+      requestedCursor,
+      lastSentSequence: latestReplayEvent?.sequence,
+      lastEventAt: latestReplayEvent?.timestamp,
+    });
+    sendNamedEvent("stream-ready", {
+      leaseId: lease.leaseId,
+      clientId: lease.clientId,
+      gatewayNodeId: lease.gatewayNodeId,
+      requestedCursor,
+      replayedEventCount: replay.length,
+      lastSentSequence: latestReplayEvent?.sequence,
+    });
 
     const unsubscribe = fastify.gateway.subscribeRealtime((event) => {
       try {
         send(event, event.sequence);
+        fastify.gateway.touchRealtimeStreamLease({
+          leaseId: lease.leaseId,
+          lastSentSequence: event.sequence,
+          lastEventAt: event.timestamp,
+        });
       } catch {
-        cleanup();
+        cleanup("stream_write_error");
       }
     });
 
     const keepAlive = setInterval(() => {
       try {
         raw.write(": keep-alive\n\n");
+        fastify.gateway.touchRealtimeStreamLease({
+          leaseId: lease.leaseId,
+        });
       } catch {
-        cleanup();
+        cleanup("keepalive_write_error");
       }
     }, 25000);
 
     let closed = false;
-    const cleanup = () => {
+    const cleanup = (closeReason = "client_disconnect") => {
       if (closed) {
         return;
       }
       closed = true;
       clearInterval(keepAlive);
       unsubscribe();
+      fastify.gateway.closeRealtimeStreamLease({
+        leaseId: lease.leaseId,
+        closeReason,
+      });
       try {
         raw.end();
       } catch {
@@ -135,8 +175,8 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       }
     };
 
-    raw.on("close", cleanup);
-    request.raw.on("aborted", cleanup);
+    raw.on("close", () => cleanup("client_disconnect"));
+    request.raw.on("aborted", () => cleanup("client_aborted"));
     reply.hijack();
   });
 };

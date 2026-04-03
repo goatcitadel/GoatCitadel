@@ -61,6 +61,8 @@ import { AssemblyRepository } from "./assembly-repo.js";
 import { WorkspaceHookRepository } from "./workspace-hook-repo.js";
 import { HookRunRepository } from "./hook-run-repo.js";
 import { MemoryMaintenanceRepository } from "./memory-maintenance-repo.js";
+import { TranscriptOutboxRepository } from "./transcript-outbox-repo.js";
+import { RealtimeStreamLeaseRepository } from "./realtime-stream-lease-repo.js";
 
 export interface StorageOptions extends SqliteOptions {
   transcriptsDir: string;
@@ -136,6 +138,8 @@ export class Storage {
   public readonly durableRuns: DurableRunRepository;
   public readonly gatewaySql: GatewaySqlRepository;
   public readonly assembly: AssemblyRepository;
+  public readonly transcriptOutbox: TranscriptOutboxRepository;
+  public readonly realtimeStreamLeases: RealtimeStreamLeaseRepository;
 
   public constructor(options: StorageOptions) {
     this.db = createDatabase({
@@ -202,6 +206,8 @@ export class Storage {
     this.durableRuns = new DurableRunRepository(this.db);
     this.gatewaySql = new GatewaySqlRepository(this.db);
     this.assembly = new AssemblyRepository(this.db);
+    this.transcriptOutbox = new TranscriptOutboxRepository(this.db);
+    this.realtimeStreamLeases = new RealtimeStreamLeaseRepository(this.db);
   }
 
   public close(): void {
@@ -297,6 +303,7 @@ export class Storage {
         "bankr_action_audit",
         "voice_sessions",
         "mesh_session_owners",
+        "transcript_outbox",
         "chat_inline_approvals",
         "chat_stream_events",
         "chat_tool_artifacts",
@@ -432,3 +439,5 @@ export * from "./assembly-repo.js";
 export * from "./request-attribution.js";
 export * from "./remote-action-token-repo.js";
 export * from "./approval-inbox-repo.js";
+export * from "./transcript-outbox-repo.js";
+export * from "./realtime-stream-lease-repo.js";

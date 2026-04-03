@@ -20,6 +20,11 @@ describe("extension starter pack", () => {
         networkAllowlistCount: 1,
         postureSummary: "",
         proofStatus: { hasArtifact: false, freshness: "missing", matchedCurrentProfile: false },
+        proofCoverage: {
+          currentProfiles: [],
+          staleProfiles: [],
+          missingProfiles: ["local_dev", "trusted_local", "remote_hardened"],
+        },
         blockingIssues: [],
         recommendedActions: [],
       },
@@ -51,6 +56,11 @@ describe("extension starter pack", () => {
           hasArtifact: false,
           freshness: "missing",
           matchedCurrentProfile: false,
+        },
+        proofCoverage: {
+          currentProfiles: [],
+          staleProfiles: [],
+          missingProfiles: ["local_dev", "trusted_local", "remote_hardened"],
         },
         blockingIssues: [],
         recoveryActions: [],

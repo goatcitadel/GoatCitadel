@@ -19,7 +19,9 @@ export function publishEventStreamStatus(nextStatus: EventStreamStatus): void {
   const nextEventAt = nextStatus.lastEventAt ? Date.parse(nextStatus.lastEventAt) : 0;
   const stateChanged = nextStatus.state !== currentStatus.state
     || nextStatus.reconnectAttempts !== currentStatus.reconnectAttempts
-    || nextStatus.lastErrorAt !== currentStatus.lastErrorAt;
+    || nextStatus.lastErrorAt !== currentStatus.lastErrorAt
+    || nextStatus.leaseId !== currentStatus.leaseId
+    || nextStatus.gatewayNodeId !== currentStatus.gatewayNodeId;
   const shouldPublishNow = !nextStatus.lastEventAt
     || stateChanged
     || nextEventAt - lastPublishedEventAt >= EVENT_STATUS_THROTTLE_MS;

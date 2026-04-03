@@ -13,8 +13,11 @@ export interface CompanionBootstrapBriefDraft {
 export function buildCompanionBootstrapBrief(report: FollowOnParityReport): CompanionBootstrapBriefDraft {
   const generatedAt = new Date().toISOString();
   const contract = report.companion.contract;
+  const proofCurrent = report.companion.artifactStatus.hasArtifact && report.companion.artifactStatus.freshness === "current";
   const summary = contract
-    ? `${contract.contractId} is ready for separate-repo bootstrap planning, and live gateway session proof is complete; the remaining proof gap is the Android runtime/UI bundle.`
+    ? proofCurrent
+      ? `${contract.contractId} now has current Android runtime/UI proof recorded for the separate mobile repo, and the gateway/session lane remains aligned to that proof.`
+      : `${contract.contractId} is ready for separate-repo bootstrap planning, and live gateway session proof is complete; the remaining proof gap is the Android runtime/UI bundle.`
     : "Companion bootstrap is blocked until the live companion contract is resolved in the parity report.";
 
   return {
@@ -57,10 +60,18 @@ export function buildCompanionBootstrapBrief(report: FollowOnParityReport): Comp
       "## Next Actions",
       ...report.companion.recommendedActions.map((action, index) => `${index + 1}. ${action}`),
       "",
-      "## Expected First Proof",
-      "1. Align the separate `GoatCitadel-mobile` repo to the current companion bootstrap template and contract baseline.",
-      "2. Reuse the proved gateway exchange/refresh/signed-session path from the Android runtime instead of re-proving the server in isolation.",
-      "3. Capture Android-resident UI/runtime evidence for approvals, signed session creation, SSE resume, and refresh rotation before broadening feature scope.",
+      proofCurrent ? "## Current Proof Focus" : "## Expected First Proof",
+      ...(proofCurrent
+        ? [
+          "1. Keep the Android approval/bootstrap/runtime evidence current when the bootstrap contract, session semantics, or deployment posture changes.",
+          "2. Re-run the Android-resident proof lane when signed mutation, SSE resume, or refresh rotation behavior changes.",
+          "3. Use this brief plus the attached mobile evidence bundle as the operator handoff instead of re-proving the gateway in isolation.",
+        ]
+        : [
+          "1. Align the separate `GoatCitadel-mobile` repo to the current companion bootstrap template and contract baseline.",
+          "2. Reuse the proved gateway exchange/refresh/signed-session path from the Android runtime instead of re-proving the server in isolation.",
+          "3. Capture Android-resident UI/runtime evidence for approvals, signed session creation, SSE resume, and refresh rotation before broadening feature scope.",
+        ]),
       "",
     ].join("\n"),
   };

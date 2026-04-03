@@ -208,6 +208,12 @@
   color: #ffe2e6;
 }
 
+.prompt-lab-chip.run-paused {
+  border-color: rgba(255, 206, 120, 0.78);
+  background: rgba(255, 206, 120, 0.18);
+  color: #fff1d1;
+}
+
 .prompt-lab-chip.score-missing {
   border-color: rgba(255, 206, 120, 0.72);
   background: rgba(255, 206, 120, 0.14);
@@ -224,6 +230,12 @@
   border-color: rgba(255, 114, 136, 0.85);
   background: rgba(255, 114, 136, 0.2);
   color: #ffe8ec;
+}
+
+.prompt-lab-chip.result-run-paused {
+  border-color: rgba(255, 206, 120, 0.82);
+  background: rgba(255, 206, 120, 0.22);
+  color: #fff1d1;
 }
 
 .prompt-lab-chip.result-score-failed {

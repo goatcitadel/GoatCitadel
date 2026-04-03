@@ -182,4 +182,36 @@ describe("approvals routes", () => {
       failedCount: 0,
     });
   });
+
+  it("returns replay snapshots with an explicit durable run id", async () => {
+    const getApprovalReplay = vi.fn(() => ({
+      approval: {
+        approvalId: "3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d",
+        kind: "tool.invoke",
+        status: "pending",
+        riskLevel: "danger",
+        payload: {},
+        preview: {},
+        createdAt: new Date().toISOString(),
+      },
+      events: [],
+      durableRunId: "durable-run-42",
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      getApprovalReplay,
+    } as never);
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/approvals/3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d/replay",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getApprovalReplay).toHaveBeenCalledWith("3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d", "operator");
+    expect(response.json()).toMatchObject({
+      durableRunId: "durable-run-42",
+    });
+  });
 });

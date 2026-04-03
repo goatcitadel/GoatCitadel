@@ -15,6 +15,9 @@ describe("dashboard follow-on parity route", () => {
   });
 
   it("returns a live follow-on parity report", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-02T00:00:00.000Z"));
+
     app = Fastify();
     app.decorate("gateway", {
       getSettings: vi.fn(() => ({
@@ -113,10 +116,15 @@ describe("dashboard follow-on parity route", () => {
           laneId: "browser",
           generatedAt: "2026-03-28T23:55:00.000Z",
           summary: "Prior browser proof bundle",
-          relativePath: "artifacts/follow-on-parity/browser/2026-03-28/prior-browser-proof.md",
-          fullPath: "workspace/artifacts/follow-on-parity/browser/2026-03-28/prior-browser-proof.md",
+          relativePath: "artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
+          fullPath: "workspace/artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
           bytes: 321,
         },
+      })),
+      getVoiceProofCoverage: vi.fn(() => ({
+        currentProfiles: ["local_dev"],
+        staleProfiles: [],
+        missingProfiles: ["trusted_local", "remote_hardened"],
       })),
     } as never);
     await app.register(dashboardRoutes);
@@ -158,12 +166,13 @@ describe("dashboard follow-on parity route", () => {
         artifactStatus: {
           hasArtifact: true,
           freshness: "current",
-          matchedCurrentProfile: false,
+          latestArtifactDeploymentProfile: "trusted_local",
+          matchedCurrentProfile: true,
           ageDays: 4,
         },
         blockingIssues: [],
         recommendedActions: expect.arrayContaining([
-          expect.stringContaining("browser proof-lane draft"),
+          expect.stringContaining("Current browser proof artifact matches the active deployment profile"),
         ]),
         automationCatalog: {
           catalogId: "automation.browser-chrome-control",
@@ -172,7 +181,7 @@ describe("dashboard follow-on parity route", () => {
         latestArtifact: {
           laneId: "browser",
           generatedAt: "2026-03-28T23:55:00.000Z",
-          relativePath: "artifacts/follow-on-parity/browser/2026-03-28/prior-browser-proof.md",
+          relativePath: "artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
           bytes: 321,
         },
       },
@@ -189,9 +198,9 @@ describe("dashboard follow-on parity route", () => {
         },
         blockingIssues: [],
         recoveryActions: [],
-        recommendedActions: expect.arrayContaining([
-          expect.stringContaining("voice proof-lane draft"),
-        ]),
+        recommendedActions: [
+          "Current local-first voice proof is on file for local_dev; rerun trusted_local or remote_hardened only when deliberately widening the supported voice posture.",
+        ],
       },
       addons: {
         catalogCount: 1,
@@ -214,11 +223,10 @@ describe("dashboard follow-on parity route", () => {
           hasArtifact: false,
           freshness: "missing",
         },
-        blockingIssues: expect.arrayContaining([
-          expect.stringContaining("reference integration plugin"),
-        ]),
+        blockingIssues: [],
         recommendedActions: expect.arrayContaining([
           expect.stringContaining("PLUGIN_SDK_CONTRACT.md"),
+          expect.stringContaining("@goatcitadel/extensions-sdk@0.6.0-beta.2"),
           expect.stringContaining("reference-integration-plugin"),
           expect.stringContaining("smoke test"),
         ]),
@@ -304,45 +312,55 @@ describe("dashboard follow-on parity route", () => {
 
     expect(openclawResponse.statusCode).toBe(200);
     expect(openclawResponse.json()).toMatchObject({
-      completedEpicIds: ["GC-P0-01", "GC-P0-05"],
-      openEpicIds: expect.arrayContaining(["GC-P0-02", "GC-P0-03", "GC-P1-04", "GC-P1-10"]),
+      completedEpicIds: ["GC-P0-01", "GC-P0-02", "GC-P0-03", "GC-P0-05", "GC-P0-06", "GC-P0-07", "GC-P1-04", "GC-P1-08", "GC-P1-10", "GC-P2-11", "GC-P2-12"],
+      openEpicIds: ["GC-P1-09"],
       completionOrder: [
-        "GC-P1-10",
-        "GC-P2-12",
-        "GC-P0-06",
         "GC-P1-09",
-        "GC-P1-08",
-        "GC-P0-07",
-        "GC-P0-02",
-        "GC-P0-03",
-        "GC-P1-04",
-        "GC-P2-11",
       ],
-      nextEpicId: "GC-P1-10",
-      nextSlice: expect.stringContaining("Keep this report"),
+      nextEpicId: "GC-P1-09",
+      nextSlice: expect.stringContaining("repeatable install"),
       unsafeClaims: expect.arrayContaining([
-        expect.stringContaining("Slack, Telegram, Google Chat, Teams, and Discord"),
-        expect.stringContaining("WhatsApp, iMessage/BlueBubbles, and Signal"),
-        expect.stringContaining("Mattermost, LINE, Zalo OA, and Zalo Personal"),
+        expect.stringContaining("Discord, Slack, and Telegram"),
+        expect.stringContaining("Google Chat and Teams are outbound webhook lanes only"),
+        expect.stringContaining("WhatsApp, Signal, iMessage/BlueBubbles, Mattermost, LINE, Zalo OA, and Zalo Personal"),
+        expect.stringContaining("Broader voice parity beyond the current local-first runtime lane still requires deliberate widening"),
       ]),
       epics: expect.arrayContaining([
         expect.objectContaining({
           epicId: "GC-P0-02",
           label: "Stabilize core beta channels",
-          status: "in_progress",
-          summary: expect.stringContaining("Slack, Telegram, Google Chat, Teams, and Discord"),
+          status: "complete",
+          summary: expect.stringContaining("Discord, Slack, and Telegram"),
         }),
         expect.objectContaining({
           epicId: "GC-P0-03",
           label: "Ship Tier-1 planned channels",
-          status: "pending",
-          summary: expect.stringContaining("WhatsApp, iMessage/BlueBubbles, and Signal"),
+          status: "complete",
+          summary: expect.stringContaining("WhatsApp, Signal, and iMessage/BlueBubbles"),
         }),
         expect.objectContaining({
           epicId: "GC-P1-04",
           label: "Ship Tier-2 planned channels",
-          status: "pending",
+          status: "complete",
           summary: expect.stringContaining("Mattermost, LINE, Zalo OA, and Zalo Personal"),
+        }),
+        expect.objectContaining({
+          epicId: "GC-P1-10",
+          label: "Long-tail parity register",
+          status: "complete",
+          blockers: [],
+        }),
+        expect.objectContaining({
+          epicId: "GC-P2-11",
+          label: "Extension / plugin SDK breadth",
+          status: "complete",
+          blockers: [],
+        }),
+        expect.objectContaining({
+          epicId: "GC-P2-12",
+          label: "Voice Wake / Talk Mode parity",
+          status: "complete",
+          blockers: [],
         }),
       ]),
     });
@@ -1307,7 +1325,7 @@ describe("dashboard follow-on parity route", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body).toEqual(expect.objectContaining({
-      summary: expect.stringContaining("published SDK package or broader runtime-contract decision"),
+      summary: expect.stringContaining("public beta package already exists"),
       markdown: expect.stringContaining("Decision Gate"),
     }));
     expect(body.markdown).toContain("Reference plugin present: yes");

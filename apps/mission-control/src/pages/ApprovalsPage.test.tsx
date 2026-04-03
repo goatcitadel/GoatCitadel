@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchDevDiagnostics: vi.fn(),
   fetchDurableRun: vi.fn(),
   fetchDurableRunTimeline: vi.fn(),
+  fetchRuntimeLifecycle: vi.fn(),
   resolveApproval: vi.fn(),
   resolveApprovalsBulk: vi.fn(),
   resumeDurableRun: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("../api/client", () => ({
   fetchDevDiagnostics: apiMocks.fetchDevDiagnostics,
   fetchDurableRun: apiMocks.fetchDurableRun,
   fetchDurableRunTimeline: apiMocks.fetchDurableRunTimeline,
+  fetchRuntimeLifecycle: apiMocks.fetchRuntimeLifecycle,
   resolveApproval: apiMocks.resolveApproval,
   resolveApprovalsBulk: apiMocks.resolveApprovalsBulk,
   resumeDurableRun: apiMocks.resumeDurableRun,
@@ -42,6 +44,32 @@ function collectText(node: ReactTestRendererJSON | ReactTestRendererJSON[] | str
 
 function rendererText(renderer: ReactTestRenderer): string {
   return collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
+}
+
+async function clickButton(renderer: ReactTestRenderer, label: string): Promise<void> {
+  const instanceText = (node: unknown): string => {
+    if (typeof node === "string") {
+      return node;
+    }
+    if (!node || typeof node !== "object" || !("children" in node)) {
+      return "";
+    }
+    const children = (node as { children?: unknown[] }).children ?? [];
+    return children.map((child) => instanceText(child)).join(" ");
+  };
+
+  const button = renderer.root.findAll((node) => (
+    node.type === "button"
+      && instanceText(node).replace(/\s+/g, " ").includes(label)
+  ))[0];
+
+  if (!button) {
+    throw new Error(`Button not found: ${label}`);
+  }
+
+  await act(async () => {
+    button.props.onClick();
+  });
 }
 
 async function flush(): Promise<void> {
@@ -129,6 +157,55 @@ describe("ApprovalsPage", () => {
       expect(text).toContain("The approvals queue is clear right now.");
       expect(text).not.toContain("Reject all pending");
       expect(text).not.toContain("0 replay trails loaded");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("prefers the replay durable run id over payload scraping when loading checkpoint status", async () => {
+    apiMocks.fetchRuntimeLifecycle.mockResolvedValue({
+      query: {
+        approvalId: "approval-1",
+        runId: "durable-run-42",
+      },
+      linked: {
+        sessionIds: [],
+        turnIds: [],
+        runIds: ["durable-run-42"],
+        approvalIds: ["approval-1"],
+        taskIds: [],
+        workspaceIds: [],
+      },
+      turns: [],
+      toolRuns: [],
+    });
+    apiMocks.fetchDurableRun.mockResolvedValue({
+      runId: "durable-run-42",
+      status: "waiting",
+      updatedAt: new Date("2026-03-29T18:05:00.000Z").toISOString(),
+    });
+    apiMocks.fetchDurableRunTimeline.mockResolvedValue({
+      items: [],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+      await clickButton(renderer, "Load durable status");
+      await flush();
+
+      const text = rendererText(renderer);
+      expect(apiMocks.fetchRuntimeLifecycle).toHaveBeenCalledWith({ approvalId: "approval-1" });
+      expect(apiMocks.fetchDurableRun).toHaveBeenCalledWith("durable-run-42");
+      expect(apiMocks.fetchDurableRunTimeline).toHaveBeenCalledWith("durable-run-42", 120);
+      expect(text).toContain("Run: durable-run-42 | Status: waiting");
     } finally {
       renderer.unmount();
     }
