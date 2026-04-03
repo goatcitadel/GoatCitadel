@@ -35,6 +35,9 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
 
   const app = Fastify();
   app.decorate("gateway", {
+    getOnboardingStartupState: () => ({
+      completed: false,
+    }),
     validateDeviceAccessToken: (token: string) => {
       if (token === "device-bearer") {
         return {
@@ -130,6 +133,12 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
   await app.register(authRoutes);
 
   app.get("/protected", async (request) => ({
+    ok: true,
+    actorId: request.authActorId,
+    actorSource: request.authActorSource,
+  }));
+
+  app.get("/api/v1/onboarding/startup", async (request) => ({
     ok: true,
     actorId: request.authActorId,
     actorSource: request.authActorSource,
@@ -289,6 +298,41 @@ describe("auth plugin", () => {
     expect(response.json()).toMatchObject({
       actorSource: "loopback",
     });
+  });
+
+  it("allows loopback onboarding recovery when token auth is enabled without a token", async () => {
+    app = await buildApp({
+      mode: "token",
+      allowLoopbackBypass: false,
+      token: { value: undefined, queryParam: "access_token" },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/onboarding/startup",
+      remoteAddress: "127.0.0.1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      actorSource: "loopback",
+    });
+  });
+
+  it("keeps non-recovery routes blocked when token auth is enabled without a token", async () => {
+    app = await buildApp({
+      mode: "token",
+      allowLoopbackBypass: false,
+      token: { value: undefined, queryParam: "access_token" },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/protected",
+      remoteAddress: "127.0.0.1",
+    });
+
+    expect(response.statusCode).toBe(503);
   });
 
   it("issues one-time SSE bridge token and rejects reuse", async () => {

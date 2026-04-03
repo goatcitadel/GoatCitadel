@@ -6,6 +6,7 @@ import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.j
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
 import { isTelegramWebhookPath } from "../services/telegram-webhook.js";
 import { isWhatsAppWebhookPath } from "../services/whatsapp-webhook.js";
+import type { FastifyInstance } from "fastify";
 import fp from "fastify-plugin";
 
 declare module "fastify" {
@@ -102,10 +103,20 @@ export const authPlugin = fp(async (fastify) => {
 
     const remoteAddress = request.raw.socket.remoteAddress ?? request.ip;
     const forwardedFor = request.headers["x-forwarded-for"];
+    const loopbackRequest = !forwardedFor && isLoopbackAddress(remoteAddress);
     if (
       auth.allowLoopbackBypass
-      && !forwardedFor
-      && isLoopbackAddress(remoteAddress)
+      && loopbackRequest
+    ) {
+      setAuthActor(request, `loopback:${normalizeActorSuffix(remoteAddress)}`, "loopback");
+      return;
+    }
+
+    if (
+      loopbackRequest
+      && isOnboardingRecoveryRoute(request.url)
+      && isAuthMisconfigured(auth)
+      && !isOnboardingComplete(fastify)
     ) {
       setAuthActor(request, `loopback:${normalizeActorSuffix(remoteAddress)}`, "loopback");
       return;
@@ -238,6 +249,37 @@ export const authPlugin = fp(async (fastify) => {
     }
   });
 });
+
+function isOnboardingRecoveryRoute(url: string): boolean {
+  const pathname = url.split("?", 1)[0] ?? url;
+  return pathname === "/api/v1/onboarding/startup"
+    || pathname === "/api/v1/onboarding/state"
+    || pathname === "/api/v1/onboarding/bootstrap"
+    || pathname === "/api/v1/auth/plan"
+    || pathname === "/api/v1/auth/install-token";
+}
+
+function isAuthMisconfigured(auth: {
+  mode: "none" | "token" | "basic";
+  token: { value?: string };
+  basic: { username?: string; password?: string };
+}): boolean {
+  if (auth.mode === "token") {
+    return !auth.token.value?.trim();
+  }
+  if (auth.mode === "basic") {
+    return !auth.basic.username?.trim() || !auth.basic.password?.trim();
+  }
+  return false;
+}
+
+function isOnboardingComplete(fastify: FastifyInstance): boolean {
+  try {
+    return Boolean(fastify.gateway?.getOnboardingStartupState?.().completed);
+  } catch {
+    return true;
+  }
+}
 
 function readHeaderToken(value: string | string[] | undefined): string | undefined {
   if (!value || Array.isArray(value)) {

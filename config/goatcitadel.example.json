@@ -9,7 +9,7 @@
     "workspaceDir": "./workspace",
     "worktreesDir": "./.worktrees",
     "auth": {
-      "mode": "token",
+      "mode": "none",
       "allowLoopbackBypass": false,
       "token": {
         "queryParam": "access_token"

@@ -28,7 +28,6 @@ export async function startVerificationStack(context, options = {}) {
     GOATCITADEL_ROOT_DIR: runtimeRoot,
     GATEWAY_HOST: "127.0.0.1",
     GATEWAY_PORT: String(gatewayPort),
-    GOATCITADEL_AUTH_MODE: "none",
     GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
     GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
     ...options.gatewayEnv,
