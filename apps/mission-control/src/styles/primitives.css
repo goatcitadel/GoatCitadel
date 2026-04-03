@@ -3,6 +3,7 @@
   border: 1px solid var(--border-default);
   background: var(--surface-1);
   box-shadow: var(--shadow-1);
+  padding: var(--mc-surface-pad, calc(var(--space-4) * var(--density-scale)));
 }
 
 .panel-body {
@@ -10,16 +11,19 @@
   gap: calc(var(--space-3) * var(--density-scale));
 }
 
-.panel[data-padding="compact"] .panel-body {
-  padding: calc(var(--space-3) * var(--density-scale));
+.panel[data-padding="compact"],
+.panel.panel-pad-compact {
+  padding: var(--mc-surface-pad-compact, calc(var(--space-3) * var(--density-scale)));
 }
 
-.panel[data-padding="default"] .panel-body {
-  padding: calc(var(--space-4) * var(--density-scale));
+.panel[data-padding="default"],
+.panel.panel-pad-default {
+  padding: var(--mc-surface-pad, calc(var(--space-4) * var(--density-scale)));
 }
 
-.panel[data-padding="spacious"] .panel-body {
-  padding: calc(var(--space-5) * var(--density-scale));
+.panel[data-padding="spacious"],
+.panel.panel-pad-spacious {
+  padding: var(--mc-surface-pad-spacious, calc(var(--space-5) * var(--density-scale)));
 }
 
 .panel-summary {
