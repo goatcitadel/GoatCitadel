@@ -40,5 +40,6 @@ describe("CoworkCanvasPanel", () => {
     expect(markup).toContain("Researcher -&gt; Coder");
     expect(markup).toContain("Collected constraints and scoped the problem.");
     expect(markup).toContain("Research is in motion and implementation is queued behind it.");
+    expect(markup).toContain("Active run");
   });
 });

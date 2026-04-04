@@ -211,4 +211,54 @@ describe("ApprovalsPage", () => {
       renderer.unmount();
     }
   });
+
+  it("surfaces inline operator evidence for code-heavy approvals before the raw payload", async () => {
+    apiMocks.fetchApprovals.mockResolvedValueOnce({
+      items: [
+        {
+          approvalId: "approval-code",
+          kind: "files.apply_patch",
+          riskLevel: "danger",
+          status: "pending",
+          preview: {
+            files: ["apps/mission-control/src/pages/ChatPage.tsx"],
+            patch: "*** Begin Patch\n*** Update File: apps/mission-control/src/pages/ChatPage.tsx\n+const nextValue = true;\n*** End Patch",
+          },
+          payload: {
+            command: "apply patch to ChatPage",
+          },
+          explanationStatus: "completed",
+          explanation: {
+            summary: "Apply a patch to the Chat page.",
+            riskExplanation: "This changes production UI code.",
+            saferAlternative: "Review the patch before approving.",
+            generatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+          },
+          explanationError: null,
+          createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+          updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+        },
+      ],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      const text = rendererText(renderer);
+      expect(text).toContain("Operator evidence");
+      expect(text).toContain("Files: apps/mission-control/src/pages/ChatPage.tsx");
+      expect(text).toContain("Patch");
+      expect(text).toContain("Raw request and preview payload");
+    } finally {
+      renderer.unmount();
+    }
+  });
 });

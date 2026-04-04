@@ -24,6 +24,7 @@ export function MissionControlSurfaceHeader({
       <div className="mission-surface-header-copy">
         <p className="mission-surface-header-kicker">{config.shellEyebrow}</p>
         <h2>{sessionTitle}</h2>
+        <p className="mission-surface-header-posture">{config.stageTitle}</p>
         <p>{summary}</p>
       </div>
       <div className="mission-surface-header-actions">
