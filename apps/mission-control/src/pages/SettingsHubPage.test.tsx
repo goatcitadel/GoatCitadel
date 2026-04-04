@@ -77,6 +77,7 @@ describe("SettingsHubPage", () => {
         );
       });
 
+      expect(settingsPageMock).toHaveBeenCalledTimes(1);
       expect(settingsPageMock).toHaveBeenCalledWith("runtime");
       const text = rendererText(renderer);
       expect(text).toContain("SettingsPage:runtime");

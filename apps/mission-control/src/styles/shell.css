@@ -97,8 +97,8 @@
   display: grid;
   grid-template-columns: minmax(180px, auto) minmax(0, 1fr) auto;
   align-items: center;
-  gap: calc(var(--space-4) * var(--density-scale));
-  padding: calc(var(--space-3) * var(--density-scale)) calc(var(--space-5) * var(--density-scale));
+  gap: calc(var(--space-3) * var(--density-scale));
+  padding: calc(var(--space-2) * var(--density-scale)) calc(var(--space-4) * var(--density-scale));
   border-bottom: 1px solid var(--border-default);
   backdrop-filter: blur(18px);
 }
@@ -148,15 +148,15 @@
 .secondary-page-nav-item,
 .shell-command-trigger-topbar,
 .shell-status-link {
-  min-height: 42px;
+  min-height: 38px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
   border: 1px solid var(--border-default);
   border-radius: 999px;
-  padding: calc(var(--space-2) * var(--density-scale)) calc(var(--space-4) * var(--density-scale));
-  font: 700 13px/1 var(--font-body);
+  padding: calc(var(--space-2) * var(--density-scale)) calc(var(--space-3) * var(--density-scale));
+  font: 700 12px/1 var(--font-body);
   color: var(--text-primary);
   cursor: pointer;
   transition:
@@ -191,7 +191,7 @@
 .shell-workspace-picker {
   display: grid;
   gap: calc(var(--space-1) * var(--density-scale));
-  min-width: 220px;
+  min-width: 208px;
 }
 
 .shell-context-picker {
@@ -204,8 +204,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: calc(var(--space-3) * var(--density-scale));
-  padding: 0 calc(var(--space-5) * var(--density-scale)) calc(var(--space-3) * var(--density-scale));
+  gap: calc(var(--space-2) * var(--density-scale));
+  padding: 0 calc(var(--space-4) * var(--density-scale)) calc(var(--space-2) * var(--density-scale));
   border-bottom: 1px solid var(--border-default);
 }
 
@@ -216,14 +216,14 @@
 .shell-main {
   width: min(1680px, calc(100% - calc(var(--space-5) * 2)));
   margin: 0 auto;
-  padding: calc(var(--space-4) * var(--density-scale)) 0 calc(var(--space-6) * var(--density-scale));
+  padding: calc(var(--space-3) * var(--density-scale)) 0 calc(var(--space-5) * var(--density-scale));
   display: grid;
-  gap: calc(var(--space-5) * var(--density-scale));
+  gap: calc(var(--space-4) * var(--density-scale));
 }
 
 .space-page {
   display: grid;
-  gap: calc(var(--space-5) * var(--density-scale));
+  gap: calc(var(--space-4) * var(--density-scale));
 }
 
 .space-page-surface {
@@ -305,8 +305,8 @@
 
 .settings-hub-grid {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: calc(var(--space-5) * var(--density-scale));
+  grid-template-columns: 208px minmax(0, 1fr);
+  gap: calc(var(--space-4) * var(--density-scale));
 }
 
 .settings-hub-content {
@@ -386,8 +386,8 @@
 
 .theme-citadel-light .shell-bar .shell-workspace-picker {
   min-width: 240px;
-  padding: 10px 12px;
-  border-radius: 18px;
+  padding: 8px 10px;
+  border-radius: 16px;
   border: 1px solid rgba(21, 72, 87, 0.16);
   background:
     linear-gradient(180deg, rgba(210, 230, 236, 0.96), rgba(185, 207, 214, 0.94));
@@ -414,7 +414,7 @@
 }
 
 .theme-citadel-light .shell-main {
-  width: min(1700px, calc(100% - calc(var(--space-5) * 2)));
+  width: min(1700px, calc(100% - calc(var(--space-4) * 2)));
 }
 
 .theme-citadel-light .status-strip .stat-card {

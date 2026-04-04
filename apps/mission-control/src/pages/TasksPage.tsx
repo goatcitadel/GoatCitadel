@@ -572,14 +572,24 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                 <tr
                   key={task.taskId}
                   className={task.taskId === selectedTaskId ? "row-selected" : ""}
+                  aria-selected={task.taskId === selectedTaskId}
                 >
-                  <td onClick={() => setSelectedTaskId(task.taskId)}>
-                    {task.title}
-                    {task.deletedAt ? <span className="office-subtitle"> (trashed)</span> : null}
+                  <td>
+                    <button
+                      type="button"
+                      className="task-queue-select"
+                      aria-pressed={task.taskId === selectedTaskId}
+                      onClick={() => setSelectedTaskId(task.taskId)}
+                    >
+                      <span className="task-queue-select-title">{task.title}</span>
+                      <span className="task-queue-select-meta">
+                        {task.deletedAt ? "Open trashed task details" : "Open task details"}
+                      </span>
+                    </button>
                   </td>
-                  <td onClick={() => setSelectedTaskId(task.taskId)}>{task.status}</td>
-                  <td onClick={() => setSelectedTaskId(task.taskId)}>{task.priority}</td>
-                  <td onClick={() => setSelectedTaskId(task.taskId)}>{new Date(task.updatedAt).toLocaleString()}</td>
+                  <td>{task.status}</td>
+                  <td>{task.priority}</td>
+                  <td>{new Date(task.updatedAt).toLocaleString()}</td>
                   <td className="actions">
                     {!task.deletedAt ? (
                       <button type="button" onClick={() => setConfirmDelete({ task, mode: "soft" })}>Move to Trash</button>

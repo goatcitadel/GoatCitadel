@@ -1,12 +1,12 @@
 .chat-v11-shell {
-  gap: 16px;
+  gap: 14px;
   align-items: stretch;
 }
 
 .chat-v11-left {
-  gap: 12px;
-  padding: 16px;
-  border-radius: 20px;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 18px;
 }
 
 .chat-v11-workspace-summary {
@@ -34,9 +34,9 @@
 .mission-surface-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
+  gap: 12px;
   align-items: end;
-  padding: 8px 4px 0;
+  padding: 4px 2px 0;
   position: sticky;
   top: 0;
   z-index: 4;
@@ -65,7 +65,7 @@
 
 .mission-surface-header-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -74,32 +74,32 @@
 .mission-surface-dock-toggle {
   border: 1px solid var(--line-soft);
   border-radius: 999px;
-  padding: 8px 12px;
+  padding: 7px 10px;
   background: rgba(115, 205, 255, 0.05);
 }
 
 .chat-v11-main-grid.with-dock-open {
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
   align-items: start;
 }
 
 .chat-v11-main-grid.with-cowork.with-dock-open {
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 390px);
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 372px);
 }
 
 .chat-v11-main-grid.with-code.with-dock-open {
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
+  grid-template-columns: minmax(0, 1fr) minmax(336px, 396px);
 }
 
 .chat-v11-thread {
-  gap: 14px;
-  padding: 10px;
-  border-radius: 22px;
+  gap: 12px;
+  padding: 8px;
+  border-radius: 20px;
 }
 
 .chat-v11-thread-shell {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   min-height: 0;
   grid-template-rows: auto auto minmax(0, 1fr);
 }
@@ -110,13 +110,13 @@
 
 .chat-v11-thread-status-lane {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .chat-v11-composer {
-  gap: 10px;
-  padding: 14px;
-  border-radius: 18px;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
 }
 
 .chat-v11-composer-headline {
@@ -175,9 +175,9 @@
 
 .mission-context-dock {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   align-self: stretch;
-  min-height: clamp(520px, calc(100vh - 220px), 980px);
+  min-height: clamp(480px, calc(100vh - 208px), 920px);
 }
 
 .mission-context-dock.is-collapsed {
@@ -186,8 +186,8 @@
 
 .mission-context-dock-head {
   display: grid;
-  gap: 8px;
-  padding: 4px 6px 0;
+  gap: 6px;
+  padding: 2px 4px 0;
   position: sticky;
   top: 0;
   z-index: 2;
@@ -196,13 +196,13 @@
 
 .mission-context-dock-body {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   align-content: start;
 }
 
 .mission-dock-section {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   min-height: 0;
 }
 
@@ -213,8 +213,8 @@
 .chat-cowork-panel,
 .chat-code-workbench,
 .chat-v11-inspector-lane {
-  border-radius: 20px;
-  padding: 14px;
+  border-radius: 18px;
+  padding: 12px;
 }
 
 .mission-empty-shell {

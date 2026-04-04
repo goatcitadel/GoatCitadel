@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import * as Popover from "@radix-ui/react-popover";
 
 export function ChatComposerPlusMenu({
   disabled,
@@ -10,57 +11,56 @@ export function ChatComposerPlusMenu({
   onRunQuickResearch: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const handleOutside = (event: MouseEvent) => {
-      if (!rootRef.current) {
-        return;
-      }
-      if (event.target instanceof Node && !rootRef.current.contains(event.target)) {
-        setOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", handleOutside);
-    return () => window.removeEventListener("mousedown", handleOutside);
-  }, []);
+    if (disabled) {
+      setOpen(false);
+    }
+  }, [disabled]);
 
   return (
-    <div className="chat-plus-menu" ref={rootRef}>
-      <button
-        type="button"
-        className="chat-plus-trigger"
-        disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-        aria-expanded={open}
-        aria-label="Open chat actions"
-      >
-        +
-      </button>
-      {open ? (
-        <div className="chat-plus-popover" role="menu" aria-label="Chat actions">
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <div className="chat-plus-menu">
+        <Popover.Trigger asChild>
           <button
             type="button"
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              onAttachFiles();
-            }}
+            className="chat-plus-trigger"
+            disabled={disabled}
+            aria-expanded={open}
+            aria-label="Open chat actions"
           >
-            Add files or photos
+            +
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              onRunQuickResearch();
-            }}
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content
+            className="chat-plus-popover"
+            align="start"
+            side="top"
+            sideOffset={8}
+            onOpenAutoFocus={(event) => event.preventDefault()}
           >
-            Quick web research
-          </button>
-        </div>
-      ) : null}
-    </div>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onAttachFiles();
+              }}
+            >
+              Add files or photos
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onRunQuickResearch();
+              }}
+            >
+              Quick web research
+            </button>
+          </Popover.Content>
+        </Popover.Portal>
+      </div>
+    </Popover.Root>
   );
 }

@@ -1,7 +1,7 @@
 .settings-v2-layout {
   display: grid;
   grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
-  gap: 18px;
+  gap: 14px;
   align-items: start;
 }
 
@@ -11,9 +11,9 @@
 
 .settings-v2-nav {
   position: sticky;
-  top: 88px;
+  top: 72px;
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .settings-v2-nav-head {
@@ -27,7 +27,7 @@
 
 .settings-v2-nav-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .settings-v2-nav-item {
@@ -35,8 +35,8 @@
   text-align: left;
   display: grid;
   gap: 4px;
-  padding: 12px 14px;
-  border-radius: 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
   border: 1px solid rgba(120, 146, 186, 0.16);
   background: rgba(17, 23, 35, 0.78);
 }
@@ -53,13 +53,13 @@
 
 .settings-v2-content {
   display: grid;
-  gap: 18px;
+  gap: 14px;
   min-width: 0;
 }
 
 .settings-v2-section {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .settings-v2-panel {
@@ -70,19 +70,19 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .settings-v2-overview-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .settings-v2-overview-grid > div {
   border: 1px solid rgba(120, 146, 186, 0.14);
-  border-radius: 14px;
-  padding: 12px 14px;
+  border-radius: 12px;
+  padding: 10px 12px;
   background: rgba(15, 20, 31, 0.64);
 }
 

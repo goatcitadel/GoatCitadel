@@ -228,6 +228,72 @@ type SessionControlPending =
   | "binding";
 
 type ChatHistoryView = "active" | "archived";
+type ConfirmableCapabilityAction =
+  | "enable_skill"
+  | "install_skill_disabled"
+  | "install_skill_enable"
+  | "add_mcp_template";
+
+interface CapabilitySuggestionConfirmationCopy {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  danger: boolean;
+}
+
+function isConfirmableCapabilityAction(
+  action: ChatCapabilityUpgradeSuggestion["recommendedAction"],
+): action is ConfirmableCapabilityAction {
+  return action === "enable_skill"
+    || action === "install_skill_disabled"
+    || action === "install_skill_enable"
+    || action === "add_mcp_template";
+}
+
+export function getCapabilitySuggestionConfirmationCopy(
+  suggestion: ChatCapabilityUpgradeSuggestion,
+): CapabilitySuggestionConfirmationCopy | null {
+  if (!isConfirmableCapabilityAction(suggestion.recommendedAction)) {
+    return null;
+  }
+
+  switch (suggestion.recommendedAction) {
+    case "enable_skill":
+      return {
+        title: "Enable skill",
+        message: `Enable ${suggestion.title}? GoatCitadel will turn it on and then resume the original request.`,
+        confirmLabel: "Enable and resume",
+        danger: false,
+      };
+    case "install_skill_disabled":
+      return {
+        title: "Install skill for review",
+        message: `Install ${suggestion.title} in a disabled state first? You can review it in Skills before enabling live use.`,
+        confirmLabel: "Install disabled",
+        danger: false,
+      };
+    case "install_skill_enable":
+      return {
+        title: "Install and enable hosted skill",
+        message: `Approve GoatCitadel to install and enable ${suggestion.title} now? The original request will resume automatically afterward.`,
+        confirmLabel: "Install and enable",
+        danger: suggestion.riskLevel === "high",
+      };
+    case "add_mcp_template":
+      return {
+        title: "Add MCP template",
+        message: `Add MCP template "${suggestion.title}" now? Review trust and auth details in MCP Servers before first live use.`,
+        confirmLabel: "Add template",
+        danger: false,
+      };
+    default:
+      return null;
+  }
+}
+
+export function getDeleteSessionConfirmationMessage(label: string): string {
+  return `Delete "${label}" permanently? This removes its messages, traces, session history, and attached files.`;
+}
 
 function normalizeComparableAssistantContent(value: string | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
@@ -449,7 +515,10 @@ export function ChatPage({
   const [projectPath, setProjectPath] = useState("chat/default");
   const [showProjectCreate, setShowProjectCreate] = useState(false);
   const [renameTitle, setRenameTitle] = useState("");
+  const [capabilitySuggestionConfirm, setCapabilitySuggestionConfirm] = useState<ChatCapabilityUpgradeSuggestion | null>(null);
+  const [capabilitySuggestionPending, setCapabilitySuggestionPending] = useState(false);
   const [sessionControlPending, setSessionControlPending] = useState<SessionControlPending>(null);
+  const [sessionDeleteConfirm, setSessionDeleteConfirm] = useState<{ sessionId: string; label: string } | null>(null);
   const [archiveWorkspacePending, setArchiveWorkspacePending] = useState(false);
   const [archiveWorkspaceConfirmOpen, setArchiveWorkspaceConfirmOpen] = useState(false);
   const [integrationConnectionId, setIntegrationConnectionId] = useState("");
@@ -1186,6 +1255,9 @@ export function ChatPage({
   useEffect(() => setCommandIndex(0), [draft]);
 
   const selectedSessionProjectValue = selectedSession?.projectId ?? "none";
+  const capabilityConfirmationCopy = capabilitySuggestionConfirm
+    ? getCapabilitySuggestionConfirmationCopy(capabilitySuggestionConfirm)
+    : null;
   const planningMode = prefs?.planningMode ?? "off";
   const proactiveSuggestionCount = proactiveRuns.filter((run) => run.status === "suggested").length;
   const {
@@ -1735,16 +1807,12 @@ export function ChatPage({
     await executeOutboundItemRef.current(nextItem);
   }, [pushLocalNotice, selectedSessionId, selectedTurn?.turnId, tryBeginOutboundExecution]);
 
-  const handleCapabilitySuggestionAction = useCallback(async (suggestion: ChatCapabilityUpgradeSuggestion) => {
+  const runCapabilitySuggestionAction = useCallback(async (suggestion: ChatCapabilityUpgradeSuggestion) => {
     try {
       setError(null);
       if (suggestion.recommendedAction === "enable_skill") {
         if (!suggestion.candidateId) {
           throw new Error("This suggestion is missing the installed skill identifier.");
-        }
-        const confirmed = window.confirm(`Enable ${suggestion.title}?`);
-        if (!confirmed) {
-          return;
         }
         const updated = await updateSkillState(suggestion.candidateId, {
           state: "enabled",
@@ -1760,12 +1828,6 @@ export function ChatPage({
       if (suggestion.recommendedAction === "install_skill_disabled") {
         if (!suggestion.sourceRef) {
           throw new Error("This suggestion is missing the import source.");
-        }
-        const confirmed = window.confirm(
-          `${suggestion.title}\n\nInstall this skill in disabled state for review first?`,
-        );
-        if (!confirmed) {
-          return;
         }
         const installed = await installSkillImport({
           sourceRef: suggestion.sourceRef,
@@ -1789,12 +1851,6 @@ export function ChatPage({
       if (suggestion.recommendedAction === "install_skill_enable") {
         if (!suggestion.sourceRef) {
           throw new Error("This suggestion is missing the import source.");
-        }
-        const confirmed = window.confirm(
-          `${suggestion.title}\n\nApprove GoatCitadel to install and enable this hosted skill now?`,
-        );
-        if (!confirmed) {
-          return;
         }
         const installed = await installSkillImport({
           sourceRef: suggestion.sourceRef,
@@ -1821,10 +1877,6 @@ export function ChatPage({
         const templateId = suggestion.candidateId ?? suggestion.sourceRef;
         if (!templateId) {
           throw new Error("This suggestion is missing the MCP template identifier.");
-        }
-        const confirmed = window.confirm(`Add MCP template "${suggestion.title}" now?`);
-        if (!confirmed) {
-          return;
         }
         const templates = await fetchMcpTemplates();
         const template = templates.items.find((item) => item.templateId === templateId);
@@ -1867,6 +1919,48 @@ export function ChatPage({
       setError((err as Error).message);
     }
   }, [dismissCapabilitySuggestion, pushLocalNotice, resumeCapabilitySuggestionTurn]);
+
+  const handleCapabilitySuggestionAction = useCallback((suggestion: ChatCapabilityUpgradeSuggestion) => {
+    const confirmation = getCapabilitySuggestionConfirmationCopy(suggestion);
+    if (confirmation) {
+      setCapabilitySuggestionConfirm(suggestion);
+      return;
+    }
+    void runCapabilitySuggestionAction(suggestion);
+  }, [runCapabilitySuggestionAction]);
+
+  const confirmCapabilitySuggestionAction = useCallback(async () => {
+    if (!capabilitySuggestionConfirm) {
+      return;
+    }
+    setCapabilitySuggestionPending(true);
+    try {
+      await runCapabilitySuggestionAction(capabilitySuggestionConfirm);
+    } finally {
+      setCapabilitySuggestionPending(false);
+      setCapabilitySuggestionConfirm(null);
+    }
+  }, [capabilitySuggestionConfirm, runCapabilitySuggestionAction]);
+
+  const confirmDeleteSession = useCallback(async () => {
+    if (!sessionDeleteConfirm) {
+      return;
+    }
+    setSessionControlPending("delete");
+    try {
+      await deleteChatSession(sessionDeleteConfirm.sessionId);
+      clearChatSessionLocalState(workspaceId, sessionDeleteConfirm.sessionId);
+      setQueuedOutbound((current) => current.filter((item) => item.sessionId !== sessionDeleteConfirm.sessionId));
+      setThread(null);
+      setSelectedSessionId((current) => current === sessionDeleteConfirm.sessionId ? null : current);
+      await loadSidebar();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSessionControlPending(null);
+      setSessionDeleteConfirm(null);
+    }
+  }, [loadSidebar, sessionDeleteConfirm, workspaceId]);
 
   const handleCommandExecution = useCallback(async (sessionId: string, commandText: string) => {
     const result = await parseChatCommand(sessionId, commandText);
@@ -3281,26 +3375,10 @@ export function ChatPage({
                   }} />
                   <ActionButton label="Delete permanently" disabled={sending || Boolean(sessionControlPending)} pending={sessionControlPending === "delete"} onClick={async () => {
                     if (!selectedSession) return;
-                    const label = formatSessionLabel(selectedSession);
-                    const confirmed = window.confirm(
-                      `Delete "${label}" permanently?\n\nThis removes its messages, traces, session history, and attached files.`,
-                    );
-                    if (!confirmed) {
-                      return;
-                    }
-                    setSessionControlPending("delete");
-                    try {
-                      await deleteChatSession(selectedSession.sessionId);
-                      clearChatSessionLocalState(workspaceId, selectedSession.sessionId);
-                      setQueuedOutbound((current) => current.filter((item) => item.sessionId !== selectedSession.sessionId));
-                      setThread(null);
-                      setSelectedSessionId((current) => current === selectedSession.sessionId ? null : current);
-                      await loadSidebar();
-                    } catch (err) {
-                      setError((err as Error).message);
-                    } finally {
-                      setSessionControlPending(null);
-                    }
+                    setSessionDeleteConfirm({
+                      sessionId: selectedSession.sessionId,
+                      label: formatSessionLabel(selectedSession),
+                    });
                   }} />
                   <GCCombobox
                     value={selectedSessionProjectValue}
@@ -3364,6 +3442,34 @@ export function ChatPage({
           )}
         </div>
       </div>
+      <ConfirmModal
+        open={Boolean(capabilitySuggestionConfirm)}
+        title={capabilityConfirmationCopy?.title ?? "Confirm capability action"}
+        message={capabilityConfirmationCopy?.message ?? ""}
+        confirmLabel={capabilitySuggestionPending ? "Applying..." : (capabilityConfirmationCopy?.confirmLabel ?? "Confirm")}
+        danger={capabilityConfirmationCopy?.danger ?? false}
+        pending={capabilitySuggestionPending}
+        cancelDisabled={capabilitySuggestionPending}
+        disableDismiss={capabilitySuggestionPending}
+        onCancel={() => setCapabilitySuggestionConfirm(null)}
+        onConfirm={() => {
+          void confirmCapabilitySuggestionAction();
+        }}
+      />
+      <ConfirmModal
+        open={Boolean(sessionDeleteConfirm)}
+        title="Delete session permanently"
+        message={sessionDeleteConfirm ? getDeleteSessionConfirmationMessage(sessionDeleteConfirm.label) : ""}
+        confirmLabel={sessionControlPending === "delete" ? "Deleting..." : "Delete permanently"}
+        danger
+        pending={sessionControlPending === "delete"}
+        cancelDisabled={sessionControlPending === "delete"}
+        disableDismiss={sessionControlPending === "delete"}
+        onCancel={() => setSessionDeleteConfirm(null)}
+        onConfirm={() => {
+          void confirmDeleteSession();
+        }}
+      />
       <ConfirmModal
         open={archiveWorkspaceConfirmOpen}
         title="Archive Workspace Mission Chats"

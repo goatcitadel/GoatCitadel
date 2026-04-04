@@ -1330,9 +1330,6 @@ pre {
 }
 
 .chat-plus-popover {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 8px);
   display: grid;
   gap: 6px;
   min-width: 210px;
@@ -1346,6 +1343,35 @@ pre {
 .chat-plus-popover button {
   text-align: left;
   width: 100%;
+}
+
+.task-queue-select {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+  color: inherit;
+}
+
+.task-queue-select:hover,
+.task-queue-select:focus-visible {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.task-queue-select-title {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.task-queue-select-meta {
+  font-size: 0.76rem;
+  color: var(--muted);
 }
 
 .chat-trace-card {

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ChatMessageRecord } from "@goatcitadel/contracts";
 import {
   formatSessionLabel,
+  getCapabilitySuggestionConfirmationCopy,
+  getDeleteSessionConfirmationMessage,
   looksMachineSessionLabel,
   resolveOptimisticChatPrefs,
   shouldShowLearnedMemoryPanel,
@@ -106,6 +108,42 @@ describe("chat session rail labels", () => {
       channel: "slack",
       account: "ops",
     }))).toBe("External chat - slack / ops");
+  });
+});
+
+describe("chat capability confirmation copy", () => {
+  it("describes install-and-enable actions with the proper risk posture", () => {
+    expect(getCapabilitySuggestionConfirmationCopy({
+      kind: "skill_import",
+      title: "Filesystem access",
+      summary: "Install the hosted filesystem helper.",
+      reason: "The request needs filesystem capabilities.",
+      recommendedAction: "install_skill_enable",
+      riskLevel: "high",
+      sourceRef: "skill://filesystem-access",
+      requiresUserApproval: true,
+    })).toMatchObject({
+      title: "Install and enable hosted skill",
+      confirmLabel: "Install and enable",
+      danger: true,
+    });
+  });
+
+  it("skips confirmation copy for non-destructive profile review suggestions", () => {
+    expect(getCapabilitySuggestionConfirmationCopy({
+      kind: "existing_but_disabled",
+      title: "Tool Access",
+      summary: "Switch the current tool profile.",
+      reason: "The current policy blocks this action.",
+      recommendedAction: "switch_tool_profile",
+      riskLevel: "medium",
+      requiresUserApproval: true,
+    })).toBeNull();
+  });
+
+  it("formats permanent session deletion copy without browser confirm text", () => {
+    expect(getDeleteSessionConfirmationMessage("Release checklist")).toContain("Delete \"Release checklist\" permanently?");
+    expect(getDeleteSessionConfirmationMessage("Release checklist")).toContain("attached files");
   });
 });
 

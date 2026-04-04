@@ -1,4 +1,5 @@
 import { globalCopy } from "../content/copy";
+import { GCModal } from "./ui";
 
 interface ConfirmModalProps {
   open: boolean;
@@ -29,48 +30,23 @@ export function ConfirmModal({
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
-  if (!open) {
-    return null;
-  }
-
   return (
-    <div
-      className="modal-backdrop"
-      role="presentation"
-      onClick={() => {
-        if (!disableDismiss) {
+    <GCModal
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) {
           onCancel();
         }
       }}
-    >
-      <div
-        className="modal-card confirm-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <h3 className="confirm-modal-title">{title}</h3>
-        <p className="confirm-modal-message">{message}</p>
-        <div className="actions confirm-modal-actions">
-          <button
-            type="button"
-            className="gc-action-button gc-action-tertiary"
-            disabled={cancelDisabled || pending}
-            onClick={onCancel}
-          >
-            {cancelLabel}
-          </button>
-          <button
-            type="button"
-            className={`gc-action-button ${danger ? "gc-action-danger" : "gc-action-primary"}`}
-            disabled={confirmDisabled || pending}
-            onClick={onConfirm}
-          >
-            {pending ? "Working..." : confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
+      title={title}
+      description={message}
+      confirmLabel={confirmLabel}
+      cancelLabel={cancelLabel}
+      danger={danger}
+      confirmPending={pending}
+      confirmDisabled={confirmDisabled}
+      dismissDisabled={disableDismiss || cancelDisabled || pending}
+      onConfirm={onConfirm}
+    />
   );
 }

@@ -39,8 +39,7 @@ export function SettingsHubPage({
     activeTab === "general" ||
     activeTab === "providers" ||
     activeTab === "access" ||
-    activeTab === "budget" ||
-    activeTab === "runtime";
+    activeTab === "budget";
 
   return (
     <section className="space-page settings-hub">
