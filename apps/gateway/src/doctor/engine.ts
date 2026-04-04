@@ -208,8 +208,6 @@ function summarizeDoctor(checks: DoctorCheckResult[], repairs: DoctorRepairResul
 
   if (summary.hardFailures > 0) {
     summary.exitCode = 2;
-  } else if (summary.unresolvedWarnings > 0) {
-    summary.exitCode = 1;
   } else {
     summary.exitCode = 0;
   }
@@ -1234,10 +1232,16 @@ async function fetchGatewayJson(
   if (authToken?.trim()) {
     headers.Authorization = `Bearer ${authToken.trim()}`;
   }
-  const result = await fetchWithTimeout(url.toString(), {
+  let result = await fetchWithTimeout(url.toString(), {
     method: "GET",
     headers,
   }, 5_000);
+  if (!result.ok && result.aborted) {
+    result = await fetchWithTimeout(url.toString(), {
+      method: "GET",
+      headers,
+    }, 10_000);
+  }
   if (!result.ok) {
     return {
       ok: false,
@@ -1255,7 +1259,7 @@ async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs: number,
-): Promise<{ ok: boolean; detail: string; statusCode?: number; payload?: unknown }> {
+): Promise<{ ok: boolean; detail: string; statusCode?: number; payload?: unknown; aborted?: boolean }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -1285,9 +1289,13 @@ async function fetchWithTimeout(
       payload,
     };
   } catch (error) {
+    const message = (error as Error).message;
+    const name = error instanceof Error ? error.name : "";
+    const aborted = controller.signal.aborted || name === "AbortError" || /abort/i.test(message);
     return {
       ok: false,
-      detail: (error as Error).message,
+      detail: message,
+      aborted,
     };
   } finally {
     clearTimeout(timer);

@@ -66,6 +66,79 @@ describe("doctor operator links", () => {
   });
 });
 
+describe("doctor summary behavior", () => {
+  it("does not fail when the report only contains warnings", async () => {
+    const rootDir = await createDoctorFixture();
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new Error("connect ECONNREFUSED");
+    }) as typeof fetch);
+
+    const report = await runDoctor({
+      rootDir,
+      gatewayBaseUrl: "http://192.168.0.77:8787",
+      auditOnly: true,
+    });
+
+    expect(report.summary.warn).toBeGreaterThan(0);
+    expect(report.summary.fail).toBe(0);
+    expect(report.summary.exitCode).toBe(0);
+  });
+
+  it("retries an aborted deep-runtime settings probe before warning", async () => {
+    const rootDir = await createDoctorFixture();
+    let settingsAttempts = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/settings")) {
+        settingsAttempts += 1;
+        if (settingsAttempts === 1) {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/onboarding/state")) {
+        return new Response(JSON.stringify({ checklist: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/voice/status")) {
+        return new Response(JSON.stringify({ provider: "whisper.cpp", readiness: "ready" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/voice/runtime")) {
+        return new Response(JSON.stringify({ readiness: "ready", selectedModelId: "base.en" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as typeof fetch);
+
+    const report = await runDoctor({
+      rootDir,
+      gatewayBaseUrl: "http://127.0.0.1:8787",
+      auditOnly: true,
+      deep: true,
+    });
+
+    expect(settingsAttempts).toBe(2);
+    expect(report.checks.find((check) => check.id === "gateway.deep-runtime")?.status).toBe("ok");
+  });
+});
+
 async function createDoctorFixture(): Promise<string> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-doctor-"));
   TEMP_ROOTS.push(rootDir);

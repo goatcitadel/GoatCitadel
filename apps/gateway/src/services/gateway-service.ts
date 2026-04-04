@@ -44,6 +44,7 @@ import {
   NotFoundError,
   ValidationError,
 } from "@goatcitadel/contracts";
+import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
 import type {
   AddonActionResponse,
   AddonCatalogEntry,
@@ -19008,6 +19009,7 @@ export class GatewayService {
       nextRunAt: job.nextRunAt,
     }));
     fsSync.writeFileSync(filePath, JSON.stringify({ jobs }, null, 2), "utf8");
+    this.persistUnifiedConfig();
   }
 
   private getCronJobsConfigPath(): string {
@@ -19072,6 +19074,7 @@ export class GatewayService {
     const filePath = path.join(this.config.rootDir, "config", "llm-providers.json");
     fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
     fsSync.writeFileSync(filePath, JSON.stringify(this.llmService.exportConfigFile(), null, 2), "utf8");
+    this.persistUnifiedConfig();
   }
 
   private persistToolPolicyConfig(): void {
@@ -19086,18 +19089,21 @@ export class GatewayService {
     };
     fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
     fsSync.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf8");
+    this.persistUnifiedConfig();
   }
 
   private persistBudgetsConfig(): void {
     const filePath = path.join(this.config.rootDir, "config", "budgets.json");
     fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
     fsSync.writeFileSync(filePath, JSON.stringify(this.config.budgets, null, 2), "utf8");
+    this.persistUnifiedConfig();
   }
 
   private persistAssistantConfig(): void {
     const filePath = path.join(this.config.rootDir, "config", "assistant.config.json");
     const payload = {
       environment: this.config.assistant.environment,
+      deploymentProfile: this.config.assistant.deploymentProfile,
       defaultToolProfile: this.config.assistant.defaultToolProfile,
       dataDir: this.config.assistant.dataDir,
       transcriptsDir: this.config.assistant.transcriptsDir,
@@ -19123,6 +19129,64 @@ export class GatewayService {
     };
     fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
     fsSync.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf8");
+    this.persistUnifiedConfig();
+  }
+
+  private persistUnifiedConfig(): void {
+    const filePath = path.join(this.config.rootDir, "config", "goatcitadel.json");
+    const cronJobs = {
+      jobs: this.storage.cronJobs.list().map((job) => ({
+        jobId: job.jobId,
+        name: job.name,
+        schedule: job.schedule,
+        enabled: job.enabled,
+        lastRunAt: job.lastRunAt,
+        nextRunAt: job.nextRunAt,
+      })),
+    };
+    const assistantPayload = {
+      environment: this.config.assistant.environment,
+      deploymentProfile: this.config.assistant.deploymentProfile,
+      defaultToolProfile: this.config.assistant.defaultToolProfile,
+      dataDir: this.config.assistant.dataDir,
+      transcriptsDir: this.config.assistant.transcriptsDir,
+      auditDir: this.config.assistant.auditDir,
+      workspaceDir: this.config.assistant.workspaceDir,
+      worktreesDir: this.config.assistant.worktreesDir,
+      auth: {
+        mode: this.config.assistant.auth.mode,
+        allowLoopbackBypass: this.config.assistant.auth.allowLoopbackBypass,
+        token: {
+          queryParam: this.config.assistant.auth.token.queryParam,
+        },
+        basic: {},
+      },
+      approvalExplainer: this.config.assistant.approvalExplainer,
+      memory: this.config.assistant.memory,
+      mesh: this.config.assistant.mesh,
+      npu: this.config.assistant.npu,
+      sqlite: this.config.assistant.sqlite,
+      durable: this.config.assistant.durable,
+      features: this.readFeatureFlags(),
+      budgets: this.config.assistant.budgets,
+    };
+    const toolPolicyPayload = {
+      ...this.config.toolPolicy,
+      sandbox: {
+        ...this.config.toolPolicy.sandbox,
+        writeJailRoots: this.config.toolPolicy.sandbox.writeJailRoots.map((root) => this.serializeRootPath(root)),
+        readOnlyRoots: this.config.toolPolicy.sandbox.readOnlyRoots.map((root) => this.serializeRootPath(root)),
+      },
+    };
+    const unifiedPayload = buildUnifiedConfigPayload(
+      assistantPayload,
+      toolPolicyPayload,
+      this.config.budgets,
+      this.llmService.exportConfigFile(),
+      cronJobs,
+    );
+    fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
+    fsSync.writeFileSync(filePath, JSON.stringify(unifiedPayload, null, 2), "utf8");
   }
 
   private getBackupDirectory(): string {

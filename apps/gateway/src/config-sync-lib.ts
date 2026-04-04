@@ -29,6 +29,23 @@ export interface UnifiedConfigSyncOptions {
   createUnifiedIfMissing?: boolean;
 }
 
+export function buildUnifiedConfigPayload(
+  assistant: unknown,
+  toolPolicy: unknown,
+  budgets: unknown,
+  llm: unknown,
+  cronJobs: unknown,
+): Record<string, unknown> {
+  return {
+    version: 1,
+    assistant,
+    toolPolicy,
+    budgets,
+    llm,
+    cronJobs,
+  };
+}
+
 export async function syncUnifiedConfig(
   rootDir: string,
   options: UnifiedConfigSyncOptions = {},
@@ -101,14 +118,7 @@ async function buildUnifiedFromSplitFiles(configDir: string): Promise<Record<str
   const llm = await readJson(path.join(configDir, "llm-providers.json"));
   const cronJobs = await readJson(path.join(configDir, "cron-jobs.json"));
 
-  return {
-    version: 1,
-    assistant,
-    toolPolicy,
-    budgets,
-    llm,
-    cronJobs,
-  };
+  return buildUnifiedConfigPayload(assistant, toolPolicy, budgets, llm, cronJobs);
 }
 
 async function readJson(filePath: string): Promise<unknown> {

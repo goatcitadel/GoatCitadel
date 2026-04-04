@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { syncUnifiedConfig } from "./config-sync-lib.js";
+import { buildUnifiedConfigPayload, syncUnifiedConfig } from "./config-sync-lib.js";
 
 const TEMP_ROOTS: string[] = [];
 
@@ -18,6 +18,23 @@ afterEach(async () => {
 });
 
 describe("syncUnifiedConfig", () => {
+  it("builds a canonical unified payload shape", () => {
+    const assistant = { environment: "local" };
+    const toolPolicy = { profiles: { safe: [] } };
+    const budgets = { mode: "balanced" };
+    const llm = { activeProviderId: "local" };
+    const cronJobs = { jobs: [] };
+
+    expect(buildUnifiedConfigPayload(assistant, toolPolicy, budgets, llm, cronJobs)).toEqual({
+      version: 1,
+      assistant,
+      toolPolicy,
+      budgets,
+      llm,
+      cronJobs,
+    });
+  });
+
   it("creates config/goatcitadel.json from split files when missing", async () => {
     const root = await makeTempRoot();
     await seedSplitFiles(root);
