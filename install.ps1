@@ -149,7 +149,8 @@ $ManagedLocalConfigPaths = @(
   "config/llm-providers.json",
   "config/cron-jobs.json",
   "config/goatcitadel.json",
-  "config/private-beta.profile.json"
+  "config/private-beta.profile.json",
+  "data/onboarding-state.json"
 )
 $preservedManagedConfig = $null
 
