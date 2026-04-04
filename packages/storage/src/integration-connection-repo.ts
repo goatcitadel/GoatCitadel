@@ -74,15 +74,15 @@ export class IntegrationConnectionRepository {
   }
 
   public list(kind?: IntegrationKind, limit = 200): IntegrationConnection[] {
-    const rows = this.listStmt.all({
+    const rows = toIntegrationConnectionRows(this.listStmt.all({
       kind: kind ?? null,
       limit,
-    }) as unknown as IntegrationConnectionRow[];
+    }));
     return rows.map(mapRow);
   }
 
   public get(connectionId: string): IntegrationConnection {
-    const row = this.getStmt.get(connectionId) as IntegrationConnectionRow | undefined;
+    const row = toIntegrationConnectionRow(this.getStmt.get(connectionId));
     if (!row) {
       throw new NotFoundError({ entity: "Integration connection", id: connectionId });
     }
@@ -142,7 +142,7 @@ export class IntegrationConnectionRepository {
   }
 
   public delete(connectionId: string): boolean {
-    const current = this.getStmt.get(connectionId) as IntegrationConnectionRow | undefined;
+    const current = toIntegrationConnectionRow(this.getStmt.get(connectionId));
     if (!current) {
       return false;
     }
@@ -169,4 +169,41 @@ function mapRow(row: IntegrationConnectionRow): IntegrationConnection {
     lastSyncAt: row.last_sync_at ?? undefined,
     lastError: row.last_error ?? undefined,
   };
+}
+
+function toIntegrationConnectionRow(value: unknown): IntegrationConnectionRow | undefined {
+  return isIntegrationConnectionRow(value) ? value : undefined;
+}
+
+function toIntegrationConnectionRows(value: unknown): IntegrationConnectionRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isIntegrationConnectionRow);
+}
+
+function isIntegrationConnectionRow(value: unknown): value is IntegrationConnectionRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.connection_id === "string"
+    && typeof value.catalog_id === "string"
+    && typeof value.kind === "string"
+    && typeof value.integration_key === "string"
+    && typeof value.label === "string"
+    && typeof value.enabled === "number"
+    && typeof value.status === "string"
+    && typeof value.config_json === "string"
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string"
+    && (typeof value.last_sync_at === "string" || value.last_sync_at === null)
+    && (typeof value.last_error === "string" || value.last_error === null)
+    && (typeof value.plugin_id === "string" || value.plugin_id === null)
+    && (typeof value.plugin_version === "string" || value.plugin_version === null)
+    && (typeof value.plugin_enabled === "number" || value.plugin_enabled === null)
+    && (typeof value.plugin_meta_json === "string" || value.plugin_meta_json === null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

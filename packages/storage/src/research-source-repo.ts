@@ -58,12 +58,33 @@ export class ResearchSourceRepository {
   }
 
   public listByRun(runId: string, limit = 200): ResearchSourceRecord[] {
-    const rows = this.listByRunStmt.all({
+    const rows = toResearchSourceRows(this.listByRunStmt.all({
       runId,
       limit: Math.max(1, Math.min(limit, 1000)),
-    }) as unknown as ResearchSourceRow[];
+    }));
     return rows.map(mapRow);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isResearchSourceRow(value: unknown): value is ResearchSourceRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.source_id === "string"
+    && typeof value.run_id === "string"
+    && (typeof value.title === "string" || value.title === null)
+    && typeof value.url === "string"
+    && (typeof value.snippet === "string" || value.snippet === null)
+    && typeof value.rank === "number"
+    && typeof value.created_at === "string";
+}
+
+function toResearchSourceRows(value: unknown): ResearchSourceRow[] {
+  return Array.isArray(value) ? value.filter(isResearchSourceRow) : [];
 }
 
 function mapRow(row: ResearchSourceRow): ResearchSourceRecord {

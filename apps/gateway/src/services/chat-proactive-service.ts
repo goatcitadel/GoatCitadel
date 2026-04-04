@@ -595,11 +595,11 @@ export class ChatProactiveService {
   }
 
   private getProactiveAction(actionId: string): ProactiveActionRecord {
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = toProactiveActionRow(this.ctx.gatewaySql.prepare(`
       SELECT *
       FROM proactive_actions
       WHERE action_id = ?
-    `).get(actionId) as ProactiveActionRow | undefined;
+    `).get(actionId));
     if (!row) {
       throw new Error(`Proactive action ${actionId} not found.`);
     }
@@ -607,12 +607,12 @@ export class ChatProactiveService {
   }
 
   private listProactiveRunActions(runId: string): ProactiveActionRecord[] {
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = toProactiveActionRows(this.ctx.gatewaySql.prepare(`
       SELECT *
       FROM proactive_actions
       WHERE run_id = ?
       ORDER BY created_at ASC
-    `).all(runId) as unknown as ProactiveActionRow[];
+    `).all(runId));
     return rows.map(mapProactiveActionRow);
   }
 
@@ -630,7 +630,7 @@ export class ChatProactiveService {
   }
 
   private parseProactiveTickWorkflowPayload(run: DurableRunRecord): ProactiveTickWorkflowPayload | undefined {
-    const payload = run.payload as Partial<ProactiveTickWorkflowPayload> | undefined;
+    const payload = toPlainRecord(run.payload) as Partial<ProactiveTickWorkflowPayload>;
     if (!payload || payload.version !== "proactive.tick.v1") {
       return undefined;
     }
@@ -777,7 +777,7 @@ export class ChatProactiveService {
   }
 
   private findActiveProactiveTickRun(sessionId: string): ProactiveRunRecord | undefined {
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = toProactiveRunRow(this.ctx.gatewaySql.prepare(`
       SELECT pr.*
       FROM proactive_runs pr
       JOIN durable_runs dr
@@ -787,7 +787,7 @@ export class ChatProactiveService {
         AND dr.status IN ('queued', 'running', 'waiting', 'paused')
       ORDER BY pr.started_at DESC
       LIMIT 1
-    `).get(sessionId) as ProactiveRunRow | undefined;
+    `).get(sessionId));
     return row ? mapProactiveRunRow(row) : undefined;
   }
 
@@ -1593,14 +1593,14 @@ export class ChatProactiveService {
     const policySnapshot = this.toProactivePolicy(sessionId, prefs);
     const durableRun = this.callbacks.createDurableRun({
       workflowKey: "proactive.tick",
-      payload: this.createProactiveTickWorkflowPayload({
+      payload: proactiveTickWorkflowPayloadToRecord(this.createProactiveTickWorkflowPayload({
         sessionId,
         proactiveRunId,
         originSurface,
         triggerSource: source,
         policySnapshot,
         requestedAt: now,
-      }) as unknown as Record<string, unknown>,
+      })),
       metadata: {
         proactive: {
           phase: "planning",
@@ -1635,13 +1635,13 @@ export class ChatProactiveService {
 
   listChatSessionProactiveRuns(sessionId: string, limit = 50): ProactiveRunRecord[] {
     this.callbacks.getSession(sessionId);
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = toProactiveRunRows(this.ctx.gatewaySql.prepare(`
       SELECT *
       FROM proactive_runs
       WHERE session_id = ?
       ORDER BY started_at DESC
       LIMIT ?
-    `).all(sessionId, Math.max(1, Math.min(limit, 500))) as unknown as ProactiveRunRow[];
+    `).all(sessionId, Math.max(1, Math.min(limit, 500))));
     return rows.map(mapProactiveRunRow);
   }
 }
@@ -1701,6 +1701,81 @@ function mapProactiveActionRow(row: ProactiveActionRow): ProactiveActionRecord {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? { ...value } : undefined;
+}
+
+function proactiveTickWorkflowPayloadToRecord(payload: ProactiveTickWorkflowPayload): Record<string, unknown> {
+  return {
+    ...payload,
+  };
+}
+
+function toProactiveRunRow(value: unknown): ProactiveRunRow | undefined {
+  return isProactiveRunRow(value) ? value : undefined;
+}
+
+function toProactiveRunRows(value: unknown): ProactiveRunRow[] {
+  return Array.isArray(value) ? value.filter(isProactiveRunRow) : [];
+}
+
+function toProactiveActionRow(value: unknown): ProactiveActionRow | undefined {
+  return isProactiveActionRow(value) ? value : undefined;
+}
+
+function toProactiveActionRows(value: unknown): ProactiveActionRow[] {
+  return Array.isArray(value) ? value.filter(isProactiveActionRow) : [];
+}
+
+function isProactiveRunRow(value: unknown): value is ProactiveRunRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.run_id === "string"
+    && typeof value.session_id === "string"
+    && (typeof value.linked_task_id === "string" || value.linked_task_id === null)
+    && (typeof value.linked_durable_run_id === "string" || value.linked_durable_run_id === null)
+    && (typeof value.approval_id === "string" || value.approval_id === null)
+    && typeof value.status === "string"
+    && typeof value.mode === "string"
+    && (typeof value.trigger_source === "string" || value.trigger_source === null)
+    && (typeof value.origin_surface === "string" || value.origin_surface === null)
+    && typeof value.confidence === "number"
+    && (typeof value.reasoning_summary === "string" || value.reasoning_summary === null)
+    && typeof value.suggested_actions_json === "string"
+    && typeof value.executed_actions_json === "string"
+    && (typeof value.next_wake_at === "string" || value.next_wake_at === null)
+    && (typeof value.stop_reason === "string" || value.stop_reason === null)
+    && (typeof value.external_reference_roots_json === "string" || value.external_reference_roots_json === null)
+    && (typeof value.resume_metadata_json === "string" || value.resume_metadata_json === null)
+    && typeof value.started_at === "string"
+    && (typeof value.finished_at === "string" || value.finished_at === null)
+    && (typeof value.error === "string" || value.error === null);
+}
+
+function isProactiveActionRow(value: unknown): value is ProactiveActionRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.action_id === "string"
+    && typeof value.run_id === "string"
+    && typeof value.session_id === "string"
+    && (typeof value.linked_task_id === "string" || value.linked_task_id === null)
+    && (typeof value.linked_durable_run_id === "string" || value.linked_durable_run_id === null)
+    && (typeof value.approval_id === "string" || value.approval_id === null)
+    && typeof value.kind === "string"
+    && typeof value.status === "string"
+    && (typeof value.trigger_source === "string" || value.trigger_source === null)
+    && (typeof value.origin_surface === "string" || value.origin_surface === null)
+    && (typeof value.tool_name === "string" || value.tool_name === null)
+    && (typeof value.args_json === "string" || value.args_json === null)
+    && (typeof value.result_json === "string" || value.result_json === null)
+    && (typeof value.error === "string" || value.error === null)
+    && (typeof value.external_reference_roots_json === "string" || value.external_reference_roots_json === null)
+    && typeof value.created_at === "string"
+    && (typeof value.updated_at === "string" || value.updated_at === null);
 }
 
 function objectContainsPathPrefix(value: Record<string, unknown>, prefix: string): boolean {

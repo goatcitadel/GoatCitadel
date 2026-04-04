@@ -64,15 +64,17 @@ export class CronJobRepository {
   }
 
   public get(jobId: string): CronJobRecord | undefined {
-    const row = this.getStmt.get({ jobId }) as unknown as CronJobRow | undefined;
+    const row = this.getStmt.get({ jobId });
     if (!row) {
       return undefined;
     }
+    assertCronJobRow(row);
     return mapRow(row);
   }
 
   public list(): CronJobRecord[] {
-    const rows = this.listStmt.all() as unknown as CronJobRow[];
+    const rows = this.listStmt.all();
+    assertCronJobRows(rows);
     return rows.map(mapRow);
   }
 
@@ -102,4 +104,33 @@ function cronJobsMatch(existing: CronJobRecord, next: CronJobRecord): boolean {
     && existing.enabled === next.enabled
     && existing.lastRunAt === next.lastRunAt
     && existing.nextRunAt === next.nextRunAt;
+}
+
+function assertCronJobRows(rows: unknown[]): asserts rows is CronJobRow[] {
+  for (const row of rows) {
+    assertCronJobRow(row);
+  }
+}
+
+function assertCronJobRow(row: unknown): asserts row is CronJobRow {
+  if (!isCronJobRow(row)) {
+    throw new TypeError("cron_jobs query returned an unexpected row shape");
+  }
+}
+
+function isCronJobRow(row: unknown): row is CronJobRow {
+  if (!isRecord(row)) {
+    return false;
+  }
+  return typeof row.job_id === "string"
+    && typeof row.name === "string"
+    && typeof row.schedule === "string"
+    && typeof row.enabled === "number"
+    && (typeof row.last_run_at === "string" || row.last_run_at === null)
+    && (typeof row.next_run_at === "string" || row.next_run_at === null)
+    && typeof row.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

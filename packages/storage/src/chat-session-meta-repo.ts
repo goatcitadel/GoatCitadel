@@ -69,7 +69,7 @@ export class ChatSessionMetaRepository {
   }
 
   public get(sessionId: string): ChatSessionMetaRecord | undefined {
-    const row = this.getStmt.get(sessionId) as ChatSessionMetaRow | undefined;
+    const row = toChatSessionMetaRow(this.getStmt.get(sessionId));
     return row ? mapRow(row) : undefined;
   }
 
@@ -90,7 +90,11 @@ export class ChatSessionMetaRepository {
       createdAt: now,
       updatedAt: now,
     });
-    return mapRow(this.getStmt.get(sessionId) as unknown as ChatSessionMetaRow);
+    const row = toChatSessionMetaRow(this.getStmt.get(sessionId));
+    if (!row) {
+      throw new TypeError("chat_session_meta ensure did not return a row");
+    }
+    return mapRow(row);
   }
 
   public patch(sessionId: string, input: ChatSessionMetaPatchInput, now = new Date().toISOString()): ChatSessionMetaRecord {
@@ -107,19 +111,58 @@ export class ChatSessionMetaRepository {
       createdAt: current.createdAt,
       updatedAt: now,
     });
-    return mapRow(this.getStmt.get(sessionId) as unknown as ChatSessionMetaRow);
+    const row = toChatSessionMetaRow(this.getStmt.get(sessionId));
+    if (!row) {
+      throw new TypeError("chat_session_meta patch did not return a row");
+    }
+    return mapRow(row);
   }
 
   public listBySessionIds(sessionIds: string[], workspaceId?: string): Map<string, ChatSessionMetaRecord> {
     if (sessionIds.length === 0) {
       return new Map();
     }
-    const rows = this.listBySessionIdsStmt.all({
+    const rows = toChatSessionMetaRows(this.listBySessionIdsStmt.all({
       sessionIdsJson: JSON.stringify(sessionIds),
       workspaceId: workspaceId ? sanitizeWorkspaceId(workspaceId) : null,
-    }) as unknown as ChatSessionMetaRow[];
+    }));
     return new Map(rows.map((row) => [row.session_id, mapRow(row)]));
   }
+}
+
+function toChatSessionMetaRow(row: unknown): ChatSessionMetaRow | undefined {
+  if (row !== undefined && !isChatSessionMetaRow(row)) {
+    throw new TypeError("Unexpected chat_session_meta row shape");
+  }
+  return row;
+}
+
+function toChatSessionMetaRows(rows: unknown): ChatSessionMetaRow[] {
+  if (!Array.isArray(rows) || rows.some((row) => !isChatSessionMetaRow(row))) {
+    throw new TypeError("Unexpected chat_session_meta row shape");
+  }
+  return rows;
+}
+
+function isChatSessionMetaRow(value: unknown): value is ChatSessionMetaRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return typeof value.session_id === "string"
+    && typeof value.workspace_id === "string"
+    && (typeof value.title === "string" || value.title === null)
+    && (typeof value.origin === "string" || value.origin === null)
+    && typeof value.include_in_history === "number"
+    && typeof value.pinned === "number"
+    && (value.lifecycle_status === "active" || value.lifecycle_status === "archived")
+    && (typeof value.archived_at === "string" || value.archived_at === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function mapRow(row: ChatSessionMetaRow): ChatSessionMetaRecord {

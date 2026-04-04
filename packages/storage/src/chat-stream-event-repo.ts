@@ -86,35 +86,70 @@ export class ChatStreamEventRepository {
   }
 
   public listByTurn(turnId: string, afterSequence = 0, limit = 500): ChatStreamEventRecord[] {
-    const rows = this.listByTurnStmt.all({
+    const rows = toChatStreamEventRows(this.listByTurnStmt.all({
       turnId,
       afterSequence,
       limit: Math.max(1, Math.min(limit, 5_000)),
-    }) as unknown as ChatStreamEventRow[];
+    }));
     return rows.map(mapRow);
   }
 
   public get(turnId: string, sequence: number): ChatStreamEventRecord | undefined {
-    const row = this.getStmt.get({
+    const row = toChatStreamEventRow(this.getStmt.get({
       turnId,
       sequence,
-    }) as ChatStreamEventRow | undefined;
+    }));
     return row ? mapRow(row) : undefined;
   }
 
   public getByEventId(eventId: string): ChatStreamEventRecord | undefined {
-    const row = this.getByEventIdStmt.get(eventId) as ChatStreamEventRow | undefined;
+    const row = toChatStreamEventRow(this.getByEventIdStmt.get(eventId));
     return row ? mapRow(row) : undefined;
   }
 
   public getLatestSequence(turnId: string): number {
-    const row = this.getLatestSequenceStmt.get(turnId) as { sequence?: number | null } | undefined;
+    const row = toLatestSequenceRow(this.getLatestSequenceStmt.get(turnId));
     return Number(row?.sequence ?? 0);
   }
 
   public purgeBefore(createdAtExclusive: string): number {
     return Number(this.purgeBeforeStmt.run(createdAtExclusive).changes ?? 0);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isChatStreamEventRow(value: unknown): value is ChatStreamEventRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.event_id === "string"
+    && typeof value.session_id === "string"
+    && typeof value.turn_id === "string"
+    && typeof value.sequence === "number"
+    && (typeof value.run_id === "string" || value.run_id === null)
+    && typeof value.chunk_type === "string"
+    && typeof value.payload_json === "string"
+    && typeof value.created_at === "string";
+}
+
+function toChatStreamEventRow(value: unknown): ChatStreamEventRow | undefined {
+  return isChatStreamEventRow(value) ? value : undefined;
+}
+
+function toChatStreamEventRows(value: unknown): ChatStreamEventRow[] {
+  return Array.isArray(value) ? value.filter(isChatStreamEventRow) : [];
+}
+
+function toLatestSequenceRow(value: unknown): { sequence?: number | null } | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return typeof value.sequence === "number" || value.sequence === null || value.sequence === undefined
+    ? { sequence: value.sequence as number | null | undefined }
+    : undefined;
 }
 
 function mapRow(row: ChatStreamEventRow): ChatStreamEventRecord {

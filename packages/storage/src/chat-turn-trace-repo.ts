@@ -160,7 +160,7 @@ export class ChatTurnTraceRepository {
   }
 
   public get(turnId: string): ChatTurnTraceRecord {
-    const row = this.getStmt.get(turnId) as ChatTurnTraceRow | undefined;
+    const row = toChatTurnTraceRow(this.getStmt.get(turnId));
     if (!row) {
       throw new NotFoundError({ entity: "Chat turn trace", id: turnId });
     }
@@ -246,10 +246,10 @@ export class ChatTurnTraceRepository {
   }
 
   public listBySession(sessionId: string, limit = 100): ChatTurnTraceRecord[] {
-    const rows = this.listBySessionStmt.all({
+    const rows = toChatTurnTraceRows(this.listBySessionStmt.all({
       sessionId,
       limit: Math.max(1, Math.min(limit, 1000)),
-    }) as unknown as ChatTurnTraceRow[];
+    }));
     return rows.map(mapRow);
   }
 }
@@ -346,4 +346,48 @@ export function attachTurnTraceDetails(
     executionPlan: details.executionPlan ?? trace.executionPlan,
     capabilityUpgradeSuggestions: details.capabilityUpgradeSuggestions ?? trace.capabilityUpgradeSuggestions,
   };
+}
+
+function toChatTurnTraceRow(value: unknown): ChatTurnTraceRow | undefined {
+  return isChatTurnTraceRow(value) ? value : undefined;
+}
+
+function toChatTurnTraceRows(value: unknown): ChatTurnTraceRow[] {
+  return Array.isArray(value) ? value.filter(isChatTurnTraceRow) : [];
+}
+
+function isChatTurnTraceRow(value: unknown): value is ChatTurnTraceRow {
+  return isRecord(value)
+    && typeof value.turn_id === "string"
+    && typeof value.session_id === "string"
+    && typeof value.user_message_id === "string"
+    && (typeof value.parent_turn_id === "string" || value.parent_turn_id === null)
+    && typeof value.branch_kind === "string"
+    && (typeof value.source_turn_id === "string" || value.source_turn_id === null)
+    && (typeof value.assistant_message_id === "string" || value.assistant_message_id === null)
+    && (typeof value.execution_plan_id === "string" || value.execution_plan_id === null)
+    && typeof value.status === "string"
+    && typeof value.mode === "string"
+    && (typeof value.model === "string" || value.model === null)
+    && typeof value.web_mode === "string"
+    && typeof value.memory_mode === "string"
+    && typeof value.thinking_level === "string"
+    && typeof value.routing_json === "string"
+    && (typeof value.retrieval_json === "string" || value.retrieval_json === null)
+    && (typeof value.reflection_json === "string" || value.reflection_json === null)
+    && (typeof value.proactive_json === "string" || value.proactive_json === null)
+    && (typeof value.completion_json === "string" || value.completion_json === null)
+    && (typeof value.durable_json === "string" || value.durable_json === null)
+    && (typeof value.orchestration_json === "string" || value.orchestration_json === null)
+    && (typeof value.guidance_json === "string" || value.guidance_json === null)
+    && (typeof value.citations_json === "string" || value.citations_json === null)
+    && (typeof value.capability_upgrade_suggestions_json === "string" || value.capability_upgrade_suggestions_json === null)
+    && (typeof value.specialist_candidate_suggestions_json === "string" || value.specialist_candidate_suggestions_json === null)
+    && (typeof value.failure_json === "string" || value.failure_json === null)
+    && typeof value.started_at === "string"
+    && (typeof value.finished_at === "string" || value.finished_at === null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

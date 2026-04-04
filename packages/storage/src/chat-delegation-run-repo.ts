@@ -9,6 +9,7 @@ import type {
   ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
+import { safeJsonParse } from "./safe-json.js";
 
 interface ChatDelegationRunRow {
   run_id: string;
@@ -75,7 +76,7 @@ export class ChatDelegationRunRepository {
   }
 
   public get(runId: string): ChatDelegationRunRecord {
-    const row = this.getStmt.get(runId) as ChatDelegationRunRow | undefined;
+    const row = toChatDelegationRunRow(this.getStmt.get(runId));
     if (!row) {
       throw new NotFoundError({ entity: "Delegation run", id: runId });
     }
@@ -157,12 +158,49 @@ export class ChatDelegationRunRepository {
   }
 
   public listBySession(sessionId: string, limit = 100): ChatDelegationRunRecord[] {
-    const rows = this.listBySessionStmt.all({
+    const rows = toChatDelegationRunRows(this.listBySessionStmt.all({
       sessionId,
       limit: Math.max(1, Math.min(limit, 1000)),
-    }) as unknown as ChatDelegationRunRow[];
+    }));
     return rows.map(mapRow);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isChatDelegationRunRow(value: unknown): value is ChatDelegationRunRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.run_id === "string"
+    && typeof value.session_id === "string"
+    && typeof value.task_id === "string"
+    && typeof value.objective === "string"
+    && typeof value.roles_json === "string"
+    && typeof value.mode === "string"
+    && (typeof value.provider_id === "string" || value.provider_id === null)
+    && (typeof value.model === "string" || value.model === null)
+    && typeof value.status === "string"
+    && (typeof value.visibility === "string" || value.visibility === null)
+    && (typeof value.workflow_template === "string" || value.workflow_template === null)
+    && (typeof value.execution_plan_id === "string" || value.execution_plan_id === null)
+    && (typeof value.route_decision_json === "string" || value.route_decision_json === null)
+    && (typeof value.final_summary === "string" || value.final_summary === null)
+    && (typeof value.stitched_output === "string" || value.stitched_output === null)
+    && typeof value.citations_json === "string"
+    && (typeof value.trace_json === "string" || value.trace_json === null)
+    && typeof value.started_at === "string"
+    && (typeof value.finished_at === "string" || value.finished_at === null);
+}
+
+function toChatDelegationRunRow(value: unknown): ChatDelegationRunRow | undefined {
+  return isChatDelegationRunRow(value) ? value : undefined;
+}
+
+function toChatDelegationRunRows(value: unknown): ChatDelegationRunRow[] {
+  return Array.isArray(value) ? value.filter(isChatDelegationRunRow) : [];
 }
 
 function mapRow(row: ChatDelegationRunRow): ChatDelegationRunRecord {
@@ -189,12 +227,4 @@ function mapRow(row: ChatDelegationRunRow): ChatDelegationRunRecord {
     citations: safeJsonParse<ChatCitationRecord[]>(row.citations_json, []),
     trace: row.trace_json ? safeJsonParse<ChatTurnTraceRecord["routing"]>(row.trace_json, {}) : undefined,
   };
-}
-
-function safeJsonParse<T>(raw: string, fallback: T): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
 }

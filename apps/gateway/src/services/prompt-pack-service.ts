@@ -692,20 +692,20 @@ export class PromptPackService {
   }
 
   getPromptPackBenchmarkStatus(benchmarkRunId: string): PromptPackBenchmarkStatusRecord {
-    const runRow = this.ctx.gatewaySql.prepare(`
+    const runRow = toPromptPackBenchmarkRunRow(this.ctx.gatewaySql.prepare(`
       SELECT *
       FROM prompt_pack_benchmark_runs
       WHERE benchmark_run_id = ?
-    `).get(benchmarkRunId) as PromptPackBenchmarkRunRow | undefined;
+    `).get(benchmarkRunId));
     if (!runRow) {
       throw new Error(`Prompt-pack benchmark run ${benchmarkRunId} not found.`);
     }
-    const itemRows = this.ctx.gatewaySql.prepare(`
+    const itemRows = toPromptPackBenchmarkItemRows(this.ctx.gatewaySql.prepare(`
       SELECT *
       FROM prompt_pack_benchmark_items
       WHERE benchmark_run_id = ?
       ORDER BY created_at ASC
-    `).all(benchmarkRunId) as unknown as PromptPackBenchmarkItemRow[];
+    `).all(benchmarkRunId));
     const items = itemRows.map((row) => mapPromptPackBenchmarkItemRow(row));
     const run = mapPromptPackBenchmarkRunRow(runRow);
     const modelSummaries = summarizePromptPackBenchmarkItems(items);
@@ -3749,4 +3749,47 @@ function hasJsonLikeStructuredOutput(responseText: string): boolean {
     return true;
   }
   return /```(?:json)?\s*[\[{]/i.test(trimmed);
+}
+
+function toPromptPackBenchmarkRunRow(value: unknown): PromptPackBenchmarkRunRow | undefined {
+  return isPromptPackBenchmarkRunRow(value) ? value : undefined;
+}
+
+function toPromptPackBenchmarkItemRows(value: unknown): PromptPackBenchmarkItemRow[] {
+  return Array.isArray(value) ? value.filter(isPromptPackBenchmarkItemRow) : [];
+}
+
+function isPromptPackBenchmarkRunRow(value: unknown): value is PromptPackBenchmarkRunRow {
+  return isRecord(value)
+    && typeof value.benchmark_run_id === "string"
+    && typeof value.pack_id === "string"
+    && typeof value.status === "string"
+    && typeof value.test_codes_json === "string"
+    && typeof value.providers_json === "string"
+    && typeof value.total_items === "number"
+    && typeof value.completed_items === "number"
+    && (typeof value.error === "string" || value.error === null)
+    && typeof value.started_at === "string"
+    && (typeof value.finished_at === "string" || value.finished_at === null);
+}
+
+function isPromptPackBenchmarkItemRow(value: unknown): value is PromptPackBenchmarkItemRow {
+  return isRecord(value)
+    && typeof value.item_id === "string"
+    && typeof value.benchmark_run_id === "string"
+    && typeof value.pack_id === "string"
+    && typeof value.test_id === "string"
+    && typeof value.test_code === "string"
+    && typeof value.provider_id === "string"
+    && typeof value.model === "string"
+    && (typeof value.run_id === "string" || value.run_id === null)
+    && (typeof value.score_id === "string" || value.score_id === null)
+    && typeof value.run_status === "string"
+    && (typeof value.total_score === "number" || value.total_score === null)
+    && (typeof value.failure_signal === "string" || value.failure_signal === null)
+    && typeof value.created_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

@@ -92,12 +92,14 @@ export class ChannelSetupDraftRepository {
   }
 
   public listByCatalog(catalogId: string, limit = 50): ChannelSetupDraft[] {
-    const rows = this.listByCatalogStmt.all({ catalogId, limit }) as unknown as ChannelSetupDraftRow[];
+    const rows = this.listByCatalogStmt.all({ catalogId, limit });
+    assertChannelSetupDraftRows(rows);
     return rows.map(mapRow);
   }
 
   public listByConnection(connectionId: string, limit = 50): ChannelSetupDraft[] {
-    const rows = this.listByConnectionStmt.all({ connectionId, limit }) as unknown as ChannelSetupDraftRow[];
+    const rows = this.listByConnectionStmt.all({ connectionId, limit });
+    assertChannelSetupDraftRows(rows);
     return rows.map(mapRow);
   }
 
@@ -204,4 +206,38 @@ function mapRow(row: ChannelSetupDraftRow): ChannelSetupDraft {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function assertChannelSetupDraftRows(rows: unknown): asserts rows is ChannelSetupDraftRow[] {
+  if (!Array.isArray(rows) || rows.some((row) => !isChannelSetupDraftRow(row))) {
+    throw new TypeError("Unexpected channel setup draft row shape");
+  }
+}
+
+function isChannelSetupDraftRow(value: unknown): value is ChannelSetupDraftRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return typeof value.draft_id === "string"
+    && typeof value.catalog_id === "string"
+    && (typeof value.connection_id === "string" || value.connection_id === null)
+    && typeof value.lifecycle_mode === "string"
+    && (typeof value.label === "string" || value.label === null)
+    && typeof value.enabled === "number"
+    && typeof value.draft_json === "string"
+    && (typeof value.hydration_json === "string" || value.hydration_json === null)
+    && typeof value.content_version === "string"
+    && typeof value.adapter_version === "string"
+    && typeof value.validation_version === "string"
+    && typeof value.test_version === "string"
+    && (typeof value.last_validated_at === "string" || value.last_validated_at === null)
+    && (typeof value.last_tested_at === "string" || value.last_tested_at === null)
+    && (typeof value.last_failure_category === "string" || value.last_failure_category === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

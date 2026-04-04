@@ -94,10 +94,10 @@ export class CommsDeliveryRepository {
   }
 
   public list(connectionId?: string, limit = 200): CommsSendResult[] {
-    const rows = this.listStmt.all({
+    const rows = toCommsDeliveryRows(this.listStmt.all({
       connectionId: connectionId ?? null,
       limit,
-    }) as unknown as CommsDeliveryRow[];
+    }));
     return rows.map((row) => ({
       deliveryId: row.delivery_id,
       status: row.status,
@@ -109,4 +109,31 @@ export class CommsDeliveryRepository {
       updatedAt: row.updated_at,
     }));
   }
+}
+
+function toCommsDeliveryRows(value: unknown): CommsDeliveryRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isCommsDeliveryRow);
+}
+
+function isCommsDeliveryRow(value: unknown): value is CommsDeliveryRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.delivery_id === "string"
+    && typeof value.connection_id === "string"
+    && typeof value.channel_key === "string"
+    && typeof value.target === "string"
+    && typeof value.payload_hash === "string"
+    && typeof value.status === "string"
+    && (typeof value.provider_msg_id === "string" || value.provider_msg_id === null)
+    && (typeof value.error === "string" || value.error === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

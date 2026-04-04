@@ -435,6 +435,43 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
       outcome: "executed",
     });
   });
+
+  it("redacts secret-looking tool arguments before persisting audit records", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    await (engine as unknown as {
+      recordInvocation: (
+        auditEventId: string,
+        request: {
+          toolName: string;
+          args: Record<string, unknown>;
+          agentId: string;
+          sessionId: string;
+          taskId?: string;
+        },
+        outcome: "executed" | "approval_required" | "blocked",
+        policyReason: string,
+      ) => Promise<void>;
+    }).recordInvocation("audit-1", {
+      toolName: "session.status",
+      args: {
+        command: "DATABASE_URL=mongodb://example.com:27017/myapp API_KEY=sk_test_1234567890abcdefghijklmnop NODE_ENV=production",
+      },
+      agentId: "agent",
+      sessionId: "session-1",
+    }, "executed", "allowed");
+
+    expect(vi.mocked(storage.audit.append)).toHaveBeenCalledWith(
+      "tool_invocations",
+      expect.objectContaining({
+        args: {
+          command: expect.stringContaining("[REDACTED]"),
+        },
+      }),
+    );
+    expect(JSON.stringify(vi.mocked(storage.audit.append).mock.calls)).not.toContain("sk_test_1234567890abcdefghijklmnop");
+  });
 });
 
 function createPendingApprovalAction(input: {

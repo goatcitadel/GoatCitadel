@@ -204,7 +204,7 @@ export class DurableRunRepository {
   }
 
   public getRun(runId: string): DurableRunRecord {
-    const row = this.getRunStmt.get(runId) as DurableRunRow | undefined;
+    const row = toDurableRunRow(this.getRunStmt.get(runId));
     if (!row) {
       throw new NotFoundError({ entity: "Durable run", id: runId });
     }
@@ -250,12 +250,12 @@ export class DurableRunRepository {
 
   public listRuns(limit = 25): DurableRunRecord[] {
     const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
-    const rows = this.listRunsStmt.all(safeLimit) as unknown as DurableRunRow[];
+    const rows = toDurableRunRows(this.listRunsStmt.all(safeLimit));
     return rows.map(mapRunRow);
   }
 
   public countRuns(): number {
-    const row = this.countRunsStmt.get() as { count: number } | undefined;
+    const row = toCountRow(this.countRunsStmt.get());
     return Number(row?.count ?? 0);
   }
 
@@ -294,7 +294,7 @@ export class DurableRunRepository {
 
   public listCheckpoints(runId: string, limit = 200): DurableCheckpointRecord[] {
     const safeLimit = Math.max(1, Math.min(2_000, Math.floor(limit)));
-    const rows = this.listCheckpointsStmt.all(runId, safeLimit) as unknown as DurableCheckpointRow[];
+    const rows = toDurableCheckpointRows(this.listCheckpointsStmt.all(runId, safeLimit));
     return rows.map((row) => ({
       checkpointId: row.checkpoint_id,
       runId: row.run_id,
@@ -337,7 +337,7 @@ export class DurableRunRepository {
 
   public listRetries(runId: string, limit = 100): DurableRetryRecord[] {
     const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
-    const rows = this.listRetriesStmt.all(runId, safeLimit) as unknown as DurableRetryRow[];
+    const rows = toDurableRetryRows(this.listRetriesStmt.all(runId, safeLimit));
     return rows.map((row) => ({
       retryId: row.retry_id,
       runId: row.run_id,
@@ -384,7 +384,7 @@ export class DurableRunRepository {
 
   public listDeadLetters(limit = 100): DurableDeadLetterRecord[] {
     const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
-    const rows = this.listDeadLettersStmt.all(safeLimit) as unknown as DurableDeadLetterRow[];
+    const rows = toDurableDeadLetterRows(this.listDeadLettersStmt.all(safeLimit));
     return rows.map((row) => ({
       deadLetterId: row.dead_letter_id,
       runId: row.run_id,
@@ -397,7 +397,7 @@ export class DurableRunRepository {
   }
 
   public getDeadLetterByRun(runId: string): DurableDeadLetterRecord | undefined {
-    const row = this.getDeadLetterByRunStmt.get(runId) as unknown as DurableDeadLetterRow | undefined;
+    const row = toDurableDeadLetterRow(this.getDeadLetterByRunStmt.get(runId));
     if (!row) {
       return undefined;
     }
@@ -413,6 +413,102 @@ export class DurableRunRepository {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isDurableRunRow(value: unknown): value is DurableRunRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.run_id === "string"
+    && typeof value.workflow_key === "string"
+    && typeof value.status === "string"
+    && typeof value.attempt_count === "number"
+    && typeof value.max_attempts === "number"
+    && typeof value.payload_json === "string"
+    && (typeof value.metadata_json === "string" || value.metadata_json === null)
+    && (typeof value.started_at === "string" || value.started_at === null)
+    && (typeof value.finished_at === "string" || value.finished_at === null)
+    && (typeof value.last_error === "string" || value.last_error === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isDurableCheckpointRow(value: unknown): value is DurableCheckpointRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.checkpoint_id === "string"
+    && typeof value.run_id === "string"
+    && typeof value.checkpoint_kind === "string"
+    && typeof value.state_json === "string"
+    && typeof value.created_at === "string";
+}
+
+function isDurableRetryRow(value: unknown): value is DurableRetryRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.retry_id === "string"
+    && typeof value.run_id === "string"
+    && typeof value.attempt_no === "number"
+    && typeof value.reason === "string"
+    && (typeof value.next_retry_at === "string" || value.next_retry_at === null)
+    && typeof value.created_at === "string";
+}
+
+function isDurableDeadLetterRow(value: unknown): value is DurableDeadLetterRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.dead_letter_id === "string"
+    && typeof value.run_id === "string"
+    && typeof value.reason === "string"
+    && typeof value.payload_json === "string"
+    && typeof value.created_at === "string"
+    && (typeof value.resolved_at === "string" || value.resolved_at === null)
+    && (typeof value.resolution_note === "string" || value.resolution_note === null);
+}
+
+function toDurableRunRow(value: unknown): DurableRunRow | undefined {
+  return isDurableRunRow(value) ? value : undefined;
+}
+
+function toDurableRunRows(value: unknown): DurableRunRow[] {
+  return Array.isArray(value) ? value.filter(isDurableRunRow) : [];
+}
+
+function toDurableCheckpointRows(value: unknown): DurableCheckpointRow[] {
+  return Array.isArray(value) ? value.filter(isDurableCheckpointRow) : [];
+}
+
+function toDurableRetryRows(value: unknown): DurableRetryRow[] {
+  return Array.isArray(value) ? value.filter(isDurableRetryRow) : [];
+}
+
+function toDurableDeadLetterRow(value: unknown): DurableDeadLetterRow | undefined {
+  return isDurableDeadLetterRow(value) ? value : undefined;
+}
+
+function toDurableDeadLetterRows(value: unknown): DurableDeadLetterRow[] {
+  return Array.isArray(value) ? value.filter(isDurableDeadLetterRow) : [];
+}
+
+function toCountRow(value: unknown): { count?: number } | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return typeof value.count === "number" || value.count === undefined
+    ? { count: value.count as number | undefined }
+    : undefined;
+}
+
+function parseRecordJson(raw: string): Record<string, unknown> {
+  const parsed = safeJsonParse<unknown>(raw, {});
+  return isRecord(parsed) ? parsed : {};
+}
+
 function mapRunRow(row: DurableRunRow): DurableRunRecord {
   return {
     runId: row.run_id,
@@ -420,8 +516,8 @@ function mapRunRow(row: DurableRunRow): DurableRunRecord {
     status: row.status,
     attemptCount: Number(row.attempt_count ?? 0),
     maxAttempts: Number(row.max_attempts ?? 0),
-    payload: safeJsonParse<Record<string, unknown>>(row.payload_json, {}),
-    metadata: row.metadata_json ? safeJsonParse<Record<string, unknown>>(row.metadata_json, {}) : undefined,
+    payload: parseRecordJson(row.payload_json),
+    metadata: row.metadata_json ? parseRecordJson(row.metadata_json) : undefined,
     startedAt: row.started_at ?? undefined,
     finishedAt: row.finished_at ?? undefined,
     lastError: row.last_error ?? undefined,

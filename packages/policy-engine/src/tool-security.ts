@@ -156,6 +156,8 @@ export function sanitizeForModel<T>(value: T): T {
   return output as T;
 }
 
+export const sanitizeForAudit = sanitizeForModel;
+
 export function buildInternalToolCall(
   request: ToolInvokeRequest,
   capabilityPolicy: ToolCapabilityPolicy,

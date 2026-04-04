@@ -226,12 +226,12 @@ export class MeshRepository {
   }
 
   public listNodes(limit = 200): MeshNodeRecord[] {
-    const rows = this.listNodesStmt.all({ limit }) as unknown as MeshNodeRow[];
+    const rows = toMeshNodeRows(this.listNodesStmt.all({ limit }));
     return rows.map(mapNodeRow);
   }
 
   public getNode(nodeId: string): MeshNodeRecord {
-    const row = this.getNodeStmt.get(nodeId) as MeshNodeRow | undefined;
+    const row = toMeshNodeRow(this.getNodeStmt.get(nodeId));
     if (!row) {
       throw new NotFoundError({ entity: "Mesh node", id: nodeId });
     }
@@ -261,7 +261,7 @@ export class MeshRepository {
     ttlSeconds: number,
     now = new Date().toISOString(),
   ): MeshLeaseRecord {
-    const current = this.getLeaseStmt.get(leaseKey) as MeshLeaseRow | undefined;
+    const current = toMeshLeaseRow(this.getLeaseStmt.get(leaseKey));
     const expiresAt = addSeconds(now, ttlSeconds);
 
     if (!current) {
@@ -328,7 +328,7 @@ export class MeshRepository {
   }
 
   public getLease(leaseKey: string): MeshLeaseRecord {
-    const row = this.getLeaseStmt.get(leaseKey) as MeshLeaseRow | undefined;
+    const row = toMeshLeaseRow(this.getLeaseStmt.get(leaseKey));
     if (!row) {
       throw new NotFoundError({ entity: "Lease", id: leaseKey });
     }
@@ -336,7 +336,7 @@ export class MeshRepository {
   }
 
   public listLeases(limit = 200): MeshLeaseRecord[] {
-    const rows = this.listLeasesStmt.all({ limit }) as unknown as MeshLeaseRow[];
+    const rows = toMeshLeaseRows(this.listLeasesStmt.all({ limit }));
     return rows.map(mapLeaseRow);
   }
 
@@ -345,7 +345,7 @@ export class MeshRepository {
     input: MeshSessionClaimRequest,
     now = new Date().toISOString(),
   ): MeshSessionOwnerRecord {
-    const current = this.getSessionOwnerStmt.get(sessionId) as MeshSessionOwnerRow | undefined;
+    const current = toMeshSessionOwnerRow(this.getSessionOwnerStmt.get(sessionId));
 
     if (!current) {
       this.insertSessionOwnerStmt.run({
@@ -376,7 +376,7 @@ export class MeshRepository {
   }
 
   public getSessionOwner(sessionId: string): MeshSessionOwnerRecord {
-    const row = this.getSessionOwnerStmt.get(sessionId) as MeshSessionOwnerRow | undefined;
+    const row = toMeshSessionOwnerRow(this.getSessionOwnerStmt.get(sessionId));
     if (!row) {
       throw new NotFoundError({ entity: "Session owner", id: sessionId });
     }
@@ -384,7 +384,7 @@ export class MeshRepository {
   }
 
   public listSessionOwners(limit = 500): MeshSessionOwnerRecord[] {
-    const rows = this.listSessionOwnersStmt.all({ limit }) as unknown as MeshSessionOwnerRow[];
+    const rows = toMeshSessionOwnerRows(this.listSessionOwnersStmt.all({ limit }));
     return rows.map(mapSessionOwnerRow);
   }
 
@@ -400,13 +400,13 @@ export class MeshRepository {
       createdAt: now,
     });
 
-    const row = this.db.prepare(`
+    const row = toMeshReplicationRow(this.db.prepare(`
       SELECT * FROM mesh_replication_log
       WHERE source_node_id = @sourceNodeId AND idempotency_key = @idempotencyKey
     `).get({
       sourceNodeId: input.sourceNodeId,
       idempotencyKey: input.idempotencyKey,
-    }) as MeshReplicationRow | undefined;
+    }));
 
     if (!row) {
       throw new NotFoundError("Unable to persist replication event");
@@ -415,10 +415,10 @@ export class MeshRepository {
   }
 
   public listReplicationEvents(limit = 200, cursor?: string): MeshReplicationRecord[] {
-    const rows = this.listReplicationStmt.all({
+    const rows = toMeshReplicationRows(this.listReplicationStmt.all({
       limit,
       cursor: cursor ?? null,
-    }) as unknown as MeshReplicationRow[];
+    }));
     return rows.map(mapReplicationRow);
   }
 
@@ -438,10 +438,10 @@ export class MeshRepository {
   }
 
   public getReplicationOffset(consumerNodeId: string, sourceNodeId: string): MeshReplicationOffset {
-    const row = this.getOffsetStmt.get({
+    const row = toMeshReplicationOffsetRow(this.getOffsetStmt.get({
       consumerNodeId,
       sourceNodeId,
-    }) as MeshReplicationOffsetRow | undefined;
+    }));
     if (!row) {
       throw new NotFoundError(`Replication offset not found for ${consumerNodeId} <= ${sourceNodeId}`);
     }
@@ -449,7 +449,7 @@ export class MeshRepository {
   }
 
   public listReplicationOffsets(limit = 500): MeshReplicationOffset[] {
-    const rows = this.listOffsetsStmt.all({ limit }) as unknown as MeshReplicationOffsetRow[];
+    const rows = toMeshReplicationOffsetRows(this.listOffsetsStmt.all({ limit }));
     return rows.map(mapOffsetRow);
   }
 
@@ -496,7 +496,7 @@ function mapNodeRow(row: MeshNodeRow): MeshNodeRecord {
     advertiseAddress: row.advertise_address ?? undefined,
     transport: row.transport,
     status: row.status,
-    capabilities: safeJsonParse<string[]>(row.capabilities_json, []),
+    capabilities: parseMeshCapabilities(row.capabilities_json),
     tlsFingerprint: row.tls_fingerprint ?? undefined,
     joinedAt: row.joined_at,
     lastSeenAt: row.last_seen_at,
@@ -528,7 +528,7 @@ function mapReplicationRow(row: MeshReplicationRow): MeshReplicationRecord {
     replicationId: row.replication_id,
     sourceNodeId: row.source_node_id,
     eventType: row.event_type,
-    payload: safeJsonParse<Record<string, unknown>>(row.payload_json, {}),
+    payload: parseMeshPayload(row.payload_json),
     idempotencyKey: row.idempotency_key,
     createdAt: row.created_at,
   };
@@ -549,4 +549,117 @@ function addSeconds(isoTimestamp: string, seconds: number): string {
 
 function hashJoinToken(rawToken: string): string {
   return createHash("sha256").update(rawToken).digest("hex");
+}
+
+function parseMeshCapabilities(value: string): string[] {
+  const parsed = safeJsonParse<unknown>(value, []);
+  return Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string") ? parsed : [];
+}
+
+function parseMeshPayload(value: string): Record<string, unknown> {
+  const parsed = safeJsonParse<unknown>(value, {});
+  return isRecord(parsed) ? parsed : {};
+}
+
+function toMeshNodeRow(value: unknown): MeshNodeRow | undefined {
+  return isMeshNodeRow(value) ? value : undefined;
+}
+
+function toMeshNodeRows(value: unknown): MeshNodeRow[] {
+  return Array.isArray(value) ? value.filter(isMeshNodeRow) : [];
+}
+
+function toMeshLeaseRow(value: unknown): MeshLeaseRow | undefined {
+  return isMeshLeaseRow(value) ? value : undefined;
+}
+
+function toMeshLeaseRows(value: unknown): MeshLeaseRow[] {
+  return Array.isArray(value) ? value.filter(isMeshLeaseRow) : [];
+}
+
+function toMeshSessionOwnerRow(value: unknown): MeshSessionOwnerRow | undefined {
+  return isMeshSessionOwnerRow(value) ? value : undefined;
+}
+
+function toMeshSessionOwnerRows(value: unknown): MeshSessionOwnerRow[] {
+  return Array.isArray(value) ? value.filter(isMeshSessionOwnerRow) : [];
+}
+
+function toMeshReplicationRow(value: unknown): MeshReplicationRow | undefined {
+  return isMeshReplicationRow(value) ? value : undefined;
+}
+
+function toMeshReplicationRows(value: unknown): MeshReplicationRow[] {
+  return Array.isArray(value) ? value.filter(isMeshReplicationRow) : [];
+}
+
+function toMeshReplicationOffsetRow(value: unknown): MeshReplicationOffsetRow | undefined {
+  return isMeshReplicationOffsetRow(value) ? value : undefined;
+}
+
+function toMeshReplicationOffsetRows(value: unknown): MeshReplicationOffsetRow[] {
+  return Array.isArray(value) ? value.filter(isMeshReplicationOffsetRow) : [];
+}
+
+function isMeshNodeRow(value: unknown): value is MeshNodeRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.node_id === "string"
+    && (typeof value.label === "string" || value.label === null)
+    && (typeof value.advertise_address === "string" || value.advertise_address === null)
+    && typeof value.transport === "string"
+    && typeof value.status === "string"
+    && typeof value.capabilities_json === "string"
+    && (typeof value.tls_fingerprint === "string" || value.tls_fingerprint === null)
+    && typeof value.joined_at === "string"
+    && typeof value.last_seen_at === "string";
+}
+
+function isMeshLeaseRow(value: unknown): value is MeshLeaseRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.lease_key === "string"
+    && typeof value.holder_node_id === "string"
+    && typeof value.fencing_token === "number"
+    && typeof value.expires_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isMeshSessionOwnerRow(value: unknown): value is MeshSessionOwnerRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.session_id === "string"
+    && typeof value.owner_node_id === "string"
+    && typeof value.epoch === "number"
+    && typeof value.claimed_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isMeshReplicationRow(value: unknown): value is MeshReplicationRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.replication_id === "string"
+    && typeof value.source_node_id === "string"
+    && typeof value.event_type === "string"
+    && typeof value.payload_json === "string"
+    && typeof value.idempotency_key === "string"
+    && typeof value.created_at === "string";
+}
+
+function isMeshReplicationOffsetRow(value: unknown): value is MeshReplicationOffsetRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.consumer_node_id === "string"
+    && typeof value.source_node_id === "string"
+    && (typeof value.last_replication_id === "string" || value.last_replication_id === null)
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

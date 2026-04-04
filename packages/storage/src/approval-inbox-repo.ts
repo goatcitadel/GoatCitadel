@@ -190,7 +190,7 @@ export class ApprovalInboxRepository {
   }
 
   public get(inboxItemId: string): ApprovalInboxItemRecord {
-    const row = this.getStmt.get(inboxItemId) as ApprovalInboxRow | undefined;
+    const row = toApprovalInboxRow(this.getStmt.get(inboxItemId));
     if (!row) {
       throw new NotFoundError({ entity: "Approval inbox item", id: inboxItemId });
     }
@@ -202,11 +202,11 @@ export class ApprovalInboxRepository {
     receiverId: string,
     tokenId: string,
   ): ApprovalInboxItemRecord | undefined {
-    const row = this.getByReceiverAndTokenStmt.get({
+    const row = toApprovalInboxRow(this.getByReceiverAndTokenStmt.get({
       receiverKind,
       receiverId,
       tokenId,
-    }) as ApprovalInboxRow | undefined;
+    }));
     return row ? mapRow(row) : undefined;
   }
 
@@ -218,12 +218,12 @@ export class ApprovalInboxRepository {
       limit?: number;
     },
   ): ApprovalInboxItemRecord[] {
-    const rows = this.listStmt.all({
+    const rows = toApprovalInboxRows(this.listStmt.all({
       receiverKind,
       receiverId,
       state: input?.state ?? null,
       limit: input?.limit ?? 100,
-    }) as unknown as ApprovalInboxRow[];
+    }));
     return rows.map(mapRow);
   }
 
@@ -297,4 +297,46 @@ function normalizeObject(value: Record<string, unknown> | undefined): Record<str
 
 function redactApprovalToken(tokenId: string): string {
   return `redacted:${tokenId}`;
+}
+
+function toApprovalInboxRow(value: unknown): ApprovalInboxRow | undefined {
+  return isApprovalInboxRow(value) ? value : undefined;
+}
+
+function toApprovalInboxRows(value: unknown): ApprovalInboxRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isApprovalInboxRow);
+}
+
+function isApprovalInboxRow(value: unknown): value is ApprovalInboxRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.inbox_item_id === "string"
+    && typeof value.approval_id === "string"
+    && typeof value.connector_id === "string"
+    && value.receiver_kind === "mcp"
+    && typeof value.receiver_id === "string"
+    && typeof value.token_id === "string"
+    && typeof value.token === "string"
+    && value.action_type === "approval.resolve"
+    && typeof value.state === "string"
+    && typeof value.approval_kind === "string"
+    && typeof value.risk_level === "string"
+    && typeof value.approval_status === "string"
+    && typeof value.preview_json === "string"
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string"
+    && typeof value.expires_at === "string"
+    && (typeof value.resolved_at === "string" || value.resolved_at === null)
+    && (typeof value.resolved_by === "string" || value.resolved_by === null)
+    && (typeof value.last_error === "string" || value.last_error === null)
+    && typeof value.delivery_count === "number"
+    && typeof value.last_delivered_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

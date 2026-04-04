@@ -52,12 +52,12 @@ export class ChatSessionBindingRepository {
   }
 
   public get(sessionId: string): ChatSessionBindingRecord | undefined {
-    const row = this.getStmt.get(sessionId) as ChatSessionBindingRow | undefined;
+    const row = toChatSessionBindingRow(this.getStmt.get(sessionId));
     return row ? mapRow(row) : undefined;
   }
 
   public upsert(input: ChatSessionBindingUpsertInput, now = new Date().toISOString()): ChatSessionBindingRecord {
-    const existingRow = this.getStmt.get(input.sessionId) as ChatSessionBindingRow | undefined;
+    const existingRow = toChatSessionBindingRow(this.getStmt.get(input.sessionId));
     const existing = existingRow ? mapRow(existingRow) : undefined;
     this.upsertStmt.run({
       sessionId: input.sessionId,
@@ -69,19 +69,56 @@ export class ChatSessionBindingRepository {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     });
-    return mapRow(this.getStmt.get(input.sessionId) as unknown as ChatSessionBindingRow);
+    const row = toChatSessionBindingRow(this.getStmt.get(input.sessionId));
+    if (!row) {
+      throw new TypeError("chat_session_bindings upsert did not return a row");
+    }
+    return mapRow(row);
   }
 
   public listBySessionIds(sessionIds: string[], workspaceId?: string): Map<string, ChatSessionBindingRecord> {
     if (sessionIds.length === 0) {
       return new Map();
     }
-    const rows = this.listBySessionIdsStmt.all({
+    const rows = toChatSessionBindingRows(this.listBySessionIdsStmt.all({
       sessionIdsJson: JSON.stringify(sessionIds),
       workspaceId: workspaceId ? sanitizeWorkspaceId(workspaceId) : null,
-    }) as unknown as ChatSessionBindingRow[];
+    }));
     return new Map(rows.map((row) => [row.session_id, mapRow(row)]));
   }
+}
+
+function toChatSessionBindingRow(row: unknown): ChatSessionBindingRow | undefined {
+  if (row !== undefined && !isChatSessionBindingRow(row)) {
+    throw new TypeError("Unexpected chat_session_bindings row shape");
+  }
+  return row;
+}
+
+function toChatSessionBindingRows(rows: unknown): ChatSessionBindingRow[] {
+  if (!Array.isArray(rows) || rows.some((row) => !isChatSessionBindingRow(row))) {
+    throw new TypeError("Unexpected chat_session_bindings row shape");
+  }
+  return rows;
+}
+
+function isChatSessionBindingRow(value: unknown): value is ChatSessionBindingRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return typeof value.session_id === "string"
+    && typeof value.workspace_id === "string"
+    && (value.transport === "llm" || value.transport === "integration")
+    && (typeof value.connection_id === "string" || value.connection_id === null)
+    && (typeof value.target_json === "string" || value.target_json === null)
+    && typeof value.writable === "number"
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function mapRow(row: ChatSessionBindingRow): ChatSessionBindingRecord {

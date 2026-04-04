@@ -144,22 +144,22 @@ export class CostLedgerRepository {
 
   public summary(scope: CostSummary["scope"], fromIso: string, toIso: string): CostSummary[] {
     if (scope === "day") {
-      const rows = this.summaryByDayStmt.all({
+      const rows = toSummaryRows(this.summaryByDayStmt.all({
         fromDay: fromIso.slice(0, 10),
         toDay: toIso.slice(0, 10),
-      }) as unknown as SummaryRow[];
+      }));
       return rows.map((row) => mapSummaryRow(scope, row));
     }
     if (scope === "session") {
-      const rows = this.summaryBySessionStmt.all({ from: fromIso, to: toIso }) as unknown as SummaryRow[];
+      const rows = toSummaryRows(this.summaryBySessionStmt.all({ from: fromIso, to: toIso }));
       return rows.map((row) => mapSummaryRow(scope, row));
     }
     if (scope === "agent") {
-      const rows = this.summaryByAgentStmt.all({ from: fromIso, to: toIso }) as unknown as SummaryRow[];
+      const rows = toSummaryRows(this.summaryByAgentStmt.all({ from: fromIso, to: toIso }));
       return rows.map((row) => mapSummaryRow(scope, row));
     }
 
-    const rows = this.summaryByTaskStmt.all({ from: fromIso, to: toIso }) as unknown as SummaryRow[];
+    const rows = toSummaryRows(this.summaryByTaskStmt.all({ from: fromIso, to: toIso }));
     return rows.map((row) => mapSummaryRow(scope, row));
   }
 
@@ -198,4 +198,21 @@ function mapSummaryRow(scope: CostSummary["scope"], row: SummaryRow): CostSummar
     tokenTotal: tokenInput + tokenOutput,
     costUsd: Number(row.cost_usd ?? 0),
   };
+}
+
+function toSummaryRows(value: unknown): SummaryRow[] {
+  return Array.isArray(value) ? value.filter(isSummaryRow) : [];
+}
+
+function isSummaryRow(value: unknown): value is SummaryRow {
+  return isRecord(value)
+    && typeof value.key === "string"
+    && typeof value.token_input === "number"
+    && typeof value.token_output === "number"
+    && typeof value.token_cached_input === "number"
+    && typeof value.cost_usd === "number";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

@@ -150,12 +150,12 @@ export class ChatMessageRepository {
   }
 
   public countBySession(sessionId: string): number {
-    const row = this.countStmt.get(sessionId) as { count?: number } | undefined;
+    const row = toCountRow(this.countStmt.get(sessionId));
     return Number(row?.count ?? 0);
   }
 
   public get(messageId: string): ChatMessageRecord | undefined {
-    const row = this.getStmt.get(messageId) as ChatMessageRow | undefined;
+    const row = toChatMessageRow(this.getStmt.get(messageId));
     return row ? mapRow(row) : undefined;
   }
 
@@ -163,18 +163,89 @@ export class ChatMessageRepository {
     const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
     let rows: ChatMessageRow[] = [];
     if (cursor) {
-      const cursorRow = this.getCursorStmt.get(sessionId, cursor) as { seq?: number } | undefined;
+      const cursorRow = toCursorRow(this.getCursorStmt.get(sessionId, cursor));
       if (typeof cursorRow?.seq === "number") {
-        rows = this.listBeforeSeqStmt.all(sessionId, cursorRow.seq, safeLimit) as unknown as ChatMessageRow[];
+        rows = toChatMessageRows(this.listBeforeSeqStmt.all(sessionId, cursorRow.seq, safeLimit));
       } else {
-        rows = this.listLatestStmt.all(sessionId, safeLimit) as unknown as ChatMessageRow[];
+        rows = toChatMessageRows(this.listLatestStmt.all(sessionId, safeLimit));
       }
     } else {
-      rows = this.listLatestStmt.all(sessionId, safeLimit) as unknown as ChatMessageRow[];
+      rows = toChatMessageRows(this.listLatestStmt.all(sessionId, safeLimit));
     }
     rows.reverse();
     return rows.map((row) => mapRow(row));
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isChatMessageRow(value: unknown): value is ChatMessageRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.seq === "number"
+    && typeof value.message_id === "string"
+    && typeof value.session_id === "string"
+    && typeof value.role === "string"
+    && typeof value.actor_type === "string"
+    && typeof value.actor_id === "string"
+    && typeof value.content === "string"
+    && (typeof value.parts_json === "string" || value.parts_json === null)
+    && (typeof value.attachments_json === "string" || value.attachments_json === null)
+    && typeof value.timestamp === "string"
+    && (typeof value.token_input === "number" || value.token_input === null)
+    && (typeof value.token_output === "number" || value.token_output === null)
+    && (typeof value.cost_usd === "number" || value.cost_usd === null)
+    && typeof value.created_at === "string";
+}
+
+function isChatInputPart(value: unknown): value is ChatInputPart {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return false;
+  }
+  switch (value.type) {
+    case "text":
+      return typeof value.text === "string";
+    case "image_ref":
+      return typeof value.attachmentId === "string"
+        && (value.mimeType === undefined || typeof value.mimeType === "string")
+        && (value.detail === undefined || value.detail === "low" || value.detail === "high" || value.detail === "auto");
+    case "audio_ref":
+    case "video_ref":
+    case "file_ref":
+      return typeof value.attachmentId === "string"
+        && (value.mimeType === undefined || typeof value.mimeType === "string");
+    default:
+      return false;
+  }
+}
+
+function toChatMessageRow(value: unknown): ChatMessageRow | undefined {
+  return isChatMessageRow(value) ? value : undefined;
+}
+
+function toChatMessageRows(value: unknown): ChatMessageRow[] {
+  return Array.isArray(value) ? value.filter(isChatMessageRow) : [];
+}
+
+function toCountRow(value: unknown): { count?: number } | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return typeof value.count === "number" || value.count === undefined
+    ? { count: value.count as number | undefined }
+    : undefined;
+}
+
+function toCursorRow(value: unknown): { seq?: number } | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return typeof value.seq === "number" || value.seq === undefined
+    ? { seq: value.seq as number | undefined }
+    : undefined;
 }
 
 function mapRow(row: ChatMessageRow): ChatMessageRecord {
@@ -202,7 +273,7 @@ function parseParts(raw: string | null): ChatInputPart[] | undefined {
   if (!Array.isArray(parsed)) {
     return undefined;
   }
-  const parts = parsed.filter((item) => item && typeof item === "object") as ChatInputPart[];
+  const parts = parsed.filter(isChatInputPart);
   return parts.length > 0 ? parts : undefined;
 }
 
@@ -216,15 +287,14 @@ function parseAttachments(raw: string | null): ChatMessageRecord["attachments"] 
   }
   const attachments = parsed
     .map((item) => {
-      if (!item || typeof item !== "object") {
+      if (!isRecord(item)) {
         return undefined;
       }
-      const value = item as Record<string, unknown>;
-      const attachmentId = typeof value.attachmentId === "string" ? value.attachmentId : undefined;
-      const fileName = typeof value.fileName === "string" ? value.fileName : undefined;
-      const mimeType = typeof value.mimeType === "string" ? value.mimeType : undefined;
-      const sizeBytes = typeof value.sizeBytes === "number" && Number.isFinite(value.sizeBytes)
-        ? value.sizeBytes
+      const attachmentId = typeof item.attachmentId === "string" ? item.attachmentId : undefined;
+      const fileName = typeof item.fileName === "string" ? item.fileName : undefined;
+      const mimeType = typeof item.mimeType === "string" ? item.mimeType : undefined;
+      const sizeBytes = typeof item.sizeBytes === "number" && Number.isFinite(item.sizeBytes)
+        ? item.sizeBytes
         : undefined;
       if (!attachmentId || !fileName || !mimeType || sizeBytes === undefined) {
         return undefined;

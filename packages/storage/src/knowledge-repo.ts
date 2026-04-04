@@ -154,34 +154,34 @@ export class KnowledgeRepository {
   }
 
   public listDocuments(namespace?: string, limit = 100): KnowledgeDocumentRecord[] {
-    const rows = this.listDocumentsStmt.all({
+    const rows = toKnowledgeDocumentRows(this.listDocumentsStmt.all({
       namespace: namespace ?? null,
       limit,
-    }) as unknown as KnowledgeDocumentRow[];
+    }));
     return rows.map((row) => ({
       docId: row.doc_id,
       namespace: row.namespace,
       sourceType: row.source_type,
       sourceRef: row.source_ref,
       title: row.title,
-      metadata: safeJsonParse<Record<string, unknown>>(row.metadata_json, {}),
+      metadata: parseKnowledgeMetadata(row.metadata_json),
       createdAt: row.created_at,
     }));
   }
 
   public listChunksByNamespace(namespace?: string, limit = 500): KnowledgeChunkRecord[] {
-    const rows = this.listChunksByNamespaceStmt.all({
+    const rows = toKnowledgeChunkRows(this.listChunksByNamespaceStmt.all({
       namespace: namespace ?? null,
       limit,
-    }) as unknown as KnowledgeChunkRow[];
+    }));
     return rows.map(mapChunkRow);
   }
 
   public listChunksByDocument(docId: string, limit = 500): KnowledgeChunkRecord[] {
-    const rows = this.listChunksByDocStmt.all({
+    const rows = toKnowledgeChunkRows(this.listChunksByDocStmt.all({
       docId,
       limit,
-    }) as unknown as KnowledgeChunkRow[];
+    }));
     return rows.map(mapChunkRow);
   }
 
@@ -199,10 +199,60 @@ function mapChunkRow(row: KnowledgeChunkRow): KnowledgeChunkRecord {
     docId: row.doc_id,
     seq: row.seq,
     content: row.content,
-    embedding: safeJsonParse<number[] | undefined>(row.embedding_json, undefined),
+    embedding: parseKnowledgeEmbedding(row.embedding_json),
     tokenEstimate: row.token_estimate,
     createdAt: row.created_at,
   };
+}
+
+function parseKnowledgeMetadata(value: string): Record<string, unknown> {
+  const parsed = safeJsonParse<unknown>(value, {});
+  return isRecord(parsed) ? parsed : {};
+}
+
+function parseKnowledgeEmbedding(value: string | null): number[] | undefined {
+  const parsed = safeJsonParse<unknown>(value, undefined);
+  return Array.isArray(parsed) && parsed.every((entry) => typeof entry === "number")
+    ? parsed
+    : undefined;
+}
+
+function toKnowledgeDocumentRows(value: unknown): KnowledgeDocumentRow[] {
+  return Array.isArray(value) ? value.filter(isKnowledgeDocumentRow) : [];
+}
+
+function toKnowledgeChunkRows(value: unknown): KnowledgeChunkRow[] {
+  return Array.isArray(value) ? value.filter(isKnowledgeChunkRow) : [];
+}
+
+function isKnowledgeDocumentRow(value: unknown): value is KnowledgeDocumentRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.doc_id === "string"
+    && typeof value.namespace === "string"
+    && (value.source_type === "file" || value.source_type === "url" || value.source_type === "text" || value.source_type === "memory")
+    && typeof value.source_ref === "string"
+    && typeof value.title === "string"
+    && typeof value.metadata_json === "string"
+    && typeof value.created_at === "string";
+}
+
+function isKnowledgeChunkRow(value: unknown): value is KnowledgeChunkRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.chunk_id === "string"
+    && typeof value.doc_id === "string"
+    && typeof value.seq === "number"
+    && typeof value.content === "string"
+    && (typeof value.embedding_json === "string" || value.embedding_json === null)
+    && typeof value.token_estimate === "number"
+    && typeof value.created_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function estimateTokens(text: string): number {

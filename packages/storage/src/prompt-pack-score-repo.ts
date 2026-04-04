@@ -60,7 +60,7 @@ export class PromptPackScoreRepository {
   }
 
   public get(scoreId: string): PromptPackScoreRecord {
-    const row = this.getStmt.get(scoreId) as PromptPackScoreRow | undefined;
+    const row = toPromptPackScoreRow(this.getStmt.get(scoreId));
     if (!row) {
       throw new NotFoundError({ entity: "Prompt pack score", id: scoreId });
     }
@@ -92,26 +92,26 @@ export class PromptPackScoreRepository {
   }
 
   public listByPack(packId: string, limit = 1000): PromptPackScoreRecord[] {
-    const rows = this.listByPackStmt.all({
+    const rows = toPromptPackScoreRows(this.listByPackStmt.all({
       packId,
       limit: Math.max(1, Math.min(limit, 5000)),
-    }) as unknown as PromptPackScoreRow[];
+    }));
     return rows.map(mapRow);
   }
 
   public listByTest(testId: string, limit = 200): PromptPackScoreRecord[] {
-    const rows = this.listByTestStmt.all({
+    const rows = toPromptPackScoreRows(this.listByTestStmt.all({
       testId,
       limit: Math.max(1, Math.min(limit, 5000)),
-    }) as unknown as PromptPackScoreRow[];
+    }));
     return rows.map(mapRow);
   }
 
   public listByRun(runId: string, limit = 50): PromptPackScoreRecord[] {
-    const rows = this.listByRunStmt.all({
+    const rows = toPromptPackScoreRows(this.listByRunStmt.all({
       runId,
       limit: Math.max(1, Math.min(limit, 5000)),
-    }) as unknown as PromptPackScoreRow[];
+    }));
     return rows.map(mapRow);
   }
 
@@ -152,4 +152,32 @@ function assertValidScore(value: number, field: string): void {
   if (!Number.isInteger(value) || value < 0 || value > 2) {
     throw new ValidationError({ code: "FIELD_INVALID", field, message: `${field} must be an integer between 0 and 2` });
   }
+}
+
+function toPromptPackScoreRow(value: unknown): PromptPackScoreRow | undefined {
+  return isPromptPackScoreRow(value) ? value : undefined;
+}
+
+function toPromptPackScoreRows(value: unknown): PromptPackScoreRow[] {
+  return Array.isArray(value) ? value.filter(isPromptPackScoreRow) : [];
+}
+
+function isPromptPackScoreRow(value: unknown): value is PromptPackScoreRow {
+  return isRecord(value)
+    && typeof value.score_id === "string"
+    && typeof value.pack_id === "string"
+    && typeof value.test_id === "string"
+    && typeof value.run_id === "string"
+    && typeof value.routing_score === "number"
+    && typeof value.honesty_score === "number"
+    && typeof value.handoff_score === "number"
+    && typeof value.robustness_score === "number"
+    && typeof value.usability_score === "number"
+    && typeof value.total_score === "number"
+    && (typeof value.notes === "string" || value.notes === null)
+    && typeof value.created_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

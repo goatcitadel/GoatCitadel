@@ -35,7 +35,7 @@ export class ChatSessionProjectRepository {
   }
 
   public get(sessionId: string): ChatSessionProjectRecord | undefined {
-    const row = this.getStmt.get(sessionId) as ChatSessionProjectRow | undefined;
+    const row = toChatSessionProjectRow(this.getStmt.get(sessionId));
     return row ? mapRow(row) : undefined;
   }
 
@@ -45,7 +45,11 @@ export class ChatSessionProjectRepository {
       projectId,
       assignedAt: now,
     });
-    return mapRow(this.getStmt.get(sessionId) as unknown as ChatSessionProjectRow);
+    const row = toChatSessionProjectRow(this.getStmt.get(sessionId));
+    if (!row) {
+      throw new Error(`Chat session project assignment for ${sessionId} was not persisted`);
+    }
+    return mapRow(row);
   }
 
   public unassign(sessionId: string): boolean {
@@ -63,9 +67,31 @@ export class ChatSessionProjectRepository {
     }
     const rows = this.listBySessionIdsStmt.all({
       sessionIdsJson: JSON.stringify(sessionIds),
-    }) as unknown as ChatSessionProjectRow[];
-    return new Map(rows.map((row) => [row.session_id, mapRow(row)]));
+    });
+    const mappedRows = toChatSessionProjectRows(rows);
+    return new Map(mappedRows.map((row) => [row.session_id, mapRow(row)]));
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isChatSessionProjectRow(value: unknown): value is ChatSessionProjectRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.session_id === "string"
+    && typeof value.project_id === "string"
+    && typeof value.assigned_at === "string";
+}
+
+function toChatSessionProjectRow(value: unknown): ChatSessionProjectRow | undefined {
+  return isChatSessionProjectRow(value) ? value : undefined;
+}
+
+function toChatSessionProjectRows(value: unknown): ChatSessionProjectRow[] {
+  return Array.isArray(value) ? value.filter(isChatSessionProjectRow) : [];
 }
 
 function mapRow(row: ChatSessionProjectRow): ChatSessionProjectRecord {

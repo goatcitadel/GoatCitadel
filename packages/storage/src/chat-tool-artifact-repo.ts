@@ -79,7 +79,7 @@ export class ChatToolArtifactRepository {
   }
 
   public get(artifactId: string): ChatToolArtifactRecord {
-    const row = this.getStmt.get(artifactId) as ChatToolArtifactRow | undefined;
+    const row = toChatToolArtifactRow(this.getStmt.get(artifactId));
     if (!row) {
       throw new NotFoundError({ entity: "Chat tool artifact", id: artifactId });
     }
@@ -87,14 +87,44 @@ export class ChatToolArtifactRepository {
   }
 
   public listByTurn(turnId: string): ChatToolArtifactRecord[] {
-    const rows = this.listByTurnStmt.all(turnId) as unknown as ChatToolArtifactRow[];
+    const rows = toChatToolArtifactRows(this.listByTurnStmt.all(turnId));
     return rows.map(mapRow);
   }
 
   public listBySession(sessionId: string, limit = 500): ChatToolArtifactRecord[] {
-    const rows = this.listBySessionStmt.all(sessionId, Math.max(1, Math.min(limit, 5_000))) as unknown as ChatToolArtifactRow[];
+    const rows = toChatToolArtifactRows(
+      this.listBySessionStmt.all(sessionId, Math.max(1, Math.min(limit, 5_000))),
+    );
     return rows.map(mapRow);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isChatToolArtifactRow(value: unknown): value is ChatToolArtifactRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.artifact_id === "string"
+    && typeof value.session_id === "string"
+    && typeof value.turn_id === "string"
+    && typeof value.tool_run_id === "string"
+    && typeof value.tool_name === "string"
+    && (typeof value.content_type === "string" || value.content_type === null)
+    && typeof value.byte_length === "number"
+    && (typeof value.snippet === "string" || value.snippet === null)
+    && typeof value.storage_rel_path === "string"
+    && typeof value.created_at === "string";
+}
+
+function toChatToolArtifactRow(value: unknown): ChatToolArtifactRow | undefined {
+  return isChatToolArtifactRow(value) ? value : undefined;
+}
+
+function toChatToolArtifactRows(value: unknown): ChatToolArtifactRow[] {
+  return Array.isArray(value) ? value.filter(isChatToolArtifactRow) : [];
 }
 
 function mapRow(row: ChatToolArtifactRow): ChatToolArtifactRecord {

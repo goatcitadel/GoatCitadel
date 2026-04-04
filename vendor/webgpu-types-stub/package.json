@@ -1,0 +1,6 @@
+{
+  "name": "@webgpu/types",
+  "version": "0.1.69",
+  "private": true,
+  "types": "index.d.ts"
+}

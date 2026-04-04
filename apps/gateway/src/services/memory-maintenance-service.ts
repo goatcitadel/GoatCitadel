@@ -81,7 +81,7 @@ export class MemoryMaintenanceService {
   ) {}
 
   public parseWorkflowPayload(run: DurableRunRecord): MemoryMaintenanceWorkflowPayload | undefined {
-    const payload = run.payload as Partial<MemoryMaintenanceWorkflowPayload> | undefined;
+    const payload = toPlainRecord(run.payload) as Partial<MemoryMaintenanceWorkflowPayload> | undefined;
     if (!payload || payload.version !== MEMORY_MAINTENANCE_WORKFLOW_VERSION) {
       return undefined;
     }
@@ -723,7 +723,7 @@ export class MemoryMaintenanceService {
       status: "queued",
       providerId: modelSelection.providerId,
       model: modelSelection.model,
-      policySnapshot: policy as unknown as Record<string, unknown>,
+      policySnapshot: policyToRecord(policy),
       sourceSessionCount: 0,
       changedArtifactCount: 0,
       createdAt: now,
@@ -1756,4 +1756,14 @@ function findScheduledMinute(
     cursor = new Date(cursor.getTime() + stepMs);
   }
   return undefined;
+}
+
+function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : undefined;
+}
+
+function policyToRecord(policy: MemoryMaintenancePolicyRecord): Record<string, unknown> {
+  return { ...policy };
 }

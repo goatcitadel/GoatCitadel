@@ -1,13 +1,18 @@
 import type { DatabaseSync } from "node:sqlite";
 import type {
+  AdversarialReview,
   AssemblyArtifactRecord,
   AssemblyArtifactType,
+  AssemblyResult,
   AssemblyRound,
   AssemblyRunRecord,
   AssemblyRunStatus,
   AssemblyStage,
+  ConvergenceScore,
+  DefenseResponse,
   AssemblyUsageSummary,
   ModelReputation,
+  PeerReview,
 } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -296,7 +301,7 @@ export class AssemblyRepository {
   }
 
   public getRun(runId: string): AssemblyRunRecord {
-    const row = this.getRunStmt.get(runId) as AssemblyRunRow | undefined;
+    const row = toAssemblyRunRow(this.getRunStmt.get(runId));
     if (!row) {
       throw new Error(`Assembly run ${runId} not found`);
     }
@@ -316,9 +321,9 @@ export class AssemblyRepository {
   }
 
   public listRuns(limit = 50): AssemblyRunRecord[] {
-    const rows = this.listRunsStmt.all({
+    const rows = toAssemblyRunRows(this.listRunsStmt.all({
       limit: clampLimit(limit, 1, 250),
-    }) as unknown as AssemblyRunRow[];
+    }));
     return rows.map(mapRunRow);
   }
 
@@ -350,7 +355,7 @@ export class AssemblyRepository {
   }
 
   public listRounds(runId: string): AssemblyRound[] {
-    const rows = this.listRoundsStmt.all({ runId }) as unknown as AssemblyRoundRow[];
+    const rows = toAssemblyRoundRows(this.listRoundsStmt.all({ runId }));
     return rows.map(mapRoundRow);
   }
 
@@ -379,10 +384,10 @@ export class AssemblyRepository {
   }
 
   public listArtifacts(runId: string, artifactType?: AssemblyArtifactType): AssemblyArtifactRecord[] {
-    const rows = this.listArtifactsStmt.all({
+    const rows = toAssemblyArtifactRows(this.listArtifactsStmt.all({
       runId,
       artifactType: artifactType ?? null,
-    }) as unknown as AssemblyArtifactRow[];
+    }));
     return rows.map(mapArtifactRow);
   }
 
@@ -406,9 +411,9 @@ export class AssemblyRepository {
   }
 
   public listReputations(limit = 100): ModelReputation[] {
-    const rows = this.listReputationsStmt.all({
+    const rows = toAssemblyReputationRows(this.listReputationsStmt.all({
       limit: clampLimit(limit, 1, 500),
-    }) as unknown as AssemblyReputationRow[];
+    }));
     return rows.map(mapReputationRow);
   }
 }
@@ -480,14 +485,11 @@ function mapRunRow(row: AssemblyRunRow): AssemblyRunRecord {
     status: row.status,
     currentStage: row.current_stage,
     currentRoundIndex: row.current_round_index,
-    problem: safeJsonParse(row.problem_json, {} as AssemblyRunRecord["problem"]),
-    settings: safeJsonParse(row.settings_json, {} as AssemblyRunRecord["settings"]),
-    adversarialSettings: safeJsonParse(
-      row.adversarial_settings_json,
-      {} as AssemblyRunRecord["adversarialSettings"],
-    ),
+    problem: parseAssemblyObject(row.problem_json, createFallbackAssemblyProblem(row)),
+    settings: parseAssemblyObject(row.settings_json, createFallbackAssemblySettings()),
+    adversarialSettings: parseAssemblyObject(row.adversarial_settings_json, createFallbackAdversarialSettings()),
     result: row.result_json
-      ? safeJsonParse(row.result_json, undefined as AssemblyRunRecord["result"])
+      ? parseAssemblyOptionalObject(row.result_json)
       : undefined,
     stopReason: row.stop_reason ?? undefined,
     usage: row.usage_json
@@ -511,10 +513,10 @@ function mapRoundRow(row: AssemblyRoundRow): AssemblyRound {
     participantIds: safeJsonParse<string[]>(row.participant_ids_json, []),
     artifactIds: safeJsonParse<string[]>(row.artifact_ids_json, []),
     convergenceSnapshot: row.convergence_snapshot_json
-      ? safeJsonParse(row.convergence_snapshot_json, undefined as AssemblyRound["convergenceSnapshot"])
+      ? parseAssemblyOptionalObject<AssemblyRound["convergenceSnapshot"]>(row.convergence_snapshot_json)
       : undefined,
     stopCheck: row.stop_check_json
-      ? safeJsonParse(row.stop_check_json, undefined as AssemblyRound["stopCheck"])
+      ? parseAssemblyOptionalObject<AssemblyRound["stopCheck"]>(row.stop_check_json)
       : undefined,
     startedAt: row.started_at,
     finishedAt: row.finished_at ?? undefined,
@@ -530,7 +532,7 @@ function mapArtifactRow(row: AssemblyArtifactRow): AssemblyArtifactRecord {
     artifactType: row.artifact_type,
     participantModelRef: row.participant_model_ref ?? undefined,
     blindedAuthorToken: row.blinded_author_token ?? undefined,
-    payload: safeJsonParse(row.payload_json, {} as AssemblyArtifactRecord["payload"]),
+    payload: parseAssemblyArtifactPayload(row),
     createdAt: row.created_at,
   };
 }
@@ -555,4 +557,282 @@ function mapReputationRow(row: AssemblyReputationRow): ModelReputation {
 
 function clampLimit(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function createFallbackAssemblyProblem(row: AssemblyRunRow): AssemblyRunRecord["problem"] {
+  return {
+    runId: row.run_id,
+    domain: "analysis",
+    title: row.title,
+    originalPrompt: "",
+    normalizedStatement: "",
+    objectives: [],
+    constraints: [],
+    evaluationCriteria: [],
+    contextRefs: [],
+    createdAt: row.created_at,
+  };
+}
+
+function createFallbackAssemblySettings(): AssemblyRunRecord["settings"] {
+  return {
+    mode: "consensus",
+    participantModels: [],
+    maxRounds: 0,
+    maxCritiquePasses: 0,
+    maxInterModelExchanges: 0,
+    convergenceThreshold: 0,
+    stagnationWindow: 0,
+    timeBudgetMs: 0,
+    tokenBudget: 0,
+    costBudgetUsd: 0,
+    domainPreset: "analysis",
+    synthesisStyle: "balanced",
+    exportTargets: [],
+  };
+}
+
+function createFallbackAdversarialSettings(): AssemblyRunRecord["adversarialSettings"] {
+  return {
+    enabled: false,
+    reviewerCount: 0,
+    selectionStrategy: "auto_selected_by_reputation",
+    strictness: "balanced",
+    requireMitigations: false,
+    requireEvidenceTags: false,
+    defenseRoundEnabled: false,
+    repetitiveObjectionCutoff: false,
+    minorityReportRequired: false,
+  };
+}
+
+function parseAssemblyArtifactPayload(row: AssemblyArtifactRow): AssemblyArtifactRecord["payload"] {
+  switch (row.artifact_type) {
+    case "problem":
+      return parseAssemblyObject(row.payload_json, {
+        runId: row.run_id,
+        domain: "analysis",
+        title: "",
+        originalPrompt: "",
+        normalizedStatement: "",
+        objectives: [],
+        constraints: [],
+        evaluationCriteria: [],
+        contextRefs: [],
+        createdAt: row.created_at,
+      } as AssemblyArtifactRecord["payload"]);
+    case "convergence_score":
+      return parseAssemblyObject<ConvergenceScore>(row.payload_json, {
+        runId: row.run_id,
+        roundIndex: row.round_index,
+        dimensionScores: {
+          rootCause: 0,
+          solutionDesign: 0,
+          riskAnalysis: 0,
+          implementationScope: 0,
+          evidenceStrength: 0,
+          confidenceStability: 0,
+          testPlanAlignment: 0,
+        },
+        proposalSupportScores: {},
+        compositeScore: 0,
+        stagnationDelta: 0,
+        disagreementClusters: [],
+        minorityFlags: [],
+        createdAt: row.created_at,
+      });
+    case "result":
+      return parseAssemblyObject<AssemblyResult>(row.payload_json, {
+        runId: row.run_id,
+        recommendation: "",
+        disagreements: [],
+        riskAnalysis: [],
+        implementationPlan: [],
+        modelContributionSummary: [],
+        exports: [],
+        createdAt: row.created_at,
+      });
+    case "proposal":
+      return parseAssemblyObject(row.payload_json, {
+        runId: row.run_id,
+        roundIndex: row.round_index,
+        proposalId: row.artifact_id,
+        authorModelRef: row.participant_model_ref ?? "",
+        blindedAuthorToken: row.blinded_author_token ?? "",
+        abstract: "",
+        diagnosis: "",
+        proposedSolution: "",
+        reasoning: "",
+        risks: [],
+        assumptions: [],
+        confidence: 0,
+        evidence: [],
+        testPlan: [],
+        schemaVersion: 1,
+        createdAt: row.created_at,
+        updatedAt: row.created_at,
+      } as AssemblyArtifactRecord["payload"]);
+    case "peer_review":
+      return parseAssemblyObject<PeerReview>(row.payload_json, {
+        runId: row.run_id,
+        roundIndex: row.round_index,
+        reviewId: row.artifact_id,
+        proposalId: "",
+        blindedReviewerToken: row.blinded_author_token ?? "",
+        strengths: [],
+        weaknesses: [],
+        missingAssumptions: [],
+        failureScenarios: [],
+        scores: {
+          correctness: 0,
+          reasoningStrength: 0,
+          practicality: 0,
+          evidenceQuality: 0,
+          riskAwareness: 0,
+          testability: 0,
+          clarity: 0,
+        },
+        verdict: "revise",
+        confidence: 0,
+        createdAt: row.created_at,
+      });
+    case "adversarial_review":
+      return parseAssemblyObject<AdversarialReview>(row.payload_json, {
+        runId: row.run_id,
+        roundIndex: row.round_index,
+        reviewId: row.artifact_id,
+        proposalId: "",
+        blindedReviewerToken: row.blinded_author_token ?? "",
+        strengthsFirst: [],
+        objections: [],
+        overallAssessment: "",
+        usefulnessPending: true,
+        createdAt: row.created_at,
+      });
+    case "defense_response":
+    default:
+      return parseAssemblyObject<DefenseResponse>(row.payload_json, {
+        runId: row.run_id,
+        roundIndex: row.round_index,
+        responseId: row.artifact_id,
+        proposalId: "",
+        challengedReviewIds: [],
+        acceptedPoints: [],
+        rejectedPoints: [],
+        revisionsMade: [],
+        unresolvedDisputes: [],
+        updatedConfidence: 0,
+        createdAt: row.created_at,
+      });
+  }
+}
+
+function parseAssemblyObject<T>(value: string, fallback: T): T {
+  const parsed = safeJsonParse<unknown>(value, {});
+  return isRecord(parsed) ? parsed as T : fallback;
+}
+
+function parseAssemblyOptionalObject<T>(value: string): T | undefined {
+  const parsed = safeJsonParse<unknown>(value, undefined);
+  return isRecord(parsed) ? parsed as T : undefined;
+}
+
+function toAssemblyRunRow(value: unknown): AssemblyRunRow | undefined {
+  return isAssemblyRunRow(value) ? value : undefined;
+}
+
+function toAssemblyRunRows(value: unknown): AssemblyRunRow[] {
+  return Array.isArray(value) ? value.filter(isAssemblyRunRow) : [];
+}
+
+function toAssemblyRoundRows(value: unknown): AssemblyRoundRow[] {
+  return Array.isArray(value) ? value.filter(isAssemblyRoundRow) : [];
+}
+
+function toAssemblyArtifactRows(value: unknown): AssemblyArtifactRow[] {
+  return Array.isArray(value) ? value.filter(isAssemblyArtifactRow) : [];
+}
+
+function toAssemblyReputationRows(value: unknown): AssemblyReputationRow[] {
+  return Array.isArray(value) ? value.filter(isAssemblyReputationRow) : [];
+}
+
+function isAssemblyRunRow(value: unknown): value is AssemblyRunRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.run_id === "string"
+    && (typeof value.workspace_id === "string" || value.workspace_id === null)
+    && (typeof value.source_session_id === "string" || value.source_session_id === null)
+    && (typeof value.source_task_id === "string" || value.source_task_id === null)
+    && typeof value.title === "string"
+    && typeof value.status === "string"
+    && typeof value.current_stage === "string"
+    && typeof value.current_round_index === "number"
+    && typeof value.problem_json === "string"
+    && typeof value.settings_json === "string"
+    && typeof value.adversarial_settings_json === "string"
+    && (typeof value.result_json === "string" || value.result_json === null)
+    && (typeof value.stop_reason === "string" || value.stop_reason === null)
+    && (typeof value.usage_json === "string" || value.usage_json === null)
+    && (typeof value.error_text === "string" || value.error_text === null)
+    && typeof value.created_at === "string"
+    && (typeof value.started_at === "string" || value.started_at === null)
+    && (typeof value.finished_at === "string" || value.finished_at === null)
+    && typeof value.updated_at === "string";
+}
+
+function isAssemblyRoundRow(value: unknown): value is AssemblyRoundRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.round_id === "string"
+    && typeof value.run_id === "string"
+    && typeof value.round_index === "number"
+    && typeof value.stage === "string"
+    && typeof value.status === "string"
+    && typeof value.participant_ids_json === "string"
+    && typeof value.artifact_ids_json === "string"
+    && (typeof value.convergence_snapshot_json === "string" || value.convergence_snapshot_json === null)
+    && (typeof value.stop_check_json === "string" || value.stop_check_json === null)
+    && typeof value.started_at === "string"
+    && (typeof value.finished_at === "string" || value.finished_at === null);
+}
+
+function isAssemblyArtifactRow(value: unknown): value is AssemblyArtifactRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.artifact_id === "string"
+    && typeof value.run_id === "string"
+    && typeof value.round_index === "number"
+    && typeof value.stage === "string"
+    && typeof value.artifact_type === "string"
+    && (typeof value.participant_model_ref === "string" || value.participant_model_ref === null)
+    && (typeof value.blinded_author_token === "string" || value.blinded_author_token === null)
+    && typeof value.payload_json === "string"
+    && typeof value.created_at === "string";
+}
+
+function isAssemblyReputationRow(value: unknown): value is AssemblyReputationRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.model_ref === "string"
+    && typeof value.provider_id === "string"
+    && typeof value.model_id === "string"
+    && typeof value.overall === "number"
+    && typeof value.by_domain_json === "string"
+    && typeof value.accuracy === "number"
+    && typeof value.reasoning_strength === "number"
+    && typeof value.critique_quality === "number"
+    && typeof value.consensus_leadership === "number"
+    && typeof value.stability === "number"
+    && typeof value.adversarial_usefulness === "number"
+    && typeof value.sample_count === "number"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

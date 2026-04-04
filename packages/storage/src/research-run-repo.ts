@@ -47,7 +47,7 @@ export class ResearchRunRepository {
   }
 
   public get(runId: string): ResearchRunRecord {
-    const row = this.getStmt.get(runId) as ResearchRunRow | undefined;
+    const row = toResearchRunRow(this.getStmt.get(runId));
     if (!row) {
       throw new NotFoundError({ entity: "Research run", id: runId });
     }
@@ -97,10 +97,10 @@ export class ResearchRunRepository {
   }
 
   public listBySession(sessionId: string, limit = 50): ResearchRunRecord[] {
-    const rows = this.listBySessionStmt.all({
+    const rows = toResearchRunRows(this.listBySessionStmt.all({
       sessionId,
       limit: Math.max(1, Math.min(limit, 500)),
-    }) as unknown as ResearchRunRow[];
+    }));
     return rows.map(mapRow);
   }
 }
@@ -117,4 +117,34 @@ function mapRow(row: ResearchRunRow): ResearchRunRecord {
     startedAt: row.started_at,
     finishedAt: row.finished_at ?? undefined,
   };
+}
+
+function toResearchRunRow(value: unknown): ResearchRunRow | undefined {
+  return isResearchRunRow(value) ? value : undefined;
+}
+
+function toResearchRunRows(value: unknown): ResearchRunRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isResearchRunRow);
+}
+
+function isResearchRunRow(value: unknown): value is ResearchRunRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.run_id === "string"
+    && typeof value.session_id === "string"
+    && typeof value.query === "string"
+    && typeof value.mode === "string"
+    && typeof value.status === "string"
+    && (typeof value.summary === "string" || value.summary === null)
+    && (typeof value.error === "string" || value.error === null)
+    && typeof value.started_at === "string"
+    && (typeof value.finished_at === "string" || value.finished_at === null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

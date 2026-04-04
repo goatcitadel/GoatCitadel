@@ -121,9 +121,14 @@ export class SessionRepository {
   }
 
   public applyUsage(delta: SessionUsageDelta): void {
-    this.applyUsageStmt.run(
-      delta as unknown as Record<string, string | number | null>,
-    );
+    this.applyUsageStmt.run({
+      sessionId: delta.sessionId,
+      tokenInput: delta.tokenInput,
+      tokenOutput: delta.tokenOutput,
+      tokenCachedInput: delta.tokenCachedInput,
+      costUsd: delta.costUsd,
+      timestamp: delta.timestamp,
+    });
   }
 
   public getBySessionKey(sessionKey: string): SessionMeta {
@@ -150,17 +155,23 @@ export class SessionRepository {
       limit,
       cursorUpdatedAt: parsedCursor?.timestamp ?? null,
       cursorSessionId: parsedCursor?.key ?? null,
-    }) as unknown as SessionRow[];
+    });
 
-    return rows.map(mapSessionRow);
+    assertSessionRows(rows);
+    const sessionRows: SessionRow[] = rows;
+
+    return sessionRows.map(mapSessionRow);
   }
 
   public listOperatorSummaries(activeSinceIso: string): OperatorSummary[] {
     const rows = this.listOperatorSummariesStmt.all({
       activeSinceIso,
-    }) as unknown as OperatorSummaryRow[];
+    });
 
-    return rows.map((row) => ({
+    assertOperatorSummaryRows(rows);
+    const operatorSummaryRows: OperatorSummaryRow[] = rows;
+
+    return operatorSummaryRows.map((row) => ({
       operatorId: row.operator_id,
       sessionCount: row.session_count,
       activeSessions: row.active_sessions,
@@ -194,6 +205,56 @@ function parseCompositeCursor(cursor?: string): CompositeCursor | undefined {
   }
 
   return { timestamp, key };
+}
+
+function assertSessionRows(rows: unknown): asserts rows is SessionRow[] {
+  if (!Array.isArray(rows) || rows.some((row) => !isSessionRow(row))) {
+    throw new TypeError("Unexpected sessions row shape");
+  }
+}
+
+function assertOperatorSummaryRows(rows: unknown): asserts rows is OperatorSummaryRow[] {
+  if (!Array.isArray(rows) || rows.some((row) => !isOperatorSummaryRow(row))) {
+    throw new TypeError("Unexpected operator summary row shape");
+  }
+}
+
+function isSessionRow(value: unknown): value is SessionRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return typeof value.session_id === "string"
+    && typeof value.session_key === "string"
+    && (value.kind === "dm" || value.kind === "group" || value.kind === "thread")
+    && typeof value.channel === "string"
+    && typeof value.account === "string"
+    && (typeof value.display_name === "string" || value.display_name === null)
+    && (typeof value.routing_hints_json === "string" || value.routing_hints_json === null)
+    && typeof value.last_activity_at === "string"
+    && typeof value.updated_at === "string"
+    && typeof value.health === "string"
+    && typeof value.token_input === "number"
+    && typeof value.token_output === "number"
+    && typeof value.token_cached_input === "number"
+    && typeof value.token_total === "number"
+    && typeof value.cost_usd_total === "number"
+    && typeof value.budget_state === "string";
+}
+
+function isOperatorSummaryRow(value: unknown): value is OperatorSummaryRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return typeof value.operator_id === "string"
+    && typeof value.session_count === "number"
+    && typeof value.active_sessions === "number"
+    && (typeof value.last_activity_at === "string" || value.last_activity_at === null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function mapSessionRow(row: SessionRow): SessionMeta {

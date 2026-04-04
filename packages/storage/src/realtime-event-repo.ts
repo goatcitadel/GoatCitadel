@@ -118,7 +118,7 @@ export class RealtimeEventRepository {
     let sequence = 1;
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const nextSequenceRow = this.allocateSequenceStmt.get() as { last_sequence?: number } | undefined;
+      const nextSequenceRow = toSequenceStateRow(this.allocateSequenceStmt.get());
       sequence = Number(nextSequenceRow?.last_sequence ?? 1);
       this.insertStmt.run({
         eventId,
@@ -159,8 +159,8 @@ export class RealtimeEventRepository {
             cursorSequence: sequenceCursor,
           })
           : this.listLatestStmt.all({ limit })
-      ) as unknown as RealtimeEventRow[];
-      return rows.map(mapRealtimeEventRow);
+      );
+      return toRealtimeEventRows(rows).map(mapRealtimeEventRow);
     }
 
     const parsedCursor = parseCompositeCursor(cursor);
@@ -172,14 +172,14 @@ export class RealtimeEventRepository {
       })
       : this.listLatestStmt.all({ limit });
 
-    return (rows as unknown as RealtimeEventRow[]).map(mapRealtimeEventRow);
+    return toRealtimeEventRows(rows).map(mapRealtimeEventRow);
   }
 
   public listAfterSequence(afterSequence: number, limit: number): RealtimeEvent[] {
-    const rows = this.listAfterSequenceStmt.all({
+    const rows = toRealtimeEventRows(this.listAfterSequenceStmt.all({
       afterSequence,
       limit,
-    }) as unknown as RealtimeEventRow[];
+    }));
     return rows.map(mapRealtimeEventRow);
   }
 
@@ -198,8 +198,9 @@ export class RealtimeEventRepository {
 
   public pruneOlderThan(cutoffIso: string): number {
     const before = this.db.prepare("SELECT COUNT(*) AS count FROM realtime_events WHERE created_at < ?")
-      .get(cutoffIso) as { count: number } | undefined;
-    const count = Number(before?.count ?? 0);
+      .get(cutoffIso);
+    const countRow = toCountRow(before);
+    const count = Number(countRow?.count ?? 0);
     if (count <= 0) {
       return 0;
     }
@@ -243,8 +244,59 @@ function parseSequenceCursor(cursor?: string): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isRealtimeEventRow(value: unknown): value is RealtimeEventRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.event_id === "string"
+    && typeof value.sequence === "number"
+    && typeof value.event_type === "string"
+    && typeof value.source === "string"
+    && typeof value.payload_json === "string"
+    && typeof value.created_at === "string";
+}
+
+function toRealtimeEventRows(value: unknown): RealtimeEventRow[] {
+  return Array.isArray(value) ? value.filter(isRealtimeEventRow) : [];
+}
+
+function toSequenceStateRow(value: unknown): { last_sequence?: number } | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return typeof value.last_sequence === "number" || value.last_sequence === undefined
+    ? { last_sequence: value.last_sequence as number | undefined }
+    : undefined;
+}
+
+function toCountRow(value: unknown): { count?: number } | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return typeof value.count === "number" || value.count === undefined
+    ? { count: value.count as number | undefined }
+    : undefined;
+}
+
+function isRealtimeEventClass(value: string): value is NonNullable<RealtimeEvent["eventClass"]> {
+  return value === "domain_fact" || value === "operational_signal" || value === "ui_notification";
+}
+
+function isRealtimeEventAuthority(value: string): value is NonNullable<RealtimeEvent["eventAuthority"]> {
+  return value === "retained_stream" || value === "durable_history" || value === "derived_projection";
+}
+
+function parseRealtimePayload(raw: string): Record<string, unknown> {
+  const parsed = safeJsonParse<unknown>(raw, {});
+  return isRecord(parsed) ? parsed : {};
+}
+
 function mapRealtimeEventRow(row: RealtimeEventRow): RealtimeEvent {
-  const payload = safeJsonParse<Record<string, unknown>>(row.payload_json, {});
+  const payload = parseRealtimePayload(row.payload_json);
   return {
     eventId: row.event_id,
     sequence: Number(row.sequence),
@@ -262,11 +314,12 @@ function extractRealtimeMetadata(payload: Record<string, unknown>): Pick<
 > {
   const links = payload[REALTIME_EVENT_LINKS_KEY];
   return {
-    eventClass: typeof payload[REALTIME_EVENT_CLASS_KEY] === "string"
-      ? payload[REALTIME_EVENT_CLASS_KEY] as RealtimeEvent["eventClass"]
+    eventClass: typeof payload[REALTIME_EVENT_CLASS_KEY] === "string" && isRealtimeEventClass(payload[REALTIME_EVENT_CLASS_KEY])
+      ? payload[REALTIME_EVENT_CLASS_KEY]
       : undefined,
     eventAuthority: typeof payload[REALTIME_EVENT_AUTHORITY_KEY] === "string"
-      ? payload[REALTIME_EVENT_AUTHORITY_KEY] as RealtimeEvent["eventAuthority"]
+      && isRealtimeEventAuthority(payload[REALTIME_EVENT_AUTHORITY_KEY])
+      ? payload[REALTIME_EVENT_AUTHORITY_KEY]
       : undefined,
     links: links && typeof links === "object" && !Array.isArray(links)
       ? Object.fromEntries(

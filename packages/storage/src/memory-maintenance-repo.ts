@@ -388,7 +388,7 @@ export class MemoryMaintenanceRepository {
   }
 
   public findPolicy(workspaceId: string): MemoryMaintenancePolicyRecord | undefined {
-    const row = this.getPolicyStmt.get(workspaceId) as MemoryMaintenancePolicyRow | undefined;
+    const row = toMemoryMaintenancePolicyRow(this.getPolicyStmt.get(workspaceId));
     return row ? mapPolicyRow(row) : undefined;
   }
 
@@ -446,7 +446,7 @@ export class MemoryMaintenanceRepository {
   }
 
   public findState(workspaceId: string): MemoryMaintenanceStateRecord | undefined {
-    const row = this.getStateStmt.get(workspaceId) as MemoryMaintenanceStateRow | undefined;
+    const row = toMemoryMaintenanceStateRow(this.getStateStmt.get(workspaceId));
     return row ? mapStateRow(row) : undefined;
   }
 
@@ -496,7 +496,7 @@ export class MemoryMaintenanceRepository {
   }
 
   public getRun(runId: string): MemoryMaintenanceRunRecord {
-    const row = this.getRunStmt.get(runId) as MemoryMaintenanceRunRow | undefined;
+    const row = toMemoryMaintenanceRunRow(this.getRunStmt.get(runId));
     if (!row) {
       throw new NotFoundError({ entity: "Memory maintenance run", id: runId });
     }
@@ -504,7 +504,7 @@ export class MemoryMaintenanceRepository {
   }
 
   public findRunByDurableRunId(durableRunId: string): MemoryMaintenanceRunRecord | undefined {
-    const row = this.getRunByDurableRunStmt.get(durableRunId) as MemoryMaintenanceRunRow | undefined;
+    const row = toMemoryMaintenanceRunRow(this.getRunByDurableRunStmt.get(durableRunId));
     return row ? mapRunRow(row) : undefined;
   }
 
@@ -528,10 +528,10 @@ export class MemoryMaintenanceRepository {
   }
 
   public listRuns(workspaceId: string, limit = 100): MemoryMaintenanceRunRecord[] {
-    const rows = this.listRunsStmt.all({
+    const rows = toMemoryMaintenanceRunRows(this.listRunsStmt.all({
       workspaceId,
       limit: clampLimit(limit, 500),
-    }) as unknown as MemoryMaintenanceRunRow[];
+    }));
     return rows.map(mapRunRow);
   }
 
@@ -553,7 +553,7 @@ export class MemoryMaintenanceRepository {
   }
 
   public listRunSources(runId: string): MemoryMaintenanceRunSourceRecord[] {
-    const rows = this.listRunSourcesStmt.all(runId) as unknown as MemoryMaintenanceRunSourceRow[];
+    const rows = toMemoryMaintenanceRunSourceRows(this.listRunSourcesStmt.all(runId));
     return rows.map((row) => ({
       sourceId: row.source_id,
       runId: row.run_id,
@@ -585,7 +585,7 @@ export class MemoryMaintenanceRepository {
   }
 
   public listRunChanges(runId: string): MemoryMaintenanceChangeRecord[] {
-    const rows = this.listRunChangesStmt.all(runId) as unknown as MemoryMaintenanceChangeRow[];
+    const rows = toMemoryMaintenanceChangeRows(this.listRunChangesStmt.all(runId));
     return rows.map((row) => ({
       changeId: row.change_id,
       runId: row.run_id,
@@ -619,7 +619,7 @@ export class MemoryMaintenanceRepository {
   }
 
   public getRecommendation(recommendationId: string): MemoryMaintenanceRecommendationRecord {
-    const row = this.getRecommendationStmt.get(recommendationId) as MemoryMaintenanceRecommendationRow | undefined;
+    const row = toMemoryMaintenanceRecommendationRow(this.getRecommendationStmt.get(recommendationId));
     if (!row) {
       throw new NotFoundError({ entity: "Memory maintenance recommendation", id: recommendationId });
     }
@@ -640,10 +640,10 @@ export class MemoryMaintenanceRepository {
   }
 
   public listRecommendations(workspaceId: string, limit = 100): MemoryMaintenanceRecommendationRecord[] {
-    const rows = this.listRecommendationsStmt.all({
+    const rows = toMemoryMaintenanceRecommendationRows(this.listRecommendationsStmt.all({
       workspaceId,
       limit: clampLimit(limit, 500),
-    }) as unknown as MemoryMaintenanceRecommendationRow[];
+    }));
     return rows.map(mapRecommendationRow);
   }
 }
@@ -691,7 +691,7 @@ function mapRunRow(row: MemoryMaintenanceRunRow): MemoryMaintenanceRunRecord {
     status: row.status,
     providerId: row.provider_id ?? undefined,
     model: row.model ?? undefined,
-    policySnapshot: safeJsonParse<Record<string, unknown>>(row.policy_snapshot_json, {}),
+    policySnapshot: parseObjectJson(row.policy_snapshot_json),
     sourceSessionCount: Number(row.source_session_count ?? 0),
     changedArtifactCount: Number(row.changed_artifact_count ?? 0),
     summary: row.summary ?? undefined,
@@ -710,7 +710,7 @@ function mapRecommendationRow(row: MemoryMaintenanceRecommendationRow): MemoryMa
     kind: row.kind,
     status: row.status,
     summary: row.summary,
-    proposedPatch: safeJsonParse<Record<string, unknown>>(row.proposed_patch_json, {}),
+    proposedPatch: parseObjectJson(row.proposed_patch_json),
     rationale: row.rationale ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -725,4 +725,146 @@ function normalizeNullableText(value: string | undefined): string | null {
 
 function clampLimit(value: number, max: number): number {
   return Math.max(1, Math.min(max, Math.floor(value)));
+}
+
+function parseObjectJson(value: string): Record<string, unknown> {
+  const parsed = safeJsonParse<unknown>(value, {});
+  return isRecord(parsed) ? parsed : {};
+}
+
+function toMemoryMaintenancePolicyRow(value: unknown): MemoryMaintenancePolicyRow | undefined {
+  return isMemoryMaintenancePolicyRow(value) ? value : undefined;
+}
+
+function toMemoryMaintenanceStateRow(value: unknown): MemoryMaintenanceStateRow | undefined {
+  return isMemoryMaintenanceStateRow(value) ? value : undefined;
+}
+
+function toMemoryMaintenanceRunRow(value: unknown): MemoryMaintenanceRunRow | undefined {
+  return isMemoryMaintenanceRunRow(value) ? value : undefined;
+}
+
+function toMemoryMaintenanceRunRows(value: unknown): MemoryMaintenanceRunRow[] {
+  return Array.isArray(value) ? value.filter(isMemoryMaintenanceRunRow) : [];
+}
+
+function toMemoryMaintenanceRunSourceRows(value: unknown): MemoryMaintenanceRunSourceRow[] {
+  return Array.isArray(value) ? value.filter(isMemoryMaintenanceRunSourceRow) : [];
+}
+
+function toMemoryMaintenanceChangeRows(value: unknown): MemoryMaintenanceChangeRow[] {
+  return Array.isArray(value) ? value.filter(isMemoryMaintenanceChangeRow) : [];
+}
+
+function toMemoryMaintenanceRecommendationRow(value: unknown): MemoryMaintenanceRecommendationRow | undefined {
+  return isMemoryMaintenanceRecommendationRow(value) ? value : undefined;
+}
+
+function toMemoryMaintenanceRecommendationRows(value: unknown): MemoryMaintenanceRecommendationRow[] {
+  return Array.isArray(value) ? value.filter(isMemoryMaintenanceRecommendationRow) : [];
+}
+
+function isMemoryMaintenancePolicyRow(value: unknown): value is MemoryMaintenancePolicyRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.workspace_id === "string"
+    && typeof value.enabled === "number"
+    && typeof value.run_mode === "string"
+    && typeof value.timing_strategy === "string"
+    && (typeof value.schedule_json === "string" || value.schedule_json === null)
+    && typeof value.time_zone === "string"
+    && typeof value.min_hours_since_last_success === "number"
+    && typeof value.min_changed_sessions === "number"
+    && (typeof value.provider_id === "string" || value.provider_id === null)
+    && (typeof value.model === "string" || value.model === null)
+    && typeof value.execution_target === "string"
+    && typeof value.unavailable_model_policy === "string"
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isMemoryMaintenanceStateRow(value: unknown): value is MemoryMaintenanceStateRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.workspace_id === "string"
+    && (typeof value.last_eligibility_at === "string" || value.last_eligibility_at === null)
+    && (typeof value.last_successful_run_at === "string" || value.last_successful_run_at === null)
+    && typeof value.changed_session_count === "number"
+    && (typeof value.active_run_id === "string" || value.active_run_id === null)
+    && (typeof value.last_recommendation_at === "string" || value.last_recommendation_at === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isMemoryMaintenanceRunRow(value: unknown): value is MemoryMaintenanceRunRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.run_id === "string"
+    && (typeof value.durable_run_id === "string" || value.durable_run_id === null)
+    && typeof value.workspace_id === "string"
+    && typeof value.trigger_source === "string"
+    && typeof value.status === "string"
+    && (typeof value.provider_id === "string" || value.provider_id === null)
+    && (typeof value.model === "string" || value.model === null)
+    && typeof value.policy_snapshot_json === "string"
+    && typeof value.source_session_count === "number"
+    && typeof value.changed_artifact_count === "number"
+    && (typeof value.summary === "string" || value.summary === null)
+    && (typeof value.error_text === "string" || value.error_text === null)
+    && typeof value.created_at === "string"
+    && (typeof value.started_at === "string" || value.started_at === null)
+    && (typeof value.finished_at === "string" || value.finished_at === null)
+    && typeof value.updated_at === "string";
+}
+
+function isMemoryMaintenanceRunSourceRow(value: unknown): value is MemoryMaintenanceRunSourceRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.source_id === "string"
+    && typeof value.run_id === "string"
+    && typeof value.source_kind === "string"
+    && typeof value.source_ref === "string"
+    && (typeof value.modified_at === "string" || value.modified_at === null)
+    && (typeof value.excerpt === "string" || value.excerpt === null)
+    && (typeof value.token_estimate === "number" || value.token_estimate === null)
+    && typeof value.created_at === "string";
+}
+
+function isMemoryMaintenanceChangeRow(value: unknown): value is MemoryMaintenanceChangeRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.change_id === "string"
+    && typeof value.run_id === "string"
+    && typeof value.change_kind === "string"
+    && typeof value.target_kind === "string"
+    && typeof value.target_ref === "string"
+    && (typeof value.before_ref === "string" || value.before_ref === null)
+    && (typeof value.after_ref === "string" || value.after_ref === null)
+    && typeof value.summary === "string"
+    && typeof value.created_at === "string";
+}
+
+function isMemoryMaintenanceRecommendationRow(value: unknown): value is MemoryMaintenanceRecommendationRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.recommendation_id === "string"
+    && typeof value.workspace_id === "string"
+    && typeof value.kind === "string"
+    && typeof value.status === "string"
+    && typeof value.summary === "string"
+    && typeof value.proposed_patch_json === "string"
+    && (typeof value.rationale === "string" || value.rationale === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string"
+    && (typeof value.applied_at === "string" || value.applied_at === null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

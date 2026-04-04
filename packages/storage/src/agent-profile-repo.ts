@@ -141,15 +141,15 @@ export class AgentProfileRepository {
   }
 
   public list(view: AgentLifecycleStatus | "all" = "active", limit = 500): AgentProfileRecord[] {
-    const rows = this.listStmt.all({
+    const rows = toAgentProfileRows(this.listStmt.all({
       view,
       limit: Math.max(1, Math.min(2000, Math.floor(limit))),
-    }) as unknown as AgentProfileRow[];
+    }));
     return rows.map(mapRow);
   }
 
   public get(agentId: string): AgentProfileRecord {
-    const row = this.getStmt.get(agentId) as AgentProfileRow | undefined;
+    const row = toAgentProfileRow(this.getStmt.get(agentId));
     if (!row) {
       throw new NotFoundError({ entity: "Agent profile", id: agentId });
     }
@@ -157,12 +157,12 @@ export class AgentProfileRepository {
   }
 
   public find(agentId: string): AgentProfileRecord | undefined {
-    const row = this.getStmt.get(agentId) as AgentProfileRow | undefined;
+    const row = toAgentProfileRow(this.getStmt.get(agentId));
     return row ? mapRow(row) : undefined;
   }
 
   public getByRoleId(roleId: string): AgentProfileRecord | undefined {
-    const row = this.getByRoleIdStmt.get(roleId) as AgentProfileRow | undefined;
+    const row = toAgentProfileRow(this.getByRoleIdStmt.get(roleId));
     return row ? mapRow(row) : undefined;
   }
 
@@ -325,4 +325,40 @@ function parseStringArray(value: string): string[] {
     out.push(trimmed);
   }
   return out;
+}
+
+function toAgentProfileRow(value: unknown): AgentProfileRow | undefined {
+  return isAgentProfileRow(value) ? value : undefined;
+}
+
+function toAgentProfileRows(value: unknown): AgentProfileRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isAgentProfileRow);
+}
+
+function isAgentProfileRow(value: unknown): value is AgentProfileRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.agent_id === "string"
+    && typeof value.role_id === "string"
+    && typeof value.name === "string"
+    && typeof value.title === "string"
+    && typeof value.summary === "string"
+    && typeof value.specialties_json === "string"
+    && typeof value.default_tools_json === "string"
+    && typeof value.aliases_json === "string"
+    && typeof value.is_builtin === "number"
+    && typeof value.lifecycle_status === "string"
+    && (typeof value.archived_at === "string" || value.archived_at === null)
+    && (typeof value.archived_by === "string" || value.archived_by === null)
+    && (typeof value.archive_reason === "string" || value.archive_reason === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

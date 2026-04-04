@@ -128,7 +128,7 @@ export class ContextManifestRepository {
   }
 
   public getByTurn(turnId: string): ContextManifestRecord {
-    const row = this.getByTurnStmt.get({ turnId }) as ContextManifestRow | undefined;
+    const row = toContextManifestRow(this.getByTurnStmt.get({ turnId }));
     if (!row) {
       throw new NotFoundError({ entity: "Context manifest", id: turnId });
     }
@@ -148,7 +148,7 @@ export class ContextManifestRepository {
   }
 
   public maybeGetDetailByTurn(turnId: string): ContextManifestDetail | undefined {
-    const row = this.getByTurnStmt.get({ turnId }) as ContextManifestRow | undefined;
+    const row = toContextManifestRow(this.getByTurnStmt.get({ turnId }));
     if (!row) {
       return undefined;
     }
@@ -164,7 +164,7 @@ export class ContextManifestRepository {
   }
 
   public listEntries(manifestId: string): ContextManifestEntryRecord[] {
-    const rows = this.listEntriesStmt.all({ manifestId }) as unknown as ContextManifestEntryRow[];
+    const rows = toContextManifestEntryRows(this.listEntriesStmt.all({ manifestId }));
     return rows.map(mapEntryRow);
   }
 
@@ -220,7 +220,7 @@ function mapEntryRow(row: ContextManifestEntryRow): ContextManifestEntryRecord {
     sourceRef: row.source_ref ?? undefined,
     contentText: row.content_text ?? undefined,
     contentHash: row.content_hash,
-    metadata: safeJsonParse<Record<string, unknown>>(row.metadata_json, {}),
+    metadata: parseContextManifestMetadata(row.metadata_json),
     createdAt: row.created_at,
   };
 }
@@ -232,4 +232,51 @@ function createContentHash(input: ContextManifestAppendEntryInput): string {
     contentText: input.contentText ?? null,
     metadata: input.metadata ?? {},
   })).digest("hex");
+}
+
+function parseContextManifestMetadata(value: string): Record<string, unknown> {
+  const parsed = safeJsonParse<unknown>(value, {});
+  return isRecord(parsed) ? parsed : {};
+}
+
+function toContextManifestRow(value: unknown): ContextManifestRow | undefined {
+  return isContextManifestRow(value) ? value : undefined;
+}
+
+function toContextManifestEntryRows(value: unknown): ContextManifestEntryRow[] {
+  return Array.isArray(value) ? value.filter(isContextManifestEntryRow) : [];
+}
+
+function isContextManifestRow(value: unknown): value is ContextManifestRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.manifest_id === "string"
+    && typeof value.scope === "string"
+    && typeof value.turn_id === "string"
+    && (typeof value.session_id === "string" || value.session_id === null)
+    && (typeof value.task_id === "string" || value.task_id === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string"
+    && typeof value.entry_count === "number";
+}
+
+function isContextManifestEntryRow(value: unknown): value is ContextManifestEntryRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.entry_id === "string"
+    && typeof value.manifest_id === "string"
+    && typeof value.kind === "string"
+    && typeof value.entry_index === "number"
+    && (typeof value.title === "string" || value.title === null)
+    && (typeof value.source_ref === "string" || value.source_ref === null)
+    && (typeof value.content_text === "string" || value.content_text === null)
+    && typeof value.content_hash === "string"
+    && typeof value.metadata_json === "string"
+    && typeof value.created_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

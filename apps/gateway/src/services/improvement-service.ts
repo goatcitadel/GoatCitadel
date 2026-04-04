@@ -412,23 +412,23 @@ export class ImprovementService {
 
   listCapabilityGapEvents(limit = 100): CapabilityGapEventRecord[] {
     this.ensureCapabilityGapTables();
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = toCapabilityGapEventRows(this.ctx.gatewaySql.prepare(`
       SELECT *
       FROM capability_gap_events
       ORDER BY updated_at DESC, created_at DESC
       LIMIT ?
-    `).all(Math.max(1, Math.min(limit, 500))) as unknown as CapabilityGapEventRow[];
+    `).all(Math.max(1, Math.min(limit, 500))));
     return rows.map((row) => mapCapabilityGapEventRow(row));
   }
 
   listRepairCandidates(limit = 60): RepairCandidateRecord[] {
     this.ensureCapabilityGapTables();
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = toRepairCandidateRows(this.ctx.gatewaySql.prepare(`
       SELECT *
       FROM repair_candidates
       ORDER BY last_seen_at DESC, updated_at DESC
       LIMIT ?
-    `).all(Math.max(1, Math.min(limit, 300))) as unknown as RepairCandidateRow[];
+    `).all(Math.max(1, Math.min(limit, 300))));
     return rows.map((row) => mapRepairCandidateRow(row));
   }
 
@@ -437,12 +437,12 @@ export class ImprovementService {
     input: RepairCandidateValidationUpdateInput,
   ): RepairCandidateRecord {
     this.ensureCapabilityGapTables();
-    const existing = this.ctx.gatewaySql.prepare(`
+    const existing = toRepairCandidateRow(this.ctx.gatewaySql.prepare(`
       SELECT *
       FROM repair_candidates
       WHERE candidate_id = ?
       LIMIT 1
-    `).get(candidateId) as unknown as RepairCandidateRow | undefined;
+    `).get(candidateId));
     if (!existing) {
       throw new Error(`Repair candidate not found: ${candidateId}`);
     }
@@ -463,11 +463,14 @@ export class ImprovementService {
       updatedAt: now,
       candidateId,
     });
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = toRepairCandidateRow(this.ctx.gatewaySql.prepare(`
       SELECT *
       FROM repair_candidates
       WHERE candidate_id = ?
-    `).get(candidateId) as unknown as RepairCandidateRow;
+    `).get(candidateId));
+    if (!row) {
+      throw new Error(`Repair candidate not found after update: ${candidateId}`);
+    }
     return mapRepairCandidateRow(row);
   }
 
@@ -485,12 +488,12 @@ export class ImprovementService {
       toolProfile: input.toolProfile,
       providerId: input.providerId,
     });
-    const existing = this.ctx.gatewaySql.prepare(`
+    const existing = toCapabilityGapEventRow(this.ctx.gatewaySql.prepare(`
       SELECT *
       FROM capability_gap_events
       WHERE fingerprint = ?
       LIMIT 1
-    `).get(fingerprint) as unknown as CapabilityGapEventRow | undefined;
+    `).get(fingerprint));
     const eventId = existing?.event_id ?? randomUUID();
     const repeatCount = (existing?.repeat_count ?? 0) + 1;
     const recoveryOptionsJson = JSON.stringify(normalizedRecoveryOptions);
@@ -618,11 +621,14 @@ export class ImprovementService {
         WHERE event_id = ?
       `).run(candidate.candidateId, now, eventId);
     }
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = toCapabilityGapEventRow(this.ctx.gatewaySql.prepare(`
       SELECT *
       FROM capability_gap_events
       WHERE event_id = ?
-    `).get(eventId) as unknown as CapabilityGapEventRow;
+    `).get(eventId));
+    if (!row) {
+      throw new Error(`Capability gap event not found after upsert: ${eventId}`);
+    }
     return mapCapabilityGapEventRow(row);
   }
 
@@ -986,11 +992,14 @@ export class ImprovementService {
       lastSeenAt: now,
     });
 
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = toRepairCandidateRow(this.ctx.gatewaySql.prepare(`
       SELECT *
       FROM repair_candidates
       WHERE candidate_id = ?
-    `).get(candidateId) as unknown as RepairCandidateRow;
+    `).get(candidateId));
+    if (!row) {
+      throw new Error(`Repair candidate not found after upsert: ${candidateId}`);
+    }
     return mapRepairCandidateRow(row);
   }
 
@@ -1927,6 +1936,80 @@ function buildRepairCandidateSummary(input: {
     input.configArea ? `config ${input.configArea}` : undefined,
   ].filter(Boolean);
   return `${fragments.join(" · ")}. Validate with replay before apply.`;
+}
+
+function toCapabilityGapEventRow(value: unknown): CapabilityGapEventRow | undefined {
+  return isCapabilityGapEventRow(value) ? value : undefined;
+}
+
+function toCapabilityGapEventRows(value: unknown): CapabilityGapEventRow[] {
+  return Array.isArray(value) ? value.filter(isCapabilityGapEventRow) : [];
+}
+
+function toRepairCandidateRow(value: unknown): RepairCandidateRow | undefined {
+  return isRepairCandidateRow(value) ? value : undefined;
+}
+
+function toRepairCandidateRows(value: unknown): RepairCandidateRow[] {
+  return Array.isArray(value) ? value.filter(isRepairCandidateRow) : [];
+}
+
+function isCapabilityGapEventRow(value: unknown): value is CapabilityGapEventRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.event_id === "string"
+    && typeof value.session_id === "string"
+    && (typeof value.turn_id === "string" || value.turn_id === null)
+    && (typeof value.run_id === "string" || value.run_id === null)
+    && typeof value.cause_class === "string"
+    && (typeof value.failure_class === "string" || value.failure_class === null)
+    && (typeof value.prompt_excerpt === "string" || value.prompt_excerpt === null)
+    && (typeof value.prompt_ref === "string" || value.prompt_ref === null)
+    && (typeof value.requested_tool === "string" || value.requested_tool === null)
+    && (typeof value.tool_family === "string" || value.tool_family === null)
+    && (typeof value.tool_profile === "string" || value.tool_profile === null)
+    && (typeof value.policy_reason === "string" || value.policy_reason === null)
+    && (typeof value.provider_id === "string" || value.provider_id === null)
+    && (typeof value.model === "string" || value.model === null)
+    && (typeof value.config_area === "string" || value.config_area === null)
+    && (typeof value.suggested_repair_class === "string" || value.suggested_repair_class === null)
+    && typeof value.confidence === "number"
+    && typeof value.repeat_count === "number"
+    && typeof value.recovery_options_json === "string"
+    && (typeof value.replay_run_id === "string" || value.replay_run_id === null)
+    && (typeof value.replay_status === "string" || value.replay_status === null)
+    && (typeof value.repair_candidate_id === "string" || value.repair_candidate_id === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRepairCandidateRow(value: unknown): value is RepairCandidateRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.candidate_id === "string"
+    && typeof value.fingerprint === "string"
+    && typeof value.cause_class === "string"
+    && typeof value.title === "string"
+    && typeof value.summary === "string"
+    && (typeof value.requested_tool === "string" || value.requested_tool === null)
+    && (typeof value.tool_profile === "string" || value.tool_profile === null)
+    && (typeof value.provider_id === "string" || value.provider_id === null)
+    && (typeof value.config_area === "string" || value.config_area === null)
+    && (typeof value.suggested_patch === "string" || value.suggested_patch === null)
+    && (typeof value.replay_run_id === "string" || value.replay_run_id === null)
+    && typeof value.validation_status === "string"
+    && (typeof value.validation_summary === "string" || value.validation_summary === null)
+    && typeof value.event_count === "number"
+    && typeof value.confidence === "number"
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string"
+    && typeof value.last_seen_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function buildSuggestedRepairPatch(input: {

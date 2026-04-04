@@ -14,6 +14,7 @@ describe("config-sync entrypoint coverage", () => {
     syncUnifiedConfigMock.mockResolvedValue({
       unifiedPath: "C:/tmp/goatcitadel.json",
       createdUnified: false,
+      materializedExamples: [],
       syncedSections: ["assistant", "tool-policy"],
     });
   });

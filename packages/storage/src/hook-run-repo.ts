@@ -163,7 +163,7 @@ export class HookRunRepository {
   }
 
   public get(runId: string): HookRunRecord {
-    const row = this.getStmt.get(runId) as HookRunRow | undefined;
+    const row = toHookRunRow(this.getStmt.get(runId));
     if (!row) {
       throw new Error(`Unknown hook run ${runId}`);
     }
@@ -171,15 +171,15 @@ export class HookRunRepository {
   }
 
   public findByIdempotency(hookId: string, idempotencyKey: string): HookRunRecord | undefined {
-    const row = this.findByIdempotencyStmt.get({ hookId, idempotencyKey }) as HookRunRow | undefined;
+    const row = toHookRunRow(this.findByIdempotencyStmt.get({ hookId, idempotencyKey }));
     return row ? mapHookRunRow(row) : undefined;
   }
 
   public listByWorkspace(workspaceId: string, limit = 200): HookRunRecord[] {
-    const rows = this.listByWorkspaceStmt.all({
+    const rows = toHookRunRows(this.listByWorkspaceStmt.all({
       workspaceId,
       limit: Math.max(1, Math.min(1_000, Math.floor(limit))),
-    }) as unknown as HookRunRow[];
+    }));
     return rows.map(mapHookRunRow);
   }
 
@@ -263,4 +263,40 @@ function serializeJson(value: unknown): string | null {
     return null;
   }
   return JSON.stringify(value);
+}
+
+function toHookRunRow(value: unknown): HookRunRow | undefined {
+  return isHookRunRow(value) ? value : undefined;
+}
+
+function toHookRunRows(value: unknown): HookRunRow[] {
+  return Array.isArray(value) ? value.filter(isHookRunRow) : [];
+}
+
+function isHookRunRow(value: unknown): value is HookRunRow {
+  return isRecord(value)
+    && typeof value.run_id === "string"
+    && typeof value.hook_id === "string"
+    && typeof value.workspace_id === "string"
+    && typeof value.trigger === "string"
+    && typeof value.entity_type === "string"
+    && typeof value.entity_id === "string"
+    && typeof value.mode === "string"
+    && typeof value.status === "string"
+    && typeof value.idempotency_key === "string"
+    && typeof value.attempt_count === "number"
+    && (typeof value.durable_run_id === "string" || value.durable_run_id === null)
+    && (typeof value.decision_json === "string" || value.decision_json === null)
+    && (typeof value.patch_summary_json === "string" || value.patch_summary_json === null)
+    && (typeof value.error_text === "string" || value.error_text === null)
+    && (typeof value.latency_ms === "number" || value.latency_ms === null)
+    && (typeof value.request_payload_json === "string" || value.request_payload_json === null)
+    && (typeof value.response_payload_json === "string" || value.response_payload_json === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string"
+    && (typeof value.completed_at === "string" || value.completed_at === null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

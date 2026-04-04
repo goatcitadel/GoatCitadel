@@ -88,16 +88,16 @@ export class ChatProjectRepository {
   }
 
   public list(view: "active" | "archived" | "all" = "active", limit = 300, workspaceId?: string): ChatProjectRecord[] {
-    const rows = this.listStmt.all({
+    const rows = toChatProjectRows(this.listStmt.all({
       view,
       workspaceId: workspaceId ? sanitizeWorkspaceId(workspaceId) : null,
       limit: Math.max(1, Math.min(2000, Math.floor(limit))),
-    }) as unknown as ChatProjectRow[];
+    }));
     return rows.map(mapRow);
   }
 
   public get(projectId: string): ChatProjectRecord {
-    const row = this.getStmt.get(projectId) as ChatProjectRow | undefined;
+    const row = toChatProjectRow(this.getStmt.get(projectId));
     if (!row) {
       throw new NotFoundError({ entity: "Chat project", id: projectId });
     }
@@ -105,7 +105,7 @@ export class ChatProjectRepository {
   }
 
   public find(projectId: string): ChatProjectRecord | undefined {
-    const row = this.getStmt.get(projectId) as ChatProjectRow | undefined;
+    const row = toChatProjectRow(this.getStmt.get(projectId));
     return row ? mapRow(row) : undefined;
   }
 
@@ -229,4 +229,35 @@ function sanitizeWorkspaceId(value: string): string {
     throw new ValidationError({ message: "workspaceId contains unsupported characters" });
   }
   return trimmed;
+}
+
+function toChatProjectRow(value: unknown): ChatProjectRow | undefined {
+  return isChatProjectRow(value) ? value : undefined;
+}
+
+function toChatProjectRows(value: unknown): ChatProjectRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isChatProjectRow);
+}
+
+function isChatProjectRow(value: unknown): value is ChatProjectRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.project_id === "string"
+    && typeof value.workspace_id === "string"
+    && typeof value.name === "string"
+    && (typeof value.description === "string" || value.description === null)
+    && typeof value.workspace_path === "string"
+    && (typeof value.color === "string" || value.color === null)
+    && typeof value.lifecycle_status === "string"
+    && (typeof value.archived_at === "string" || value.archived_at === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

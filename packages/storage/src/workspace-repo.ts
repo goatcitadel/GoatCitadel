@@ -74,15 +74,15 @@ export class WorkspaceRepository {
   }
 
   public list(view: "active" | "archived" | "all" = "active", limit = 200): WorkspaceRecord[] {
-    const rows = this.listStmt.all({
+    const rows = toWorkspaceRows(this.listStmt.all({
       view,
       limit: Math.max(1, Math.min(2000, Math.floor(limit))),
-    }) as unknown as WorkspaceRow[];
+    }));
     return rows.map(mapRow);
   }
 
   public get(workspaceId: string): WorkspaceRecord {
-    const row = this.getStmt.get(workspaceId) as WorkspaceRow | undefined;
+    const row = toWorkspaceRow(this.getStmt.get(workspaceId));
     if (!row) {
       throw new NotFoundError({ entity: "Workspace", id: workspaceId });
     }
@@ -90,12 +90,12 @@ export class WorkspaceRepository {
   }
 
   public find(workspaceId: string): WorkspaceRecord | undefined {
-    const row = this.getStmt.get(workspaceId) as WorkspaceRow | undefined;
+    const row = toWorkspaceRow(this.getStmt.get(workspaceId));
     return row ? mapRow(row) : undefined;
   }
 
   public findBySlug(slug: string): WorkspaceRecord | undefined {
-    const row = this.getBySlugStmt.get(normalizeSlug(slug)) as WorkspaceRow | undefined;
+    const row = toWorkspaceRow(this.getBySlugStmt.get(normalizeSlug(slug)));
     return row ? mapRow(row) : undefined;
   }
 
@@ -224,4 +224,34 @@ function serializeWorkspacePrefs(value: WorkspacePrefs | undefined): string {
     return "{}";
   }
   return JSON.stringify(value);
+}
+
+function toWorkspaceRow(value: unknown): WorkspaceRow | undefined {
+  return isWorkspaceRow(value) ? value : undefined;
+}
+
+function toWorkspaceRows(value: unknown): WorkspaceRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isWorkspaceRow);
+}
+
+function isWorkspaceRow(value: unknown): value is WorkspaceRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.workspace_id === "string"
+    && typeof value.name === "string"
+    && (typeof value.description === "string" || value.description === null)
+    && typeof value.slug === "string"
+    && typeof value.lifecycle_status === "string"
+    && (typeof value.archived_at === "string" || value.archived_at === null)
+    && (typeof value.workspace_prefs_json === "string" || value.workspace_prefs_json === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

@@ -115,7 +115,7 @@ export class ChatSessionPrefsRepository {
   }
 
   public get(sessionId: string): ChatSessionPrefsRecord | undefined {
-    const row = this.getStmt.get(sessionId) as unknown as ChatSessionPrefsRow | undefined;
+    const row = toChatSessionPrefsRow(this.getStmt.get(sessionId));
     return row ? mapRow(row) : undefined;
   }
 
@@ -179,7 +179,7 @@ export class ChatSessionPrefsRepository {
   }
 
   private requireRow(sessionId: string): ChatSessionPrefsRow {
-    const row = this.getStmt.get(sessionId) as unknown as ChatSessionPrefsRow | undefined;
+    const row = toChatSessionPrefsRow(this.getStmt.get(sessionId));
     if (!row) {
       throw new NotFoundError({ entity: "chat session prefs", id: sessionId });
     }
@@ -214,4 +214,37 @@ function mapRow(row: ChatSessionPrefsRow): ChatSessionPrefsRecord {
 function normalizeOptional(value: string): string | null {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function toChatSessionPrefsRow(value: unknown): ChatSessionPrefsRow | undefined {
+  return isChatSessionPrefsRow(value) ? value : undefined;
+}
+
+function isChatSessionPrefsRow(value: unknown): value is ChatSessionPrefsRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.session_id === "string"
+    && typeof value.mode === "string"
+    && typeof value.planning_mode === "string"
+    && (typeof value.provider_id === "string" || value.provider_id === null)
+    && (typeof value.model === "string" || value.model === null)
+    && typeof value.web_mode === "string"
+    && typeof value.memory_mode === "string"
+    && typeof value.thinking_level === "string"
+    && typeof value.tool_autonomy === "string"
+    && (typeof value.vision_fallback_model === "string" || value.vision_fallback_model === null)
+    && typeof value.orchestration_enabled === "number"
+    && typeof value.orchestration_intensity === "string"
+    && typeof value.orchestration_visibility === "string"
+    && typeof value.orchestration_provider_preference === "string"
+    && typeof value.orchestration_review_depth === "string"
+    && typeof value.orchestration_parallelism === "string"
+    && typeof value.code_auto_apply === "string"
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

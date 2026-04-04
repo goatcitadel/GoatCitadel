@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatCitationRecord, ChatDelegationStepRecord, ChatDelegationStepStatus } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
+import { safeJsonParse } from "./safe-json.js";
 
 interface ChatDelegationStepRow {
   step_id: string;
@@ -64,7 +65,7 @@ export class ChatDelegationStepRepository {
   }
 
   public get(stepId: string): ChatDelegationStepRecord {
-    const row = this.getStmt.get(stepId) as ChatDelegationStepRow | undefined;
+    const row = toChatDelegationStepRow(this.getStmt.get(stepId));
     if (!row) {
       throw new NotFoundError({ entity: "Delegation step", id: stepId });
     }
@@ -148,9 +149,44 @@ export class ChatDelegationStepRepository {
   }
 
   public listByRun(runId: string): ChatDelegationStepRecord[] {
-    const rows = this.listByRunStmt.all({ runId }) as unknown as ChatDelegationStepRow[];
+    const rows = toChatDelegationStepRows(this.listByRunStmt.all({ runId }));
     return rows.map(mapRow);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isChatDelegationStepRow(value: unknown): value is ChatDelegationStepRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.step_id === "string"
+    && typeof value.run_id === "string"
+    && typeof value.role === "string"
+    && typeof value.step_index === "number"
+    && typeof value.status === "string"
+    && (typeof value.provider_id === "string" || value.provider_id === null)
+    && (typeof value.model === "string" || value.model === null)
+    && (typeof value.summary === "string" || value.summary === null)
+    && (typeof value.output === "string" || value.output === null)
+    && (typeof value.error === "string" || value.error === null)
+    && (typeof value.failure_guidance === "string" || value.failure_guidance === null)
+    && (typeof value.child_session_id === "string" || value.child_session_id === null)
+    && (typeof value.child_turn_id === "string" || value.child_turn_id === null)
+    && (typeof value.citations_json === "string" || value.citations_json === null)
+    && typeof value.started_at === "string"
+    && (typeof value.finished_at === "string" || value.finished_at === null)
+    && (typeof value.duration_ms === "number" || value.duration_ms === null);
+}
+
+function toChatDelegationStepRow(value: unknown): ChatDelegationStepRow | undefined {
+  return isChatDelegationStepRow(value) ? value : undefined;
+}
+
+function toChatDelegationStepRows(value: unknown): ChatDelegationStepRow[] {
+  return Array.isArray(value) ? value.filter(isChatDelegationStepRow) : [];
 }
 
 function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
@@ -173,12 +209,4 @@ function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
     childTurnId: row.child_turn_id ?? undefined,
     citations: row.citations_json ? safeJsonParse<ChatCitationRecord[]>(row.citations_json, []) : undefined,
   };
-}
-
-function safeJsonParse<T>(raw: string, fallback: T): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
 }

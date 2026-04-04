@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
+import { safeJsonParse } from "./safe-json.js";
 
 interface ChatToolRunRow {
   tool_run_id: string;
@@ -85,7 +86,7 @@ export class ChatToolRunRepository {
   }
 
   public get(toolRunId: string): ChatToolRunRecord {
-    const row = this.getStmt.get(toolRunId) as ChatToolRunRow | undefined;
+    const row = toChatToolRunRow(this.getStmt.get(toolRunId));
     if (!row) {
       throw new NotFoundError({ entity: "Chat tool run", id: toolRunId });
     }
@@ -125,15 +126,15 @@ export class ChatToolRunRepository {
   }
 
   public listByTurn(turnId: string): ChatToolRunRecord[] {
-    const rows = this.listByTurnStmt.all({ turnId }) as unknown as ChatToolRunRow[];
+    const rows = toChatToolRunRows(this.listByTurnStmt.all({ turnId }));
     return rows.map(mapRow);
   }
 
   public listBySession(sessionId: string, limit = 200): ChatToolRunRecord[] {
-    const rows = this.listBySessionStmt.all({
+    const rows = toChatToolRunRows(this.listBySessionStmt.all({
       sessionId,
       limit: Math.max(1, Math.min(limit, 2000)),
-    }) as unknown as ChatToolRunRow[];
+    }));
     return rows.map(mapRow);
   }
 
@@ -147,7 +148,7 @@ export class ChatToolRunRepository {
     for (let index = 0; index < uniqueTurnIds.length; index += 400) {
       const batch = uniqueTurnIds.slice(index, index + 400);
       const stmt = this.getListByTurnIdsStmt(batch.length);
-      const rows = stmt.all(...batch) as unknown as ChatToolRunRow[];
+      const rows = toChatToolRunRows(stmt.all(...batch));
       for (const row of rows) {
         const record = mapRow(row);
         const current = grouped.get(record.turnId) ?? [];
@@ -187,6 +188,44 @@ export class ChatToolRunRepository {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isChatToolRunRow(value: unknown): value is ChatToolRunRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.tool_run_id === "string"
+    && typeof value.turn_id === "string"
+    && typeof value.session_id === "string"
+    && typeof value.tool_name === "string"
+    && typeof value.status === "string"
+    && (typeof value.approval_id === "string" || value.approval_id === null)
+    && (typeof value.args_json === "string" || value.args_json === null)
+    && (typeof value.result_json === "string" || value.result_json === null)
+    && (typeof value.error === "string" || value.error === null)
+    && (typeof value.failure_guidance === "string" || value.failure_guidance === null)
+    && typeof value.started_at === "string"
+    && (typeof value.finished_at === "string" || value.finished_at === null);
+}
+
+function toChatToolRunRow(value: unknown): ChatToolRunRow | undefined {
+  return isChatToolRunRow(value) ? value : undefined;
+}
+
+function toChatToolRunRows(value: unknown): ChatToolRunRow[] {
+  return Array.isArray(value) ? value.filter(isChatToolRunRow) : [];
+}
+
+function parseOptionalRecord(raw: string | null): Record<string, unknown> | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = safeJsonParse<unknown>(raw, undefined);
+  return isRecord(parsed) ? parsed : undefined;
+}
+
 function mapRow(row: ChatToolRunRow): ChatToolRunRecord {
   return {
     toolRunId: row.tool_run_id,
@@ -195,19 +234,11 @@ function mapRow(row: ChatToolRunRow): ChatToolRunRecord {
     toolName: row.tool_name,
     status: row.status,
     approvalId: row.approval_id ?? undefined,
-    args: row.args_json ? safeJsonParse<Record<string, unknown>>(row.args_json, {}) : undefined,
-    result: row.result_json ? safeJsonParse<Record<string, unknown>>(row.result_json, {}) : undefined,
+    args: parseOptionalRecord(row.args_json),
+    result: parseOptionalRecord(row.result_json),
     error: row.error ?? undefined,
     failureGuidance: row.failure_guidance ?? undefined,
     startedAt: row.started_at,
     finishedAt: row.finished_at ?? undefined,
   };
-}
-
-function safeJsonParse<T>(raw: string, fallback: T): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
 }

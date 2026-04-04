@@ -70,7 +70,7 @@ export class ChatConversationSummaryRepository {
   }
 
   public get(summaryId: string): ChatConversationSummaryRecord {
-    const row = this.getStmt.get(summaryId) as ChatConversationSummaryRow | undefined;
+    const row = toChatConversationSummaryRow(this.getStmt.get(summaryId));
     if (!row) {
       throw new NotFoundError({ entity: "Chat conversation summary", id: summaryId });
     }
@@ -95,10 +95,10 @@ export class ChatConversationSummaryRepository {
       updatedAt,
     });
 
-    const rows = this.listByBranchStmt.all({
+    const rows = toChatConversationSummaryRows(this.listByBranchStmt.all({
       sessionId: input.sessionId,
       branchHeadTurnId: input.branchHeadTurnId,
-    }) as unknown as ChatConversationSummaryRow[];
+    }));
     const match = rows.find((row) =>
       row.start_turn_id === input.startTurnId
       && row.end_turn_id === input.endTurnId
@@ -110,18 +110,18 @@ export class ChatConversationSummaryRepository {
   }
 
   public listByBranch(sessionId: string, branchHeadTurnId: string): ChatConversationSummaryRecord[] {
-    const rows = this.listByBranchStmt.all({
+    const rows = toChatConversationSummaryRows(this.listByBranchStmt.all({
       sessionId,
       branchHeadTurnId,
-    }) as unknown as ChatConversationSummaryRow[];
+    }));
     return rows.map(mapRow);
   }
 
   public listBySession(sessionId: string, limit = 50): ChatConversationSummaryRecord[] {
-    const rows = this.listBySessionStmt.all({
+    const rows = toChatConversationSummaryRows(this.listBySessionStmt.all({
       sessionId,
       limit: Math.max(1, Math.min(limit, 500)),
-    }) as unknown as ChatConversationSummaryRow[];
+    }));
     return rows.map(mapRow);
   }
 }
@@ -140,4 +140,36 @@ function mapRow(row: ChatConversationSummaryRow): ChatConversationSummaryRecord 
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function toChatConversationSummaryRow(value: unknown): ChatConversationSummaryRow | undefined {
+  return isChatConversationSummaryRow(value) ? value : undefined;
+}
+
+function toChatConversationSummaryRows(value: unknown): ChatConversationSummaryRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isChatConversationSummaryRow);
+}
+
+function isChatConversationSummaryRow(value: unknown): value is ChatConversationSummaryRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.summary_id === "string"
+    && typeof value.session_id === "string"
+    && typeof value.branch_head_turn_id === "string"
+    && typeof value.start_turn_id === "string"
+    && typeof value.end_turn_id === "string"
+    && typeof value.turn_ids_json === "string"
+    && typeof value.source_hash === "string"
+    && typeof value.token_estimate === "number"
+    && typeof value.summary_text === "string"
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

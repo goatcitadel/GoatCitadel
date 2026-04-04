@@ -192,7 +192,7 @@ async function seedChat(app: FastifyInstance): Promise<ChatSeed> {
 }
 
 async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Promise<void> {
-  const gateway = (app as unknown as { gateway: { parseChatCommand: (id: string, command: string) => Promise<unknown> } }).gateway;
+  const gateway = getCoverageGateway(app);
 
   const commands = [
     "/help",
@@ -746,7 +746,7 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
 }
 
 async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: ExerciseSeed): Promise<void> {
-  const gateway = (app as unknown as { gateway: Record<string, unknown> }).gateway;
+  const gateway = getCoverageGateway(app) as Record<string, unknown>;
 
   const skip = new Set<string>([
     "constructor",
@@ -1000,6 +1000,17 @@ async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: Exercis
   }
 
   console.log(`[coverage-exercise] gateway method sweep invoked ${invoked}/${methodNames.length} public methods (attempted ${attempted} calls)`);
+}
+
+function getCoverageGateway(app: FastifyInstance): {
+  parseChatCommand: (sessionId: string, command: string) => Promise<unknown>;
+} & Record<string, unknown> {
+  const candidate: unknown = (app as FastifyInstance & { gateway?: unknown }).gateway;
+  assert.ok(candidate && typeof candidate === "object" && !Array.isArray(candidate), "Expected Fastify gateway decorator");
+  assert.equal(typeof (candidate as { parseChatCommand?: unknown }).parseChatCommand, "function");
+  return candidate as {
+    parseChatCommand: (sessionId: string, command: string) => Promise<unknown>;
+  } & Record<string, unknown>;
 }
 
 async function requestNotServerError(

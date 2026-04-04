@@ -67,7 +67,7 @@ export class TaskDeliverableRepository {
   }
 
   public listByTask(taskId: string, limit = 200): TaskDeliverableRecord[] {
-    const rows = this.listByTaskStmt.all(taskId, limit) as unknown as TaskDeliverableRow[];
+    const rows = toTaskDeliverableRows(this.listByTaskStmt.all(taskId, limit));
     return rows.map((row) => ({
       deliverableId: row.deliverable_id,
       taskId: row.task_id,
@@ -83,4 +83,23 @@ export class TaskDeliverableRepository {
     const row = this.countByTaskStmt.get(taskId) as { count: number } | undefined;
     return Number(row?.count ?? 0);
   }
+}
+
+function toTaskDeliverableRows(value: unknown): TaskDeliverableRow[] {
+  return Array.isArray(value) ? value.filter(isTaskDeliverableRow) : [];
+}
+
+function isTaskDeliverableRow(value: unknown): value is TaskDeliverableRow {
+  return isRecord(value)
+    && typeof value.deliverable_id === "string"
+    && typeof value.task_id === "string"
+    && typeof value.deliverable_type === "string"
+    && typeof value.title === "string"
+    && (typeof value.path === "string" || value.path === null)
+    && (typeof value.description === "string" || value.description === null)
+    && typeof value.created_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

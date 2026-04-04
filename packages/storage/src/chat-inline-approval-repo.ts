@@ -55,7 +55,11 @@ export class ChatInlineApprovalRepository {
   }
 
   public get(approvalId: string): ChatInlineApprovalRecord | undefined {
-    const row = this.getStmt.get(approvalId) as unknown as ChatInlineApprovalRow | undefined;
+    const row = this.getStmt.get(approvalId);
+    if (!row) {
+      return undefined;
+    }
+    assertChatInlineApprovalRow(row);
     return row ? mapRow(row) : undefined;
   }
 
@@ -89,15 +93,17 @@ export class ChatInlineApprovalRepository {
   }
 
   public listByTurn(turnId: string): ChatInlineApprovalRecord[] {
-    const rows = this.listByTurnStmt.all({ turnId }) as unknown as ChatInlineApprovalRow[];
+    const rows = this.listByTurnStmt.all({ turnId });
+    assertChatInlineApprovalRows(rows);
     return rows.map(mapRow);
   }
 
   private requireRow(approvalId: string): ChatInlineApprovalRow {
-    const row = this.getStmt.get(approvalId) as unknown as ChatInlineApprovalRow | undefined;
+    const row = this.getStmt.get(approvalId);
     if (!row) {
       throw new NotFoundError({ entity: "chat inline approval", id: approvalId });
     }
+    assertChatInlineApprovalRow(row);
     return row;
   }
 }
@@ -115,4 +121,36 @@ function mapRow(row: ChatInlineApprovalRow): ChatInlineApprovalRecord {
     createdAt: row.created_at,
     resolvedAt: row.resolved_at ?? undefined,
   };
+}
+
+function assertChatInlineApprovalRows(rows: unknown[]): asserts rows is ChatInlineApprovalRow[] {
+  for (const row of rows) {
+    assertChatInlineApprovalRow(row);
+  }
+}
+
+function assertChatInlineApprovalRow(row: unknown): asserts row is ChatInlineApprovalRow {
+  if (!isChatInlineApprovalRow(row)) {
+    throw new TypeError("chat_inline_approvals query returned an unexpected row shape");
+  }
+}
+
+function isChatInlineApprovalRow(row: unknown): row is ChatInlineApprovalRow {
+  if (!isRecord(row)) {
+    return false;
+  }
+  return typeof row.approval_id === "string"
+    && typeof row.session_id === "string"
+    && typeof row.turn_id === "string"
+    && (typeof row.tool_name === "string" || row.tool_name === null)
+    && (row.status === "pending" || row.status === "approved" || row.status === "denied")
+    && (typeof row.reason === "string" || row.reason === null)
+    && (typeof row.expires_at === "string" || row.expires_at === null)
+    && (typeof row.resolved_by === "string" || row.resolved_by === null)
+    && typeof row.created_at === "string"
+    && (typeof row.resolved_at === "string" || row.resolved_at === null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

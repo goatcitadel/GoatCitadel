@@ -149,7 +149,7 @@ export class TaskRepository {
   }
 
   public get(taskId: string): TaskRecord {
-    const row = this.getStmt.get(taskId) as TaskRow | undefined;
+    const row = toTaskRow(this.getStmt.get(taskId));
     if (!row) {
       throw new NotFoundError({ entity: "Task", id: taskId });
     }
@@ -157,7 +157,7 @@ export class TaskRepository {
   }
 
   public find(taskId: string): TaskRecord | undefined {
-    const row = this.getStmt.get(taskId) as TaskRow | undefined;
+    const row = toTaskRow(this.getStmt.get(taskId));
     if (!row) {
       return undefined;
     }
@@ -166,14 +166,14 @@ export class TaskRepository {
 
   public list(query: TaskListQuery): TaskRecord[] {
     const parsedCursor = parseCompositeCursor(query.cursor);
-    const rows = this.listStmt.all({
+    const rows = toTaskRows(this.listStmt.all({
       status: query.status ?? null,
       workspaceId: query.workspaceId ? sanitizeWorkspaceId(query.workspaceId) : null,
       view: query.view ?? "active",
       cursorUpdatedAt: parsedCursor?.timestamp ?? null,
       cursorTaskId: parsedCursor?.key ?? null,
       limit: query.limit,
-    }) as unknown as TaskRow[];
+    }));
     return rows.map(mapTaskRow);
   }
 
@@ -239,9 +239,9 @@ export class TaskRepository {
   }
 
   public statusCounts(): TaskStatusCount[] {
-    const rows = this.statusCountsStmt.all({
+    const rows = toTaskStatusCountRows(this.statusCountsStmt.all({
       workspaceId: null,
-    }) as unknown as Array<{ status: string; count: number }>;
+    }));
     return rows.map((row) => ({
       status: row.status,
       count: Number(row.count ?? 0),
@@ -249,9 +249,9 @@ export class TaskRepository {
   }
 
   public statusCountsByWorkspace(workspaceId: string): TaskStatusCount[] {
-    const rows = this.statusCountsStmt.all({
+    const rows = toTaskStatusCountRows(this.statusCountsStmt.all({
       workspaceId: sanitizeWorkspaceId(workspaceId),
-    }) as unknown as Array<{ status: string; count: number }>;
+    }));
     return rows.map((row) => ({
       status: row.status,
       count: Number(row.count ?? 0),
@@ -323,4 +323,43 @@ function serializeTaskMetadata(proactiveContext?: TaskProactiveContext): string 
     return null;
   }
   return JSON.stringify({ proactiveContext });
+}
+
+function toTaskRow(value: unknown): TaskRow | undefined {
+  return isTaskRow(value) ? value : undefined;
+}
+
+function toTaskRows(value: unknown): TaskRow[] {
+  return Array.isArray(value) ? value.filter(isTaskRow) : [];
+}
+
+function toTaskStatusCountRows(value: unknown): Array<{ status: string; count: number }> {
+  return Array.isArray(value)
+    ? value.filter((row): row is { status: string; count: number } => (
+      isRecord(row) && typeof row.status === "string" && typeof row.count === "number"
+    ))
+    : [];
+}
+
+function isTaskRow(value: unknown): value is TaskRow {
+  return isRecord(value)
+    && typeof value.task_id === "string"
+    && typeof value.workspace_id === "string"
+    && typeof value.title === "string"
+    && (typeof value.description === "string" || value.description === null)
+    && typeof value.status === "string"
+    && typeof value.priority === "string"
+    && (typeof value.assigned_agent_id === "string" || value.assigned_agent_id === null)
+    && (typeof value.created_by === "string" || value.created_by === null)
+    && (typeof value.due_at === "string" || value.due_at === null)
+    && (typeof value.metadata_json === "string" || value.metadata_json === null)
+    && (typeof value.deleted_at === "string" || value.deleted_at === null)
+    && (typeof value.deleted_by === "string" || value.deleted_by === null)
+    && (typeof value.delete_reason === "string" || value.delete_reason === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

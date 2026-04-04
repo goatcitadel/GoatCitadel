@@ -99,7 +99,7 @@ export class MemoryQmdRunRepository {
   }
 
   public list(limit = 100): MemoryQmdRunRecord[] {
-    const rows = this.listStmt.all({ limit }) as unknown as MemoryQmdRunRow[];
+    const rows = toMemoryQmdRunRows(this.listStmt.all({ limit }));
     return rows.map(mapRow);
   }
 
@@ -175,4 +175,33 @@ function mapRow(row: MemoryQmdRunRow): MemoryQmdRunRecord {
     errorText: row.error_text ?? undefined,
     createdAt: row.created_at,
   };
+}
+
+function toMemoryQmdRunRows(value: unknown): MemoryQmdRunRow[] {
+  return Array.isArray(value) ? value.filter(isMemoryQmdRunRow) : [];
+}
+
+function isMemoryQmdRunRow(value: unknown): value is MemoryQmdRunRow {
+  return isRecord(value)
+    && typeof value.run_event_id === "string"
+    && (value.scope === "chat" || value.scope === "orchestration")
+    && (typeof value.session_id === "string" || value.session_id === null)
+    && (typeof value.task_id === "string" || value.task_id === null)
+    && (typeof value.run_id === "string" || value.run_id === null)
+    && (typeof value.phase_id === "string" || value.phase_id === null)
+    && typeof value.status === "string"
+    && (typeof value.provider_id === "string" || value.provider_id === null)
+    && (typeof value.model === "string" || value.model === null)
+    && typeof value.duration_ms === "number"
+    && typeof value.candidate_count === "number"
+    && typeof value.citations_count === "number"
+    && typeof value.original_token_estimate === "number"
+    && typeof value.distilled_token_estimate === "number"
+    && typeof value.savings_percent === "number"
+    && (typeof value.error_text === "string" || value.error_text === null)
+    && typeof value.created_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

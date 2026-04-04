@@ -132,7 +132,7 @@ export function evaluateBankrActionPreview(
   at = new Date(),
 ): BankrActionPreviewResponse {
   const policy = readBankrSafetyPolicy(storage);
-  const normalized = normalizeBankrAction(input as unknown as Record<string, unknown>);
+  const normalized = normalizeBankrAction(toPlainRecord(input));
   const day = currentDayKey(at);
   const dailyUsageUsd = readBankrDailyUsage(storage, day);
   const isWrite = WRITE_ACTION_TYPES.has(normalized.actionType);
@@ -588,4 +588,11 @@ function asString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function toPlainRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return { ...value };
 }

@@ -443,24 +443,15 @@ export class ChatAgentOrchestrator {
             yield syntheticRun.chunk;
           }
           const toolMessageId = `prefetch-file-${randomUUID()}`;
-          conversationMessages.push({
-            role: "assistant",
-            content: "",
-            tool_calls: [
-              {
-                id: toolMessageId,
-                type: "function",
-                function: {
-                  name: this.resolveModelToolName("file.read_range", toolSchema.canonicalToModel),
-                  arguments: JSON.stringify({
-                    path: filePath,
-                    startLine: 1,
-                    endLine: prefetchEndLine,
-                  }),
-                },
-              },
-            ] as unknown as Array<Record<string, unknown>>,
-          } as unknown as ChatCompletionMessage);
+          conversationMessages.push(createAssistantToolCallMessage({
+            toolCallId: toolMessageId,
+            toolName: this.resolveModelToolName("file.read_range", toolSchema.canonicalToModel),
+            argumentsJson: JSON.stringify({
+              path: filePath,
+              startLine: 1,
+              endLine: prefetchEndLine,
+            }),
+          }));
           const prefetchResultPayload: Record<string, unknown> = {
             ...(syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." }),
           };
@@ -561,23 +552,14 @@ export class ChatAgentOrchestrator {
             yield syntheticRun.chunk;
           }
           const toolMessageId = `prefetch-search-files-${randomUUID()}`;
-          conversationMessages.push({
-            role: "assistant",
-            content: "",
-            tool_calls: [
-              {
-                id: toolMessageId,
-                type: "function",
-                function: {
-                  name: this.resolveModelToolName("code.search_files", toolSchema.canonicalToModel),
-                  arguments: JSON.stringify({
-                    path: promptLabSearchPath,
-                    query,
-                  }),
-                },
-              },
-            ] as unknown as Array<Record<string, unknown>>,
-          } as unknown as ChatCompletionMessage);
+          conversationMessages.push(createAssistantToolCallMessage({
+            toolCallId: toolMessageId,
+            toolName: this.resolveModelToolName("code.search_files", toolSchema.canonicalToModel),
+            argumentsJson: JSON.stringify({
+              path: promptLabSearchPath,
+              query,
+            }),
+          }));
           conversationMessages.push({
             role: "tool",
             tool_call_id: toolMessageId,
@@ -662,23 +644,14 @@ export class ChatAgentOrchestrator {
             yield syntheticRun.chunk;
           }
           const toolMessageId = `prefetch-search-${randomUUID()}`;
-          conversationMessages.push({
-            role: "assistant",
-            content: "",
-            tool_calls: [
-              {
-                id: toolMessageId,
-                type: "function",
-                function: {
-                  name: this.resolveModelToolName("browser.search", toolSchema.canonicalToModel),
-                  arguments: JSON.stringify({
-                    query: promptLabSearchQuery,
-                    maxResults: executionBudget.searchMaxResults,
-                  }),
-                },
-              },
-            ] as unknown as Array<Record<string, unknown>>,
-          } as unknown as ChatCompletionMessage);
+          conversationMessages.push(createAssistantToolCallMessage({
+            toolCallId: toolMessageId,
+            toolName: this.resolveModelToolName("browser.search", toolSchema.canonicalToModel),
+            argumentsJson: JSON.stringify({
+              query: promptLabSearchQuery,
+              maxResults: executionBudget.searchMaxResults,
+            }),
+          }));
           conversationMessages.push({
             role: "tool",
             tool_call_id: toolMessageId,
@@ -738,20 +711,11 @@ export class ChatAgentOrchestrator {
       }
       if (syntheticRun.record.status === "executed" && syntheticRun.record.result) {
         const toolMessageId = `time-${randomUUID()}`;
-        conversationMessages.push({
-          role: "assistant",
-          content: "",
-          tool_calls: [
-            {
-              id: toolMessageId,
-              type: "function",
-              function: {
-                name: this.resolveModelToolName("time.now", toolSchema.canonicalToModel),
-                arguments: "{}",
-              },
-            },
-          ] as unknown as Array<Record<string, unknown>>,
-        } as unknown as ChatCompletionMessage);
+        conversationMessages.push(createAssistantToolCallMessage({
+          toolCallId: toolMessageId,
+          toolName: this.resolveModelToolName("time.now", toolSchema.canonicalToModel),
+          argumentsJson: "{}",
+        }));
         conversationMessages.push({
           role: "tool",
           tool_call_id: toolMessageId,
@@ -849,23 +813,14 @@ export class ChatAgentOrchestrator {
       }
       if (syntheticRun.record.status === "executed" && syntheticRun.record.result) {
         const toolMessageId = `search-${randomUUID()}`;
-        conversationMessages.push({
-          role: "assistant",
-          content: "",
-          tool_calls: [
-            {
-              id: toolMessageId,
-              type: "function",
-              function: {
-                name: this.resolveModelToolName("browser.search", toolSchema.canonicalToModel),
-                arguments: JSON.stringify({
-                  query: liveDataQuery,
-                  maxResults: executionBudget.searchMaxResults,
-                }),
-              },
-            },
-          ] as unknown as Array<Record<string, unknown>>,
-        } as unknown as ChatCompletionMessage);
+        conversationMessages.push(createAssistantToolCallMessage({
+          toolCallId: toolMessageId,
+          toolName: this.resolveModelToolName("browser.search", toolSchema.canonicalToModel),
+          argumentsJson: JSON.stringify({
+            query: liveDataQuery,
+            maxResults: executionBudget.searchMaxResults,
+          }),
+        }));
         conversationMessages.push({
           role: "tool",
           tool_call_id: toolMessageId,
@@ -1083,18 +1038,17 @@ export class ChatAgentOrchestrator {
           break;
         }
 
-        conversationMessages.push({
-          role: "assistant",
+        conversationMessages.push(createAssistantToolCallMessage({
           content: extractMessageContent(message),
-          tool_calls: toolCalls.map((toolCall) => ({
+          toolCalls: toolCalls.map((toolCall) => ({
             id: toolCall.id,
             type: "function",
             function: {
               name: this.resolveModelToolName(toolCall.toolName, toolSchema.canonicalToModel),
               arguments: toolCall.rawArguments,
             },
-          })) as unknown as Array<Record<string, unknown>>,
-        } as unknown as ChatCompletionMessage);
+          })),
+        }));
 
         let shortCircuitedOnBudget = false;
         for (const toolCall of toolCalls) {
@@ -3449,6 +3403,28 @@ function extractMessageContent(message: Record<string, unknown>): string {
   return extractStructuredTextContent(message.content).trim();
 }
 
+function createAssistantToolCallMessage(input: {
+  toolCallId?: string;
+  toolName?: string;
+  argumentsJson?: string;
+  content?: string;
+  toolCalls?: Array<Record<string, unknown>>;
+}): ChatCompletionMessage {
+  const toolCalls = input.toolCalls ?? [{
+    id: input.toolCallId ?? randomUUID(),
+    type: "function",
+    function: {
+      name: input.toolName ?? "tool_fn",
+      arguments: input.argumentsJson ?? "{}",
+    },
+  }];
+  return {
+    role: "assistant",
+    content: input.content ?? "",
+    tool_calls: toolCalls,
+  } as ChatCompletionMessage;
+}
+
 function extractStructuredTextContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -3493,6 +3469,12 @@ function extractStructuredTextPart(part: unknown): string {
     }
   }
   return "";
+}
+
+function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : undefined;
 }
 
 function parseUsageFromCompletion(completion: ChatCompletionResponse): {
@@ -4099,8 +4081,8 @@ function readPendingClarification(
   historyMessages: ChatCompletionRequest["messages"],
 ): string[] | undefined {
   for (let index = historyMessages.length - 1; index >= 0; index -= 1) {
-    const message = historyMessages[index] as unknown as Record<string, unknown>;
-    if (message.role !== "assistant") {
+    const message = toPlainRecord(historyMessages[index]);
+    if (!message || message.role !== "assistant") {
       continue;
     }
     const content = extractMessageContent(message);
@@ -5206,8 +5188,8 @@ function inferMeaningfulPriorUserQuery(
   let skippedCurrentUser = false;
   const normalizedCurrent = currentUserContent.trim();
   for (let index = historyMessages.length - 1; index >= 0; index -= 1) {
-    const message = historyMessages[index] as unknown as Record<string, unknown>;
-    if (message.role !== "user") {
+    const message = toPlainRecord(historyMessages[index]);
+    if (!message || message.role !== "user") {
       continue;
     }
     const content = extractMessageContent(message).trim();

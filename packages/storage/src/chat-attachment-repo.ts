@@ -75,7 +75,7 @@ export class ChatAttachmentRepository {
   }
 
   public get(attachmentId: string): ChatAttachmentRecord {
-    const row = this.getStmt.get(attachmentId) as ChatAttachmentRow | undefined;
+    const row = toChatAttachmentRow(this.getStmt.get(attachmentId));
     if (!row) {
       throw new NotFoundError({ entity: "Attachment", id: attachmentId });
     }
@@ -99,11 +99,11 @@ export class ChatAttachmentRepository {
   }
 
   public listBySession(sessionId: string, limit = 200, workspaceId?: string): ChatAttachmentRecord[] {
-    const rows = this.listBySessionStmt.all({
+    const rows = toChatAttachmentRows(this.listBySessionStmt.all({
       sessionId,
       workspaceId: workspaceId ? sanitizeWorkspaceId(workspaceId) : null,
       limit: Math.max(1, Math.min(2000, Math.floor(limit))),
-    }) as unknown as ChatAttachmentRow[];
+    }));
     return rows.map(mapRow);
   }
 
@@ -111,10 +111,10 @@ export class ChatAttachmentRepository {
     if (ids.length === 0) {
       return [];
     }
-    const rows = this.listByIdsStmt.all({
+    const rows = toChatAttachmentRows(this.listByIdsStmt.all({
       idsJson: JSON.stringify(ids),
       workspaceId: workspaceId ? sanitizeWorkspaceId(workspaceId) : null,
-    }) as unknown as ChatAttachmentRow[];
+    }));
     return rows.map(mapRow);
   }
 }
@@ -162,4 +162,42 @@ function sanitizeWorkspaceId(value: string): string {
     throw new ValidationError({ message: "workspaceId contains unsupported characters" });
   }
   return trimmed;
+}
+
+function toChatAttachmentRow(value: unknown): ChatAttachmentRow | undefined {
+  return isChatAttachmentRow(value) ? value : undefined;
+}
+
+function toChatAttachmentRows(value: unknown): ChatAttachmentRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isChatAttachmentRow);
+}
+
+function isChatAttachmentRow(value: unknown): value is ChatAttachmentRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.attachment_id === "string"
+    && typeof value.session_id === "string"
+    && typeof value.workspace_id === "string"
+    && (typeof value.project_id === "string" || value.project_id === null)
+    && typeof value.file_name === "string"
+    && typeof value.mime_type === "string"
+    && (typeof value.media_type === "string" || value.media_type === null)
+    && typeof value.size_bytes === "number"
+    && typeof value.sha256 === "string"
+    && typeof value.storage_rel_path === "string"
+    && typeof value.extract_status === "string"
+    && (typeof value.extract_preview === "string" || value.extract_preview === null)
+    && (typeof value.thumbnail_rel_path === "string" || value.thumbnail_rel_path === null)
+    && (typeof value.ocr_text === "string" || value.ocr_text === null)
+    && (typeof value.transcript_text === "string" || value.transcript_text === null)
+    && (typeof value.analysis_status === "string" || value.analysis_status === null)
+    && typeof value.created_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

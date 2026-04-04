@@ -166,6 +166,7 @@ import type {
   ChatSpecialistCandidateSuggestionRecord,
   ChatStreamChunk,
   ChatStreamChunkDraft,
+  ChatStreamUsageRecord,
   ChatThreadResponse,
   ChatThinkingLevel,
   CapabilityGapEventRecord,
@@ -3202,7 +3203,7 @@ export class GatewayService {
       sequence,
       runId,
       chunkType: enriched.type,
-      payload: enriched as unknown as Record<string, unknown>,
+      payload: chatStreamChunkToRecord(enriched),
       createdAt: new Date().toISOString(),
     });
     this.purgeExpiredChatStreamEventsIfNeeded();
@@ -3246,8 +3247,12 @@ export class GatewayService {
       if (events.length > 0) {
         for (const event of events) {
           afterSequence = event.sequence;
-          yield event.payload as unknown as ChatStreamChunk;
-          if ((event.payload as { type?: string }).type === "done") {
+          const payload = toChatStreamChunk(event.payload);
+          if (!payload) {
+            continue;
+          }
+          yield payload;
+          if (payload.type === "done") {
             return;
           }
         }
@@ -8045,7 +8050,7 @@ export class GatewayService {
     const mode = prepared.normalized.mode ?? prepared.prefs.mode;
     const run = this.createDurableRun({
       workflowKey: "chat.turn.execute",
-      payload: this.createDurableChatTurnPayload(prepared, input, threadEventType) as unknown as Record<string, unknown>,
+      payload: durableChatTurnPayloadToRecord(this.createDurableChatTurnPayload(prepared, input, threadEventType)),
       metadata: {
         surface: mode,
         autoPromoted: mode === "chat",
@@ -9728,7 +9733,7 @@ export class GatewayService {
     const requestAttribution = this.getCurrentRequestAttribution();
     const run = this.createDurableRun({
       workflowKey: "approval.wait",
-      payload: ({
+      payload: approvalWaitPayloadToRecord({
         version: "approval.wait.v1",
         approvalId: approval.approvalId,
         approvalKind: approval.kind,
@@ -9736,7 +9741,7 @@ export class GatewayService {
         correlationId: requestAttribution.correlationId,
         traceId: requestAttribution.traceId,
         originSurface: requestAttribution.originSurface,
-      } satisfies ApprovalWaitWorkflowPayload) as unknown as Record<string, unknown>,
+      } satisfies ApprovalWaitWorkflowPayload),
       metadata: {
         approvalId: approval.approvalId,
         approvalKind: approval.kind,
@@ -9869,11 +9874,11 @@ export class GatewayService {
     }
     return this.createDurableRun({
       workflowKey: "connector.delivery",
-      payload: {
+      payload: toPlainRecord({
         ...payload,
         traceId: requestAttribution.traceId,
         originSurface: requestAttribution.originSurface,
-      } as unknown as Record<string, unknown>,
+      }) ?? {},
       metadata: {
         approvalId: approval.approvalId,
         connectorId: connector.connectorId,
@@ -13948,14 +13953,14 @@ export class GatewayService {
   }
 
   public listMediaJobs(sessionId?: string): MediaJobRecord[] {
-    const rows = this.gatewaySql.prepare(`
+    const rows = toMediaJobRows(this.gatewaySql.prepare(`
       SELECT * FROM media_jobs
       WHERE (@sessionId IS NULL OR session_id = @sessionId)
       ORDER BY created_at DESC
       LIMIT 500
     `).all({
       sessionId: sessionId ?? null,
-    }) as unknown as MediaJobRow[];
+    }));
     return rows.map(mapMediaJobRow);
   }
 
@@ -17064,10 +17069,10 @@ export class GatewayService {
   }
 
   private readSkillStates(): Map<string, SkillStateRecord> {
-    const rows = this.gatewaySql.prepare(`
+    const rows = toSkillStateRows(this.gatewaySql.prepare(`
       SELECT skill_id AS skillId, state, note, updated_at AS updatedAt, first_auto_approved_at AS firstAutoApprovedAt
       FROM skill_state
-    `).all() as unknown as SkillStateRecord[];
+    `).all());
 
     return new Map(rows.map((row) => [row.skillId, row]));
   }
@@ -22149,11 +22154,11 @@ function normalizeToolProtocolRetryRequest(
     : request.tools;
 
   const messages = request.messages.map((message) => {
-    const value = message as unknown as Record<string, unknown>;
-    if (value.role === "assistant" && Array.isArray(value.tool_calls)) {
+    const value = toPlainRecord(message);
+    if (message.role === "assistant" && value && Array.isArray(value.tool_calls)) {
       const toolCalls = value.tool_calls.map((toolCall) => {
-        const tc = toolCall as Record<string, unknown>;
-        const fn = (tc.function ?? {}) as Record<string, unknown>;
+        const tc = toPlainRecord(toolCall) ?? {};
+        const fn = toPlainRecord(tc.function) ?? {};
         const rawName = typeof fn.name === "string" ? fn.name : "";
         const normalized = modelToolNameMap.get(rawName) ?? rawName;
         const rawArgs = fn.arguments;
@@ -22170,14 +22175,14 @@ function normalizeToolProtocolRetryRequest(
           },
         };
       });
-      const next = {
-        ...value,
+      const next: ChatCompletionRequest["messages"][number] & Record<string, unknown> = {
+        ...message,
         tool_calls: toolCalls,
-      } as Record<string, unknown>;
+      };
       if (attempt === 2 && typeof next.reasoning_content !== "string") {
         next.reasoning_content = "Using tool outputs to continue the response.";
       }
-      return next as unknown as ChatCompletionRequest["messages"][number];
+      return next;
     }
     return message;
   });
@@ -22555,6 +22560,253 @@ function normalizeCompanionAuditEvent(value: unknown): CompanionAuditEventRecord
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? { ...value } : undefined;
+}
+
+function isChatTurnBranchKind(value: unknown): value is ChatTurnBranchKind {
+  return value === "append" || value === "retry" || value === "edit";
+}
+
+function isChatStreamUsageRecord(value: unknown): value is ChatStreamUsageRecord {
+  return isRecord(value)
+    && (value.inputTokens === undefined || typeof value.inputTokens === "number")
+    && (value.outputTokens === undefined || typeof value.outputTokens === "number")
+    && (value.cachedInputTokens === undefined || typeof value.cachedInputTokens === "number")
+    && (value.costUsd === undefined || typeof value.costUsd === "number");
+}
+
+function isChatToolRunRecord(value: unknown): value is ChatToolRunRecord {
+  return isRecord(value)
+    && typeof value.toolRunId === "string"
+    && typeof value.turnId === "string"
+    && typeof value.sessionId === "string"
+    && typeof value.toolName === "string"
+    && (
+      value.status === "started"
+      || value.status === "executed"
+      || value.status === "blocked"
+      || value.status === "approval_required"
+      || value.status === "failed"
+    )
+    && typeof value.startedAt === "string"
+    && (value.finishedAt === undefined || typeof value.finishedAt === "string")
+    && (value.approvalId === undefined || typeof value.approvalId === "string")
+    && (value.args === undefined || isRecord(value.args))
+    && (value.result === undefined || isRecord(value.result))
+    && (value.error === undefined || typeof value.error === "string")
+    && (value.failureGuidance === undefined || typeof value.failureGuidance === "string");
+}
+
+function isChatCitationRecord(value: unknown): value is ChatCitationRecord {
+  return isRecord(value)
+    && typeof value.citationId === "string"
+    && typeof value.url === "string"
+    && (value.title === undefined || typeof value.title === "string")
+    && (value.snippet === undefined || typeof value.snippet === "string")
+    && (value.sourceType === undefined || value.sourceType === "web" || value.sourceType === "file" || value.sourceType === "tool");
+}
+
+function isChatTurnTraceRecord(value: unknown): value is ChatTurnTraceRecord {
+  return isRecord(value)
+    && typeof value.turnId === "string"
+    && typeof value.sessionId === "string"
+    && typeof value.userMessageId === "string"
+    && (
+      value.branchKind === "append"
+      || value.branchKind === "retry"
+      || value.branchKind === "edit"
+    )
+    && typeof value.status === "string"
+    && typeof value.mode === "string"
+    && typeof value.webMode === "string"
+    && typeof value.memoryMode === "string"
+    && typeof value.thinkingLevel === "string"
+    && typeof value.startedAt === "string"
+    && Array.isArray(value.toolRuns)
+    && value.toolRuns.every(isChatToolRunRecord)
+    && Array.isArray(value.citations)
+    && value.citations.every(isChatCitationRecord)
+    && isRecord(value.routing);
+}
+
+function chatStreamChunkToRecord(chunk: ChatStreamChunk): Record<string, unknown> {
+  return { ...chunk };
+}
+
+function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
+  if (!isRecord(value) || typeof value.type !== "string" || typeof value.sessionId !== "string") {
+    return undefined;
+  }
+  const common = {
+    type: value.type,
+    sessionId: value.sessionId,
+    eventId: typeof value.eventId === "string" ? value.eventId : "",
+    sequence: typeof value.sequence === "number" && Number.isFinite(value.sequence) ? value.sequence : 0,
+    ...(typeof value.runId === "string" ? { runId: value.runId } : {}),
+  };
+  switch (value.type) {
+    case "message_start":
+      if (
+        typeof value.turnId !== "string"
+        || typeof value.messageId !== "string"
+        || !isChatTurnBranchKind(value.branchKind)
+      ) {
+        return undefined;
+      }
+      return {
+        ...common,
+        type: "message_start",
+        turnId: value.turnId,
+        messageId: value.messageId,
+        branchKind: value.branchKind,
+        ...(typeof value.parentTurnId === "string" ? { parentTurnId: value.parentTurnId } : {}),
+        ...(typeof value.sourceTurnId === "string" ? { sourceTurnId: value.sourceTurnId } : {}),
+      };
+    case "delta":
+      return typeof value.turnId === "string" && typeof value.delta === "string"
+        ? {
+          ...common,
+          type: "delta",
+          turnId: value.turnId,
+          delta: value.delta,
+          ...(typeof value.messageId === "string" ? { messageId: value.messageId } : {}),
+        }
+        : undefined;
+    case "usage":
+      return typeof value.turnId === "string" && isChatStreamUsageRecord(value.usage)
+        ? {
+          ...common,
+          type: "usage",
+          turnId: value.turnId,
+          usage: value.usage,
+          ...(typeof value.messageId === "string" ? { messageId: value.messageId } : {}),
+        }
+        : undefined;
+    case "message_done":
+      return typeof value.turnId === "string" && typeof value.messageId === "string" && typeof value.content === "string"
+        ? {
+          ...common,
+          type: "message_done",
+          turnId: value.turnId,
+          messageId: value.messageId,
+          content: value.content,
+        }
+        : undefined;
+    case "tool_start":
+    case "tool_result":
+      return typeof value.turnId === "string" && isChatToolRunRecord(value.toolRun)
+        ? {
+          ...common,
+          type: value.type,
+          turnId: value.turnId,
+          toolRun: value.toolRun,
+        }
+        : undefined;
+    case "approval_required":
+      return typeof value.turnId === "string" && isRecord(value.approval) && typeof value.approval.approvalId === "string"
+        ? {
+          ...common,
+          type: "approval_required",
+          turnId: value.turnId,
+          approval: {
+            approvalId: value.approval.approvalId,
+            ...(typeof value.approval.toolName === "string" ? { toolName: value.approval.toolName } : {}),
+            ...(typeof value.approval.reason === "string" ? { reason: value.approval.reason } : {}),
+            ...(typeof value.approval.expiresAt === "string" ? { expiresAt: value.approval.expiresAt } : {}),
+          },
+        }
+        : undefined;
+    case "trace_update":
+      return typeof value.turnId === "string" && isChatTurnTraceRecord(value.trace)
+        ? {
+          ...common,
+          type: "trace_update",
+          turnId: value.turnId,
+          trace: value.trace,
+        }
+        : undefined;
+    case "citation":
+      return typeof value.turnId === "string" && isChatCitationRecord(value.citation)
+        ? {
+          ...common,
+          type: "citation",
+          turnId: value.turnId,
+          citation: value.citation,
+        }
+        : undefined;
+    case "capability_upgrade_suggestion":
+      return typeof value.turnId === "string" && Array.isArray(value.capabilityUpgradeSuggestions)
+        ? {
+          ...common,
+          type: "capability_upgrade_suggestion",
+          turnId: value.turnId,
+          capabilityUpgradeSuggestions: value.capabilityUpgradeSuggestions as ChatCapabilityUpgradeSuggestion[],
+        }
+        : undefined;
+    case "error":
+      return typeof value.error === "string"
+        ? {
+          ...common,
+          type: "error",
+          error: value.error,
+          ...(typeof value.turnId === "string" ? { turnId: value.turnId } : {}),
+        }
+        : undefined;
+    case "done":
+      return typeof value.turnId === "string" && typeof value.messageId === "string"
+        ? {
+          ...common,
+          type: "done",
+          turnId: value.turnId,
+          messageId: value.messageId,
+        }
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function durableChatTurnPayloadToRecord(payload: DurableChatTurnExecutionPayload): Record<string, unknown> {
+  return { ...payload };
+}
+
+function approvalWaitPayloadToRecord(payload: ApprovalWaitWorkflowPayload): Record<string, unknown> {
+  return { ...payload };
+}
+
+function toMediaJobRows(value: unknown): MediaJobRow[] {
+  return Array.isArray(value) ? value.filter(isMediaJobRow) : [];
+}
+
+function isMediaJobRow(value: unknown): value is MediaJobRow {
+  return isRecord(value)
+    && typeof value.job_id === "string"
+    && (typeof value.session_id === "string" || value.session_id === null)
+    && (typeof value.attachment_id === "string" || value.attachment_id === null)
+    && typeof value.job_type === "string"
+    && typeof value.status === "string"
+    && (typeof value.input_json === "string" || value.input_json === null)
+    && (typeof value.output_json === "string" || value.output_json === null)
+    && (typeof value.error === "string" || value.error === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string"
+    && (typeof value.completed_at === "string" || value.completed_at === null);
+}
+
+function toSkillStateRows(value: unknown): SkillStateRecord[] {
+  return Array.isArray(value)
+    ? value.filter((row): row is SkillStateRecord => (
+      isRecord(row)
+      && typeof row.skillId === "string"
+      && typeof row.state === "string"
+      && (typeof row.note === "string" || row.note === null)
+      && typeof row.updatedAt === "string"
+      && (typeof row.firstAutoApprovedAt === "string" || row.firstAutoApprovedAt === null)
+    ))
+    : [];
 }
 
 function normalizeCompanionSigningPublicKeyPem(value: string): string {

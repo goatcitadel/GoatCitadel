@@ -27,6 +27,7 @@ import {
   buildToolAuditRecord,
   deriveToolCapabilityPolicy,
   isUntrustedToolEscalation,
+  sanitizeForModel,
 } from "./tool-security.js";
 
 interface AccessEvaluation {
@@ -229,7 +230,7 @@ export class ToolPolicyEngine {
       this.storage.pendingApprovalActions.upsertPending({
         approvalId: approval.approvalId,
         actionType: "tool.invoke",
-        request: request as unknown as Record<string, unknown>,
+        request: toPlainRecord(request),
       });
 
       this.storage.approvalEvents.append({
@@ -919,6 +920,8 @@ export class ToolPolicyEngine {
     approvalId?: string,
   ): Promise<void> {
     const now = new Date().toISOString();
+    const sanitizedArgs = sanitizeForModel(request.args);
+    const sanitizedResult = result ? sanitizeForModel(result) : undefined;
     this.storage.db.prepare(`
       INSERT INTO tool_invocations (
         audit_event_id, timestamp, agent_id, session_id, task_id, tool_name,
@@ -933,8 +936,8 @@ export class ToolPolicyEngine {
       request.toolName,
       outcome,
       policyReason,
-      JSON.stringify(request.args),
-      result ? JSON.stringify(result) : null,
+      JSON.stringify(sanitizedArgs),
+      sanitizedResult ? JSON.stringify(sanitizedResult) : null,
       approvalId ?? null,
     );
 
@@ -947,8 +950,8 @@ export class ToolPolicyEngine {
       outcome,
       policyReason,
       approvalId,
-      args: request.args,
-      result,
+      args: sanitizedArgs,
+      result: sanitizedResult,
     });
   }
 }
@@ -1137,4 +1140,11 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
 
 function isBankrToolName(toolName: string): boolean {
   return toolName.startsWith("bankr.");
+}
+
+function toPlainRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return { ...value };
 }

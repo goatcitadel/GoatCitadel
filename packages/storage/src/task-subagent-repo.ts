@@ -85,7 +85,7 @@ export class TaskSubagentRepository {
   }
 
   public getByAgentSessionId(agentSessionId: string): TaskSubagentSession {
-    const row = this.getByAgentSessionStmt.get(agentSessionId) as TaskSubagentRow | undefined;
+    const row = toTaskSubagentRow(this.getByAgentSessionStmt.get(agentSessionId));
     if (!row) {
       throw new NotFoundError({ entity: "Sub-agent session", id: agentSessionId });
     }
@@ -93,7 +93,7 @@ export class TaskSubagentRepository {
   }
 
   public findByAgentSessionId(agentSessionId: string): TaskSubagentSession | undefined {
-    const row = this.getByAgentSessionStmt.get(agentSessionId) as TaskSubagentRow | undefined;
+    const row = toTaskSubagentRow(this.getByAgentSessionStmt.get(agentSessionId));
     if (!row) {
       return undefined;
     }
@@ -101,12 +101,12 @@ export class TaskSubagentRepository {
   }
 
   public listByTask(taskId: string, limit = 200): TaskSubagentSession[] {
-    const rows = this.listByTaskStmt.all(taskId, limit) as unknown as TaskSubagentRow[];
+    const rows = toTaskSubagentRows(this.listByTaskStmt.all(taskId, limit));
     return rows.map(mapSubagentRow);
   }
 
   public listAll(limit = 500): TaskSubagentSession[] {
-    const rows = this.listAllStmt.all(limit) as unknown as TaskSubagentRow[];
+    const rows = toTaskSubagentRows(this.listAllStmt.all(limit));
     return rows.map(mapSubagentRow);
   }
 
@@ -142,4 +142,28 @@ function mapSubagentRow(row: TaskSubagentRow): TaskSubagentSession {
     updatedAt: row.updated_at,
     endedAt: row.ended_at ?? undefined,
   };
+}
+
+function toTaskSubagentRow(value: unknown): TaskSubagentRow | undefined {
+  return isTaskSubagentRow(value) ? value : undefined;
+}
+
+function toTaskSubagentRows(value: unknown): TaskSubagentRow[] {
+  return Array.isArray(value) ? value.filter(isTaskSubagentRow) : [];
+}
+
+function isTaskSubagentRow(value: unknown): value is TaskSubagentRow {
+  return isRecord(value)
+    && typeof value.subagent_session_id === "string"
+    && typeof value.task_id === "string"
+    && typeof value.agent_session_id === "string"
+    && (typeof value.agent_name === "string" || value.agent_name === null)
+    && typeof value.status === "string"
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string"
+    && (typeof value.ended_at === "string" || value.ended_at === null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

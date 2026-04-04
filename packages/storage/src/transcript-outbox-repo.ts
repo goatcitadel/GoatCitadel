@@ -108,14 +108,14 @@ export class TranscriptOutboxRepository {
   }
 
   public get(eventId: string): TranscriptOutboxRecord | undefined {
-    const row = this.getStmt.get(eventId) as TranscriptOutboxRow | undefined;
+    const row = toTranscriptOutboxRow(this.getStmt.get(eventId));
     return row ? mapRow(row) : undefined;
   }
 
   public listPending(limit = 100, sessionId?: string): TranscriptOutboxRecord[] {
-    const rows = (sessionId
+    const rows = toTranscriptOutboxRows(sessionId
       ? this.listPendingBySessionStmt.all({ limit, sessionId })
-      : this.listPendingStmt.all({ limit })) as unknown as TranscriptOutboxRow[];
+      : this.listPendingStmt.all({ limit }));
     return rows.map(mapRow);
   }
 
@@ -153,7 +153,7 @@ export class TranscriptOutboxRepository {
 }
 
 function mapRow(row: TranscriptOutboxRow): TranscriptOutboxRecord {
-  const event = safeJsonParse<TranscriptEvent>(row.event_json, {} as TranscriptEvent);
+  const event = parseTranscriptEvent(row.event_json);
   return {
     eventId: row.event_id,
     sessionId: row.session_id,
@@ -165,4 +165,71 @@ function mapRow(row: TranscriptOutboxRow): TranscriptOutboxRecord {
     lastAttemptAt: row.last_attempt_at ?? undefined,
     lastError: row.last_error ?? undefined,
   };
+}
+
+function parseTranscriptEvent(raw: string): TranscriptEvent {
+  const parsed = safeJsonParse<unknown>(raw, undefined);
+  if (isTranscriptEvent(parsed)) {
+    return parsed;
+  }
+  return {
+    eventId: "invalid",
+    actionId: "invalid",
+    idempotencyKey: "invalid",
+    sessionId: "invalid",
+    sessionKey: "invalid",
+    timestamp: new Date(0).toISOString(),
+    type: "orchestration.phase",
+    actorType: "system",
+    actorId: "system",
+    payload: {
+      reason: "invalid_transcript_event",
+    },
+  } satisfies TranscriptEvent;
+}
+
+function toTranscriptOutboxRow(value: unknown): TranscriptOutboxRow | undefined {
+  return isTranscriptOutboxRow(value) ? value : undefined;
+}
+
+function toTranscriptOutboxRows(value: unknown): TranscriptOutboxRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isTranscriptOutboxRow);
+}
+
+function isTranscriptOutboxRow(value: unknown): value is TranscriptOutboxRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.event_id === "string"
+    && typeof value.session_id === "string"
+    && typeof value.event_json === "string"
+    && typeof value.enqueued_at === "string"
+    && (typeof value.delivered_at === "string" || value.delivered_at === null)
+    && (typeof value.transcript_offset === "number" || value.transcript_offset === null)
+    && typeof value.attempt_count === "number"
+    && (typeof value.last_attempt_at === "string" || value.last_attempt_at === null)
+    && (typeof value.last_error === "string" || value.last_error === null);
+}
+
+function isTranscriptEvent(value: unknown): value is TranscriptEvent {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.eventId === "string"
+    && typeof value.actionId === "string"
+    && typeof value.idempotencyKey === "string"
+    && typeof value.sessionId === "string"
+    && typeof value.sessionKey === "string"
+    && typeof value.timestamp === "string"
+    && typeof value.type === "string"
+    && typeof value.actorType === "string"
+    && typeof value.actorId === "string"
+    && isRecord(value.payload);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

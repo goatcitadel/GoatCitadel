@@ -116,7 +116,25 @@ export async function runDeepCoreLane(context, options = {}) {
     if (!seedResponse.ok) {
       throw new Error(`verification seed failed: ${JSON.stringify(seedResponse.body)}`);
     }
-    const onboardingStateResponse = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/state");
+    let onboardingStateResponse = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/state");
+    if (!onboardingStateResponse.ok) {
+      throw new Error(`verification onboarding state failed: ${JSON.stringify(onboardingStateResponse.body)}`);
+    }
+    if (!onboardingStateResponse.body?.completed) {
+      const completeResponse = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/complete", {
+        method: "POST",
+        body: {
+          completedBy: "verification-deep-core",
+        },
+      });
+      if (!completeResponse.ok) {
+        throw new Error(`verification onboarding completion failed: ${JSON.stringify(completeResponse.body)}`);
+      }
+      onboardingStateResponse = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/state");
+      if (!onboardingStateResponse.ok || !onboardingStateResponse.body?.completed) {
+        throw new Error(`verification onboarding completion did not persist: ${JSON.stringify(onboardingStateResponse.body)}`);
+      }
+    }
     const onboardingCompleted = Boolean(onboardingStateResponse.body?.completed);
     const shellLandingTab = onboardingCompleted ? "dashboard" : "onboarding";
 
@@ -171,13 +189,12 @@ export async function runDeepCoreLane(context, options = {}) {
         await waitForMissionControlShell(page);
         await waitForTabReady(page, "chat");
         await setBrowserCorrelation(page, correlationId, seedResponse.body.sessionId);
-        await page.getByRole("button", {
-          name: String(seedResponse.body.sessionTitle ?? "Verification Core Session"),
-          exact: true,
-        }).click();
+        const seededSessionButton = page.locator(".chat-v11-session-row button").first();
+        await seededSessionButton.waitFor({ timeout: 15000 });
+        await seededSessionButton.click();
         await page.waitForTimeout(1000);
         await page.waitForSelector(".chat-v11-turn-surface", { timeout: 15000 });
-        await page.getByText("Run details", { exact: true }).first().click();
+        await page.getByText("Review run details", { exact: true }).first().click();
         await page.waitForSelector(".chat-v11-turn-details[open]", { timeout: 10000 });
         const artifacts = await captureBrowserArtifacts(context, {
           slug: "core-chat-thread",
@@ -208,9 +225,13 @@ export async function runDeepCoreLane(context, options = {}) {
         await setBrowserCorrelation(page, correlationId);
         await page.getByRole("button", { name: "Command Palette" }).click();
         await page.getByPlaceholder("Type a page or action...").fill("chat");
-        await page.waitForSelector("text=/Go to Chat Workspace/i", { timeout: 15000 });
+        await page.locator(".command-palette-action", { hasText: "Open Chat" }).first().waitFor({ timeout: 15000 });
         await page.keyboard.press("Escape");
-        await page.getByRole("button", { name: "Diagnostics" }).click();
+        await page.getByRole("button", { name: "Command Palette" }).click();
+        await page.getByPlaceholder("Type a page or action...").fill("diagnostics");
+        const diagnosticsAction = page.locator(".command-palette-action", { hasText: "Show developer diagnostics" }).first();
+        await diagnosticsAction.waitFor({ timeout: 15000 });
+        await diagnosticsAction.click();
         await page.waitForSelector('[aria-label="Developer diagnostics"]', { timeout: 15000 });
         const artifacts = await captureBrowserArtifacts(context, {
           slug: "core-command-palette-diagnostics",
@@ -236,7 +257,15 @@ export async function runDeepCoreLane(context, options = {}) {
         await page.goto(`${stack.uiUrl}/?tab=${encodeURIComponent(shellLandingTab)}`, { waitUntil: "domcontentloaded" });
         await waitForMissionControlShell(page);
         await waitForTabReady(page, shellLandingTab);
-        await page.getByRole("button", { name: "Reduced" }).click();
+        await page.getByRole("button", { name: "Command Palette" }).click();
+        await page.getByPlaceholder("Type a page or action...").fill("reduced effects");
+        const reducedEffectsAction = page.locator(".command-palette-action", { hasText: "Use reduced effects" }).first();
+        await reducedEffectsAction.waitFor({ timeout: 15000 });
+        await reducedEffectsAction.click();
+        await page.waitForFunction(() => {
+          const shell = document.querySelector(".layout-shell");
+          return shell?.getAttribute("data-effective-effects-mode") === "reduced";
+        }, { timeout: 15000 });
         await page.waitForTimeout(400);
         const dashboardPerf = await measureLongTaskProfile(page, async () => {
           await page.evaluate(async () => {
@@ -661,7 +690,7 @@ async function waitForMissionControlShell(page, timeoutMs = 30000) {
     const accessGate = document.querySelector(".gateway-access-shell");
     return Boolean(shell) && !accessGate;
   }, { timeout: timeoutMs });
-  await page.waitForSelector(".shell-topbar", { timeout: timeoutMs });
+  await page.waitForSelector(".shell-bar", { timeout: timeoutMs });
 }
 
 async function waitForTabReady(page, tab, timeoutMs = 30000) {
@@ -670,17 +699,17 @@ async function waitForTabReady(page, tab, timeoutMs = 30000) {
       await page.waitForSelector("text=Step 1: Gateway Access", { timeout: timeoutMs });
       break;
     case "dashboard":
-      await page.waitForSelector(".dashboard-page", { timeout: timeoutMs });
+      await page.getByPlaceholder("Ask GoatCitadel anything... Try /help").waitFor({ timeout: timeoutMs });
       break;
     case "chat":
-      await page.waitForSelector(".chat-v11", { timeout: timeoutMs });
+      await page.getByPlaceholder("Ask GoatCitadel anything... Try /help").waitFor({ timeout: timeoutMs });
       break;
     default:
       await page.waitForFunction(() => {
         const loading = document.querySelector(".shell-page-loading");
         return !loading;
       }, { timeout: timeoutMs });
-      await page.waitForSelector(".shell-topbar", { timeout: timeoutMs });
+      await page.waitForSelector(".shell-bar", { timeout: timeoutMs });
       break;
   }
 }

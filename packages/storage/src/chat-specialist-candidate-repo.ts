@@ -80,7 +80,7 @@ export class ChatSpecialistCandidateRepository {
   }
 
   public get(candidateId: string): ChatSpecialistCandidateRecord {
-    const row = this.getStmt.get(candidateId) as ChatSpecialistCandidateRow | undefined;
+    const row = toChatSpecialistCandidateRow(this.getStmt.get(candidateId));
     if (!row) {
       throw new NotFoundError({ entity: "Specialist candidate", id: candidateId });
     }
@@ -88,15 +88,15 @@ export class ChatSpecialistCandidateRepository {
   }
 
   public find(candidateId: string): ChatSpecialistCandidateRecord | undefined {
-    const row = this.getStmt.get(candidateId) as ChatSpecialistCandidateRow | undefined;
+    const row = toChatSpecialistCandidateRow(this.getStmt.get(candidateId));
     return row ? mapRow(row) : undefined;
   }
 
   public listBySession(sessionId: string, limit = 100): ChatSpecialistCandidateRecord[] {
-    const rows = this.listBySessionStmt.all({
+    const rows = toChatSpecialistCandidateRows(this.listBySessionStmt.all({
       sessionId: sanitizeRequired(sessionId, "sessionId"),
       limit: Math.max(1, Math.min(limit, 500)),
-    }) as unknown as ChatSpecialistCandidateRow[];
+    }));
     return rows.map(mapRow);
   }
 
@@ -258,4 +258,42 @@ function clamp01(value: number): number {
     return 0;
   }
   return Math.min(1, Math.max(0, value));
+}
+
+function toChatSpecialistCandidateRow(value: unknown): ChatSpecialistCandidateRow | undefined {
+  return isChatSpecialistCandidateRow(value) ? value : undefined;
+}
+
+function toChatSpecialistCandidateRows(value: unknown): ChatSpecialistCandidateRow[] {
+  return Array.isArray(value) ? value.filter(isChatSpecialistCandidateRow) : [];
+}
+
+function isChatSpecialistCandidateRow(value: unknown): value is ChatSpecialistCandidateRow {
+  return isRecord(value)
+    && typeof value.candidate_id === "string"
+    && (typeof value.workspace_id === "string" || value.workspace_id === null)
+    && typeof value.session_id === "string"
+    && (typeof value.lead_turn_id === "string" || value.lead_turn_id === null)
+    && (typeof value.lead_run_id === "string" || value.lead_run_id === null)
+    && typeof value.title === "string"
+    && typeof value.role === "string"
+    && typeof value.summary === "string"
+    && typeof value.reason === "string"
+    && typeof value.source === "string"
+    && typeof value.status === "string"
+    && typeof value.routing_mode === "string"
+    && typeof value.confidence === "number"
+    && typeof value.requires_approval === "number"
+    && (typeof value.suggested_tools_json === "string" || value.suggested_tools_json === null)
+    && (typeof value.suggested_skills_json === "string" || value.suggested_skills_json === null)
+    && typeof value.routing_hints_json === "string"
+    && typeof value.evidence_json === "string"
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string"
+    && (typeof value.activated_at === "string" || value.activated_at === null)
+    && (typeof value.retired_at === "string" || value.retired_at === null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

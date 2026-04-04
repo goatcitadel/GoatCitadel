@@ -108,24 +108,24 @@ export class WorkspaceHookRepository {
   }
 
   public list(workspaceId: string, limit = 200): HookRecord[] {
-    const rows = this.listStmt.all({
+    const rows = toHookRows(this.listStmt.all({
       workspaceId,
       limit: clampLimit(limit),
-    }) as unknown as HookRow[];
+    }));
     return rows.map(mapHookRow);
   }
 
   public listByTrigger(workspaceId: string, trigger: HookTrigger, limit = 200): HookRecord[] {
-    const rows = this.getByTriggerStmt.all({
+    const rows = toHookRows(this.getByTriggerStmt.all({
       workspaceId,
       trigger,
       limit: clampLimit(limit),
-    }) as unknown as HookRow[];
+    }));
     return rows.map(mapHookRow);
   }
 
   public get(workspaceId: string, hookId: string): HookRecord {
-    const row = this.getStmt.get({ workspaceId, hookId }) as HookRow | undefined;
+    const row = toHookRow(this.getStmt.get({ workspaceId, hookId }));
     if (!row) {
       throw new ValidationError({ message: `Unknown hook ${hookId}` });
     }
@@ -237,4 +237,37 @@ function normalizeAction(value: HookActionConfig): HookActionConfig {
 
 function clampLimit(value: number): number {
   return Math.max(1, Math.min(1_000, Math.floor(value)));
+}
+
+function toHookRow(value: unknown): HookRow | undefined {
+  return isHookRow(value) ? value : undefined;
+}
+
+function toHookRows(value: unknown): HookRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isHookRow);
+}
+
+function isHookRow(value: unknown): value is HookRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.hook_id === "string"
+    && typeof value.workspace_id === "string"
+    && typeof value.label === "string"
+    && typeof value.trigger === "string"
+    && typeof value.mode === "string"
+    && typeof value.enabled === "number"
+    && typeof value.priority === "number"
+    && typeof value.timeout_ms === "number"
+    && typeof value.fail_policy === "string"
+    && typeof value.action_json === "string"
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

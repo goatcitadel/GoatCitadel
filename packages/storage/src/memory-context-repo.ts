@@ -153,15 +153,16 @@ export class MemoryContextRepository {
       runId: input.runId ?? null,
       phaseId: input.phaseId ?? null,
       now: "1970-01-01T00:00:00.000Z",
-    }) as MemoryContextRow | undefined;
-    if (!fresh) {
+    });
+    const freshRow = toMemoryContextRow(fresh);
+    if (!freshRow) {
       throw new NotFoundError("Failed to read memory context pack after upsert");
     }
-    return mapRow(fresh);
+    return mapRow(freshRow);
   }
 
   public findFreshByCacheKey(input: MemoryContextLookupInput, now = new Date().toISOString()): MemoryContextPack | undefined {
-    const row = this.getByCacheKeyStmt.get({
+    const row = toMemoryContextRow(this.getByCacheKeyStmt.get({
       cacheKey: toScopedCacheKey(input),
       scope: input.scope,
       sessionId: input.sessionId ?? null,
@@ -169,12 +170,12 @@ export class MemoryContextRepository {
       runId: input.runId ?? null,
       phaseId: input.phaseId ?? null,
       now,
-    }) as MemoryContextRow | undefined;
+    }));
     return row ? mapRow(row) : undefined;
   }
 
   public get(contextId: string): MemoryContextPack {
-    const row = this.getStmt.get(contextId) as MemoryContextRow | undefined;
+    const row = toMemoryContextRow(this.getStmt.get(contextId));
     if (!row) {
       throw new NotFoundError({ entity: "Memory context", id: contextId });
     }
@@ -182,12 +183,12 @@ export class MemoryContextRepository {
   }
 
   public listRecent(limit = 50): MemoryContextPack[] {
-    const rows = this.listRecentStmt.all({ limit }) as unknown as MemoryContextRow[];
+    const rows = toMemoryContextRows(this.listRecentStmt.all({ limit }));
     return rows.map(mapRow);
   }
 
   public listByRun(runId: string): MemoryContextPack[] {
-    const rows = this.listByRunStmt.all({ runId }) as unknown as MemoryContextRow[];
+    const rows = toMemoryContextRows(this.listByRunStmt.all({ runId }));
     return rows.map(mapRow);
   }
 
@@ -200,6 +201,40 @@ export class MemoryContextRepository {
     const result = this.pruneOlderThanStmt.run({ cutoff: cutoffIso }) as { changes?: number };
     return Number(result.changes ?? 0);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isMemoryContextRow(value: unknown): value is MemoryContextRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.context_id === "string"
+    && typeof value.cache_key === "string"
+    && typeof value.scope === "string"
+    && (typeof value.session_id === "string" || value.session_id === null)
+    && (typeof value.task_id === "string" || value.task_id === null)
+    && (typeof value.run_id === "string" || value.run_id === null)
+    && (typeof value.phase_id === "string" || value.phase_id === null)
+    && typeof value.query_hash === "string"
+    && typeof value.sources_hash === "string"
+    && typeof value.context_text === "string"
+    && typeof value.citations_json === "string"
+    && typeof value.quality_json === "string"
+    && typeof value.original_token_estimate === "number"
+    && typeof value.distilled_token_estimate === "number"
+    && typeof value.created_at === "string"
+    && typeof value.expires_at === "string";
+}
+
+function toMemoryContextRow(value: unknown): MemoryContextRow | undefined {
+  return isMemoryContextRow(value) ? value : undefined;
+}
+
+function toMemoryContextRows(value: unknown): MemoryContextRow[] {
+  return Array.isArray(value) ? value.filter(isMemoryContextRow) : [];
 }
 
 function mapRow(row: MemoryContextRow): MemoryContextPack {

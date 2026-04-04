@@ -64,7 +64,7 @@ export class PromptPackRepository {
   }
 
   public getPack(packId: string): PromptPackRecord {
-    const row = this.getPackStmt.get(packId) as PromptPackRow | undefined;
+    const row = toPromptPackRow(this.getPackStmt.get(packId));
     if (!row) {
       throw new NotFoundError({ entity: "Prompt pack", id: packId });
     }
@@ -72,22 +72,22 @@ export class PromptPackRepository {
   }
 
   public listPacks(limit = 100): PromptPackRecord[] {
-    const rows = this.listPacksStmt.all({
+    const rows = toPromptPackRows(this.listPacksStmt.all({
       limit: Math.max(1, Math.min(limit, 1000)),
-    }) as unknown as PromptPackRow[];
+    }));
     return rows.map(mapPackRow);
   }
 
   public listTests(packId: string, limit = 1000): PromptPackTestRecord[] {
-    const rows = this.listTestsStmt.all({
+    const rows = toPromptPackTestRows(this.listTestsStmt.all({
       packId,
       limit: Math.max(1, Math.min(limit, 5000)),
-    }) as unknown as PromptPackTestRow[];
+    }));
     return rows.map(mapTestRow);
   }
 
   public getTest(testId: string): PromptPackTestRecord {
-    const row = this.getTestStmt.get(testId) as PromptPackTestRow | undefined;
+    const row = toPromptPackTestRow(this.getTestStmt.get(testId));
     if (!row) {
       throw new NotFoundError({ entity: "Prompt pack test", id: testId });
     }
@@ -112,7 +112,7 @@ export class PromptPackRepository {
   } {
     const now = new Date().toISOString();
     const packId = input.packId ?? `pack-${randomUUID()}`;
-    const existing = this.getPackStmt.get(packId) as PromptPackRow | undefined;
+    const existing = toPromptPackRow(this.getPackStmt.get(packId));
     this.db.exec("SAVEPOINT prompt_pack_replace");
     try {
       this.upsertPackStmt.run({
@@ -175,5 +175,48 @@ function mapTestRow(row: PromptPackTestRow): PromptPackTestRecord {
     toolTier: (row.tool_tier as PromptPackTestRecord["toolTier"]) ?? undefined,
     createdAt: row.created_at,
   };
+}
+
+function toPromptPackRow(value: unknown): PromptPackRow | undefined {
+  return isPromptPackRow(value) ? value : undefined;
+}
+
+function toPromptPackRows(value: unknown): PromptPackRow[] {
+  return Array.isArray(value) ? value.filter(isPromptPackRow) : [];
+}
+
+function toPromptPackTestRow(value: unknown): PromptPackTestRow | undefined {
+  return isPromptPackTestRow(value) ? value : undefined;
+}
+
+function toPromptPackTestRows(value: unknown): PromptPackTestRow[] {
+  return Array.isArray(value) ? value.filter(isPromptPackTestRow) : [];
+}
+
+function isPromptPackRow(value: unknown): value is PromptPackRow {
+  return isRecord(value)
+    && typeof value.pack_id === "string"
+    && typeof value.name === "string"
+    && (typeof value.source_label === "string" || value.source_label === null)
+    && typeof value.test_count === "number"
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isPromptPackTestRow(value: unknown): value is PromptPackTestRow {
+  return isRecord(value)
+    && typeof value.test_id === "string"
+    && typeof value.pack_id === "string"
+    && typeof value.code === "string"
+    && typeof value.title === "string"
+    && typeof value.prompt === "string"
+    && typeof value.order_index === "number"
+    && (typeof value.mode === "string" || value.mode === null)
+    && (typeof value.tool_tier === "string" || value.tool_tier === null)
+    && typeof value.created_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 

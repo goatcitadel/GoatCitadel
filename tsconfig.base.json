@@ -10,10 +10,9 @@
     "declaration": true,
     "sourceMap": true,
     "outDir": "dist",
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
+    "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
-    "skipLibCheck": true,
+    "skipLibCheck": false,
     "forceConsistentCasingInFileNames": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true

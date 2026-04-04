@@ -94,7 +94,7 @@ export class SessionAutonomyPrefsRepository {
   }
 
   public get(sessionId: string): SessionAutonomyPrefsRecord | undefined {
-    const row = this.getStmt.get(sessionId) as SessionAutonomyPrefsRow | undefined;
+    const row = toSessionAutonomyPrefsRow(this.getStmt.get(sessionId));
     return row ? mapRow(row) : undefined;
   }
 
@@ -180,7 +180,7 @@ export class SessionAutonomyPrefsRepository {
         FROM session_autonomy_prefs
         WHERE session_id IN (${placeholders})
       `);
-      rows.push(...(stmt.all(...batch) as unknown as SessionAutonomyPrefsRow[]));
+      rows.push(...toSessionAutonomyPrefsRows(stmt.all(...batch)));
     }
     const mapped = rows.map((row) => mapRow(row));
     return new Map(mapped.map((row) => [row.sessionId, row]));
@@ -201,4 +201,31 @@ function mapRow(row: SessionAutonomyPrefsRow): SessionAutonomyPrefsRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function toSessionAutonomyPrefsRow(value: unknown): SessionAutonomyPrefsRow | undefined {
+  return isSessionAutonomyPrefsRow(value) ? value : undefined;
+}
+
+function toSessionAutonomyPrefsRows(value: unknown): SessionAutonomyPrefsRow[] {
+  return Array.isArray(value) ? value.filter(isSessionAutonomyPrefsRow) : [];
+}
+
+function isSessionAutonomyPrefsRow(value: unknown): value is SessionAutonomyPrefsRow {
+  return isRecord(value)
+    && typeof value.session_id === "string"
+    && typeof value.proactive_mode === "string"
+    && typeof value.max_actions_per_hour === "number"
+    && typeof value.max_actions_per_turn === "number"
+    && typeof value.cooldown_seconds === "number"
+    && typeof value.retrieval_mode === "string"
+    && typeof value.reflection_mode === "string"
+    && (typeof value.last_proactive_at === "string" || value.last_proactive_at === null)
+    && (typeof value.last_proactive_run_id === "string" || value.last_proactive_run_id === null)
+    && typeof value.created_at === "string"
+    && typeof value.updated_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

@@ -78,7 +78,7 @@ export class PromptPackRunRepository {
   }
 
   public get(runId: string): PromptPackRunRecord {
-    const row = this.getStmt.get(runId) as PromptPackRunRow | undefined;
+    const row = toPromptPackRunRow(this.getStmt.get(runId));
     if (!row) {
       throw new NotFoundError({ entity: "Prompt pack run", id: runId });
     }
@@ -177,18 +177,18 @@ export class PromptPackRunRepository {
   }
 
   public listByPack(packId: string, limit = 500): PromptPackRunRecord[] {
-    const rows = this.listByPackStmt.all({
+    const rows = toPromptPackRunRows(this.listByPackStmt.all({
       packId,
       limit: Math.max(1, Math.min(limit, 5000)),
-    }) as unknown as PromptPackRunRow[];
+    }));
     return rows.map(mapRow);
   }
 
   public listByTest(testId: string, limit = 100): PromptPackRunRecord[] {
-    const rows = this.listByTestStmt.all({
+    const rows = toPromptPackRunRows(this.listByTestStmt.all({
       testId,
       limit: Math.max(1, Math.min(limit, 5000)),
-    }) as unknown as PromptPackRunRow[];
+    }));
     return rows.map(mapRow);
   }
 
@@ -228,4 +228,39 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function toPromptPackRunRow(value: unknown): PromptPackRunRow | undefined {
+  return isPromptPackRunRow(value) ? value : undefined;
+}
+
+function toPromptPackRunRows(value: unknown): PromptPackRunRow[] {
+  return Array.isArray(value) ? value.filter(isPromptPackRunRow) : [];
+}
+
+function isPromptPackRunRow(value: unknown): value is PromptPackRunRow {
+  return isRecord(value)
+    && typeof value.run_id === "string"
+    && typeof value.pack_id === "string"
+    && typeof value.test_id === "string"
+    && (typeof value.session_id === "string" || value.session_id === null)
+    && typeof value.status === "string"
+    && (typeof value.provider_id === "string" || value.provider_id === null)
+    && (typeof value.model === "string" || value.model === null)
+    && (typeof value.mode === "string" || value.mode === null)
+    && (typeof value.tool_tier === "string" || value.tool_tier === null)
+    && (typeof value.tool_autonomy === "string" || value.tool_autonomy === null)
+    && (typeof value.web_mode === "string" || value.web_mode === null)
+    && (typeof value.memory_mode === "string" || value.memory_mode === null)
+    && (typeof value.thinking_level === "string" || value.thinking_level === null)
+    && (typeof value.response_text === "string" || value.response_text === null)
+    && (typeof value.trace_json === "string" || value.trace_json === null)
+    && (typeof value.citations_json === "string" || value.citations_json === null)
+    && (typeof value.error === "string" || value.error === null)
+    && typeof value.started_at === "string"
+    && (typeof value.finished_at === "string" || value.finished_at === null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

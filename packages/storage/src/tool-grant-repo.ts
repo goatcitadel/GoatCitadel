@@ -84,7 +84,8 @@ export class ToolGrantRepository {
   }
 
   public get(grantId: string): ToolGrantRecord {
-    const row = this.getStmt.get(grantId) as ToolGrantRow | undefined;
+    const row = this.getStmt.get(grantId);
+    assertToolGrantRow(row);
     if (!row) {
       throw new NotFoundError({ entity: "Tool grant", id: grantId });
     }
@@ -96,7 +97,8 @@ export class ToolGrantRepository {
       scope: scope ?? null,
       scopeRef: scopeRef ?? null,
       limit,
-    }) as unknown as ToolGrantRow[];
+    });
+    assertToolGrantRows(rows);
     return rows.map(mapRow);
   }
 
@@ -111,6 +113,41 @@ export class ToolGrantRepository {
   public consumeOne(grantId: string): void {
     this.consumeStmt.run({ grantId });
   }
+}
+
+function assertToolGrantRow(row: unknown): asserts row is ToolGrantRow | undefined {
+  if (row !== undefined && !isToolGrantRow(row)) {
+    throw new TypeError("Unexpected tool_grants row shape");
+  }
+}
+
+function assertToolGrantRows(rows: unknown): asserts rows is ToolGrantRow[] {
+  if (!Array.isArray(rows) || rows.some((row) => !isToolGrantRow(row))) {
+    throw new TypeError("Unexpected tool_grants row shape");
+  }
+}
+
+function isToolGrantRow(value: unknown): value is ToolGrantRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return typeof value.grant_id === "string"
+    && typeof value.tool_pattern === "string"
+    && (value.decision === "allow" || value.decision === "deny")
+    && typeof value.scope === "string"
+    && typeof value.scope_ref === "string"
+    && (value.grant_type === "one_time" || value.grant_type === "ttl" || value.grant_type === "persistent")
+    && (typeof value.constraints_json === "string" || value.constraints_json === null)
+    && typeof value.created_by === "string"
+    && typeof value.created_at === "string"
+    && (typeof value.expires_at === "string" || value.expires_at === null)
+    && (typeof value.revoked_at === "string" || value.revoked_at === null)
+    && (typeof value.uses_remaining === "number" || value.uses_remaining === null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function mapRow(row: ToolGrantRow): ToolGrantRecord {

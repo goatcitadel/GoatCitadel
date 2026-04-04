@@ -175,7 +175,7 @@ export class OrchestrationRepository {
   }
 
   public getRun(runId: string): OrchestrationRun {
-    const row = this.getRunStmt.get(runId) as OrchestrationRunRow | undefined;
+    const row = toOrchestrationRunRow(this.getRunStmt.get(runId));
     if (!row) {
       throw new NotFoundError({ entity: "Orchestration run", id: runId });
     }
@@ -183,7 +183,7 @@ export class OrchestrationRepository {
   }
 
   public findLatestRunByPlan(planId: string): OrchestrationRun | undefined {
-    const row = this.getLatestRunByPlanStmt.get(planId) as OrchestrationRunRow | undefined;
+    const row = toOrchestrationRunRow(this.getLatestRunByPlanStmt.get(planId));
     if (!row) {
       return undefined;
     }
@@ -218,11 +218,11 @@ export class OrchestrationRepository {
   ): OrchestrationCheckpoint[] {
     const safeLimit = Math.max(1, Math.min(1_000, Math.floor(options.limit ?? 1_000)));
     const cursor = options.cursor?.trim();
-    const rows = (
+    const rows = toOrchestrationCheckpointRows(
       cursor
         ? this.listCheckpointsAfterStmt.all({ runId, cursor, limit: safeLimit })
         : this.listCheckpointsStmt.all({ runId, limit: safeLimit })
-    ) as unknown as OrchestrationCheckpointRow[];
+    );
     return rows.map((row) => ({
       checkpointId: row.checkpoint_id,
       runId: row.run_id,
@@ -259,4 +259,42 @@ function mapRunRow(row: OrchestrationRunRow): OrchestrationRun {
     totalCostUsd: Number(row.total_cost_usd ?? 0),
     totalIterations: Number(row.total_iterations ?? 0),
   };
+}
+
+function toOrchestrationRunRow(value: unknown): OrchestrationRunRow | undefined {
+  return isOrchestrationRunRow(value) ? value : undefined;
+}
+
+function toOrchestrationCheckpointRows(value: unknown): OrchestrationCheckpointRow[] {
+  return Array.isArray(value) ? value.filter(isOrchestrationCheckpointRow) : [];
+}
+
+function isOrchestrationRunRow(value: unknown): value is OrchestrationRunRow {
+  return isRecord(value)
+    && typeof value.run_id === "string"
+    && typeof value.plan_id === "string"
+    && typeof value.status === "string"
+    && typeof value.started_at === "string"
+    && (typeof value.ended_at === "string" || value.ended_at === null)
+    && (typeof value.current_wave_id === "string" || value.current_wave_id === null)
+    && (typeof value.current_phase_id === "string" || value.current_phase_id === null)
+    && typeof value.total_cost_usd === "number"
+    && typeof value.total_iterations === "number";
+}
+
+function isOrchestrationCheckpointRow(value: unknown): value is OrchestrationCheckpointRow {
+  return isRecord(value)
+    && typeof value.checkpoint_id === "string"
+    && typeof value.run_id === "string"
+    && typeof value.plan_id === "string"
+    && (typeof value.wave_id === "string" || value.wave_id === null)
+    && (typeof value.phase_id === "string" || value.phase_id === null)
+    && typeof value.checkpoint_kind === "string"
+    && (typeof value.git_ref === "string" || value.git_ref === null)
+    && typeof value.details_json === "string"
+    && typeof value.created_at === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

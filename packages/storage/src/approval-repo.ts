@@ -115,7 +115,7 @@ export class ApprovalRepository {
   }
 
   public get(approvalId: string): ApprovalRequest {
-    const row = this.getStmt.get(approvalId) as ApprovalRow | undefined;
+    const row = toApprovalRow(this.getStmt.get(approvalId));
     if (!row) {
       throw new NotFoundError({ entity: "Approval", id: approvalId });
     }
@@ -124,7 +124,7 @@ export class ApprovalRepository {
   }
 
   public list(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
-    const rows = this.listStmt.all({ status: status ?? null, limit }) as unknown as ApprovalRow[];
+    const rows = toApprovalRows(this.listStmt.all({ status: status ?? null, limit }));
     return rows.map(mapRow);
   }
 
@@ -159,7 +159,7 @@ export class ApprovalRepository {
     approvalId: string,
     linkagePatch: NonNullable<ApprovalRequest["linkage"]>,
   ): ApprovalRequest {
-    const row = this.getStmt.get(approvalId) as ApprovalRow | undefined;
+    const row = toApprovalRow(this.getStmt.get(approvalId));
     if (!row) {
       throw new NotFoundError({ entity: "Approval", id: approvalId });
     }
@@ -232,6 +232,47 @@ function mapRow(row: ApprovalRow): ApprovalRequest {
     explanation,
     explanationError: row.explanation_error ?? undefined,
   };
+}
+
+function toApprovalRow(row: unknown): ApprovalRow | undefined {
+  if (row !== undefined && !isApprovalRow(row)) {
+    throw new TypeError("Unexpected approvals row shape");
+  }
+  return row;
+}
+
+function toApprovalRows(rows: unknown): ApprovalRow[] {
+  if (!Array.isArray(rows) || rows.some((row) => !isApprovalRow(row))) {
+    throw new TypeError("Unexpected approvals row shape");
+  }
+  return rows;
+}
+
+function isApprovalRow(value: unknown): value is ApprovalRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return typeof value.approval_id === "string"
+    && typeof value.kind === "string"
+    && typeof value.risk_level === "string"
+    && typeof value.status === "string"
+    && (typeof value.linkage_json === "string" || value.linkage_json === null)
+    && typeof value.payload_json === "string"
+    && typeof value.preview_json === "string"
+    && typeof value.explanation_status === "string"
+    && (typeof value.explanation_json === "string" || value.explanation_json === null)
+    && (typeof value.explanation_error === "string" || value.explanation_error === null)
+    && (typeof value.explanation_updated_at === "string" || value.explanation_updated_at === null)
+    && typeof value.created_at === "string"
+    && (typeof value.expires_at === "string" || value.expires_at === null)
+    && (typeof value.resolved_at === "string" || value.resolved_at === null)
+    && (typeof value.resolved_by === "string" || value.resolved_by === null)
+    && (typeof value.resolution_note === "string" || value.resolution_note === null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function embedApprovalLinkage(

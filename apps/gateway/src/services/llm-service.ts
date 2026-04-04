@@ -2042,7 +2042,7 @@ function buildOpenAiResponsesInput(
   const input: Array<Record<string, unknown>> = [];
 
   for (const message of messages) {
-    const record = message as unknown as Record<string, unknown>;
+    const record = toPlainRecord(message);
     if (message.role === "system" || message.role === "developer") {
       const text = normalizeStringMessageContent(message.content);
       if (text) {
@@ -2066,7 +2066,7 @@ function buildOpenAiResponsesInput(
       input.push({ role, content });
     }
 
-    if (message.role === "assistant" && Array.isArray(record.tool_calls)) {
+    if (message.role === "assistant" && record && Array.isArray(record.tool_calls)) {
       for (const toolCall of record.tool_calls) {
         if (!isRecord(toolCall) || !isRecord(toolCall.function)) {
           continue;
@@ -2232,9 +2232,9 @@ function buildAnthropicMessagesInput(
     }
 
     if (message.role === "assistant") {
-      const assistantRecord = message as unknown as Record<string, unknown>;
+      const assistantRecord = toPlainRecord(message);
       const assistantContent = mapAnthropicMessageContent(message.content);
-      if (Array.isArray(assistantRecord.tool_calls)) {
+      if (assistantRecord && Array.isArray(assistantRecord.tool_calls)) {
         for (const toolCall of assistantRecord.tool_calls) {
           if (!isRecord(toolCall) || !isRecord(toolCall.function)) {
             continue;
@@ -2442,6 +2442,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? { ...value } : undefined;
+}
+
 function randomToolCallId(): string {
   return `call_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -2484,8 +2488,8 @@ function normalizeProviderMessages(
     return messages;
   }
   return messages.map((message) => {
-    const value = message as unknown as Record<string, unknown>;
-    if (value.role !== "assistant" || !Array.isArray(value.tool_calls)) {
+    const value = toPlainRecord(message);
+    if (message.role !== "assistant" || !value || !Array.isArray(value.tool_calls)) {
       return message;
     }
     const existingReasoning = typeof value.reasoning_content === "string" ? value.reasoning_content.trim() : "";
@@ -2494,9 +2498,9 @@ function normalizeProviderMessages(
     }
     const content = typeof value.content === "string" ? value.content.trim() : "";
     return {
-      ...value,
+      ...message,
       reasoning_content: content || "Using tools to gather and verify information.",
-    } as unknown as ChatCompletionRequest["messages"][number];
+    } as ChatCompletionRequest["messages"][number];
   });
 }
 
