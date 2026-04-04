@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { GoatError } from "@goatcitadel/contracts";
 
 const SECRET_SERVICE = "goatcitadel";
+const DISABLE_SECRET_STORE_ENV = "GOATCITADEL_DISABLE_SECRET_STORE";
 
 export type SecretSource = "none" | "keychain";
 
@@ -19,8 +20,27 @@ export class SecretStoreUnavailableError extends GoatError {
   }
 }
 
+export function isSecretStoreUnavailableLikeError(error: unknown): boolean {
+  if (error instanceof SecretStoreUnavailableError) {
+    return true;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return [
+    /secure keychain is unavailable/i,
+    /secret store unavailable/i,
+    /passwordvault/i,
+    /windows\.security\.credentials/i,
+    /system\.runtime\.windowsruntime/i,
+  ].some((pattern) => pattern.test(error.message));
+}
+
 export class SecretStoreService {
   public isAvailable(): boolean {
+    if (isSecretStoreExplicitlyDisabled()) {
+      return false;
+    }
     if (process.platform === "win32") {
       return hasCommand("powershell");
     }
@@ -278,4 +298,9 @@ function runCommand(
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   };
+}
+
+function isSecretStoreExplicitlyDisabled(): boolean {
+  const raw = process.env[DISABLE_SECRET_STORE_ENV]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
 }

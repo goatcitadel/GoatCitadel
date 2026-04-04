@@ -193,8 +193,11 @@ async function run(): Promise<void> {
               label: provider.providerLabel,
               baseUrl: provider.providerBaseUrl,
               defaultModel: provider.providerDefaultModel,
-              apiKey: provider.saveProviderApiKeyToSecureStore ? provider.providerApiKey || undefined : undefined,
+              apiKey: provider.providerApiKey || undefined,
               apiKeyEnv: provider.providerApiKeyEnv || undefined,
+              persistSecretToSecureStore: provider.providerApiKey.trim().length > 0
+                ? provider.saveProviderApiKeyToSecureStore
+                : undefined,
             },
           },
           mesh,

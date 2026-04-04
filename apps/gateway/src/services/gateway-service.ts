@@ -11203,6 +11203,7 @@ export class GatewayService {
         defaultModel?: string;
         apiKey?: string;
         apiKeyEnv?: string;
+        persistSecretToSecureStore?: boolean;
         headers?: Record<string, string>;
       };
     };
@@ -11397,6 +11398,7 @@ export class GatewayService {
           providerId: llmInput.upsertProvider.providerId,
           apiKey: submittedApiKey,
           preferredEnvVar: llmInput.upsertProvider.apiKeyEnv,
+          persistToEnv: llmInput.upsertProvider.persistSecretToSecureStore === false,
           rootDir: this.config.rootDir,
           llmService: this.llmService,
         });
@@ -14676,6 +14678,7 @@ export class GatewayService {
       defaultModel?: string;
       apiKey?: string;
       apiKeyEnv?: string;
+      persistSecretToSecureStore?: boolean;
       headers?: Record<string, string>;
     };
   }): LlmRuntimeConfig {

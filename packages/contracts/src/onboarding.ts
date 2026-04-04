@@ -71,6 +71,7 @@ export interface OnboardingBootstrapInput {
       defaultModel?: string;
       apiKey?: string;
       apiKeyEnv?: string;
+      persistSecretToSecureStore?: boolean;
       headers?: Record<string, string>;
     };
   };

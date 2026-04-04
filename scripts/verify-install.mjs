@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFile } from "node:fs/promises";
 import { createRunContext, finalizeRunContext, runScenario } from "./verification/lib/shared.mjs";
 import { requestJson, startVerificationStack, stopVerificationStack } from "./verification/lib/runtime.mjs";
 
@@ -15,6 +16,10 @@ async function main() {
       includeUi: true,
       gatewayPort: 0,
       uiPort: 0,
+      gatewayEnv: {
+        GOATCITADEL_AUTH_MODE: "none",
+        GOATCITADEL_DISABLE_SECRET_STORE: "true",
+      },
     });
 
     await runScenario(context, {
@@ -45,6 +50,48 @@ async function main() {
         error: response.ok ? undefined : JSON.stringify(response.body),
         metrics: {
           statusCode: response.status,
+        },
+      };
+    });
+
+    await runScenario(context, {
+      id: "install.gateway.bootstrap",
+      lane: "install-smoke",
+      title: "Bootstrap onboarding persists an env-backed provider secret on first run",
+      subsystem: "gateway",
+    }, async () => {
+      const response = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/bootstrap", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "install-smoke-bootstrap-1",
+        },
+        body: {
+          defaultToolProfile: "minimal",
+          budgetMode: "balanced",
+          networkAllowlist: ["127.0.0.1", "localhost"],
+          llm: {
+            activeProviderId: "openai",
+            activeModel: "gpt-5",
+            upsertProvider: {
+              providerId: "openai",
+              apiKey: "sk-install-smoke-value",
+              apiKeyEnv: "OPENAI_API_KEY",
+              persistSecretToSecureStore: false,
+            },
+          },
+          markComplete: true,
+          completedBy: "install-smoke",
+        },
+      });
+      const envFile = await readFile(`${stack.runtimeRoot}/.env`, "utf8").catch(() => "");
+      return {
+        status: response.ok && /OPENAI_API_KEY=\"sk-install-smoke-value\"/.test(envFile) ? "passed" : "failed",
+        error: response.ok ? undefined : JSON.stringify(response.body),
+        metrics: {
+          statusCode: response.status,
+          wroteEnvFile: /OPENAI_API_KEY=\"sk-install-smoke-value\"/.test(envFile),
+          completed: response.body?.state?.completed === true,
         },
       };
     });

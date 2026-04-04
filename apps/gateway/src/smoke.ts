@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { cp, mkdtemp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { buildApp } from "./app.js";
 
 interface JsonResponse<T = unknown> {
@@ -16,6 +16,7 @@ export async function runSmoke(): Promise<void> {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-smoke-"));
   const priorRoot = process.env.GOATCITADEL_ROOT_DIR;
   const priorAuthMode = process.env.GOATCITADEL_AUTH_MODE;
+  const priorDisableSecretStore = process.env.GOATCITADEL_DISABLE_SECRET_STORE;
 
   try {
     await cp(path.join(repoRoot, "config"), path.join(tempRoot, "config"), { recursive: true });
@@ -24,6 +25,7 @@ export async function runSmoke(): Promise<void> {
     await mkdir(path.join(tempRoot, "workspace"), { recursive: true });
     process.env.GOATCITADEL_ROOT_DIR = tempRoot;
     process.env.GOATCITADEL_AUTH_MODE = "none";
+    process.env.GOATCITADEL_DISABLE_SECRET_STORE = "true";
 
     const app = await buildApp();
     try {
@@ -55,6 +57,11 @@ export async function runSmoke(): Promise<void> {
       delete process.env.GOATCITADEL_AUTH_MODE;
     } else {
       process.env.GOATCITADEL_AUTH_MODE = priorAuthMode;
+    }
+    if (priorDisableSecretStore === undefined) {
+      delete process.env.GOATCITADEL_DISABLE_SECRET_STORE;
+    } else {
+      process.env.GOATCITADEL_DISABLE_SECRET_STORE = priorDisableSecretStore;
     }
     await rm(tempRoot, { recursive: true, force: true });
   }
@@ -673,6 +680,16 @@ async function smokeOnboarding(app: Awaited<ReturnType<typeof buildApp>>): Promi
     budgetMode: "balanced",
     defaultToolProfile: "minimal",
     networkAllowlist: ["127.0.0.1", "localhost"],
+    llm: {
+      activeProviderId: "openai",
+      activeModel: "gpt-5",
+      upsertProvider: {
+        providerId: "openai",
+        apiKey: "sk-smoke-value",
+        apiKeyEnv: "OPENAI_API_KEY",
+        persistSecretToSecureStore: false,
+      },
+    },
     markComplete: true,
     completedBy: "smoke",
   }, {
@@ -685,6 +702,9 @@ async function smokeOnboarding(app: Awaited<ReturnType<typeof buildApp>>): Promi
   };
   assert.equal(typeof bootstrapBody.appliedAt, "string");
   assert.equal(bootstrapBody.state.completed, true);
+  const envPath = path.join(process.env.GOATCITADEL_ROOT_DIR ?? "", ".env");
+  const envFile = await readFile(envPath, "utf8");
+  assert.match(envFile, /OPENAI_API_KEY="sk-smoke-value"/);
 }
 
 async function postJson<T>(

@@ -18,7 +18,11 @@ import {
   providerAllowsForeignModelIds,
 } from "@goatcitadel/contracts";
 import { applyEstimatedCostToChatResponse, applyEstimatedCostToStreamChunk } from "./llm-pricing.js";
-import { SecretStoreService, SecretStoreUnavailableError } from "./secret-store-service.js";
+import {
+  isSecretStoreUnavailableLikeError,
+  SecretStoreService,
+  SecretStoreUnavailableError,
+} from "./secret-store-service.js";
 
 export interface LlmRuntimeUpdateInput {
   activeProviderId?: string;
@@ -295,7 +299,7 @@ export class LlmService {
     try {
       this.secretStore.setProviderApiKey(providerId, apiKey);
     } catch (error) {
-      if (error instanceof SecretStoreUnavailableError) {
+      if (isSecretStoreUnavailableLikeError(error)) {
         throw new Error("Secure keychain is unavailable on this host. Use apiKeyEnv for env-backed secrets.");
       }
       throw error;

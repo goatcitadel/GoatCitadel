@@ -1,4 +1,5 @@
 import { deleteLocalEnvVar, upsertLocalEnvVar } from "../env-file.js";
+import { isSecretStoreUnavailableLikeError } from "./secret-store-service.js";
 
 type ProviderSecretSource = "none" | "keychain" | "env" | "inline";
 
@@ -27,6 +28,7 @@ interface PersistProviderApiKeyInput {
   llmService: ProviderSecretPersistenceService;
   env?: NodeJS.ProcessEnv;
   preferredEnvVar?: string;
+  persistToEnv?: boolean;
 }
 
 interface DeleteProviderApiKeyInput {
@@ -41,17 +43,19 @@ export function persistProviderApiKeyWithFallback(input: PersistProviderApiKeyIn
   hasSecret: boolean;
   source: ProviderSecretSource;
 } {
-  try {
-    input.llmService.setProviderApiKey(input.providerId, input.apiKey);
-    const status = input.llmService.getProviderSecretStatus(input.providerId);
-    return {
-      providerId: status.providerId,
-      hasSecret: status.hasApiKey,
-      source: status.apiKeySource,
-    };
-  } catch (error) {
-    if (!isKeychainUnavailableError(error)) {
-      throw error;
+  if (!input.persistToEnv) {
+    try {
+      input.llmService.setProviderApiKey(input.providerId, input.apiKey);
+      const status = input.llmService.getProviderSecretStatus(input.providerId);
+      return {
+        providerId: status.providerId,
+        hasSecret: status.hasApiKey,
+        source: status.apiKeySource,
+      };
+    } catch (error) {
+      if (!isKeychainUnavailableError(error)) {
+        throw error;
+      }
     }
   }
 
@@ -60,17 +64,7 @@ export function persistProviderApiKeyWithFallback(input: PersistProviderApiKeyIn
     throw new Error(`Secure keychain is unavailable on this host, and no env var is configured for provider ${input.providerId}.`);
   }
 
-  const writeResult = upsertLocalEnvVar(envVar, input.apiKey, { rootDir: input.rootDir });
-  if (!writeResult.updated) {
-    throw new Error(`Secure keychain is unavailable on this host, and GoatCitadel could not persist ${envVar} to the local .env file.`);
-  }
-
-  (input.env ?? process.env)[envVar] = input.apiKey;
-  return {
-    providerId: input.providerId,
-    hasSecret: true,
-    source: "env",
-  };
+  return persistProviderApiKeyToEnv(input.providerId, envVar, input.apiKey, input.rootDir, input.env);
 }
 
 export function deleteProviderApiKeyWithFallback(input: DeleteProviderApiKeyInput): {
@@ -119,5 +113,29 @@ function resolveProviderEnvVar(
 }
 
 function isKeychainUnavailableError(error: unknown): boolean {
-  return error instanceof Error && /secure keychain is unavailable/i.test(error.message);
+  return isSecretStoreUnavailableLikeError(error);
+}
+
+function persistProviderApiKeyToEnv(
+  providerId: string,
+  envVar: string,
+  apiKey: string,
+  rootDir: string,
+  env?: NodeJS.ProcessEnv,
+): {
+  providerId: string;
+  hasSecret: boolean;
+  source: ProviderSecretSource;
+} {
+  const writeResult = upsertLocalEnvVar(envVar, apiKey, { rootDir });
+  if (!writeResult.updated) {
+    throw new Error(`Secure keychain is unavailable on this host, and GoatCitadel could not persist ${envVar} to the local .env file.`);
+  }
+
+  (env ?? process.env)[envVar] = apiKey;
+  return {
+    providerId,
+    hasSecret: true,
+    source: "env",
+  };
 }

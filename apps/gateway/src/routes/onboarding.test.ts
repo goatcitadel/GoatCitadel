@@ -81,6 +81,38 @@ describe("onboarding routes", () => {
     expect(bootstrapOnboarding).not.toHaveBeenCalled();
   });
 
+  it("accepts explicit env-backed provider persistence in bootstrap payloads", async () => {
+    const bootstrapOnboarding = vi.fn((input) => input);
+    app = Fastify();
+    app.decorate("gateway", { bootstrapOnboarding } as never);
+    await app.register(onboardingRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/onboarding/bootstrap",
+      payload: {
+        llm: {
+          upsertProvider: {
+            providerId: "openai",
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "sk-test-value",
+            apiKeyEnv: "OPENAI_API_KEY",
+            persistSecretToSecureStore: false,
+          },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(bootstrapOnboarding).toHaveBeenCalledWith(expect.objectContaining({
+      llm: expect.objectContaining({
+        upsertProvider: expect.objectContaining({
+          persistSecretToSecureStore: false,
+        }),
+      }),
+    }));
+  });
+
   it("marks onboarding complete", async () => {
     const markOnboardingComplete = vi.fn(() => ({ completed: true }));
     app = Fastify();

@@ -29,6 +29,7 @@ const bootstrapSchema = z.object({
       defaultModel: z.string().min(1).optional(),
       apiKey: z.string().min(1).optional(),
       apiKeyEnv: z.string().min(1).optional(),
+      persistSecretToSecureStore: z.boolean().optional(),
       headers: z.record(z.string()).optional(),
     }).optional(),
   }).optional(),

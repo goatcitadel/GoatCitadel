@@ -51,6 +51,85 @@ describe("provider secret persistence fallback", () => {
     assert.match(raw, /OPENAI_API_KEY="sk-test-value"/);
   });
 
+  it("falls back to the local env file for raw Windows keychain backend failures", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-provider-secret-win32-test-"));
+    TEMP_ROOTS.push(tempRoot);
+    await mkdir(path.join(tempRoot, "config"), { recursive: true });
+    await writeFile(path.join(tempRoot, "config", "assistant.config.json"), "{}\n", "utf8");
+    const envPath = path.join(tempRoot, ".env");
+    const env: NodeJS.ProcessEnv = {};
+    const llmService = createStubLlmService({
+      providerId: "openai",
+      apiKeyRef: "OPENAI_API_KEY",
+      setError: new Error("powershell failed: Cannot find type [Windows.Security.Credentials.PasswordVault]"),
+    });
+
+    const status = persistProviderApiKeyWithFallback({
+      providerId: "openai",
+      apiKey: "sk-test-value",
+      rootDir: tempRoot,
+      llmService,
+      env,
+    });
+
+    assert.deepEqual(status, {
+      providerId: "openai",
+      hasSecret: true,
+      source: "env",
+    });
+    assert.equal(env.OPENAI_API_KEY, "sk-test-value");
+    const raw = await readFile(envPath, "utf8");
+    assert.match(raw, /OPENAI_API_KEY="sk-test-value"/);
+  });
+
+  it("writes directly to the local env file when secure-store persistence is disabled", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-provider-secret-env-only-test-"));
+    TEMP_ROOTS.push(tempRoot);
+    await mkdir(path.join(tempRoot, "config"), { recursive: true });
+    await writeFile(path.join(tempRoot, "config", "assistant.config.json"), "{}\n", "utf8");
+    const envPath = path.join(tempRoot, ".env");
+    const env: NodeJS.ProcessEnv = {};
+    let setCalls = 0;
+    const llmService = {
+      setProviderApiKey: () => {
+        setCalls += 1;
+      },
+      deleteProviderApiKey: () => undefined,
+      getProviderSecretStatus: (providerId: string) => ({
+        providerId,
+        hasApiKey: false,
+        apiKeySource: "none" as const,
+      }),
+      getRuntimeConfig: () => ({
+        providers: [
+          {
+            providerId: "openai",
+            apiKeyRef: "OPENAI_API_KEY",
+          },
+        ],
+      }),
+    };
+
+    const status = persistProviderApiKeyWithFallback({
+      providerId: "openai",
+      apiKey: "sk-test-value",
+      rootDir: tempRoot,
+      llmService,
+      env,
+      persistToEnv: true,
+    });
+
+    assert.equal(setCalls, 0);
+    assert.deepEqual(status, {
+      providerId: "openai",
+      hasSecret: true,
+      source: "env",
+    });
+    assert.equal(env.OPENAI_API_KEY, "sk-test-value");
+    const raw = await readFile(envPath, "utf8");
+    assert.match(raw, /OPENAI_API_KEY="sk-test-value"/);
+  });
+
   it("removes env-backed provider secrets from both process env and local env file", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-provider-secret-delete-test-"));
     TEMP_ROOTS.push(tempRoot);
