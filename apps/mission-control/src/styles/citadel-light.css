@@ -1437,6 +1437,11 @@
     linear-gradient(180deg, rgba(136, 159, 168, 0.99), rgba(116, 138, 147, 0.99));
 }
 
+.theme-citadel-light .chat-v11.mode-cowork .chat-cowork-stage-card {
+  border-color: rgba(66, 201, 219, 0.24);
+  background: rgba(224, 243, 247, 0.16);
+}
+
 .theme-citadel-light .chat-v11.mode-code .chat-code-workbench {
   border-color: rgba(84, 107, 117, 0.48);
   border-radius: 12px;
@@ -2224,6 +2229,46 @@
 
 .theme-citadel-light .approval-empty-panel .panel-body {
   gap: 10px;
+}
+
+.theme-citadel-light .approval-decision-shell {
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(24, 72, 86, 0.12);
+  background:
+    linear-gradient(180deg, rgba(242, 248, 250, 0.98), rgba(228, 239, 243, 0.96));
+}
+
+.theme-citadel-light .approval-decision-kicker,
+.theme-citadel-light .approval-consequence-title,
+.theme-citadel-light .approval-technical-details > summary {
+  color: rgba(17, 95, 117, 0.82);
+}
+
+.theme-citadel-light .approval-decision-copy h3 {
+  color: #11232b;
+}
+
+.theme-citadel-light .approval-decision-risk,
+.theme-citadel-light .approval-consequence-box p,
+.theme-citadel-light .approval-support-box p,
+.theme-citadel-light .approval-consequence-box small {
+  color: rgba(24, 54, 63, 0.82);
+}
+
+.theme-citadel-light .approval-consequence-box,
+.theme-citadel-light .approval-support-box {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(24, 72, 86, 0.1);
+  background: rgba(246, 250, 251, 0.92);
+}
+
+.theme-citadel-light .approval-action-primary {
+  border-color: rgba(14, 145, 170, 0.22);
+  background:
+    linear-gradient(180deg, rgba(213, 238, 243, 0.98), rgba(187, 223, 230, 0.96));
+  color: #143842;
 }
 
 .theme-citadel-light .task-detail-summary-panel {

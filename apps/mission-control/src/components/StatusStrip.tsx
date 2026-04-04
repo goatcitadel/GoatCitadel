@@ -90,42 +90,50 @@ export function StatusStrip({
         </button>
       ) : null}
       <div className="status-strip">
-        <StatCard
-          label="Pending approvals"
-          value={approvalsCount}
-          note={approvalsCount > 0 ? "Review queue" : "No blockers"}
-          tone={approvalsCount > 0 ? "warning" : "success"}
-          compact
-          interactive
-          onClick={onOpenApprovals}
-        />
-        <StatCard
-          label="Active agents"
-          value={activeAgentsCount}
-          note={activeAgentsCount > 0 ? "Inspect live herd" : "No active agents"}
-          tone={activeAgentsCount > 0 ? "accent" : "default"}
-          compact
-          interactive
-          onClick={onOpenAgents}
-        />
-        <StatCard
-          label="Spend today"
-          value={formatUsd(dailyCostUsd)}
-          note="Provider and runtime spend"
-          tone="default"
-          compact
-          interactive
-          onClick={onOpenCosts}
-        />
-        <StatCard
-          label="Open tasks"
-          value={openTasksCount}
-          note={openTasksCount > 0 ? "Trailboard queue" : "No open tasks"}
-          tone={openTasksCount > 0 ? "accent" : "default"}
-          compact
-          interactive
-          onClick={onOpenTasks}
-        />
+        <div className="status-strip-tier status-strip-tier-primary" aria-label="Critical operator priorities">
+          <StatCard
+            label="Pending approvals"
+            value={approvalsCount}
+            note={approvalsCount > 0 ? "Needs operator review now" : "No blockers"}
+            tone={approvalsCount > 0 ? "warning" : "success"}
+            className={`status-strip-card status-strip-card-approvals${approvalsCount > 0 ? " is-attention" : ""}`}
+            compact
+            interactive
+            onClick={onOpenApprovals}
+          />
+          <StatCard
+            label="Active agents"
+            value={activeAgentsCount}
+            note={activeAgentsCount > 0 ? "Inspect live herd" : "No active agents"}
+            tone={activeAgentsCount > 0 ? "accent" : "default"}
+            className="status-strip-card status-strip-card-agents"
+            compact
+            interactive
+            onClick={onOpenAgents}
+          />
+        </div>
+        <div className="status-strip-tier status-strip-tier-secondary" aria-label="Monitoring and background state">
+          <StatCard
+            label="Spend today"
+            value={formatUsd(dailyCostUsd)}
+            note="Provider and runtime spend"
+            tone="default"
+            className="status-strip-card status-strip-card-spend"
+            compact
+            interactive
+            onClick={onOpenCosts}
+          />
+          <StatCard
+            label="Open tasks"
+            value={openTasksCount}
+            note={openTasksCount > 0 ? "Trailboard queue" : "No open tasks"}
+            tone={openTasksCount > 0 ? "accent" : "default"}
+            className="status-strip-card status-strip-card-tasks"
+            compact
+            interactive
+            onClick={onOpenTasks}
+          />
+        </div>
       </div>
     </section>
   );

@@ -874,6 +874,76 @@
     0 22px 42px rgba(0, 0, 0, 0.32);
 }
 
+.theme-signal-noir .approval-card .panel-body {
+  gap: 16px;
+}
+
+.theme-signal-noir .approval-decision-shell {
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(92, 198, 223, 0.12);
+  background:
+    linear-gradient(180deg, rgba(11, 17, 26, 0.96), rgba(8, 12, 19, 0.98));
+}
+
+.theme-signal-noir .approval-decision-kicker,
+.theme-signal-noir .approval-consequence-title,
+.theme-signal-noir .approval-technical-details > summary {
+  color: rgba(223, 238, 249, 0.8);
+}
+
+.theme-signal-noir .approval-decision-copy h3 {
+  color: #f2f8fd;
+}
+
+.theme-signal-noir .approval-decision-risk,
+.theme-signal-noir .approval-consequence-box p,
+.theme-signal-noir .approval-support-box p,
+.theme-signal-noir .approval-consequence-box small {
+  color: rgba(190, 204, 218, 0.84);
+}
+
+.theme-signal-noir .approval-consequence-box,
+.theme-signal-noir .approval-support-box {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(92, 198, 223, 0.1);
+  background: rgba(8, 12, 19, 0.76);
+}
+
+.theme-signal-noir .approval-card-danger .approval-decision-shell,
+.theme-signal-noir .approval-card-nuclear .approval-decision-shell {
+  border-color: rgba(255, 154, 69, 0.18);
+}
+
+.theme-signal-noir .approval-card-nuclear .approval-decision-shell {
+  border-color: rgba(255, 86, 120, 0.22);
+}
+
+.theme-signal-noir .approval-action-primary {
+  border-color: rgba(92, 198, 223, 0.24);
+  background:
+    linear-gradient(180deg, rgba(15, 38, 47, 0.98), rgba(8, 20, 27, 1));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 0 0 1px rgba(84, 221, 255, 0.08);
+}
+
+.theme-signal-noir .approval-action-secondary {
+  box-shadow: none;
+}
+
+.theme-signal-noir .approval-evidence-label {
+  margin: 0;
+  color: rgba(223, 238, 249, 0.74);
+}
+
+.theme-signal-noir .chat-v11.mode-cowork .chat-cowork-stage-card {
+  border-color: rgba(255, 154, 69, 0.16);
+  background:
+    linear-gradient(180deg, rgba(22, 19, 16, 0.92), rgba(12, 12, 12, 0.96));
+}
+
 @media (max-width: 1540px) {
   .theme-signal-noir .shell-topbar {
     grid-template-columns: minmax(0, 1fr);

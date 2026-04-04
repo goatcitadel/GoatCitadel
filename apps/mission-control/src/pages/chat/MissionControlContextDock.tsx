@@ -22,6 +22,7 @@ export function MissionControlContextDock({
         <div>
           <p className="mission-context-dock-kicker">{config.dockTitle}</p>
           <h3>{config.stageTitle}</h3>
+          <p className="mission-context-dock-posture">{config.stageSummary}</p>
           <p>{config.dockSummary}</p>
         </div>
       </div>

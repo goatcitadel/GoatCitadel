@@ -106,10 +106,10 @@ export function resolveMissionControlDockSectionOrder(input: {
   codeModeNeedsProjectBinding: boolean;
 }): MissionControlDockSectionId[] {
   const baseOrder: MissionControlDockSectionId[] = input.mode === "chat"
-    ? ["surface", "trace", "suggestions", "memory", "session"]
+    ? ["surface", "trace", "memory", "session", "suggestions"]
     : input.mode === "cowork"
-      ? ["workflow", "surface", "suggestions", "trace", "memory", "session"]
-      : ["workflow", "surface", "trace", "session"];
+      ? ["workflow", "suggestions", "trace", "surface", "memory", "session"]
+      : ["workflow", "surface", "session", "trace"];
 
   const sections = [...baseOrder];
   if (input.hasExternalBindingSection) {

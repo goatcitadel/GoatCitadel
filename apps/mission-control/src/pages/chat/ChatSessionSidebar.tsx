@@ -62,14 +62,25 @@ export function ChatSessionSidebar(props: {
     renderSessionLabel,
   } = props;
   const surfaceConfig = getMissionControlSurfaceConfig(mode);
+  const railHint = mode === "chat"
+    ? "Keep the rail quiet: jump between conversations fast, but let the active thread do most of the work."
+    : mode === "cowork"
+      ? "Use the rail like an operations queue: move between live runs, orchestration threads, and the next workflow to steer."
+      : "Use the rail like an implementation queue: keep project-bound sessions tight and jump straight into the active code thread.";
+  const projectHint = mode === "chat"
+    ? "Projects are optional here. Stay lightweight unless the conversation needs a more durable workspace."
+    : mode === "cowork"
+      ? "Projects help keep orchestration work grouped by objective, but you can still steer ad hoc runs from the queue."
+      : "Projects matter more in Code because binding execution to a workspace improves precision and artifact handling.";
 
   return (
-    <aside className="panel panel-soft panel-pad-default chat-v11-left">
+    <aside className={`panel panel-soft panel-pad-default chat-v11-left mode-${mode}`}>
       <div className="chat-v11-workspace-summary">
         <div className="chat-v11-workspace-copy">
           <p className="chat-v11-workspace-kicker">{surfaceConfig.shellEyebrow}</p>
           <h3>{summaryTitle}</h3>
           <p className="chat-v11-muted">{summaryCopy}</p>
+          <p className="chat-v11-rail-posture">{railHint}</p>
         </div>
         <div className="chat-v11-summary-grid">
           {workspaceSummaryCards.map((item) => (
@@ -100,7 +111,7 @@ export function ChatSessionSidebar(props: {
         </div>
         <input value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="Find a chat..." />
       </div>
-      <FieldHelp>Mission chats stay local. External chats can write back only when a binding is configured.</FieldHelp>
+      <FieldHelp>{mode === "code" ? "Code sessions stay local-first and become safer once a project binding is in place. External chats can write back only when a binding is configured." : "Mission chats stay local. External chats can write back only when a binding is configured."}</FieldHelp>
       <div className="chat-v11-filter-row">
         <button type="button" className={historyView === "active" ? "active" : ""} onClick={() => onHistoryViewChange("active")}>Active</button>
         <button type="button" className={historyView === "archived" ? "active" : ""} onClick={() => onHistoryViewChange("archived")}>Archived</button>
@@ -115,9 +126,7 @@ export function ChatSessionSidebar(props: {
         <div className="chat-v11-project-create">
           <input value={projectName} onChange={(event) => onProjectNameChange(event.target.value)} placeholder="New project name" />
           <input value={projectPath} onChange={(event) => onProjectPathChange(event.target.value)} placeholder="Project path (optional)" />
-          <p className="chat-v11-muted">
-            Project creation is optional. Stay in <strong>Chat</strong> for quick work, or use <strong>Code</strong> when you are ready to bind implementation to a project.
-          </p>
+          <p className="chat-v11-muted">{projectHint}</p>
           <button type="button" onClick={onCreateProject}>Create project</button>
         </div>
       ) : null}

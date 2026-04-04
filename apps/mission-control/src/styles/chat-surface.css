@@ -9,6 +9,18 @@
   border-radius: 18px;
 }
 
+.chat-v11-left.mode-chat {
+  --surface-rail-accent: rgba(84, 221, 255, 0.12);
+}
+
+.chat-v11-left.mode-cowork {
+  --surface-rail-accent: rgba(255, 154, 69, 0.12);
+}
+
+.chat-v11-left.mode-code {
+  --surface-rail-accent: rgba(151, 224, 234, 0.12);
+}
+
 .chat-v11-workspace-summary {
   display: grid;
   gap: 12px;
@@ -47,6 +59,13 @@
   display: grid;
   gap: 6px;
   min-width: 0;
+}
+
+.mission-surface-header-posture,
+.mission-context-dock-posture {
+  font-size: 0.83rem;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
 }
 
 .mission-surface-header-copy h2,
@@ -95,6 +114,46 @@
   gap: 12px;
   padding: 8px;
   border-radius: 20px;
+}
+
+.chat-v11.mode-chat .chat-v11-shell {
+  gap: 16px;
+}
+
+.chat-v11.mode-chat .chat-v11-left {
+  opacity: 0.9;
+}
+
+.chat-v11.mode-chat .chat-v11-thread {
+  padding: 12px;
+}
+
+.chat-v11.mode-chat .chat-v11-thread-shell {
+  gap: 12px;
+}
+
+.chat-v11.mode-chat .chat-v11-composer {
+  padding: 14px;
+}
+
+.chat-v11.mode-cowork .chat-v11-thread {
+  padding: 9px;
+}
+
+.chat-v11.mode-code .chat-v11-thread {
+  padding: 6px;
+}
+
+.chat-v11.mode-code .chat-v11-thread-shell {
+  gap: 8px;
+}
+
+.chat-v11.mode-code .chat-v11-composer {
+  padding: 10px;
+}
+
+.chat-v11.mode-code .chat-v11-composer textarea {
+  min-height: 104px;
 }
 
 .chat-v11-thread-shell {
@@ -206,6 +265,21 @@
   min-height: 0;
 }
 
+.mission-surface-header.mode-chat,
+.mission-context-dock.mode-chat {
+  --surface-posture-accent: rgba(84, 221, 255, 0.14);
+}
+
+.mission-surface-header.mode-cowork,
+.mission-context-dock.mode-cowork {
+  --surface-posture-accent: rgba(255, 154, 69, 0.14);
+}
+
+.mission-surface-header.mode-code,
+.mission-context-dock.mode-code {
+  --surface-posture-accent: rgba(151, 224, 234, 0.14);
+}
+
 .mission-dock-panel {
   min-height: 0;
 }
@@ -269,10 +343,77 @@
 .theme-signal-noir .chat-v11-left,
 .theme-signal-noir .chat-v11-thread {
   background:
-    linear-gradient(180deg, rgba(13, 21, 33, 0.92), rgba(10, 17, 28, 0.9)),
+    linear-gradient(180deg, color-mix(in srgb, rgba(13, 21, 33, 0.92) 90%, var(--surface-posture-accent, transparent) 10%), rgba(10, 17, 28, 0.9)),
     radial-gradient(circle at top, rgba(95, 240, 255, 0.08), transparent 45%);
   border: 1px solid rgba(125, 238, 255, 0.14);
   box-shadow: 0 24px 60px rgba(2, 8, 18, 0.38);
+}
+
+.theme-signal-noir .mission-surface-header-posture,
+.theme-signal-noir .mission-context-dock-posture {
+  color: rgba(223, 237, 248, 0.86);
+}
+
+.theme-signal-noir .mission-context-dock.mode-cowork,
+.theme-signal-noir .mission-surface-header.mode-cowork {
+  border-color: rgba(255, 154, 69, 0.18);
+}
+
+.theme-signal-noir .mission-context-dock.mode-code,
+.theme-signal-noir .mission-surface-header.mode-code {
+  border-color: rgba(151, 224, 234, 0.18);
+}
+
+.theme-signal-noir .chat-v11.mode-chat .chat-v11-left {
+  border-color: rgba(92, 198, 223, 0.1);
+  background:
+    linear-gradient(180deg, rgba(11, 17, 26, 0.92), rgba(8, 13, 21, 0.9)),
+    radial-gradient(circle at top, rgba(95, 240, 255, 0.04), transparent 40%);
+}
+
+.theme-signal-noir .chat-v11-left {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, rgba(12, 18, 28, 0.96) 90%, var(--surface-rail-accent, transparent) 10%), rgba(8, 13, 21, 0.9)),
+    radial-gradient(circle at top left, var(--surface-rail-accent, rgba(95, 240, 255, 0.04)), transparent 42%);
+}
+
+.theme-signal-noir .chat-v11-rail-posture {
+  color: rgba(209, 224, 237, 0.82);
+}
+
+.theme-signal-noir .chat-v11-left.mode-cowork .chat-v11-summary-card,
+.theme-signal-noir .chat-v11-left.mode-cowork .chat-v11-session-row {
+  border-color: rgba(255, 154, 69, 0.14);
+}
+
+.theme-signal-noir .chat-v11-left.mode-code .chat-v11-summary-card,
+.theme-signal-noir .chat-v11-left.mode-code .chat-v11-session-row {
+  border-color: rgba(151, 224, 234, 0.14);
+}
+
+.theme-signal-noir .chat-v11.mode-chat .chat-v11-thread,
+.theme-signal-noir .chat-v11.mode-chat .chat-v11-composer {
+  border-color: rgba(125, 238, 255, 0.18);
+  box-shadow: 0 26px 60px rgba(2, 8, 18, 0.4);
+}
+
+.theme-signal-noir .chat-v11.mode-cowork .mission-context-dock-body > .mission-dock-section:first-child .panel,
+.theme-signal-noir .chat-v11.mode-code .mission-context-dock-body > .mission-dock-section:first-child .panel {
+  border-color: rgba(125, 238, 255, 0.22);
+}
+
+.theme-citadel-light .mission-surface-header-posture,
+.theme-citadel-light .mission-context-dock-posture {
+  color: rgba(19, 58, 68, 0.74);
+}
+
+.theme-citadel-light .chat-v11-left {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, rgba(136, 156, 165, 0.99) 92%, var(--surface-rail-accent, transparent) 8%), rgba(118, 139, 148, 0.99));
+}
+
+.theme-citadel-light .chat-v11-rail-posture {
+  color: rgba(24, 54, 63, 0.74);
 }
 
 .theme-signal-noir .mission-surface-dock-toggle,

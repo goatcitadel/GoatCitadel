@@ -16,8 +16,8 @@ export interface MissionControlSurfaceConfig {
 const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | "label">> = {
   chat: {
     shellEyebrow: "Conversation lane",
-    stageTitle: "Clear, calm chat for real work",
-    stageSummary: "Stay focused on the thread. Reach for context only when it helps.",
+    stageTitle: "Conversation stays primary",
+    stageSummary: "Read the thread, answer quickly, and only surface extra context when it changes the next move.",
     emptyTitle: "Start with the thing you actually need",
     emptyBody: "Chat is the lightest Mission Control surface: fast questions, drafting, synthesis, and follow-ups without orchestration overload.",
     emptyPrompts: [
@@ -26,12 +26,12 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
       "Help me think through tradeoffs",
     ],
     dockTitle: "Chat context",
-    dockSummary: "Trace, memory, and controls stay nearby without crowding the thread.",
+    dockSummary: "Trace, memory, and controls stay nearby as supporting context instead of competing with the conversation.",
   },
   cowork: {
     shellEyebrow: "Workflow lane",
-    stageTitle: "Guide the work, not just the words",
-    stageSummary: "Cowork keeps the conversation grounded in tasks, progress, and next actions.",
+    stageTitle: "Orchestration leads the surface",
+    stageSummary: "Cowork should read like active coordination: what is running, what is blocked, and what the operator should steer next.",
     emptyTitle: "Frame the work and move it forward",
     emptyBody: "Cowork is for multi-step runs, orchestration, research, and active collaboration with visible state instead of vague progress.",
     emptyPrompts: [
@@ -40,12 +40,12 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
       "Coordinate next steps across roles",
     ],
     dockTitle: "Cowork context",
-    dockSummary: "Active tasks, orchestration state, and approvals live here so the main thread stays readable.",
+    dockSummary: "Workflow state, delegation opportunities, and approvals lead here so the thread stays readable while the system stays transparent.",
   },
   code: {
     shellEyebrow: "Implementation lane",
-    stageTitle: "Build with a steadier operator surface",
-    stageSummary: "Code mode keeps project context, heavier prompts, and execution posture visible without turning into an IDE clone.",
+    stageTitle: "Execution posture stays exact",
+    stageSummary: "Code should feel denser and more deliberate, with project binding, artifact handling, and review posture kept close at hand.",
     emptyTitle: "Anchor the implementation before you execute",
     emptyBody: "Code is for serious implementation help: long prompts, code-heavy output, planning, review, and project-aware execution.",
     emptyPrompts: [
@@ -54,7 +54,7 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
       "Plan the refactor before touching files",
     ],
     dockTitle: "Code context",
-    dockSummary: "Project binding, execution posture, and workbench details stay visible while the transcript remains primary.",
+    dockSummary: "Workbench state, project binding, and execution controls stay visible so implementation decisions are precise instead of conversational.",
   },
 };
 
