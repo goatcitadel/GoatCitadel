@@ -68,19 +68,19 @@ function Preserve-ManagedConfigForUpdate {
   }
 
   $unexpected = @($dirtyTrackedPaths | Where-Object { -not $managedSet.Contains($_) })
-  if ($unexpected.Count -gt 0) {
-    throw "Update blocked because the installed checkout has non-config tracked changes: $($unexpected -join ', ')"
-  }
-
   $existingConfigPaths = @($ManagedPaths | Where-Object { Test-Path (Join-Path $RepositoryPath $_) })
-  if ($existingConfigPaths.Count -eq 0) {
+  if ($existingConfigPaths.Count -eq 0 -and $unexpected.Count -eq 0) {
     return $null
   }
 
   $backupRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("goatcitadel-update-" + [guid]::NewGuid())
   New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
-  foreach ($relativePath in $existingConfigPaths) {
+  $pathsToArchive = @($existingConfigPaths + $unexpected | Select-Object -Unique)
+  foreach ($relativePath in $pathsToArchive) {
     $sourcePath = Join-Path $RepositoryPath $relativePath
+    if (-not (Test-Path $sourcePath)) {
+      continue
+    }
     $backupPath = Join-Path $backupRoot $relativePath
     $backupDir = Split-Path -Parent $backupPath
     if (-not [string]::IsNullOrWhiteSpace($backupDir)) {
@@ -95,6 +95,7 @@ function Preserve-ManagedConfigForUpdate {
   return [pscustomobject]@{
     BackupRoot = $backupRoot
     Paths = $existingConfigPaths
+    ArchivedPaths = $unexpected
   }
 }
 
@@ -172,6 +173,9 @@ if (Test-Path (Join-Path $AppDir ".git")) {
   $preservedManagedConfig = Preserve-ManagedConfigForUpdate -RepositoryPath $AppDir -ManagedPaths $ManagedLocalConfigPaths
   Invoke-NativeOrThrow -FilePath "git" -Arguments @("-C", $AppDir, "pull", "--ff-only") -FailureMessage "Failed to fast-forward GoatCitadel install"
   Restore-PreservedManagedConfig -RepositoryPath $AppDir -PreservedState $preservedManagedConfig
+  if ($null -ne $preservedManagedConfig -and $preservedManagedConfig.ArchivedPaths.Count -gt 0) {
+    Write-Warning "Archived local tracked changes before update to $($preservedManagedConfig.BackupRoot). Archived paths: $($preservedManagedConfig.ArchivedPaths -join ', ')"
+  }
 } else {
   if (Test-Path $AppDir) {
     Write-Host "Removing non-git directory at $AppDir..."
