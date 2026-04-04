@@ -23,6 +23,11 @@
   --text-primary: var(--gc-text-primary, var(--text));
   --text-secondary: var(--gc-text-secondary, var(--gc-text-muted, var(--muted)));
   --density-scale: 1;
+
+  /* Page-level spacing rhythm */
+  --page-gap-tight: 14px;
+  --page-gap-default: 20px;
+  --page-gap-loose: 28px;
 }
 
 [data-density="compact"] {

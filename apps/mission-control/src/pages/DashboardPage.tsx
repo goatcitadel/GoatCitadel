@@ -187,16 +187,13 @@ export function DashboardPage({
 
   return (
     <section className="dashboard-page">
-      <section className="dashboard-hero" aria-label="Summit overview hero">
+      {/* ── Tier 0: Compact hero — orient, not dominate ── */}
+      <section className="dashboard-hero dashboard-hero-compact" aria-label="Mission Control overview">
         <div className="dashboard-hero-copy">
           <div className="dashboard-hero-heading">
             <p className="dashboard-hero-kicker">{pageCopy.dashboard.title}</p>
-            <h1>Mission Control for the work that needs attention now.</h1>
+            <h1>What needs attention now</h1>
           </div>
-          <p className="dashboard-hero-summary">
-            See operator workload, system health, and human decisions at a glance. Start here, then move into the
-            next workflow without wading through dashboard noise.
-          </p>
           <DataToolbar
             className="dashboard-hero-actions"
             primary={
@@ -215,39 +212,16 @@ export function DashboardPage({
 
       {error ? <p className="error">{error}</p> : null}
 
-      <div className="dashboard-kpi-grid dashboard-kpi-grid-summit">
-        <StatCard
-          label="Pending approvals"
-          value={state.pendingApprovals}
-          note="Risky actions waiting for your decision."
-          tone={state.pendingApprovals > 0 ? "warning" : "default"}
-        />
-        <StatCard
-          label="Active sub-agents"
-          value={state.activeSubagents}
-          note="Sessions currently doing task work."
-          tone={state.activeSubagents > 0 ? "accent" : "default"}
-        />
-        <StatCard
-          label="Daily cost"
-          value={`$${state.dailyCostUsd.toFixed(4)}`}
-          note="Today across the current node."
-        />
-        <StatCard
-          label="Tracked sessions"
-          value={state.sessions.length}
-          note="Total sessions visible to this node."
-        />
-      </div>
-
-      <div className="dashboard-main-grid">
+      {/* ── Tier 1: Critical / active — highest contrast, tightest spacing ── */}
+      <div className="dashboard-tier dashboard-tier-1">
         <Panel
           title="Needs attention"
-          subtitle="The few items worth reviewing before you dive deeper."
+          subtitle={urgentItems.length > 0 ? `${urgentItems.length} items require operator action` : undefined}
           className="dashboard-urgent-panel"
+          tone={urgentItems.length > 0 ? "warning" : "default"}
         >
           {urgentItems.length === 0 ? (
-            <FieldHelp>No urgent blockers detected. Use quick actions to move into the next workflow.</FieldHelp>
+            <FieldHelp>No urgent blockers detected. All clear.</FieldHelp>
           ) : (
             <ul className="dashboard-priority-list">
               {urgentItems.map((item) => (
@@ -262,9 +236,84 @@ export function DashboardPage({
             </ul>
           )}
         </Panel>
+
+        <div className="dashboard-kpi-grid dashboard-kpi-grid-summit">
+          <StatCard
+            label="Pending approvals"
+            value={state.pendingApprovals}
+            note="Awaiting your decision"
+            tone={state.pendingApprovals > 0 ? "warning" : "default"}
+            interactive
+            onClick={() => onNavigate?.("approvals")}
+          />
+          <StatCard
+            label="Active sub-agents"
+            value={state.activeSubagents}
+            note="In-flight task work"
+            tone={state.activeSubagents > 0 ? "accent" : "default"}
+            interactive
+            onClick={() => onNavigate?.("sessions")}
+          />
+          <StatCard
+            label="Daily cost"
+            value={`$${state.dailyCostUsd.toFixed(4)}`}
+            note="Current node today"
+          />
+          <StatCard
+            label="Tracked sessions"
+            value={state.sessions.length}
+            note="Visible to this node"
+          />
+        </div>
+      </div>
+
+      {/* ── Tier 2: Monitoring — moderate contrast ── */}
+      <div className="dashboard-tier dashboard-tier-2">
+        <div className="dashboard-main-grid">
+          <Panel
+            title="System vitals"
+            subtitle={`${vitals.hostname} · ${vitals.platform} ${vitals.release}`}
+          >
+            <div className="dashboard-vitals-grid">
+              <div>
+                <p className="dashboard-vitals-label">CPU cores</p>
+                <p className="dashboard-vitals-value">{vitals.cpuCount}</p>
+              </div>
+              <div>
+                <p className="dashboard-vitals-label">Memory used</p>
+                <p className="dashboard-vitals-value">{formatBytes(vitals.memoryUsedBytes)}</p>
+                <FieldHelp>{formatBytes(vitals.memoryTotalBytes)} total</FieldHelp>
+              </div>
+              <div>
+                <p className="dashboard-vitals-label">Process RSS</p>
+                <p className="dashboard-vitals-value">{formatBytes(vitals.processRssBytes)}</p>
+              </div>
+              <div>
+                <p className="dashboard-vitals-label">Memory artifacts</p>
+                <p className="dashboard-vitals-value">{memoryArtifactCount}</p>
+              </div>
+            </div>
+          </Panel>
+          <Panel title="Task load" subtitle="Pressure by status bucket">
+            <table className="dashboard-data-table">
+              <thead>
+                <tr><th>Status</th><th>Count</th></tr>
+              </thead>
+              <tbody>
+                {state.taskStatusCounts.map((row) => (
+                  <tr key={row.status}>
+                    <td>{row.status}</td>
+                    <td className="dashboard-data-table-number">{row.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Panel>
+        </div>
+
         <Panel
           title="Quick actions"
-          subtitle="High-signal entry points for the next operator loop."
+          subtitle="Entry points for the next operator loop"
           className="dashboard-quick-actions-panel"
         >
           <div className="dashboard-action-grid">
@@ -278,80 +327,50 @@ export function DashboardPage({
         </Panel>
       </div>
 
-      <div className="dashboard-secondary-grid">
-        <Panel
-          title="System vitals"
-          subtitle={`${vitals.hostname} · ${vitals.platform} ${vitals.release}`}
-        >
-          <div className="dashboard-vitals-grid">
-            <div>
-              <p className="dashboard-vitals-label">CPU cores</p>
-              <p className="dashboard-vitals-value">{vitals.cpuCount}</p>
-            </div>
-            <div>
-              <p className="dashboard-vitals-label">Memory used</p>
-              <p className="dashboard-vitals-value">{formatBytes(vitals.memoryUsedBytes)}</p>
-              <FieldHelp>{formatBytes(vitals.memoryTotalBytes)} total memory available.</FieldHelp>
-            </div>
-            <div>
-              <p className="dashboard-vitals-label">Process RSS</p>
-              <p className="dashboard-vitals-value">{formatBytes(vitals.processRssBytes)}</p>
-            </div>
-            <div>
-              <p className="dashboard-vitals-label">Memory artifacts</p>
-              <p className="dashboard-vitals-value">{memoryArtifactCount}</p>
-              <FieldHelp>Recent workspace memory files visible to this node.</FieldHelp>
-            </div>
-          </div>
-        </Panel>
-        <Panel title="Task load" subtitle="Current task pressure by status bucket.">
-          <ul className="compact-list">
-            {state.taskStatusCounts.map((row) => (
-              <li key={row.status}>{row.status}: {row.count}</li>
-            ))}
-          </ul>
-        </Panel>
-        <Panel title="Scheduler" subtitle="Routine automation posture and whether jobs are healthy.">
-          <ul className="compact-list">
-            {cron.items.map((job) => (
-              <li key={job.jobId}>
-                <strong>{job.name}</strong> ({job.schedule}) - {job.enabled ? "enabled" : "disabled"}
-              </li>
-            ))}
-          </ul>
-        </Panel>
-      </div>
-
-      <div className="dashboard-secondary-grid">
-        <Panel title="Operators" subtitle={`${activeOperatorSessions} active sessions are currently in motion.`}>
-          <ul className="compact-list">
-            {operators.items.map((operator) => (
-              <li key={operator.operatorId}>
-                <strong>{operator.operatorId}</strong> - sessions {operator.sessionCount}, active {operator.activeSessions}
-              </li>
-            ))}
-          </ul>
-        </Panel>
-        <Panel
-          title="Operational summary"
-          subtitle="A short human-readable view of the current machine state."
-          className="dashboard-command-notes"
-        >
-          <div className="dashboard-command-note-list">
-            <p>
-              <strong>{state.pendingApprovals}</strong> approvals need operator judgment before risky work can continue.
-            </p>
-            <p>
-              <strong>{schedulerDisabledCount}</strong> Bell Tower jobs are currently disabled.
-            </p>
-            <p>
-              <strong>{formatBytes(vitals.processRssBytes)}</strong> of resident memory is tied up in the active gateway process.
-            </p>
-            <p>
-              <strong>{memoryArtifactCount}</strong> recent memory artifacts are visible for context recovery and replay.
-            </p>
-          </div>
-        </Panel>
+      {/* ── Tier 3: Background — quieter, compressed ── */}
+      <div className="dashboard-tier dashboard-tier-3">
+        <div className="dashboard-secondary-grid">
+          <Panel title="Scheduler" subtitle="Automation jobs">
+            {cron.items.length === 0 ? (
+              <FieldHelp>No scheduler jobs configured.</FieldHelp>
+            ) : (
+              <table className="dashboard-data-table">
+                <thead>
+                  <tr><th>Job</th><th>Schedule</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                  {cron.items.map((job) => (
+                    <tr key={job.jobId}>
+                      <td>{job.name}</td>
+                      <td className="dashboard-data-table-mono">{job.schedule}</td>
+                      <td><StatusChip tone={job.enabled ? "success" : "muted"}>{job.enabled ? "Enabled" : "Disabled"}</StatusChip></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Panel>
+          <Panel title="Operators" subtitle={`${activeOperatorSessions} active`}>
+            {operators.items.length === 0 ? (
+              <FieldHelp>No operators registered.</FieldHelp>
+            ) : (
+              <table className="dashboard-data-table">
+                <thead>
+                  <tr><th>Operator</th><th>Sessions</th><th>Active</th></tr>
+                </thead>
+                <tbody>
+                  {operators.items.map((operator) => (
+                    <tr key={operator.operatorId}>
+                      <td className="dashboard-data-table-mono">{operator.operatorId}</td>
+                      <td className="dashboard-data-table-number">{operator.sessionCount}</td>
+                      <td className="dashboard-data-table-number">{operator.activeSessions}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Panel>
+        </div>
       </div>
 
       <PageGuideCard

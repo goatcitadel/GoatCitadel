@@ -60,18 +60,28 @@ export function InlineApprovalPrompt({
 
   const actionsDisabled = pending || expiryState.expired;
 
+  const isUrgent = expiryState.expired === false && expiresAt != null;
+  const remainingMs = expiresAt ? Date.parse(expiresAt) - now : Infinity;
+  const isLowTime = remainingMs > 0 && remainingMs < 120_000;
+
   return (
-    <div className={`chat-approval-card${expiryState.expired ? " is-expired" : ""}`}>
-      <p className="chat-approval-title">Approval required</p>
-      <p className="chat-approval-body">
-        {toolName ? `Tool: ${toolName}` : "A tool action"} needs approval. {reason ?? "Review and decide."}
-      </p>
-      {expiryState.label ? <p className={`chat-approval-status${expiryState.expired ? " is-expired" : ""}`}>{expiryState.label}</p> : null}
-      <p className="chat-approval-id">Approval ID: {approvalId}</p>
-      <div className="chat-approval-actions">
-        <button type="button" disabled={actionsDisabled} onClick={onApprove}>Allow once</button>
-        <button type="button" className="danger" disabled={actionsDisabled} onClick={onDeny}>Deny</button>
+    <div className={`chat-approval-card${expiryState.expired ? " is-expired" : ""}${isLowTime ? " is-low-time" : ""}`} role="alert">
+      <div className="chat-approval-header">
+        <p className="chat-approval-title">Approval required</p>
+        {isUrgent && !expiryState.expired ? (
+          <span className={`chat-approval-countdown${isLowTime ? " is-low-time" : ""}`}>{expiryState.label}</span>
+        ) : null}
+        {expiryState.expired ? (
+          <span className="chat-approval-countdown is-expired">{expiryState.label}</span>
+        ) : null}
       </div>
+      {toolName ? <p className="chat-approval-tool">{toolName}</p> : null}
+      {reason ? <p className="chat-approval-reason">{reason}</p> : null}
+      <div className="chat-approval-actions">
+        <button type="button" className="chat-approval-allow" disabled={actionsDisabled} onClick={onApprove}>Allow once</button>
+        <button type="button" className="chat-approval-deny" disabled={actionsDisabled} onClick={onDeny}>Deny</button>
+      </div>
+      <p className="chat-approval-id">{approvalId}</p>
     </div>
   );
 }

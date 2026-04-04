@@ -1006,6 +1006,41 @@
   min-height: 100%;
 }
 
+.theme-citadel-light .dashboard-data-table thead th {
+  color: rgba(34, 67, 77, 0.62);
+  border-bottom-color: rgba(21, 72, 87, 0.12);
+}
+
+.theme-citadel-light .dashboard-data-table tbody td {
+  color: rgba(19, 58, 68, 0.88);
+  border-bottom-color: rgba(21, 72, 87, 0.06);
+}
+
+.theme-citadel-light .chat-approval-card {
+  border-color: rgba(200, 140, 50, 0.36);
+  border-left-color: rgba(200, 120, 30, 0.62);
+  background:
+    linear-gradient(135deg, rgba(255, 180, 80, 0.08), transparent 60%),
+    rgba(248, 250, 252, 0.98);
+  box-shadow: 0 2px 12px rgba(200, 140, 50, 0.08);
+}
+
+.theme-citadel-light .chat-approval-title {
+  color: rgba(180, 100, 20, 0.92);
+}
+
+.theme-citadel-light .chat-approval-allow {
+  background: rgba(21, 72, 87, 0.1);
+  border-color: rgba(21, 72, 87, 0.32);
+  color: rgba(19, 58, 68, 0.92);
+}
+
+.theme-citadel-light .chat-approval-deny {
+  background: transparent;
+  border-color: rgba(21, 72, 87, 0.16);
+  color: rgba(34, 67, 77, 0.68);
+}
+
 .theme-citadel-light .workflow-page > .data-toolbar,
 .theme-citadel-light .dashboard-hero .data-toolbar {
   padding: var(--mc-toolbar-pad);

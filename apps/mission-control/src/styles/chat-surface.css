@@ -154,6 +154,48 @@
 
 .chat-v11.mode-code .chat-v11-composer textarea {
   min-height: 104px;
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 0.88rem;
+  letter-spacing: -0.01em;
+}
+
+/* ── Surface identity: Chat — conversational, breathing room ── */
+
+.chat-v11.mode-chat .chat-v11-thread {
+  border-radius: 22px;
+}
+
+.chat-v11.mode-chat .chat-v11-turn-card {
+  border-radius: 18px;
+}
+
+/* ── Surface identity: Cowork — orchestration, multi-lane ── */
+
+.chat-v11.mode-cowork .chat-v11-thread {
+  border-radius: 16px;
+}
+
+.chat-v11.mode-cowork .chat-v11-thread-shell {
+  gap: 9px;
+}
+
+.chat-v11.mode-cowork .chat-v11-composer {
+  padding: 11px;
+  border-radius: 14px;
+}
+
+/* ── Surface identity: Code — precision, rectilinear ── */
+
+.chat-v11.mode-code .chat-v11-thread {
+  border-radius: 12px;
+}
+
+.chat-v11.mode-code .chat-v11-turn-card {
+  border-radius: 10px;
+}
+
+.chat-v11.mode-code .chat-v11-composer {
+  border-radius: 10px;
 }
 
 .chat-v11-thread-shell {
@@ -285,10 +327,44 @@
 }
 
 .chat-cowork-panel,
-.chat-code-workbench,
 .chat-v11-inspector-lane {
   border-radius: 18px;
   padding: 12px;
+}
+
+.chat-code-workbench {
+  border-radius: 12px;
+  padding: 10px;
+}
+
+/* Cowork dock: reinforce orchestration timeline feel */
+.chat-v11.mode-cowork .mission-context-dock {
+  gap: 8px;
+}
+
+.chat-v11.mode-cowork .mission-dock-section {
+  gap: 8px;
+}
+
+/* Cowork orchestration step items — subtle timeline border */
+.chat-v11.mode-cowork .chat-cowork-orchestration-steps li {
+  border-left: 2px solid rgba(255, 154, 69, 0.24);
+  padding-left: 10px;
+  border-radius: 6px;
+}
+
+/* Code dock: tighter alignment, monospace presence */
+.chat-v11.mode-code .mission-context-dock {
+  gap: 8px;
+}
+
+.chat-v11.mode-code .mission-dock-section {
+  gap: 6px;
+}
+
+.chat-v11.mode-code .chat-code-workbench {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 0.86rem;
 }
 
 .mission-empty-shell {

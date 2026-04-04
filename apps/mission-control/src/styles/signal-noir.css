@@ -550,6 +550,20 @@
     0 18px 38px rgba(0, 0, 0, 0.26);
 }
 
+.theme-signal-noir .dashboard-data-table thead th {
+  color: var(--gc-text-muted);
+  border-bottom-color: rgba(92, 198, 223, 0.12);
+}
+
+.theme-signal-noir .dashboard-data-table tbody td {
+  color: var(--gc-text-secondary);
+  border-bottom-color: rgba(92, 198, 223, 0.06);
+}
+
+.theme-signal-noir .dashboard-tier-3 {
+  opacity: 0.92;
+}
+
 .theme-signal-noir .panel-critical {
   border-color: rgba(255, 86, 120, 0.3);
   box-shadow:

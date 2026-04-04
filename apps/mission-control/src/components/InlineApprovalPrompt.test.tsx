@@ -27,14 +27,16 @@ describe("InlineApprovalPrompt", () => {
         );
       });
 
-      expect(renderer.root.findAllByProps({ className: "chat-approval-status" })[0]?.children.join("")).toContain("Expires in 0m 05s");
+      const countdownBefore = renderer.root.findAll((node) =>
+        typeof node.props.className === "string" && node.props.className.includes("chat-approval-countdown"));
+      expect(countdownBefore[0]?.children.join("")).toContain("Expires in 0m 05s");
 
       await act(async () => {
         vi.advanceTimersByTime(6_000);
       });
 
       const expiredLabel = renderer.root.findAll((node) =>
-        typeof node.props.className === "string" && node.props.className.includes("chat-approval-status is-expired"));
+        typeof node.props.className === "string" && node.props.className.includes("chat-approval-countdown") && node.props.className.includes("is-expired"));
       expect(expiredLabel[0]?.children.join("")).toContain("Approval expired, rerun the action.");
       const buttons = renderer.root.findAllByType("button");
       expect(buttons.every((button) => button.props.disabled === true)).toBe(true);
