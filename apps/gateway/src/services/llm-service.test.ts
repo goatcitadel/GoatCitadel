@@ -1,5 +1,9 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { LlmConfigFile } from "@goatcitadel/contracts";
+import { Agent, ProxyAgent } from "undici";
 import { LlmService } from "./llm-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
 
@@ -1928,6 +1932,302 @@ describe("LlmService", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("normalizes legacy headers into canonical request headers on export", () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+          headers: { "X-Legacy": "1" },
+          request: {
+            headers: { "X-Canonical": "1" },
+          },
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const exported = service.exportConfigFile();
+
+    expect(exported.providers[0]?.request?.headers).toEqual({
+      "X-Legacy": "1",
+      "X-Canonical": "1",
+    });
+    expect(exported.providers[0]?.headers).toBeUndefined();
+  });
+
+  it("keeps vendor-compatible providers on chat completions even when configured as openai-responses", () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "moonshot",
+      providers: [
+        {
+          providerId: "moonshot",
+          label: "Moonshot",
+          baseUrl: "https://api.moonshot.ai/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "kimi-k2-0905-preview",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    expect(service.resolveExecutionApiStyle("moonshot", "kimi-k2-0905-preview")).toBe("openai-chat-completions");
+  });
+
+  it("posts JSON image generations to the OpenAI generations endpoint", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    let payloadBody: Record<string, unknown> | undefined;
+    globalThis.fetch = vi.fn(async (input, init) => {
+      requestedUrl = String(input);
+      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      return new Response(
+        JSON.stringify({
+          created: 123,
+          data: [{ b64_json: "image-bytes" }],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const response = await service.generateImage({
+        providerId: "openai",
+        prompt: "Generate a goat citadel poster",
+        size: "1024x1024",
+      });
+      expect(response.operation).toBe("generate");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(requestedUrl).toBe("https://api.openai.com/v1/images/generations");
+    expect(payloadBody).toMatchObject({
+      model: "gpt-image-1",
+      prompt: "Generate a goat citadel poster",
+      size: "1024x1024",
+    });
+  });
+
+  it("uses multipart image edits without inferring a size", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    let bodyEntries: Array<[string, unknown]> = [];
+    globalThis.fetch = vi.fn(async (input, init) => {
+      requestedUrl = String(input);
+      const formData = init?.body as FormData;
+      bodyEntries = [];
+      formData.forEach((value, key) => {
+        bodyEntries.push([key, value]);
+      });
+      return new Response(
+        JSON.stringify({
+          created: 456,
+          data: [{ b64_json: "edited-image" }],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const response = await service.generateImage({
+        providerId: "openai",
+        prompt: "Edit the uploaded reference image",
+        referenceImages: [
+          {
+            bytesBase64: "aGVsbG8=",
+            mimeType: "image/png",
+            fileName: "reference.png",
+          },
+        ],
+      });
+      expect(response.operation).toBe("edit");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(requestedUrl).toBe("https://api.openai.com/v1/images/edits");
+    expect(bodyEntries).toEqual(expect.arrayContaining([
+      ["model", "gpt-image-1"],
+      ["prompt", "Edit the uploaded reference image"],
+    ]));
+    expect(bodyEntries.some(([key]) => key === "size")).toBe(false);
+    expect(bodyEntries.some(([key]) => key === "image" || key === "image[]")).toBe(true);
+  });
+
+  it("routes provider requests through a proxy dispatcher when configured", async () => {
+    const tlsDir = mkdtempSync(join(tmpdir(), "llm-service-proxy-"));
+    const caPath = join(tlsDir, "ca.pem");
+    const proxyCaPath = join(tlsDir, "proxy-ca.pem");
+    writeFileSync(caPath, "test-ca");
+    writeFileSync(proxyCaPath, "proxy-ca");
+
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5.4-mini",
+          request: {
+            proxy: {
+              url: "http://proxy.internal:8080",
+              auth: {
+                type: "header",
+                headerName: "Proxy-Authorization",
+                valueEnv: "TEST_PROXY_AUTH",
+                scheme: "Bearer",
+              },
+              tls: {
+                caCertPath: proxyCaPath,
+                serverName: "proxy.internal",
+              },
+            },
+            tls: {
+              caCertPath: caPath,
+              serverName: "api.openai.com",
+            },
+          },
+        },
+      ],
+    };
+
+    const service = new LlmService(
+      config,
+      { ...process.env, TEST_PROXY_AUTH: "proxy-secret" },
+      { secretStore: createNoopSecretStore() },
+    );
+    const originalFetch = globalThis.fetch;
+    let dispatcher: unknown;
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      dispatcher = init?.dispatcher;
+      return new Response(
+        JSON.stringify({
+          id: "cmpl_proxy",
+          choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      await service.chatCompletions({
+        providerId: "openai",
+        messages: [{ role: "user", content: "hello" }],
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      rmSync(tlsDir, { recursive: true, force: true });
+    }
+
+    expect(dispatcher).toBeInstanceOf(ProxyAgent);
+  });
+
+  it("bypasses the proxy and uses a direct TLS dispatcher for configured bypass hosts", async () => {
+    const tlsDir = mkdtempSync(join(tmpdir(), "llm-service-bypass-"));
+    const certPath = join(tlsDir, "client-cert.pem");
+    const keyPath = join(tlsDir, "client-key.pem");
+    writeFileSync(certPath, "test-cert");
+    writeFileSync(keyPath, "test-key");
+
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5.4-mini",
+          request: {
+            proxy: {
+              url: "http://proxy.internal:8080",
+              bypassHosts: ["api.openai.com"],
+            },
+            tls: {
+              clientCertPath: certPath,
+              clientKeyPath: keyPath,
+              insecureSkipVerify: true,
+            },
+          },
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let dispatcher: unknown;
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      dispatcher = init?.dispatcher;
+      return new Response(
+        JSON.stringify({
+          id: "cmpl_bypass",
+          choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      await service.chatCompletions({
+        providerId: "openai",
+        messages: [{ role: "user", content: "hello" }],
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      rmSync(tlsDir, { recursive: true, force: true });
+    }
+
+    expect(dispatcher).toBeInstanceOf(Agent);
+    expect(dispatcher).not.toBeInstanceOf(ProxyAgent);
   });
 });
 

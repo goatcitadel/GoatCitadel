@@ -132,6 +132,104 @@ describe("LlmConfigFileSchema", () => {
     const result = LlmConfigFileSchema.parse(input);
     expect(result.providers[0]?.apiKey).toBe("sk-abc");
   });
+
+  it("accepts canonical request transport config and legacy headers together", () => {
+    const input = {
+      activeProviderId: "test",
+      providers: [
+        {
+          providerId: "test",
+          label: "Test",
+          baseUrl: "http://localhost",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "m",
+          headers: { "X-Legacy": "value" },
+          request: {
+            headers: { "X-Canonical": "value" },
+            auth: { type: "header", headerName: "X-API-Key", valueEnv: "TEST_API_KEY" },
+            proxy: {
+              url: "http://127.0.0.1:8080",
+              bypassHosts: ["localhost"],
+              auth: { type: "bearer", tokenEnv: "TEST_PROXY_TOKEN" },
+              tls: { serverName: "proxy.internal" },
+            },
+          },
+        },
+      ],
+    };
+
+    const result = LlmConfigFileSchema.parse(input);
+    expect(result.providers[0]?.request?.headers).toEqual({ "X-Canonical": "value" });
+    expect(result.providers[0]?.headers).toEqual({ "X-Legacy": "value" });
+  });
+
+  it("rejects query auth inside proxy transport config", () => {
+    const input = {
+      activeProviderId: "test",
+      providers: [
+        {
+          providerId: "test",
+          label: "Test",
+          baseUrl: "http://localhost",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "m",
+          request: {
+            proxy: {
+              url: "http://127.0.0.1:8080",
+              auth: { type: "query", queryParam: "token", value: "abc" },
+            },
+          },
+        },
+      ],
+    };
+
+    expect(() => LlmConfigFileSchema.parse(input)).toThrow(/invalid discriminator value/i);
+  });
+
+  it("rejects incomplete TLS client certificate config", () => {
+    const input = {
+      activeProviderId: "test",
+      providers: [
+        {
+          providerId: "test",
+          label: "Test",
+          baseUrl: "http://localhost",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "m",
+          request: {
+            tls: {
+              clientCertPath: "/tmp/client.crt",
+            },
+          },
+        },
+      ],
+    };
+
+    expect(() => LlmConfigFileSchema.parse(input)).toThrow(/clientCertPath and clientKeyPath/i);
+  });
+
+  it("rejects conflicting TLS verification modes", () => {
+    const input = {
+      activeProviderId: "test",
+      providers: [
+        {
+          providerId: "test",
+          label: "Test",
+          baseUrl: "http://localhost",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "m",
+          request: {
+            tls: {
+              insecureSkipVerify: true,
+              caCertPath: "/tmp/ca.pem",
+            },
+          },
+        },
+      ],
+    };
+
+    expect(() => LlmConfigFileSchema.parse(input)).toThrow(/cannot be combined with insecureSkipVerify/i);
+  });
 });
 
 describe("BudgetConfigSchema", () => {

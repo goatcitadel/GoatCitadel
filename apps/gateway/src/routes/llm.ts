@@ -7,6 +7,78 @@ const llmApiStyleSchema = z.enum([
   "anthropic-messages",
 ]);
 
+const providerRequestAuthSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("bearer"),
+    token: z.string().min(1).optional(),
+    tokenEnv: z.string().min(1).optional(),
+    headerName: z.string().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("header"),
+    headerName: z.string().min(1),
+    value: z.string().min(1).optional(),
+    valueEnv: z.string().min(1).optional(),
+    scheme: z.string().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("query"),
+    queryParam: z.string().min(1),
+    value: z.string().min(1).optional(),
+    valueEnv: z.string().min(1).optional(),
+    prefix: z.string().optional(),
+  }),
+]);
+
+const providerProxyAuthSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("bearer"),
+    token: z.string().min(1).optional(),
+    tokenEnv: z.string().min(1).optional(),
+    headerName: z.string().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("header"),
+    headerName: z.string().min(1),
+    value: z.string().min(1).optional(),
+    valueEnv: z.string().min(1).optional(),
+    scheme: z.string().min(1).optional(),
+  }),
+]);
+
+const providerRequestTlsSchema = z.object({
+  insecureSkipVerify: z.boolean().optional(),
+  caCertPath: z.string().min(1).optional(),
+  clientCertPath: z.string().min(1).optional(),
+  clientKeyPath: z.string().min(1).optional(),
+  serverName: z.string().min(1).optional(),
+}).superRefine((value, ctx) => {
+  if (Boolean(value.clientCertPath) !== Boolean(value.clientKeyPath)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "clientCertPath and clientKeyPath must be provided together",
+    });
+  }
+  if (value.insecureSkipVerify && value.caCertPath) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "caCertPath cannot be combined with insecureSkipVerify",
+    });
+  }
+});
+
+const providerRequestSchema = z.object({
+  headers: z.record(z.string()).optional(),
+  auth: providerRequestAuthSchema.optional(),
+  proxy: z.object({
+    url: z.string().url(),
+    bypassHosts: z.array(z.string().min(1)).optional(),
+    auth: providerProxyAuthSchema.optional(),
+    tls: providerRequestTlsSchema.optional(),
+  }).optional(),
+  tls: providerRequestTlsSchema.optional(),
+});
+
 const updateConfigSchema = z.object({
   activeProviderId: z.string().optional(),
   activeModel: z.string().optional(),
@@ -18,6 +90,7 @@ const updateConfigSchema = z.object({
     defaultModel: z.string().min(1).optional(),
     apiKey: z.string().min(1).optional(),
     apiKeyEnv: z.string().min(1).optional(),
+    request: providerRequestSchema.optional(),
     headers: z.record(z.string()).optional(),
   }).optional(),
 });
@@ -32,7 +105,30 @@ const modelPreviewSchema = z.object({
   apiStyle: llmApiStyleSchema.optional(),
   apiKey: z.string().min(1).optional(),
   apiKeyEnv: z.string().min(1).optional(),
+  request: providerRequestSchema.optional(),
   headers: z.record(z.string()).optional(),
+});
+
+const imageAssetSchema = z.object({
+  bytesBase64: z.string().min(1),
+  mimeType: z.string().min(1).optional(),
+  fileName: z.string().min(1).optional(),
+});
+
+const imageGenerationSchema = z.object({
+  providerId: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  prompt: z.string().min(1),
+  referenceImages: z.array(imageAssetSchema).optional(),
+  maskImage: imageAssetSchema.optional(),
+  n: z.number().int().positive().max(10).optional(),
+  size: z.string().min(1).optional(),
+  quality: z.string().min(1).optional(),
+  background: z.string().min(1).optional(),
+  outputFormat: z.enum(["png", "jpeg", "webp"]).optional(),
+  responseFormat: z.enum(["b64_json", "url"]).optional(),
+  moderation: z.enum(["auto", "low"]).optional(),
+  timeoutMs: z.number().int().positive().optional(),
 });
 
 const chatCompletionSchema = z.object({
@@ -76,7 +172,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/llm/config", async (_request, reply) => {
-    return reply.send(fastify.gateway.getLlmConfig());
+    return reply.send(fastify.gateway.getLlmConfigWithDetails());
   });
 
   fastify.patch("/api/v1/llm/config", async (request, reply) => {
@@ -112,6 +208,19 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       return reply.send(await fastify.gateway.previewLlmModels(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/llm/images", async (request, reply) => {
+    const parsed = imageGenerationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+
+    try {
+      return reply.send(await fastify.gateway.generateImage(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

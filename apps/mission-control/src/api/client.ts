@@ -163,6 +163,8 @@ import type {
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
   LearnedMemoryUpdateInput,
+  LlmProviderConfig,
+  LlmProviderRequestConfig,
   DecisionAutoTuneRecord,
   DecisionReplayFindingRecord,
   DecisionReplayItemRecord,
@@ -1350,6 +1352,10 @@ export async function fetchSessionTimeline(sessionId: string, limit = 200): Prom
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/timeline?limit=${Math.max(1, Math.min(limit, 1000))}`,
   );
 }
+
+export type LlmRuntimeConfigResponse = RuntimeSettingsResponse["llm"] & {
+  providerConfigs?: LlmProviderConfig[];
+};
 
 export async function fetchRuntimeLifecycle(input: {
   sessionId?: string;
@@ -3688,6 +3694,7 @@ export async function patchSettings(input: {
       defaultModel?: string;
       apiKey?: string;
       apiKeyEnv?: string;
+      request?: LlmProviderRequestConfig;
       headers?: Record<string, string>;
     };
   };
@@ -4190,8 +4197,8 @@ export async function captureObsidianInboxEntry(input: {
   );
 }
 
-export async function fetchLlmConfig(): Promise<RuntimeSettingsResponse["llm"]> {
-  return request<RuntimeSettingsResponse["llm"]>("/api/v1/llm/config");
+export async function fetchLlmConfig(): Promise<LlmRuntimeConfigResponse> {
+  return request<LlmRuntimeConfigResponse>("/api/v1/llm/config");
 }
 
 export async function fetchLlmModels(providerId?: string): Promise<{ items: Array<{ id: string; ownedBy?: string; created?: number }> }> {
@@ -4224,6 +4231,7 @@ export async function previewLlmModels(input: {
   apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
   apiKey?: string;
   apiKeyEnv?: string;
+  request?: LlmProviderRequestConfig;
   headers?: Record<string, string>;
 }, options?: { signal?: AbortSignal }): Promise<{
   items: Array<{ id: string; ownedBy?: string; created?: number }>;

@@ -1,8 +1,17 @@
+import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { assertHostAllowed } from "@goatcitadel/policy-engine";
+import { Agent, ProxyAgent } from "undici";
+import type { Dispatcher } from "undici";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ImageGenerationRequest,
+  ImageGenerationResponse,
+  LlmProviderRequestAuthConfig,
+  LlmProviderRequestConfig,
+  LlmProviderRequestProxyAuthConfig,
+  LlmProviderRequestTlsConfig,
   LlmApiStyle,
   LlmConfigFile,
   LlmModelRecord,
@@ -35,6 +44,7 @@ export interface LlmRuntimeUpdateInput {
     defaultModel?: string;
     apiKey?: string;
     apiKeyEnv?: string;
+    request?: LlmProviderRequestConfig;
     headers?: Record<string, string>;
   };
 }
@@ -42,6 +52,12 @@ export interface LlmRuntimeUpdateInput {
 interface ResolvedProvider {
   provider: LlmProviderConfig;
   apiKey?: string;
+}
+
+interface ProviderRequestTarget {
+  url: string;
+  headers: Record<string, string>;
+  dispatcher?: Dispatcher;
 }
 
 interface ModelDiscoveryResult {
@@ -93,11 +109,17 @@ const DISALLOWED_BASE_HOSTS = new Set([
   "100.100.100.200",
 ]);
 const SECRET_STATUS_CACHE_TTL_MS = 60_000;
+type UndiciConnectOptions = Exclude<
+  NonNullable<NonNullable<ConstructorParameters<typeof Agent>[0]>["connect"]>,
+  (...args: any[]) => unknown
+>;
+type FetchRequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
 
 export class LlmService {
   private readonly providers = new Map<string, LlmProviderConfig>();
   private readonly secretStore: SecretStoreService;
   private readonly secretStatusCache = new Map<string, SecretStatusCacheEntry>();
+  private readonly requestDispatcherCache = new Map<string, Dispatcher>();
   private networkAllowlist: string[];
   private activeProviderId: string;
   private activeModel: string;
@@ -200,10 +222,12 @@ export class LlmService {
         defaultModel: input.upsertProvider.defaultModel ?? existing?.defaultModel ?? defaultModelForProvider(input.upsertProvider.providerId),
         apiKey: submittedApiKey ? undefined : (input.upsertProvider.apiKey ?? existing?.apiKey),
         apiKeyEnv: input.upsertProvider.apiKeyEnv ?? existing?.apiKeyEnv,
+        request: input.upsertProvider.request ?? existing?.request,
         headers: input.upsertProvider.headers ?? existing?.headers,
       });
       this.providers.set(merged.providerId, merged);
       this.secretStatusCache.delete(merged.providerId);
+      this.clearRequestDispatcherCache();
     }
 
     const hasActiveProviderId = Object.prototype.hasOwnProperty.call(input, "activeProviderId");
@@ -355,6 +379,7 @@ export class LlmService {
       providers: Array.from(this.providers.values()).map((provider) => ({
         ...provider,
         apiKey: undefined,
+        headers: undefined,
       })),
     };
   }
@@ -375,6 +400,7 @@ export class LlmService {
       defaultModel: existing?.defaultModel ?? defaultModelForProvider(input.providerId),
       apiKey: input.apiKey ?? existing?.apiKey,
       apiKeyEnv: input.apiKeyEnv ?? existing?.apiKeyEnv,
+      request: input.request ?? existing?.request,
       headers: input.headers ?? existing?.headers,
     });
     const explicitPreviewApiKey = input.apiKey?.trim()
@@ -415,6 +441,87 @@ export class LlmService {
       source: "fallback",
       warning: "Provider returned no models. Falling back to the recommended default model.",
     };
+  }
+
+  public async generateImage(request: ImageGenerationRequest): Promise<ImageGenerationResponse> {
+    const prompt = request.prompt.trim();
+    if (!prompt) {
+      throw new Error("images requires a non-empty prompt");
+    }
+
+    const resolved = this.resolveProvider(request.providerId);
+    this.assertProviderHostAllowed(resolved.provider.baseUrl);
+    if (resolved.provider.providerId !== "openai") {
+      throw new Error("Image generation currently requires the OpenAI provider.");
+    }
+
+    const model = request.model?.trim() || "gpt-image-1";
+    const operation = Array.isArray(request.referenceImages) && request.referenceImages.length > 0
+      ? "edit"
+      : "generate";
+
+    if (operation === "edit") {
+      const target = this.buildRequestTarget(resolved, "chat", `${resolved.provider.baseUrl}/images/edits`, "multipart");
+      const formData = new FormData();
+      formData.set("model", model);
+      formData.set("prompt", prompt);
+      if (request.n !== undefined) formData.set("n", String(request.n));
+      if (request.responseFormat) formData.set("response_format", request.responseFormat);
+      if (request.quality) formData.set("quality", request.quality);
+      if (request.background) formData.set("background", request.background);
+      if (request.outputFormat) formData.set("output_format", request.outputFormat);
+      if (request.moderation) formData.set("moderation", request.moderation);
+      if (request.size) formData.set("size", request.size);
+
+      const imageField = (request.referenceImages?.length ?? 0) > 1 ? "image[]" : "image";
+      for (const image of request.referenceImages ?? []) {
+        formData.append(imageField, decodeImageAssetToBlob(image), image.fileName ?? "reference.png");
+      }
+      if (request.maskImage) {
+        formData.set("mask", decodeImageAssetToBlob(request.maskImage), request.maskImage.fileName ?? "mask.png");
+      }
+
+      const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
+      const response = await postMultipartRequest(target, formData, timeoutMs);
+      if (isRedirect(response.status)) {
+        throw new Error(`image edit blocked redirect (${response.status})`);
+      }
+      if (!response.ok) {
+        throw new Error(await buildHttpError("image edit", response));
+      }
+      return adaptImageGenerationResponse((await response.json()) as Record<string, unknown>, {
+        providerId: resolved.provider.providerId,
+        model,
+        operation,
+      });
+    }
+
+    const target = this.buildRequestTarget(resolved, "chat", `${resolved.provider.baseUrl}/images/generations`);
+    const payload: Record<string, unknown> = {
+      model,
+      prompt,
+    };
+    if (request.n !== undefined) payload.n = request.n;
+    if (request.size) payload.size = request.size;
+    if (request.quality) payload.quality = request.quality;
+    if (request.background) payload.background = request.background;
+    if (request.outputFormat) payload.output_format = request.outputFormat;
+    if (request.responseFormat) payload.response_format = request.responseFormat;
+    if (request.moderation) payload.moderation = request.moderation;
+
+    const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
+    const response = await postJsonRequest(target, payload, timeoutMs);
+    if (isRedirect(response.status)) {
+      throw new Error(`image generation blocked redirect (${response.status})`);
+    }
+    if (!response.ok) {
+      throw new Error(await buildHttpError("image generation", response));
+    }
+    return adaptImageGenerationResponse((await response.json()) as Record<string, unknown>, {
+      providerId: resolved.provider.providerId,
+      model,
+      operation,
+    });
   }
 
   public async chatCompletions(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
@@ -501,10 +608,9 @@ export class LlmService {
     });
     if (request.metadata !== undefined) payload.metadata = request.metadata;
 
-    const endpoint = `${resolved.provider.baseUrl}/chat/completions`;
-    const headers = this.buildHeaders(resolved, "chat");
+    const target = this.buildRequestTarget(resolved, "chat", `${resolved.provider.baseUrl}/chat/completions`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
-    let response = await postJsonRequest(endpoint, headers, payload, timeoutMs, request.signal);
+    let response = await postJsonRequest(target, payload, timeoutMs, request.signal);
 
     if (isRedirect(response.status)) {
       throw new Error(`chat completion blocked redirect (${response.status})`);
@@ -515,7 +621,7 @@ export class LlmService {
       if (request.metadata !== undefined && isMetadataStoreCompatibilityError(errorText)) {
         const fallbackPayload = { ...payload };
         delete fallbackPayload.metadata;
-        response = await postJsonRequest(endpoint, headers, fallbackPayload, timeoutMs, request.signal);
+        response = await postJsonRequest(target, fallbackPayload, timeoutMs, request.signal);
         if (isRedirect(response.status)) {
           throw new Error(`chat completion blocked redirect (${response.status})`);
         }
@@ -572,10 +678,9 @@ export class LlmService {
     });
     if (request.metadata !== undefined) payload.metadata = request.metadata;
 
-    const endpoint = `${resolved.provider.baseUrl}/chat/completions`;
-    const headers = this.buildHeaders(resolved, "chat");
+    const target = this.buildRequestTarget(resolved, "chat", `${resolved.provider.baseUrl}/chat/completions`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
-    let response = await postJsonRequest(endpoint, headers, payload, timeoutMs, request.signal);
+    let response = await postJsonRequest(target, payload, timeoutMs, request.signal);
 
     if (isRedirect(response.status)) {
       throw new Error(`chat completion blocked redirect (${response.status})`);
@@ -586,7 +691,7 @@ export class LlmService {
       if (request.metadata !== undefined && isMetadataStoreCompatibilityError(errorText)) {
         const fallbackPayload = { ...payload };
         delete fallbackPayload.metadata;
-        response = await postJsonRequest(endpoint, headers, fallbackPayload, timeoutMs, request.signal);
+        response = await postJsonRequest(target, fallbackPayload, timeoutMs, request.signal);
         if (isRedirect(response.status)) {
           throw new Error(`chat completion blocked redirect (${response.status})`);
         }
@@ -612,10 +717,9 @@ export class LlmService {
     model: string,
   ): Promise<ChatCompletionResponse> {
     const payload = buildOpenAiResponsesPayload(request, model);
-    const endpoint = `${resolved.provider.baseUrl}/responses`;
-    const headers = this.buildHeaders(resolved, "responses");
+    const target = this.buildRequestTarget(resolved, "responses", `${resolved.provider.baseUrl}/responses`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
-    const response = await postJsonRequest(endpoint, headers, payload, timeoutMs, request.signal);
+    const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
 
     if (isRedirect(response.status)) {
       throw new Error(`responses request blocked redirect (${response.status})`);
@@ -639,10 +743,9 @@ export class LlmService {
     const payload = buildOpenAiResponsesPayload(request, model);
     payload.stream = true;
 
-    const endpoint = `${resolved.provider.baseUrl}/responses`;
-    const headers = this.buildHeaders(resolved, "responses");
+    const target = this.buildRequestTarget(resolved, "responses", `${resolved.provider.baseUrl}/responses`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
-    const response = await postJsonRequest(endpoint, headers, payload, timeoutMs, request.signal);
+    const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
 
     if (isRedirect(response.status)) {
       throw new Error(`responses request blocked redirect (${response.status})`);
@@ -738,10 +841,9 @@ export class LlmService {
     model: string,
   ): Promise<ChatCompletionResponse> {
     const payload = buildAnthropicMessagesPayload(request, model);
-    const endpoint = `${resolved.provider.baseUrl}/messages`;
-    const headers = this.buildHeaders(resolved, "messages");
+    const target = this.buildRequestTarget(resolved, "messages", `${resolved.provider.baseUrl}/messages`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
-    const response = await postJsonRequest(endpoint, headers, payload, timeoutMs, request.signal);
+    const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
 
     if (isRedirect(response.status)) {
       throw new Error(`messages request blocked redirect (${response.status})`);
@@ -765,10 +867,9 @@ export class LlmService {
     const payload = buildAnthropicMessagesPayload(request, model);
     payload.stream = true;
 
-    const endpoint = `${resolved.provider.baseUrl}/messages`;
-    const headers = this.buildHeaders(resolved, "messages");
+    const target = this.buildRequestTarget(resolved, "messages", `${resolved.provider.baseUrl}/messages`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
-    const response = await postJsonRequest(endpoint, headers, payload, timeoutMs, request.signal);
+    const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
 
     if (isRedirect(response.status)) {
       throw new Error(`messages request blocked redirect (${response.status})`);
@@ -968,28 +1069,87 @@ export class LlmService {
   private buildHeaders(
     resolved: ResolvedProvider,
     purpose: "chat" | "models" | "responses" | "messages" = "chat",
+    bodyKind: "json" | "multipart" = "json",
   ): Record<string, string> {
     const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...(resolved.provider.headers ?? {}),
+      ...(bodyKind === "json" ? { "Content-Type": "application/json" } : {}),
+      ...(resolved.provider.request?.headers ?? {}),
     };
-
+    const explicitAuth = resolved.provider.request?.auth;
     const useAnthropicNativeHeaders = resolved.provider.providerId === "anthropic"
       && (purpose === "models" || purpose === "messages");
 
-    if (useAnthropicNativeHeaders) {
+    delete headers.Authorization;
+    delete headers["x-api-key"];
+    applyRequestAuthHeaders(headers, explicitAuth, this.env, resolved.apiKey);
+    if (useAnthropicNativeHeaders && !explicitAuth && resolved.apiKey) {
+      headers["x-api-key"] = resolved.apiKey;
       delete headers.Authorization;
-      if (resolved.apiKey) {
-        headers["x-api-key"] = resolved.apiKey;
-      }
-      headers["anthropic-version"] = "2023-06-01";
-      return headers;
-    }
-
-    if (resolved.apiKey) {
+    } else if (!explicitAuth && resolved.apiKey) {
       headers.Authorization = `Bearer ${resolved.apiKey}`;
     }
+    if (useAnthropicNativeHeaders) {
+      headers["anthropic-version"] = "2023-06-01";
+    }
     return headers;
+  }
+
+  private buildRequestTarget(
+    resolved: ResolvedProvider,
+    purpose: "chat" | "models" | "responses" | "messages",
+    endpoint: string,
+    bodyKind: "json" | "multipart" = "json",
+  ): ProviderRequestTarget {
+    const headers = this.buildHeaders(resolved, purpose, bodyKind);
+    const dispatcher = this.resolveRequestDispatcher(endpoint, resolved.provider.request);
+    const auth = resolved.provider.request?.auth;
+    if (!auth || auth.type !== "query") {
+      return { url: endpoint, headers, dispatcher };
+    }
+    const secret = resolveRequestAuthSecret(auth, this.env, resolved.apiKey);
+    if (!secret) {
+      return { url: endpoint, headers, dispatcher };
+    }
+    const url = new URL(endpoint);
+    url.searchParams.set(auth.queryParam, `${auth.prefix ?? ""}${secret}`);
+    return {
+      url: url.toString(),
+      headers,
+      dispatcher,
+    };
+  }
+
+  private resolveRequestDispatcher(
+    endpoint: string,
+    requestConfig: LlmProviderRequestConfig | undefined,
+  ): Dispatcher | undefined {
+    if (!requestConfig?.proxy && !requestConfig?.tls) {
+      return undefined;
+    }
+
+    const targetUrl = new URL(endpoint);
+    const cacheKey = buildRequestDispatcherCacheKey(targetUrl, requestConfig);
+    const cached = this.requestDispatcherCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const dispatcher = createRequestDispatcher(targetUrl, requestConfig, this.env);
+    if (!dispatcher) {
+      return undefined;
+    }
+    this.requestDispatcherCache.set(cacheKey, dispatcher);
+    return dispatcher;
+  }
+
+  private clearRequestDispatcherCache(): void {
+    for (const dispatcher of this.requestDispatcherCache.values()) {
+      const close = (dispatcher as { close?: () => Promise<void> }).close;
+      if (typeof close === "function") {
+        void close.call(dispatcher).catch(() => {});
+      }
+    }
+    this.requestDispatcherCache.clear();
   }
 
   private buildQuickSecretStatus(provider: LlmProviderConfig): LlmProviderSecretStatus {
@@ -1046,14 +1206,17 @@ export class LlmService {
       resolved.provider.providerId,
       resolved.provider.defaultModel,
     );
+    const target = this.buildRequestTarget(resolved, "models", `${resolved.provider.baseUrl}/models`);
 
     try {
-      const response = await fetch(`${resolved.provider.baseUrl}/models`, {
+      const requestInit: FetchRequestInitWithDispatcher = {
         method: "GET",
-        headers: this.buildHeaders(resolved, "models"),
+        headers: target.headers,
         signal: AbortSignal.timeout(15000),
         redirect: "manual",
-      });
+        dispatcher: target.dispatcher,
+      };
+      const response = await fetch(target.url, requestInit);
 
       if (isRedirect(response.status)) {
         throw new Error(`model listing blocked redirect (${response.status})`);
@@ -1090,7 +1253,37 @@ function normalizeProvider(provider: LlmProviderConfig): LlmProviderConfig {
     ...provider,
     baseUrl: withV1,
     apiStyle: normalizeProviderApiStyle(provider.providerId, provider.apiStyle),
+    request: normalizeProviderRequestConfig(provider.request, provider.headers),
+    headers: undefined,
   };
+}
+
+function normalizeProviderRequestConfig(
+  request: LlmProviderRequestConfig | undefined,
+  legacyHeaders: Record<string, string> | undefined,
+): LlmProviderRequestConfig | undefined {
+  const headers = {
+    ...(legacyHeaders ?? {}),
+    ...(request?.headers ?? {}),
+  };
+  const normalizedHeaders = Object.fromEntries(
+    Object.entries(headers)
+      .map(([key, value]) => [key.trim(), value] as const)
+      .filter(([key, value]) => key.length > 0 && typeof value === "string"),
+  );
+  const normalizedRequest: LlmProviderRequestConfig = {
+    ...(request ?? {}),
+    headers: Object.keys(normalizedHeaders).length > 0 ? normalizedHeaders : undefined,
+  };
+  if (
+    !normalizedRequest.headers
+    && !normalizedRequest.auth
+    && !normalizedRequest.proxy
+    && !normalizedRequest.tls
+  ) {
+    return undefined;
+  }
+  return normalizedRequest;
 }
 
 function normalizeProviderApiStyle(providerId: string, apiStyle: LlmApiStyle | undefined): LlmApiStyle {
@@ -1122,7 +1315,9 @@ function resolveProviderExecutionApiStyle(provider: LlmProviderConfig, model: st
       : "anthropic-messages";
   }
 
-  return provider.apiStyle;
+  return provider.apiStyle === "openai-responses"
+    ? "openai-chat-completions"
+    : provider.apiStyle;
 }
 
 function isOpenAiResponsesPreferredModel(model: string): boolean {
@@ -1366,6 +1561,43 @@ function buildHttpErrorFromText(action: string, status: number, statusText: stri
   return `${action} failed (${status} ${statusText}): ${snippet}`;
 }
 
+function resolveRequestAuthSecret(
+  auth: LlmProviderRequestAuthConfig,
+  env: NodeJS.ProcessEnv,
+  fallbackApiKey?: string,
+): string | undefined {
+  if (auth.type === "bearer") {
+    return auth.token?.trim() || (auth.tokenEnv ? env[auth.tokenEnv]?.trim() : undefined) || fallbackApiKey;
+  }
+  if (auth.type === "header") {
+    return auth.value?.trim() || (auth.valueEnv ? env[auth.valueEnv]?.trim() : undefined) || fallbackApiKey;
+  }
+  return auth.value?.trim() || (auth.valueEnv ? env[auth.valueEnv]?.trim() : undefined) || fallbackApiKey;
+}
+
+function applyRequestAuthHeaders(
+  headers: Record<string, string>,
+  auth: LlmProviderRequestAuthConfig | undefined,
+  env: NodeJS.ProcessEnv,
+  fallbackApiKey?: string,
+): void {
+  if (!auth) {
+    return;
+  }
+  const secret = resolveRequestAuthSecret(auth, env, fallbackApiKey);
+  if (!secret) {
+    return;
+  }
+  if (auth.type === "query") {
+    return;
+  }
+  if (auth.type === "bearer") {
+    headers[auth.headerName?.trim() || "Authorization"] = `Bearer ${secret}`;
+    return;
+  }
+  headers[auth.headerName] = auth.scheme ? `${auth.scheme} ${secret}` : secret;
+}
+
 function isMetadataStoreCompatibilityError(text: string): boolean {
   const normalized = text.toLowerCase();
   return (
@@ -1407,8 +1639,7 @@ function shouldUseMaxCompletionTokens(providerId: string, model: string): boolea
 }
 
 async function postJsonRequest(
-  endpoint: string,
-  headers: Record<string, string>,
+  target: ProviderRequestTarget,
   payload: Record<string, unknown>,
   timeoutMs: number,
   externalSignal?: AbortSignal,
@@ -1417,13 +1648,148 @@ async function postJsonRequest(
   const signal = externalSignal
     ? AbortSignal.any([timeoutSignal, externalSignal])
     : timeoutSignal;
-  return fetch(endpoint, {
+  const requestInit: FetchRequestInitWithDispatcher = {
     method: "POST",
-    headers,
+    headers: target.headers,
     body: JSON.stringify(payload),
     signal,
     redirect: "manual",
+    dispatcher: target.dispatcher,
+  };
+  return fetch(target.url, requestInit);
+}
+
+async function postMultipartRequest(
+  target: ProviderRequestTarget,
+  formData: FormData,
+  timeoutMs: number,
+  externalSignal?: AbortSignal,
+): Promise<Response> {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = externalSignal
+    ? AbortSignal.any([timeoutSignal, externalSignal])
+    : timeoutSignal;
+  const requestInit: FetchRequestInitWithDispatcher = {
+    method: "POST",
+    headers: target.headers,
+    body: formData,
+    signal,
+    redirect: "manual",
+    dispatcher: target.dispatcher,
+  };
+  return fetch(target.url, requestInit);
+}
+
+function createRequestDispatcher(
+  targetUrl: URL,
+  requestConfig: LlmProviderRequestConfig,
+  env: NodeJS.ProcessEnv,
+): Dispatcher | undefined {
+  const tlsOptions = targetUrl.protocol === "https:"
+    ? buildRequestTlsOptions(requestConfig.tls)
+    : undefined;
+  const proxy = requestConfig.proxy;
+  if (proxy && !shouldBypassProxy(targetUrl.hostname, proxy.bypassHosts)) {
+    const proxyHeaders = buildProxyRequestHeaders(proxy.auth, env);
+    return new ProxyAgent({
+      uri: proxy.url,
+      headers: proxyHeaders,
+      proxyTls: buildRequestTlsOptions(proxy.tls),
+      requestTls: tlsOptions,
+    });
+  }
+  if (!tlsOptions) {
+    return undefined;
+  }
+  return new Agent({
+    connect: tlsOptions,
   });
+}
+
+function buildRequestDispatcherCacheKey(targetUrl: URL, requestConfig: LlmProviderRequestConfig): string {
+  const useProxy = Boolean(
+    requestConfig.proxy && !shouldBypassProxy(targetUrl.hostname, requestConfig.proxy.bypassHosts),
+  );
+  return JSON.stringify({
+    origin: targetUrl.origin,
+    useProxy,
+    proxyUrl: useProxy ? requestConfig.proxy?.url : undefined,
+    proxyAuth: useProxy ? requestConfig.proxy?.auth ?? undefined : undefined,
+    proxyTls: useProxy ? requestConfig.proxy?.tls ?? undefined : undefined,
+    tls: requestConfig.tls ?? undefined,
+  });
+}
+
+function buildRequestTlsOptions(
+  tlsConfig: LlmProviderRequestTlsConfig | undefined,
+): UndiciConnectOptions | undefined {
+  if (!tlsConfig) {
+    return undefined;
+  }
+
+  const connectOptions: UndiciConnectOptions = {};
+  let hasTlsOverride = false;
+
+  if (tlsConfig.insecureSkipVerify !== undefined) {
+    connectOptions.rejectUnauthorized = !tlsConfig.insecureSkipVerify;
+    hasTlsOverride = true;
+  }
+  if (tlsConfig.serverName) {
+    connectOptions.servername = tlsConfig.serverName;
+    hasTlsOverride = true;
+  }
+  if (tlsConfig.caCertPath) {
+    connectOptions.ca = readFileSync(tlsConfig.caCertPath);
+    hasTlsOverride = true;
+  }
+  if (tlsConfig.clientCertPath) {
+    connectOptions.cert = readFileSync(tlsConfig.clientCertPath);
+    hasTlsOverride = true;
+  }
+  if (tlsConfig.clientKeyPath) {
+    connectOptions.key = readFileSync(tlsConfig.clientKeyPath);
+    hasTlsOverride = true;
+  }
+
+  return hasTlsOverride ? connectOptions : undefined;
+}
+
+function buildProxyRequestHeaders(
+  auth: LlmProviderRequestProxyAuthConfig | undefined,
+  env: NodeJS.ProcessEnv,
+): Record<string, string> | undefined {
+  if (!auth) {
+    return undefined;
+  }
+  const headers: Record<string, string> = {};
+  applyRequestAuthHeaders(headers, auth, env);
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+function shouldBypassProxy(hostname: string, bypassHosts: string[] | undefined): boolean {
+  if (!bypassHosts || bypassHosts.length === 0) {
+    return false;
+  }
+  const normalizedHostname = hostname.trim().toLowerCase();
+  return bypassHosts.some((entry) => matchesBypassHostEntry(normalizedHostname, entry));
+}
+
+function matchesBypassHostEntry(hostname: string, entry: string): boolean {
+  const normalizedEntry = entry.trim().toLowerCase();
+  if (!normalizedEntry) {
+    return false;
+  }
+  if (normalizedEntry === hostname) {
+    return true;
+  }
+  if (normalizedEntry.startsWith("*.")) {
+    const suffix = normalizedEntry.slice(2);
+    return hostname === suffix || hostname.endsWith(`.${suffix}`);
+  }
+  if (normalizedEntry.startsWith(".")) {
+    return hostname.endsWith(normalizedEntry);
+  }
+  return false;
 }
 
 function validateProviderBaseUrl(rawUrl: string): void {
@@ -2078,6 +2444,36 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function randomToolCallId(): string {
   return `call_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function decodeImageAssetToBlob(input: { bytesBase64: string; mimeType?: string }): Blob {
+  return new Blob([Buffer.from(input.bytesBase64, "base64")], {
+    type: input.mimeType?.trim() || "image/png",
+  });
+}
+
+function adaptImageGenerationResponse(
+  payload: Record<string, unknown>,
+  context: {
+    providerId: string;
+    model: string;
+    operation: "generate" | "edit";
+  },
+): ImageGenerationResponse {
+  const items = Array.isArray(payload.data)
+    ? payload.data.filter(isRecord).map((item) => ({
+      b64Json: typeof item.b64_json === "string" ? item.b64_json : undefined,
+      url: typeof item.url === "string" ? item.url : undefined,
+      revisedPrompt: typeof item.revised_prompt === "string" ? item.revised_prompt : undefined,
+    }))
+    : [];
+  return {
+    providerId: context.providerId,
+    model: typeof payload.model === "string" ? payload.model : context.model,
+    created: typeof payload.created === "number" ? payload.created : undefined,
+    operation: context.operation,
+    data: items,
+  };
 }
 
 function normalizeProviderMessages(

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { findProviderTemplate } from "@goatcitadel/contracts";
-import type { RuntimeSettingsResponse } from "../api/client";
+import { findProviderTemplate, type LlmProviderRequestConfig } from "@goatcitadel/contracts";
+import type { LlmRuntimeConfigResponse, RuntimeSettingsResponse } from "../api/client";
 import { fetchLlmConfig, fetchLlmModels, previewLlmModels } from "../api/client";
 import { useRefreshSubscription } from "./useRefreshSubscription";
 
@@ -98,6 +98,7 @@ export async function previewProviderModels(input: {
   apiStyle?: RuntimeSettingsResponse["llm"]["providers"][number]["apiStyle"];
   apiKey?: string;
   apiKeyEnv?: string;
+  request?: LlmProviderRequestConfig;
   headers?: Record<string, string>;
   fallbackModel?: string;
 }, options?: { signal?: AbortSignal }): Promise<ProviderModelPreviewResult> {
@@ -107,6 +108,7 @@ export async function previewProviderModels(input: {
     apiStyle: input.apiStyle,
     apiKey: input.apiKey,
     apiKeyEnv: input.apiKeyEnv,
+    request: input.request,
     headers: input.headers,
   }, {
     signal: options?.signal,
@@ -124,13 +126,13 @@ export async function previewProviderModels(input: {
 }
 
 export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "system") {
-  const [config, setConfig] = useState<RuntimeSettingsResponse["llm"] | null>(null);
+  const [config, setConfig] = useState<LlmRuntimeConfigResponse | null>(null);
   const [providers, setProviders] = useState<ProviderModelCatalogOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const configRef = useRef<RuntimeSettingsResponse["llm"] | null>(null);
+  const configRef = useRef<LlmRuntimeConfigResponse | null>(null);
 
-  const syncProviderState = useCallback((nextConfig?: RuntimeSettingsResponse["llm"] | null) => {
+  const syncProviderState = useCallback((nextConfig?: LlmRuntimeConfigResponse | null) => {
     const effectiveConfig = nextConfig ?? configRef.current;
     if (!effectiveConfig) {
       return;

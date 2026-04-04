@@ -194,6 +194,8 @@ import type {
   DashboardState,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ImageGenerationRequest,
+  ImageGenerationResponse,
   GatewayEventInput,
   GatewayEventResult,
   IntegrationCatalogEntry,
@@ -222,7 +224,9 @@ import type {
   McpToolRecord,
   MediaCreateJobRequest,
   MediaJobRecord,
+  LlmConfigFile,
   LlmModelRecord,
+  LlmProviderRequestConfig,
   LlmRuntimeConfig,
   OnboardingBootstrapInput,
   OnboardingBootstrapResult,
@@ -379,7 +383,7 @@ import {
   looksLowConfidenceResponse,
   shouldExtractLearnedMemoryContent,
 } from "./learned-memory-utils.js";
-import { buildConversationCompactionSummary } from "./chat-compaction.js";
+import { buildConversationCompactionSummary, trimNewestContextMessagesForPromptCache } from "./chat-compaction.js";
 import {
   assertChatSessionActive,
   buildChatSessionUpdatedPayload,
@@ -1219,6 +1223,7 @@ const CHAT_COMPACTION_RECENT_TURN_LIMIT = 6;
 const CHAT_COMPACTION_WINDOW_SIZE = 8;
 const CHAT_COMPACTION_TRIGGER_TOKENS = 2200;
 const CHAT_COMPACTION_SUMMARY_TOKEN_BUDGET = 360;
+const CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT = 3;
 const CHAT_PLANNER_MAX_STEPS = 8;
 const CHAT_PLANNER_MIN_STEPS = 3;
 const FOLLOW_ON_PARITY_ARTIFACTS_SETTING_KEY = "follow_on_parity_artifacts_v1";
@@ -11204,6 +11209,7 @@ export class GatewayService {
         apiKey?: string;
         apiKeyEnv?: string;
         persistSecretToSecureStore?: boolean;
+        request?: LlmProviderRequestConfig;
         headers?: Record<string, string>;
       };
     };
@@ -14667,6 +14673,13 @@ export class GatewayService {
     });
   }
 
+  public getLlmConfigWithDetails(): LlmRuntimeConfig & { providerConfigs: LlmConfigFile["providers"] } {
+    return {
+      ...this.getLlmConfig(),
+      providerConfigs: this.llmService.exportConfigFile().providers,
+    };
+  }
+
   public updateLlmConfig(input: {
     activeProviderId?: string;
     activeModel?: string;
@@ -14679,6 +14692,7 @@ export class GatewayService {
       apiKey?: string;
       apiKeyEnv?: string;
       persistSecretToSecureStore?: boolean;
+      request?: LlmProviderRequestConfig;
       headers?: Record<string, string>;
     };
   }): LlmRuntimeConfig {
@@ -14713,9 +14727,14 @@ export class GatewayService {
     apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
     apiKey?: string;
     apiKeyEnv?: string;
+    request?: LlmProviderRequestConfig;
     headers?: Record<string, string>;
   }): Promise<{ items: LlmModelRecord[]; source: "remote" | "fallback"; warning?: string }> {
     return this.llmService.previewModels(input);
+  }
+
+  public async generateImage(input: ImageGenerationRequest): Promise<ImageGenerationResponse> {
+    return this.llmService.generateImage(input);
   }
 
   public getNpuStatus(): NpuRuntimeStatus {
@@ -14903,50 +14922,62 @@ export class GatewayService {
     const completionDeadline = createChatCompletionDeadline(hookableRequest.timeoutMs);
     let lastError: Error | undefined;
 
-    for (let index = 0; index < retryAttempts.length; index += 1) {
+    attemptLoop: for (let index = 0; index < retryAttempts.length; index += 1) {
       const attemptRequest = retryAttempts[index]!;
-      try {
+      for (let transientRetryIndex = 0; transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT; transientRetryIndex += 1) {
+        try {
           const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
           response = await this.llmService.chatCompletions({
             ...attemptRequest,
             timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
-        });
-        routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
-        routing.effectiveModel = response.model ?? attemptRequest.model ?? primaryModel;
-        routing.effectiveApiStyle = this.llmService.resolveExecutionApiStyle(
-          routing.effectiveProviderId,
-          routing.effectiveModel,
-        );
-        if (index > 0) {
-          routing.fallbackUsed = true;
-          routing.fallbackProviderId = routing.effectiveProviderId;
-          routing.fallbackModel = routing.effectiveModel;
-          routing.fallbackApiStyle = routing.effectiveApiStyle;
-          routing.fallbackReason = index === 1
-            ? "provider compatibility retry (normalized tool protocol)"
-            : "provider compatibility retry (minimal thinking metadata)";
-        }
-        break;
-      } catch (error) {
-        lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
-        this.recordDevDiagnostic({
-          level: "warn",
-          category: "chat",
-          event: "chat.completion.attempt_failed",
-          message: "Chat completion attempt failed",
-          sessionId: request.memory?.sessionId,
-          providerId: attemptRequest.providerId ?? primaryProviderId,
-          modelId: attemptRequest.model ?? primaryModel,
-          context: {
-            error: lastError.message,
-            retryIndex: index,
-          },
-        });
-        if (index < retryAttempts.length - 1 && shouldRetryToolProtocolError(lastError)) {
-          continue;
-        }
-        if (index < retryAttempts.length - 1 && index === 0) {
-          continue;
+          });
+          routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
+          routing.effectiveModel = response.model ?? attemptRequest.model ?? primaryModel;
+          routing.effectiveApiStyle = this.llmService.resolveExecutionApiStyle(
+            routing.effectiveProviderId,
+            routing.effectiveModel,
+          );
+          if (index > 0) {
+            routing.fallbackUsed = true;
+            routing.fallbackProviderId = routing.effectiveProviderId;
+            routing.fallbackModel = routing.effectiveModel;
+            routing.fallbackApiStyle = routing.effectiveApiStyle;
+            routing.fallbackReason = index === 1
+              ? "provider compatibility retry (normalized tool protocol)"
+              : "provider compatibility retry (minimal thinking metadata)";
+          }
+          break attemptLoop;
+        } catch (error) {
+          lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
+          this.recordDevDiagnostic({
+            level: "warn",
+            category: "chat",
+            event: "chat.completion.attempt_failed",
+            message: "Chat completion attempt failed",
+            sessionId: request.memory?.sessionId,
+            providerId: attemptRequest.providerId ?? primaryProviderId,
+            modelId: attemptRequest.model ?? primaryModel,
+            context: {
+              error: lastError.message,
+              retryIndex: index,
+              transientRetryIndex,
+            },
+          });
+
+          if (
+            transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1
+            && shouldRetryTransientProviderError(lastError)
+          ) {
+            await delayChatCompletionRetry(completionDeadline, hookableRequest.timeoutMs, transientRetryIndex);
+            continue;
+          }
+          if (index < retryAttempts.length - 1 && shouldRetryToolProtocolError(lastError)) {
+            continue attemptLoop;
+          }
+          if (index < retryAttempts.length - 1 && index === 0) {
+            continue attemptLoop;
+          }
+          break;
         }
       }
     }
@@ -14954,40 +14985,52 @@ export class GatewayService {
     if (!response && allowCrossProviderFallback) {
       const fallbacks = this.resolveFallbackTargets(runtime, primaryProviderId, primaryModel);
       for (const fallback of fallbacks) {
-        try {
+        for (let transientRetryIndex = 0; transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT; transientRetryIndex += 1) {
+          try {
             const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
             response = await this.llmService.chatCompletions({
-            ...normalizeToolProtocolRetryRequest(hookableRequest, 2),
-            providerId: fallback.providerId,
-            model: fallback.model,
-            timeoutMs: attemptTimeoutMs ?? hookableRequest.timeoutMs,
-          });
-          this.recordDevDiagnostic({
-            level: "info",
-            category: "chat",
-            event: "chat.completion.fallback_applied",
-            message: "Applied cross-provider fallback",
-            sessionId: request.memory?.sessionId,
-            providerId: fallback.providerId,
-            modelId: fallback.model,
-            context: {
-              reason: lastError?.message,
-            },
-          });
-          routing.fallbackUsed = true;
-          routing.fallbackProviderId = fallback.providerId;
-          routing.fallbackModel = response.model ?? fallback.model;
-          routing.fallbackApiStyle = this.llmService.resolveExecutionApiStyle(
-            fallback.providerId,
-            routing.fallbackModel,
-          );
-          routing.fallbackReason = `primary failed (${lastError?.message ?? "unknown error"})`;
-          routing.effectiveProviderId = fallback.providerId;
-          routing.effectiveModel = routing.fallbackModel;
-          routing.effectiveApiStyle = routing.fallbackApiStyle;
+              ...normalizeToolProtocolRetryRequest(hookableRequest, 2),
+              providerId: fallback.providerId,
+              model: fallback.model,
+              timeoutMs: attemptTimeoutMs ?? hookableRequest.timeoutMs,
+            });
+            this.recordDevDiagnostic({
+              level: "info",
+              category: "chat",
+              event: "chat.completion.fallback_applied",
+              message: "Applied cross-provider fallback",
+              sessionId: request.memory?.sessionId,
+              providerId: fallback.providerId,
+              modelId: fallback.model,
+              context: {
+                reason: lastError?.message,
+              },
+            });
+            routing.fallbackUsed = true;
+            routing.fallbackProviderId = fallback.providerId;
+            routing.fallbackModel = response.model ?? fallback.model;
+            routing.fallbackApiStyle = this.llmService.resolveExecutionApiStyle(
+              fallback.providerId,
+              routing.fallbackModel,
+            );
+            routing.fallbackReason = `primary failed (${lastError?.message ?? "unknown error"})`;
+            routing.effectiveProviderId = fallback.providerId;
+            routing.effectiveModel = routing.fallbackModel;
+            routing.effectiveApiStyle = routing.fallbackApiStyle;
+            break;
+          } catch (error) {
+            lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
+            if (
+              transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1
+              && shouldRetryTransientProviderError(lastError)
+            ) {
+              await delayChatCompletionRetry(completionDeadline, hookableRequest.timeoutMs, transientRetryIndex);
+              continue;
+            }
+          }
+        }
+        if (response) {
           break;
-        } catch (error) {
-          lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
         }
       }
     }
@@ -15141,38 +15184,51 @@ export class GatewayService {
     let streamed = false;
     let lastError: Error | undefined;
 
-    for (let index = 0; index < retryAttempts.length; index += 1) {
+    attemptLoop: for (let index = 0; index < retryAttempts.length; index += 1) {
       const attemptRequest = retryAttempts[index]!;
-      try {
-        const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
-        for await (const chunk of this.llmService.chatCompletionsStream({
-          ...attemptRequest,
-          stream: true,
-          timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
-        })) {
-          streamed = true;
-          yield chunk;
-        }
-        routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
-        routing.effectiveModel = attemptRequest.model ?? primaryModel;
-        routing.effectiveApiStyle = this.llmService.resolveExecutionApiStyle(
-          routing.effectiveProviderId,
-          routing.effectiveModel,
-        );
-        if (index > 0) {
-          routing.fallbackUsed = true;
-          routing.fallbackProviderId = routing.effectiveProviderId;
-          routing.fallbackModel = routing.effectiveModel;
-          routing.fallbackApiStyle = routing.effectiveApiStyle;
-          routing.fallbackReason = index === 1
-            ? "provider compatibility retry (normalized tool protocol)"
-            : "provider compatibility retry (minimal thinking metadata)";
-        }
-        break;
-      } catch (error) {
-        lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
-        if (index < retryAttempts.length - 1 && shouldRetryToolProtocolError(lastError)) {
-          continue;
+      for (let transientRetryIndex = 0; transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT; transientRetryIndex += 1) {
+        let attemptStreamed = false;
+        try {
+          const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
+          for await (const chunk of this.llmService.chatCompletionsStream({
+            ...attemptRequest,
+            stream: true,
+            timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
+          })) {
+            attemptStreamed = true;
+            streamed = true;
+            yield chunk;
+          }
+          routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
+          routing.effectiveModel = attemptRequest.model ?? primaryModel;
+          routing.effectiveApiStyle = this.llmService.resolveExecutionApiStyle(
+            routing.effectiveProviderId,
+            routing.effectiveModel,
+          );
+          if (index > 0) {
+            routing.fallbackUsed = true;
+            routing.fallbackProviderId = routing.effectiveProviderId;
+            routing.fallbackModel = routing.effectiveModel;
+            routing.fallbackApiStyle = routing.effectiveApiStyle;
+            routing.fallbackReason = index === 1
+              ? "provider compatibility retry (normalized tool protocol)"
+              : "provider compatibility retry (minimal thinking metadata)";
+          }
+          break attemptLoop;
+        } catch (error) {
+          lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
+          if (
+            !attemptStreamed
+            && transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1
+            && shouldRetryTransientProviderError(lastError)
+          ) {
+            await delayChatCompletionRetry(completionDeadline, withContext.timeoutMs, transientRetryIndex);
+            continue;
+          }
+          if (index < retryAttempts.length - 1 && shouldRetryToolProtocolError(lastError)) {
+            continue attemptLoop;
+          }
+          break;
         }
       }
     }
@@ -15180,32 +15236,47 @@ export class GatewayService {
     if (!streamed && allowCrossProviderFallback) {
       const fallbacks = this.resolveFallbackTargets(runtime, primaryProviderId, primaryModel);
       for (const fallback of fallbacks) {
-        try {
-          const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
-          for await (const chunk of this.llmService.chatCompletionsStream({
-            ...normalizeToolProtocolRetryRequest(withContext, 2),
-            providerId: fallback.providerId,
-            model: fallback.model,
-            stream: true,
-            timeoutMs: attemptTimeoutMs ?? withContext.timeoutMs,
-          })) {
-            streamed = true;
-            yield chunk;
+        for (let transientRetryIndex = 0; transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT; transientRetryIndex += 1) {
+          let attemptStreamed = false;
+          try {
+            const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
+            for await (const chunk of this.llmService.chatCompletionsStream({
+              ...normalizeToolProtocolRetryRequest(withContext, 2),
+              providerId: fallback.providerId,
+              model: fallback.model,
+              stream: true,
+              timeoutMs: attemptTimeoutMs ?? withContext.timeoutMs,
+            })) {
+              attemptStreamed = true;
+              streamed = true;
+              yield chunk;
+            }
+            routing.fallbackUsed = true;
+            routing.fallbackProviderId = fallback.providerId;
+            routing.fallbackModel = fallback.model;
+            routing.fallbackApiStyle = this.llmService.resolveExecutionApiStyle(
+              fallback.providerId,
+              fallback.model,
+            );
+            routing.fallbackReason = `primary failed (${lastError?.message ?? "unknown error"})`;
+            routing.effectiveProviderId = fallback.providerId;
+            routing.effectiveModel = fallback.model;
+            routing.effectiveApiStyle = routing.fallbackApiStyle;
+            break;
+          } catch (error) {
+            lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
+            if (
+              !attemptStreamed
+              && transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1
+              && shouldRetryTransientProviderError(lastError)
+            ) {
+              await delayChatCompletionRetry(completionDeadline, withContext.timeoutMs, transientRetryIndex);
+              continue;
+            }
           }
-          routing.fallbackUsed = true;
-          routing.fallbackProviderId = fallback.providerId;
-          routing.fallbackModel = fallback.model;
-          routing.fallbackApiStyle = this.llmService.resolveExecutionApiStyle(
-            fallback.providerId,
-            fallback.model,
-          );
-          routing.fallbackReason = `primary failed (${lastError?.message ?? "unknown error"})`;
-          routing.effectiveProviderId = fallback.providerId;
-          routing.effectiveModel = fallback.model;
-          routing.effectiveApiStyle = routing.fallbackApiStyle;
+        }
+        if (streamed) {
           break;
-        } catch (error) {
-          lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
         }
       }
     }
@@ -18574,14 +18645,16 @@ export class GatewayService {
     const summary = buildConversationCompactionSummary(records.slice(0, Math.max(0, records.length - recentRecords.length)));
     const recentMessages = mapped.slice(-(CHAT_COMPACTION_RECENT_TURN_LIMIT * 2));
     if (!summary) {
-      return recentMessages;
+      return trimNewestContextMessagesForPromptCache(recentMessages, CHAT_COMPACTION_TRIGGER_TOKENS);
     }
+    const summaryContent = truncateByTokenEstimate(summary, CHAT_COMPACTION_SUMMARY_TOKEN_BUDGET);
+    const recentMessageBudget = Math.max(240, CHAT_COMPACTION_TRIGGER_TOKENS - estimateTokensFromText(summaryContent));
     return [
       {
         role: "system",
-        content: truncateByTokenEstimate(summary, CHAT_COMPACTION_SUMMARY_TOKEN_BUDGET),
+        content: summaryContent,
       },
-      ...recentMessages,
+      ...trimNewestContextMessagesForPromptCache(recentMessages, recentMessageBudget),
     ];
   }
 
@@ -18641,9 +18714,12 @@ export class GatewayService {
         : { role: "user" as const, content: message.content };
     }));
 
+    const summaryTokenBudget = estimateTokensFromText(stringifyMessagesForTokenEstimate(summaryMessages));
+    const verbatimTokenBudget = Math.max(240, CHAT_COMPACTION_TRIGGER_TOKENS - summaryTokenBudget);
+
     return [
       ...summaryMessages,
-      ...mappedVerbatim,
+      ...trimNewestContextMessagesForPromptCache(mappedVerbatim, verbatimTokenBudget),
     ];
   }
 
@@ -21839,6 +21915,47 @@ function shouldRetryToolProtocolError(error: Error): boolean {
     || message.includes("tool call")
     || message.includes("tool_calls")
   );
+}
+
+function shouldRetryTransientProviderError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  const statusMatch = error.message.match(/\((\d{3})(?:\s|[)])?/);
+  const status = statusMatch ? Number(statusMatch[1]) : undefined;
+
+  if (status !== undefined && [408, 409, 425, 429, 500, 502, 503, 504].includes(status)) {
+    return true;
+  }
+  if (status !== undefined && [401, 403].includes(status)) {
+    return /(tempor|timeout|upstream|gateway|proxy|connect|connection|network|unavailable|overload|retry)/.test(message);
+  }
+
+  return (
+    message.includes("fetch failed")
+    || message.includes("network error")
+    || message.includes("socket hang up")
+    || message.includes("econnreset")
+    || message.includes("econnrefused")
+    || message.includes("etimedout")
+    || message.includes("service unavailable")
+    || message.includes("gateway timeout")
+    || message.includes("temporarily unavailable")
+    || message.includes("too many requests")
+    || message.includes("rate limit")
+  );
+}
+
+async function delayChatCompletionRetry(
+  deadline: number | undefined,
+  timeoutMs: number | undefined,
+  retryIndex: number,
+): Promise<void> {
+  const delayMs = retryIndex === 0 ? 250 : 750;
+  if (deadline !== undefined && Date.now() + delayMs >= deadline) {
+    throw buildChatCompletionTimeoutError(timeoutMs);
+  }
+  await new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
 }
 
 function normalizeToolProtocolRetryRequest(

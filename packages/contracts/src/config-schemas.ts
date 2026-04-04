@@ -46,6 +46,84 @@ export const LlmProviderCapabilitiesSchema = z
   })
   .passthrough();
 
+export const LlmProviderRequestAuthSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("bearer"),
+    token: z.string().optional(),
+    tokenEnv: z.string().optional(),
+    headerName: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("header"),
+    headerName: z.string().min(1),
+    value: z.string().optional(),
+    valueEnv: z.string().optional(),
+    scheme: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("query"),
+    queryParam: z.string().min(1),
+    value: z.string().optional(),
+    valueEnv: z.string().optional(),
+    prefix: z.string().optional(),
+  }),
+]);
+
+export const LlmProviderRequestProxyAuthSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("bearer"),
+    token: z.string().optional(),
+    tokenEnv: z.string().optional(),
+    headerName: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("header"),
+    headerName: z.string().min(1),
+    value: z.string().optional(),
+    valueEnv: z.string().optional(),
+    scheme: z.string().optional(),
+  }),
+]);
+
+export const LlmProviderRequestTlsSchema = z.object({
+  insecureSkipVerify: z.boolean().optional(),
+  caCertPath: z.string().optional(),
+  clientCertPath: z.string().optional(),
+  clientKeyPath: z.string().optional(),
+  serverName: z.string().optional(),
+}).superRefine((value, ctx) => {
+  const hasClientCert = Boolean(value.clientCertPath);
+  const hasClientKey = Boolean(value.clientKeyPath);
+  if (hasClientCert !== hasClientKey) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "TLS clientCertPath and clientKeyPath must be provided together.",
+      path: hasClientCert ? ["clientKeyPath"] : ["clientCertPath"],
+    });
+  }
+  if (value.insecureSkipVerify && value.caCertPath) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "TLS caCertPath cannot be combined with insecureSkipVerify.",
+      path: ["caCertPath"],
+    });
+  }
+});
+
+export const LlmProviderRequestProxySchema = z.object({
+  url: z.string().url(),
+  bypassHosts: z.array(z.string()).optional(),
+  auth: LlmProviderRequestProxyAuthSchema.optional(),
+  tls: LlmProviderRequestTlsSchema.optional(),
+});
+
+export const LlmProviderRequestConfigSchema = z.object({
+  headers: z.record(z.string(), z.string()).optional(),
+  auth: LlmProviderRequestAuthSchema.optional(),
+  proxy: LlmProviderRequestProxySchema.optional(),
+  tls: LlmProviderRequestTlsSchema.optional(),
+});
+
 export const LlmProviderConfigSchema = z
   .object({
     providerId: z.string(),
@@ -55,6 +133,7 @@ export const LlmProviderConfigSchema = z
     defaultModel: z.string(),
     apiKey: z.string().optional(),
     apiKeyEnv: z.string().optional(),
+    request: LlmProviderRequestConfigSchema.optional(),
     headers: z.record(z.string(), z.string()).optional(),
     capabilities: LlmProviderCapabilitiesSchema.partial().optional(),
   })

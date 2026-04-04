@@ -13,6 +13,55 @@ export interface LlmProviderCapabilities {
   reasoning?: boolean;
 }
 
+export type LlmProviderRequestAuthConfig =
+  | {
+    type: "bearer";
+    token?: string;
+    tokenEnv?: string;
+    headerName?: string;
+  }
+  | {
+    type: "header";
+    headerName: string;
+    value?: string;
+    valueEnv?: string;
+    scheme?: string;
+  }
+  | {
+    type: "query";
+    queryParam: string;
+    value?: string;
+    valueEnv?: string;
+    prefix?: string;
+  };
+
+export type LlmProviderRequestProxyAuthConfig = Extract<
+  LlmProviderRequestAuthConfig,
+  { type: "bearer" } | { type: "header" }
+>;
+
+export interface LlmProviderRequestProxyConfig {
+  url: string;
+  bypassHosts?: string[];
+  auth?: LlmProviderRequestProxyAuthConfig;
+  tls?: LlmProviderRequestTlsConfig;
+}
+
+export interface LlmProviderRequestTlsConfig {
+  insecureSkipVerify?: boolean;
+  caCertPath?: string;
+  clientCertPath?: string;
+  clientKeyPath?: string;
+  serverName?: string;
+}
+
+export interface LlmProviderRequestConfig {
+  headers?: Record<string, string>;
+  auth?: LlmProviderRequestAuthConfig;
+  proxy?: LlmProviderRequestProxyConfig;
+  tls?: LlmProviderRequestTlsConfig;
+}
+
 export interface LlmProviderConfig {
   providerId: string;
   label: string;
@@ -21,6 +70,8 @@ export interface LlmProviderConfig {
   defaultModel: string;
   apiKey?: string;
   apiKeyEnv?: string;
+  request?: LlmProviderRequestConfig;
+  /** @deprecated Use request.headers instead. */
   headers?: Record<string, string>;
   capabilities?: Partial<LlmProviderCapabilities>;
 }
@@ -63,7 +114,45 @@ export interface LlmModelPreviewRequest {
   apiStyle?: LlmApiStyle;
   apiKey?: string;
   apiKeyEnv?: string;
+  request?: LlmProviderRequestConfig;
+  /** @deprecated Use request.headers instead. */
   headers?: Record<string, string>;
+}
+
+export interface ImageAssetInput {
+  bytesBase64: string;
+  mimeType?: string;
+  fileName?: string;
+}
+
+export interface ImageGenerationRequest {
+  providerId?: string;
+  model?: string;
+  prompt: string;
+  referenceImages?: ImageAssetInput[];
+  maskImage?: ImageAssetInput;
+  n?: number;
+  size?: string;
+  quality?: string;
+  background?: string;
+  outputFormat?: "png" | "jpeg" | "webp";
+  responseFormat?: "b64_json" | "url";
+  moderation?: "auto" | "low";
+  timeoutMs?: number;
+}
+
+export interface ImageGenerationResultItem {
+  b64Json?: string;
+  url?: string;
+  revisedPrompt?: string;
+}
+
+export interface ImageGenerationResponse {
+  providerId?: string;
+  model?: string;
+  created?: number;
+  operation: "generate" | "edit";
+  data: ImageGenerationResultItem[];
 }
 
 export interface LlmModelPreviewResponse {

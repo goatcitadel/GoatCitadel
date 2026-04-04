@@ -136,6 +136,7 @@ async function executeBrowserSearch(
 ): Promise<Record<string, unknown>> {
   const query = asNonEmptyString(args.query, "query");
   const requestedEngine = normalizeSearchEngine(asString(args.engine)) ?? "auto";
+  const requestedBackend = normalizeSearchBackend(asString(args.backend));
   const limit = clampInt(args.limit ?? args.maxResults, 5, 1, 25);
   const attemptedEngines: string[] = [];
   const failures: string[] = [];
@@ -218,9 +219,25 @@ async function executeBrowserSearch(
         },
       );
 
-      if ((snapshot.results as Array<unknown> | undefined)?.length) {
+      const normalizedSnapshot = {
+        requestedEngine,
+        engine,
+        query,
+        finalUrl: String(snapshot.finalUrl ?? searchUrl),
+        results: Array.isArray(snapshot.results)
+          ? snapshot.results as Array<{ title: string; url: string; snippet: string }>
+          : [],
+      };
+
+      if (normalizedSnapshot.results.length) {
+        const withBackend = await applySearchBackend(normalizedSnapshot, {
+          args,
+          config,
+          requestedBackend,
+          signal: executionContext?.signal,
+        });
         return {
-          ...snapshot,
+          ...withBackend,
           action: "search",
           attemptedEngines,
           fallbackUsed: false,
@@ -235,8 +252,20 @@ async function executeBrowserSearch(
     try {
       const fallback = await executeBrowserSearchFallback(query, limit, config, engine, executionContext?.signal);
       if (fallback.results.length > 0) {
+        const withBackend = await applySearchBackend({
+          requestedEngine,
+          engine,
+          query,
+          finalUrl: fallback.finalUrl,
+          results: fallback.results,
+        }, {
+          args,
+          config,
+          requestedBackend,
+          signal: executionContext?.signal,
+        });
         return {
-          ...fallback,
+          ...withBackend,
           action: "search",
           requestedEngine,
           engine,
@@ -1578,6 +1607,13 @@ function normalizeSearchEngine(engine: string | undefined): "auto" | "duckduckgo
   return undefined;
 }
 
+function normalizeSearchBackend(backend: string | undefined): "ollama" | undefined {
+  if (!backend) {
+    return undefined;
+  }
+  return backend === "ollama" ? "ollama" : undefined;
+}
+
 function resolveSearchEngineCandidates(engine: "auto" | "duckduckgo" | "bing" | "google"): Array<"duckduckgo" | "bing" | "google"> {
   if (engine === "google") {
     return ["google", "bing", "duckduckgo"];
@@ -1666,6 +1702,117 @@ async function executeBrowserSearchFallback(
     finalUrl: page.finalUrl,
     results: parseSearchResults(page.html, limit, page.finalUrl),
   };
+}
+
+async function applySearchBackend(
+  base: {
+    requestedEngine?: string;
+    engine: string;
+    query: string;
+    finalUrl: string;
+    results: Array<{ title: string; url: string; snippet: string }>;
+  },
+  input: {
+    args: Record<string, unknown>;
+    config: ToolPolicyConfig;
+    requestedBackend?: "ollama";
+    signal?: AbortSignal;
+  },
+): Promise<typeof base & {
+  backend?: "ollama";
+  backendUsed?: boolean;
+  backendWarning?: string;
+  summary?: string;
+}> {
+  if (!input.requestedBackend || base.results.length === 0) {
+    return base;
+  }
+  if (input.requestedBackend !== "ollama") {
+    return base;
+  }
+
+  try {
+    const summary = await summarizeSearchResultsWithOllama(base.query, base.results, input);
+    return {
+      ...base,
+      backend: "ollama",
+      backendUsed: true,
+      summary,
+    };
+  } catch (error) {
+    return {
+      ...base,
+      backend: "ollama",
+      backendUsed: false,
+      backendWarning: (error as Error).message,
+    };
+  }
+}
+
+async function summarizeSearchResultsWithOllama(
+  query: string,
+  results: Array<{ title: string; url: string; snippet: string }>,
+  input: {
+    args: Record<string, unknown>;
+    config: ToolPolicyConfig;
+    signal?: AbortSignal;
+  },
+): Promise<string> {
+  const endpoint = resolveOllamaSearchEndpoint(input.args);
+  assertAllowedHttpUrl(endpoint);
+  assertHostAllowed(endpoint, input.config.sandbox.networkAllowlist);
+
+  const model = asString(input.args.ollamaModel)
+    ?? process.env.GOATCITADEL_OLLAMA_SEARCH_MODEL?.trim()
+    ?? "llama3.2";
+  const renderedResults = results
+    .slice(0, 8)
+    .map((result, index) => `${index + 1}. ${result.title}\nURL: ${result.url}\nSnippet: ${result.snippet}`)
+    .join("\n\n");
+  const prompt = [
+    "Summarize the most relevant web results for the query below.",
+    "Use only the provided results.",
+    "Keep the answer concise and high-signal.",
+    "",
+    `Query: ${query}`,
+    "",
+    renderedResults,
+  ].join("\n");
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    signal: composeAbortSignal(15_000, input.signal),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      prompt,
+      stream: false,
+      options: {
+        temperature: 0.2,
+      },
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Ollama search backend failed (${response.status} ${response.statusText}).`);
+  }
+  const payload = await response.json() as Record<string, unknown>;
+  const summary = typeof payload.response === "string" ? payload.response.trim() : "";
+  if (!summary) {
+    throw new Error("Ollama search backend returned no summary.");
+  }
+  return summary;
+}
+
+function resolveOllamaSearchEndpoint(args: Record<string, unknown>): string {
+  const explicit = asString(args.ollamaUrl);
+  if (explicit) {
+    return explicit;
+  }
+  const envHost = process.env.OLLAMA_HOST?.trim() || process.env.GOATCITADEL_OLLAMA_SEARCH_URL?.trim();
+  const base = envHost && envHost.length > 0 ? envHost.replace(/\/+$/u, "") : "http://127.0.0.1:11434";
+  return base.endsWith("/api/generate") ? base : `${base}/api/generate`;
 }
 
 async function executeBrowserNavigateFallback(

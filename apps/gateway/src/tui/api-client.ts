@@ -498,6 +498,12 @@ export class TuiApiClient {
     baseUrl: string;
     apiKey?: string;
     apiKeyEnv?: string;
+    request?: {
+      headers?: Record<string, string>;
+      auth?: Record<string, unknown>;
+      proxy?: Record<string, unknown>;
+      tls?: Record<string, unknown>;
+    };
     headers?: Record<string, string>;
   }): Promise<LlmModelPreviewResponse> {
     return this.request("/api/v1/llm/models/preview", {

@@ -92,6 +92,9 @@ importers:
       ora:
         specifier: ^9.0.0
         version: 9.3.0
+      undici:
+        specifier: ^6.24.1
+        version: 6.24.1
       zod:
         specifier: ^3.24.1
         version: 3.25.76

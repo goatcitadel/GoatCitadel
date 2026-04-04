@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessageRecord } from "@goatcitadel/contracts";
-import { buildConversationCompactionSummary } from "./chat-compaction.js";
+import { buildConversationCompactionSummary, trimNewestContextMessagesForPromptCache } from "./chat-compaction.js";
 
 function createMessage(input: Pick<ChatMessageRecord, "role" | "content"> & { messageId: string }): ChatMessageRecord {
   return {
@@ -52,5 +52,23 @@ describe("buildConversationCompactionSummary", () => {
     ]);
 
     expect(summary).toBeUndefined();
+  });
+
+  it("trims newest tool/context payloads first to keep older prefixes stable", () => {
+    const messages = [
+      { role: "system", content: "Pinned instruction block." },
+      { role: "user", content: "Please compare the latest release notes." },
+      { role: "assistant", content: "I will use the recent search context." },
+      { role: "tool", content: "x".repeat(4000) },
+      { role: "system", content: "y".repeat(2200) },
+    ] as const;
+
+    const trimmed = trimNewestContextMessagesForPromptCache(messages as never, 260);
+
+    expect(trimmed[0]).toEqual(messages[0]);
+    expect(trimmed[1]).toEqual(messages[1]);
+    expect(trimmed[2]).toEqual(messages[2]);
+    expect(trimmed[3]?.content).toContain("cache-stable prompt prefix");
+    expect(trimmed[4]?.content).toContain("cache-stable prompt prefix");
   });
 });

@@ -98,6 +98,13 @@ describe("onboarding routes", () => {
             apiKey: "sk-test-value",
             apiKeyEnv: "OPENAI_API_KEY",
             persistSecretToSecureStore: false,
+            request: {
+              proxy: {
+                url: "http://proxy.internal:8080",
+                auth: { type: "bearer", tokenEnv: "PROXY_TOKEN" },
+                tls: { serverName: "proxy.internal" },
+              },
+            },
           },
         },
       },
@@ -108,6 +115,11 @@ describe("onboarding routes", () => {
       llm: expect.objectContaining({
         upsertProvider: expect.objectContaining({
           persistSecretToSecureStore: false,
+          request: expect.objectContaining({
+            proxy: expect.objectContaining({
+              url: "http://proxy.internal:8080",
+            }),
+          }),
         }),
       }),
     }));

@@ -463,7 +463,7 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   entry("automation", "cron", "Cron Jobs", "Scheduled task orchestration.", "native", ["local"], ["scheduling"]),
   entry("automation", "webhooks", "Webhooks", "Inbound/outbound webhook automation.", "native", ["token"], ["events", "automation"]),
   entry("automation", "weather", "Weather", "Weather data integration.", "native", ["none"], ["data"]),
-  entry("automation", "image-gen", "Image Generation", "Image generation model integration.", "planned", ["api-key"], ["generation"]),
+  entry("automation", "image-gen", "Image Generation", "Image generation model integration with generate/edit support.", "beta", ["api-key"], ["generation", "edits"]),
   entry("automation", "gif-search", "GIF Search", "GIF search integration.", "planned", ["api-key"], ["search"]),
   entry("automation", "peekaboo-screen", "Peekaboo Screen", "Screen capture and remote control integration.", "planned", ["local-agent"], ["capture", "control"]),
   entry("automation", "camera-photo-video", "Camera", "Photo/video capture integration.", "planned", ["local-agent"], ["capture"]),

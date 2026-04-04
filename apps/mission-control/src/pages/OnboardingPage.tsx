@@ -12,6 +12,12 @@ import {
 } from "../api/client";
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { HelpHint } from "../components/HelpHint";
+import {
+  createEmptyLlmTransportDraft,
+  draftFromRequestConfig,
+  LlmTransportFields,
+  requestConfigFromDraft,
+} from "../components/LlmTransportFields";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { SelectOrCustom, type SelectOption } from "../components/SelectOrCustom";
 import { pageCopy } from "../content/copy";
@@ -142,6 +148,8 @@ function hasUnsavedOnboardingDraft(params: {
   providerDefaultModel: string;
   providerApiKey: string;
   providerApiKeyEnv: string;
+  currentProviderTransportDraftJson: string;
+  savedProviderTransportDraftJson: string;
   defaultToolProfile: string;
   budgetMode: RuntimeSettingsResponse["budgetMode"];
   networkAllowlistText: string;
@@ -169,7 +177,8 @@ function hasUnsavedOnboardingDraft(params: {
     || params.providerApiStyle !== (activeProvider?.apiStyle ?? "openai-responses")
     || params.providerDefaultModel !== (activeProvider?.defaultModel ?? "")
     || params.providerApiKey.trim().length > 0
-    || params.providerApiKeyEnv !== ""
+    || params.providerApiKeyEnv !== (activeProvider?.apiKeySource === "env" ? (activeProvider.apiKeyRef ?? "") : "")
+    || params.currentProviderTransportDraftJson !== params.savedProviderTransportDraftJson
     || params.defaultToolProfile !== params.state.settings.defaultToolProfile
     || params.budgetMode !== params.state.settings.budgetMode
     || params.networkAllowlistText !== params.state.settings.networkAllowlist.join("\n")
@@ -209,6 +218,8 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   const [providerDefaultModel, setProviderDefaultModel] = useState("gpt-5.4-mini");
   const [providerApiKey, setProviderApiKey] = useState("");
   const [providerApiKeyEnv, setProviderApiKeyEnv] = useState("");
+  const [providerRequestDraft, setProviderRequestDraft] = useState(createEmptyLlmTransportDraft);
+  const [savedProviderTransportDraftJson, setSavedProviderTransportDraftJson] = useState(JSON.stringify(createEmptyLlmTransportDraft()));
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelDiscoverySource, setModelDiscoverySource] = useState<"remote" | "fallback" | null>(null);
@@ -280,6 +291,25 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     return [...new Set(values)].map((value) => ({ value, label: value }));
   }, [providerLabel, state]);
 
+  const providerConfigMap = useMemo(
+    () => new Map((runtimeLlmConfig?.providerConfigs ?? []).map((provider) => [provider.providerId, provider] as const)),
+    [runtimeLlmConfig?.providerConfigs],
+  );
+
+  const providerRequestValidation = useMemo(() => {
+    try {
+      return {
+        request: requestConfigFromDraft(providerRequestDraft),
+        error: null,
+      };
+    } catch (error) {
+      return {
+        request: undefined,
+        error: (error as Error).message,
+      };
+    }
+  }, [providerRequestDraft]);
+
   const hydrateFromState = useCallback((next: OnboardingRuntimeState) => {
     setAuthMode(next.settings.auth.mode);
     setAllowLoopbackBypass(next.settings.auth.allowLoopbackBypass);
@@ -296,7 +326,15 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       setProviderBaseUrl(activeProvider.baseUrl);
       setProviderApiStyle(activeProvider.apiStyle);
       setProviderDefaultModel(activeProvider.defaultModel);
+      setProviderApiKeyEnv(activeProvider.apiKeySource === "env" ? (activeProvider.apiKeyRef ?? "") : "");
+    } else {
+      setProviderApiKeyEnv("");
     }
+    setProviderApiKey("");
+
+    const nextTransportDraft = draftFromRequestConfig(providerConfigMap.get(next.settings.llm.activeProviderId)?.request);
+    setProviderRequestDraft(nextTransportDraft);
+    setSavedProviderTransportDraftJson(JSON.stringify(nextTransportDraft));
 
     setMeshEnabled(next.settings.mesh.enabled);
     setMeshMode(next.settings.mesh.mode);
@@ -305,7 +343,16 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     setMeshStaticPeers(next.settings.mesh.staticPeers.join("\n"));
     setMeshRequireMtls(next.settings.mesh.requireMtls);
     setMeshTailnetEnabled(next.settings.mesh.tailnetEnabled);
-  }, []);
+  }, [providerConfigMap]);
+
+  useEffect(() => {
+    if (!state || hasUnsavedDraftRef.current) {
+      return;
+    }
+    const nextTransportDraft = draftFromRequestConfig(providerConfigMap.get(activeProviderId.trim())?.request);
+    setProviderRequestDraft(nextTransportDraft);
+    setSavedProviderTransportDraftJson(JSON.stringify(nextTransportDraft));
+  }, [activeProviderId, providerConfigMap, state]);
 
   useEffect(() => {
     hasUnsavedDraftRef.current = hasUnsavedOnboardingDraft({
@@ -323,6 +370,8 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       providerDefaultModel,
       providerApiKey,
       providerApiKeyEnv,
+      currentProviderTransportDraftJson: JSON.stringify(providerRequestDraft),
+      savedProviderTransportDraftJson,
       defaultToolProfile,
       budgetMode,
       networkAllowlistText,
@@ -356,10 +405,12 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     networkAllowlistText,
     providerApiKey,
     providerApiKeyEnv,
+    providerRequestDraft,
     providerApiStyle,
     providerBaseUrl,
     providerDefaultModel,
     providerLabel,
+    savedProviderTransportDraftJson,
     state,
   ]);
 
@@ -499,6 +550,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       setLoadingModels(false);
       return;
     }
+    if (providerRequestValidation.error) {
+      setAvailableModels([]);
+      setModelDiscoverySource("fallback");
+      setModelDiscoveryWarning(providerRequestValidation.error);
+      setLoadingModels(false);
+      return;
+    }
     previewTimerRef.current = setTimeout(() => {
       const controller = new AbortController();
       previewAbortRef.current = controller;
@@ -509,6 +567,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
         apiStyle: providerApiStyle,
         apiKey: providerApiKey.trim() || undefined,
         apiKeyEnv: providerApiKeyEnv.trim() || undefined,
+        request: providerRequestValidation.request,
         fallbackModel: providerDefaultModel || activeModel,
       }, {
         signal: controller.signal,
@@ -548,7 +607,17 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       }
       previewAbortRef.current?.abort();
     };
-  }, [activeProviderId, providerApiKey, providerApiKeyEnv, providerApiStyle, providerBaseUrl]);
+  }, [
+    activeModel,
+    activeProviderId,
+    providerApiKey,
+    providerApiKeyEnv,
+    providerApiStyle,
+    providerBaseUrl,
+    providerDefaultModel,
+    providerRequestValidation.error,
+    providerRequestValidation.request,
+  ]);
 
   const applyProviderTemplate = (providerId: string) => {
     const existing = runtimeProviderCatalog.find((provider) => provider.providerId === providerId)
@@ -562,6 +631,9 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     setProviderBaseUrl(source.baseUrl);
     setProviderApiStyle(source.apiStyle ?? "openai-chat-completions");
     setProviderDefaultModel(source.defaultModel);
+    setProviderApiKey("");
+    setProviderApiKeyEnv(existing?.apiKeySource === "env" ? (existing.apiKeyRef ?? "") : "");
+    setProviderRequestDraft(draftFromRequestConfig(providerConfigMap.get(providerId)?.request));
     if (!activeModel || activeModel === providerDefaultModel) {
       setActiveModel(source.defaultModel);
     }
@@ -633,6 +705,10 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       setError("Confirm critical changes before applying onboarding.");
       return;
     }
+    if (providerRequestValidation.error) {
+      setError(providerRequestValidation.error);
+      return;
+    }
     setApplying(true);
     setError(null);
     try {
@@ -658,6 +734,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
             defaultModel: providerDefaultModel || undefined,
             apiKey: providerApiKey || undefined,
             apiKeyEnv: providerApiKeyEnv || undefined,
+            request: providerRequestValidation.request,
           },
         },
         mesh: {
@@ -942,6 +1019,12 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
                 onChange={(event) => setProviderApiKeyEnv(event.target.value)}
               />
             </div>
+            <LlmTransportFields
+              idPrefix="wizard-provider-transport"
+              draft={providerRequestDraft}
+              onChange={setProviderRequestDraft}
+              error={providerRequestValidation.error}
+            />
           </details>
         </article>
       ) : null}

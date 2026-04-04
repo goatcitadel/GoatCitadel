@@ -7,6 +7,78 @@ const llmApiStyleSchema = z.enum([
   "anthropic-messages",
 ]);
 
+const llmProviderRequestAuthSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("bearer"),
+    token: z.string().min(1).optional(),
+    tokenEnv: z.string().min(1).optional(),
+    headerName: z.string().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("header"),
+    headerName: z.string().min(1),
+    value: z.string().min(1).optional(),
+    valueEnv: z.string().min(1).optional(),
+    scheme: z.string().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("query"),
+    queryParam: z.string().min(1),
+    value: z.string().min(1).optional(),
+    valueEnv: z.string().min(1).optional(),
+    prefix: z.string().optional(),
+  }),
+]);
+
+const llmProviderProxyAuthSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("bearer"),
+    token: z.string().min(1).optional(),
+    tokenEnv: z.string().min(1).optional(),
+    headerName: z.string().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("header"),
+    headerName: z.string().min(1),
+    value: z.string().min(1).optional(),
+    valueEnv: z.string().min(1).optional(),
+    scheme: z.string().min(1).optional(),
+  }),
+]);
+
+const llmProviderRequestTlsSchema = z.object({
+  insecureSkipVerify: z.boolean().optional(),
+  caCertPath: z.string().min(1).optional(),
+  clientCertPath: z.string().min(1).optional(),
+  clientKeyPath: z.string().min(1).optional(),
+  serverName: z.string().min(1).optional(),
+}).superRefine((value, ctx) => {
+  if (Boolean(value.clientCertPath) !== Boolean(value.clientKeyPath)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "clientCertPath and clientKeyPath must be provided together",
+    });
+  }
+  if (value.insecureSkipVerify && value.caCertPath) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "caCertPath cannot be combined with insecureSkipVerify",
+    });
+  }
+});
+
+const llmProviderRequestSchema = z.object({
+  headers: z.record(z.string()).optional(),
+  auth: llmProviderRequestAuthSchema.optional(),
+  proxy: z.object({
+    url: z.string().url(),
+    bypassHosts: z.array(z.string().min(1)).optional(),
+    auth: llmProviderProxyAuthSchema.optional(),
+    tls: llmProviderRequestTlsSchema.optional(),
+  }).optional(),
+  tls: llmProviderRequestTlsSchema.optional(),
+});
+
 const bootstrapSchema = z.object({
   defaultToolProfile: z.enum(["minimal", "standard", "coding", "ops", "research", "danger"]).optional(),
   budgetMode: z.enum(["saver", "balanced", "power"]).optional(),
@@ -30,6 +102,7 @@ const bootstrapSchema = z.object({
       apiKey: z.string().min(1).optional(),
       apiKeyEnv: z.string().min(1).optional(),
       persistSecretToSecureStore: z.boolean().optional(),
+      request: llmProviderRequestSchema.optional(),
       headers: z.record(z.string()).optional(),
     }).optional(),
   }).optional(),

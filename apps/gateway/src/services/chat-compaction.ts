@@ -1,6 +1,7 @@
-import type { ChatMessageRecord } from "@goatcitadel/contracts";
+import type { ChatCompletionRequest, ChatMessageRecord } from "@goatcitadel/contracts";
 
 const CHAT_COMPACTION_MAX_ARTIFACTS = 8;
+const PROMPT_CACHE_TRIM_NOTE = "Compacted recent tool/context payload to preserve a cache-stable prompt prefix.";
 
 export function buildConversationCompactionSummary(messages: ChatMessageRecord[]): string | undefined {
   const normalized = messages
@@ -35,6 +36,29 @@ export function buildConversationCompactionSummary(messages: ChatMessageRecord[]
   ].filter((section): section is string => Boolean(section));
 
   return sections.join("\n\n");
+}
+
+export function trimNewestContextMessagesForPromptCache(
+  messages: ChatCompletionRequest["messages"],
+  maxApproxTokens: number,
+): ChatCompletionRequest["messages"] {
+  if (maxApproxTokens <= 0 || estimateApproxMessageTokens(messages) <= maxApproxTokens) {
+    return messages;
+  }
+
+  const trimmed = messages.map((message) => ({ ...message }));
+  for (let index = trimmed.length - 1; index >= 0; index -= 1) {
+    if (estimateApproxMessageTokens(trimmed) <= maxApproxTokens) {
+      break;
+    }
+    const candidate = trimmed[index];
+    if (!candidate || !isPromptCacheTrimCandidate(candidate)) {
+      continue;
+    }
+    trimmed[index] = compactPromptCacheMessage(candidate);
+  }
+
+  return trimmed;
 }
 
 function extractCompactionArtifacts(contents: string[]): string[] {
@@ -80,4 +104,43 @@ function toTitleCase(value: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function isPromptCacheTrimCandidate(message: ChatCompletionRequest["messages"][number]): boolean {
+  if (Array.isArray(message.content)) {
+    return true;
+  }
+  if (typeof message.content !== "string") {
+    return false;
+  }
+  const normalized = message.content.trim();
+  if (normalized.length < 480) {
+    return false;
+  }
+  return message.role === "tool" || message.role === "system" || message.role === "developer";
+}
+
+function compactPromptCacheMessage(
+  message: ChatCompletionRequest["messages"][number],
+): ChatCompletionRequest["messages"][number] {
+  return {
+    ...message,
+    content: `${PROMPT_CACHE_TRIM_NOTE} Role=${message.role}.`,
+  };
+}
+
+function estimateApproxMessageTokens(messages: ChatCompletionRequest["messages"]): number {
+  return Math.ceil(
+    messages.reduce((total, message) => total + estimateApproxContentTokens(message.content), 0),
+  );
+}
+
+function estimateApproxContentTokens(content: ChatCompletionRequest["messages"][number]["content"]): number {
+  if (typeof content === "string") {
+    return Math.ceil(content.length / 4);
+  }
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  return Math.ceil(JSON.stringify(content).length / 4);
 }

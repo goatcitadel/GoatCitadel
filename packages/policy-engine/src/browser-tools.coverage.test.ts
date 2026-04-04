@@ -41,6 +41,7 @@ function createConfig(root: string): ToolPolicyConfig {
         "lite.duckduckgo.com",
         "www.google.com",
         "www.bing.com",
+        "127.0.0.1:11434",
       ],
       riskyShellPatterns: [],
       requireApprovalForRiskyShell: true,
@@ -411,6 +412,78 @@ describe("browser tools coverage sweep", () => {
       { query: "Kristi Noem latest news", limit: 2 },
       config,
     )).rejects.toThrow(/browser\.search failed/i);
+  });
+
+  it("uses the Ollama search backend when configured", async () => {
+    const config = createConfig(tempRoot);
+    mocked.launch.mockResolvedValueOnce(createSearchPlaywrightStub(() => [
+      {
+        href: "https://example.com/result-a",
+        title: "Result A",
+        snippet: "Snippet A",
+      },
+    ]) as never);
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/generate")) {
+        return new Response(JSON.stringify({ response: "Local summary from Ollama." }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("<html></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    }) as unknown as typeof fetch;
+
+    const response = await executeBrowserTool(
+      "browser.search",
+      { query: "coverage", engine: "duckduckgo", backend: "ollama" },
+      config,
+    );
+
+    expect(response.backend).toBe("ollama");
+    expect(response.backendUsed).toBe(true);
+    expect(response.summary).toBe("Local summary from Ollama.");
+  });
+
+  it("keeps browser search results when the Ollama backend is unavailable", async () => {
+    const config = createConfig(tempRoot);
+    mocked.launch.mockResolvedValueOnce(createSearchPlaywrightStub(() => [
+      {
+        href: "https://example.com/result-a",
+        title: "Result A",
+        snippet: "Snippet A",
+      },
+    ]) as never);
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/generate")) {
+        throw new Error("connection refused");
+      }
+      return new Response("<html></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    }) as unknown as typeof fetch;
+
+    const response = await executeBrowserTool(
+      "browser.search",
+      { query: "coverage", engine: "duckduckgo", backend: "ollama" },
+      config,
+    );
+
+    expect(response.backend).toBe("ollama");
+    expect(response.backendUsed).toBe(false);
+    expect(response.backendWarning).toContain("connection refused");
+    expect(response.results).toEqual([
+      {
+        title: "Result A",
+        url: "https://example.com/result-a",
+        snippet: "Snippet A",
+      },
+    ]);
   });
 
   it("uses HTML fetch fallback for navigate and extract when playwright runtime is unavailable", async () => {

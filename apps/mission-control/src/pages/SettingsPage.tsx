@@ -39,6 +39,12 @@ import type { VoiceRuntimeStatus, VoiceStatus, VoiceTalkSessionRecord } from "@g
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { FieldHelp } from "../components/FieldHelp";
 import { HelpHint } from "../components/HelpHint";
+import {
+  createEmptyLlmTransportDraft,
+  draftFromRequestConfig,
+  LlmTransportFields,
+  requestConfigFromDraft,
+} from "../components/LlmTransportFields";
 import { Panel } from "../components/Panel";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
@@ -213,6 +219,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
   const [providerDefaultModel, setProviderDefaultModel] = useState("local-model");
   const [providerApiKey, setProviderApiKey] = useState("");
   const [providerApiKeyEnv, setProviderApiKeyEnv] = useState("");
+  const [providerRequestDraft, setProviderRequestDraft] = useState(createEmptyLlmTransportDraft);
   const [providerSecretStatus, setProviderSecretStatus] = useState<ProviderSecretStatus | null>(null);
   const [hasUnsavedActiveLlmDraft, setHasUnsavedActiveLlmDraft] = useState(false);
   const [hasUnsavedProviderDraft, setHasUnsavedProviderDraft] = useState(false);
@@ -294,6 +301,23 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     () => runtimeProviderCatalog.find((provider) => provider.providerId === effectiveProviderId),
     [effectiveProviderId, runtimeProviderCatalog],
   );
+  const providerConfigMap = useMemo(
+    () => new Map((runtimeLlmConfig?.providerConfigs ?? []).map((provider) => [provider.providerId, provider] as const)),
+    [runtimeLlmConfig?.providerConfigs],
+  );
+  const providerRequestValidation = useMemo(() => {
+    try {
+      return {
+        request: requestConfigFromDraft(providerRequestDraft),
+        error: null,
+      };
+    } catch (error) {
+      return {
+        request: undefined,
+        error: (error as Error).message,
+      };
+    }
+  }, [providerRequestDraft]);
   const visibleSectionIds = useMemo(() => {
     return activeTab ? new Set(resolveSettingsTabSections(activeTab)) : null;
   }, [activeTab]);
@@ -388,6 +412,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
             setProviderDefaultModel(activeProvider.defaultModel);
             setProviderApiKeyEnv(activeProvider.apiKeySource === "env" && activeProvider.apiKeyRef ? activeProvider.apiKeyRef : "");
           }
+          setProviderRequestDraft(createEmptyLlmTransportDraft());
         }
 
         if (!preserveModelDrafts) {
@@ -414,6 +439,14 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     }
     setSettings((current) => current ? { ...current, llm: runtimeLlmConfig } : current);
   }, [runtimeLlmConfig]);
+
+  useEffect(() => {
+    if (hasUnsavedProviderDraft) {
+      return;
+    }
+    const config = providerConfigMap.get(providerId.trim());
+    setProviderRequestDraft(draftFromRequestConfig(config?.request));
+  }, [hasUnsavedProviderDraft, providerConfigMap, providerId]);
 
   useRefreshSubscription(
     "system",
@@ -603,6 +636,10 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       setError("Confirm critical changes before saving.");
       return;
     }
+    if (providerRequestValidation.error) {
+      setError(providerRequestValidation.error);
+      return;
+    }
     setError(null);
     try {
       const next = await patchSettings({
@@ -614,6 +651,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
             apiStyle: providerApiStyle,
             defaultModel: providerDefaultModel || undefined,
             apiKeyEnv: providerApiKeyEnv || undefined,
+            request: providerRequestValidation.request,
           },
         },
       });
@@ -676,6 +714,13 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
         setModelDiscoveryWarning(null);
         return;
       }
+      if (providerRequestValidation.error) {
+        setModels([]);
+        setPreviewedProviderId(targetProviderId);
+        setModelDiscoverySource("fallback");
+        setModelDiscoveryWarning(providerRequestValidation.error);
+        return;
+      }
       setLoadingModels(true);
       setPreviewedProviderId(targetProviderId);
       const res = await previewProviderModels({
@@ -684,6 +729,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
         apiStyle: providerApiStyle,
         apiKey: providerApiKey.trim() || undefined,
         apiKeyEnv: providerApiKeyEnv.trim() || undefined,
+        request: providerRequestValidation.request,
         fallbackModel: getModelPreviewFallbackModel(
           targetProviderId === effectiveActiveProviderId ? activeModel : "",
           providerDefaultModel,
@@ -742,7 +788,16 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       }
       modelPreviewAbortRef.current?.abort();
     };
-  }, [activeProviderId, providerApiKey, providerApiKeyEnv, providerApiStyle, providerBaseUrl, providerId]);
+  }, [
+    activeProviderId,
+    providerApiKey,
+    providerApiKeyEnv,
+    providerApiStyle,
+    providerBaseUrl,
+    providerId,
+    providerRequestValidation.error,
+    providerRequestValidation.request,
+  ]);
 
   const onTestChat = async () => {
     setError(null);
@@ -990,6 +1045,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
   const applyProviderTemplate = (nextProviderId: string) => {
     const current = providerOptions.find((provider) => provider.providerId === nextProviderId);
     const template = providerTemplates.find((item) => item.providerId === nextProviderId);
+    const currentConfig = providerConfigMap.get(nextProviderId);
 
     if (current) {
       setProviderLabel(current.label);
@@ -998,6 +1054,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       setProviderDefaultModel(current.defaultModel);
       setProviderApiKeyEnv(current.apiKeySource === "env" ? (current.apiKeyRef ?? "") : "");
       setProviderApiKey("");
+      setProviderRequestDraft(draftFromRequestConfig(currentConfig?.request));
       return;
     }
 
@@ -1008,6 +1065,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       setProviderDefaultModel(template.defaultModel);
       setProviderApiKeyEnv("");
       setProviderApiKey("");
+      setProviderRequestDraft(draftFromRequestConfig(currentConfig?.request));
     }
   };
 
@@ -1029,6 +1087,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     setProviderDefaultModel(template.defaultModel);
     setProviderApiKey("");
     setProviderApiKeyEnv("");
+    setProviderRequestDraft(draftFromRequestConfig(providerConfigMap.get(nextProviderId)?.request));
     setHasUnsavedActiveLlmDraft(true);
     setHasUnsavedProviderDraft(true);
     setShowAdvanced(true);
@@ -1844,6 +1903,15 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
                 customLabel="Custom env var"
               />
             </div>
+            <LlmTransportFields
+              idPrefix="settings-provider-transport"
+              draft={providerRequestDraft}
+              onChange={(nextDraft) => {
+                setHasUnsavedProviderDraft(true);
+                setProviderRequestDraft(nextDraft);
+              }}
+              error={providerRequestValidation.error}
+            />
             <button type="button" onClick={onSaveProvider} disabled={blockSaves}>Save Provider Settings</button>
           </div>
         ) : null}
