@@ -1,0 +1,331 @@
+.chat-v11-shell {
+  gap: 16px;
+  align-items: stretch;
+}
+
+.chat-v11-left {
+  gap: 12px;
+  padding: 16px;
+  border-radius: 20px;
+}
+
+.chat-v11-workspace-summary {
+  display: grid;
+  gap: 12px;
+}
+
+.chat-v11-workspace-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.chat-v11-workspace-kicker,
+.mission-surface-header-kicker,
+.mission-context-dock-kicker,
+.mission-empty-shell-kicker,
+.chat-v11-composer-kicker {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mission-surface-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: end;
+  padding: 8px 4px 0;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  backdrop-filter: blur(10px);
+}
+
+.mission-surface-header-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mission-surface-header-copy h2,
+.mission-context-dock-head h3,
+.mission-empty-shell-copy h3 {
+  margin: 0;
+  font-size: clamp(1.45rem, 2vw, 2rem);
+  line-height: 1.08;
+}
+
+.mission-surface-header-copy p,
+.mission-context-dock-head p,
+.mission-empty-shell-copy p {
+  margin: 0;
+}
+
+.mission-surface-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mission-surface-dock-toggle {
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(115, 205, 255, 0.05);
+}
+
+.chat-v11-main-grid.with-dock-open {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+  align-items: start;
+}
+
+.chat-v11-main-grid.with-cowork.with-dock-open {
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 390px);
+}
+
+.chat-v11-main-grid.with-code.with-dock-open {
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
+}
+
+.chat-v11-thread {
+  gap: 14px;
+  padding: 10px;
+  border-radius: 22px;
+}
+
+.chat-v11-thread-shell {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.chat-v11-thread-scroll {
+  min-height: 0;
+}
+
+.chat-v11-thread-status-lane {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-v11-composer {
+  gap: 10px;
+  padding: 14px;
+  border-radius: 18px;
+}
+
+.chat-v11-composer-headline {
+  display: grid;
+  gap: 4px;
+}
+
+.chat-v11-composer-headline span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.chat-v11-composer textarea {
+  min-height: 118px;
+}
+
+.chat-v11-composer-actions {
+  align-items: center;
+}
+
+.chat-v11-queue-bar {
+  border-radius: 16px;
+}
+
+.chat-v11-session-row {
+  gap: 6px;
+}
+
+.chat-v11-session-row button {
+  display: grid;
+  gap: 6px;
+}
+
+.chat-v11-session-row-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-v11-session-row-meta {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.chat-v11-session-row p {
+  margin: 0;
+  line-height: 1.35;
+}
+
+.chat-v11-session-row-preview {
+  color: var(--text-soft, var(--muted));
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.mission-context-dock {
+  display: grid;
+  gap: 12px;
+  align-self: stretch;
+  min-height: clamp(520px, calc(100vh - 220px), 980px);
+}
+
+.mission-context-dock.is-collapsed {
+  display: none;
+}
+
+.mission-context-dock-head {
+  display: grid;
+  gap: 8px;
+  padding: 4px 6px 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  backdrop-filter: blur(12px);
+}
+
+.mission-context-dock-body {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.mission-dock-section {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+}
+
+.mission-dock-panel {
+  min-height: 0;
+}
+
+.chat-cowork-panel,
+.chat-code-workbench,
+.chat-v11-inspector-lane {
+  border-radius: 20px;
+  padding: 14px;
+}
+
+.mission-empty-shell {
+  display: grid;
+  gap: 18px;
+  min-height: min(68vh, 680px);
+  align-content: center;
+  justify-items: center;
+  padding: clamp(24px, 4vw, 48px);
+  text-align: center;
+  border-radius: 24px;
+}
+
+.mission-empty-shell-copy {
+  display: grid;
+  gap: 10px;
+  max-width: 760px;
+}
+
+.mission-empty-shell-actions {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+}
+
+.mission-empty-shell-stats {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.mission-empty-shell-prompts {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 920px;
+}
+
+.mission-empty-shell-prompt {
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: rgba(115, 205, 255, 0.05);
+  color: var(--muted);
+}
+
+.theme-signal-noir .mission-surface-header,
+.theme-signal-noir .mission-context-dock,
+.theme-signal-noir .mission-empty-shell,
+.theme-signal-noir .chat-v11-left,
+.theme-signal-noir .chat-v11-thread {
+  background:
+    linear-gradient(180deg, rgba(13, 21, 33, 0.92), rgba(10, 17, 28, 0.9)),
+    radial-gradient(circle at top, rgba(95, 240, 255, 0.08), transparent 45%);
+  border: 1px solid rgba(125, 238, 255, 0.14);
+  box-shadow: 0 24px 60px rgba(2, 8, 18, 0.38);
+}
+
+.theme-signal-noir .mission-surface-dock-toggle,
+.theme-signal-noir .mission-empty-shell-prompt {
+  background: rgba(26, 40, 56, 0.78);
+  border-color: rgba(125, 238, 255, 0.14);
+}
+
+@media (max-width: 1480px) {
+  .chat-v11-main-grid.with-code.with-dock-open {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  }
+
+  .chat-v11-main-grid.with-cowork.with-dock-open {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+  }
+}
+
+@media (max-width: 1120px) {
+  .chat-v11-main-grid.with-dock-open,
+  .chat-v11-main-grid.with-code.with-dock-open,
+  .chat-v11-main-grid.with-cowork.with-dock-open {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mission-context-dock.is-open {
+    position: fixed;
+    top: 92px;
+    right: 16px;
+    bottom: 16px;
+    width: min(420px, calc(100vw - 32px));
+    padding: 16px;
+    overflow: auto;
+    z-index: 30;
+    background: rgba(8, 15, 24, 0.98);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.48);
+  }
+
+  .mission-surface-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mission-surface-header-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 840px) {
+  .chat-v11-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-v11-left {
+    max-height: none;
+  }
+}

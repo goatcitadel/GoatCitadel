@@ -42,15 +42,15 @@ export function CodeWorkbenchPanel({
   const activeDraft = drafts[activeBlockIndex] ?? "";
 
   return (
-    <aside className="chat-code-workbench">
+    <aside className="chat-code-workbench mission-dock-panel">
       <header className="chat-code-workbench-head">
         <div>
           <h4>Code Workbench</h4>
           <p>
             {needsProjectBinding
-              ? "Bind a project to turn this into an execution-ready code lane."
+              ? "Bind a project to turn this into an execution-ready implementation lane."
               : projectName
-                ? `Project-bound editing surface for ${projectName}.`
+                ? `Project-bound implementation surface for ${projectName}.`
                 : "Editable code lane sourced from the selected turn."}
           </p>
         </div>

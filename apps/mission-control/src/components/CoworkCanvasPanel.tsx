@@ -14,13 +14,13 @@ export function CoworkCanvasPanel({
   orchestration?: ChatOrchestrationSummary;
 }) {
   return (
-    <aside className="chat-cowork-panel">
-      <header>
+    <aside className="chat-cowork-panel mission-dock-panel">
+      <header className="mission-dock-panel-head">
         <h4>Cowork Canvas</h4>
         <p>
           {orchestration
-            ? `Workflow ${orchestration.workflowTemplate} · ${orchestration.steps.length} role${orchestration.steps.length === 1 ? "" : "s"}`
-            : "Shared context and active checklist for this session."}
+            ? `Workflow ${orchestration.workflowTemplate} · ${orchestration.steps.length} role${orchestration.steps.length === 1 ? "" : "s"} in play.`
+            : "Shared context, active checklist, and workflow framing for this session."}
         </p>
       </header>
       {orchestration ? (
@@ -45,7 +45,7 @@ export function CoworkCanvasPanel({
         </div>
       ) : null}
       {items.length === 0 ? (
-        <p className="chat-cowork-empty">No active tasks yet. Use `/research ...` or ask the model to plan next steps.</p>
+        <p className="chat-cowork-empty">No active tasks yet. Ask GoatCitadel to plan next steps, research the space, or coordinate work across roles.</p>
       ) : (
         <ul>
           {items.map((item) => (

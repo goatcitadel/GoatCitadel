@@ -95,16 +95,13 @@ import {
 import { ActionButton } from "../components/ActionButton";
 import { CardSkeleton } from "../components/CardSkeleton";
 import { ChatPlanningPill } from "../components/chat/ChatPlanningPill";
-import { ChatQueueBar, type ChatQueueItemView } from "../components/chat/ChatQueueBar";
-import { ChatSessionRail } from "../components/chat/ChatSessionRail";
 import {
   isThreadMutatingStreamChunk,
   type PendingStreamTurnSeed,
   updateThreadFromStreamChunk,
 } from "../components/chat/chat-thread-reducer";
-import { ChatThreadView, type ChatThreadNotice } from "../components/chat/ChatThreadView";
+import type { ChatThreadNotice } from "../components/chat/ChatThreadView";
 import type { ChatStreamStatus } from "../components/chat/ChatStreamStatusBar";
-import { ChatComposerPlusMenu } from "../components/ChatComposerPlusMenu";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { ChatModeSwitch } from "../components/ChatModeSwitch";
 import { ChatModelPicker, type ChatModelProviderOption } from "../components/ChatModelPicker";
@@ -114,11 +111,11 @@ import { CoworkCanvasPanel } from "../components/CoworkCanvasPanel";
 import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
 import { HelpHint } from "../components/HelpHint";
-import { InlineApprovalPrompt } from "../components/InlineApprovalPrompt";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
 import { GCCombobox, GCSelect, GCSwitch } from "../components/ui";
+import { useEventStreamStatus } from "../hooks/useEventStreamStatus";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { pageCopy } from "../content/copy";
@@ -135,7 +132,34 @@ import {
   isLikelyLocalProviderUrl,
   resolveProviderModelSelection,
 } from "./chat/chat-page-helpers";
+import { ChatComposerShell } from "./chat/ChatComposerShell";
+import { ChatSessionSidebar } from "./chat/ChatSessionSidebar";
+import { ChatThreadShell } from "./chat/ChatThreadShell";
+import { MissionControlContextDock } from "./chat/MissionControlContextDock";
+import { MissionControlEmptyState } from "./chat/MissionControlEmptyState";
+import { MissionControlSurfaceHeader } from "./chat/MissionControlSurfaceHeader";
+import { defaultDockOpenForMode } from "./chat/surface-config";
+import {
+  formatSessionLabel,
+  looksMachineSessionLabel,
+  shouldShowLearnedMemoryPanel,
+  shouldShowSuggestionsPanel,
+  shouldShowTracePanel,
+  type MissionControlDockSectionId,
+  useMissionControlSurfaceState,
+} from "./chat/useMissionControlSurfaceState";
+import { useChatSurfaceOrchestration, type OutboundQueueItem } from "./chat/useChatSurfaceOrchestration";
 import "../styles/chat.css";
+import "../styles/chat-surface.css";
+import "../styles/chat-motion.css";
+
+export {
+  formatSessionLabel,
+  looksMachineSessionLabel,
+  shouldShowLearnedMemoryPanel,
+  shouldShowSuggestionsPanel,
+  shouldShowTracePanel,
+} from "./chat/useMissionControlSurfaceState";
 
 const STREAM_PREF_KEY = "goatcitadel.chat.agent.stream.enabled";
 
@@ -192,17 +216,6 @@ interface FinalizedStreamMessageState {
   placeholderId: string;
   messageId?: string;
   content: string;
-}
-
-interface OutboundQueueItem {
-  id: string;
-  action: "send" | "edit" | "retry";
-  sessionId?: string;
-  targetTurnId?: string;
-  content: string;
-  attachments: ChatAttachmentRecord[];
-  createdAt: string;
-  paused?: boolean;
 }
 
 type SessionControlPending =
@@ -275,78 +288,6 @@ export function shouldApplyFetchedMessagesAfterStream(
     item.role === "assistant" && normalizeComparableAssistantContent(item.content) === finalizedContent
   ));
   return fetchedHasEquivalentAssistant;
-}
-
-export function looksMachineSessionLabel(label: string | undefined, sessionKey?: string): boolean {
-  const trimmed = label?.trim();
-  if (!trimmed) {
-    return true;
-  }
-  if (sessionKey && trimmed === sessionKey.trim()) {
-    return true;
-  }
-  return /^(mission|external):/i.test(trimmed) || /:operator:chat_/i.test(trimmed);
-}
-
-export function formatSessionLabel(session: ChatSessionsResponse["items"][number]): string {
-  const title = session.title?.trim();
-  if (title && !looksMachineSessionLabel(title, session.sessionKey)) {
-    return title;
-  }
-  if (session.scope === "external") {
-    const channel = [session.channel, session.account].filter(Boolean).join(" / ");
-    return channel ? `External chat - ${channel}` : `External chat - ${session.sessionId.slice(-6)}`;
-  }
-  return `Mission chat - ${session.sessionId.slice(-6)}`;
-}
-
-export function shouldShowTracePanel(
-  mode: ChatMode,
-  turn: ChatThreadResponse["turns"][number] | null,
-): boolean {
-  if (!turn) {
-    return false;
-  }
-  if (mode !== "chat") {
-    return true;
-  }
-  return turn.trace.status !== "completed"
-    || Boolean(turn.trace.failure)
-    || turn.trace.toolRuns.length > 0
-    || Boolean(turn.trace.routing.fallbackUsed)
-    || Boolean(turn.trace.orchestration);
-}
-
-export function shouldShowSuggestionsPanel(
-  mode: ChatMode,
-  input: {
-    capabilitySuggestionCount: number;
-    specialistSuggestionCount: number;
-    specialistCandidateCount: number;
-    proactiveSuggestionCount: number;
-    hasDelegationSuggestion: boolean;
-  },
-): boolean {
-  if (mode === "cowork") {
-    return true;
-  }
-  if (mode === "code") {
-    return input.capabilitySuggestionCount > 0
-      || input.specialistSuggestionCount > 0
-      || input.specialistCandidateCount > 0;
-  }
-  return input.capabilitySuggestionCount > 0
-    || input.specialistSuggestionCount > 0
-    || input.specialistCandidateCount > 0
-    || input.proactiveSuggestionCount > 0
-    || input.hasDelegationSuggestion;
-}
-
-export function shouldShowLearnedMemoryPanel(mode: ChatMode, learnedMemoryCount: number): boolean {
-  if (mode === "chat") {
-    return learnedMemoryCount > 0;
-  }
-  return true;
 }
 
 function toTitleCase(value: string): string {
@@ -475,11 +416,9 @@ export function ChatPage({
   const [learnedMemory, setLearnedMemory] = useState<LearnedMemoryItemRecord[]>([]);
   const [delegationSuggestion, setDelegationSuggestion] = useState<ChatDelegationSuggestionRecord | null>(null);
   const [localNotices, setLocalNotices] = useState<ChatThreadNotice[]>([]);
-  const [queuedOutbound, setQueuedOutbound] = useState<OutboundQueueItem[]>([]);
   const [installedSkills, setInstalledSkills] = useState<SkillListItem[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerRecord[]>([]);
   const [mcpTemplates, setMcpTemplates] = useState<Array<McpServerTemplateRecord & { installed: boolean }>>([]);
-  const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -508,6 +447,7 @@ export function ChatPage({
   const [approvalPending, setApprovalPending] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const [followThreadOutput, setFollowThreadOutput] = useState(true);
+  const [dockOpen, setDockOpen] = useState<boolean>(() => defaultDockOpenForMode(surface ?? "chat"));
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const dragDepthRef = useRef(0);
@@ -528,12 +468,48 @@ export function ChatPage({
   const activeStreamRef = useRef<ActiveChatStreamState | null>(null);
   const lastShellSurfaceSyncKeyRef = useRef<string | null>(null);
   const executeOutboundItemRef = useRef<(item: OutboundQueueItem) => Promise<void>>(async () => undefined);
+  const tryBeginOutboundExecutionRef = useRef<() => boolean>(() => false);
+  const pushLocalNoticeRef = useRef<(message: string, tone?: ChatThreadNotice["tone"]) => void>(() => undefined);
+  const loadSessionCoreStateRef = useRef<(
+    sessionId: string,
+    options?: { background?: boolean; includeThread?: boolean },
+  ) => Promise<void>>(async () => undefined);
   const {
     config: runtimeLlmConfig,
     providers: runtimeProviderCatalog,
     getCachedModels,
     loadModelsForProvider,
   } = useProviderModelCatalog("chat");
+  const eventStreamStatus = useEventStreamStatus();
+  const {
+    queuedOutbound,
+    setQueuedOutbound,
+    editingTurnId,
+    setEditingTurnId,
+    handleSend,
+    handleRetryTurn,
+    handleStopActiveTurn,
+    handleBeginEditTurn,
+    handleResumeQueue,
+    handleRemoveQueuedItem,
+  } = useChatSurfaceOrchestration({
+    draft,
+    pendingAttachments,
+    selectedSessionId,
+    thread,
+    sending,
+    composerRef,
+    activeStreamRef,
+    tryBeginOutboundExecutionRef,
+    executeOutboundItemRef,
+    pushLocalNoticeRef,
+    setDraft,
+    setPendingAttachments,
+    setPendingApproval,
+    setError,
+    loadSessionCoreStateRef,
+    abortActiveChatStream,
+  });
 
   const loadSidebar = useCallback(async (nextHistoryView: ChatHistoryView = historyView) => {
     recordClientDiagnostic({
@@ -592,6 +568,10 @@ export function ChatPage({
       timestamp: new Date().toISOString(),
     }, ...current].slice(0, 12));
   }, []);
+
+  useEffect(() => {
+    pushLocalNoticeRef.current = pushLocalNotice;
+  }, [pushLocalNotice]);
 
   const commitThreadUpdate = useCallback((
     updater: ChatThreadResponse | null | ((current: ChatThreadResponse | null) => ChatThreadResponse | null),
@@ -673,6 +653,10 @@ export function ChatPage({
       }
     }
   }, [applyFetchedThread]);
+
+  useEffect(() => {
+    loadSessionCoreStateRef.current = loadSessionCoreState;
+  }, [loadSessionCoreState]);
 
   const scheduleStreamMessageReconciliation = useCallback((sessionId: string) => {
     if (streamReconcileTimeoutRef.current) {
@@ -1033,6 +1017,10 @@ export function ChatPage({
     () => visibleSessions.filter((item) => item.scope === "external"),
     [visibleSessions],
   );
+  const boundMissionSessionCount = useMemo(
+    () => (sessions?.items ?? []).filter((item) => item.scope === "mission" && Boolean(item.projectId)).length,
+    [sessions?.items],
+  );
   const visibleSessionLabelById = useMemo(() => new Map(
     visibleSessions.map((session) => [session.sessionId, formatSessionLabel(session)]),
   ), [visibleSessions]);
@@ -1187,49 +1175,57 @@ export function ChatPage({
   useEffect(() => setCommandIndex(0), [draft]);
 
   const selectedSessionProjectValue = selectedSession?.projectId ?? "none";
-  const messageMode = lockSurface && surface ? surface : (prefs?.mode ?? "chat");
-  const activeModePreset = CHAT_MODE_PRESETS[messageMode];
-  const isChatSurface = messageMode === "chat";
-  const isCoworkSurface = messageMode === "cowork";
-  const isCodeSurface = messageMode === "code";
-  const surfaceHeaderTitle = activeModePreset.label;
-  const surfaceHeaderSubtitle = isChatSurface
-    ? pageCopy.chat.subtitle
-    : activeModePreset.summary;
-  const workspaceSummaryCards = useMemo(() => ([
-    { label: "Projects", value: String(projects?.items.length ?? 0) },
-    { label: "Mission", value: String(missionSessions.length) },
-    { label: "Queue", value: String(missionSessions.length + externalSessions.length) },
-  ]), [externalSessions.length, missionSessions.length, projects?.items.length]);
-  const codeModeNeedsProjectBinding = isCodeSurface && !selectedSession?.projectId;
-  const selectedProjectBindingCandidateId = selectedProjectId !== "all" && selectedProjectId !== "none"
-    ? selectedProjectId
-    : undefined;
-  const selectedProjectBindingCandidateName = selectedProjectBindingCandidateId
-    ? (projects?.items ?? []).find((item) => item.projectId === selectedProjectBindingCandidateId)?.name
-    : undefined;
   const planningMode = prefs?.planningMode ?? "off";
-  const selectedTurn = useMemo(
-    () => thread?.turns.find((turn) => turn.turnId === selectedTurnId) ?? thread?.turns.at(-1) ?? null,
-    [selectedTurnId, thread],
-  );
+  const proactiveSuggestionCount = proactiveRuns.filter((run) => run.status === "suggested").length;
+  const {
+    messageMode,
+    activeModePreset,
+    isChatSurface,
+    isCoworkSurface,
+    isCodeSurface,
+    surfaceHeaderTitle,
+    surfaceHeaderSubtitle,
+    workspaceSummaryCards,
+    selectedTurn,
+    selectedTurnRecovery,
+    effectiveToolAutonomy,
+    selectedSessionLabel,
+    codeModeNeedsProjectBinding,
+    selectedProjectBindingCandidateId,
+    selectedProjectBindingCandidateName,
+    showTracePanel,
+    showSuggestionsPanel,
+    showLearnedMemoryPanel,
+    dockSectionOrder,
+  } = useMissionControlSurfaceState({
+    lockSurface,
+    surface,
+    prefs,
+    selectedTurnId,
+    thread,
+    selectedSession,
+    selectedProjectId,
+    projects: (projects?.items ?? []).map((item) => ({ projectId: item.projectId, name: item.name })),
+    projectsCount: projects?.items.length ?? 0,
+    missionSessionCount: missionSessions.length,
+    externalSessionCount: externalSessions.length,
+    boundMissionSessionCount,
+    planningMode,
+    chatSubtitle: pageCopy.chat.subtitle ?? "Fast conversation, drafting, and lightweight help.",
+    capabilitySuggestionCount: capabilitySuggestions.length,
+    specialistSuggestionCount: specialistSuggestions.length,
+    specialistCandidateCount: specialistCandidates.filter((item) => item.status !== "retired").length,
+    proactiveSuggestionCount,
+    hasDelegationSuggestion: Boolean(delegationSuggestion),
+    learnedMemoryCount: learnedMemory.length,
+  });
+  useEffect(() => {
+    setDockOpen(defaultDockOpenForMode(messageMode));
+  }, [messageMode]);
   const latestOrchestration = useMemo(
     () => selectedTurn?.trace.orchestration ?? thread?.turns.at(-1)?.trace.orchestration,
     [selectedTurn, thread],
   );
-  const selectedTurnRecovery = useMemo(() => {
-    const action = selectedTurn?.trace.failure?.recommendedAction;
-    if (!action) {
-      return null;
-    }
-    return {
-      action,
-      label: getChatTurnRecoveryActionLabel(action),
-      summary: getChatTurnRecoveryActionSummary(action),
-    };
-  }, [selectedTurn]);
-  const effectiveToolAutonomy = selectedTurn?.trace.effectiveToolAutonomy
-    ?? (planningMode === "advisory" ? "manual" : prefs?.toolAutonomy);
   useEffect(() => {
     setCapabilitySuggestions(selectedTurn?.trace.capabilityUpgradeSuggestions ?? []);
     setSpecialistSuggestions(selectedTurn?.trace.specialistCandidateSuggestions ?? []);
@@ -1238,16 +1234,6 @@ export function ChatPage({
     () => deriveCoworkItems(messages, localNotices, latestOrchestration),
     [latestOrchestration, localNotices, messages],
   );
-  const proactiveSuggestionCount = proactiveRuns.filter((run) => run.status === "suggested").length;
-  const showTracePanel = shouldShowTracePanel(messageMode, selectedTurn);
-  const showSuggestionsPanel = shouldShowSuggestionsPanel(messageMode, {
-    capabilitySuggestionCount: capabilitySuggestions.length,
-    specialistSuggestionCount: specialistSuggestions.length,
-    specialistCandidateCount: specialistCandidates.filter((item) => item.status !== "retired").length,
-    proactiveSuggestionCount,
-    hasDelegationSuggestion: Boolean(delegationSuggestion),
-  });
-  const showLearnedMemoryPanel = shouldShowLearnedMemoryPanel(messageMode, learnedMemory.length);
   const canSend = Boolean(draft.trim()) && !sending;
 
   useEffect(() => {
@@ -1292,6 +1278,10 @@ export function ChatPage({
     setSending(true);
     return true;
   }, []);
+
+  useEffect(() => {
+    tryBeginOutboundExecutionRef.current = tryBeginOutboundExecution;
+  }, [tryBeginOutboundExecution]);
 
   const finishOutboundExecution = useCallback(() => {
     sendingRef.current = false;
@@ -2242,47 +2232,6 @@ export function ChatPage({
     executeOutboundItemRef.current = executeOutboundItem;
   }, [executeOutboundItem]);
 
-  const handleSend = useCallback(async () => {
-    const content = draft.trim();
-    if (!content) return;
-    const nextItem: OutboundQueueItem = {
-      id: `queue-${Date.now()}`,
-      action: editingTurnId ? "edit" : "send",
-      sessionId: selectedSessionId ?? undefined,
-      targetTurnId: editingTurnId ?? undefined,
-      content,
-      attachments: pendingAttachments,
-      createdAt: new Date().toISOString(),
-    };
-    setDraft("");
-    setPendingAttachments([]);
-    setPendingApproval(null);
-    if (!tryBeginOutboundExecution()) {
-      setQueuedOutbound((current) => [...current, nextItem]);
-      pushLocalNotice(`${editingTurnId ? "Edit" : "Message"} queued while the current turn finishes.`);
-      return;
-    }
-    await executeOutboundItem(nextItem);
-  }, [draft, editingTurnId, executeOutboundItem, pendingAttachments, pushLocalNotice, selectedSessionId, tryBeginOutboundExecution]);
-
-  const handleRetryTurn = useCallback(async (turnId: string) => {
-    const nextItem: OutboundQueueItem = {
-      id: `queue-${Date.now()}`,
-      action: "retry",
-      sessionId: selectedSessionId ?? undefined,
-      targetTurnId: turnId,
-      content: "",
-      attachments: [],
-      createdAt: new Date().toISOString(),
-    };
-    if (!tryBeginOutboundExecution()) {
-      setQueuedOutbound((current) => [...current, nextItem]);
-      pushLocalNotice("Retry queued while the current turn finishes.");
-      return;
-    }
-    await executeOutboundItem(nextItem);
-  }, [executeOutboundItem, pushLocalNotice, selectedSessionId, tryBeginOutboundExecution]);
-
   const handleRevealSelectedTurnDetails = useCallback(() => {
     if (typeof document === "undefined") {
       return;
@@ -2293,42 +2242,6 @@ export function ChatPage({
       details.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
   }, []);
-
-  const handleStopActiveTurn = useCallback(async () => {
-    if (!selectedSession) {
-      return;
-    }
-    const activeStream = activeStreamRef.current;
-    if (!activeStream) {
-      return;
-    }
-    try {
-      if (activeStream.turnId) {
-        await cancelChatTurn(selectedSession.sessionId, activeStream.turnId, "mission-control");
-        pushLocalNotice(`Stopped turn ${activeStream.turnId.slice(-6)}.`, "warning");
-        void loadSessionCoreState(selectedSession.sessionId, {
-          background: true,
-          includeThread: true,
-        }).catch(() => undefined);
-      } else {
-        pushLocalNotice("Stopped the local connection before the turn id was assigned.", "warning");
-      }
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      abortActiveChatStream(activeStream);
-    }
-  }, [loadSessionCoreState, pushLocalNotice, selectedSession]);
-
-  const handleBeginEditTurn = useCallback((turnId: string) => {
-    const turn = thread?.turns.find((item) => item.turnId === turnId);
-    if (!turn) {
-      return;
-    }
-    setEditingTurnId(turnId);
-    setDraft(turn.userMessage.content);
-    composerRef.current?.focus();
-  }, [thread]);
 
   const handleSelectBranchTurn = useCallback(async (turnId: string) => {
     if (!selectedSessionId) {
@@ -2350,47 +2263,6 @@ export function ChatPage({
       setError((err as Error).message);
     }
   }, [commitThreadUpdate, selectedSessionId]);
-
-  const handleResumeQueue = useCallback(() => {
-    recordClientDiagnostic({
-      level: "info",
-      category: "chat",
-      event: "queue.resume",
-      message: "Resuming queued outbound chat items",
-      sessionId: selectedSessionId ?? undefined,
-      context: {
-        queuedCount: queuedOutbound.length,
-      },
-    });
-    setQueuedOutbound((current) => current.map((item) => ({ ...item, paused: false })));
-  }, [queuedOutbound.length, selectedSessionId]);
-
-  const handleRemoveQueuedItem = useCallback((id: string) => {
-    recordClientDiagnostic({
-      level: "info",
-      category: "chat",
-      event: "queue.remove",
-      message: "Removed queued outbound chat item",
-      sessionId: selectedSessionId ?? undefined,
-      context: { id },
-    });
-    setQueuedOutbound((current) => current.filter((item) => item.id !== id));
-  }, [selectedSessionId]);
-
-  useEffect(() => {
-    if (sendingRef.current || sending) {
-      return;
-    }
-    const nextItem = queuedOutbound.find((item) => !item.paused);
-    if (!nextItem) {
-      return;
-    }
-    if (!tryBeginOutboundExecution()) {
-      return;
-    }
-    setQueuedOutbound((current) => current.filter((item) => item.id !== nextItem.id));
-    void executeOutboundItemRef.current(nextItem);
-  }, [queuedOutbound, sending, tryBeginOutboundExecution]);
 
   const handleComposerKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (commandSuggestions.length > 0) {
@@ -2480,6 +2352,9 @@ export function ChatPage({
       : isCodeSurface
         ? "Pick a code session or start a new one. Bind a project only when you want execution-heavy work."
         : `Use the queue to reopen a session or start a new ${activeModePreset.label.toLowerCase()} run from the left rail.`;
+  const dockSectionStyle = useCallback((sectionId: MissionControlDockSectionId) => ({
+    order: Math.max(0, dockSectionOrder.indexOf(sectionId)),
+  }), [dockSectionOrder]);
 
   if (loading) {
     return (
@@ -2523,238 +2398,164 @@ export function ChatPage({
       {isRefreshing ? <p className="status-banner">Refreshing chat context...</p> : null}
 
       <div className="chat-v11-shell">
-        <aside className="panel panel-soft panel-pad-default chat-v11-left">
-          <div className="chat-v11-workspace-summary">
-            <div className="chat-v11-workspace-copy">
-              <p className="chat-v11-workspace-kicker">Workspace</p>
-              <h3>{selectedProject?.name ?? "Mission Control workspace"}</h3>
-              <p className="chat-v11-muted">{workspaceSummaryText}</p>
-            </div>
-            {!isCodeSurface && !lockSurface ? (
-              <div className="chat-v11-summary-grid">
-                {workspaceSummaryCards.map((item) => (
-                  <div key={item.label} className="chat-v11-summary-card">
-                    <span>{item.label}</span>
-                    <strong>{item.value}</strong>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
-          <div className="chat-v11-left-head">
-            <div className="chat-v11-left-actions">
-              <button
-                type="button"
-                className="chat-v11-project-toggle chat-v11-session-launch active"
-                disabled={sending || Boolean(creatingSessionMode)}
-                onClick={() => handleCreateSession(messageMode)}
-              >
-                {creatingSessionMode === messageMode
-                  ? `Starting ${activeModePreset.label.toLowerCase()}...`
-                  : isCodeSurface
-                    ? "Start code session"
-                    : `New ${activeModePreset.label.toLowerCase()} session`}
-              </button>
-              <button
-                type="button"
-                className={`chat-v11-project-toggle${showProjectCreate ? " active" : ""}`}
-                onClick={() => setShowProjectCreate((current) => !current)}
-              >
-                {showProjectCreate ? "Hide project form" : "New project"}
-              </button>
-            </div>
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a chat..." />
-          </div>
-          {!lockSurface ? <FieldHelp>Mission chats stay local. External chats can write back only when a binding is configured.</FieldHelp> : null}
-          <div className="chat-v11-filter-row">
-            <button type="button" className={historyView === "active" ? "active" : ""} onClick={() => setHistoryView("active")}>Active</button>
-            <button type="button" className={historyView === "archived" ? "active" : ""} onClick={() => setHistoryView("archived")}>Archived</button>
-            {isChatSurface && historyView === "active" ? (
-              <button
-                type="button"
-                className="danger"
-                disabled={archiveWorkspacePending || workspaceMissionSessionCount === 0}
-                onClick={() => setArchiveWorkspaceConfirmOpen(true)}
-              >
-                {archiveWorkspacePending ? "Archiving..." : "Archive workspace chats"}
-              </button>
-            ) : null}
-          </div>
-          <FieldHelp>Normal history defaults to active chats. Archived chats stay out of the default rail until you switch to the archived view.</FieldHelp>
-          {showProjectCreate ? (
-            <div className="chat-v11-project-create">
-              <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="New project name" />
-              <input value={projectPath} onChange={(event) => setProjectPath(event.target.value)} placeholder="Project path (optional)" />
-              <p className="chat-v11-muted">
-                Project creation is optional. Stay in <strong>Chat</strong> for quick work, or use <strong>Code</strong> when you are ready to bind implementation to a project.
-              </p>
-              <button type="button" onClick={async () => {
-                const name = projectName.trim();
-                if (!name) return;
-                setSending(true);
-                try {
-                  const created = await createChatProject({
-                    workspaceId,
-                    name,
-                    workspacePath: projectPath.trim() || "chat/default",
-                  });
-                  setProjectName("");
-                  setShowProjectCreate(false);
-                  setSelectedProjectId(created.projectId);
-                  await loadSidebar();
-                } catch (err) {
-                  setError((err as Error).message);
-                } finally {
-                  setSending(false);
-                }
-              }}>Create project</button>
-            </div>
-          ) : null}
-          <div className="chat-v11-filter-row">
-            <button type="button" className={selectedProjectId === "all" ? "active" : ""} onClick={() => setSelectedProjectId("all")}>All projects</button>
-            <button type="button" className={selectedProjectId === "none" ? "active" : ""} onClick={() => setSelectedProjectId("none")}>Unassigned</button>
-          </div>
-          <ChatSessionRail
-            missionSessions={missionSessions}
-            externalSessions={externalSessions}
-            selectedSessionId={selectedSessionId}
-            onSelectSession={setSelectedSessionId}
-            renderSessionLabel={(sessionId) => visibleSessionLabelById.get(sessionId) ?? `Chat ${sessionId.slice(-6)}`}
-          />
-        </aside>
+        <ChatSessionSidebar
+          mode={messageMode}
+          showProjectCreate={showProjectCreate}
+          creatingSession={Boolean(creatingSessionMode)}
+          search={search}
+          projectName={projectName}
+          projectPath={projectPath}
+          historyView={historyView}
+          selectedProjectId={selectedProjectId}
+          missionSessions={missionSessions}
+          externalSessions={externalSessions}
+          selectedSessionId={selectedSessionId}
+          summaryTitle={selectedProject?.name ?? "Mission Control workspace"}
+          summaryCopy={workspaceSummaryText}
+          workspaceSummaryCards={workspaceSummaryCards}
+          archiveWorkspaceEnabled={isChatSurface && historyView === "active" && workspaceMissionSessionCount > 0}
+          archiveWorkspacePending={archiveWorkspacePending}
+          onToggleProjectCreate={() => setShowProjectCreate((current) => !current)}
+          onCreateSession={() => void handleCreateSession(messageMode)}
+          onSearchChange={setSearch}
+          onProjectNameChange={setProjectName}
+          onProjectPathChange={setProjectPath}
+          onCreateProject={() => {
+            const name = projectName.trim();
+            if (!name) return;
+            setSending(true);
+            void createChatProject({
+              workspaceId,
+              name,
+              workspacePath: projectPath.trim() || "chat/default",
+            })
+              .then(async (created) => {
+                setProjectName("");
+                setShowProjectCreate(false);
+                setSelectedProjectId(created.projectId);
+                await loadSidebar();
+              })
+              .catch((err) => setError((err as Error).message))
+              .finally(() => setSending(false));
+          }}
+          onHistoryViewChange={setHistoryView}
+          onArchiveWorkspace={() => setArchiveWorkspaceConfirmOpen(true)}
+          onSelectProjectId={setSelectedProjectId}
+          onSelectSession={setSelectedSessionId}
+          renderSessionLabel={(sessionId) => visibleSessionLabelById.get(sessionId) ?? `Chat ${sessionId.slice(-6)}`}
+        />
 
         <div className="chat-v11-main">
           {selectedSession ? (
             <div className={`chat-v11-conversation-shell surface-${messageMode}`}>
-              <div className={`chat-v11-main-grid${isCoworkSurface ? " with-cowork" : ""}${isCodeSurface ? " with-code" : ""}`}>
+              <MissionControlSurfaceHeader
+                mode={messageMode}
+                sessionTitle={selectedSessionLabel}
+                summary={workspaceSummaryText}
+                status={selectedTurn?.trace.status ?? null}
+                dockOpen={dockOpen}
+                onToggleDock={() => setDockOpen((current) => !current)}
+              />
+              <div className={`chat-v11-main-grid${isCoworkSurface ? " with-cowork" : ""}${isCodeSurface ? " with-code" : ""}${dockOpen ? " with-dock-open" : " with-dock-collapsed"}`}>
                 <article className={`card chat-v11-thread mode-${messageMode}`}>
-                  <div className="chat-v11-thread-scroll">
-                    <ChatThreadView
-                      loading={messagesLoading}
-                      thread={thread}
-                      selectedTurnId={selectedTurnId}
-                      notices={localNotices}
-                      followOutput={followThreadOutput}
-                      streamStatus={streamStatus}
-                      queuedCount={queuedOutbound.length}
-                      streamError={error}
-                      onBottomStateChange={setFollowThreadOutput}
-                      onSelectTurn={setSelectedTurnId}
-                      onSwitchBranch={(turnId) => void handleSelectBranchTurn(turnId)}
-                      onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
-                      onEditTurn={handleBeginEditTurn}
-                    />
-                  </div>
-
-                  {pendingApproval ? <InlineApprovalPrompt approvalId={pendingApproval.approvalId} toolName={pendingApproval.toolName} reason={pendingApproval.reason} pending={approvalPending} onApprove={() => void handleApprovePending()} onDeny={() => void handleDenyPending()} /> : null}
-
-                  <div className={`chat-v11-composer ${isDragActive ? "drop-active" : ""}`} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
-                    {isDragActive ? <div className="chat-drop-overlay">Drop files to attach</div> : null}
-                    <ChatQueueBar
-                      items={queuedOutbound.map((item): ChatQueueItemView => ({
-                        id: item.id,
-                        action: item.action,
-                        label: item.content.trim() ? item.content.trim().slice(0, 96) : `Turn ${item.targetTurnId?.slice(-6) ?? "queued"}`,
-                        createdAt: item.createdAt,
-                        paused: item.paused,
-                      }))}
-                      onResumeAll={handleResumeQueue}
-                      onRemove={handleRemoveQueuedItem}
-                    />
-                    {editingTurnId ? (
-                      <div className="chat-v11-composer-banner">
-                        Editing branch from turn {editingTurnId.slice(-6)}.
-                        <button type="button" onClick={() => setEditingTurnId(null)}>Cancel edit</button>
-                      </div>
-                    ) : null}
-                    {planningMode === "advisory" ? (
-                      <div className="chat-v11-composer-banner planning">
-                        Planning mode is on. GoatCitadel will respond with a plan/spec instead of executing tool work automatically.
-                        {effectiveToolAutonomy === "manual" ? " Manual tool execution is enforced for this turn." : ""}
-                      </div>
-                    ) : null}
-                    {selectedTurnRecovery && selectedTurn && selectedTurn.trace.status !== "waiting_for_approval" ? (
-                      <div className="chat-v11-composer-banner recovery chat-v11-recovery-banner">
-                        <div className="chat-v11-recovery-copy">
-                          <div className="chat-v11-recovery-head">
-                            <StatusChip tone={selectedTurn.trace.status === "failed" ? "critical" : "warning"}>
-                              {selectedTurn.trace.status}
-                            </StatusChip>
-                            <strong>{selectedTurnRecovery.label}</strong>
-                          </div>
-                          <p>{selectedTurnRecovery.summary}</p>
-                        </div>
-                        <div className="chat-v11-recovery-actions">
-                          {selectedTurnRecovery.action === "retry" || selectedTurnRecovery.action === "retry_narrower" ? (
-                            <button type="button" disabled={sending} onClick={() => void handleRetryTurn(selectedTurn.turnId)}>
-                              Retry turn
-                            </button>
-                          ) : null}
-                          {selectedTurnRecovery.action === "switch_to_deep_mode" && (prefs?.webMode ?? "auto") !== "deep" ? (
-                            <button type="button" disabled={!selectedSessionId || sending} onClick={() => void handlePrefPatch({ webMode: "deep" })}>
-                              Set Deep mode
-                            </button>
-                          ) : null}
-                          <button type="button" onClick={handleRevealSelectedTurnDetails}>
-                            Review run details
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
-                    <textarea ref={composerRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleComposerKeyDown} onPaste={handleComposerPaste} placeholder="Ask GoatCitadel anything... Try /help" rows={4} />
-                    {commandSuggestions.length > 0 ? (
-                      <div className="chat-v11-command-popover" role="listbox" aria-label="Slash command suggestions">
-                        {commandSuggestions.map((item, index) => (
-                          <button key={item.key} type="button" className={index === commandIndex ? "active" : ""} onClick={() => applyDraftCommand(item.applyValue)}>
-                            <strong>{item.command}</strong>
-                            <span>{item.description}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                    {pendingAttachments.length > 0 ? (
-                      <div className="chat-v11-pending-attachments">
-                        {pendingAttachments.map((item) => (
-                          <button key={item.attachmentId} type="button" className="chat-attachment-chip" onClick={() => setPendingAttachments((current) => current.filter((entry) => entry.attachmentId !== item.attachmentId))}>{item.fileName} ×</button>
-                        ))}
-                      </div>
-                    ) : null}
-                    <div className="chat-v11-composer-actions">
-                      <ChatComposerPlusMenu disabled={sending} onAttachFiles={() => fileInputRef.current?.click()} onRunQuickResearch={() => { void handleRunQuickResearch(); }} />
-                      <input ref={fileInputRef} type="file" multiple className="chat-v11-hidden-file" onChange={(event) => {
-                        const files = event.target.files;
-                        if (!files || files.length === 0) return;
-                        void uploadAttachments(Array.from(files));
-                      }} />
-                      <p>Tip: drag files here, paste screenshots, press Enter to send, or queue the next prompt while a turn is still streaming.</p>
-                      {sending && activeStreamRef.current ? (
-                        <button type="button" onClick={() => void handleStopActiveTurn()}>
-                          {activeStreamRef.current.turnId ? "Stop turn" : "Stop stream"}
-                        </button>
-                      ) : (
-                        <button type="button" disabled={!canSend} onClick={() => void handleSend()}>
-                          {sending ? "Sending..." : editingTurnId ? "Edit and resend" : "Send message"}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </article>
-                {isCoworkSurface ? <CoworkCanvasPanel items={coworkItems} orchestration={latestOrchestration} /> : null}
-                {isCodeSurface ? (
-                  <CodeWorkbenchPanel
-                    selectedTurn={selectedTurn}
-                    projectName={selectedProject?.name}
-                    needsProjectBinding={codeModeNeedsProjectBinding}
+                  <ChatThreadShell
+                    mode={messageMode}
+                    loading={messagesLoading}
+                    thread={thread}
+                    selectedTurnId={selectedTurnId}
+                    notices={localNotices}
+                    followOutput={followThreadOutput}
+                    streamStatus={streamStatus}
+                    queuedCount={queuedOutbound.length}
+                    streamError={error}
+                    pendingApproval={pendingApproval}
+                    approvalPending={approvalPending}
+                    eventStreamStatus={eventStreamStatus}
+                    onBottomStateChange={setFollowThreadOutput}
+                    onSelectTurn={setSelectedTurnId}
+                    onSwitchBranch={(turnId) => void handleSelectBranchTurn(turnId)}
+                    onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
+                    onEditTurn={handleBeginEditTurn}
+                    onApprovePending={() => void handleApprovePending()}
+                    onDenyPending={() => void handleDenyPending()}
+                    onRefresh={() => void loadSessionCoreState(selectedSession.sessionId, { includeThread: true })}
                   />
+
+                  <ChatComposerShell
+                    mode={messageMode}
+                    isDragActive={isDragActive}
+                    queueItems={queuedOutbound.map((item) => ({
+                      id: item.id,
+                      action: item.action,
+                      label: item.content.trim() ? item.content.trim().slice(0, 96) : `Turn ${item.targetTurnId?.slice(-6) ?? "queued"}`,
+                      createdAt: item.createdAt,
+                      paused: item.paused,
+                    }))}
+                    editingTurnId={editingTurnId}
+                    planningMode={planningMode}
+                    effectiveToolAutonomy={effectiveToolAutonomy}
+                    error={null}
+                    draft={draft}
+                    commandSuggestions={commandSuggestions}
+                    commandIndex={commandIndex}
+                    pendingAttachments={pendingAttachments}
+                    selectedTurnRecovery={selectedTurnRecovery}
+                    selectedTurn={selectedTurn}
+                    selectedSessionId={selectedSessionId}
+                    currentWebMode={prefs?.webMode ?? "auto"}
+                    sending={sending}
+                    canSend={canSend}
+                    hasActiveStream={Boolean(activeStreamRef.current)}
+                    activeStreamTurnAssigned={Boolean(activeStreamRef.current?.turnId)}
+                    composerRef={composerRef}
+                    fileInputRef={fileInputRef}
+                    onDragEnter={handleDragEnter}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    onResumeAll={handleResumeQueue}
+                    onRemoveQueuedItem={handleRemoveQueuedItem}
+                    onCancelEdit={() => setEditingTurnId(null)}
+                    onDismissError={() => setError(null)}
+                    onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
+                    onSetDeepMode={() => void handlePrefPatch({ webMode: "deep" })}
+                    onReviewRunDetails={handleRevealSelectedTurnDetails}
+                    onDraftChange={setDraft}
+                    onComposerKeyDown={handleComposerKeyDown}
+                    onComposerPaste={handleComposerPaste}
+                    onApplyDraftCommand={applyDraftCommand}
+                    onRemoveAttachment={(attachmentId) => setPendingAttachments((current) => current.filter((entry) => entry.attachmentId !== attachmentId))}
+                    onAttachFiles={() => fileInputRef.current?.click()}
+                    onUploadFiles={(files) => {
+                      if (!files || files.length === 0) return;
+                      void uploadAttachments(Array.from(files));
+                    }}
+                    onRunQuickResearch={() => { void handleRunQuickResearch(); }}
+                    onStopActiveTurn={() => void handleStopActiveTurn()}
+                    onSend={() => void handleSend()}
+                  />
+                </article>
+                <MissionControlContextDock mode={messageMode} open={dockOpen}>
+                {isCoworkSurface ? (
+                  <div className="mission-dock-section" style={dockSectionStyle("workflow")}>
+                    <CoworkCanvasPanel items={coworkItems} orchestration={latestOrchestration} />
+                  </div>
                 ) : null}
-              </div>
-              {!isChatSurface ? (
-                <section className={`chat-v11-inspector-lane mode-${messageMode}`}>
+                {isCodeSurface ? (
+                  <div className="mission-dock-section" style={dockSectionStyle("workflow")}>
+                    <CodeWorkbenchPanel
+                      selectedTurn={selectedTurn}
+                      projectName={selectedProject?.name}
+                      needsProjectBinding={codeModeNeedsProjectBinding}
+                    />
+                  </div>
+                ) : null}
+                <div className="mission-dock-section" style={dockSectionStyle("surface")}>
                 <Panel
                   className="chat-v11-topbar-panel chat-v11-panel-surface"
                   padding="compact"
-                  title={isCodeSurface ? "Execution settings" : "Surface controls"}
-                  subtitle={isCodeSurface ? "Mode, model, and execution posture for this session." : activeModePreset.summary}
+                  title={isCodeSurface ? "Execution posture" : isCoworkSurface ? "Now / next / controls" : "Surface controls"}
+                  subtitle={isCodeSurface ? "Project binding, model, and review posture for this session." : isCoworkSurface ? "Guide the workflow lane without crowding the central thread." : activeModePreset.summary}
                 >
                   <ChatPlanningPill planningMode={planningMode} effectiveToolAutonomy={effectiveToolAutonomy} />
                   <div className="chat-v11-surface-identity">
@@ -3146,7 +2947,9 @@ export function ChatPage({
                         </div>
                       ) : null}
                 </Panel>
+                </div>
                 {!isCodeSurface && showTracePanel && selectedTurn ? (
+                  <div className="mission-dock-section" style={dockSectionStyle("trace")}>
                   <Panel
                     className="chat-v11-agentic-card chat-v11-trace-card chat-v11-panel-trace"
                     title={isChatSurface ? "Run status" : "Run trace"}
@@ -3158,8 +2961,10 @@ export function ChatPage({
                   >
                     <ChatTraceCard trace={selectedTurn.trace} defaultCollapsed={isChatSurface} />
                   </Panel>
+                  </div>
                 ) : null}
                 {!isCodeSurface && showSuggestionsPanel ? (
+                <div className="mission-dock-section" style={dockSectionStyle("suggestions")}>
                 <Panel
                   className="chat-v11-agentic-card chat-v11-panel-inbox"
                   title={isCoworkSurface ? "Cowork inbox" : isCodeSurface ? "Capability inbox" : "Suggestions"}
@@ -3345,9 +3150,11 @@ export function ChatPage({
                     </ul>
                   ) : null}
                 </Panel>
+                </div>
                 ) : null}
 
                 {!isCodeSurface && showLearnedMemoryPanel ? (
+                <div className="mission-dock-section" style={dockSectionStyle("memory")}>
                 <Panel
                   className="chat-v11-agentic-card chat-v11-panel-memory"
                   title={(
@@ -3396,8 +3203,10 @@ export function ChatPage({
                     {learnedMemory.length === 0 ? <li className="chat-v11-muted">No learned memory items yet. They appear after completed assistant turns.</li> : null}
                   </ul>
                 </Panel>
+                </div>
                 ) : null}
 
+                <div className="mission-dock-section" style={dockSectionStyle("session")}>
                 <Panel
                   className="chat-v11-session-bar chat-v11-panel-session"
                   title="Session management"
@@ -3486,9 +3295,11 @@ export function ChatPage({
                     ]}
                   />
                 </Panel>
+                </div>
 
-                {selectedSession.scope === "external" && (!binding || !binding.writable) ? <div className="status-banner warning">This external chat is read-only right now. Set a connection and target before sending replies out.</div> : null}
                 {selectedSession.scope === "external" ? (
+                  <div className="mission-dock-section" style={dockSectionStyle("external")}>
+                  {(!binding || !binding.writable) ? <div className="status-banner warning">This external chat is read-only right now. Set a connection and target before sending replies out.</div> : null}
                   <Panel
                     className="chat-v11-external-bind"
                     title="External connection binding"
@@ -3509,15 +3320,18 @@ export function ChatPage({
                       }
                     }} />
                   </Panel>
+                  </div>
                 ) : null}
-                </section>
-              ) : null}
+                </MissionControlContextDock>
+              </div>
             </div>
           ) : (
-            <article className="card chat-v11-empty-shell">
-              <h3>No chat selected</h3>
-              <p className="office-subtitle">Pick a session from the left, or start a new Chat, Cowork, or Code run from the left rail. You do not need to create a project first unless you want Code mode to execute against one.</p>
-            </article>
+            <MissionControlEmptyState
+              mode={messageMode}
+              sessionCount={missionSessions.length + externalSessions.length}
+              projectCount={projects?.items.length ?? 0}
+              onCreateSession={() => void handleCreateSession(messageMode)}
+            />
           )}
         </div>
       </div>

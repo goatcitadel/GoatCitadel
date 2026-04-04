@@ -1,9 +1,12 @@
-import type { ChatAttachmentRecord, ChatThreadResponse } from "@goatcitadel/contracts";
+import type { ChatAttachmentRecord, ChatMode, ChatThreadResponse } from "@goatcitadel/contracts";
 import type { ClipboardEvent, DragEvent, KeyboardEvent, RefObject } from "react";
 import { ChatComposerPlusMenu } from "../../components/ChatComposerPlusMenu";
 import { ChatQueueBar, type ChatQueueItemView } from "../../components/chat/ChatQueueBar";
+import { StatusChip } from "../../components/StatusChip";
+import { getMissionControlSurfaceConfig } from "./surface-config";
 
 export function ChatComposerShell(props: {
+  mode: ChatMode;
   isDragActive: boolean;
   queueItems: ChatQueueItemView[];
   editingTurnId: string | null;
@@ -38,6 +41,7 @@ export function ChatComposerShell(props: {
   onDismissError: () => void;
   onRetryTurn: (turnId: string) => void;
   onSetDeepMode: () => void;
+  onReviewRunDetails?: () => void;
   onDraftChange: (value: string) => void;
   onComposerKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onComposerPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
@@ -50,6 +54,7 @@ export function ChatComposerShell(props: {
   onSend: () => void;
 }) {
   const {
+    mode,
     isDragActive,
     queueItems,
     editingTurnId,
@@ -80,6 +85,7 @@ export function ChatComposerShell(props: {
     onDismissError,
     onRetryTurn,
     onSetDeepMode,
+    onReviewRunDetails,
     onDraftChange,
     onComposerKeyDown,
     onComposerPaste,
@@ -91,10 +97,21 @@ export function ChatComposerShell(props: {
     onStopActiveTurn,
     onSend,
   } = props;
+  const surfaceConfig = getMissionControlSurfaceConfig(mode);
+  const placeholder = mode === "code"
+    ? "Describe the implementation task, constraints, or review goal..."
+    : mode === "cowork"
+      ? "Describe the work to coordinate, research, or move forward..."
+      : "Ask GoatCitadel anything... Try /help";
+  const helperCopy = mode === "code"
+    ? "Paste larger prompts, drag files, and keep heavier implementation context in one place."
+    : mode === "cowork"
+      ? "Queue follow-up work while a run streams so Cowork can keep momentum without losing context."
+      : "Drag files here, paste screenshots, and queue the next prompt while a turn is still streaming.";
 
   return (
     <div
-      className={`chat-v11-composer ${isDragActive ? "drop-active" : ""}`}
+      className={`chat-v11-composer mode-${mode} ${isDragActive ? "drop-active" : ""}`}
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -122,26 +139,45 @@ export function ChatComposerShell(props: {
       ) : null}
       {selectedTurnRecovery && selectedTurn && selectedTurn.trace.status !== "waiting_for_approval" ? (
         <div className="chat-v11-composer-banner recovery">
-          Next step: <strong>{selectedTurnRecovery.label}.</strong> {selectedTurnRecovery.summary}
-          {selectedTurnRecovery.action === "retry" || selectedTurnRecovery.action === "retry_narrower" ? (
-            <button type="button" disabled={sending} onClick={() => onRetryTurn(selectedTurn.turnId)}>
-              Retry turn
-            </button>
-          ) : null}
-          {selectedTurnRecovery.action === "switch_to_deep_mode" && currentWebMode !== "deep" ? (
-            <button type="button" disabled={!selectedSessionId || sending} onClick={onSetDeepMode}>
-              Set Deep mode
-            </button>
-          ) : null}
+          <div className="chat-v11-recovery-copy">
+            <div className="chat-v11-recovery-head">
+              <StatusChip tone={selectedTurn.trace.status === "failed" ? "critical" : "warning"}>
+                {selectedTurn.trace.status}
+              </StatusChip>
+              <strong>{selectedTurnRecovery.label}</strong>
+            </div>
+            <p>{selectedTurnRecovery.summary}</p>
+          </div>
+          <div className="chat-v11-recovery-actions">
+            {selectedTurnRecovery.action === "retry" || selectedTurnRecovery.action === "retry_narrower" ? (
+              <button type="button" disabled={sending} onClick={() => onRetryTurn(selectedTurn.turnId)}>
+                Retry turn
+              </button>
+            ) : null}
+            {selectedTurnRecovery.action === "switch_to_deep_mode" && currentWebMode !== "deep" ? (
+              <button type="button" disabled={!selectedSessionId || sending} onClick={onSetDeepMode}>
+                Set Deep mode
+              </button>
+            ) : null}
+            {onReviewRunDetails ? (
+              <button type="button" onClick={onReviewRunDetails}>
+                Review run details
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
+      <div className="chat-v11-composer-headline">
+        <p className="chat-v11-composer-kicker">{surfaceConfig.label}</p>
+        <span>{surfaceConfig.stageSummary}</span>
+      </div>
       <textarea
         ref={composerRef}
         value={draft}
         onChange={(event) => onDraftChange(event.target.value)}
         onKeyDown={onComposerKeyDown}
         onPaste={onComposerPaste}
-        placeholder="Ask GoatCitadel anything... Try /help"
+        placeholder={placeholder}
         rows={4}
       />
       {commandSuggestions.length > 0 ? (
@@ -172,7 +208,7 @@ export function ChatComposerShell(props: {
           className="chat-v11-hidden-file"
           onChange={(event) => onUploadFiles(event.target.files)}
         />
-        <p>Tip: drag files here, paste screenshots, press Enter to send, or queue the next prompt while a turn is still streaming.</p>
+        <p>{helperCopy}</p>
         {sending && hasActiveStream ? (
           <button type="button" onClick={onStopActiveTurn}>
             {activeStreamTurnAssigned ? "Stop turn" : "Stop stream"}

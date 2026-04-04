@@ -33,6 +33,7 @@ export function useChatSurfaceOrchestration(input: {
   pushLocalNoticeRef: RefObject<(message: string, tone?: ChatThreadNotice["tone"]) => void>;
   setDraft: (value: string) => void;
   setPendingAttachments: (value: ChatAttachmentRecord[] | ((current: ChatAttachmentRecord[]) => ChatAttachmentRecord[])) => void;
+  setPendingApproval: (value: null) => void;
   setError: (value: string | null) => void;
   loadSessionCoreStateRef: RefObject<(sessionId: string, options?: { background?: boolean; includeThread?: boolean }) => Promise<void>>;
   abortActiveChatStream: (stream: {
@@ -61,6 +62,7 @@ export function useChatSurfaceOrchestration(input: {
     };
     input.setDraft("");
     input.setPendingAttachments([]);
+    input.setPendingApproval(null);
     if (!input.tryBeginOutboundExecutionRef.current?.()) {
       setQueuedOutbound((current) => [...current, nextItem]);
       input.pushLocalNoticeRef.current?.(`${editingTurnId ? "Edit" : "Message"} queued while the current turn finishes.`);

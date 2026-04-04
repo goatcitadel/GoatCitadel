@@ -200,6 +200,17 @@ describe("resolveOptimisticChatPrefs", () => {
     expect(nextPrefs.providerId).toBe("anthropic");
     expect(nextPrefs.model).toBeUndefined();
   });
+
+  it("applies code-mode guardrails without dropping the current provider and model", () => {
+    const nextPrefs = resolveOptimisticChatPrefs(makePrefs(), { mode: "code" });
+
+    expect(nextPrefs.mode).toBe("code");
+    expect(nextPrefs.providerId).toBe("openai");
+    expect(nextPrefs.model).toBe("gpt-4.1-mini");
+    expect(nextPrefs.orchestrationProviderPreference).toBe("quality");
+    expect(nextPrefs.orchestrationReviewDepth).toBe("strict");
+    expect(nextPrefs.codeAutoApply).toBe("manual");
+  });
 });
 
 function makeTurn(

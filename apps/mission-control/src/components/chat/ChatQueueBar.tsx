@@ -6,6 +6,40 @@ export interface ChatQueueItemView {
   paused?: boolean;
 }
 
+export const MAX_VISIBLE_QUEUE_ITEMS = 3;
+
+function formatQueueAction(action: ChatQueueItemView["action"]): string {
+  switch (action) {
+    case "edit":
+      return "Edit queued";
+    case "retry":
+      return "Retry queued";
+    default:
+      return "Reply queued";
+  }
+}
+
+function summarizeOverflowItems(items: ChatQueueItemView[]): ChatQueueItemView | null {
+  if (items.length <= MAX_VISIBLE_QUEUE_ITEMS) {
+    return null;
+  }
+  const hiddenItems = items.slice(MAX_VISIBLE_QUEUE_ITEMS - 1);
+  return {
+    id: "__overflow__",
+    action: "send",
+    label: `+${hiddenItems.length} more queued`,
+    createdAt: hiddenItems[0]?.createdAt ?? new Date().toISOString(),
+    paused: hiddenItems.some((item) => item.paused),
+  };
+}
+
+export function buildVisibleQueueItems(items: ChatQueueItemView[]): ChatQueueItemView[] {
+  const overflowItem = summarizeOverflowItems(items);
+  return overflowItem
+    ? [...items.slice(0, MAX_VISIBLE_QUEUE_ITEMS - 1), overflowItem]
+    : items;
+}
+
 export function ChatQueueBar({
   items,
   onResumeAll,
@@ -19,23 +53,30 @@ export function ChatQueueBar({
     return null;
   }
   const pausedCount = items.filter((item) => item.paused).length;
+  const visibleItems = buildVisibleQueueItems(items);
   return (
     <div className="chat-v11-queue-bar">
       <div className="chat-v11-queue-header">
-        <strong>Queued sends</strong>
+        <strong>Queue</strong>
         <span>{items.length} pending</span>
         {pausedCount > 0 ? (
           <button type="button" onClick={onResumeAll}>Resume queue</button>
         ) : null}
       </div>
       <ul className="chat-v11-queue-list">
-        {items.map((item) => (
+        {visibleItems.map((item) => (
           <li key={item.id}>
             <div>
               <strong>{item.label}</strong>
-              <p>{item.action}{item.paused ? " · paused after reload" : ""}</p>
+              <p>
+                {item.id === "__overflow__"
+                  ? "Additional queued work stays staged until the current turn finishes."
+                  : `${formatQueueAction(item.action)}${item.paused ? " · paused after reload" : ""}`}
+              </p>
             </div>
-            <button type="button" onClick={() => onRemove(item.id)}>Remove</button>
+            {item.id === "__overflow__" ? null : (
+              <button type="button" onClick={() => onRemove(item.id)}>Remove</button>
+            )}
           </li>
         ))}
       </ul>
