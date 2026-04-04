@@ -25,6 +25,7 @@ const compactMetaKeys = new Set([
   "authMode",
   "code",
   "error",
+  "fallbackUsed",
   "host",
   "method",
   "overrideEnv",
@@ -33,6 +34,7 @@ const compactMetaKeys = new Set([
   "port",
   "reason",
   "reqId",
+  "retryIndex",
   "responseTime",
   "route",
   "signal",
@@ -310,6 +312,16 @@ function compactMeta(value: unknown): unknown {
       const res = entry as Record<string, unknown>;
       Object.assign(result, compactMeta({
         statusCode: res.statusCode,
+      }) as Record<string, unknown>);
+      continue;
+    }
+    if (key === "context" && entry && typeof entry === "object") {
+      const context = entry as Record<string, unknown>;
+      Object.assign(result, compactMeta({
+        error: context.error,
+        reason: context.reason,
+        retryIndex: context.retryIndex,
+        fallbackUsed: context.fallbackUsed,
       }) as Record<string, unknown>);
       continue;
     }

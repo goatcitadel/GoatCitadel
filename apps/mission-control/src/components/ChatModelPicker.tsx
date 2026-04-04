@@ -30,12 +30,24 @@ export function ChatModelPicker({
   onChangeModel: (model: string) => void;
 }) {
   const displayProviderId = pendingProviderId ?? providerId;
-  const activeProvider = providers.find((item) => item.providerId === displayProviderId) ?? providers[0];
+  const activeProvider = providers.find((item) => item.providerId === displayProviderId);
   const models = activeProvider?.models ?? [];
+  const providerOptions = [
+    { value: "", label: "Select provider", disabled: true },
+    ...providers.map((provider) => ({
+      value: provider.providerId,
+      label: provider.availabilityLabel ?? provider.label,
+      disabled: provider.disabled,
+    })),
+  ];
   const modelOptions = modelLoading
     ? [{ value: "", label: "Loading models...", disabled: true }]
+    : !activeProvider
+      ? [{ value: "", label: "Select provider first", disabled: true }]
     : models.map((item) => ({ value: item, label: item }));
-  const availabilityMessage = modelLoading
+  const availabilityMessage = !activeProvider
+    ? "No provider selected yet. Connect a provider in Configure, then choose a model."
+    : modelLoading
     ? `Loading models for ${activeProvider?.label ?? "provider"}...`
     : activeProvider?.availabilityHint
       ?? (models.length === 0 ? `No models available for ${activeProvider?.label ?? "this provider"} yet.` : null);
@@ -47,16 +59,12 @@ export function ChatModelPicker({
         disabled={disabled || providers.length === 0}
         onChange={onChangeProvider}
         aria-label="Provider"
-        options={providers.map((provider) => ({
-          value: provider.providerId,
-          label: provider.availabilityLabel ?? provider.label,
-          disabled: provider.disabled,
-        }))}
+        options={providerOptions}
       />
       {models.length > 12 ? (
         <GCCombobox
           value={modelLoading ? "" : (model ?? models[0] ?? "")}
-          disabled={disabled || modelLoading || models.length === 0}
+          disabled={disabled || modelLoading || !activeProvider || models.length === 0}
           onChange={onChangeModel}
           aria-label="Model"
           placeholder={modelLoading ? "Loading models..." : "Search model..."}
@@ -65,7 +73,7 @@ export function ChatModelPicker({
       ) : (
         <GCSelect
           value={modelLoading ? "" : (model ?? models[0] ?? "")}
-          disabled={disabled || modelLoading || models.length === 0}
+          disabled={disabled || modelLoading || !activeProvider || models.length === 0}
           onChange={onChangeModel}
           aria-label="Model"
           options={modelOptions}

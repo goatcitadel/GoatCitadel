@@ -206,6 +206,12 @@ $privateBetaConfig = Join-Path $AppDir "config\private-beta.profile.json"
 if ((Test-Path $privateBetaExample) -and -not (Test-Path $privateBetaConfig)) {
   Copy-Item -Path $privateBetaExample -Destination $privateBetaConfig -Force
 }
+$envExamplePath = Join-Path $AppDir ".env.example"
+$envPath = Join-Path $AppDir ".env"
+if ((Test-Path $envExamplePath) -and -not (Test-Path $envPath)) {
+  Write-Host "Materializing local .env from .env.example..."
+  Copy-Item -Path $envExamplePath -Destination $envPath -Force
+}
 Write-Host "Installing Playwright Chromium runtime..."
 Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $AppDir, "--filter", "@goatcitadel/policy-engine", "exec", "playwright", "install", "chromium") -FailureMessage "Failed to install required Playwright Chromium runtime"
 if (-not $SkipVoice) {

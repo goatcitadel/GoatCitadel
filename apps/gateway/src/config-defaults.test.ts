@@ -9,11 +9,20 @@ describe("shipped config defaults", () => {
   it("keep fresh local installs on unauthenticated startup defaults", async () => {
     const assistantRaw = await readFile(path.join(repoRoot, "config", "assistant.config.example.json"), "utf8");
     const unifiedRaw = await readFile(path.join(repoRoot, "config", "goatcitadel.example.json"), "utf8");
+    const llmRaw = await readFile(path.join(repoRoot, "config", "llm-providers.example.json"), "utf8");
 
     const assistant = JSON.parse(assistantRaw) as { auth?: { mode?: string } };
-    const unified = JSON.parse(unifiedRaw) as { assistant?: { auth?: { mode?: string } } };
+    const unified = JSON.parse(unifiedRaw) as {
+      assistant?: { auth?: { mode?: string } };
+      llm?: { activeProviderId?: string; activeModel?: string };
+    };
+    const llm = JSON.parse(llmRaw) as { activeProviderId?: string; activeModel?: string };
 
     expect(assistant.auth?.mode ?? "none").toBe("none");
     expect(unified.assistant?.auth?.mode ?? "none").toBe("none");
+    expect(unified.llm?.activeProviderId ?? "").toBe("");
+    expect(unified.llm?.activeModel ?? "").toBe("");
+    expect(llm.activeProviderId ?? "").toBe("");
+    expect(llm.activeModel ?? "").toBe("");
   });
 });

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { findProviderTemplate } from "./provider-templates.js";
+import {
+  findProviderTemplate,
+  inferProviderForModelId,
+  providerAllowsForeignModelIds,
+} from "./provider-templates.js";
 
 describe("provider templates", () => {
   it("uses GPT-5.4-mini defaults for OpenAI-family templates", () => {
@@ -72,5 +76,23 @@ describe("provider templates", () => {
       "glm-5v-turbo",
     ]);
     expect(findProviderTemplate("openrouter")?.knownModels).toContain("zai/glm-5v-turbo");
+  });
+
+  it("infers canonical providers for known model ids", () => {
+    expect(inferProviderForModelId("gpt-5.4-mini")).toBe("openai");
+    expect(inferProviderForModelId("claude-sonnet-4-6")).toBe("anthropic");
+    expect(inferProviderForModelId("models/gemini-2.5-flash")).toBe("google");
+    expect(inferProviderForModelId("openai/gpt-5.4-mini")).toBe("openai");
+    expect(inferProviderForModelId("anthropic/claude-sonnet-4")).toBe("anthropic");
+    expect(inferProviderForModelId("zai/glm-5v-turbo")).toBe("glm");
+    expect(inferProviderForModelId("custom-private-model")).toBeUndefined();
+  });
+
+  it("marks pass-through providers as capable of foreign model ids", () => {
+    expect(providerAllowsForeignModelIds("openrouter")).toBe(true);
+    expect(providerAllowsForeignModelIds("vercel")).toBe(true);
+    expect(providerAllowsForeignModelIds("ollama")).toBe(true);
+    expect(providerAllowsForeignModelIds("openai")).toBe(false);
+    expect(providerAllowsForeignModelIds("anthropic")).toBe(false);
   });
 });

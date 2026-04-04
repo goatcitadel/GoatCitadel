@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildQueuedOutboundItemView,
+  isLikelyLocalProviderUrl,
+  resolveProviderModelSelection,
   resolveProviderSelectionPlan,
   resolveStreamTurnOperation,
 } from "./chat-page-helpers";
@@ -40,6 +42,7 @@ describe("chat page characterization helpers", () => {
   it("keeps provider-disabled and misconfigured model messaging explicit", () => {
     expect(resolveProviderSelectionPlan({
       provider: {
+        providerId: "anthropic",
         label: "Anthropic",
         disabled: true,
         availabilityHint: "Anthropic is disabled until the API key is configured.",
@@ -52,6 +55,7 @@ describe("chat page characterization helpers", () => {
 
     expect(resolveProviderSelectionPlan({
       provider: {
+        providerId: "openai",
         label: "OpenAI",
         models: [],
       },
@@ -62,6 +66,7 @@ describe("chat page characterization helpers", () => {
 
     expect(resolveProviderSelectionPlan({
       provider: {
+        providerId: "openai",
         label: "OpenAI",
         models: ["gpt-5.4-mini"],
         defaultModel: "gpt-5.4",
@@ -69,6 +74,43 @@ describe("chat page characterization helpers", () => {
       loadedModels: ["gpt-5.4"],
     })).toEqual({
       nextModel: "gpt-5.4",
+    });
+  });
+
+  it("detects likely local provider urls", () => {
+    expect(isLikelyLocalProviderUrl("http://127.0.0.1:11434/v1")).toBe(true);
+    expect(isLikelyLocalProviderUrl("http://localhost:1234/v1")).toBe(true);
+    expect(isLikelyLocalProviderUrl("https://api.openai.com/v1")).toBe(false);
+  });
+
+  it("normalizes obviously mismatched provider/model combinations back to the provider catalog", () => {
+    expect(resolveProviderModelSelection({
+      provider: {
+        providerId: "openai",
+        label: "OpenAI",
+        defaultModel: "gpt-5.4-mini",
+        models: ["gpt-5.4-mini", "gpt-5.4"],
+      },
+      loadedModels: [],
+      selectedModel: "claude-sonnet-4-6",
+    })).toEqual({
+      nextModel: "gpt-5.4-mini",
+      model: "gpt-5.4-mini",
+      modelNormalized: true,
+    });
+
+    expect(resolveProviderModelSelection({
+      provider: {
+        providerId: "openrouter",
+        label: "OpenRouter",
+        defaultModel: "openai/gpt-5.4-mini",
+        models: ["openai/gpt-5.4-mini", "anthropic/claude-sonnet-4"],
+      },
+      loadedModels: [],
+      selectedModel: "anthropic/claude-sonnet-4",
+    })).toEqual({
+      nextModel: "openai/gpt-5.4-mini",
+      model: "anthropic/claude-sonnet-4",
     });
   });
 });

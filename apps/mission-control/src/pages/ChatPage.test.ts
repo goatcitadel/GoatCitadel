@@ -193,6 +193,13 @@ describe("resolveOptimisticChatPrefs", () => {
     expect(afterModelChange.providerId).toBe("openai");
     expect(afterModelChange.model).toBe("gpt-5.4");
   });
+
+  it("clears the optimistic model when the provider changes without an explicit replacement model", () => {
+    const nextPrefs = resolveOptimisticChatPrefs(makePrefs(), { providerId: "anthropic" });
+
+    expect(nextPrefs.providerId).toBe("anthropic");
+    expect(nextPrefs.model).toBeUndefined();
+  });
 });
 
 function makeTurn(

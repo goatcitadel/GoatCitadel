@@ -32,12 +32,15 @@ function createPrefs(
   };
 }
 
-describe("GatewayService chat session provider defaults", () => {
-  it("prefers the active runtime provider for fresh session prefs before GLM fallbacks", () => {
-    const initialPrefs = createPrefs();
+describe("GatewayService chat session provider normalization", () => {
+  it("repairs stale cross-provider model selections to the selected provider default", () => {
+    const initialPrefs = createPrefs({
+      providerId: "openai",
+      model: "claude-sonnet-4-6",
+    });
     const patchedPrefs = createPrefs({
       providerId: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.4-mini",
       updatedAt: "2026-04-03T00:01:00.000Z",
     });
 
@@ -65,10 +68,9 @@ describe("GatewayService chat session provider defaults", () => {
     const prefs = GatewayService.prototype.getChatSessionPrefs.call(gateway, "sess-1");
 
     expect(gateway.storage.chatSessionPrefs.patch).toHaveBeenCalledWith("sess-1", {
-      providerId: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.4-mini",
     });
     expect(prefs.providerId).toBe("openai");
-    expect(prefs.model).toBe("gpt-5.4");
+    expect(prefs.model).toBe("gpt-5.4-mini");
   });
 });

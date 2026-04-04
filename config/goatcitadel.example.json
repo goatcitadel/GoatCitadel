@@ -241,7 +241,8 @@
     }
   },
   "llm": {
-    "activeProviderId": "openai",
+    "activeProviderId": "",
+    "activeModel": "",
     "providers": [
       {
         "providerId": "openai",

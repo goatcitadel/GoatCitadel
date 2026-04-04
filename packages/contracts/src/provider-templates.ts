@@ -192,6 +192,51 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
   },
 ];
 
+const FOREIGN_MODEL_PROVIDER_IDS = new Set([
+  "openrouter",
+  "vercel",
+  "huggingface",
+  "lmstudio",
+  "ollama",
+  "localai",
+  "npu-local",
+  "genie-ir20",
+]);
+
+const MODEL_PREFIX_PROVIDER_IDS: Record<string, string> = {
+  anthropic: "anthropic",
+  google: "google",
+  openai: "openai",
+  zai: "glm",
+};
+
 export function findProviderTemplate(providerId: string): ProviderTemplateDefinition | undefined {
   return providerTemplates.find((template) => template.providerId === providerId);
+}
+
+export function providerAllowsForeignModelIds(providerId: string): boolean {
+  return FOREIGN_MODEL_PROVIDER_IDS.has(providerId.trim().toLowerCase());
+}
+
+export function inferProviderForModelId(modelId: string): string | undefined {
+  const normalizedModelId = modelId.trim();
+  if (!normalizedModelId) {
+    return undefined;
+  }
+
+  const providerPrefix = normalizedModelId.split("/", 1)[0]?.trim().toLowerCase();
+  if (providerPrefix && MODEL_PREFIX_PROVIDER_IDS[providerPrefix]) {
+    return MODEL_PREFIX_PROVIDER_IDS[providerPrefix];
+  }
+
+  for (const template of providerTemplates) {
+    if (providerAllowsForeignModelIds(template.providerId)) {
+      continue;
+    }
+    if (template.defaultModel === normalizedModelId || template.knownModels?.includes(normalizedModelId)) {
+      return template.providerId;
+    }
+  }
+
+  return undefined;
 }

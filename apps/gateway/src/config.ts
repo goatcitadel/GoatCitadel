@@ -573,7 +573,8 @@ async function readFileWithDefault(filePath: string, fallback: string): Promise<
 
 function defaultLlmConfig(): string {
   return JSON.stringify({
-    activeProviderId: "openai",
+    activeProviderId: "",
+    activeModel: "",
     providers: [
       {
         providerId: "openai",

@@ -1,10 +1,16 @@
 import type { ChatQueueItemView } from "../../components/chat/ChatQueueBar";
 
+import {
+  inferProviderForModelId,
+  providerAllowsForeignModelIds,
+} from "@goatcitadel/contracts";
+
 export type ChatOutboundAction = "send" | "edit" | "retry";
 export type ChatStreamOperation = "resume" | "send" | "edit" | "retry";
 
 export interface ProviderSelectionPlanInput {
   provider: {
+    providerId: string;
     label: string;
     disabled?: boolean;
     availabilityHint?: string;
@@ -18,6 +24,17 @@ export interface ProviderSelectionPlan {
   blockedMessage?: string;
   nextModel?: string;
   missingModelMessage?: string;
+}
+
+export interface ProviderModelSelectionInput {
+  provider: ProviderSelectionPlanInput["provider"];
+  loadedModels: string[];
+  selectedModel?: string;
+}
+
+export interface ProviderModelSelectionResult extends ProviderSelectionPlan {
+  model?: string;
+  modelNormalized?: boolean;
 }
 
 function dedupeStrings(values: readonly string[]): string[] {
@@ -93,5 +110,57 @@ export function resolveProviderSelectionPlan(input: ProviderSelectionPlanInput):
   }
   return {
     nextModel,
+  };
+}
+
+export function isLikelyLocalProviderUrl(baseUrl: string | undefined): boolean {
+  const normalized = (baseUrl ?? "").trim().toLowerCase();
+  return /https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(normalized);
+}
+
+export function resolveProviderModelSelection(input: ProviderModelSelectionInput): ProviderModelSelectionResult {
+  const plan = resolveProviderSelectionPlan({
+    provider: input.provider,
+    loadedModels: input.loadedModels,
+  });
+  if (!input.provider || plan.blockedMessage || plan.missingModelMessage) {
+    return plan;
+  }
+
+  const selectedModel = input.selectedModel?.trim();
+  if (!selectedModel) {
+    return {
+      ...plan,
+      model: plan.nextModel,
+      modelNormalized: Boolean(plan.nextModel),
+    };
+  }
+
+  const knownModels = dedupeStrings([
+    ...input.loadedModels,
+    ...input.provider.models,
+    input.provider.defaultModel ?? "",
+  ]);
+  if (knownModels.includes(selectedModel)) {
+    return {
+      ...plan,
+      model: selectedModel,
+    };
+  }
+
+  const foreignProviderId = providerAllowsForeignModelIds(input.provider.providerId)
+    ? undefined
+    : inferProviderForModelId(selectedModel);
+  if (!foreignProviderId || foreignProviderId === input.provider.providerId) {
+    return {
+      ...plan,
+      model: selectedModel,
+    };
+  }
+
+  return {
+    ...plan,
+    model: plan.nextModel,
+    modelNormalized: selectedModel !== plan.nextModel,
   };
 }

@@ -76,8 +76,8 @@ const updateSettingsSchema = z.object({
   networkAllowlist: z.array(z.string().min(1)).optional(),
   auth: authUpdateSchema.optional(),
   llm: z.object({
-    activeProviderId: z.string().min(1).optional(),
-    activeModel: z.string().min(1).optional(),
+    activeProviderId: z.string().optional(),
+    activeModel: z.string().optional(),
     upsertProvider: z.object({
       providerId: z.string().min(1),
       label: z.string().min(1).optional(),

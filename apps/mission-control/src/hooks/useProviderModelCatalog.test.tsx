@@ -133,6 +133,7 @@ describe("useProviderModelCatalog", () => {
       "glm-5-air",
       "glm-5-flash",
       "glm-5-turbo",
+      "glm-5v-turbo",
     ]);
     expect(latest?.providers.find((provider) => provider.providerId === "google")?.models).toEqual([
       "models/gemini-2.5-flash",
@@ -160,6 +161,7 @@ describe("useProviderModelCatalog", () => {
       "glm-5-air",
       "glm-5-flash",
       "glm-5-turbo",
+      "glm-5v-turbo",
     ]);
 
     await act(async () => {

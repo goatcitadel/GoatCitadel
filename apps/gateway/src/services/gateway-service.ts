@@ -13,6 +13,10 @@ import {
   truncateByTokenEstimate,
 } from "@goatcitadel/memory-core";
 import { buildInstalledIntegrationPluginRecord, resolveIntegrationPluginInstallMetadata } from "./integration-plugin-author-contract.js";
+import {
+  deleteProviderApiKeyWithFallback,
+  persistProviderApiKeyWithFallback,
+} from "./provider-secret-persistence.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
 import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
 import {
@@ -39,9 +43,11 @@ import {
   ConflictError,
   findProviderTemplate,
   GoatError,
+  inferProviderForModelId,
   isChatTurnActiveStatus,
   isChatTurnTerminalStatus,
   NotFoundError,
+  providerAllowsForeignModelIds,
   ValidationError,
 } from "@goatcitadel/contracts";
 import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
@@ -2706,21 +2712,31 @@ export class GatewayService {
   }
 
   private ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord {
-    if (prefs.providerId && prefs.model) {
+    if (!prefs.providerId || !prefs.model) {
       return prefs;
     }
-    const defaults = this.getPromptRunnerModelDefaults();
-    const patch: Partial<Omit<ChatSessionPrefsRecord, "sessionId" | "createdAt" | "updatedAt">> = {};
-    if (!prefs.providerId && defaults.providerId) {
-      patch.providerId = defaults.providerId;
-    }
-    if (!prefs.model && defaults.model) {
-      patch.model = defaults.model;
-    }
-    if (Object.keys(patch).length === 0) {
+
+    const runtime = this.llmService.getRuntimeConfig({
+      includeKeychainForActiveProvider: true,
+      useCache: true,
+    });
+    const provider = runtime.providers.find((item) => item.providerId === prefs.providerId);
+    if (!provider) {
       return prefs;
     }
-    return this.storage.chatSessionPrefs.patch(sessionId, patch);
+
+    if (providerAllowsForeignModelIds(provider.providerId)) {
+      return prefs;
+    }
+
+    const ownerProviderId = inferProviderForModelId(prefs.model);
+    if (!ownerProviderId || ownerProviderId === provider.providerId) {
+      return prefs;
+    }
+
+    return this.storage.chatSessionPrefs.patch(sessionId, {
+      model: provider.defaultModel,
+    });
   }
 
   private hydrateChatPrefsWithAutonomy(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord {
@@ -11369,7 +11385,24 @@ export class GatewayService {
     }
 
     if (input.llm) {
-      this.llmService.updateRuntimeConfig(input.llm);
+      const llmInput = {
+        ...input.llm,
+        upsertProvider: input.llm.upsertProvider
+          ? { ...input.llm.upsertProvider }
+          : undefined,
+      };
+      const submittedApiKey = llmInput.upsertProvider?.apiKey?.trim();
+      if (llmInput.upsertProvider && submittedApiKey) {
+        persistProviderApiKeyWithFallback({
+          providerId: llmInput.upsertProvider.providerId,
+          apiKey: submittedApiKey,
+          preferredEnvVar: llmInput.upsertProvider.apiKeyEnv,
+          rootDir: this.config.rootDir,
+          llmService: this.llmService,
+        });
+        llmInput.upsertProvider.apiKey = undefined;
+      }
+      this.llmService.updateRuntimeConfig(llmInput);
       this.persistLlmConfig();
     }
 
@@ -14602,10 +14635,15 @@ export class GatewayService {
     hasSecret: boolean;
     source: "none" | "keychain" | "env" | "inline";
   } {
-    this.llmService.setProviderApiKey(providerId, apiKey);
+    const status = persistProviderApiKeyWithFallback({
+      providerId,
+      apiKey,
+      rootDir: this.config.rootDir,
+      llmService: this.llmService,
+    });
     this.llmService.clearInlineProviderApiKey(providerId);
     this.persistLlmConfig();
-    return this.getProviderSecretStatus(providerId);
+    return status;
   }
 
   public deleteProviderSecret(providerId: string): {
@@ -14613,8 +14651,11 @@ export class GatewayService {
     hasSecret: boolean;
     source: "none" | "keychain" | "env" | "inline";
   } {
-    this.llmService.deleteProviderApiKey(providerId);
-    return this.getProviderSecretStatus(providerId);
+    return deleteProviderApiKeyWithFallback({
+      providerId,
+      rootDir: this.config.rootDir,
+      llmService: this.llmService,
+    });
   }
 
   public getLlmConfig(): LlmRuntimeConfig {

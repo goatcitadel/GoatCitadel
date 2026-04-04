@@ -45,6 +45,17 @@ export function loadLocalEnvFile(options?: { forceReload?: boolean }): EnvFileLo
 }
 
 export function detectEnvFilePath(options?: { rootDir?: string }): string | undefined {
+  const writablePath = resolveWritableEnvFilePath(options);
+  if (!writablePath) {
+    return undefined;
+  }
+  if (fs.existsSync(writablePath)) {
+    return writablePath;
+  }
+  return undefined;
+}
+
+export function resolveWritableEnvFilePath(options?: { rootDir?: string }): string | undefined {
   const envRoot = process.env.GOATCITADEL_ROOT_DIR?.trim();
   const cwd = process.cwd();
 
@@ -58,9 +69,8 @@ export function detectEnvFilePath(options?: { rootDir?: string }): string | unde
 
   const deduped = Array.from(new Set(rootCandidates));
   for (const root of deduped) {
-    const envPath = path.join(root, ".env");
-    if (repoHasConfigMarker(root) && fs.existsSync(envPath)) {
-      return envPath;
+    if (repoHasConfigMarker(root)) {
+      return path.join(root, ".env");
     }
   }
 
@@ -79,7 +89,7 @@ export function upsertLocalEnvVar(
   value: string,
   options?: { rootDir?: string },
 ): { path?: string; updated: boolean } {
-  const envPath = detectEnvFilePath(options);
+  const envPath = resolveWritableEnvFilePath(options);
   if (!envPath) {
     return { updated: false };
   }
@@ -122,6 +132,52 @@ export function upsertLocalEnvVar(
   const normalized = replaced
     ? updatedLines.join("\n")
     : [...updatedLines.filter((line, index, array) => !(index === array.length - 1 && line === "")), nextLine, ""].join("\n");
+  fs.writeFileSync(envPath, normalized, "utf8");
+  return { path: envPath, updated: true };
+}
+
+export function deleteLocalEnvVar(
+  key: string,
+  options?: { rootDir?: string },
+): { path?: string; updated: boolean } {
+  const envPath = resolveWritableEnvFilePath(options);
+  if (!envPath || !fs.existsSync(envPath)) {
+    return { path: envPath, updated: false };
+  }
+
+  const validatedKey = key.trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(validatedKey)) {
+    throw new Error(`Invalid env var key: ${key}`);
+  }
+
+  const raw = fs.readFileSync(envPath, "utf8");
+  const lines = raw.split(/\r?\n/u);
+  let removed = false;
+  const updatedLines = lines.filter((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      return true;
+    }
+    const candidate = trimmed.startsWith("export ")
+      ? trimmed.slice("export ".length).trimStart()
+      : trimmed;
+    const splitIndex = candidate.indexOf("=");
+    if (splitIndex <= 0) {
+      return true;
+    }
+    const existingKey = candidate.slice(0, splitIndex).trim();
+    if (existingKey !== validatedKey) {
+      return true;
+    }
+    removed = true;
+    return false;
+  });
+
+  if (!removed) {
+    return { path: envPath, updated: false };
+  }
+
+  const normalized = [...updatedLines.filter((line, index, array) => !(index === array.length - 1 && line === "")), ""].join("\n");
   fs.writeFileSync(envPath, normalized, "utf8");
   return { path: envPath, updated: true };
 }

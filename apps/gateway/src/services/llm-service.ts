@@ -12,7 +12,11 @@ import type {
   LlmProviderSummary,
   LlmRuntimeConfig,
 } from "@goatcitadel/contracts";
-import { findProviderTemplate } from "@goatcitadel/contracts";
+import {
+  findProviderTemplate,
+  inferProviderForModelId,
+  providerAllowsForeignModelIds,
+} from "@goatcitadel/contracts";
 import { applyEstimatedCostToChatResponse, applyEstimatedCostToStreamChunk } from "./llm-pricing.js";
 import { SecretStoreService, SecretStoreUnavailableError } from "./secret-store-service.js";
 
@@ -73,6 +77,11 @@ function normalizeConfiguredActiveModel(model: string | undefined): string | und
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeConfiguredProviderId(providerId: string | undefined): string | undefined {
+  const trimmed = providerId?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 const DISALLOWED_BASE_HOSTS = new Set([
   "0.0.0.0",
   "169.254.169.254",
@@ -96,20 +105,32 @@ export class LlmService {
   ) {
     this.secretStore = options.secretStore ?? new SecretStoreService();
     this.networkAllowlist = [...(options.networkAllowlist ?? [])];
+    this.activeProviderId = "";
+    this.activeModel = "";
 
     for (const provider of config.providers) {
       this.providers.set(provider.providerId, normalizeProvider(provider));
     }
 
-    const active = this.providers.get(config.activeProviderId) ?? this.providers.values().next().value;
-    if (!active) {
+    if (this.providers.size === 0) {
       throw new Error("LLM configuration must include at least one provider");
     }
 
+    const configuredActiveProviderId = normalizeConfiguredProviderId(config.activeProviderId);
+    if (!configuredActiveProviderId) {
+      return;
+    }
+
+    const active = this.providers.get(configuredActiveProviderId);
+    if (!active) {
+      throw new Error(`Unknown LLM provider: ${configuredActiveProviderId}`);
+    }
+
     this.activeProviderId = active.providerId;
-    this.activeModel = active.providerId === config.activeProviderId.trim()
-      ? normalizeConfiguredActiveModel(config.activeModel) ?? active.defaultModel
-      : active.defaultModel;
+    this.activeModel = resolveConfiguredModelForProvider(active, config.activeModel, {
+      fallbackModel: active.defaultModel,
+      onMismatch: "fallback",
+    }) ?? "";
   }
 
   public updateNetworkAllowlist(allowlist: string[]): void {
@@ -181,19 +202,41 @@ export class LlmService {
       this.secretStatusCache.delete(merged.providerId);
     }
 
-    if (input.activeProviderId) {
-      const provider = this.providers.get(input.activeProviderId);
-      if (!provider) {
-        throw new Error(`Unknown LLM provider: ${input.activeProviderId}`);
-      }
-      this.activeProviderId = provider.providerId;
-      if (!input.activeModel) {
-        this.activeModel = provider.defaultModel;
-      }
-    }
+    const hasActiveProviderId = Object.prototype.hasOwnProperty.call(input, "activeProviderId");
+    const hasActiveModel = Object.prototype.hasOwnProperty.call(input, "activeModel");
 
-    if (input.activeModel) {
-      this.activeModel = input.activeModel;
+    if (hasActiveProviderId) {
+      const providerId = normalizeConfiguredProviderId(input.activeProviderId);
+      if (!providerId) {
+        this.activeProviderId = "";
+        this.activeModel = "";
+      } else {
+        const provider = this.providers.get(providerId);
+        if (!provider) {
+          throw new Error(`Unknown LLM provider: ${providerId}`);
+        }
+        this.activeProviderId = provider.providerId;
+        this.activeModel = resolveConfiguredModelForProvider(provider, hasActiveModel ? input.activeModel : undefined, {
+          fallbackModel: provider.defaultModel,
+          onMismatch: "throw",
+        }) ?? "";
+      }
+    } else if (hasActiveModel) {
+      if (!this.activeProviderId) {
+        if (normalizeConfiguredActiveModel(input.activeModel)) {
+          throw new Error("Select an active LLM provider before choosing a model.");
+        }
+        this.activeModel = "";
+      } else {
+        const provider = this.providers.get(this.activeProviderId);
+        if (!provider) {
+          throw new Error(`Unknown LLM provider: ${this.activeProviderId}`);
+        }
+        this.activeModel = resolveConfiguredModelForProvider(provider, input.activeModel, {
+          fallbackModel: provider.defaultModel,
+          onMismatch: "throw",
+        }) ?? "";
+      }
     }
 
     return this.getRuntimeConfig({
@@ -377,10 +420,7 @@ export class LlmService {
 
     const resolved = this.resolveProvider(request.providerId);
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
-    const model = normalizeRequestedModel(
-      resolved.provider.providerId,
-      request.model ?? (resolved.provider.providerId === this.activeProviderId ? this.activeModel : resolved.provider.defaultModel),
-    );
+    const model = this.resolveRequestModel(resolved.provider, request.model);
     const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
 
     switch (apiStyle) {
@@ -400,10 +440,7 @@ export class LlmService {
 
     const resolved = this.resolveProvider(request.providerId);
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
-    const model = normalizeRequestedModel(
-      resolved.provider.providerId,
-      request.model ?? (resolved.provider.providerId === this.activeProviderId ? this.activeModel : resolved.provider.defaultModel),
-    );
+    const model = this.resolveRequestModel(resolved.provider, request.model);
     const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
 
     switch (apiStyle) {
@@ -421,10 +458,7 @@ export class LlmService {
 
   public resolveExecutionApiStyle(providerId?: string, model?: string): LlmApiStyle {
     const resolved = this.resolveProvider(providerId);
-    const resolvedModel = normalizeRequestedModel(
-      resolved.provider.providerId,
-      model ?? (resolved.provider.providerId === this.activeProviderId ? this.activeModel : resolved.provider.defaultModel),
-    );
+    const resolvedModel = this.resolveRequestModel(resolved.provider, model);
     return resolveProviderExecutionApiStyle(resolved.provider, resolvedModel);
   }
 
@@ -862,7 +896,10 @@ export class LlmService {
   }
 
   private resolveProvider(providerId?: string): ResolvedProvider {
-    const selectedId = providerId ?? this.activeProviderId;
+    const selectedId = normalizeConfiguredProviderId(providerId) ?? this.activeProviderId;
+    if (!selectedId) {
+      throw new Error("No active LLM provider is configured. Select a provider first.");
+    }
     const provider = this.providers.get(selectedId);
     if (!provider) {
       throw new Error(`Unknown LLM provider: ${selectedId}`);
@@ -870,6 +907,21 @@ export class LlmService {
 
     const apiKey = this.resolveApiKey(provider);
     return { provider, apiKey };
+  }
+
+  private resolveRequestModel(provider: LlmProviderConfig, requestedModel?: string): string {
+    const fallbackModel = provider.providerId === this.activeProviderId
+      ? normalizeConfiguredActiveModel(this.activeModel) ?? provider.defaultModel
+      : provider.defaultModel;
+
+    const resolvedModel = resolveConfiguredModelForProvider(provider, requestedModel, {
+      fallbackModel,
+      onMismatch: "throw",
+    });
+    if (!resolvedModel) {
+      throw new Error(`No model is configured for ${provider.label}. Select a model first.`);
+    }
+    return resolvedModel;
   }
 
   private resolveApiKey(provider: LlmProviderConfig): string | undefined {
@@ -1072,6 +1124,47 @@ function resolveProviderExecutionApiStyle(provider: LlmProviderConfig, model: st
 function isOpenAiResponsesPreferredModel(model: string): boolean {
   const normalized = model.trim().toLowerCase();
   return /^gpt-5(?:$|[.-])/.test(normalized);
+}
+
+function resolveConfiguredModelForProvider(
+  provider: LlmProviderConfig,
+  model: string | undefined,
+  options: {
+    fallbackModel?: string;
+    onMismatch: "fallback" | "throw";
+  },
+): string | undefined {
+  const normalizedModel = normalizeConfiguredActiveModel(model);
+  if (!normalizedModel) {
+    return options.fallbackModel
+      ? normalizeRequestedModel(provider.providerId, options.fallbackModel)
+      : undefined;
+  }
+
+  const foreignProviderId = inferForeignProviderForModel(provider.providerId, normalizedModel);
+  if (foreignProviderId) {
+    if (options.onMismatch === "throw") {
+      throw new Error(
+        `Model ${normalizedModel} belongs to ${foreignProviderId}; switch providers or choose a ${provider.providerId} model.`,
+      );
+    }
+    return options.fallbackModel
+      ? normalizeRequestedModel(provider.providerId, options.fallbackModel)
+      : undefined;
+  }
+
+  return normalizeRequestedModel(provider.providerId, normalizedModel);
+}
+
+function inferForeignProviderForModel(providerId: string, model: string): string | undefined {
+  if (providerAllowsForeignModelIds(providerId)) {
+    return undefined;
+  }
+  const ownerProviderId = inferProviderForModelId(model);
+  if (!ownerProviderId || ownerProviderId === providerId) {
+    return undefined;
+  }
+  return ownerProviderId;
 }
 
 function normalizeRequestedModel(providerId: string, model: string): string {
@@ -1523,14 +1616,53 @@ function buildOpenAiResponsesPayload(
       format: request.response_format,
     };
   }
-  if (request.tools !== undefined) payload.tools = request.tools;
-  if (request.tool_choice !== undefined) payload.tool_choice = request.tool_choice;
+  if (request.tools !== undefined) payload.tools = mapOpenAiResponsesTools(request.tools);
+  if (request.tool_choice !== undefined) payload.tool_choice = mapOpenAiResponsesToolChoice(request.tool_choice);
   if (request.stop !== undefined) payload.stop = request.stop;
   if (request.metadata !== undefined) payload.metadata = request.metadata;
   if (request.service_tier) payload.service_tier = request.service_tier;
   if (request.prompt_cache_retention) payload.prompt_cache_retention = request.prompt_cache_retention;
 
   return payload;
+}
+
+function mapOpenAiResponsesTools(tools: ChatCompletionRequest["tools"]): ChatCompletionRequest["tools"] {
+  if (!Array.isArray(tools)) {
+    return tools;
+  }
+  return tools.map((tool) => {
+    if (!isRecord(tool) || tool.type !== "function" || typeof tool.name === "string") {
+      return tool;
+    }
+    const fn = isRecord(tool.function) ? tool.function : undefined;
+    if (!fn) {
+      return tool;
+    }
+    const mapped: Record<string, unknown> = {
+      ...tool,
+      ...fn,
+    };
+    delete mapped.function;
+    return mapped;
+  });
+}
+
+function mapOpenAiResponsesToolChoice(
+  toolChoice: ChatCompletionRequest["tool_choice"],
+): ChatCompletionRequest["tool_choice"] {
+  if (!isRecord(toolChoice) || toolChoice.type !== "function" || typeof toolChoice.name === "string") {
+    return toolChoice;
+  }
+  const fn = isRecord(toolChoice.function) ? toolChoice.function : undefined;
+  if (!fn || typeof fn.name !== "string" || !fn.name.trim()) {
+    return toolChoice;
+  }
+  const mapped: Record<string, unknown> = {
+    ...toolChoice,
+    name: fn.name,
+  };
+  delete mapped.function;
+  return mapped as ChatCompletionRequest["tool_choice"];
 }
 
 function buildOpenAiResponsesInput(

@@ -131,6 +131,10 @@ import {
   buildModelCommandSuggestions,
   type CommandSuggestionItem,
 } from "./chat-command-suggestions";
+import {
+  isLikelyLocalProviderUrl,
+  resolveProviderModelSelection,
+} from "./chat/chat-page-helpers";
 import "../styles/chat.css";
 
 const STREAM_PREF_KEY = "goatcitadel.chat.agent.stream.enabled";
@@ -221,12 +225,14 @@ export function resolveOptimisticChatPrefs(
   patch: ChatSessionPrefsPatch,
 ): ChatSessionPrefsRecord {
   const normalizedPatch = applyChatModePresetToPatch(patch);
+  const providerChanged = normalizedPatch.providerId !== undefined
+    && normalizedPatch.providerId !== current.providerId;
   return {
     ...current,
     mode: normalizedPatch.mode ?? current.mode,
     planningMode: normalizedPatch.planningMode ?? current.planningMode,
     providerId: normalizedPatch.providerId ?? current.providerId,
-    model: normalizedPatch.model ?? current.model,
+    model: normalizedPatch.model ?? (providerChanged ? undefined : current.model),
     webMode: normalizedPatch.webMode ?? current.webMode,
     memoryMode: normalizedPatch.memoryMode ?? current.memoryMode,
     thinkingLevel: normalizedPatch.thinkingLevel ?? current.thinkingLevel,
@@ -525,6 +531,7 @@ export function ChatPage({
   const {
     config: runtimeLlmConfig,
     providers: runtimeProviderCatalog,
+    getCachedModels,
     loadModelsForProvider,
   } = useProviderModelCatalog("chat");
 
@@ -1036,6 +1043,14 @@ export function ChatPage({
     return runtimeProviderCatalog.map((provider) => ({
       providerId: provider.providerId,
       label: provider.label,
+      defaultModel: provider.defaultModel,
+      disabled: !provider.hasApiKey && !isLikelyLocalProviderUrl(provider.baseUrl),
+      availabilityLabel: !provider.hasApiKey && !isLikelyLocalProviderUrl(provider.baseUrl)
+        ? `${provider.label} · setup required`
+        : undefined,
+      availabilityHint: !provider.hasApiKey && !isLikelyLocalProviderUrl(provider.baseUrl)
+        ? `${provider.label} is not configured yet. Add an API key before using it.`
+        : undefined,
       models: dedupeStrings([
         ...provider.models,
         provider.providerId === activeProviderId ? activeModel : undefined,
@@ -1052,7 +1067,28 @@ export function ChatPage({
     settings?.llm.activeProviderId,
   ]);
 
-  const selectedProviderId = prefs?.providerId ?? runtimeLlmConfig?.activeProviderId ?? settings?.llm.activeProviderId;
+  const selectedProviderId = useMemo(() => {
+    const preferredProviderId = prefs?.providerId ?? runtimeLlmConfig?.activeProviderId ?? settings?.llm.activeProviderId;
+    return providerOptions.find((provider) => provider.providerId === preferredProviderId)?.providerId;
+  }, [prefs?.providerId, providerOptions, runtimeLlmConfig?.activeProviderId, settings?.llm.activeProviderId]);
+
+  const selectedProviderSelection = useMemo(() => {
+    const provider = providerOptions.find((item) => item.providerId === selectedProviderId);
+    return resolveProviderModelSelection({
+      provider,
+      loadedModels: selectedProviderId ? getCachedModels(selectedProviderId) : [],
+      selectedModel: prefs?.model ?? runtimeLlmConfig?.activeModel ?? settings?.llm.activeModel,
+    });
+  }, [
+    getCachedModels,
+    prefs?.model,
+    providerOptions,
+    runtimeLlmConfig?.activeModel,
+    selectedProviderId,
+    settings?.llm.activeModel,
+  ]);
+
+  const selectedModel = selectedProviderSelection.model;
 
   useEffect(() => {
     if (!selectedProviderId) {
@@ -1862,6 +1898,15 @@ export function ChatPage({
     const attachmentsSnapshot = item.attachments;
     const attachmentIds = attachmentsSnapshot.map((entry) => entry.attachmentId);
     const currentPrefs = prefsRef.current;
+    const currentProviderId = currentPrefs?.providerId ?? selectedProviderId;
+    const currentProvider = providerOptions.find((provider) => provider.providerId === currentProviderId);
+    const currentProviderSelection = resolveProviderModelSelection({
+      provider: currentProvider,
+      loadedModels: currentProviderId ? getCachedModels(currentProviderId) : [],
+      selectedModel: currentPrefs?.model ?? selectedModel,
+    });
+    const effectiveProviderId = currentProvider?.providerId;
+    const effectiveModel = currentProviderSelection.model;
     const localAttachments = attachmentsSnapshot.map((entry) => ({
       attachmentId: entry.attachmentId,
       fileName: entry.fileName,
@@ -1887,6 +1932,18 @@ export function ChatPage({
       setError(null);
       setPendingApproval(null);
       session = await ensureSession();
+      if (!effectiveProviderId) {
+        throw new Error("No model provider is configured yet. Open Configure and connect a provider first.");
+      }
+      if (currentProviderSelection.blockedMessage) {
+        throw new Error(currentProviderSelection.blockedMessage);
+      }
+      if (!effectiveModel) {
+        throw new Error(
+          currentProviderSelection.missingModelMessage
+          ?? `No model is selected for ${currentProvider?.label ?? effectiveProviderId}. Choose a model and try again.`,
+        );
+      }
       if (item.action === "send" && trimmedContent.startsWith("/")) {
         await handleCommandExecution(session.sessionId, trimmedContent);
         await loadSidebar();
@@ -2019,8 +2076,8 @@ export function ChatPage({
               });
             } else if (item.action === "retry" && item.targetTurnId) {
               await streamRetryChatTurn(session.sessionId, item.targetTurnId, {
-                providerId: currentPrefs?.providerId,
-                model: currentPrefs?.model,
+                providerId: effectiveProviderId,
+                model: effectiveModel,
                 mode: currentPrefs?.mode,
                 webMode: currentPrefs?.webMode,
                 memoryMode: currentPrefs?.memoryMode,
@@ -2032,8 +2089,8 @@ export function ChatPage({
                 attachments: attachmentIds,
                 useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                 mode: currentPrefs?.mode ?? "chat",
-                providerId: currentPrefs?.providerId,
-                model: currentPrefs?.model,
+                providerId: effectiveProviderId,
+                model: effectiveModel,
                 webMode: currentPrefs?.webMode ?? "auto",
                 memoryMode: currentPrefs?.memoryMode ?? "auto",
                 thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -2044,8 +2101,8 @@ export function ChatPage({
                 attachments: attachmentIds,
                 useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                 mode: currentPrefs?.mode ?? "chat",
-                providerId: currentPrefs?.providerId,
-                model: currentPrefs?.model,
+                providerId: effectiveProviderId,
+                model: effectiveModel,
                 webMode: currentPrefs?.webMode ?? "auto",
                 memoryMode: currentPrefs?.memoryMode ?? "auto",
                 thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -2073,8 +2130,8 @@ export function ChatPage({
       } else {
         const sent = item.action === "retry" && item.targetTurnId
           ? await retryChatTurn(session.sessionId, item.targetTurnId, {
-            providerId: currentPrefs?.providerId,
-            model: currentPrefs?.model,
+            providerId: effectiveProviderId,
+            model: effectiveModel,
             mode: currentPrefs?.mode,
             webMode: currentPrefs?.webMode,
             memoryMode: currentPrefs?.memoryMode,
@@ -2086,8 +2143,8 @@ export function ChatPage({
               attachments: attachmentIds,
               useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
               mode: currentPrefs?.mode ?? "chat",
-              providerId: currentPrefs?.providerId,
-              model: currentPrefs?.model,
+              providerId: effectiveProviderId,
+              model: effectiveModel,
               webMode: currentPrefs?.webMode ?? "auto",
               memoryMode: currentPrefs?.memoryMode ?? "auto",
               thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -2097,8 +2154,8 @@ export function ChatPage({
               attachments: attachmentIds,
               useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
               mode: currentPrefs?.mode ?? "chat",
-              providerId: currentPrefs?.providerId,
-              model: currentPrefs?.model,
+              providerId: effectiveProviderId,
+              model: effectiveModel,
               webMode: currentPrefs?.webMode ?? "auto",
               memoryMode: currentPrefs?.memoryMode ?? "auto",
               thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -2170,10 +2227,14 @@ export function ChatPage({
     commitThreadUpdate,
     ensureSession,
     finishOutboundExecution,
+    getCachedModels,
     handleCommandExecution,
     loadSessionCoreState,
+    providerOptions,
     loadSidebar,
     scheduleStreamMessageReconciliation,
+    selectedModel,
+    selectedProviderId,
     streamEnabled,
   ]);
 
@@ -2753,12 +2814,17 @@ export function ChatPage({
                           <ChatModelPicker
                             providers={providerOptions}
                             providerId={selectedProviderId}
-                            model={prefs?.model ?? runtimeLlmConfig?.activeModel ?? settings?.llm.activeModel}
+                            model={selectedModel}
                             disabled={!selectedSessionId || sending}
                             onChangeProvider={(providerId) => {
                               const provider = providerOptions.find((item) => item.providerId === providerId);
+                              const selection = resolveProviderModelSelection({
+                                provider,
+                                loadedModels: providerId ? getCachedModels(providerId) : [],
+                                selectedModel: undefined,
+                              });
                               void loadModelsForProvider(providerId);
-                              void handlePrefPatch({ providerId, model: provider?.models[0] });
+                              void handlePrefPatch({ providerId, model: selection.model ?? "" });
                             }}
                             onChangeModel={(model) => void handlePrefPatch({ model })}
                           />
@@ -2915,12 +2981,17 @@ export function ChatPage({
                         <ChatModelPicker
                           providers={providerOptions}
                           providerId={selectedProviderId}
-                          model={prefs?.model ?? runtimeLlmConfig?.activeModel ?? settings?.llm.activeModel}
+                          model={selectedModel}
                           disabled={!selectedSessionId || sending}
                           onChangeProvider={(providerId) => {
                             const provider = providerOptions.find((item) => item.providerId === providerId);
+                            const selection = resolveProviderModelSelection({
+                              provider,
+                              loadedModels: providerId ? getCachedModels(providerId) : [],
+                              selectedModel: undefined,
+                            });
                             void loadModelsForProvider(providerId);
-                            void handlePrefPatch({ providerId, model: provider?.models[0] });
+                            void handlePrefPatch({ providerId, model: selection.model ?? "" });
                           }}
                           onChangeModel={(model) => void handlePrefPatch({ model })}
                         />
