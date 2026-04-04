@@ -105,6 +105,7 @@ vi.mock("./components/ChatModelPicker", () => ({
 vi.mock("./components/ui", () => ({
   GCModal: (props: {
     open: boolean;
+    onOpenChange?: (open: boolean) => void;
     title: string;
     description?: string;
     confirmDisabled?: boolean;
@@ -118,6 +119,11 @@ vi.mock("./components/ui", () => ({
       data-description={props.description ?? ""}
       data-confirm-disabled={props.confirmDisabled ? "true" : "false"}
       data-dismiss-disabled={props.dismissDisabled ? "true" : "false"}
+      onRequestClose={() => {
+        if (!props.dismissDisabled) {
+          props.onOpenChange?.(false);
+        }
+      }}
     >
       {props.children}
     </div>
@@ -322,9 +328,9 @@ describe("mission-control hardening", () => {
       />,
     );
 
-    const backdrop = renderer.root.findByProps({ className: "modal-backdrop" });
+    const modal = renderer.root.findByProps({ "data-mock-modal": "true" });
     act(() => {
-      backdrop.props.onClick();
+      modal.props.onRequestClose();
     });
 
     expect(onCancel).not.toHaveBeenCalled();

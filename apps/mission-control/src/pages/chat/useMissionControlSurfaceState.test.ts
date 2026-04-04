@@ -12,7 +12,7 @@ describe("resolveMissionControlDockSectionOrder", () => {
       hasBlockingContext: true,
       hasDelegationSuggestion: false,
       codeModeNeedsProjectBinding: false,
-    })).toEqual(["trace", "surface", "suggestions", "memory", "session"]);
+    })).toEqual(["trace", "surface", "memory", "session", "suggestions"]);
   });
 
   it("keeps cowork workflow context ahead of supporting sections", () => {
@@ -25,7 +25,7 @@ describe("resolveMissionControlDockSectionOrder", () => {
       hasBlockingContext: false,
       hasDelegationSuggestion: true,
       codeModeNeedsProjectBinding: false,
-    }).slice(0, 3)).toEqual(["suggestions", "workflow", "surface"]);
+    }).slice(0, 3)).toEqual(["suggestions", "workflow", "trace"]);
   });
 
   it("pushes code posture and workbench ahead of the rest when project binding is missing", () => {
@@ -38,6 +38,6 @@ describe("resolveMissionControlDockSectionOrder", () => {
       hasBlockingContext: false,
       hasDelegationSuggestion: false,
       codeModeNeedsProjectBinding: true,
-    })).toEqual(["surface", "workflow", "trace", "session"]);
+    })).toEqual(["surface", "workflow", "session", "trace"]);
   });
 });
