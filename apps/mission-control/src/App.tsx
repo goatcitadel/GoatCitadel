@@ -28,6 +28,7 @@ import {
   buildRouteSearch,
   DEFAULT_ROUTE,
   getPageLabel,
+  isWorkSurface,
   normalizeResolvedRoute,
   PAGE_META,
   readRouteFromLocation,
@@ -191,6 +192,12 @@ export function App() {
   const [remoteApprovalPrompts, setRemoteApprovalPrompts] = useState<RemoteApprovalActionPrompt[]>([]);
   const [remoteApprovalResolveBusy, setRemoteApprovalResolveBusy] = useState(false);
   const [operateStatus, setOperateStatus] = useState<DashboardStateResponse | null>(null);
+  const [compactShellNav, setCompactShellNav] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return false;
+    }
+    return window.matchMedia("(max-width: 767px)").matches;
+  });
   const [gatewayAccess, setGatewayAccess] = useState<GatewayAccessViewState>({
     status: "checking",
     message: "Verifying gateway reachability and access policy.",
@@ -300,6 +307,25 @@ export function App() {
     navigate(DEFAULT_ROUTE);
     void loadWorkspaceOptions();
   }, [loadWorkspaceOptions, navigate]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return undefined;
+    }
+
+    const media = window.matchMedia("(max-width: 767px)");
+    const handleChange = (event: MediaQueryListEvent | MediaQueryList) => {
+      setCompactShellNav(event.matches);
+    };
+
+    handleChange(media);
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", handleChange);
+      return () => media.removeEventListener("change", handleChange);
+    }
+    media.addListener(handleChange);
+    return () => media.removeListener(handleChange);
+  }, []);
 
   const retryGatewayAccess = useCallback(() => {
     setGatewayAccessRunId((current) => current + 1);
@@ -738,9 +764,6 @@ export function App() {
   );
 
   const currentPageLabel = getPageLabel(route);
-  const activePageDescription = route.page === "surface"
-    ? CHAT_MODE_PRESETS[route.surface ?? "chat"].summary
-    : PAGE_META[route.page].description;
   const operateApprovalsCount = deriveShellApprovalCount(operateStatus, localApprovalPromptCount);
   const operateActiveAgentsCount = operateStatus?.activeSubagents ?? 0;
   const operateDailyCostUsd = operateStatus?.dailyCostUsd ?? 0;
@@ -933,6 +956,20 @@ export function App() {
     .filter((item, index, arr) => arr.findIndex((other) => other.workspaceId === item.workspaceId) === index)
     .map((item) => ({ value: item.workspaceId, label: item.name }));
 
+  const compactShellNavOptions = route.space === "operate"
+    ? [
+      { value: "chat", label: CHAT_MODE_PRESETS.chat.label },
+      { value: "cowork", label: CHAT_MODE_PRESETS.cowork.label },
+      { value: "code", label: CHAT_MODE_PRESETS.code.label },
+      { value: "tasks", label: "Tasks" },
+      { value: "approvals", label: "Approvals" },
+    ]
+    : SPACE_PAGES[route.space].map((item) => ({ value: item.page, label: item.label }));
+
+  const compactShellNavValue = route.space === "operate"
+    ? (route.page === "surface" ? route.surface ?? "chat" : route.page)
+    : route.page;
+
   return (
     <div
       className={`app-shell layout-shell theme-signal-noir ui-mode-${uiMode} ui-density-${density} ui-effects-${effectiveEffectsMode}${showTechnicalDetails ? "" : " ui-hide-technical"}`}
@@ -959,12 +996,6 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="shell-bar-context">
-          <div className="shell-bar-page">
-            <p className="shell-bar-page-label">{currentPageLabel}</p>
-            <p className="shell-bar-page-note">{activePageDescription}</p>
-          </div>
-        </div>
         <div className="shell-bar-actions">
           <button type="button" className="shell-command-trigger-topbar" onClick={() => setPaletteOpen(true)}>
             {appCopy.quickActionsButton}
@@ -985,8 +1016,24 @@ export function App() {
         </div>
       </header>
 
-      <div className="shell-secondary-nav">
-        {route.space === "operate" ? (
+      <div className={`shell-secondary-nav${compactShellNav ? " compact" : ""}`}>
+        {compactShellNav ? (
+          <label className="shell-context-picker">
+            <span className="shell-action-label">Current area</span>
+            <GCSelect
+              value={compactShellNavValue}
+              onChange={(value) => {
+                if (route.space === "operate" && isWorkSurface(value)) {
+                  handleSelectSurface(value);
+                  return;
+                }
+                handleSelectPage(value as SpacePage);
+              }}
+              options={compactShellNavOptions}
+              aria-label={`${SPACE_META[route.space].label} pages`}
+            />
+          </label>
+        ) : route.space === "operate" ? (
           <nav className="surface-nav" aria-label="Operate destinations">
             {(["chat", "cowork", "code"] as WorkSurface[]).map((surface) => (
               <button

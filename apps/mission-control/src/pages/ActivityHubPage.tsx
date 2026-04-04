@@ -22,7 +22,6 @@ export function ActivityHubPage({ activeTab, workspaceId, onTabChange }: Activit
   return (
     <section className="space-page stack-lg">
       <SectionTitle
-        eyebrow="Observe"
         title="Activity"
         subtitle="Realtime events, scheduler health, and improvement signals live together here."
       />

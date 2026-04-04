@@ -95,7 +95,7 @@
   top: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: minmax(180px, auto) auto minmax(280px, 1fr) auto;
+  grid-template-columns: minmax(180px, auto) minmax(0, 1fr) auto;
   align-items: center;
   gap: calc(var(--space-4) * var(--density-scale));
   padding: calc(var(--space-3) * var(--density-scale)) calc(var(--space-5) * var(--density-scale));
@@ -194,6 +194,12 @@
   min-width: 220px;
 }
 
+.shell-context-picker {
+  display: grid;
+  gap: calc(var(--space-1) * var(--density-scale));
+  width: min(100%, 280px);
+}
+
 .shell-secondary-nav {
   display: flex;
   align-items: center;
@@ -201,6 +207,10 @@
   gap: calc(var(--space-3) * var(--density-scale));
   padding: 0 calc(var(--space-5) * var(--density-scale)) calc(var(--space-3) * var(--density-scale));
   border-bottom: 1px solid var(--border-default);
+}
+
+.shell-secondary-nav.compact {
+  justify-content: flex-start;
 }
 
 .shell-main {
@@ -218,6 +228,43 @@
 
 .space-page-surface {
   min-height: 0;
+}
+
+.status-strip-shell {
+  display: grid;
+  gap: calc(var(--space-3) * var(--density-scale));
+}
+
+.status-strip-summary {
+  display: none;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: calc(var(--space-3) * var(--density-scale)) calc(var(--space-4) * var(--density-scale));
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+
+.status-strip-summary-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.status-strip-summary-label {
+  font: 700 12px/1.2 var(--font-body);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.status-strip-summary-value {
+  font: 600 14px/1.35 var(--font-body);
+  color: var(--text-primary);
+}
+
+.status-strip-summary-caret {
+  color: var(--text-secondary);
 }
 
 .status-strip {
@@ -620,7 +667,6 @@
     width: calc(100% - calc(var(--space-4) * 2));
   }
 
-  .shell-secondary-nav,
   .surface-nav,
   .secondary-page-nav {
     overflow-x: auto;
@@ -629,6 +675,14 @@
 
   .status-strip {
     grid-template-columns: 1fr;
+  }
+
+  .status-strip-shell.compact .status-strip-summary {
+    display: inline-flex;
+  }
+
+  .status-strip-shell.compact.collapsed .status-strip {
+    display: none;
   }
 
   .shell-notification-region {

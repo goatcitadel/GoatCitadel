@@ -119,7 +119,7 @@ const SETTINGS_SECTIONS = [
   {
     id: "settings-overview",
     label: "Overview",
-    description: "Environment, defaults, and runtime posture.",
+    description: "Environment and general defaults.",
   },
   {
     id: "settings-access",
@@ -180,6 +180,8 @@ export function resolveSettingsTabSection(tab: SettingsTab): SettingsSectionId {
       return "settings-models";
     case "access":
       return "settings-access";
+    case "runtime":
+      return "settings-voice";
     case "budget":
       return "settings-runtime";
     case "general":
@@ -194,11 +196,13 @@ export function resolveSettingsTabSections(tab: SettingsTab): SettingsSectionId[
       return ["settings-models", "settings-tests"];
     case "access":
       return ["settings-access"];
+    case "runtime":
+      return ["settings-voice", "settings-runtime"];
     case "budget":
       return ["settings-runtime"];
     case "general":
     default:
-      return ["settings-overview", "settings-voice"];
+      return ["settings-overview"];
   }
 }
 

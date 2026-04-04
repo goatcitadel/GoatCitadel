@@ -20,7 +20,6 @@ export function ArtifactsPage({ activeTab, workspaceId, onTabChange }: Artifacts
   return (
     <section className="space-page stack-lg">
       <SectionTitle
-        eyebrow="Observe"
         title="Artifacts"
         subtitle="Workspace memory and file trails share one operational browser."
       />

@@ -75,10 +75,11 @@ describe("SettingsPage model selection helpers", () => {
   });
 
   it("groups shared settings sections by top-level tab", () => {
-    expect(resolveSettingsTabSections("general")).toEqual(["settings-overview", "settings-voice"]);
+    expect(resolveSettingsTabSections("general")).toEqual(["settings-overview"]);
     expect(resolveSettingsTabSections("providers")).toEqual(["settings-models", "settings-tests"]);
     expect(resolveSettingsTabSections("access")).toEqual(["settings-access"]);
     expect(resolveSettingsTabSections("budget")).toEqual(["settings-runtime"]);
+    expect(resolveSettingsTabSections("runtime")).toEqual(["settings-voice", "settings-runtime"]);
   });
 });
 

@@ -10,10 +10,10 @@ interface ShellPageFrameProps {
   children: ReactNode;
 }
 
-export function ShellPageFrame({ eyebrow, title, subtitle, actions, children }: ShellPageFrameProps) {
+export function ShellPageFrame({ title, subtitle, actions, children }: ShellPageFrameProps) {
   return (
     <section className="space-page stack-lg">
-      <SectionTitle eyebrow={eyebrow} title={title} subtitle={subtitle} actions={actions} />
+      <SectionTitle title={title} subtitle={subtitle} actions={actions} />
       <EmbeddedPageChromeProvider>
         {children}
       </EmbeddedPageChromeProvider>

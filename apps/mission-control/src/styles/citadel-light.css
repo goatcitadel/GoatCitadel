@@ -249,6 +249,8 @@
 
 .theme-citadel-light button.active,
 .theme-citadel-light .gc-select-option.active,
+.theme-citadel-light .gc-select-option[data-highlighted],
+.theme-citadel-light .gc-select-option[data-state="checked"],
 .theme-citadel-light .gc-combobox-option.active {
   border-color: rgba(15, 138, 166, 0.42);
   background:

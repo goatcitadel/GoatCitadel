@@ -128,9 +128,21 @@
   gap: var(--space-2);
 }
 
+.page-tabs-compact {
+  width: 100%;
+}
+
 .page-tabs-vertical {
   flex-direction: column;
   align-items: stretch;
+}
+
+.page-tabs-select {
+  width: 100%;
+}
+
+.page-tabs-select .gc-select-trigger {
+  width: 100%;
 }
 
 .page-tab {

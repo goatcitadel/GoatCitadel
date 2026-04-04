@@ -232,6 +232,8 @@
 
 .theme-signal-noir button.active,
 .theme-signal-noir .gc-select-option.active,
+.theme-signal-noir .gc-select-option[data-highlighted],
+.theme-signal-noir .gc-select-option[data-state="checked"],
 .theme-signal-noir .gc-combobox-option.active {
   border-color: rgba(92, 198, 223, 0.38);
   background:

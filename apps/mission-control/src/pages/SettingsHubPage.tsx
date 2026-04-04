@@ -39,14 +39,14 @@ export function SettingsHubPage({
     activeTab === "general" ||
     activeTab === "providers" ||
     activeTab === "access" ||
-    activeTab === "budget";
+    activeTab === "budget" ||
+    activeTab === "runtime";
 
   return (
     <section className="space-page settings-hub">
       <SectionTitle
-        eyebrow="Configure"
         title="Settings"
-        subtitle="Defaults, runtime posture, workspaces, and onboarding controls all live in one setup hub."
+        subtitle="Defaults, provider access, and workspace setup live here. Runtime-heavy controls stay grouped under Runtime."
       />
       <div className="settings-hub-grid">
         <PageTabs
@@ -61,6 +61,7 @@ export function SettingsHubPage({
             {rendersSettingsPage ? <SettingsPage activeTab={activeTab} /> : null}
             {activeTab === "runtime" ? (
               <div className="stack-lg">
+                <SettingsPage activeTab={activeTab} />
                 <MeshPage />
                 <NpuPage />
               </div>

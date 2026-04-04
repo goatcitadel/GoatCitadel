@@ -23,7 +23,6 @@ export function AgentsHubPage({ activeTab, onTabChange }: AgentsHubPageProps) {
   return (
     <section className="space-page stack-lg">
       <SectionTitle
-        eyebrow="Configure"
         title="Agents"
         subtitle="Manage your roster, inspect the herd, and tune reusable skills."
       />

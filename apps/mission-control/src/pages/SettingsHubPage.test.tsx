@@ -61,7 +61,7 @@ describe("SettingsHubPage", () => {
     }
   });
 
-  it("renders the dedicated runtime pages instead of the shared settings page", async () => {
+  it("keeps runtime guidance in the hub while still rendering the shared runtime settings section", async () => {
     settingsPageMock.mockClear();
 
     let renderer = create(<div />);
@@ -77,8 +77,9 @@ describe("SettingsHubPage", () => {
         );
       });
 
-      expect(settingsPageMock).not.toHaveBeenCalled();
+      expect(settingsPageMock).toHaveBeenCalledWith("runtime");
       const text = rendererText(renderer);
+      expect(text).toContain("SettingsPage:runtime");
       expect(text).toContain("MeshPage");
       expect(text).toContain("NpuPage");
     } finally {

@@ -21,7 +21,6 @@ export function IntegrationsHubPage({ activeTab, onTabChange }: IntegrationsHubP
   return (
     <section className="space-page stack-lg">
       <SectionTitle
-        eyebrow="Configure"
         title="Integrations"
         subtitle="Connections, provider hooks, and MCP servers belong in one setup surface."
       />
