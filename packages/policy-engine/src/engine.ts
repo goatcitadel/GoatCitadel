@@ -1,5 +1,6 @@
 import type {
   FilesystemReadAccessMode,
+  ToolGrantConstraints,
   ToolAccessEvaluateRequest,
   ToolAccessEvaluateResponse,
   ToolGrantCreateInput,
@@ -630,6 +631,14 @@ export class ToolPolicyEngine {
       }
     }
 
+    const referenceRoots = getReferenceRootPaths(constraints);
+    if (referenceRoots.length > 0) {
+      const candidates = extractPathCandidates(request.args);
+      if (isMutationTool(toolDef) && candidates.some((candidate) => isPathWithinAnyRoot(candidate, referenceRoots))) {
+        return "reference roots are read-only";
+      }
+    }
+
     return undefined;
   }
 
@@ -655,7 +664,11 @@ export class ToolPolicyEngine {
 
       if (request.toolName === "fs.write" || request.toolName === "fs.move" || request.toolName === "fs.delete" || request.toolName === "artifacts.create") {
         const pathValue = String(request.args?.path ?? request.args?.to ?? request.args?.from ?? "");
-        assertWritePathInJail(pathValue, this.config.sandbox.writeJailRoots);
+        const referenceRoots = getReferenceRootPaths(allowGrant?.constraints);
+        const targetsReferenceRoot = referenceRoots.length > 0 && isPathWithinAnyRoot(pathValue, referenceRoots);
+        if (!targetsReferenceRoot) {
+          assertWritePathInJail(pathValue, this.config.sandbox.writeJailRoots);
+        }
       }
 
       if (request.toolName.startsWith("http.") || request.toolName === "webhook.send") {
@@ -757,8 +770,8 @@ export class ToolPolicyEngine {
   }
 
   private grantAllowsReadPath(grant: ToolGrantRecord | undefined, resolvedPath: string): boolean {
-    const allowedPaths = grant?.constraints?.allowedPaths;
-    if (!allowedPaths || allowedPaths.length === 0) {
+    const allowedPaths = getAllowedReadPaths(grant?.constraints);
+    if (allowedPaths.length === 0) {
       return false;
     }
     return isPathWithinAnyRoot(resolvedPath, allowedPaths);
@@ -1040,6 +1053,20 @@ function matchesHostAllowlist(host: string, patterns: string[]): boolean {
     }
     return normalizedHost === normalized;
   });
+}
+
+function getAllowedReadPaths(constraints?: ToolGrantConstraints): string[] {
+  if (!constraints) {
+    return [];
+  }
+  return [
+    ...(constraints.allowedPaths ?? []),
+    ...getReferenceRootPaths(constraints),
+  ];
+}
+
+function getReferenceRootPaths(constraints?: ToolGrantConstraints): string[] {
+  return (constraints?.referenceRoots ?? []).map((item) => item.rootPath);
 }
 
 function isPathWithinAnyRoot(candidate: string, roots: string[]): boolean {

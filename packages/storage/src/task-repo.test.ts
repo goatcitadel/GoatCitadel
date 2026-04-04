@@ -116,4 +116,39 @@ describe("task repositories", () => {
     assert.equal(hardDeleted, true);
     assert.equal(repos.tasks.find(task.taskId), undefined);
   });
+
+  it("round-trips proactive task context and allows clearing it", () => {
+    const repos = createRepos();
+    const task = repos.tasks.create({
+      title: "Drive proactive follow-up",
+      proactiveContext: {
+        sessionId: "sess-1",
+        originSurface: "cowork",
+        proactiveRunId: "run-1",
+        durableRunId: "durable-1",
+        approvalId: "approval-1",
+        nextWakeAt: "2026-04-04T12:00:00.000Z",
+        stopReason: "approval_block",
+        externalReferenceRoots: [
+          {
+            label: "claude-code-reference",
+            rootPath: "F:\\code\\claude-code",
+            access: "read_only",
+          },
+        ],
+      },
+    });
+
+    assert.equal(task.proactiveContext?.originSurface, "cowork");
+    assert.deepEqual(task.proactiveContext?.externalReferenceRoots, [
+      {
+        label: "claude-code-reference",
+        rootPath: "F:\\code\\claude-code",
+        access: "read_only",
+      },
+    ]);
+
+    const cleared = repos.tasks.update(task.taskId, { proactiveContext: null });
+    assert.equal(cleared.proactiveContext, undefined);
+  });
 });

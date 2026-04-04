@@ -5,9 +5,16 @@ export type ToolGrantScope = "global" | "session" | "agent" | "task";
 export type ToolGrantDecision = "allow" | "deny";
 export type ToolGrantType = "one_time" | "ttl" | "persistent";
 
+export interface ToolReferenceRootGrant {
+  label: string;
+  rootPath: string;
+  access: "read_only";
+}
+
 export interface ToolGrantConstraints {
   allowedHosts?: string[];
   allowedPaths?: string[];
+  referenceRoots?: ToolReferenceRootGrant[];
   maxWritesPerHour?: number;
   maxCallsPerHour?: number;
   mutationAllowed?: boolean;

@@ -58,28 +58,58 @@ export function ActivityPage() {
         <div className="virtual-list-shell tall">
           <Virtuoso
             data={events}
-            itemContent={(_index, event) => (
-              <div className="virtual-list-item">
-                <div className="workflow-summary-strip">
-                  <strong>{event.eventType}</strong>
-                  <StatusChip tone="muted">{event.source}</StatusChip>
-                  {event.eventClass ? <StatusChip tone="muted">{event.eventClass}</StatusChip> : null}
-                  {event.eventAuthority ? <StatusChip tone="live">{event.eventAuthority}</StatusChip> : null}
+            itemContent={(_index, event) => {
+              const links = event.links as Record<string, string | undefined> | undefined;
+              return (
+                <div className="virtual-list-item">
+                  <div className="workflow-summary-strip">
+                    <strong>{event.eventType}</strong>
+                    <StatusChip tone="muted">{event.source}</StatusChip>
+                    {event.eventClass ? <StatusChip tone="muted">{event.eventClass}</StatusChip> : null}
+                    {event.eventAuthority ? <StatusChip tone="live">{event.eventAuthority}</StatusChip> : null}
+                    {links?.proactiveRunId ? <StatusChip tone="warning">proactive</StatusChip> : null}
+                    {links?.approvalId ? <StatusChip tone="warning">approval</StatusChip> : null}
+                    {links?.taskId ? <StatusChip tone="muted">task</StatusChip> : null}
+                    {links?.runId ? <StatusChip tone="muted">durable</StatusChip> : null}
+                  </div>
+                  <p className="office-subtitle">{new Date(event.timestamp).toLocaleString()}</p>
+                  {links ? (
+                    <p className="office-subtitle">
+                      {Object.entries(links)
+                        .map(([key, value]) => `${key}: ${value}`)
+                        .join(" | ")}
+                    </p>
+                  ) : null}
+                  {renderActivityPayloadSummary(event.payload) ? (
+                    <p className="office-subtitle">{renderActivityPayloadSummary(event.payload)}</p>
+                  ) : null}
+                  <pre>{JSON.stringify(event.payload, null, 2)}</pre>
                 </div>
-                <p className="office-subtitle">{new Date(event.timestamp).toLocaleString()}</p>
-                {event.links ? (
-                  <p className="office-subtitle">
-                    {Object.entries(event.links)
-                      .map(([key, value]) => `${key}: ${value}`)
-                      .join(" | ")}
-                  </p>
-                ) : null}
-                <pre>{JSON.stringify(event.payload, null, 2)}</pre>
-              </div>
-            )}
+              );
+            }}
           />
         </div>
       </Panel>
     </section>
   );
+}
+
+function renderActivityPayloadSummary(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  const nextWakeAt = typeof record.nextWakeAt === "string" ? record.nextWakeAt : undefined;
+  const stopReason = typeof record.stopReason === "string" ? record.stopReason : undefined;
+  const originSurface = typeof record.originSurface === "string" ? record.originSurface : undefined;
+  const externalReferenceRoots = Array.isArray(record.externalReferenceRoots)
+    ? record.externalReferenceRoots.length
+    : 0;
+  const summary = [
+    originSurface ? `surface ${originSurface}` : null,
+    nextWakeAt ? `wake ${new Date(nextWakeAt).toLocaleString()}` : null,
+    stopReason ? `stop ${stopReason}` : null,
+    externalReferenceRoots > 0 ? `${externalReferenceRoots} reference root${externalReferenceRoots === 1 ? "" : "s"}` : null,
+  ].filter(Boolean).join(" | ");
+  return summary || null;
 }

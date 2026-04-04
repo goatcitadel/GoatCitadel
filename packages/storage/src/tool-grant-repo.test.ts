@@ -75,4 +75,33 @@ describe("ToolGrantRepository", () => {
       });
     }, /scopeRef is required/);
   });
+
+  it("round-trips read-only reference root constraints", () => {
+    const repo = createRepo();
+
+    const grant = repo.create({
+      toolPattern: "fs.read",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "sess-1",
+      createdBy: "operator",
+      constraints: {
+        referenceRoots: [
+          {
+            label: "claude-code-reference",
+            rootPath: "F:\\code\\claude-code",
+            access: "read_only",
+          },
+        ],
+      },
+    }, "2026-04-04T10:00:00.000Z");
+
+    assert.deepEqual(grant.constraints?.referenceRoots, [
+      {
+        label: "claude-code-reference",
+        rootPath: "F:\\code\\claude-code",
+        access: "read_only",
+      },
+    ]);
+  });
 });

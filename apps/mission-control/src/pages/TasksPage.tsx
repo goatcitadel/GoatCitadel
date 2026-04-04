@@ -224,6 +224,14 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
     loadTaskDetail(selectedTaskId);
   }, [selectedTaskId]);
 
+  useEffect(() => {
+    if (selectedTask?.proactiveContext?.durableRunId) {
+      setDurableRunId(selectedTask.proactiveContext.durableRunId);
+      return;
+    }
+    setDurableRunId("");
+  }, [selectedTask?.taskId, selectedTask?.proactiveContext?.durableRunId]);
+
   const onCreateTask = async () => {
     if (!createTitle.trim()) {
       setError("Enter a task title before creating a task.");
@@ -633,6 +641,35 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     </button>
                   ))}
                 </div>
+                {selectedTask.proactiveContext ? (
+                  <div className="replay-box">
+                    <h4>Proactive orchestration linkage</h4>
+                    <p className="office-subtitle">
+                      Session: {selectedTask.proactiveContext.sessionId}
+                      {" | "}
+                      Surface: {selectedTask.proactiveContext.originSurface}
+                      {" | "}
+                      Proactive run: {selectedTask.proactiveContext.proactiveRunId ?? "none"}
+                    </p>
+                    <p className="office-subtitle">
+                      Durable run: {selectedTask.proactiveContext.durableRunId ?? "none"}
+                      {" | "}
+                      Approval: {selectedTask.proactiveContext.approvalId ?? "none"}
+                      {" | "}
+                      Next wake: {selectedTask.proactiveContext.nextWakeAt ? new Date(selectedTask.proactiveContext.nextWakeAt).toLocaleString() : "none"}
+                    </p>
+                    <p className="office-subtitle">
+                      Stop reason: {selectedTask.proactiveContext.stopReason ?? "active"}
+                    </p>
+                    {selectedTask.proactiveContext.externalReferenceRoots?.length ? (
+                      <p className="office-subtitle">
+                        Reference roots: {selectedTask.proactiveContext.externalReferenceRoots
+                          .map((root) => root.label)
+                          .join(", ")}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </Panel>
 
               <Panel title="Run checkpoint resume" subtitle="Recover long-running workflows from the last known checkpoint.">

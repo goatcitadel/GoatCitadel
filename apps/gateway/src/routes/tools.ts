@@ -26,6 +26,11 @@ const createGrantSchema = z.object({
   constraints: z.object({
     allowedHosts: z.array(z.string().min(1)).optional(),
     allowedPaths: z.array(z.string().min(1)).optional(),
+    referenceRoots: z.array(z.object({
+      label: z.string().min(1),
+      rootPath: z.string().min(1),
+      access: z.literal("read_only"),
+    })).optional(),
     maxWritesPerHour: z.number().int().positive().optional(),
     maxCallsPerHour: z.number().int().positive().optional(),
     mutationAllowed: z.boolean().optional(),

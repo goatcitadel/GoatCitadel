@@ -363,6 +363,30 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "approvals", "linkage_json", "TEXT");
     },
   },
+  {
+    version: 51,
+    name: "proactive_orchestration_linkage_schema",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "tasks", "metadata_json", "TEXT");
+
+      addColumnIfMissingIfTableExists(db, "proactive_runs", "linked_task_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_runs", "linked_durable_run_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_runs", "approval_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_runs", "trigger_source", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_runs", "origin_surface", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_runs", "next_wake_at", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_runs", "stop_reason", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_runs", "external_reference_roots_json", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_runs", "resume_metadata_json", "TEXT");
+
+      addColumnIfMissingIfTableExists(db, "proactive_actions", "linked_task_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_actions", "linked_durable_run_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_actions", "approval_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_actions", "trigger_source", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_actions", "origin_surface", "TEXT");
+      addColumnIfMissingIfTableExists(db, "proactive_actions", "external_reference_roots_json", "TEXT");
+    },
+  },
 ];
 
 function createBaseSchema(db: DatabaseSync): void {
@@ -491,6 +515,7 @@ function createBaseSchema(db: DatabaseSync): void {
       assigned_agent_id TEXT,
       created_by TEXT,
       due_at TEXT,
+      metadata_json TEXT,
       deleted_at TEXT,
       deleted_by TEXT,
       delete_reason TEXT,
@@ -1820,6 +1845,15 @@ function createAgenticDepthSchema(db: DatabaseSync): void {
       action_count INTEGER NOT NULL DEFAULT 0,
       suggested_actions_json TEXT NOT NULL,
       executed_actions_json TEXT NOT NULL,
+      linked_task_id TEXT,
+      linked_durable_run_id TEXT,
+      approval_id TEXT,
+      trigger_source TEXT,
+      origin_surface TEXT,
+      next_wake_at TEXT,
+      stop_reason TEXT,
+      external_reference_roots_json TEXT,
+      resume_metadata_json TEXT,
       error TEXT,
       started_at TEXT NOT NULL,
       finished_at TEXT
@@ -1839,6 +1873,12 @@ function createAgenticDepthSchema(db: DatabaseSync): void {
       tool_name TEXT,
       args_json TEXT,
       result_json TEXT,
+      linked_task_id TEXT,
+      linked_durable_run_id TEXT,
+      approval_id TEXT,
+      trigger_source TEXT,
+      origin_surface TEXT,
+      external_reference_roots_json TEXT,
       error TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT

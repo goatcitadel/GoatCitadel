@@ -10,6 +10,17 @@ export type TaskStatus =
 
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 
+export interface TaskProactiveContext {
+  sessionId?: string;
+  originSurface?: import("./proactive.js").ProactiveOriginSurface;
+  proactiveRunId?: string;
+  durableRunId?: string;
+  approvalId?: string;
+  nextWakeAt?: string;
+  stopReason?: import("./proactive.js").ProactiveStopReason;
+  externalReferenceRoots?: import("./proactive.js").ProactiveReferenceRootRecord[];
+}
+
 export interface TaskRecord {
   taskId: string;
   workspaceId?: string;
@@ -20,6 +31,7 @@ export interface TaskRecord {
   assignedAgentId?: string;
   createdBy?: string;
   dueAt?: string;
+  proactiveContext?: TaskProactiveContext;
   deletedAt?: string;
   deletedBy?: string;
   deleteReason?: string;
@@ -36,6 +48,7 @@ export interface TaskCreateInput {
   assignedAgentId?: string;
   createdBy?: string;
   dueAt?: string;
+  proactiveContext?: TaskProactiveContext;
 }
 
 export interface TaskUpdateInput {
@@ -45,6 +58,7 @@ export interface TaskUpdateInput {
   priority?: TaskPriority;
   assignedAgentId?: string | null;
   dueAt?: string;
+  proactiveContext?: TaskProactiveContext | null;
 }
 
 export type TaskActivityType =

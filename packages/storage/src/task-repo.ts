@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type {
   TaskCreateInput,
+  TaskProactiveContext,
   TaskRecord,
   TaskStatus,
   TaskUpdateInput,
 } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { safeJsonParse } from "./safe-json.js";
 
 interface TaskRow {
   task_id: string;
@@ -18,6 +20,7 @@ interface TaskRow {
   assigned_agent_id: string | null;
   created_by: string | null;
   due_at: string | null;
+  metadata_json: string | null;
   deleted_at: string | null;
   deleted_by: string | null;
   delete_reason: string | null;
@@ -52,10 +55,10 @@ export class TaskRepository {
     this.insertStmt = db.prepare(`
       INSERT INTO tasks (
         task_id, workspace_id, title, description, status, priority,
-        assigned_agent_id, created_by, due_at, created_at, updated_at
+        assigned_agent_id, created_by, due_at, metadata_json, created_at, updated_at
       ) VALUES (
         @taskId, @workspaceId, @title, @description, @status, @priority,
-        @assignedAgentId, @createdBy, @dueAt, @createdAt, @updatedAt
+        @assignedAgentId, @createdBy, @dueAt, @metadataJson, @createdAt, @updatedAt
       )
     `);
 
@@ -88,6 +91,7 @@ export class TaskRepository {
         priority = @priority,
         assigned_agent_id = @assignedAgentId,
         due_at = @dueAt,
+        metadata_json = @metadataJson,
         deleted_at = @deletedAt,
         deleted_by = @deletedBy,
         delete_reason = @deleteReason,
@@ -136,6 +140,7 @@ export class TaskRepository {
       assignedAgentId: input.assignedAgentId ?? null,
       createdBy: input.createdBy ?? null,
       dueAt: input.dueAt ?? null,
+      metadataJson: serializeTaskMetadata(input.proactiveContext),
       createdAt: now,
       updatedAt: now,
     });
@@ -186,6 +191,9 @@ export class TaskRepository {
       priority: input.priority ?? current.priority,
       assignedAgentId: nextAssignedAgentId,
       dueAt: input.dueAt ?? current.dueAt ?? null,
+      metadataJson: input.proactiveContext === undefined
+        ? serializeTaskMetadata(current.proactiveContext)
+        : serializeTaskMetadata(input.proactiveContext ?? undefined),
       deletedAt: current.deletedAt ?? null,
       deletedBy: current.deletedBy ?? null,
       deleteReason: current.deleteReason ?? null,
@@ -252,6 +260,7 @@ export class TaskRepository {
 }
 
 function mapTaskRow(row: TaskRow): TaskRecord {
+  const metadata = safeJsonParse<{ proactiveContext?: TaskProactiveContext | null }>(row.metadata_json, {});
   return {
     taskId: row.task_id,
     workspaceId: row.workspace_id,
@@ -262,6 +271,7 @@ function mapTaskRow(row: TaskRow): TaskRecord {
     assignedAgentId: row.assigned_agent_id ?? undefined,
     createdBy: row.created_by ?? undefined,
     dueAt: row.due_at ?? undefined,
+    proactiveContext: metadata.proactiveContext ?? undefined,
     deletedAt: row.deleted_at ?? undefined,
     deletedBy: row.deleted_by ?? undefined,
     deleteReason: row.delete_reason ?? undefined,
@@ -306,4 +316,11 @@ function sanitizeWorkspaceId(value: string): string {
     throw new ValidationError({ message: "workspaceId contains unsupported characters" });
   }
   return trimmed;
+}
+
+function serializeTaskMetadata(proactiveContext?: TaskProactiveContext): string | null {
+  if (!proactiveContext) {
+    return null;
+  }
+  return JSON.stringify({ proactiveContext });
 }

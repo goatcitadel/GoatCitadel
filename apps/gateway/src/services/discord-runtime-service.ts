@@ -1029,7 +1029,7 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
       .setName("proactive")
       .setDescription("Set proactive mode.")
       .addStringOption((option) => option.setName("mode").setDescription("Proactive mode.").setRequired(true)
-        .addChoices(stringChoice("off"), stringChoice("suggest"), stringChoice("auto_safe"))),
+        .addChoices(stringChoice("off"), stringChoice("suggest"), stringChoice("auto_safe"), stringChoice("auto_full"))),
     new SlashCommandBuilder()
       .setName("retrieval")
       .setDescription("Set retrieval routing mode.")

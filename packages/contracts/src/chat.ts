@@ -13,7 +13,7 @@ export type ChatModeTeamBehavior = "single_lead" | "guided_swarm" | "constrained
 export type ChatWebMode = "auto" | "off" | "quick" | "deep";
 export type ChatMemoryMode = "auto" | "on" | "off";
 export type ChatThinkingLevel = "minimal" | "standard" | "extended";
-export type ChatProactiveMode = "off" | "suggest" | "auto_safe";
+export type ChatProactiveMode = "off" | "suggest" | "auto_safe" | "auto_full";
 export type ChatRetrievalMode = "standard" | "layered";
 export type ChatReflectionMode = "off" | "on";
 export type ChatPlanningMode = "off" | "advisory";
@@ -259,6 +259,10 @@ export interface ChatModePresetRecord {
     | "orchestrationReviewDepth"
     | "orchestrationParallelism"
     | "codeAutoApply"
+    | "proactiveMode"
+    | "autonomyBudget"
+    | "retrievalMode"
+    | "reflectionMode"
   >;
   requiresProjectBindingForExecution?: boolean;
 }
@@ -286,6 +290,14 @@ export const CHAT_MODE_PRESETS = {
       orchestrationReviewDepth: "off",
       orchestrationParallelism: "auto",
       codeAutoApply: "manual",
+      proactiveMode: "auto_safe",
+      autonomyBudget: {
+        maxActionsPerHour: 6,
+        maxActionsPerTurn: 2,
+        cooldownSeconds: 60,
+      },
+      retrievalMode: "standard",
+      reflectionMode: "off",
     },
   },
   cowork: {
@@ -310,6 +322,14 @@ export const CHAT_MODE_PRESETS = {
       orchestrationReviewDepth: "standard",
       orchestrationParallelism: "parallel",
       codeAutoApply: "manual",
+      proactiveMode: "auto_full",
+      autonomyBudget: {
+        maxActionsPerHour: 12,
+        maxActionsPerTurn: 4,
+        cooldownSeconds: 30,
+      },
+      retrievalMode: "layered",
+      reflectionMode: "on",
     },
   },
   code: {
@@ -334,6 +354,14 @@ export const CHAT_MODE_PRESETS = {
       orchestrationReviewDepth: "strict",
       orchestrationParallelism: "auto",
       codeAutoApply: "manual",
+      proactiveMode: "auto_full",
+      autonomyBudget: {
+        maxActionsPerHour: 12,
+        maxActionsPerTurn: 4,
+        cooldownSeconds: 30,
+      },
+      retrievalMode: "layered",
+      reflectionMode: "on",
     },
     requiresProjectBindingForExecution: true,
   },
@@ -715,6 +743,10 @@ export interface ChatTurnTraceRecord {
     runId?: string;
     actionCount?: number;
     mode?: ChatProactiveMode;
+    linkedTaskId?: string;
+    linkedDurableRunId?: string;
+    nextWakeAt?: string;
+    stopReason?: import("./proactive.js").ProactiveStopReason;
   };
   durable?: ChatTurnDurableRecord;
   orchestration?: ChatOrchestrationSummary;

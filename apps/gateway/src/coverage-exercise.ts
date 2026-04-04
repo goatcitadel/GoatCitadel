@@ -214,7 +214,7 @@ async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Pr
     "/tool manual",
     "/proactive off",
     "/proactive suggest",
-    "/proactive auto_safe",
+    "/proactive auto_full",
     "/retrieval standard",
     "/retrieval layered",
     "/reflect off",

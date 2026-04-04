@@ -45,6 +45,9 @@ function cloneToolGrantConstraints(constraints?: ToolGrantConstraints): ToolGran
     ...constraints,
     allowedHosts: constraints.allowedHosts ? [...constraints.allowedHosts] : undefined,
     allowedPaths: constraints.allowedPaths ? [...constraints.allowedPaths] : undefined,
+    referenceRoots: constraints.referenceRoots
+      ? constraints.referenceRoots.map((item) => ({ ...item }))
+      : undefined,
   };
 }
 

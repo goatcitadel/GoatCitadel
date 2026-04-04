@@ -238,6 +238,8 @@ export function resolveOptimisticChatPrefs(
   patch: ChatSessionPrefsPatch,
 ): ChatSessionPrefsRecord {
   const normalizedPatch = applyChatModePresetToPatch(patch);
+  const presetAutonomyBudget = CHAT_MODE_PRESETS[current.mode].defaultPrefs.autonomyBudget;
+  const baseAutonomyBudget = current.autonomyBudget ?? presetAutonomyBudget;
   const providerChanged = normalizedPatch.providerId !== undefined
     && normalizedPatch.providerId !== current.providerId;
   return {
@@ -258,6 +260,15 @@ export function resolveOptimisticChatPrefs(
     orchestrationReviewDepth: normalizedPatch.orchestrationReviewDepth ?? current.orchestrationReviewDepth,
     orchestrationParallelism: normalizedPatch.orchestrationParallelism ?? current.orchestrationParallelism,
     codeAutoApply: normalizedPatch.codeAutoApply ?? current.codeAutoApply,
+    proactiveMode: normalizedPatch.proactiveMode ?? current.proactiveMode,
+    autonomyBudget: normalizedPatch.autonomyBudget
+      ? {
+        ...baseAutonomyBudget,
+        ...normalizedPatch.autonomyBudget,
+      }
+      : current.autonomyBudget ?? presetAutonomyBudget,
+    retrievalMode: normalizedPatch.retrievalMode ?? current.retrievalMode,
+    reflectionMode: normalizedPatch.reflectionMode ?? current.reflectionMode,
   };
 }
 
@@ -1395,7 +1406,7 @@ export function ChatPage({
 
   const handleProactivePolicyPatch = useCallback(async (
     patch: {
-      proactiveMode?: "off" | "suggest" | "auto_safe";
+      proactiveMode?: "off" | "suggest" | "auto_safe" | "auto_full";
       autonomyBudget?: {
         maxActionsPerHour?: number;
         maxActionsPerTurn?: number;
@@ -2825,17 +2836,18 @@ export function ChatPage({
                     )}
                     secondary={(
                       <>
-                        {isCoworkSurface ? (
+                        {!isChatSurface ? (
                           <>
                             <label className="chat-v11-select">Proactive
                               <GCSelect
                                 value={proactiveStatus?.mode ?? prefs?.proactiveMode ?? "off"}
                                 disabled={!selectedSessionId || sending}
-                                onChange={(value) => void handleProactivePolicyPatch({ proactiveMode: value as "off" | "suggest" | "auto_safe" })}
+                                onChange={(value) => void handleProactivePolicyPatch({ proactiveMode: value as "off" | "suggest" | "auto_safe" | "auto_full" })}
                                 options={[
                                   { value: "off", label: "Off" },
                                   { value: "suggest", label: "Suggest" },
                                   { value: "auto_safe", label: "Auto-safe" },
+                                  { value: "auto_full", label: "Auto-full" },
                                 ]}
                               />
                             </label>
@@ -2861,9 +2873,11 @@ export function ChatPage({
                                 ]}
                               />
                             </label>
-                            <button type="button" disabled={!selectedSessionId || sending} onClick={() => void handleSuggestDelegation()}>
-                              Suggest delegation
-                            </button>
+                            {isCoworkSurface ? (
+                              <button type="button" disabled={!selectedSessionId || sending} onClick={() => void handleSuggestDelegation()}>
+                                Suggest delegation
+                              </button>
+                            ) : null}
                             <button type="button" disabled={!selectedSessionId || sending} onClick={() => void handleTriggerProactive()}>
                               Run proactive
                             </button>
@@ -3144,6 +3158,21 @@ export function ChatPage({
                         <li key={run.runId}>
                           <p><strong>{run.status}</strong> · {new Date(run.startedAt).toLocaleTimeString()}</p>
                           <p>{run.reasoningSummary}</p>
+                          <p className="chat-v11-muted">
+                            {[
+                              run.originSurface ? `Surface ${run.originSurface}` : null,
+                              run.linkedTaskId ? `Task ${run.linkedTaskId}` : null,
+                              run.linkedDurableRunId ? `Run ${run.linkedDurableRunId}` : null,
+                              run.approvalId ? `Approval ${run.approvalId}` : null,
+                              run.nextWakeAt ? `Wake ${new Date(run.nextWakeAt).toLocaleString()}` : null,
+                              run.stopReason ? `Stop ${run.stopReason}` : null,
+                            ].filter(Boolean).join(" | ")}
+                          </p>
+                          {run.externalReferenceRoots?.length ? (
+                            <p className="chat-v11-muted">
+                              References: {run.externalReferenceRoots.map((root) => `${root.label} (${root.access})`).join(", ")}
+                            </p>
+                          ) : null}
                         </li>
                       ))}
                       {isCoworkSurface && proactiveRuns.length === 0 ? <li className="chat-v11-muted">No proactive runs yet for this session.</li> : null}

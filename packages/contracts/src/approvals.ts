@@ -7,6 +7,9 @@ export interface ApprovalLinkage {
   taskId?: string;
   workspaceId?: string;
   durableRunId?: string;
+  proactiveRunId?: string;
+  originSurface?: import("./proactive.js").ProactiveOriginSurface;
+  externalReferenceRoots?: import("./proactive.js").ProactiveReferenceRootRecord[];
   correlationId?: string;
   traceId?: string;
   connectorId?: string;

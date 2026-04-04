@@ -2037,6 +2037,10 @@ export class GatewayService {
         if (task.workspaceId) {
           linked.workspaceIds.add(task.workspaceId);
         }
+        collectLifecycleLinksFromUnknown(linked, task.proactiveContext);
+        sessionId ??= task.proactiveContext?.sessionId;
+        runId ??= task.proactiveContext?.durableRunId;
+        approvalId ??= task.proactiveContext?.approvalId;
       }
     }
 
@@ -2119,6 +2123,21 @@ export class GatewayService {
       linked.runIds.add(approval.linkage.durableRunId);
     }
 
+    const proactiveRuns = sessionId
+      ? this.listChatSessionProactiveRuns(sessionId, 50).filter((run) => {
+        if (taskId && run.linkedTaskId === taskId) {
+          return true;
+        }
+        if (approvalId && run.approvalId === approvalId) {
+          return true;
+        }
+        if (runId && (run.runId === runId || run.linkedDurableRunId === runId)) {
+          return true;
+        }
+        return !taskId && !approvalId && !runId;
+      })
+      : [];
+
     return {
       query: {
         sessionId,
@@ -2140,6 +2159,7 @@ export class GatewayService {
       task,
       approval,
       durableRun,
+      proactiveRuns,
       turns: turns.map((turn) => ({
         turnId: turn.turnId,
         sessionId: turn.sessionId,
@@ -2334,7 +2354,7 @@ export class GatewayService {
       this.storage.chatSessionProjects.assign(resolution.sessionId, input.projectId, now);
     }
     if (input.mode) {
-      this.storage.chatSessionPrefs.patch(resolution.sessionId, buildChatModePrefsPatch(input.mode), now);
+      this.updateChatSessionPrefs(resolution.sessionId, buildChatModePrefsPatch(input.mode));
     }
     const created = this.requireChatSession(resolution.sessionId);
     if (!created) {
@@ -3567,7 +3587,7 @@ export class GatewayService {
       { command: "/dream", usage: "/dream status", description: "Show workspace memory maintenance status." },
       { command: "/think", usage: "/think minimal|standard|extended", description: "Set thinking depth." },
       { command: "/tool", usage: "/tool safe_auto|manual", description: "Set tool autonomy mode." },
-      { command: "/proactive", usage: "/proactive off|suggest|auto_safe", description: "Set proactive mode." },
+      { command: "/proactive", usage: "/proactive off|suggest|auto_safe|auto_full", description: "Set proactive mode." },
       { command: "/retrieval", usage: "/retrieval standard|layered", description: "Set retrieval routing mode." },
       { command: "/reflect", usage: "/reflect off|on", description: "Toggle reflection retry mode." },
       { command: "/research", usage: "/research <query>", description: "Run quick research for current session." },
@@ -3870,8 +3890,8 @@ export class GatewayService {
 
     if (command === "/proactive") {
       const proactiveMode = (args[0] ?? "").toLowerCase() as ChatProactiveMode;
-      if (!["off", "suggest", "auto_safe"].includes(proactiveMode)) {
-        return { ok: false, command, args, message: "Usage: /proactive off|suggest|auto_safe" };
+      if (!["off", "suggest", "auto_safe", "auto_full"].includes(proactiveMode)) {
+        return { ok: false, command, args, message: "Usage: /proactive off|suggest|auto_safe|auto_full" };
       }
       const policy = this.updateChatSessionProactivePolicy(sessionId, { proactiveMode });
       const prefs = this.getChatSessionPrefs(sessionId);
@@ -22814,7 +22834,7 @@ function collectLifecycleLinksFromUnknown(
 ): void {
   const sessionId = findLifecycleString(payload, ["sessionId"]);
   const turnId = findLifecycleString(payload, ["turnId"]);
-  const runId = findLifecycleString(payload, ["runId", "durableRunId", "durable_run_id"]);
+  const runId = findLifecycleString(payload, ["runId", "durableRunId", "durable_run_id", "proactiveRunId"]);
   const approvalId = findLifecycleString(payload, ["approvalId"]);
   const taskId = findLifecycleString(payload, ["taskId"]);
   const workspaceId = findLifecycleString(payload, ["workspaceId"]);

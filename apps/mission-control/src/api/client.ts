@@ -1024,6 +1024,20 @@ export interface TaskRecord {
   deleteReason?: string;
   createdAt: string;
   updatedAt: string;
+  proactiveContext?: {
+    sessionId: string;
+    originSurface: "chat" | "cowork" | "code";
+    proactiveRunId?: string;
+    durableRunId?: string;
+    approvalId?: string;
+    nextWakeAt?: string;
+    stopReason?: string;
+    externalReferenceRoots?: Array<{
+      label: string;
+      rootPath: string;
+      access: "read_only";
+    }>;
+  };
 }
 
 export interface TaskActivityRecord {
@@ -1069,6 +1083,7 @@ export interface RealtimeEvent {
     sessionId?: string;
     turnId?: string;
     runId?: string;
+    proactiveRunId?: string;
     approvalId?: string;
     taskId?: string;
     workspaceId?: string;

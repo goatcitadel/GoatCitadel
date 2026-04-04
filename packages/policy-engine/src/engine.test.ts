@@ -174,6 +174,46 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(evaluation.requiresApproval).toBe(false);
   });
 
+  it("allows approved read-only reference roots without approval churn", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-reference-root",
+        toolPattern: "file.read_range",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: {
+          referenceRoots: [
+            {
+              label: "claude-code-reference",
+              rootPath: "F:\\code\\claude-code",
+              access: "read_only",
+            },
+          ],
+        },
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    const engine = new ToolPolicyEngine({
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        readAccessMode: "approval_required",
+      },
+    }, storage);
+    const evaluation = engine.evaluateAccess({
+      toolName: "file.read_range",
+      args: { path: "F:/code/claude-code/src/index.ts", startLine: 1, endLine: 5 },
+      agentId: "agent",
+      sessionId: "session",
+    });
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.requiresApproval).toBe(false);
+  });
+
   it("does not bypass outside-root read approval with a forged approval id", () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine({
@@ -328,6 +368,42 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
 
     expect(evaluation.allowed).toBe(false);
     expect(evaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
+  });
+
+  it("blocks writes into read-only reference roots even when granted", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-reference-write",
+        toolPattern: "fs.write",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session-1",
+        grantType: "persistent",
+        constraints: {
+          referenceRoots: [
+            {
+              label: "claude-code-reference",
+              rootPath: "F:\\code\\claude-code",
+              access: "read_only",
+            },
+          ],
+        },
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+    const evaluation = engine.evaluateAccess({
+      toolName: "fs.write",
+      args: { path: "F:/code/claude-code/README.md", content: "mutate" },
+      agentId: "agent",
+      sessionId: "session-1",
+    });
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toContain("grant_constraints_block");
   });
 
   it("returns internal tool envelopes for executed requests", async () => {

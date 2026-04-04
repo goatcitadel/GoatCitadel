@@ -53,7 +53,7 @@ describe("SessionAutonomyPrefsRepository", () => {
   it("round-trips proactive budget, retrieval mode, and reflection mode", () => {
     const repo = createRepo();
     const prefs = repo.patch("sess-1", {
-      proactiveMode: "auto_safe",
+      proactiveMode: "auto_full",
       maxActionsPerHour: 12,
       maxActionsPerTurn: 5,
       cooldownSeconds: 180,
@@ -61,7 +61,7 @@ describe("SessionAutonomyPrefsRepository", () => {
       reflectionMode: "on",
     });
 
-    assert.equal(prefs.proactiveMode, "auto_safe");
+    assert.equal(prefs.proactiveMode, "auto_full");
     assert.equal(prefs.maxActionsPerHour, 12);
     assert.equal(prefs.maxActionsPerTurn, 5);
     assert.equal(prefs.cooldownSeconds, 180);

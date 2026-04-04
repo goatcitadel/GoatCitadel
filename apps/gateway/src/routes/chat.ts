@@ -143,7 +143,7 @@ const sendMessageSchema = z.object({
     orchestrationReviewDepth: z.enum(["off", "standard", "strict"]).optional(),
     orchestrationParallelism: z.enum(["auto", "sequential", "parallel"]).optional(),
     codeAutoApply: z.enum(["manual", "low_risk_auto", "aggressive_auto"]).optional(),
-    proactiveMode: z.enum(["off", "suggest", "auto_safe"]).optional(),
+    proactiveMode: z.enum(["off", "suggest", "auto_safe", "auto_full"]).optional(),
     autonomyBudget: z.object({
       maxActionsPerHour: z.coerce.number().int().positive().max(200).optional(),
       maxActionsPerTurn: z.coerce.number().int().positive().max(25).optional(),
@@ -171,7 +171,7 @@ const prefsPatchSchema = z.object({
   orchestrationReviewDepth: z.enum(["off", "standard", "strict"]).optional(),
   orchestrationParallelism: z.enum(["auto", "sequential", "parallel"]).optional(),
   codeAutoApply: z.enum(["manual", "low_risk_auto", "aggressive_auto"]).optional(),
-  proactiveMode: z.enum(["off", "suggest", "auto_safe"]).optional(),
+  proactiveMode: z.enum(["off", "suggest", "auto_safe", "auto_full"]).optional(),
   autonomyBudget: z.object({
     maxActionsPerHour: z.coerce.number().int().positive().max(200).optional(),
     maxActionsPerTurn: z.coerce.number().int().positive().max(25).optional(),
@@ -220,7 +220,7 @@ const delegationRunParamsSchema = z.object({
 });
 
 const proactivePolicyPatchSchema = z.object({
-  proactiveMode: z.enum(["off", "suggest", "auto_safe"]).optional(),
+  proactiveMode: z.enum(["off", "suggest", "auto_safe", "auto_full"]).optional(),
   autonomyBudget: z.object({
     maxActionsPerHour: z.coerce.number().int().positive().max(200).optional(),
     maxActionsPerTurn: z.coerce.number().int().positive().max(25).optional(),

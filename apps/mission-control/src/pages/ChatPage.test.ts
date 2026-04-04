@@ -186,6 +186,10 @@ describe("resolveOptimisticChatPrefs", () => {
     expect(afterModeSwitch.orchestrationParallelism).toBe("parallel");
     expect(afterModeSwitch.orchestrationVisibility).toBe("expandable");
     expect(afterModeSwitch.thinkingLevel).toBe("extended");
+    expect(afterModeSwitch.proactiveMode).toBe("auto_full");
+    expect(afterModeSwitch.autonomyBudget?.maxActionsPerTurn).toBe(4);
+    expect(afterModeSwitch.retrievalMode).toBe("layered");
+    expect(afterModeSwitch.reflectionMode).toBe("on");
 
     const afterModelChange = resolveOptimisticChatPrefs(afterModeSwitch, { model: "gpt-5.4" });
 

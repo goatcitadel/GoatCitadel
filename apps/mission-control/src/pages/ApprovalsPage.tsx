@@ -412,6 +412,32 @@ export function ApprovalsPage() {
                   {" | "}
                   Run: {lifecycle.query.runId ?? lifecycle.linked.runIds[0] ?? "none"}
                 </p>
+                {approval.linkage?.proactiveRunId || lifecycle.proactiveRuns?.length ? (
+                  <p className="office-subtitle">
+                    Proactive run: {approval.linkage?.proactiveRunId ?? lifecycle.proactiveRuns?.[0]?.runId ?? "none"}
+                    {" | "}
+                    Surface: {approval.linkage?.originSurface ?? lifecycle.proactiveRuns?.[0]?.originSurface ?? "unknown"}
+                  </p>
+                ) : null}
+                {approval.linkage?.externalReferenceRoots?.length ? (
+                  <p className="office-subtitle">
+                    Reference roots: {approval.linkage.externalReferenceRoots.map((root) => `${root.label} (${root.access})`).join(", ")}
+                  </p>
+                ) : null}
+                {lifecycle.proactiveRuns?.length ? (
+                  <ul className="compact-list">
+                    {lifecycle.proactiveRuns.slice(0, 3).map((run) => (
+                      <li key={run.runId}>
+                        <strong>{run.status}</strong>
+                        {" | "}
+                        {run.runId}
+                        {run.linkedDurableRunId ? ` | durable ${run.linkedDurableRunId}` : ""}
+                        {run.nextWakeAt ? ` | wake ${new Date(run.nextWakeAt).toLocaleString()}` : ""}
+                        {run.stopReason ? ` | stop ${run.stopReason}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             ) : null}
             <div className="actions">

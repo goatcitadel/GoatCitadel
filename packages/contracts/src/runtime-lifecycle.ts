@@ -3,6 +3,7 @@ import type { ChatToolRunRecord, ChatTurnTraceRecord } from "./chat.js";
 import type { DurableRunRecord } from "./durable.js";
 import type { SessionMeta, SessionSummary } from "./session.js";
 import type { TaskRecord } from "./tasks.js";
+import type { ProactiveRunRecord } from "./proactive.js";
 
 export interface RuntimeLifecycleQuery {
   sessionId?: string;
@@ -43,6 +44,7 @@ export interface RuntimeLifecycleResponse {
   task?: TaskRecord;
   approval?: ApprovalRequest;
   durableRun?: DurableRunRecord;
+  proactiveRuns?: ProactiveRunRecord[];
   turns: RuntimeLifecycleTurnSummary[];
   toolRuns: RuntimeLifecycleToolRunSummary[];
 }
