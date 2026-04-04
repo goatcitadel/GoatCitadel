@@ -172,6 +172,7 @@ describe("ApprovalsPage", () => {
         sessionIds: [],
         turnIds: [],
         runIds: ["durable-run-42"],
+        proactiveRunIds: [],
         approvalIds: ["approval-1"],
         taskIds: [],
         workspaceIds: [],

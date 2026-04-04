@@ -525,14 +525,14 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       walAutoCheckpointPages: clampInt(sqliteInput.walAutoCheckpointPages, 5_000, 1_000, 20_000),
     },
     durable: {
-      enabled: durableInput.enabled ?? false,
+      enabled: durableInput.enabled ?? true,
       diagnosticsEnabled: durableInput.diagnosticsEnabled ?? false,
-      executionEnabled: durableInput.executionEnabled ?? false,
-      chatAutoPromoteEnabled: durableInput.chatAutoPromoteEnabled ?? false,
+      executionEnabled: durableInput.executionEnabled ?? true,
+      chatAutoPromoteEnabled: durableInput.chatAutoPromoteEnabled ?? true,
       maxAttemptsDefault: Math.max(1, Math.floor(durableInput.maxAttemptsDefault ?? 3)),
     },
     features: {
-      durableKernelV1Enabled: featuresInput.durableKernelV1Enabled ?? false,
+      durableKernelV1Enabled: featuresInput.durableKernelV1Enabled ?? true,
       replayOverridesV1Enabled: featuresInput.replayOverridesV1Enabled ?? false,
       memoryLifecycleAdminV1Enabled: featuresInput.memoryLifecycleAdminV1Enabled ?? false,
       memoryMaintenanceV1Enabled: featuresInput.memoryMaintenanceV1Enabled ?? false,

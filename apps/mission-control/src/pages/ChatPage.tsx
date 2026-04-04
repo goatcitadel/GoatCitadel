@@ -3162,7 +3162,7 @@ export function ChatPage({
                             {[
                               run.originSurface ? `Surface ${run.originSurface}` : null,
                               run.linkedTaskId ? `Task ${run.linkedTaskId}` : null,
-                              run.linkedDurableRunId ? `Run ${run.linkedDurableRunId}` : null,
+                              run.linkedDurableRunId ? `Durable ${run.linkedDurableRunId}` : null,
                               run.approvalId ? `Approval ${run.approvalId}` : null,
                               run.nextWakeAt ? `Wake ${new Date(run.nextWakeAt).toLocaleString()}` : null,
                               run.stopReason ? `Stop ${run.stopReason}` : null,

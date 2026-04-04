@@ -25,6 +25,7 @@ describe("sessions routes", () => {
         sessionIds: ["session-1"],
         turnIds: ["turn-1"],
         runIds: ["run-1"],
+        proactiveRunIds: ["proactive-1"],
         approvalIds: ["approval-1"],
         taskIds: ["task-1"],
         workspaceIds: ["workspace-1"],

@@ -4,6 +4,34 @@ import type { ServiceContext } from "./service-context.js";
 import { DurableRunService } from "./durable-run-service.js";
 
 describe("DurableRunService", () => {
+  it("preserves caller metadata when creating durable runs", () => {
+    const runs = new Map<string, DurableRunRecord>();
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline) as unknown as ServiceContext,
+    );
+
+    const created = service.createDurableRun({
+      workflowKey: "proactive.tick",
+      metadata: {
+        proactive: {
+          phase: "planning",
+          taskId: "task-1",
+        },
+      },
+    });
+
+    expect(created.metadata).toMatchObject({
+      retryPolicy: expect.any(Object),
+      waitForEvent: null,
+      proactive: {
+        phase: "planning",
+        taskId: "task-1",
+      },
+    });
+  });
+
   it("requeues and resumes recoverable orphaned chat turn runs on worker startup", async () => {
     const runs = new Map<string, DurableRunRecord>([
       ["run-1", createRun("run-1", "running")],
@@ -156,9 +184,39 @@ function createContext(
           }
           return run;
         },
+        createRun: (input: {
+          workflowKey: string;
+          status?: DurableRunRecord["status"];
+          attemptCount?: number;
+          maxAttempts?: number;
+          payload?: Record<string, unknown>;
+          metadata?: Record<string, unknown>;
+          startedAt?: string;
+          finishedAt?: string;
+          lastError?: string;
+          now?: string;
+        }) => {
+          const run: DurableRunRecord = {
+            runId: `run-${runs.size + 1}`,
+            workflowKey: input.workflowKey,
+            status: input.status ?? "queued",
+            attemptCount: input.attemptCount ?? 0,
+            maxAttempts: input.maxAttempts ?? 3,
+            payload: input.payload ?? {},
+            metadata: input.metadata,
+            startedAt: input.startedAt,
+            finishedAt: input.finishedAt,
+            lastError: input.lastError,
+            createdAt: input.now ?? "2026-03-14T00:00:00.000Z",
+            updatedAt: input.now ?? "2026-03-14T00:00:00.000Z",
+          };
+          runs.set(run.runId, run);
+          return run;
+        },
         updateRun: (input: {
           runId: string;
           status?: DurableRunRecord["status"];
+          metadata?: Record<string, unknown>;
           startedAt?: string;
           finishedAt?: string;
           updatedAt?: string;
@@ -261,6 +319,7 @@ function updateRun(
   runId: string,
   patch: {
     status?: DurableRunRecord["status"];
+    metadata?: Record<string, unknown>;
     startedAt?: string;
     finishedAt?: string;
     updatedAt?: string;
@@ -274,6 +333,7 @@ function updateRun(
   const next = {
     ...current,
     ...(patch.status ? { status: patch.status } : {}),
+    ...(patch.metadata !== undefined ? { metadata: patch.metadata } : {}),
     ...(patch.startedAt !== undefined ? { startedAt: patch.startedAt } : {}),
     ...(patch.finishedAt !== undefined ? { finishedAt: patch.finishedAt } : {}),
     ...(patch.updatedAt !== undefined ? { updatedAt: patch.updatedAt } : {}),

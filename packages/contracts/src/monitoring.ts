@@ -25,6 +25,7 @@ export interface RealtimeEventLinks {
   sessionId?: string;
   turnId?: string;
   runId?: string;
+  proactiveRunId?: string;
   approvalId?: string;
   taskId?: string;
   workspaceId?: string;

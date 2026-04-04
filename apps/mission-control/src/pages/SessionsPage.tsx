@@ -304,7 +304,16 @@ export function SessionsPage() {
                       {" | "}
                       Runs: {lifecycle.linked.runIds.length}
                       {" | "}
+                      Proactive summaries: {lifecycle.linked.proactiveRunIds.length}
+                      {" | "}
                       Tasks: {lifecycle.linked.taskIds.length}
+                    </p>
+                    <p className="office-subtitle session-detail-copy">
+                      Proactive durable run: {lifecycle.proactiveDurableRun?.runId ?? "none"}
+                      {" | "}
+                      Approval wait run: {lifecycle.approvalWaitDurableRun?.runId ?? "none"}
+                      {" | "}
+                      Queried run: {lifecycle.durableRun?.runId ?? "none"}
                     </p>
                   </div>
                 ) : null}

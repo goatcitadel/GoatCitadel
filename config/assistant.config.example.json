@@ -99,14 +99,14 @@
     "walAutoCheckpointPages": 5000
   },
   "durable": {
-    "enabled": false,
+    "enabled": true,
     "diagnosticsEnabled": false,
-    "executionEnabled": false,
-    "chatAutoPromoteEnabled": false,
+    "executionEnabled": true,
+    "chatAutoPromoteEnabled": true,
     "maxAttemptsDefault": 3
   },
   "features": {
-    "durableKernelV1Enabled": false,
+    "durableKernelV1Enabled": true,
     "replayOverridesV1Enabled": false,
     "memoryLifecycleAdminV1Enabled": false,
     "memoryMaintenanceV1Enabled": false,

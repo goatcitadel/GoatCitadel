@@ -31,6 +31,7 @@ export interface RuntimeLifecycleLinkedIds {
   sessionIds: string[];
   turnIds: string[];
   runIds: string[];
+  proactiveRunIds: string[];
   approvalIds: string[];
   taskIds: string[];
   workspaceIds: string[];
@@ -44,6 +45,8 @@ export interface RuntimeLifecycleResponse {
   task?: TaskRecord;
   approval?: ApprovalRequest;
   durableRun?: DurableRunRecord;
+  proactiveDurableRun?: DurableRunRecord;
+  approvalWaitDurableRun?: DurableRunRecord;
   proactiveRuns?: ProactiveRunRecord[];
   turns: RuntimeLifecycleTurnSummary[];
   toolRuns: RuntimeLifecycleToolRunSummary[];

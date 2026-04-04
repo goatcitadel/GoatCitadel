@@ -23,10 +23,22 @@ export interface DurableEventWait {
 
 export type DurableSupportedWorkflowKey =
   | "chat.turn.execute"
+  | "proactive.tick"
   | "approval.wait"
   | "connector.delivery"
   | "hook.delivery"
   | "memory.maintenance";
+
+export interface ProactiveTickWorkflowPayload {
+  version: "proactive.tick.v1";
+  sessionId: string;
+  proactiveRunId: string;
+  taskId?: string;
+  originSurface: import("./proactive.js").ProactiveOriginSurface;
+  triggerSource: import("./proactive.js").ProactiveTriggerSource;
+  policySnapshot: import("./proactive.js").ProactivePolicy;
+  requestedAt: string;
+}
 
 export interface ApprovalWaitWorkflowPayload {
   version: "approval.wait.v1";

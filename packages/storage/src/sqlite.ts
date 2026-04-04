@@ -1863,6 +1863,10 @@ function createAgenticDepthSchema(db: DatabaseSync): void {
       ON proactive_runs(session_id, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_proactive_runs_status
       ON proactive_runs(status, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_proactive_runs_approval
+      ON proactive_runs(approval_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_proactive_runs_durable
+      ON proactive_runs(linked_durable_run_id, started_at DESC);
 
     CREATE TABLE IF NOT EXISTS proactive_actions (
       action_id TEXT PRIMARY KEY,

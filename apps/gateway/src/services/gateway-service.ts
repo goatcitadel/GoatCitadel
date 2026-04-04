@@ -269,6 +269,7 @@ import type {
   PromptPackScoreRecord,
   PromptPackTestRecord,
   PromptPackToolTier,
+  ProactiveTickWorkflowPayload,
   ProactiveActionRecord,
   ProactivePolicy,
   ProactiveRunRecord,
@@ -1552,6 +1553,8 @@ export class GatewayService {
       listChatMessages: (sessionId, limit) => this.listChatMessages(sessionId, limit),
       invokeTool: (request) => this.invokeTool(request),
       detectDelegationRoles: (text) => detectDelegationRoles(text),
+      createDurableRun: (input) => this.createDurableRun(input),
+      requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       backgroundTasks: this.backgroundTasks,
       get closing() { return self.closing; },
     });
@@ -1998,6 +2001,7 @@ export class GatewayService {
       sessionIds: new Set<string>(),
       turnIds: new Set<string>(),
       runIds: new Set<string>(),
+      proactiveRunIds: new Set<string>(),
       approvalIds: new Set<string>(),
       taskIds: new Set<string>(),
       workspaceIds: new Set<string>(),
@@ -2017,6 +2021,9 @@ export class GatewayService {
       collectLifecycleLinksFromUnknown(linked, approval.preview);
       sessionId ??= approval.linkage?.sessionId;
       taskId ??= approval.linkage?.taskId;
+      if (approval.linkage?.proactiveRunId) {
+        linked.proactiveRunIds.add(approval.linkage.proactiveRunId);
+      }
       runId ??= approval.linkage?.durableRunId ?? this.findApprovalWaitDurableRunId(approvalId);
     }
 
@@ -2041,6 +2048,9 @@ export class GatewayService {
         sessionId ??= task.proactiveContext?.sessionId;
         runId ??= task.proactiveContext?.durableRunId;
         approvalId ??= task.proactiveContext?.approvalId;
+        if (task.proactiveContext?.proactiveRunId) {
+          linked.proactiveRunIds.add(task.proactiveContext.proactiveRunId);
+        }
       }
     }
 
@@ -2137,6 +2147,24 @@ export class GatewayService {
         return !taskId && !approvalId && !runId;
       })
       : [];
+    for (const proactiveRun of proactiveRuns) {
+      linked.proactiveRunIds.add(proactiveRun.runId);
+      if (proactiveRun.linkedDurableRunId) {
+        linked.runIds.add(proactiveRun.linkedDurableRunId);
+      }
+    }
+
+    const proactiveDurableRunId = proactiveRuns
+      .map((candidate) => candidate.linkedDurableRunId)
+      .find((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0)
+      ?? task?.proactiveContext?.durableRunId;
+    const approvalWaitDurableRunId = approvalId ? this.findApprovalWaitDurableRunId(approvalId) : undefined;
+    const proactiveDurableRun = proactiveDurableRunId
+      ? (durableRun?.runId === proactiveDurableRunId ? durableRun : this.findDurableRunMaybe(proactiveDurableRunId))
+      : undefined;
+    const approvalWaitDurableRun = approvalWaitDurableRunId
+      ? (durableRun?.runId === approvalWaitDurableRunId ? durableRun : this.findDurableRunMaybe(approvalWaitDurableRunId))
+      : undefined;
 
     return {
       query: {
@@ -2150,6 +2178,7 @@ export class GatewayService {
         sessionIds: Array.from(linked.sessionIds),
         turnIds: Array.from(linked.turnIds),
         runIds: Array.from(linked.runIds),
+        proactiveRunIds: Array.from(linked.proactiveRunIds),
         approvalIds: Array.from(linked.approvalIds),
         taskIds: Array.from(linked.taskIds),
         workspaceIds: Array.from(linked.workspaceIds),
@@ -2159,6 +2188,8 @@ export class GatewayService {
       task,
       approval,
       durableRun,
+      proactiveDurableRun,
+      approvalWaitDurableRun,
       proactiveRuns,
       turns: turns.map((turn) => ({
         turnId: turn.turnId,
@@ -7804,6 +7835,25 @@ export class GatewayService {
     return payload as ApprovalWaitWorkflowPayload;
   }
 
+  private parseProactiveTickWorkflowPayload(run: DurableRunRecord): ProactiveTickWorkflowPayload | undefined {
+    const payload = run.payload as Partial<ProactiveTickWorkflowPayload> | undefined;
+    if (!payload || payload.version !== "proactive.tick.v1") {
+      return undefined;
+    }
+    if (
+      typeof payload.sessionId !== "string"
+      || typeof payload.proactiveRunId !== "string"
+      || typeof payload.originSurface !== "string"
+      || typeof payload.triggerSource !== "string"
+      || typeof payload.requestedAt !== "string"
+      || !payload.policySnapshot
+      || typeof payload.policySnapshot !== "object"
+    ) {
+      return undefined;
+    }
+    return payload as ProactiveTickWorkflowPayload;
+  }
+
   private parseConnectorDeliveryWorkflowPayload(run: DurableRunRecord): ConnectorDeliveryWorkflowPayload | undefined {
     const payload = run.payload as Partial<ConnectorDeliveryWorkflowPayload> | undefined;
     if (!payload || payload.version !== "connector.delivery.v1") {
@@ -7912,6 +7962,15 @@ export class GatewayService {
     }
     if (run.workflowKey === "chat.turn.execute") {
       const payload = this.parseDurableChatTurnPayload(run);
+      if (payload?.sessionId) {
+        const meta = this.storage.chatSessionMeta.get(payload.sessionId);
+        if (meta?.workspaceId) {
+          return this.normalizeWorkspaceId(meta.workspaceId);
+        }
+      }
+    }
+    if (run.workflowKey === "proactive.tick") {
+      const payload = this.parseProactiveTickWorkflowPayload(run);
       if (payload?.sessionId) {
         const meta = this.storage.chatSessionMeta.get(payload.sessionId);
         if (meta?.workspaceId) {
@@ -8211,6 +8270,9 @@ export class GatewayService {
       case "chat.turn.execute":
         await this.executeDurableChatTurnRun(run);
         return;
+      case "proactive.tick":
+        await this.chatProactiveService.executeDurableProactiveTickRun(run);
+        return;
       case "approval.wait":
         await this.executeDurableApprovalWaitRun(run);
         return;
@@ -8233,6 +8295,10 @@ export class GatewayService {
           : { recoverable: false, reason: "Durable memory maintenance payload is invalid or incomplete." };
       case "chat.turn.execute":
         break;
+      case "proactive.tick":
+        return this.parseProactiveTickWorkflowPayload(run)
+          ? { recoverable: true }
+          : { recoverable: false, reason: "Durable proactive tick payload is invalid or incomplete." };
       case "approval.wait":
         return this.parseApprovalWaitWorkflowPayload(run)
           ? { recoverable: true }
@@ -8279,6 +8345,35 @@ export class GatewayService {
   private async markDurableWorkflowUnrecoverable(run: DurableRunRecord, reason: string): Promise<void> {
     if (run.workflowKey === "memory.maintenance") {
       this.memoryMaintenanceService.syncFromDurableRun(run);
+      this.publishRealtime("system", "durable", {
+        type: "durable_workflow_unrecoverable",
+        runId: run.runId,
+        workflowKey: run.workflowKey,
+        reason,
+      });
+      return;
+    }
+    if (run.workflowKey === "proactive.tick") {
+      const payload = this.parseProactiveTickWorkflowPayload(run);
+      if (payload) {
+        const proactiveRun = this.listChatSessionProactiveRuns(payload.sessionId, 100)
+          .find((candidate) => candidate.runId === payload.proactiveRunId);
+        if (proactiveRun) {
+          this.gatewaySql.prepare(`
+            UPDATE proactive_runs
+            SET
+              status = 'failed',
+              stop_reason = 'terminal_failure',
+              error = @reason,
+              finished_at = @finishedAt
+            WHERE run_id = @runId
+          `).run({
+            runId: proactiveRun.runId,
+            reason,
+            finishedAt: new Date().toISOString(),
+          });
+        }
+      }
       this.publishRealtime("system", "durable", {
         type: "durable_workflow_unrecoverable",
         runId: run.runId,
@@ -9479,6 +9574,30 @@ export class GatewayService {
     return row?.run_id;
   }
 
+  private findProactiveDurableRunIdsForApproval(approvalId: string): string[] {
+    const rows = this.gatewaySql.prepare(`
+      SELECT DISTINCT linked_durable_run_id AS run_id
+      FROM proactive_runs
+      WHERE approval_id = @approvalId
+        AND linked_durable_run_id IS NOT NULL
+      ORDER BY started_at DESC
+    `).all({ approvalId }) as Array<{ run_id: string | null }>;
+    return rows
+      .map((row) => row.run_id?.trim())
+      .filter((value): value is string => Boolean(value));
+  }
+
+  private findDurableRunMaybe(runId: string): DurableRunRecord | undefined {
+    try {
+      return this.storage.durableRuns.getRun(runId);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
   public async resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<ApprovalResolveResult> {
     const current = this.storage.approvals.get(approvalId);
     if (current.kind === DEVICE_ACCESS_APPROVAL_KIND) {
@@ -9530,9 +9649,30 @@ export class GatewayService {
       wakeRunId = this.markApprovalWaitDurableRunResolved(approval, input, executedAction);
     });
 
+    const proactiveRunIds = this.findProactiveDurableRunIdsForApproval(approvalId);
     if (wakeRunId) {
       approval = this.storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: wakeRunId });
       this.durableRunService.requestRunProcessing(wakeRunId);
+    }
+    for (const proactiveRunId of proactiveRunIds) {
+      try {
+        this.wakeDurableRun(proactiveRunId, {
+          eventKey: "approval.resolved",
+          correlationId: approval.approvalId,
+          payload: {
+            approvalId: approval.approvalId,
+            status: approval.status,
+            decision: input.decision,
+            resolvedBy: input.resolvedBy,
+            executedOutcome: executedAction?.outcome,
+          },
+        });
+      } catch (error) {
+        if (!String((error as Error).message ?? "").includes("not waiting/paused")) {
+          throw error;
+        }
+      }
+      this.durableRunService.requestRunProcessing(proactiveRunId);
     }
 
     await this.recordApprovalResolutionEffects(approval, input, executedAction);
@@ -9779,6 +9919,7 @@ export class GatewayService {
       sessionId: approval.linkage?.sessionId,
       taskId: approval.linkage?.taskId,
       runId: approval.linkage?.durableRunId,
+      proactiveRunId: approval.linkage?.proactiveRunId,
       workspaceId: approval.linkage?.workspaceId,
       connectorId: approval.linkage?.connectorId,
       tokenId: approval.linkage?.tokenId,
@@ -22826,6 +22967,7 @@ function collectLifecycleLinksFromUnknown(
     sessionIds: Set<string>;
     turnIds: Set<string>;
     runIds: Set<string>;
+    proactiveRunIds: Set<string>;
     approvalIds: Set<string>;
     taskIds: Set<string>;
     workspaceIds: Set<string>;
@@ -22834,7 +22976,8 @@ function collectLifecycleLinksFromUnknown(
 ): void {
   const sessionId = findLifecycleString(payload, ["sessionId"]);
   const turnId = findLifecycleString(payload, ["turnId"]);
-  const runId = findLifecycleString(payload, ["runId", "durableRunId", "durable_run_id", "proactiveRunId"]);
+  const runId = findLifecycleString(payload, ["runId", "durableRunId", "durable_run_id"]);
+  const proactiveRunId = findLifecycleString(payload, ["proactiveRunId"]);
   const approvalId = findLifecycleString(payload, ["approvalId"]);
   const taskId = findLifecycleString(payload, ["taskId"]);
   const workspaceId = findLifecycleString(payload, ["workspaceId"]);
@@ -22842,6 +22985,7 @@ function collectLifecycleLinksFromUnknown(
   if (sessionId) linked.sessionIds.add(sessionId);
   if (turnId) linked.turnIds.add(turnId);
   if (runId) linked.runIds.add(runId);
+  if (proactiveRunId) linked.proactiveRunIds.add(proactiveRunId);
   if (approvalId) linked.approvalIds.add(approvalId);
   if (taskId) linked.taskIds.add(taskId);
   if (workspaceId) linked.workspaceIds.add(workspaceId);

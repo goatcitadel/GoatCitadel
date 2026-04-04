@@ -153,16 +153,18 @@ export class DurableRunService {
     const retryPolicy = this.normalizeDurableRetryPolicy(input.retryPolicy);
     const now = new Date().toISOString();
     const status: DurableRunRecord["status"] = input.waitForEvent ? "waiting" : "queued";
+    const metadata = {
+      ...(input.metadata ?? {}),
+      retryPolicy,
+      waitForEvent: input.waitForEvent ?? null,
+    };
     const run = this.ctx.storage.durableRuns.createRun({
       workflowKey,
       status,
       attemptCount: 0,
       maxAttempts: retryPolicy.maxAttempts,
       payload: input.payload ?? {},
-      metadata: {
-        retryPolicy,
-        waitForEvent: input.waitForEvent ?? null,
-      },
+      metadata,
       startedAt: status === "queued" ? undefined : now,
       now,
     });

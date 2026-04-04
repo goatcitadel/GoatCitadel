@@ -165,6 +165,7 @@ export function ApprovalsPage() {
           sessionIds: result.approval.linkage?.sessionId ? [result.approval.linkage.sessionId] : [],
           turnIds: result.approval.linkage?.turnId ? [result.approval.linkage.turnId] : [],
           runIds: result.durableRunId ? [result.durableRunId] : result.approval.linkage?.durableRunId ? [result.approval.linkage.durableRunId] : [],
+          proactiveRunIds: result.approval.linkage?.proactiveRunId ? [result.approval.linkage.proactiveRunId] : [],
           approvalIds: [result.approval.approvalId],
           taskIds: result.approval.linkage?.taskId ? [result.approval.linkage.taskId] : [],
           workspaceIds: result.approval.linkage?.workspaceId ? [result.approval.linkage.workspaceId] : [],
@@ -409,8 +410,13 @@ export function ApprovalsPage() {
                   Turns: {lifecycle.linked.turnIds.length > 0 ? lifecycle.linked.turnIds.join(", ") : "none"}
                   {" | "}
                   Task: {lifecycle.query.taskId ?? lifecycle.linked.taskIds[0] ?? "none"}
+                </p>
+                <p className="office-subtitle">
+                  Proactive durable run: {lifecycle.proactiveDurableRun?.runId ?? "none"}
                   {" | "}
-                  Run: {lifecycle.query.runId ?? lifecycle.linked.runIds[0] ?? "none"}
+                  Approval wait run: {lifecycle.approvalWaitDurableRun?.runId ?? "none"}
+                  {" | "}
+                  Queried run: {lifecycle.query.runId ?? lifecycle.linked.runIds[0] ?? "none"}
                 </p>
                 {approval.linkage?.proactiveRunId || lifecycle.proactiveRuns?.length ? (
                   <p className="office-subtitle">

@@ -652,7 +652,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                       Proactive run: {selectedTask.proactiveContext.proactiveRunId ?? "none"}
                     </p>
                     <p className="office-subtitle">
-                      Durable run: {selectedTask.proactiveContext.durableRunId ?? "none"}
+                      Proactive durable run: {selectedTask.proactiveContext.durableRunId ?? "none"}
                       {" | "}
                       Approval: {selectedTask.proactiveContext.approvalId ?? "none"}
                       {" | "}
