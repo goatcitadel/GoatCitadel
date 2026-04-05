@@ -11,7 +11,7 @@ import fp from "fastify-plugin";
 
 declare module "fastify" {
   interface FastifyInstance {
-    issueSseToken: (scope: "events:stream", ttlMs?: number) => SseTokenIssueResponse;
+    issueSseToken: (scope: "events:stream" | "dev:diagnostics:stream", ttlMs?: number) => SseTokenIssueResponse;
   }
 
   interface FastifyRequest {
@@ -25,7 +25,7 @@ declare module "fastify" {
 
 interface SseTokenRecord {
   token: string;
-  scope: "events:stream";
+  scope: "events:stream" | "dev:diagnostics:stream";
   expiresAt: number;
 }
 
@@ -51,7 +51,7 @@ export const authPlugin = fp(async (fastify) => {
   fastify.decorateRequest("authGrantId", undefined);
   fastify.decorateRequest("authCompanionSessionId", undefined);
 
-  fastify.decorate("issueSseToken", (scope: "events:stream", ttlMs = 2 * 60 * 1000) => {
+  fastify.decorate("issueSseToken", (scope: "events:stream" | "dev:diagnostics:stream", ttlMs = 2 * 60 * 1000) => {
     purgeExpiredSseTokens(sseTokens);
     enforceSseTokenCapacity(sseTokens, MAX_ACTIVE_SSE_TOKENS);
     const token = randomBytes(32).toString("base64url");
@@ -123,9 +123,10 @@ export const authPlugin = fp(async (fastify) => {
     }
 
     // SSE bridge token for EventSource, regardless of auth mode.
-    if (request.url.startsWith("/api/v1/events/stream")) {
+    const sseScope = getSseTokenScopeForPath(request.url);
+    if (sseScope) {
       const sseToken = readQueryToken(request.query, "sse_token");
-      if (sseToken && validateSseToken(sseToken, "events:stream", sseTokens)) {
+      if (sseToken && validateSseToken(sseToken, sseScope, sseTokens)) {
         setAuthActor(request, `sse:${tokenFingerprint(sseToken)}`, "sse");
         return;
       }
@@ -259,6 +260,17 @@ function isOnboardingRecoveryRoute(url: string): boolean {
     || pathname === "/api/v1/auth/install-token";
 }
 
+function getSseTokenScopeForPath(url: string): "events:stream" | "dev:diagnostics:stream" | null {
+  const pathname = url.split("?", 1)[0] ?? url;
+  if (pathname === "/api/v1/events/stream") {
+    return "events:stream";
+  }
+  if (pathname === "/api/v1/dev/diagnostics/stream") {
+    return "dev:diagnostics:stream";
+  }
+  return null;
+}
+
 function isAuthMisconfigured(auth: {
   mode: "none" | "token" | "basic";
   token: { value?: string };
@@ -361,7 +373,7 @@ function timingSafeStringEqual(left: string, right: string): boolean {
 
 function validateSseToken(
   provided: string,
-  scope: "events:stream",
+  scope: "events:stream" | "dev:diagnostics:stream",
   store: Map<string, SseTokenRecord>,
 ): boolean {
   purgeExpiredSseTokens(store);

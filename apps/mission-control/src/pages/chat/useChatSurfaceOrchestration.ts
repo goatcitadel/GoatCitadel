@@ -4,6 +4,23 @@ import { recordClientDiagnostic } from "../../state/dev-diagnostics-store";
 import { useCallback, useEffect, useState, type RefObject } from "react";
 import type { ChatThreadNotice } from "../../components/chat/ChatThreadView";
 
+const ATTACHMENT_ONLY_SEND_PLACEHOLDER = "Please review the attached files and continue.";
+
+export function resolveOutboundDraftContent(
+  draft: string,
+  attachmentCount: number,
+  action: OutboundQueueItem["action"] = "send",
+): string {
+  const trimmed = draft.trim();
+  if (trimmed) {
+    return trimmed;
+  }
+  if (action === "send" && attachmentCount > 0) {
+    return ATTACHMENT_ONLY_SEND_PLACEHOLDER;
+  }
+  return "";
+}
+
 export interface OutboundQueueItem {
   id: string;
   action: "send" | "edit" | "retry";
@@ -47,13 +64,14 @@ export function useChatSurfaceOrchestration(input: {
   const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
 
   const handleSend = useCallback(async () => {
-    const content = input.draft.trim();
+    const action: OutboundQueueItem["action"] = editingTurnId ? "edit" : "send";
+    const content = resolveOutboundDraftContent(input.draft, input.pendingAttachments.length, action);
     if (!content) {
       return;
     }
     const nextItem: OutboundQueueItem = {
       id: `queue-${Date.now()}`,
-      action: editingTurnId ? "edit" : "send",
+      action,
       sessionId: input.selectedSessionId ?? undefined,
       targetTurnId: editingTurnId ?? undefined,
       content,

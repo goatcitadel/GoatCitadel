@@ -83,6 +83,7 @@ const SystemPage = lazyPage(() => import("./pages/SystemPage"), "SystemPage");
 const TasksPage = lazyPage(() => import("./pages/TasksPage"), "TasksPage");
 const ToolsPage = lazyPage(() => import("./pages/ToolsPage"), "ToolsPage");
 const GATEWAY_ACCESS_AUTO_RETRY_MS = 300;
+const OPERATE_STATUS_STALE_AFTER_MS = 45_000;
 
 function getStartupMonotonicNow(): number {
   if (typeof performance !== "undefined" && typeof performance.now === "function") {
@@ -97,6 +98,32 @@ export function deriveShellApprovalCount(
 ): number {
   const backendPendingApprovals = operateStatus?.pendingApprovals ?? 0;
   return Math.max(0, backendPendingApprovals + localPromptCount);
+}
+
+export function deriveOperateStatusFreshness(
+  lastSuccessAt: number | null,
+  lastError: string | null,
+  now = Date.now(),
+): { state: "live" | "stale"; note: string } {
+  if (!lastSuccessAt) {
+    return {
+      state: "stale",
+      note: lastError ? "Status refresh has not completed yet." : "Waiting for the first shell status refresh.",
+    };
+  }
+  const ageMs = Math.max(0, now - lastSuccessAt);
+  if (lastError || ageMs > OPERATE_STATUS_STALE_AFTER_MS) {
+    return {
+      state: "stale",
+      note: lastError
+        ? "Counts may be stale because the latest dashboard refresh failed."
+        : "Counts may be stale because the dashboard has not refreshed recently.",
+    };
+  }
+  return {
+    state: "live",
+    note: "Counts reflect the latest dashboard snapshot.",
+  };
 }
 
 function PageLoadingFallback({ label }: { label: string }) {
@@ -192,6 +219,8 @@ export function App() {
   const [remoteApprovalPrompts, setRemoteApprovalPrompts] = useState<RemoteApprovalActionPrompt[]>([]);
   const [remoteApprovalResolveBusy, setRemoteApprovalResolveBusy] = useState(false);
   const [operateStatus, setOperateStatus] = useState<DashboardStateResponse | null>(null);
+  const [operateStatusLastSuccessAt, setOperateStatusLastSuccessAt] = useState<number | null>(null);
+  const [operateStatusLastError, setOperateStatusLastError] = useState<string | null>(null);
   const [compactShellNav, setCompactShellNav] = useState(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
       return false;
@@ -229,8 +258,10 @@ export function App() {
       const { fetchDashboardState } = await import("./api/client");
       const next = await fetchDashboardState();
       setOperateStatus(next);
-    } catch {
-      // Keep the existing status snapshot if background refresh fails.
+      setOperateStatusLastSuccessAt(Date.now());
+      setOperateStatusLastError(null);
+    } catch (error) {
+      setOperateStatusLastError((error as Error).message);
     }
   }, []);
 
@@ -770,6 +801,12 @@ export function App() {
   const operateOpenTasksCount = (operateStatus?.taskStatusCounts ?? []).reduce((sum, item) => (
     item.status === "done" ? sum : sum + item.count
   ), 0);
+  const operateStatusFreshness = deriveOperateStatusFreshness(operateStatusLastSuccessAt, operateStatusLastError);
+  const decisionsChipLabel = operateApprovalsCount > 0
+    ? `${operateApprovalsCount} decisions`
+    : operateStatusFreshness.state === "stale"
+      ? "Decision status stale"
+      : "Decisions clear";
 
   const operateSurfaceTab = route.space === "operate" && route.page === "surface"
     ? (route.surface ?? "chat")
@@ -1009,8 +1046,8 @@ export function App() {
             className="shell-status-link"
             onClick={() => navigate({ space: "operate", page: "approvals" })}
           >
-            <StatusChip tone={operateApprovalsCount > 0 ? "warning" : "success"}>
-              {operateApprovalsCount > 0 ? `${operateApprovalsCount} approvals` : "Approvals clear"}
+            <StatusChip tone={operateApprovalsCount > 0 || operateStatusFreshness.state === "stale" ? "warning" : "success"}>
+              {decisionsChipLabel}
             </StatusChip>
           </button>
         </div>
@@ -1090,9 +1127,18 @@ export function App() {
             {shellGatewayState.summary} {shellGatewayState.nextStep}
           </div>
         ) : null}
+        {route.space === "operate" && operateStatusFreshness.state === "stale" ? (
+          <div className="status-banner warning">
+            {operateStatusFreshness.note}
+          </div>
+        ) : null}
         {route.space === "operate" ? (
           <StatusStrip
             approvalsCount={operateApprovalsCount}
+            approvalsLabel="Pending decisions"
+            approvalsNote={operateStatusFreshness.state === "stale"
+              ? `${operateStatusFreshness.note} Review the Approvals page before trusting these counts.`
+              : "Backend approvals plus local Mission Control prompts."}
             activeAgentsCount={operateActiveAgentsCount}
             dailyCostUsd={operateDailyCostUsd}
             openTasksCount={operateOpenTasksCount}

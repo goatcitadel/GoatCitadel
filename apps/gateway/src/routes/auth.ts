@@ -56,15 +56,23 @@ const companionAuditQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(200).default(50),
 });
 
+const sseTokenIssueSchema = z.object({
+  scope: z.enum(["events:stream", "dev:diagnostics:stream"]).default("events:stream"),
+});
+
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.post("/api/v1/auth/sse-token", async (_request, reply) => {
+  fastify.post("/api/v1/auth/sse-token", async (request, reply) => {
     const authMode = fastify.gatewayConfig.assistant.auth.mode;
     if (authMode === "none") {
       return reply.code(400).send({
         error: "SSE token bridge is not needed when auth mode is none",
       });
     }
-    const token = fastify.issueSseToken("events:stream");
+    const parsed = sseTokenIssueSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    const token = fastify.issueSseToken(parsed.data.scope);
     return reply.send(token);
   });
 

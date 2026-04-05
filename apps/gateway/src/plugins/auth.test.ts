@@ -150,6 +150,12 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
     actorSource: request.authActorSource,
   }));
 
+  app.get("/api/v1/dev/diagnostics/stream", async (request) => ({
+    ok: true,
+    actorId: request.authActorId,
+    actorSource: request.authActorSource,
+  }));
+
   app.post("/protected-write", async (request) => ({
     ok: true,
     actorId: request.authActorId,
@@ -385,6 +391,23 @@ describe("auth plugin", () => {
     });
 
     expect(response.statusCode).toBe(401);
+  });
+
+  it("accepts diagnostics SSE bridge tokens on the diagnostics stream", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "sse-bearer", queryParam: "access_token" },
+    });
+
+    const issued = app.issueSseToken("dev:diagnostics:stream", 30_000);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/dev/diagnostics/stream?sse_token=${encodeURIComponent(issued.token)}`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ actorSource: "sse" });
   });
 
   it("accepts approved device bearer tokens across auth modes", async () => {

@@ -3,6 +3,8 @@ import { StatCard } from "./StatCard";
 
 interface StatusStripProps {
   approvalsCount: number;
+  approvalsLabel?: string;
+  approvalsNote?: string;
   activeAgentsCount: number;
   dailyCostUsd: number;
   openTasksCount: number;
@@ -31,6 +33,8 @@ function formatUsd(value: number): string {
 
 export function StatusStrip({
   approvalsCount,
+  approvalsLabel = "Pending decisions",
+  approvalsNote,
   activeAgentsCount,
   dailyCostUsd,
   openTasksCount,
@@ -65,10 +69,10 @@ export function StatusStrip({
   }, []);
 
   const compactSummary = approvalsCount > 0
-    ? `${approvalsCount} approval${approvalsCount === 1 ? "" : "s"} waiting`
+    ? `${approvalsCount} decision${approvalsCount === 1 ? "" : "s"} waiting`
     : openTasksCount > 0
       ? `${openTasksCount} open task${openTasksCount === 1 ? "" : "s"}`
-      : "Approvals clear";
+      : "Decisions clear";
 
   return (
     <section
@@ -92,9 +96,9 @@ export function StatusStrip({
       <div className="status-strip">
         <div className="status-strip-tier status-strip-tier-primary" aria-label="Critical operator priorities">
           <StatCard
-            label="Pending approvals"
+            label={approvalsLabel}
             value={approvalsCount}
-            note={approvalsCount > 0 ? "Needs operator review now" : "No blockers"}
+            note={approvalsNote ?? (approvalsCount > 0 ? "Needs operator review now" : "No blockers")}
             tone={approvalsCount > 0 ? "warning" : "success"}
             className={`status-strip-card status-strip-card-approvals${approvalsCount > 0 ? " is-attention" : ""}`}
             compact

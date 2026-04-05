@@ -6,6 +6,7 @@ import {
   getDeleteSessionConfirmationMessage,
   looksMachineSessionLabel,
   resolveOptimisticChatPrefs,
+  shouldExecuteLocalChatCommand,
   shouldShowLearnedMemoryPanel,
   shouldShowSuggestionsPanel,
   shouldApplyFetchedMessagesAfterStream,
@@ -144,6 +145,16 @@ describe("chat capability confirmation copy", () => {
   it("formats permanent session deletion copy without browser confirm text", () => {
     expect(getDeleteSessionConfirmationMessage("Release checklist")).toContain("Delete \"Release checklist\" permanently?");
     expect(getDeleteSessionConfirmationMessage("Release checklist")).toContain("attached files");
+  });
+});
+
+describe("local chat command execution", () => {
+  it("allows slash commands to run before provider validation for normal sends", () => {
+    expect(shouldExecuteLocalChatCommand("send", "/help")).toBe(true);
+    expect(shouldExecuteLocalChatCommand("send", "   /project")).toBe(true);
+    expect(shouldExecuteLocalChatCommand("edit", "/help")).toBe(false);
+    expect(shouldExecuteLocalChatCommand("retry", "/help")).toBe(false);
+    expect(shouldExecuteLocalChatCommand("send", "hello")).toBe(false);
   });
 });
 

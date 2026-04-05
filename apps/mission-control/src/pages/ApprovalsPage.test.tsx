@@ -257,6 +257,8 @@ describe("ApprovalsPage", () => {
       expect(text).toContain("Files: apps/mission-control/src/pages/ChatPage.tsx");
       expect(text).toContain("Patch");
       expect(text).toContain("Raw request and preview payload");
+      expect(text).toContain("Raw request payload");
+      expect(text).toContain("Preview payload");
     } finally {
       renderer.unmount();
     }

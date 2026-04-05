@@ -1,7 +1,7 @@
 export interface SseTokenIssueResponse {
   token: string;
   expiresAt: string;
-  scope: "events:stream";
+  scope: "events:stream" | "dev:diagnostics:stream";
 }
 
 export type DeviceAccessRequestStatus = "pending" | "approved" | "rejected" | "expired";

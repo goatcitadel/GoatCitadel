@@ -284,6 +284,26 @@ describe("auth routes", () => {
     });
   });
 
+  it("issues diagnostics SSE token when a scope is requested", async () => {
+    app = await buildApp("token");
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/sse-token",
+      headers: {
+        Authorization: "Bearer test-token",
+      },
+      payload: {
+        scope: "dev:diagnostics:stream",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      token: expect.any(String),
+      expiresAt: expect.any(String),
+      scope: "dev:diagnostics:stream",
+    });
+  });
+
   it("creates a device approval request without prior auth", async () => {
     app = await buildApp("token");
     const response = await app.inject({

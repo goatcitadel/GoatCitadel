@@ -112,21 +112,22 @@ vi.mock("./components/ui", () => ({
     dismissDisabled?: boolean;
     children?: React.ReactNode;
   }) => (
-    <div
+    <button
+      type="button"
       data-mock-modal="true"
       data-open={props.open ? "true" : "false"}
       data-title={props.title}
       data-description={props.description ?? ""}
       data-confirm-disabled={props.confirmDisabled ? "true" : "false"}
       data-dismiss-disabled={props.dismissDisabled ? "true" : "false"}
-      onRequestClose={() => {
+      onClick={() => {
         if (!props.dismissDisabled) {
           props.onOpenChange?.(false);
         }
       }}
     >
       {props.children}
-    </div>
+    </button>
   ),
   GCSelect: (props: {
     id?: string;

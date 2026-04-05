@@ -304,6 +304,9 @@ export function ApprovalsPage() {
       <div className="workflow-status-stack">
         {error ? <p className="error">{error}</p> : null}
         {summary ? <p className="office-subtitle">{summary}</p> : null}
+        <p className="office-subtitle">
+          This queue shows backend approval records. The shell decision badge can also include active Mission Control prompts that are not yet persisted here.
+        </p>
       </div>
       {!hasPendingApprovals ? (
         <Panel
@@ -574,7 +577,12 @@ export function ApprovalsPage() {
             ) : null}
             <details className="approval-technical-details">
               <summary>Raw request and preview payload</summary>
-              <pre>{JSON.stringify(approval.preview, null, 2)}</pre>
+              <div className="replay-box">
+                <h4>Raw request payload</h4>
+                <pre>{JSON.stringify(approval.payload, null, 2)}</pre>
+                <h4>Preview payload</h4>
+                <pre>{JSON.stringify(approval.preview, null, 2)}</pre>
+              </div>
             </details>
           </Panel>
         );

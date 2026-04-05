@@ -148,7 +148,11 @@ import {
   type MissionControlDockSectionId,
   useMissionControlSurfaceState,
 } from "./chat/useMissionControlSurfaceState";
-import { useChatSurfaceOrchestration, type OutboundQueueItem } from "./chat/useChatSurfaceOrchestration";
+import {
+  resolveOutboundDraftContent,
+  useChatSurfaceOrchestration,
+  type OutboundQueueItem,
+} from "./chat/useChatSurfaceOrchestration";
 import "../styles/chat.css";
 import "../styles/chat-surface.css";
 import "../styles/chat-motion.css";
@@ -365,6 +369,10 @@ export function shouldApplyFetchedMessagesAfterStream(
     item.role === "assistant" && normalizeComparableAssistantContent(item.content) === finalizedContent
   ));
   return fetchedHasEquivalentAssistant;
+}
+
+export function shouldExecuteLocalChatCommand(action: OutboundQueueItem["action"], content: string): boolean {
+  return action === "send" && content.trim().startsWith("/");
 }
 
 function toTitleCase(value: string): string {
@@ -1317,7 +1325,9 @@ export function ChatPage({
     () => deriveCoworkItems(messages, localNotices, latestOrchestration),
     [latestOrchestration, localNotices, messages],
   );
-  const canSend = Boolean(draft.trim()) && !sending;
+  const canSend = Boolean(
+    resolveOutboundDraftContent(draft, pendingAttachments.length, editingTurnId ? "edit" : "send"),
+  ) && !sending;
 
   useEffect(() => {
     if (!lockSurface || !surface || !selectedSessionId) {
@@ -2027,6 +2037,11 @@ export function ChatPage({
       setError(null);
       setPendingApproval(null);
       session = await ensureSession();
+      if (shouldExecuteLocalChatCommand(item.action, trimmedContent)) {
+        await handleCommandExecution(session.sessionId, trimmedContent);
+        await loadSidebar();
+        return;
+      }
       if (!effectiveProviderId) {
         throw new Error("No model provider is configured yet. Open Configure and connect a provider first.");
       }
@@ -2039,12 +2054,6 @@ export function ChatPage({
           ?? `No model is selected for ${currentProvider?.label ?? effectiveProviderId}. Choose a model and try again.`,
         );
       }
-      if (item.action === "send" && trimmedContent.startsWith("/")) {
-        await handleCommandExecution(session.sessionId, trimmedContent);
-        await loadSidebar();
-        return;
-      }
-
       const targetTurn = item.targetTurnId
         ? (threadRef.current?.turns.find((turn) => turn.turnId === item.targetTurnId) ?? null)
         : null;

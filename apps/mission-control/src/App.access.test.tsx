@@ -469,6 +469,23 @@ describe("App gateway access gate", () => {
     }, 2)).toBe(5);
   });
 
+  it("marks shell status stale after refresh failures or long gaps", async () => {
+    const { deriveOperateStatusFreshness } = await import("./App");
+
+    expect(deriveOperateStatusFreshness(null, null, 0)).toMatchObject({
+      state: "stale",
+    });
+    expect(deriveOperateStatusFreshness(10_000, "gateway timeout", 20_000)).toMatchObject({
+      state: "stale",
+    });
+    expect(deriveOperateStatusFreshness(10_000, null, 70_000)).toMatchObject({
+      state: "stale",
+    });
+    expect(deriveOperateStatusFreshness(10_000, null, 20_000)).toMatchObject({
+      state: "live",
+    });
+  });
+
   it("renders the new three-space shell without the old overflow navigation", async () => {
     const { App } = await import("./App");
     const { UiPreferencesProvider } = await import("./state/ui-preferences");
