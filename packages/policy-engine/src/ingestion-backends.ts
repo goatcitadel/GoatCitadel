@@ -228,21 +228,26 @@ async function fetchDocument(input: {
 
   if (input.backend === "firecrawl") {
     const firecrawlBaseUrl = optionalString(args.firecrawlBaseUrl) ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002";
-    const response = await fetch(`${firecrawlBaseUrl.replace(/\/$/, "")}/v1/scrape`, {
+    const firecrawlTimeoutMs = positiveInt(args.firecrawlTimeoutMs) ?? 20_000;
+    const firecrawlApiKeyEnv = optionalString(args.firecrawlApiKeyEnv) ?? "FIRECRAWL_API_KEY";
+    const firecrawlApiKey = process.env[firecrawlApiKeyEnv]?.trim();
+    const response = await fetch(`${firecrawlBaseUrl.replace(/\/$/, "")}/v2/scrape`, {
       method: "POST",
+      signal: AbortSignal.timeout(firecrawlTimeoutMs),
       headers: {
         "Content-Type": "application/json",
-        ...(process.env.FIRECRAWL_API_KEY ? { Authorization: `Bearer ${process.env.FIRECRAWL_API_KEY}` } : {}),
+        ...(firecrawlApiKey ? { Authorization: `Bearer ${firecrawlApiKey}` } : {}),
       },
       body: JSON.stringify({
         url: source,
-        formats: ["markdown"],
+        formats: ["markdown", "html"],
       }),
     });
     const payload = await response.json() as Record<string, unknown>;
     const data = record(payload.data);
-    const markdown = optionalString(data.markdown) ?? optionalString(data.content) ?? "";
-    const title = optionalString(data.title) ?? optionalString(args.title);
+    const metadata = record(data.metadata);
+    const markdown = optionalString(data.markdown) ?? optionalString(data.content) ?? optionalString(data.html) ?? "";
+    const title = optionalString(metadata.title) ?? optionalString(data.title) ?? optionalString(args.title);
     return {
       backend: input.backend,
       sourceType,
@@ -250,7 +255,7 @@ async function fetchDocument(input: {
       title,
       rawText: markdown,
       normalizedText: normalizeText(markdown),
-      contentType: "text/markdown",
+      contentType: optionalString(data.markdown) || optionalString(data.content) ? "text/markdown" : "text/html",
       statusCode: response.status,
       fetchedAt: new Date().toISOString(),
       fromCache: false,

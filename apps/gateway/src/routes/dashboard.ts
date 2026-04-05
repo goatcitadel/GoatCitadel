@@ -100,6 +100,16 @@ const updateSettingsSchema = z.object({
     qmdDistillerProviderId: z.string().optional(),
     qmdDistillerModel: z.string().optional(),
   }).optional(),
+  web: z.object({
+    firecrawl: z.object({
+      enabled: z.boolean().optional(),
+      baseUrl: z.string().url().optional(),
+      apiKeyEnv: z.string().optional(),
+      timeoutMs: z.number().int().positive().optional(),
+      defaultReadBackend: z.enum(["native", "firecrawl"]).optional(),
+      fallbackToNative: z.boolean().optional(),
+    }).optional(),
+  }).optional(),
   mesh: z.object({
     enabled: z.boolean().optional(),
     mode: z.enum(["lan", "wan", "tailnet"]).optional(),

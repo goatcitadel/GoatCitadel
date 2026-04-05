@@ -41,7 +41,9 @@ function createConfig(root: string): ToolPolicyConfig {
         "lite.duckduckgo.com",
         "www.google.com",
         "www.bing.com",
+        "127.0.0.1",
         "127.0.0.1:11434",
+        "127.0.0.1:3002",
       ],
       riskyShellPatterns: [],
       requireApprovalForRiskyShell: true,
@@ -68,6 +70,7 @@ function createPlaywrightStub() {
     waitForLoadState: async () => undefined,
     waitForSelector: async () => undefined,
     waitForTimeout: async () => undefined,
+    setContent: async () => undefined,
     title: async () => "Austin Weather | 72°F Sunny",
     url: () => currentUrl,
     evaluate: async (fn: unknown, arg: unknown) => {
@@ -443,8 +446,9 @@ describe("browser tools coverage sweep", () => {
       config,
     );
 
-    expect(response.backend).toBe("ollama");
-    expect(response.backendUsed).toBe(true);
+    expect(response.backend).toBe("native");
+    expect(response.summaryBackend).toBe("ollama");
+    expect(response.summaryBackendUsed).toBe(true);
     expect(response.summary).toBe("Local summary from Ollama.");
   });
 
@@ -474,8 +478,9 @@ describe("browser tools coverage sweep", () => {
       config,
     );
 
-    expect(response.backend).toBe("ollama");
-    expect(response.backendUsed).toBe(false);
+    expect(response.backend).toBe("native");
+    expect(response.summaryBackend).toBe("ollama");
+    expect(response.summaryBackendUsed).toBe(false);
     expect(response.backendWarning).toContain("connection refused");
     expect(response.results).toEqual([
       {
@@ -483,6 +488,100 @@ describe("browser tools coverage sweep", () => {
         url: "https://example.com/result-a",
         snippet: "Snippet A",
       },
+    ]);
+  });
+
+  it("uses Firecrawl for search, navigate, and extract when requested", async () => {
+    const config = createConfig(tempRoot);
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/v2/search")) {
+        expect(init?.method).toBe("POST");
+        return new Response(JSON.stringify({
+          data: [
+            { url: "https://example.com/firecrawl-a", title: "Firecrawl A", description: "Snippet A" },
+          ],
+          summary: "Firecrawl summary",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/v2/scrape")) {
+        return new Response(JSON.stringify({
+          data: {
+            markdown: "# Firecrawl Page\n\nCoverage text from markdown.",
+            html: "<html><head><title>Firecrawl Page</title></head><body><main>Coverage text from html.</main></body></html>",
+            metadata: {
+              title: "Firecrawl Page",
+              sourceURL: "https://example.com/firecrawl-page",
+              statusCode: 200,
+            },
+          },
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const search = await executeBrowserTool(
+      "browser.search",
+      { query: "coverage", backend: "firecrawl", firecrawlBaseUrl: "http://127.0.0.1:3002" },
+      config,
+    );
+    expect(search.backend).toBe("firecrawl");
+    expect(search.backendUsed).toBe(true);
+    expect(search.results).toEqual([
+      { title: "Firecrawl A", url: "https://example.com/firecrawl-a", snippet: "Snippet A" },
+    ]);
+
+    const navigate = await executeBrowserTool(
+      "browser.navigate",
+      { url: "https://example.com/firecrawl-page", backend: "firecrawl", firecrawlBaseUrl: "http://127.0.0.1:3002" },
+      config,
+    );
+    expect(navigate.backend).toBe("firecrawl");
+    expect(navigate.extractionMode).toBe("firecrawl-markdown");
+    expect(String(navigate.textSnippet)).toContain("Coverage text");
+
+    const extract = await executeBrowserTool(
+      "browser.extract",
+      { url: "https://example.com/firecrawl-page", selector: "main", backend: "firecrawl", firecrawlBaseUrl: "http://127.0.0.1:3002" },
+      config,
+    );
+    expect(extract.backend).toBe("firecrawl");
+    expect(extract.extractionMode).toBe("firecrawl-html-selector");
+  });
+
+  it("falls back to native browser reads when Firecrawl fails and fallback is enabled", async () => {
+    const config = createConfig(tempRoot);
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/v2/search")) {
+        return new Response("boom", { status: 503 });
+      }
+      return new Response("<html></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    }) as unknown as typeof fetch;
+    mocked.launch.mockResolvedValueOnce(createSearchPlaywrightStub(() => [
+      { href: "https://example.com/fallback", title: "Fallback Result", snippet: "Fallback snippet" },
+    ]) as never);
+
+    const response = await executeBrowserTool(
+      "browser.search",
+      { query: "coverage", backend: "firecrawl", firecrawlBaseUrl: "http://127.0.0.1:3002", firecrawlFallbackToNative: true },
+      config,
+    );
+
+    expect(response.backend).toBe("firecrawl");
+    expect(response.backendUsed).toBe(false);
+    expect(response.fallbackUsed).toBe(true);
+    expect(response.results).toEqual([
+      { title: "Fallback Result", url: "https://example.com/fallback", snippet: "Fallback snippet" },
     ]);
   });
 

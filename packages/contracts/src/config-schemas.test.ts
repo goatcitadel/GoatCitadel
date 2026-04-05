@@ -284,11 +284,13 @@ describe("AssistantConfigInputSchema", () => {
       environment: "local",
       deploymentProfile: "trusted_local",
       auth: { mode: "token" },
+      web: { firecrawl: { enabled: true, baseUrl: "http://127.0.0.1:3002", defaultReadBackend: "firecrawl" } },
       features: { computerUseGuardrailsV1Enabled: true },
     };
     const result = AssistantConfigInputSchema.parse(input);
     expect(result.environment).toBe("local");
     expect(result.deploymentProfile).toBe("trusted_local");
+    expect(result.web?.firecrawl?.defaultReadBackend).toBe("firecrawl");
   });
 
   it("rejects when auth.mode is an invalid value", () => {

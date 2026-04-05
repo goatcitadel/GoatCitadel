@@ -187,6 +187,15 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
           },
         },
       },
+      web: {
+        firecrawl: {
+          enabled: false,
+          baseUrl: "http://127.0.0.1:3002",
+          timeoutMs: 20000,
+          defaultReadBackend: "native",
+          fallbackToNative: true,
+        },
+      },
       mesh: {
         enabled: false,
         mode: "lan",

@@ -27,6 +27,7 @@ export interface AssistantConfig {
   auth: AuthConfig;
   approvalExplainer: ApprovalExplainerConfig;
   memory: MemoryConfig;
+  web: WebRuntimeConfig;
   mesh: MeshConfig;
   npu: NpuConfig;
   sqlite: SqliteTuningConfig;
@@ -72,6 +73,19 @@ export interface MemoryConfig {
       fallbackCheapModel: string;
     };
   };
+}
+
+export interface FirecrawlRuntimeConfig {
+  enabled: boolean;
+  baseUrl: string;
+  apiKeyEnv?: string;
+  timeoutMs: number;
+  defaultReadBackend: "native" | "firecrawl";
+  fallbackToNative: boolean;
+}
+
+export interface WebRuntimeConfig {
+  firecrawl: FirecrawlRuntimeConfig;
 }
 
 export interface AuthConfig {
@@ -388,6 +402,30 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   if (sqliteWalAutoCheckpoint !== undefined) {
     assistant.sqlite.walAutoCheckpointPages = clampInt(sqliteWalAutoCheckpoint, assistant.sqlite.walAutoCheckpointPages, 1_000, 20_000);
   }
+  const firecrawlEnabled = parseBooleanEnv(process.env.GOATCITADEL_FIRECRAWL_ENABLED);
+  if (firecrawlEnabled !== undefined) {
+    assistant.web.firecrawl.enabled = firecrawlEnabled;
+  }
+  const firecrawlBaseUrl = process.env.GOATCITADEL_FIRECRAWL_BASE_URL?.trim();
+  if (firecrawlBaseUrl) {
+    assistant.web.firecrawl.baseUrl = firecrawlBaseUrl;
+  }
+  const firecrawlApiKeyEnv = process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV?.trim();
+  if (firecrawlApiKeyEnv) {
+    assistant.web.firecrawl.apiKeyEnv = firecrawlApiKeyEnv;
+  }
+  const firecrawlTimeoutMs = parseIntEnv(process.env.GOATCITADEL_FIRECRAWL_TIMEOUT_MS);
+  if (firecrawlTimeoutMs !== undefined) {
+    assistant.web.firecrawl.timeoutMs = clampInt(firecrawlTimeoutMs, assistant.web.firecrawl.timeoutMs, 1_000, 120_000);
+  }
+  const firecrawlFallbackToNative = parseBooleanEnv(process.env.GOATCITADEL_FIRECRAWL_FALLBACK_TO_NATIVE);
+  if (firecrawlFallbackToNative !== undefined) {
+    assistant.web.firecrawl.fallbackToNative = firecrawlFallbackToNative;
+  }
+  const firecrawlDefaultReadBackend = process.env.GOATCITADEL_FIRECRAWL_DEFAULT_READ_BACKEND?.trim().toLowerCase();
+  if (firecrawlDefaultReadBackend === "native" || firecrawlDefaultReadBackend === "firecrawl") {
+    assistant.web.firecrawl.defaultReadBackend = firecrawlDefaultReadBackend;
+  }
 }
 
 function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig {
@@ -417,6 +455,8 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
   const memoryInput = (input.memory ?? {}) as Partial<MemoryConfig>;
   const qmdInput = (memoryInput.qmd ?? {}) as Partial<MemoryConfig["qmd"]>;
   const distillerInput = (qmdInput.distiller ?? {}) as Partial<MemoryConfig["qmd"]["distiller"]>;
+  const webInput = (input.web ?? {}) as Partial<WebRuntimeConfig>;
+  const firecrawlInput = (webInput.firecrawl ?? {}) as Partial<FirecrawlRuntimeConfig>;
 
   return {
     environment: input.environment ?? "local",
@@ -474,6 +514,16 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
           timeoutMs: distillerInput.timeoutMs ?? 12_000,
           fallbackCheapModel: distillerInput.fallbackCheapModel ?? "gpt-4.1-nano",
         },
+      },
+    },
+    web: {
+      firecrawl: {
+        enabled: firecrawlInput.enabled ?? false,
+        baseUrl: firecrawlInput.baseUrl ?? "http://127.0.0.1:3002",
+        apiKeyEnv: firecrawlInput.apiKeyEnv,
+        timeoutMs: clampInt(firecrawlInput.timeoutMs, 20_000, 1_000, 120_000),
+        defaultReadBackend: firecrawlInput.defaultReadBackend ?? "native",
+        fallbackToNative: firecrawlInput.fallbackToNative ?? true,
       },
     },
     mesh: {

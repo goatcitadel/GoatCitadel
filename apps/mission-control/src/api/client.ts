@@ -1199,6 +1199,16 @@ export interface RuntimeSettingsResponse {
       distillerModel?: string;
     };
   };
+  web?: {
+    firecrawl: {
+      enabled: boolean;
+      baseUrl: string;
+      apiKeyEnv?: string;
+      timeoutMs: number;
+      defaultReadBackend: "native" | "firecrawl";
+      fallbackToNative: boolean;
+    };
+  };
   auth: {
     mode: "none" | "token" | "basic";
     allowLoopbackBypass: boolean;
@@ -3723,6 +3733,16 @@ export async function patchSettings(input: {
     qmdCacheTtlSeconds?: number;
     qmdDistillerProviderId?: string;
     qmdDistillerModel?: string;
+  };
+  web?: {
+    firecrawl?: {
+      enabled?: boolean;
+      baseUrl?: string;
+      apiKeyEnv?: string;
+      timeoutMs?: number;
+      defaultReadBackend?: "native" | "firecrawl";
+      fallbackToNative?: boolean;
+    };
   };
   mesh?: {
     enabled?: boolean;
