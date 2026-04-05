@@ -33,6 +33,27 @@ function createPrefs(
 }
 
 describe("GatewayService chat session provider normalization", () => {
+  it("treats outbound hosts as implicitly allowed under the danger tool profile", () => {
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & {
+      config: {
+        toolPolicy: {
+          tools: { profile: string };
+          sandbox: { networkAllowlist: string[] };
+        };
+      };
+    };
+
+    gateway.config = {
+      toolPolicy: {
+        tools: { profile: "danger" },
+        sandbox: { networkAllowlist: [] },
+      },
+    };
+
+    expect((GatewayService.prototype as any).isUrlAllowlisted.call(gateway, "https://lite.duckduckgo.com/lite/?q=test")).toBe(true);
+    expect((GatewayService.prototype as any).isHostAllowlisted.call(gateway, "www.google.com")).toBe(true);
+  });
+
   it("repairs stale cross-provider model selections to the selected provider default", () => {
     const initialPrefs = createPrefs({
       providerId: "openai",

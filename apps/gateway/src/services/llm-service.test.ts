@@ -1238,6 +1238,74 @@ describe("LlmService", () => {
     ]);
   });
 
+  it("encodes assistant conversation history as output_text for OpenAI Responses payloads", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let payloadBody: Record<string, unknown> | undefined;
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      return new Response(
+        JSON.stringify({
+          id: "resp_openai_assistant_history",
+          model: "gpt-5.4-mini",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "ok" }],
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      await service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-5.4-mini",
+        messages: [
+          { role: "user", content: "First prompt" },
+          { role: "assistant", content: "First answer" },
+          { role: "user", content: "Follow-up" },
+        ],
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(payloadBody?.input).toEqual([
+      {
+        role: "user",
+        content: [{ type: "input_text", text: "First prompt" }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "First answer" }],
+      },
+      {
+        role: "user",
+        content: [{ type: "input_text", text: "Follow-up" }],
+      },
+    ]);
+  });
+
   it("round-trips tool calls and tool results through Anthropic Messages", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "anthropic",
@@ -1366,6 +1434,52 @@ describe("LlmService", () => {
       networkAllowlist: ["example.com"],
     });
     await expect(service.listModels()).rejects.toThrowError(/allowlist/i);
+  });
+
+  it("skips outbound model allowlist enforcement when explicitly disabled", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-4.1-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, {
+      secretStore: createNoopSecretStore(),
+      networkAllowlist: ["example.com"],
+      enforceNetworkAllowlist: false,
+    });
+    const originalFetch = globalThis.fetch;
+    let requestUrl = "";
+    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+      requestUrl = String(url);
+      return new Response(
+        JSON.stringify({
+          data: [
+            { id: "gpt-4.1-mini", object: "model", created: 0, owned_by: "openai" },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const models = await service.listModels();
+      expect(models.some((model) => model.id === "gpt-4.1-mini")).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(requestUrl).toBe("https://api.openai.com/v1/models");
   });
 
   it("probes keychain only for the active provider when building runtime settings", () => {

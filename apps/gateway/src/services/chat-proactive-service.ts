@@ -205,6 +205,9 @@ export class ChatProactiveService {
     if (this.callbacks.closing) {
       return;
     }
+    if (!this.ctx.isFeatureEnabled("durableKernelV1Enabled")) {
+      return;
+    }
     const sessions = this.callbacks.listChatSessions({
       scope: "mission",
       view: "active",

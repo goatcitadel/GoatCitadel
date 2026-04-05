@@ -74,6 +74,15 @@ type HarnessState = {
 };
 
 describe("ChatProactiveService", () => {
+  it("skips scheduler ticks when durable kernel is disabled", async () => {
+    const harness = createHarness({ durableKernelV1Enabled: false });
+    const triggerSpy = vi.spyOn(harness.service, "triggerChatSessionProactive");
+
+    await (harness.service as unknown as { runSchedulerTick: () => Promise<void> }).runSchedulerTick();
+
+    expect(triggerSpy).not.toHaveBeenCalled();
+  });
+
   it("resumes approval-blocked proactive durable runs from checkpoint without rerunning completed actions", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-04T19:00:00.000Z"));
@@ -194,7 +203,7 @@ describe("ChatProactiveService", () => {
   });
 });
 
-function createHarness() {
+function createHarness(options?: { durableKernelV1Enabled?: boolean }) {
   const session: SessionMeta = {
     sessionId: "session-1", sessionKey: "chat:session-1", kind: "dm", channel: "chat", account: "local",
     displayName: "Approval Resume Test", lastActivityAt: "2026-04-04T18:55:00.000Z", updatedAt: "2026-04-04T18:55:00.000Z",
@@ -217,7 +226,7 @@ function createHarness() {
     gatewaySql: { prepare: (sql: string) => createStatement(sql, state) },
     publishRealtime: () => undefined,
     requireFeatureEnabled: () => undefined,
-    isFeatureEnabled: () => true,
+    isFeatureEnabled: (flag) => flag !== "durableKernelV1Enabled" || options?.durableKernelV1Enabled !== false,
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId ?? "default",
   } as unknown as ServiceContext;
   const durableRunService = new DurableRunService(ctx);

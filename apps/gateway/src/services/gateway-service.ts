@@ -1415,6 +1415,7 @@ export class GatewayService {
     this.orchestrationEngine = new OrchestrationEngine();
     this.llmService = new LlmService(config.llm, process.env, {
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
+      enforceNetworkAllowlist: config.toolPolicy.tools.profile !== "danger",
       secretStore,
     });
     this.assemblyService = new AssemblyService({
@@ -11493,6 +11494,9 @@ export class GatewayService {
       }
       this.config.toolPolicy.tools.profile = input.defaultToolProfile as typeof this.config.toolPolicy.tools.profile;
       this.config.assistant.defaultToolProfile = input.defaultToolProfile;
+      this.llmService.updateNetworkAllowlist(this.config.toolPolicy.sandbox.networkAllowlist, {
+        enforce: this.config.toolPolicy.tools.profile !== "danger",
+      });
       persistAssistant = true;
       persistToolPolicy = true;
     }
@@ -11511,7 +11515,9 @@ export class GatewayService {
       this.config.toolPolicy.sandbox.networkAllowlist = input.networkAllowlist
         .map((host) => host.trim())
         .filter(Boolean);
-      this.llmService.updateNetworkAllowlist(this.config.toolPolicy.sandbox.networkAllowlist);
+      this.llmService.updateNetworkAllowlist(this.config.toolPolicy.sandbox.networkAllowlist, {
+        enforce: this.config.toolPolicy.tools.profile !== "danger",
+      });
       persistToolPolicy = true;
     }
 
@@ -17050,6 +17056,9 @@ export class GatewayService {
   }
 
   private isUrlAllowlisted(urlValue: string): boolean {
+    if (!this.isNetworkAllowlistEnforced()) {
+      return true;
+    }
     return this.isUrlAllowlistedInList(urlValue, this.config.toolPolicy.sandbox.networkAllowlist);
   }
 
@@ -17063,7 +17072,14 @@ export class GatewayService {
   }
 
   private isHostAllowlisted(hostname: string): boolean {
+    if (!this.isNetworkAllowlistEnforced()) {
+      return true;
+    }
     return this.isHostAllowlistedInList(hostname, this.config.toolPolicy.sandbox.networkAllowlist);
+  }
+
+  private isNetworkAllowlistEnforced(): boolean {
+    return this.config.toolPolicy.tools.profile !== "danger";
   }
 
   private isHostAllowlistedInList(hostname: string, allowlist: string[]): boolean {
