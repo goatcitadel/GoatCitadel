@@ -33,6 +33,78 @@ function createPrefs(
 }
 
 describe("GatewayService chat session provider normalization", () => {
+  it("treats outbound hosts as implicitly allowed under the danger tool profile", () => {
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & {
+      config: {
+        toolPolicy: {
+          tools: { profile: string };
+          sandbox: { networkAllowlist: string[] };
+        };
+      };
+    };
+
+    gateway.config = {
+      toolPolicy: {
+        tools: { profile: "danger" },
+        sandbox: { networkAllowlist: [] },
+      },
+    };
+
+    expect((GatewayService.prototype as any).isUrlAllowlisted.call(gateway, "https://lite.duckduckgo.com/lite/?q=test")).toBe(true);
+    expect((GatewayService.prototype as any).isHostAllowlisted.call(gateway, "www.google.com")).toBe(true);
+  });
+
+  it("defaults browser tools to Firecrawl and keeps native fallback enabled", () => {
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & {
+      config: {
+        assistant: {
+          web: {
+            firecrawl: {
+              enabled: boolean;
+              baseUrl: string;
+              apiKeyEnv?: string;
+              timeoutMs: number;
+              defaultReadBackend: "native" | "firecrawl";
+              fallbackToNative: boolean;
+            };
+          };
+        };
+      };
+    };
+
+    gateway.config = {
+      assistant: {
+        web: {
+          firecrawl: {
+            enabled: true,
+            baseUrl: "http://127.0.0.1:3002",
+            apiKeyEnv: "FIRECRAWL_API_KEY",
+            timeoutMs: 20_000,
+            defaultReadBackend: "firecrawl",
+            fallbackToNative: true,
+          },
+        },
+      },
+    };
+
+    const request = {
+      toolName: "browser.navigate",
+      args: {
+        url: "https://example.com/story",
+      },
+    } as any;
+
+    const normalized = (GatewayService.prototype as any).applyRuntimeBrowserBackendDefaults.call(gateway, request);
+
+    expect(normalized.args).toMatchObject({
+      backend: "firecrawl",
+      firecrawlBaseUrl: "http://127.0.0.1:3002",
+      firecrawlTimeoutMs: 20_000,
+      firecrawlApiKeyEnv: "FIRECRAWL_API_KEY",
+      firecrawlFallbackToNative: true,
+    });
+  });
+
   it("repairs stale cross-provider model selections to the selected provider default", () => {
     const initialPrefs = createPrefs({
       providerId: "openai",

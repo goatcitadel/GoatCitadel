@@ -67,6 +67,7 @@ interface ModelDiscoveryResult {
 
 export interface LlmServiceOptions {
   networkAllowlist?: string[];
+  enforceNetworkAllowlist?: boolean;
   secretStore?: SecretStoreService;
 }
 
@@ -121,6 +122,7 @@ export class LlmService {
   private readonly secretStatusCache = new Map<string, SecretStatusCacheEntry>();
   private readonly requestDispatcherCache = new Map<string, Dispatcher>();
   private networkAllowlist: string[];
+  private enforceNetworkAllowlist: boolean;
   private activeProviderId: string;
   private activeModel: string;
 
@@ -131,6 +133,7 @@ export class LlmService {
   ) {
     this.secretStore = options.secretStore ?? new SecretStoreService();
     this.networkAllowlist = [...(options.networkAllowlist ?? [])];
+    this.enforceNetworkAllowlist = options.enforceNetworkAllowlist ?? true;
     this.activeProviderId = "";
     this.activeModel = "";
 
@@ -159,8 +162,11 @@ export class LlmService {
     }) ?? "";
   }
 
-  public updateNetworkAllowlist(allowlist: string[]): void {
+  public updateNetworkAllowlist(allowlist: string[], options?: { enforce?: boolean }): void {
     this.networkAllowlist = [...allowlist];
+    if (options?.enforce !== undefined) {
+      this.enforceNetworkAllowlist = options.enforce;
+    }
   }
 
   public listProviders(options: LlmListProvidersOptions = {}): LlmProviderSummary[] {
@@ -1058,6 +1064,9 @@ export class LlmService {
   }
 
   private assertProviderHostAllowed(baseUrl: string): void {
+    if (!this.enforceNetworkAllowlist) {
+      return;
+    }
     // When no explicit runtime allowlist is configured, permit validated provider base URLs.
     // Provider URLs still pass strict baseUrl validation (protocol/host/private-range checks).
     if (this.networkAllowlist.length === 0) {
@@ -2061,7 +2070,7 @@ function buildOpenAiResponsesInput(
     }
 
     const role = message.role === "assistant" ? "assistant" : "user";
-    const content = mapOpenAiResponsesContent(message.content);
+    const content = mapOpenAiResponsesContent(message.role, message.content);
     if (content.length > 0) {
       input.push({ role, content });
     }
@@ -2087,9 +2096,13 @@ function buildOpenAiResponsesInput(
   };
 }
 
-function mapOpenAiResponsesContent(content: ChatCompletionRequest["messages"][number]["content"]): Array<Record<string, unknown>> {
+function mapOpenAiResponsesContent(
+  role: ChatCompletionRequest["messages"][number]["role"],
+  content: ChatCompletionRequest["messages"][number]["content"],
+): Array<Record<string, unknown>> {
+  const textBlockType = role === "assistant" ? "output_text" : "input_text";
   if (typeof content === "string") {
-    return content.trim() ? [{ type: "input_text", text: content }] : [];
+    return content.trim() ? [{ type: textBlockType, text: content }] : [];
   }
   if (!Array.isArray(content)) {
     return [];
@@ -2103,7 +2116,7 @@ function mapOpenAiResponsesContent(content: ChatCompletionRequest["messages"][nu
     }
     if (block.type === "text" || block.type === "output_text") {
       const text = String(block.text ?? "");
-      return text.trim() ? { type: "input_text", text } : undefined;
+      return text.trim() ? { type: textBlockType, text } : undefined;
     }
     return block;
   }).filter((block): block is Record<string, unknown> => Boolean(block));

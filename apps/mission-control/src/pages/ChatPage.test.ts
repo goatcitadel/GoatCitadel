@@ -5,6 +5,7 @@ import {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
   looksMachineSessionLabel,
+  resolveChatRefreshPlan,
   resolveOptimisticChatPrefs,
   shouldExecuteLocalChatCommand,
   shouldShowLearnedMemoryPanel,
@@ -155,6 +156,41 @@ describe("local chat command execution", () => {
     expect(shouldExecuteLocalChatCommand("edit", "/help")).toBe(false);
     expect(shouldExecuteLocalChatCommand("retry", "/help")).toBe(false);
     expect(shouldExecuteLocalChatCommand("send", "hello")).toBe(false);
+  });
+});
+
+describe("resolveChatRefreshPlan", () => {
+  it("does not fully reload the thread for tool progress events", () => {
+    expect(resolveChatRefreshPlan({
+      reason: "tool_invoked",
+      eventType: "tool_invoked",
+      source: "gateway",
+    })).toEqual({
+      refreshSidebar: false,
+      refreshSession: "none",
+    });
+  });
+
+  it("reloads the thread when the backend announces a thread update", () => {
+    expect(resolveChatRefreshPlan({
+      reason: "chat_thread_updated",
+      eventType: "chat_thread_updated",
+      source: "chat",
+    })).toEqual({
+      refreshSidebar: false,
+      refreshSession: "full",
+    });
+  });
+
+  it("refreshes the sidebar for title updates without reloading the thread", () => {
+    expect(resolveChatRefreshPlan({
+      reason: "chat_session_title_updated",
+      eventType: "chat_session_title_updated",
+      source: "chat",
+    })).toEqual({
+      refreshSidebar: true,
+      refreshSession: "none",
+    });
   });
 });
 

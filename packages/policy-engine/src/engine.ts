@@ -40,6 +40,17 @@ interface AccessEvaluation {
   grantToConsume?: string;
 }
 
+function shouldEnforceNetworkAllowlist(config: ToolPolicyConfig): boolean {
+  return config.tools.profile !== "danger";
+}
+
+function assertHostAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
+  if (!shouldEnforceNetworkAllowlist(config)) {
+    return;
+  }
+  assertHostAllowed(hostOrUrl, config.sandbox.networkAllowlist);
+}
+
 interface GrantDecision {
   decision: "allow" | "deny";
   grant: ToolGrantRecord;
@@ -675,34 +686,34 @@ export class ToolPolicyEngine {
       if (request.toolName.startsWith("http.") || request.toolName === "webhook.send") {
         const target = String(request.args?.url ?? request.args?.host ?? "");
         if (target) {
-          assertHostAllowed(target, this.config.sandbox.networkAllowlist);
+          assertHostAllowedForConfig(target, this.config);
         }
       }
 
       if (request.toolName.startsWith("bankr.")) {
-        assertHostAllowed("https://api.bankr.bot", this.config.sandbox.networkAllowlist);
+        assertHostAllowedForConfig("https://api.bankr.bot", this.config);
         if (request.args?.useLlmGateway === true) {
-          assertHostAllowed("https://llm.bankr.bot", this.config.sandbox.networkAllowlist);
+          assertHostAllowedForConfig("https://llm.bankr.bot", this.config);
         }
       }
 
       if (request.toolName === "docs.ingest" && request.args?.sourceType === "url") {
         const source = String(request.args?.source ?? "");
         if (source) {
-          assertHostAllowed(source, this.config.sandbox.networkAllowlist);
+          assertHostAllowedForConfig(source, this.config);
         }
         if (request.args?.backend === "firecrawl") {
           const firecrawlBaseUrl = String(
             request.args?.firecrawlBaseUrl ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002",
           );
-          assertHostAllowed(firecrawlBaseUrl, this.config.sandbox.networkAllowlist);
+          assertHostAllowedForConfig(firecrawlBaseUrl, this.config);
         }
       }
 
       if (request.toolName.startsWith("browser.")) {
         const target = String(request.args?.url ?? "");
         if (target) {
-          assertHostAllowed(target, this.config.sandbox.networkAllowlist);
+          assertHostAllowedForConfig(target, this.config);
         }
       }
     } catch (error) {

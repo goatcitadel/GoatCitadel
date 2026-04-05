@@ -306,6 +306,7 @@ export class ChatAgentOrchestrator {
       : await this.buildToolSchema(input, intents);
     const canUseTimeTool = toolSchema.canonicalToModel.has("time.now");
     const canUseSearchTool = toolSchema.canonicalToModel.has("browser.search");
+    const canUseNavigateTool = toolSchema.canonicalToModel.has("browser.navigate");
     const localFileIntent = intents.localFile;
     const citations: ChatCitationRecord[] = [];
     const toolRuns: ChatToolRunRecord[] = [];
@@ -826,6 +827,101 @@ export class ChatAgentOrchestrator {
           tool_call_id: toolMessageId,
           content: JSON.stringify(syntheticRun.record.result),
         } as ChatCompletionMessage);
+
+        if (
+          shouldProactivelyOpenGroundedNewsResult(input.content)
+          && canUseNavigateTool
+          && toolRunCount < executionBudget.maxToolRunsPerTurn
+        ) {
+          const promotedUrl = inferBrowserNavigateUrlFromRepeatedSearches(input.content, toolRuns);
+          if (promotedUrl) {
+            ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+            const navigateRun = await this.executeToolCall({
+              input,
+              turnId: input.turnId,
+              toolName: "browser.navigate",
+              rawArgs: {
+                url: promotedUrl,
+                maxChars: 6000,
+              },
+              localFileIntent,
+              priorToolRuns: toolRuns,
+              turnBudgetDeadline,
+            });
+            toolRunCount += 1;
+            toolRuns.push(navigateRun.record);
+            ({ turnBudgetDeadline, effectiveTurnBudgetMs, effectiveCompletionTimeoutMs } = extendTurnBudgetForExecutedBrowserTool({
+              toolName: navigateRun.record.toolName,
+              toolStatus: navigateRun.record.status,
+              webMode: input.webMode,
+              webLookupIntent: intents.webLookup,
+              currentTurnBudgetMs: effectiveTurnBudgetMs,
+              currentCompletionTimeoutMs: effectiveCompletionTimeoutMs,
+              turnBudgetDeadline,
+            }));
+            yield {
+              type: "tool_start",
+              sessionId: input.sessionId,
+              turnId: input.turnId,
+              toolRun: {
+                ...navigateRun.record,
+                status: "started",
+              },
+            };
+            if (navigateRun.chunk) {
+              yield navigateRun.chunk;
+            }
+            if (navigateRun.record.status === "executed" && navigateRun.record.result) {
+              const navigateToolMessageId = `navigate-${randomUUID()}`;
+              conversationMessages.push(createAssistantToolCallMessage({
+                toolCallId: navigateToolMessageId,
+                toolName: this.resolveModelToolName("browser.navigate", toolSchema.canonicalToModel),
+                argumentsJson: JSON.stringify({
+                  url: promotedUrl,
+                  maxChars: 6000,
+                }),
+              }));
+              conversationMessages.push({
+                role: "tool",
+                tool_call_id: navigateToolMessageId,
+                content: JSON.stringify(navigateRun.record.result),
+              } as ChatCompletionMessage);
+            }
+            for (const citation of inferCitationsFromToolResult(navigateRun.record)) {
+              citations.push(citation);
+              yield {
+                type: "citation",
+                sessionId: input.sessionId,
+                turnId: input.turnId,
+                citation,
+              };
+            }
+            if (navigateRun.record.status === "approval_required" && navigateRun.record.approvalId) {
+              finalStatus = "waiting_for_approval";
+              finalFailure = {
+                failureClass: "approval_required",
+                message: "Approval required by policy.",
+                retryable: true,
+                recommendedAction: getChatTurnRecoveryAction("approval_required"),
+              };
+              approvalPayload = {
+                approvalId: navigateRun.record.approvalId,
+                toolName: navigateRun.record.toolName,
+                reason: "Approval required by policy.",
+                expiresAt: navigateRun.approvalExpiresAt,
+              };
+              this.deps.storage.chatInlineApprovals.upsert({
+                approvalId: navigateRun.record.approvalId,
+                sessionId: input.sessionId,
+                turnId: input.turnId,
+                toolName: navigateRun.record.toolName,
+                status: "pending",
+                reason: "Approval required by policy.",
+                expiresAt: navigateRun.approvalExpiresAt,
+              });
+            }
+          }
+        }
       }
       for (const citation of inferCitationsFromToolResult(syntheticRun.record)) {
         citations.push(citation);
@@ -4449,6 +4545,34 @@ const COMMUNITY_HOST_PATTERNS = [
   /(^|\.)stackexchange\.com$/i,
 ];
 
+const NEWS_PORTAL_HOST_PATTERNS = [
+  /(^|\.)yahoo\.com$/i,
+  /(^|\.)msn\.com$/i,
+  /(^|\.)aol\.com$/i,
+  /(^|\.)newsbreak\.com$/i,
+];
+
+const DIRECT_NEWS_PUBLISHER_HOST_PATTERNS = [
+  /(^|\.)reuters\.com$/i,
+  /(^|\.)apnews\.com$/i,
+  /(^|\.)abcnews\.go\.com$/i,
+  /(^|\.)abcnews\.com$/i,
+  /(^|\.)nytimes\.com$/i,
+  /(^|\.)wsj\.com$/i,
+  /(^|\.)washingtonpost\.com$/i,
+  /(^|\.)usatoday\.com$/i,
+  /(^|\.)npr\.org$/i,
+  /(^|\.)cnn\.com$/i,
+  /(^|\.)foxnews\.com$/i,
+  /(^|\.)cbsnews\.com$/i,
+  /(^|\.)nbcnews\.com$/i,
+  /(^|\.)bbc\.com$/i,
+  /(^|\.)theguardian\.com$/i,
+  /(^|\.)politico\.com$/i,
+  /(^|\.)axios\.com$/i,
+  /(^|\.)bloomberg\.com$/i,
+];
+
 function selectBestRecentBrowserResultUrl(
   userContent: string,
   toolRuns: ChatToolRunRecord[],
@@ -4515,10 +4639,14 @@ function selectRecentBrowserResultUrls(
   const derivedQuery = deriveLiveDataQuery(userContent);
   const queryTokens = tokenizeBrowserSearchText(derivedQuery);
   const newsLike = isLikelyNewsOrCurrentEventsQuery(userContent);
+  const preferDirectNewsPublisher = newsLike && candidates.some((candidate) => isLikelyDirectNewsPublisherHost(candidate.hostname));
   return candidates
     .map((candidate) => ({
       candidate,
-      score: scoreBrowserResultCandidate(candidate, derivedQuery, queryTokens, newsLike),
+      score: scoreBrowserResultCandidate(candidate, derivedQuery, queryTokens, {
+        newsLike,
+        preferDirectNewsPublisher,
+      }),
     }))
     .filter((item) => item.score >= minimumScore)
     .sort((left, right) => right.score - left.score)
@@ -4981,6 +5109,14 @@ function isLikelyCommunityHost(hostname: string): boolean {
   return COMMUNITY_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
 }
 
+function isLikelyNewsPortalHost(hostname: string): boolean {
+  return NEWS_PORTAL_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
+}
+
+function isLikelyDirectNewsPublisherHost(hostname: string): boolean {
+  return DIRECT_NEWS_PUBLISHER_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
+}
+
 function queryExplicitlyRequestsCommunitySources(value: string): boolean {
   return /\b(reddit|quora|stack ?overflow|stackexchange|forum|forums|community|communities|discussion|discussions)\b/i.test(value);
 }
@@ -5002,8 +5138,12 @@ function scoreBrowserResultCandidate(
   candidate: BrowserResultCandidate,
   query: string,
   queryTokens: string[],
-  newsLike: boolean,
+  options: {
+    newsLike: boolean;
+    preferDirectNewsPublisher: boolean;
+  },
 ): number {
+  const { newsLike, preferDirectNewsPublisher } = options;
   const normalizedTitle = normalizeBrowserSearchText(candidate.title);
   const normalizedSnippet = normalizeBrowserSearchText(candidate.snippet);
   const normalizedPath = normalizeBrowserSearchText(candidate.path);
@@ -5077,6 +5217,12 @@ function scoreBrowserResultCandidate(
   if (newsLike) {
     if (/\/(news|politics|article|story)(\/|$)/i.test(candidate.path) || /\b(news|times|post|reuters|apnews|axios|politico|npr|cnn|abc|nbc|cbs|fox)\b/i.test(candidate.hostname)) {
       score += 2;
+    }
+    if (isLikelyDirectNewsPublisherHost(candidate.hostname)) {
+      score += 3;
+    }
+    if (preferDirectNewsPublisher && isLikelyNewsPortalHost(candidate.hostname)) {
+      score -= 4;
     }
   } else if (!isSearchPortalHost(candidate.hostname)) {
     score += 1;
@@ -5206,6 +5352,13 @@ function inferMeaningfulPriorUserQuery(
     }
   }
   return undefined;
+}
+
+function shouldProactivelyOpenGroundedNewsResult(userContent: string): boolean {
+  const normalized = userContent.toLowerCase();
+  const hasNewsIntent = /\b(news|headline|headlines)\b/.test(normalized);
+  const hasRecencyIntent = /\b(latest|recent|today|yesterday|tonight|this week)\b/.test(normalized);
+  return hasNewsIntent && hasRecencyIntent;
 }
 
 function looksLikeContinuationSearchPrompt(value: string): boolean {

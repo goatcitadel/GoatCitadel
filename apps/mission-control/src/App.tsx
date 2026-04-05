@@ -162,7 +162,7 @@ type GatewayAccessViewState =
     healthDetail?: string;
   };
 
-function deriveRefreshTopics(event: RealtimeEvent): RefreshTopic[] {
+export function deriveRefreshTopics(event: RealtimeEvent): RefreshTopic[] {
   if (event.payload.kind === "replay_gap") {
     return [...new Set(refreshTopicRules.map((rule) => rule.topic))];
   }
@@ -173,7 +173,6 @@ function deriveRefreshTopics(event: RealtimeEvent): RefreshTopic[] {
   }
   if (event.links?.sessionId) {
     topics.add("chat");
-    topics.add("surface");
   }
   if (event.links?.taskId) {
     topics.add("tasks");

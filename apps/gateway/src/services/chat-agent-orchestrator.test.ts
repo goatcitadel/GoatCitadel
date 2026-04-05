@@ -1218,7 +1218,7 @@ describe("ChatAgentOrchestrator", () => {
     });
   });
 
-  it("rewrites search-portal browser.navigate urls to a grounded result url", async () => {
+  it("rewrites search-portal browser.navigate urls to the strongest grounded result url", async () => {
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
@@ -1263,7 +1263,7 @@ describe("ChatAgentOrchestrator", () => {
     });
 
     expect(preflight.toolName).toBe("browser.navigate");
-    expect(preflight.args.url).toBe("https://news.google.com/topics/CAAqKggKIiRDQkFTRlFvSUwyMHZNRFZxYUdjU0JXVnVMVWRDR2dKVFJ5Z0FQAQ");
+    expect(preflight.args.url).toBe("https://www.reuters.com/world/");
   });
 
   it("normalizes explicit web lookup prompts before the synthetic browser.search runs", async () => {
@@ -1801,6 +1801,73 @@ describe("ChatAgentOrchestrator", () => {
     );
     expect(groundingMsg).toBeDefined();
     expect(groundingMsg?.content as string).toContain("strictly on the tool results");
+  });
+
+  it("proactively opens the strongest live-data search result before synthesis when navigate is available", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "A humor roundup says a goat briefly disrupted a small-town parade yesterday.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-proactive-search",
+        result: {
+          results: [
+            {
+              title: "Funny news yesterday: goat disrupts small-town parade",
+              url: "https://example.com/news/odd-roundup",
+              snippet: "A funny news roundup from yesterday says a goat briefly disrupted a small-town parade.",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-proactive-navigate",
+        result: {
+          url: "https://example.com/news/odd-roundup",
+          finalUrl: "https://example.com/news/odd-roundup",
+          title: "Odd News Roundup",
+          content: "A goat briefly disrupted a small-town parade yesterday, drawing laughs from spectators.",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-proactive-live-followthrough-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-proactive-live-followthrough-1",
+      content: "tell me something funny that happened in the news yesterday",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "quick",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "tell me something funny that happened in the news yesterday" }],
+    });
+
+    const invokedToolNames = (invokeTool.mock.calls as unknown as Array<[{ toolName: string }]>).map((call) => call[0].toolName);
+    expect(invokedToolNames).toEqual(["browser.search", "browser.navigate"]);
   });
 
   it("detects explicit web lookup phrases like 'search online' as live-data intent", async () => {
@@ -3043,6 +3110,104 @@ describe("ChatAgentOrchestrator", () => {
       }),
     });
     expect(result.assistantContent).toContain("REST APIs");
+  });
+
+  it("prefers direct news publishers over portal reposts after a blocked current-events source", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(navigateToolCallCompletion({ url: "https://www.reuters.com/world/iran/" }))
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "ABC reported that search efforts intensified for a missing US crew member as the conflict escalated.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-us-iran-search-1",
+        result: {
+          query: "latest news today us iran",
+          results: [
+            { title: "Iran War: Latest Breaking News, Updates & Analysis | Reuters", url: "https://www.reuters.com/world/iran/", snippet: "Live coverage and analysis from Reuters." },
+            { title: "Iran live updates: Search for missing US crew member intensifies", url: "https://abcnews.com/International/live-updates/iran-live-updates-trump-touts-big-day-iran/?id=131532311", snippet: "ABC News live updates on the US and Iran." },
+            { title: "Tehran Dismisses U.S. Cease-Fire Conditions as Israel Steps Up Attacks", url: "https://www.nytimes.com/live/2026/03/25/world/iran-war-trump-oil-news", snippet: "New York Times live coverage of the conflict." },
+            { title: "Iran live updates: 290 American troops wounded in Iran war - Yahoo", url: "https://www.yahoo.com/news/articles/iran-live-updates-trumps-48-090509033.html", snippet: "Yahoo's live updates page covering the US and Iran." },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-us-iran-reuters-blocked-1",
+        result: {
+          url: "https://www.reuters.com/world/iran/",
+          finalUrl: "https://www.reuters.com/world/iran/",
+          status: 401,
+          title: "Reuters",
+          textSnippet: "Automation blocked",
+          browserFailureClass: "remote_blocked",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-us-iran-abc-1",
+        result: {
+          url: "https://abcnews.com/International/live-updates/iran-live-updates-trump-touts-big-day-iran/?id=131532311",
+          finalUrl: "https://abcnews.com/International/live-updates/iran-live-updates-trump-touts-big-day-iran/?id=131532311",
+          status: 200,
+          title: "Iran live updates: Search for missing US crew member intensifies",
+          textSnippet: "ABC News reports that search efforts intensified for a missing US crew member.",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-us-iran-news-fallback-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-us-iran-news-fallback-1",
+      content: "tell me something that happened today regarding the us and iran",
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "tell me something that happened today regarding the us and iran" }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledTimes(3);
+    const navigateRetryCalls = invokeTool.mock.calls as unknown as Array<[{ toolName: string; args: Record<string, unknown> }]>;
+    const firstNavigateCall = navigateRetryCalls[1]![0]!;
+    const secondNavigateCall = navigateRetryCalls[2]![0]!;
+    expect(firstNavigateCall).toMatchObject({
+      toolName: "browser.navigate",
+      args: expect.objectContaining({
+        url: "https://www.reuters.com/world/iran/",
+      }),
+    });
+    expect(secondNavigateCall).toMatchObject({
+      toolName: "browser.navigate",
+      args: expect.objectContaining({
+        url: "https://abcnews.com/International/live-updates/iran-live-updates-trump-touts-big-day-iran/?id=131532311",
+      }),
+    });
+    expect(result.assistantContent).toContain("ABC reported");
   });
 
   it("prefers use-case result pages over definition pages after a blocked first source", async () => {

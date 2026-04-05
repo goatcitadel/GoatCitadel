@@ -33,6 +33,17 @@ interface BrowserStepInput {
   timeoutMs?: number;
 }
 
+function shouldEnforceNetworkAllowlist(config: ToolPolicyConfig): boolean {
+  return config.tools.profile !== "danger";
+}
+
+function assertHostAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
+  if (!shouldEnforceNetworkAllowlist(config)) {
+    return;
+  }
+  assertHostAllowed(hostOrUrl, config.sandbox.networkAllowlist);
+}
+
 type BrowserCookieRecord = {
   name: string;
   value: string;
@@ -1006,12 +1017,12 @@ function normalizeBrowserCookieRecord(
   const domain = asString(record.domain);
   if (url) {
     assertAllowedHttpUrl(url);
-    assertHostAllowed(url, config.sandbox.networkAllowlist);
+    assertHostAllowedForConfig(url, config);
     normalized.url = url;
   }
   if (domain) {
     const normalizedDomain = normalizeBrowserCookieDomain(domain);
-    assertHostAllowed(`https://${normalizedDomain}`, config.sandbox.networkAllowlist);
+    assertHostAllowedForConfig(`https://${normalizedDomain}`, config);
     normalized.domain = domain.startsWith(".") ? `.${normalizedDomain}` : normalizedDomain;
   }
   if (!normalized.url && !normalized.domain) {
@@ -1078,7 +1089,7 @@ function normalizeBrowserOrigin(input: string): string {
 
 function normalizeBrowserOriginForConfig(input: string, config: ToolPolicyConfig): string {
   const origin = normalizeBrowserOrigin(input);
-  assertHostAllowed(origin, config.sandbox.networkAllowlist);
+  assertHostAllowedForConfig(origin, config);
   return origin;
 }
 
@@ -1289,7 +1300,7 @@ async function withBrowserPage(
 ): Promise<Record<string, unknown>> {
   throwIfBrowserExecutionAborted(executionContext?.signal);
   assertAllowedHttpUrl(url);
-  assertHostAllowed(url, config.sandbox.networkAllowlist);
+  assertHostAllowedForConfig(url, config);
 
   const playwright = await loadPlaywright();
   const headless = asBoolean(args.headless, true);
@@ -1336,7 +1347,7 @@ async function withBrowserPage(
 
     const finalUrl = page.url();
     assertAllowedHttpUrl(finalUrl);
-    assertHostAllowed(finalUrl, config.sandbox.networkAllowlist);
+    assertHostAllowedForConfig(finalUrl, config);
 
     const result = await run(page, response?.status(), finalUrl);
     if (browserSessionId) {
@@ -1856,7 +1867,7 @@ async function executeBrowserSearchFallback(
   results: Array<{ title: string; url: string; snippet: string }>;
 }> {
   const url = buildSearchUrl(engine, query);
-  const page = await fetchTextAllowlisted(url, config.sandbox.networkAllowlist, signal);
+  const page = await fetchTextAllowlisted(url, config, signal);
   return {
     finalUrl: page.finalUrl,
     results: parseSearchResults(page.html, limit, page.finalUrl),
@@ -1919,7 +1930,7 @@ async function summarizeSearchResultsWithOllama(
 ): Promise<string> {
   const endpoint = resolveOllamaSearchEndpoint(input.args);
   assertAllowedHttpUrl(endpoint);
-  assertHostAllowed(endpoint, input.config.sandbox.networkAllowlist);
+  assertHostAllowedForConfig(endpoint, input.config);
 
   const model = asString(input.args.ollamaModel)
     ?? process.env.GOATCITADEL_OLLAMA_SEARCH_MODEL?.trim()
@@ -2003,7 +2014,7 @@ async function executeBrowserSearchViaFirecrawl(
 ): Promise<Record<string, unknown>> {
   const firecrawl = resolveFirecrawlRuntimeConfig(args);
   assertAllowedHttpUrl(firecrawl.baseUrl);
-  assertHostAllowed(firecrawl.baseUrl, config.sandbox.networkAllowlist);
+  assertHostAllowedForConfig(firecrawl.baseUrl, config);
   const response = await fetch(`${firecrawl.baseUrl}/v2/search`, {
     method: "POST",
     signal: composeAbortSignal(firecrawl.timeoutMs, signal),
@@ -2106,7 +2117,7 @@ async function executeFirecrawlScrape(
 }> {
   const firecrawl = resolveFirecrawlRuntimeConfig(args);
   assertAllowedHttpUrl(firecrawl.baseUrl);
-  assertHostAllowed(firecrawl.baseUrl, config.sandbox.networkAllowlist);
+  assertHostAllowedForConfig(firecrawl.baseUrl, config);
   const response = await fetch(`${firecrawl.baseUrl}/v2/scrape`, {
     method: "POST",
     signal: composeAbortSignal(firecrawl.timeoutMs, signal),
@@ -2186,7 +2197,7 @@ async function executeBrowserNavigateFallback(
   config: ToolPolicyConfig,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  const page = await fetchTextAllowlisted(url, config.sandbox.networkAllowlist, signal);
+  const page = await fetchTextAllowlisted(url, config, signal);
   const title = extractHtmlTitle(page.html) ?? page.finalUrl;
   const textSnippet = extractHtmlText(page.html, maxChars);
   return {
@@ -2206,7 +2217,7 @@ async function executeBrowserExtractFallback(
   config: ToolPolicyConfig,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  const page = await fetchTextAllowlisted(url, config.sandbox.networkAllowlist, signal);
+  const page = await fetchTextAllowlisted(url, config, signal);
   const title = extractHtmlTitle(page.html) ?? page.finalUrl;
   const text = extractHtmlText(page.html, maxChars);
   return {
@@ -2222,11 +2233,11 @@ async function executeBrowserExtractFallback(
 
 async function fetchTextAllowlisted(
   url: string,
-  allowlist: string[],
+  config: ToolPolicyConfig,
   signal?: AbortSignal,
 ): Promise<{ html: string; finalUrl: string }> {
   assertAllowedHttpUrl(url);
-  assertHostAllowed(url, allowlist);
+  assertHostAllowedForConfig(url, config);
 
   const response = await fetch(url, {
     method: "GET",
@@ -2240,7 +2251,7 @@ async function fetchTextAllowlisted(
 
   const finalUrl = response.url || url;
   assertAllowedHttpUrl(finalUrl);
-  assertHostAllowed(finalUrl, allowlist);
+  assertHostAllowedForConfig(finalUrl, config);
 
   if (!response.ok) {
     throw new Error(`Search fetch failed (${response.status})`);
