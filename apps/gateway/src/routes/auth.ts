@@ -72,11 +72,17 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const token = fastify.issueSseToken(parsed.data.scope);
+    const token = fastify.issueSseToken(parsed.data.scope, undefined, request.authActorId);
     return reply.send(token);
   });
 
-  fastify.post("/api/v1/auth/device-requests", async (request, reply) => {
+  fastify.post("/api/v1/auth/device-requests", {
+    config: {
+      rateLimit: {
+        max: 5,
+      },
+    },
+  }, async (request, reply) => {
     const parsed = createDeviceRequestSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -252,7 +258,13 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/auth/install-token", async (request, reply) => {
+  fastify.post("/api/v1/auth/install-token", {
+    config: {
+      rateLimit: {
+        max: 5,
+      },
+    },
+  }, async (request, reply) => {
     const parsed = installTokenSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });

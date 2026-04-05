@@ -1,217 +1,107 @@
-import { create } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
+import TestRenderer from "react-test-renderer";
 import type { ChatThreadResponse } from "@goatcitadel/contracts";
 import { ChatThreadView } from "./ChatThreadView";
 
-vi.mock("react-virtuoso", () => ({
-  Virtuoso: (props: {
-    data?: unknown[];
-    itemContent?: (index: number, item: unknown) => React.ReactNode;
-    components?: { Footer?: () => React.ReactNode };
-  }) => (
-    <div data-testid="virtuoso-mock">
-      {(props.data ?? []).map((item, index) => (
-        <div key={index}>{props.itemContent ? props.itemContent(index, item) : null}</div>
-      ))}
-      {props.components?.Footer ? <props.components.Footer /> : null}
-    </div>
-  ),
-}));
-
-function makeThread(): ChatThreadResponse {
+function createThread(content: string): ChatThreadResponse {
   return {
-    sessionId: "session-1",
-    activeLeafTurnId: "turn-1",
-    selectedTurnId: "turn-1",
+    sessionId: "sess-1",
     turns: [
       {
         turnId: "turn-1",
-        branchKind: "append",
         userMessage: {
           messageId: "user-1",
-          sessionId: "session-1",
+          sessionId: "sess-1",
           role: "user",
           actorType: "user",
           actorId: "operator",
-          content: "Show me the plan.",
-          timestamp: "2026-03-08T00:00:00.000Z",
+          content: "show me the result",
+          timestamp: "2026-04-04T00:00:00.000Z",
         },
         assistantMessage: {
           messageId: "assistant-1",
-          sessionId: "session-1",
+          sessionId: "sess-1",
           role: "assistant",
           actorType: "agent",
-          actorId: "goatcitadel",
-          content: "# Plan\n\n- First step\n- Second step\n\n`inline`\n\n```ts\nconst answer = 42;\n```\n\n[Docs](https://example.com)",
-          timestamp: "2026-03-08T00:00:01.000Z",
+          actorId: "assistant",
+          content,
+          timestamp: "2026-04-04T00:00:01.000Z",
         },
+        toolRuns: [],
+        citations: [],
+        branch: {
+          siblingCount: 2,
+          activeSiblingIndex: 0,
+          siblingTurnIds: ["turn-1", "turn-2"],
+        },
+        branchKind: "append",
         trace: {
           turnId: "turn-1",
-          sessionId: "session-1",
+          sessionId: "sess-1",
           userMessageId: "user-1",
-          branchKind: "append",
-          assistantMessageId: "assistant-1",
           status: "completed",
           mode: "chat",
           webMode: "auto",
           memoryMode: "auto",
           thinkingLevel: "standard",
-          startedAt: "2026-03-08T00:00:00.000Z",
-          finishedAt: "2026-03-08T00:00:02.000Z",
-          toolRuns: [
-            {
-              toolRunId: "tool-1",
-              turnId: "turn-1",
-              sessionId: "session-1",
-              toolName: "browser.navigate",
-              status: "failed",
-              startedAt: "2026-03-08T00:00:00.500Z",
-              finishedAt: "2026-03-08T00:00:00.900Z",
-              error: "remote site blocked automation (Cloudflare 403)",
-              failureGuidance: "Try the next viable source instead of retrying the blocked host.",
-              result: {
-                url: "https://www.movieinsider.com/movies",
-                finalUrl: "https://www.movieinsider.com/movies",
-                status: 403,
-                engineTier: "builtin",
-                engineLabel: "Built-in browser",
-                browserFailureClass: "remote_blocked",
-                textSnippet: "Sorry, you have been blocked.",
-              },
-            },
-          ],
-          citations: [],
+          effectiveToolAutonomy: "safe_auto",
           routing: {
-            liveDataIntent: true,
-            fallbackReason: "primary blocked by remote site",
+            liveDataIntent: false,
+            fallbackUsed: false,
           },
-          failure: {
-            failureClass: "tool_blocked",
-            message: "A required source blocked automated access.",
-            retryable: true,
-            recommendedAction: "retry_narrower",
-          },
-          executionPlan: {
-            planId: "plan-1",
-            sessionId: "session-1",
-            turnId: "turn-1",
-            mode: "chat",
-            planningMode: "advisory",
-            status: "ready",
-            source: "planner",
-            advisoryOnly: true,
-            objective: "Show the user a safe advisory plan.",
-            summary: "Keep the first step small, then confirm before doing deeper work.",
-            steps: [
-              {
-                stepId: "step-1",
-                index: 0,
-                objective: "Inspect the current session state.",
-                status: "completed",
-                parallelizable: false,
-                summary: "Session trace and failure state loaded.",
-                suggestedTools: ["memory.search"],
-              },
-              {
-                stepId: "step-2",
-                index: 1,
-                objective: "Propose the next focused recovery step.",
-                status: "pending",
-                parallelizable: false,
-                suggestedTools: ["browser.navigate"],
-              },
-            ],
-            createdAt: "2026-03-08T00:00:00.000Z",
-            updatedAt: "2026-03-08T00:00:02.000Z",
-          },
-        },
-        toolRuns: [
-          {
-            toolRunId: "tool-1",
-            turnId: "turn-1",
-            sessionId: "session-1",
-            toolName: "browser.navigate",
-            status: "failed",
-            startedAt: "2026-03-08T00:00:00.500Z",
-            finishedAt: "2026-03-08T00:00:00.900Z",
-            error: "remote site blocked automation (Cloudflare 403)",
-            failureGuidance: "Try the next viable source instead of retrying the blocked host.",
-            result: {
-              url: "https://www.movieinsider.com/movies",
-              finalUrl: "https://www.movieinsider.com/movies",
-              status: 403,
-              engineTier: "builtin",
-              engineLabel: "Built-in browser",
-              browserFailureClass: "remote_blocked",
-              textSnippet: "Sorry, you have been blocked.",
-            },
-          },
-        ],
-        citations: [],
-        branch: {
-          siblingTurnIds: ["turn-1"],
-          activeSiblingIndex: 0,
-          siblingCount: 1,
-          isSelectedPath: true,
-          newestLeafTurnId: "turn-1",
+          startedAt: "2026-04-04T00:00:00.000Z",
         },
       },
     ],
-  };
+  } as unknown as ChatThreadResponse;
 }
 
 describe("ChatThreadView", () => {
-  it("renders assistant markdown as structured content", () => {
-    const renderer = create(
+  it("skips raw HTML in assistant markdown output", () => {
+    const renderer = TestRenderer.create(
       <ChatThreadView
         loading={false}
+        thread={createThread("<img src=x onerror=alert(1) /> **safe**")}
+        selectedTurnId="turn-1"
         notices={[]}
         followOutput={false}
-        onBottomStateChange={() => {}}
-        onEditTurn={() => {}}
-        onRetryTurn={() => {}}
-        onSelectTurn={() => {}}
-        onSwitchBranch={() => {}}
-        selectedTurnId="turn-1"
-        thread={makeThread()}
+        onBottomStateChange={vi.fn()}
+        onSelectTurn={vi.fn()}
+        onSwitchBranch={vi.fn()}
+        onRetryTurn={vi.fn()}
+        onEditTurn={vi.fn()}
       />,
     );
 
-    expect(renderer.root.findByType("h1").children.join("")).toBe("Plan");
-    expect(renderer.root.findByType("a").props.href).toBe("https://example.com");
-    expect(renderer.root.findByType("pre")).toBeTruthy();
-    expect(renderer.root.findAllByType("code").length).toBeGreaterThanOrEqual(2);
+    expect(renderer.root.findAllByType("img")).toHaveLength(0);
+    expect(renderer.root.findAll((node) => node.type === "strong" && node.children.includes("safe"))).toHaveLength(1);
   });
 
-  it("renders browser failure diagnostics in run details", () => {
-    const renderer = create(
+  it("adds accessible labels to branch and turn actions", () => {
+    const renderer = TestRenderer.create(
       <ChatThreadView
         loading={false}
+        thread={createThread("plain content")}
+        selectedTurnId="turn-1"
         notices={[]}
         followOutput={false}
-        onBottomStateChange={() => {}}
-        onEditTurn={() => {}}
-        onRetryTurn={() => {}}
-        onSelectTurn={() => {}}
-        onSwitchBranch={() => {}}
-        selectedTurnId="turn-1"
-        thread={makeThread()}
+        onBottomStateChange={vi.fn()}
+        onSelectTurn={vi.fn()}
+        onSwitchBranch={vi.fn()}
+        onRetryTurn={vi.fn()}
+        onEditTurn={vi.fn()}
       />,
     );
 
-    const detailsText = renderer.root.findAllByType("p")
-      .map((node) => node.children.join(" "))
-      .join("\n")
-      .replace(/\s+/g, " ")
-      .trim();
-    expect(detailsText).toContain("Engine: Built-in browser (builtin)");
-    expect(detailsText).toContain("URL: https://www.movieinsider.com/movies");
-    expect(detailsText).toContain("HTTP status: 403");
-    expect(detailsText).toContain("Fallback reason: primary blocked by remote site");
-    expect(detailsText).toContain("Next step: Retry with a narrower request");
-    expect(detailsText).toContain("Try the next viable source instead of retrying the blocked host.");
-    expect(detailsText).toContain("Keep the first step small, then confirm before doing deeper work.");
-    expect(detailsText).toContain("Propose the next focused recovery step.");
-    expect(detailsText).toContain("Status: pending");
+    const buttons = renderer.root.findAllByType("button");
+    expect(buttons.map((button) => button.props["aria-label"])).toEqual(expect.arrayContaining([
+      "Show previous variant for turn turn-1",
+      "Show next variant for turn turn-1",
+      "Retry assistant answer for turn turn-1",
+      "Edit and resend turn turn-1",
+    ]));
+
+    const selectableTurn = renderer.root.findAll((node) => node.props["aria-label"] === "Select turn turn-1");
+    expect(selectableTurn).toHaveLength(1);
   });
 });

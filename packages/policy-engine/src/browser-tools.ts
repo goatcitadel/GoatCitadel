@@ -3,7 +3,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
-import { assertHostAllowed } from "./sandbox/network-guard.js";
+import { assertHostAllowed, assertHostAllowedInDangerProfile } from "./sandbox/network-guard.js";
 import { assertWritePathInJail } from "./sandbox/path-jail.js";
 
 type BrowserToolName =
@@ -39,6 +39,7 @@ function shouldEnforceNetworkAllowlist(config: ToolPolicyConfig): boolean {
 
 function assertHostAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
   if (!shouldEnforceNetworkAllowlist(config)) {
+    assertHostAllowedInDangerProfile(hostOrUrl, config.sandbox.networkAllowlist);
     return;
   }
   assertHostAllowed(hostOrUrl, config.sandbox.networkAllowlist);

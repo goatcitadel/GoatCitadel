@@ -24,6 +24,7 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
+import type { RuntimeSettings } from "./gateway-service.js";
 import { ChatProactiveService, type ChatProactiveServiceCallbacks } from "./chat-proactive-service.js";
 import { DurableRunService } from "./durable-run-service.js";
 
@@ -226,7 +227,8 @@ function createHarness(options?: { durableKernelV1Enabled?: boolean }) {
     gatewaySql: { prepare: (sql: string) => createStatement(sql, state) },
     publishRealtime: () => undefined,
     requireFeatureEnabled: () => undefined,
-    isFeatureEnabled: (flag) => flag !== "durableKernelV1Enabled" || options?.durableKernelV1Enabled !== false,
+    isFeatureEnabled: (flag: keyof RuntimeSettings["features"]) =>
+      flag !== "durableKernelV1Enabled" || options?.durableKernelV1Enabled !== false,
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId ?? "default",
   } as unknown as ServiceContext;
   const durableRunService = new DurableRunService(ctx);

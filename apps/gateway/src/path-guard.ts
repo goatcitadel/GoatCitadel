@@ -9,10 +9,18 @@ export function isSuspiciousEncodedPath(rawUrl: string): boolean {
   if (!decoded) {
     return true;
   }
+  if (startsWithSuspiciousWindowsPrefix(decoded)) {
+    return true;
+  }
   const normalized = decoded.replaceAll("\\", "/");
-  return normalized.includes("/../")
+  if (normalized.includes("/../")
     || normalized.startsWith("../")
-    || normalized.endsWith("/..");
+    || normalized.endsWith("/..")) {
+    return true;
+  }
+
+  const segments = normalized.split("/").filter(Boolean);
+  return segments.some((segment) => hasNtfsAlternateDataStream(segment) || isWindowsReservedDeviceSegment(segment));
 }
 
 function decodePathSafely(value: string): string | undefined {
@@ -29,4 +37,32 @@ function decodePathSafely(value: string): string | undefined {
     }
   }
   return current;
+}
+
+function startsWithSuspiciousWindowsPrefix(value: string): boolean {
+  return (
+    value.startsWith("\\\\")
+    || value.startsWith("//")
+    || value.startsWith("\\\\?\\")
+    || value.startsWith("\\\\.\\")
+    || /^[a-z]:[\\/]/i.test(value)
+    || /^\/[a-z]:[\\/]/i.test(value)
+  );
+}
+
+function hasNtfsAlternateDataStream(segment: string): boolean {
+  if (/^[a-z]:$/i.test(segment)) {
+    return false;
+  }
+  const colonIndex = segment.indexOf(":");
+  return colonIndex > 0;
+}
+
+function isWindowsReservedDeviceSegment(segment: string): boolean {
+  const normalized = segment
+    .replace(/[. ]+$/g, "")
+    .split(":", 1)[0]
+    ?.trim()
+    .toUpperCase();
+  return normalized !== undefined && /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/.test(normalized);
 }

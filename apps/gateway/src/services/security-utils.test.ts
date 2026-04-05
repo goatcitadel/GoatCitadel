@@ -23,17 +23,19 @@ describe("security utils", () => {
 
   it("serializes in-root paths and redacts out-of-root paths", () => {
     const rootDir = path.resolve(os.tmpdir(), `goatcitadel-security-utils-${Date.now()}`);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onOutsideRootPathWarning = vi.fn();
     const warned = new Set<string>();
 
     const inRoot = path.join(rootDir, "workspace", "notes", "test.md");
     const outsideRoot = path.resolve(rootDir, "..", "secrets", "token.txt");
 
     expect(serializePathWithinRoot(rootDir, inRoot, warned)).toBe("./workspace/notes/test.md");
-    expect(serializePathWithinRoot(rootDir, outsideRoot, warned)).toBe("[outside-root]");
-    expect(serializePathWithinRoot(rootDir, outsideRoot, warned)).toBe("[outside-root]");
-    expect(warn).toHaveBeenCalledTimes(1);
-
-    warn.mockRestore();
+    expect(serializePathWithinRoot(rootDir, outsideRoot, warned, onOutsideRootPathWarning)).toBe("[outside-root]");
+    expect(serializePathWithinRoot(rootDir, outsideRoot, warned, onOutsideRootPathWarning)).toBe("[outside-root]");
+    expect(onOutsideRootPathWarning).toHaveBeenCalledTimes(1);
+    expect(onOutsideRootPathWarning).toHaveBeenCalledWith(expect.objectContaining({
+      baseName: "token.txt",
+      normalizedPath: outsideRoot,
+    }));
   });
 });

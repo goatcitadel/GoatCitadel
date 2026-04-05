@@ -480,6 +480,7 @@ import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
 import { buildDelegatedSessionToolGrantCopies } from "./delegated-session-tool-grants.js";
 import { resolveProjectRootForToolContext, resolveToolRequestPaths } from "./tool-path-resolution.js";
 import type { ServiceContext } from "./service-context.js";
+import { buildGatewayServiceContext } from "./gateway/build-service-context.js";
 import { ChatProjectService } from "./chat-project-service.js";
 import { DurableRunService } from "./durable-run-service.js";
 import { HooksService } from "./hooks-service.js";
@@ -1524,17 +1525,16 @@ export class GatewayService {
     // ── extracted sub-services (Phase 2 facade pattern) ──────────
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
-    const serviceCtx: ServiceContext = {
+    const serviceCtx: ServiceContext = buildGatewayServiceContext({
       storage: this.storage,
       config: this.config,
       llmService: this.llmService,
       policyEngine: this.policyEngine,
-      gatewaySql: this.storage.gatewaySql,
       publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
       requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
-    };
+    });
     this.chatProjectService = new ChatProjectService(serviceCtx);
     this.durableRunService = new DurableRunService(serviceCtx, {
       backgroundTasks: this.backgroundTasks,
@@ -19660,6 +19660,18 @@ export class GatewayService {
       this.config.rootDir,
       fullPath,
       this.warnedOutsideRootPathFingerprints,
+      (warning) => {
+        this.recordDevDiagnostic({
+          level: "warn",
+          category: "security",
+          event: "filesystem.outside_root_path_redacted",
+          message: "Refused to expose a filesystem path outside the workspace root.",
+          context: {
+            fingerprint: warning.fingerprint,
+            baseName: warning.baseName,
+          },
+        });
+      },
     );
   }
 }

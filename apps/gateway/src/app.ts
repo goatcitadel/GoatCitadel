@@ -206,10 +206,13 @@ export async function buildApp() {
             ? rateLimitConfig.maxSseConnect
             : rateLimitConfig.maxGeneral;
       const currentConfig = (routeOptions.config ?? {}) as Record<string, unknown>;
+      const currentRateLimit = isRecord(currentConfig.rateLimit) ? currentConfig.rateLimit : {};
+      const existingMax = typeof currentRateLimit.max === "number" ? currentRateLimit.max : undefined;
       routeOptions.config = {
         ...currentConfig,
         rateLimit: {
-          max,
+          ...currentRateLimit,
+          max: existingMax === undefined ? max : Math.min(existingMax, max),
         },
       };
     });
@@ -263,6 +266,10 @@ export async function buildApp() {
   await app.register(devVerificationRoutes);
 
   return app;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function readRequestHeader(value: string | string[] | undefined): string | undefined {

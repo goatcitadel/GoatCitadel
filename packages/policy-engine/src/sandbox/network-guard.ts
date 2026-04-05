@@ -91,6 +91,44 @@ export function assertHostAllowed(hostOrUrl: string, allowlist: string[]): void 
   }
 }
 
+export function evaluateDangerousHostBypass(hostOrUrl: string, allowlist: string[]): {
+  blocked: boolean;
+  shouldAudit: boolean;
+  hostname: string;
+  reason: string;
+} {
+  const decision = evaluateHostEgress(hostOrUrl, allowlist);
+  if (decision.allowed) {
+    return {
+      blocked: false,
+      shouldAudit: false,
+      hostname: decision.hostname,
+      reason: decision.reason,
+    };
+  }
+  if (decision.approvalState === "blocked") {
+    return {
+      blocked: true,
+      shouldAudit: false,
+      hostname: decision.hostname,
+      reason: decision.reason,
+    };
+  }
+  return {
+    blocked: false,
+    shouldAudit: true,
+    hostname: decision.hostname,
+    reason: `Danger profile bypassed network allowlist for ${hostOrUrl}`,
+  };
+}
+
+export function assertHostAllowedInDangerProfile(hostOrUrl: string, allowlist: string[]): void {
+  const decision = evaluateDangerousHostBypass(hostOrUrl, allowlist);
+  if (decision.blocked) {
+    throw new Error(decision.reason);
+  }
+}
+
 function parseHost(hostOrUrl: string): { host: string; hostname: string } {
   try {
     const parsed = new URL(hostOrUrl);

@@ -20,10 +20,10 @@ export function isLoopbackDevOrigin(origin: string): boolean {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return false;
     }
-    return parsed.hostname === "localhost"
-      || parsed.hostname === "127.0.0.1"
-      || parsed.hostname === "::1"
-      || parsed.hostname === "[::1]";
+    const host = parsed.hostname.trim().toLowerCase();
+    return host === "localhost"
+      || host === "127.0.0.1"
+      || host === "::1";
   } catch {
     return false;
   }
