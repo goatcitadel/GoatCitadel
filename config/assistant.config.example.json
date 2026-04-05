@@ -54,11 +54,11 @@
   },
   "web": {
     "firecrawl": {
-      "enabled": false,
+      "enabled": true,
       "baseUrl": "http://127.0.0.1:3002",
       "apiKeyEnv": "FIRECRAWL_API_KEY",
       "timeoutMs": 20000,
-      "defaultReadBackend": "native",
+      "defaultReadBackend": "firecrawl",
       "fallbackToNative": true
     }
   },

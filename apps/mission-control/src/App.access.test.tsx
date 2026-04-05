@@ -203,6 +203,28 @@ async function flush(): Promise<void> {
   });
 }
 
+describe("deriveRefreshTopics", () => {
+  it("keeps session-scoped chat events off the surface refresh topic", async () => {
+    const { deriveRefreshTopics } = await import("./App");
+
+    expect(deriveRefreshTopics({
+      eventId: "evt-chat-1",
+      eventType: "chat_thread_updated",
+      source: "chat",
+      payload: { kind: "event" },
+      links: { sessionId: "sess-1" },
+    } as any)).toContain("chat");
+
+    expect(deriveRefreshTopics({
+      eventId: "evt-chat-1",
+      eventType: "chat_thread_updated",
+      source: "chat",
+      payload: { kind: "event" },
+      links: { sessionId: "sess-1" },
+    } as any)).not.toContain("surface");
+  });
+});
+
 async function waitForTreeText(
   renderer: ReactTestRenderer,
   expected: string,

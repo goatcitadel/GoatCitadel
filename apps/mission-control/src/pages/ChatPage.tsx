@@ -119,6 +119,7 @@ import { useEventStreamStatus } from "../hooks/useEventStreamStatus";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { pageCopy } from "../content/copy";
+import type { RefreshSignal } from "../state/refresh-bus";
 import {
   recordClientDiagnostic,
   setDevDiagnosticsActiveChatSession,
@@ -220,6 +221,62 @@ interface FinalizedStreamMessageState {
   placeholderId: string;
   messageId?: string;
   content: string;
+}
+
+type ChatRefreshPlan = {
+  refreshSidebar: boolean;
+  refreshSession: "none" | "light" | "full";
+};
+
+export function resolveChatRefreshPlan(signal: Pick<RefreshSignal, "eventType" | "reason" | "source">, recentLocalPrefMutation = false): ChatRefreshPlan {
+  const eventType = (signal.eventType ?? "").toLowerCase();
+  const haystack = `${signal.reason} ${signal.eventType ?? ""} ${signal.source ?? ""}`.toLowerCase();
+  const isPrefEcho = recentLocalPrefMutation
+    && /\b(pref|policy|session|proactive|retrieval|reflection|mode)\b/.test(haystack);
+  if (eventType === "fallback_poll") {
+    return {
+      refreshSidebar: true,
+      refreshSession: "light",
+    };
+  }
+  if (isPrefEcho) {
+    return {
+      refreshSidebar: false,
+      refreshSession: "none",
+    };
+  }
+  if (eventType === "chat_thread_updated") {
+    return {
+      refreshSidebar: false,
+      refreshSession: "full",
+    };
+  }
+  if (eventType === "chat_session_title_updated") {
+    return {
+      refreshSidebar: true,
+      refreshSession: "none",
+    };
+  }
+  if (eventType === "memory_qmd_generated") {
+    return {
+      refreshSidebar: false,
+      refreshSession: "light",
+    };
+  }
+  if (eventType === "tool_invoked" || eventType === "session_event") {
+    return {
+      refreshSidebar: false,
+      refreshSession: "none",
+    };
+  }
+  const refreshSidebar = /\b(project|archive|restore|pin|unpin|binding|workspace|external|session_created|session_deleted|title|rename|chat_session_title_updated|chat_session_updated)\b/.test(haystack);
+  const refreshSession = /\b(chat_thread_updated|message|thread|turn|assistant|user)\b/.test(haystack)
+    ? "full"
+    : (/\b(pref|policy|proactive|retrieval|reflection|mode|learned_memory)\b/.test(haystack) ? "light" : "none");
+  return {
+    refreshSidebar,
+    refreshSession,
+  };
 }
 
 type SessionControlPending =
@@ -822,6 +879,7 @@ export function ChatPage({
     options: {
       refreshSidebar?: boolean;
       refreshSession?: "none" | "light" | "full";
+      showIndicator?: boolean;
     } = {},
   ) => {
     if (!initializedRef.current) {
@@ -829,10 +887,13 @@ export function ChatPage({
     }
     const shouldRefreshSidebar = options.refreshSidebar ?? true;
     const refreshSession = options.refreshSession ?? "light";
+    const showIndicator = options.showIndicator ?? false;
     if (!shouldRefreshSidebar && refreshSession === "none") {
       return;
     }
-    setIsRefreshing(true);
+    if (showIndicator) {
+      setIsRefreshing(true);
+    }
     try {
       if (shouldRefreshSidebar) {
         await loadSidebar();
@@ -852,7 +913,9 @@ export function ChatPage({
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setIsRefreshing(false);
+      if (showIndicator) {
+        setIsRefreshing(false);
+      }
     }
   }, [loadSessionSecondaryState, loadSessionState, loadSidebar, selectedSessionId]);
 
@@ -877,25 +940,10 @@ export function ChatPage({
     "chat",
     async (signal) => {
       const now = Date.now();
-      const haystack = `${signal.reason} ${signal.eventType ?? ""} ${signal.source ?? ""}`.toLowerCase();
-      if (signal.eventType === "fallback_poll") {
-        await refreshViewState({
-          refreshSidebar: true,
-          refreshSession: "light",
-        });
-        return;
-      }
-      const localPrefEcho = now - lastLocalPrefMutationAtRef.current < 2500
-        && /\b(pref|policy|session|proactive|retrieval|reflection|mode)\b/.test(haystack);
-      const mentionsMessages = /\b(message|thread|turn|assistant|user|tool|trace|approval|chat_thread_updated)\b/.test(haystack);
-      const affectsSidebar = /\b(project|archive|restore|pin|unpin|binding|workspace|external|session_created|session_deleted|title|rename|chat_session_title_updated|chat_session_updated)\b/.test(haystack);
-      const mentionsSessionState = /\b(pref|policy|proactive|retrieval|reflection|mode|learned_memory)\b/.test(haystack);
-      const refreshSession = localPrefEcho
-        ? "none"
-        : (mentionsMessages ? "full" : (mentionsSessionState ? "light" : "none"));
+      const plan = resolveChatRefreshPlan(signal, now - lastLocalPrefMutationAtRef.current < 2500);
       await refreshViewState({
-        refreshSidebar: affectsSidebar,
-        refreshSession,
+        ...plan,
+        showIndicator: false,
       });
     },
     {

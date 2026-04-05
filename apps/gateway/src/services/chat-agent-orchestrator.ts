@@ -4545,6 +4545,34 @@ const COMMUNITY_HOST_PATTERNS = [
   /(^|\.)stackexchange\.com$/i,
 ];
 
+const NEWS_PORTAL_HOST_PATTERNS = [
+  /(^|\.)yahoo\.com$/i,
+  /(^|\.)msn\.com$/i,
+  /(^|\.)aol\.com$/i,
+  /(^|\.)newsbreak\.com$/i,
+];
+
+const DIRECT_NEWS_PUBLISHER_HOST_PATTERNS = [
+  /(^|\.)reuters\.com$/i,
+  /(^|\.)apnews\.com$/i,
+  /(^|\.)abcnews\.go\.com$/i,
+  /(^|\.)abcnews\.com$/i,
+  /(^|\.)nytimes\.com$/i,
+  /(^|\.)wsj\.com$/i,
+  /(^|\.)washingtonpost\.com$/i,
+  /(^|\.)usatoday\.com$/i,
+  /(^|\.)npr\.org$/i,
+  /(^|\.)cnn\.com$/i,
+  /(^|\.)foxnews\.com$/i,
+  /(^|\.)cbsnews\.com$/i,
+  /(^|\.)nbcnews\.com$/i,
+  /(^|\.)bbc\.com$/i,
+  /(^|\.)theguardian\.com$/i,
+  /(^|\.)politico\.com$/i,
+  /(^|\.)axios\.com$/i,
+  /(^|\.)bloomberg\.com$/i,
+];
+
 function selectBestRecentBrowserResultUrl(
   userContent: string,
   toolRuns: ChatToolRunRecord[],
@@ -4611,10 +4639,14 @@ function selectRecentBrowserResultUrls(
   const derivedQuery = deriveLiveDataQuery(userContent);
   const queryTokens = tokenizeBrowserSearchText(derivedQuery);
   const newsLike = isLikelyNewsOrCurrentEventsQuery(userContent);
+  const preferDirectNewsPublisher = newsLike && candidates.some((candidate) => isLikelyDirectNewsPublisherHost(candidate.hostname));
   return candidates
     .map((candidate) => ({
       candidate,
-      score: scoreBrowserResultCandidate(candidate, derivedQuery, queryTokens, newsLike),
+      score: scoreBrowserResultCandidate(candidate, derivedQuery, queryTokens, {
+        newsLike,
+        preferDirectNewsPublisher,
+      }),
     }))
     .filter((item) => item.score >= minimumScore)
     .sort((left, right) => right.score - left.score)
@@ -5077,6 +5109,14 @@ function isLikelyCommunityHost(hostname: string): boolean {
   return COMMUNITY_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
 }
 
+function isLikelyNewsPortalHost(hostname: string): boolean {
+  return NEWS_PORTAL_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
+}
+
+function isLikelyDirectNewsPublisherHost(hostname: string): boolean {
+  return DIRECT_NEWS_PUBLISHER_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
+}
+
 function queryExplicitlyRequestsCommunitySources(value: string): boolean {
   return /\b(reddit|quora|stack ?overflow|stackexchange|forum|forums|community|communities|discussion|discussions)\b/i.test(value);
 }
@@ -5098,8 +5138,12 @@ function scoreBrowserResultCandidate(
   candidate: BrowserResultCandidate,
   query: string,
   queryTokens: string[],
-  newsLike: boolean,
+  options: {
+    newsLike: boolean;
+    preferDirectNewsPublisher: boolean;
+  },
 ): number {
+  const { newsLike, preferDirectNewsPublisher } = options;
   const normalizedTitle = normalizeBrowserSearchText(candidate.title);
   const normalizedSnippet = normalizeBrowserSearchText(candidate.snippet);
   const normalizedPath = normalizeBrowserSearchText(candidate.path);
@@ -5173,6 +5217,12 @@ function scoreBrowserResultCandidate(
   if (newsLike) {
     if (/\/(news|politics|article|story)(\/|$)/i.test(candidate.path) || /\b(news|times|post|reuters|apnews|axios|politico|npr|cnn|abc|nbc|cbs|fox)\b/i.test(candidate.hostname)) {
       score += 2;
+    }
+    if (isLikelyDirectNewsPublisherHost(candidate.hostname)) {
+      score += 3;
+    }
+    if (preferDirectNewsPublisher && isLikelyNewsPortalHost(candidate.hostname)) {
+      score -= 4;
     }
   } else if (!isSearchPortalHost(candidate.hostname)) {
     score += 1;

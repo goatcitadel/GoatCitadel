@@ -1,26 +1,34 @@
 #!/usr/bin/env node
-import fs from "node:fs";
-import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-const contractsDist = path.resolve("packages/contracts/dist/index.js");
-const extensionsSdkDist = path.resolve("packages/extensions-sdk/dist/index.js");
-if (!fs.existsSync(contractsDist) || !fs.existsSync(extensionsSdkDist)) {
-  console.log("[dev] bootstrap packages not built — running bootstrap build...");
-  const bootstrapResult = process.platform === "win32"
-    ? spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "pnpm --filter @goatcitadel/contracts --filter @goatcitadel/extensions-sdk build"], {
-        stdio: "inherit",
-      })
-    : spawnSync("pnpm", ["--filter", "@goatcitadel/contracts", "--filter", "@goatcitadel/extensions-sdk", "build"], {
-        stdio: "inherit",
-      });
-  if (bootstrapResult.error) {
-    throw bootstrapResult.error;
-  }
-  if (bootstrapResult.status !== 0) {
-    console.error("[dev] contracts build failed");
-    process.exit(1);
-  }
+const bootstrapPackages = [
+  "@goatcitadel/contracts",
+  "@goatcitadel/extensions-sdk",
+  "@goatcitadel/gateway-core",
+  "@goatcitadel/memory-core",
+  "@goatcitadel/mesh-core",
+  "@goatcitadel/orchestration",
+  "@goatcitadel/policy-engine",
+  "@goatcitadel/skills",
+  "@goatcitadel/storage",
+];
+
+console.log(`[dev] syncing runtime workspace packages: ${bootstrapPackages.join(", ")}`);
+const bootstrapArgs = bootstrapPackages.flatMap((pkg) => ["--filter", pkg]);
+const bootstrapResult = process.platform === "win32"
+  ? spawnSync(
+      process.env.ComSpec || "cmd.exe",
+      ["/d", "/s", "/c", buildWindowsCommand(["pnpm", ...bootstrapArgs, "build"])],
+      { stdio: "inherit" },
+    )
+  : spawnSync("pnpm", [...bootstrapArgs, "build"], { stdio: "inherit" });
+
+if (bootstrapResult.error) {
+  throw bootstrapResult.error;
+}
+if (bootstrapResult.status !== 0) {
+  console.error("[dev] workspace bootstrap build failed");
+  process.exit(1);
 }
 
 const rawArgs = process.argv.slice(2);
@@ -82,10 +90,10 @@ function quoteWindowsCommandArg(value) {
   if (value.length === 0) {
     return "\"\"";
   }
-  if (!/[\s"&()^<>|]/.test(value)) {
+  if (!/[\s\"&()^<>|]/.test(value)) {
     return value;
   }
-  return `"${value.replace(/(["\\])/g, "\\$1")}"`;
+  return `"${value.replace(/([\"\\])/g, "\\$1")}"`;
 }
 
 function setTerminalTitle(task) {
