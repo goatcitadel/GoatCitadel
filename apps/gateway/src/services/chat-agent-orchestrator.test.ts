@@ -1803,6 +1803,73 @@ describe("ChatAgentOrchestrator", () => {
     expect(groundingMsg?.content as string).toContain("strictly on the tool results");
   });
 
+  it("proactively opens the strongest live-data search result before synthesis when navigate is available", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "A humor roundup says a goat briefly disrupted a small-town parade yesterday.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-proactive-search",
+        result: {
+          results: [
+            {
+              title: "Funny news yesterday: goat disrupts small-town parade",
+              url: "https://example.com/news/odd-roundup",
+              snippet: "A funny news roundup from yesterday says a goat briefly disrupted a small-town parade.",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-proactive-navigate",
+        result: {
+          url: "https://example.com/news/odd-roundup",
+          finalUrl: "https://example.com/news/odd-roundup",
+          title: "Odd News Roundup",
+          content: "A goat briefly disrupted a small-town parade yesterday, drawing laughs from spectators.",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-proactive-live-followthrough-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-proactive-live-followthrough-1",
+      content: "tell me something funny that happened in the news yesterday",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "quick",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "tell me something funny that happened in the news yesterday" }],
+    });
+
+    const invokedToolNames = (invokeTool.mock.calls as unknown as Array<[{ toolName: string }]>).map((call) => call[0].toolName);
+    expect(invokedToolNames).toEqual(["browser.search", "browser.navigate"]);
+  });
+
   it("detects explicit web lookup phrases like 'search online' as live-data intent", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()

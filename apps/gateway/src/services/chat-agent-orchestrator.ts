@@ -306,6 +306,7 @@ export class ChatAgentOrchestrator {
       : await this.buildToolSchema(input, intents);
     const canUseTimeTool = toolSchema.canonicalToModel.has("time.now");
     const canUseSearchTool = toolSchema.canonicalToModel.has("browser.search");
+    const canUseNavigateTool = toolSchema.canonicalToModel.has("browser.navigate");
     const localFileIntent = intents.localFile;
     const citations: ChatCitationRecord[] = [];
     const toolRuns: ChatToolRunRecord[] = [];
@@ -826,6 +827,101 @@ export class ChatAgentOrchestrator {
           tool_call_id: toolMessageId,
           content: JSON.stringify(syntheticRun.record.result),
         } as ChatCompletionMessage);
+
+        if (
+          shouldProactivelyOpenGroundedNewsResult(input.content)
+          && canUseNavigateTool
+          && toolRunCount < executionBudget.maxToolRunsPerTurn
+        ) {
+          const promotedUrl = inferBrowserNavigateUrlFromRepeatedSearches(input.content, toolRuns);
+          if (promotedUrl) {
+            ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+            const navigateRun = await this.executeToolCall({
+              input,
+              turnId: input.turnId,
+              toolName: "browser.navigate",
+              rawArgs: {
+                url: promotedUrl,
+                maxChars: 6000,
+              },
+              localFileIntent,
+              priorToolRuns: toolRuns,
+              turnBudgetDeadline,
+            });
+            toolRunCount += 1;
+            toolRuns.push(navigateRun.record);
+            ({ turnBudgetDeadline, effectiveTurnBudgetMs, effectiveCompletionTimeoutMs } = extendTurnBudgetForExecutedBrowserTool({
+              toolName: navigateRun.record.toolName,
+              toolStatus: navigateRun.record.status,
+              webMode: input.webMode,
+              webLookupIntent: intents.webLookup,
+              currentTurnBudgetMs: effectiveTurnBudgetMs,
+              currentCompletionTimeoutMs: effectiveCompletionTimeoutMs,
+              turnBudgetDeadline,
+            }));
+            yield {
+              type: "tool_start",
+              sessionId: input.sessionId,
+              turnId: input.turnId,
+              toolRun: {
+                ...navigateRun.record,
+                status: "started",
+              },
+            };
+            if (navigateRun.chunk) {
+              yield navigateRun.chunk;
+            }
+            if (navigateRun.record.status === "executed" && navigateRun.record.result) {
+              const navigateToolMessageId = `navigate-${randomUUID()}`;
+              conversationMessages.push(createAssistantToolCallMessage({
+                toolCallId: navigateToolMessageId,
+                toolName: this.resolveModelToolName("browser.navigate", toolSchema.canonicalToModel),
+                argumentsJson: JSON.stringify({
+                  url: promotedUrl,
+                  maxChars: 6000,
+                }),
+              }));
+              conversationMessages.push({
+                role: "tool",
+                tool_call_id: navigateToolMessageId,
+                content: JSON.stringify(navigateRun.record.result),
+              } as ChatCompletionMessage);
+            }
+            for (const citation of inferCitationsFromToolResult(navigateRun.record)) {
+              citations.push(citation);
+              yield {
+                type: "citation",
+                sessionId: input.sessionId,
+                turnId: input.turnId,
+                citation,
+              };
+            }
+            if (navigateRun.record.status === "approval_required" && navigateRun.record.approvalId) {
+              finalStatus = "waiting_for_approval";
+              finalFailure = {
+                failureClass: "approval_required",
+                message: "Approval required by policy.",
+                retryable: true,
+                recommendedAction: getChatTurnRecoveryAction("approval_required"),
+              };
+              approvalPayload = {
+                approvalId: navigateRun.record.approvalId,
+                toolName: navigateRun.record.toolName,
+                reason: "Approval required by policy.",
+                expiresAt: navigateRun.approvalExpiresAt,
+              };
+              this.deps.storage.chatInlineApprovals.upsert({
+                approvalId: navigateRun.record.approvalId,
+                sessionId: input.sessionId,
+                turnId: input.turnId,
+                toolName: navigateRun.record.toolName,
+                status: "pending",
+                reason: "Approval required by policy.",
+                expiresAt: navigateRun.approvalExpiresAt,
+              });
+            }
+          }
+        }
       }
       for (const citation of inferCitationsFromToolResult(syntheticRun.record)) {
         citations.push(citation);
@@ -5206,6 +5302,13 @@ function inferMeaningfulPriorUserQuery(
     }
   }
   return undefined;
+}
+
+function shouldProactivelyOpenGroundedNewsResult(userContent: string): boolean {
+  const normalized = userContent.toLowerCase();
+  const hasNewsIntent = /\b(news|headline|headlines)\b/.test(normalized);
+  const hasRecencyIntent = /\b(latest|recent|today|yesterday|tonight|this week)\b/.test(normalized);
+  return hasNewsIntent && hasRecencyIntent;
 }
 
 function looksLikeContinuationSearchPrompt(value: string): boolean {
