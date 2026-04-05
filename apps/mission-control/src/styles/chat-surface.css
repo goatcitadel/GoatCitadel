@@ -337,6 +337,11 @@
   padding: 10px;
 }
 
+/* --- Surface identity: Chat (rounder, conversational) — high specificity override --- */
+.space-page-surface .chat-v11.shell-owned-surface.mode-chat .card.chat-v11-thread {
+  border-radius: 22px;
+}
+
 /* Cowork dock: reinforce orchestration timeline feel */
 .chat-v11.mode-cowork .mission-context-dock {
   gap: 8px;
@@ -346,11 +351,26 @@
   gap: 8px;
 }
 
+/* --- Surface identity: Cowork (structured, timeline) — high specificity override --- */
+.space-page-surface .chat-v11.shell-owned-surface.mode-cowork .card.chat-v11-thread {
+  border-radius: 16px;
+}
+
 /* Cowork orchestration step items — subtle timeline border */
 .chat-v11.mode-cowork .chat-cowork-orchestration-steps li {
   border-left: 2px solid rgba(255, 154, 69, 0.24);
   padding-left: 10px;
   border-radius: 6px;
+}
+
+/* --- Surface identity: Code (tight, technical) — high specificity override --- */
+.space-page-surface .chat-v11.shell-owned-surface.mode-code .card.chat-v11-thread {
+  border-radius: 12px;
+}
+
+/* Mode-specific dock spacing */
+.chat-v11.mode-chat .mission-context-dock {
+  gap: 12px;
 }
 
 /* Code dock: tighter alignment, monospace presence */
