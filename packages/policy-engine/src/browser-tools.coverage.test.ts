@@ -681,6 +681,30 @@ describe("browser tools coverage sweep", () => {
     ).rejects.toThrow(/Unsupported browser\.interact step action/i);
   });
 
+  it("bypasses browser host allowlist enforcement under the danger profile", async () => {
+    const baseConfig = createConfig(tempRoot);
+    const config: ToolPolicyConfig = {
+      ...baseConfig,
+      tools: {
+        profile: "danger",
+        allow: [],
+        deny: [],
+      },
+      sandbox: {
+        ...baseConfig.sandbox,
+        networkAllowlist: ["localhost"],
+      },
+    };
+
+    const nav = await executeBrowserTool(
+      "browser.navigate",
+      { url: "https://apnews.com/oddities", maxChars: 400 },
+      config,
+    );
+
+    expect(nav.action).toBe("navigate");
+  });
+
   it("manages browser cookies and storage in session-scoped state", async () => {
     const config = createConfig(tempRoot);
     const executionContext = { sessionId: "sess-browser-state" };

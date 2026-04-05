@@ -90,6 +90,39 @@ describe("ToolPolicyEngine bankr migration gating", () => {
 });
 
 describe("ToolPolicyEngine outside-root read access", () => {
+  it("allows browser navigation to public hosts under the danger profile even when not allowlisted", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-browser-navigate",
+        toolPattern: "browser.navigate",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    const engine = new ToolPolicyEngine({
+      ...policyConfig,
+      tools: {
+        ...policyConfig.tools,
+        allow: [],
+      },
+    }, storage);
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "browser.navigate",
+      args: { url: "https://apnews.com/oddities" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.requiresApproval).toBe(false);
+  });
+
   it("persists a default approval expiry when a tool action is gated", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T12:00:00.000Z"));
