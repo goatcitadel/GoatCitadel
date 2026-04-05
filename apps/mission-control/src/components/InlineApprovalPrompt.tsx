@@ -59,7 +59,6 @@ export function InlineApprovalPrompt({
   }, [expiresAt, now]);
 
   const actionsDisabled = pending || expiryState.expired;
-
   const isUrgent = expiryState.expired === false && expiresAt != null;
   const remainingMs = expiresAt ? Date.parse(expiresAt) - now : Infinity;
   const isLowTime = remainingMs > 0 && remainingMs < 120_000;

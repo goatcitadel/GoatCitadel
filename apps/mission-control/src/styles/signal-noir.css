@@ -857,6 +857,20 @@
   background: linear-gradient(90deg, rgba(84, 221, 255, 0.92), rgba(255, 154, 69, 0.44), transparent);
 }
 
+.theme-signal-noir .dashboard-data-table thead th {
+  color: var(--gc-text-muted);
+  border-bottom-color: rgba(92, 198, 223, 0.12);
+}
+
+.theme-signal-noir .dashboard-data-table tbody td {
+  color: var(--gc-text-secondary);
+  border-bottom-color: rgba(92, 198, 223, 0.06);
+}
+
+.theme-signal-noir .dashboard-tier-3 {
+  opacity: 0.92;
+}
+
 .theme-signal-noir .workflow-summary-strip {
   display: flex;
   flex-wrap: wrap;

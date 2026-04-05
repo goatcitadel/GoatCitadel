@@ -1554,6 +1554,12 @@ pre {
   color: #e07070;
 }
 
+.chat-approval-allow:disabled,
+.chat-approval-deny:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .surface-reconnect-banner {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -2848,13 +2854,51 @@ body {
 
 .stat-card-warning {
   border-color: rgba(246, 196, 83, 0.34);
+  background:
+    linear-gradient(135deg, rgba(255, 154, 69, 0.1), rgba(255, 154, 69, 0.02) 60%),
+    var(--panel);
 }
 
 .stat-card-accent {
   border-color: rgba(6, 182, 212, 0.3);
   background:
-    linear-gradient(180deg, rgba(6, 182, 212, 0.08), rgba(6, 182, 212, 0.01)),
+    linear-gradient(135deg, rgba(84, 221, 255, 0.1), rgba(84, 221, 255, 0.02) 60%),
     var(--panel);
+}
+
+.dashboard-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.dashboard-data-table thead th {
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(120, 146, 186, 0.18);
+}
+
+.dashboard-data-table tbody td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(120, 146, 186, 0.08);
+}
+
+.dashboard-data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.dashboard-data-table .mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-data-table td[class*="number"],
+.dashboard-data-table td:last-child:not(:first-child) {
+  text-align: right;
 }
 
 .field-help {
@@ -4945,6 +4989,24 @@ body {
   display: grid;
   gap: 20px;
   padding-bottom: 24px;
+}
+
+.dashboard-tier {
+  display: grid;
+  gap: 16px;
+}
+
+.dashboard-tier-1 {
+  gap: 16px;
+}
+
+.dashboard-tier-2 {
+  gap: 14px;
+}
+
+.dashboard-tier-3 {
+  gap: 12px;
+  opacity: 0.88;
 }
 
 .dashboard-hero {

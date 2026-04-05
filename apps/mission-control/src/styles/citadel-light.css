@@ -2774,3 +2774,57 @@
     line-height: 1.4;
   }
 }
+
+/* --- Data table theming --- */
+.theme-citadel-light .dashboard-data-table thead th {
+  color: rgba(34, 67, 77, 0.62);
+  border-bottom-color: rgba(15, 35, 44, 0.14);
+}
+
+.theme-citadel-light .dashboard-data-table tbody td {
+  color: var(--gc-text-secondary);
+  border-bottom-color: rgba(15, 35, 44, 0.08);
+}
+
+/* --- Approval card light theme --- */
+.theme-citadel-light .chat-approval-card {
+  border-color: rgba(200, 140, 50, 0.36);
+  border-left-color: rgba(182, 106, 31, 0.72);
+  background:
+    linear-gradient(135deg, rgba(182, 106, 31, 0.06), rgba(182, 106, 31, 0.01) 60%),
+    rgba(151, 173, 181, 0.96);
+}
+
+.theme-citadel-light .chat-approval-title {
+  color: rgba(180, 100, 20, 0.92);
+}
+
+.theme-citadel-light .chat-approval-tool {
+  color: var(--gc-text-primary);
+}
+
+.theme-citadel-light .chat-approval-reason {
+  color: var(--gc-text-secondary);
+}
+
+.theme-citadel-light .chat-approval-allow {
+  background: rgba(21, 72, 87, 0.1);
+  border-color: rgba(17, 112, 138, 0.38);
+  color: var(--gc-accent);
+}
+
+.theme-citadel-light .chat-approval-allow:hover:not(:disabled) {
+  background: rgba(21, 72, 87, 0.18);
+  border-color: rgba(17, 112, 138, 0.52);
+}
+
+.theme-citadel-light .chat-approval-deny {
+  background: transparent;
+  border-color: rgba(15, 35, 44, 0.16);
+  color: var(--gc-text-secondary);
+}
+
+.theme-citadel-light .chat-approval-deny:hover:not(:disabled) {
+  border-color: rgba(181, 74, 89, 0.38);
+  color: var(--gc-accent-danger);
+}
