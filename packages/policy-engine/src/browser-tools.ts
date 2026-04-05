@@ -137,7 +137,68 @@ async function executeBrowserSearch(
   const query = asNonEmptyString(args.query, "query");
   const requestedEngine = normalizeSearchEngine(asString(args.engine)) ?? "auto";
   const requestedBackend = normalizeSearchBackend(asString(args.backend));
+  const requestedReadBackend = requestedBackend === "firecrawl" ? "firecrawl" : "native";
   const limit = clampInt(args.limit ?? args.maxResults, 5, 1, 25);
+  if (requestedReadBackend === "firecrawl") {
+    try {
+      const firecrawl = await executeBrowserSearchViaFirecrawl(query, limit, args, config, executionContext?.signal);
+      return {
+        ...firecrawl,
+        action: "search",
+        requestedEngine,
+        attemptedEngines: ["firecrawl"],
+        backend: "firecrawl",
+        backendUsed: true,
+        fallbackUsed: false,
+      };
+    } catch (firecrawlError) {
+      if (!asBoolean(args.firecrawlFallbackToNative, true)) {
+        throw firecrawlError;
+      }
+      const nativeResult = await executeBrowserSearchNative(
+        query,
+        requestedEngine,
+        requestedBackend === "ollama" ? "ollama" : undefined,
+        limit,
+        args,
+        config,
+        executionContext,
+      );
+      return {
+        ...nativeResult,
+        backend: "firecrawl",
+        backendUsed: false,
+        fallbackUsed: true,
+        fallbackReason: (firecrawlError as Error).message,
+      };
+    }
+  }
+
+  const nativeResult = await executeBrowserSearchNative(
+    query,
+    requestedEngine,
+    requestedBackend === "ollama" ? "ollama" : undefined,
+    limit,
+    args,
+    config,
+    executionContext,
+  );
+  return {
+    ...nativeResult,
+    backend: "native",
+    backendUsed: true,
+  };
+}
+
+async function executeBrowserSearchNative(
+  query: string,
+  requestedEngine: "auto" | "duckduckgo" | "bing" | "google",
+  requestedBackend: "ollama" | undefined,
+  limit: number,
+  args: Record<string, unknown>,
+  config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
+): Promise<Record<string, unknown>> {
   const attemptedEngines: string[] = [];
   const failures: string[] = [];
 
@@ -291,6 +352,47 @@ async function executeBrowserNavigate(
 ): Promise<Record<string, unknown>> {
   const url = asNonEmptyString(args.url, "url");
   const maxChars = clampInt(args.maxChars, 6000, 200, 20000);
+  const backend = normalizeBrowserReadBackend(asString(args.backend));
+  if (backend === "firecrawl") {
+    try {
+      const firecrawl = await executeBrowserNavigateViaFirecrawl(url, maxChars, args, config, executionContext?.signal);
+      return {
+        ...firecrawl,
+        action: "navigate",
+        backend: "firecrawl",
+        backendUsed: true,
+        fallbackUsed: false,
+      };
+    } catch (firecrawlError) {
+      if (!asBoolean(args.firecrawlFallbackToNative, true)) {
+        throw firecrawlError;
+      }
+      const fallback = await executeBrowserNavigateNative(url, maxChars, args, config, executionContext);
+      return {
+        ...fallback,
+        backend: "firecrawl",
+        backendUsed: false,
+        fallbackUsed: true,
+        fallbackReason: (firecrawlError as Error).message,
+      };
+    }
+  }
+
+  const nativeResult = await executeBrowserNavigateNative(url, maxChars, args, config, executionContext);
+  return {
+    ...nativeResult,
+    backend: "native",
+    backendUsed: true,
+  };
+}
+
+async function executeBrowserNavigateNative(
+  url: string,
+  maxChars: number,
+  args: Record<string, unknown>,
+  config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
+): Promise<Record<string, unknown>> {
   try {
     return await withBrowserPage(url, args, config, executionContext, async (page, responseStatus) => {
       const title = await page.title();
@@ -337,6 +439,48 @@ async function executeBrowserExtract(
   const url = asNonEmptyString(args.url, "url");
   const selector = asNonEmptyString(args.selector, "selector");
   const maxChars = clampInt(args.maxChars, 12000, 200, 50000);
+  const backend = normalizeBrowserReadBackend(asString(args.backend));
+  if (backend === "firecrawl") {
+    try {
+      const firecrawl = await executeBrowserExtractViaFirecrawl(url, selector, maxChars, args, config, executionContext?.signal);
+      return {
+        ...firecrawl,
+        action: "extract",
+        backend: "firecrawl",
+        backendUsed: true,
+        fallbackUsed: false,
+      };
+    } catch (firecrawlError) {
+      if (!asBoolean(args.firecrawlFallbackToNative, true)) {
+        throw firecrawlError;
+      }
+      const fallback = await executeBrowserExtractNative(url, selector, maxChars, args, config, executionContext);
+      return {
+        ...fallback,
+        backend: "firecrawl",
+        backendUsed: false,
+        fallbackUsed: true,
+        fallbackReason: (firecrawlError as Error).message,
+      };
+    }
+  }
+
+  const nativeResult = await executeBrowserExtractNative(url, selector, maxChars, args, config, executionContext);
+  return {
+    ...nativeResult,
+    backend: "native",
+    backendUsed: true,
+  };
+}
+
+async function executeBrowserExtractNative(
+  url: string,
+  selector: string,
+  maxChars: number,
+  args: Record<string, unknown>,
+  config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
+): Promise<Record<string, unknown>> {
   try {
     return await withBrowserPage(url, args, config, executionContext, async (page, responseStatus) => {
       const title = await page.title();
@@ -1607,11 +1751,19 @@ function normalizeSearchEngine(engine: string | undefined): "auto" | "duckduckgo
   return undefined;
 }
 
-function normalizeSearchBackend(backend: string | undefined): "ollama" | undefined {
+function normalizeSearchBackend(backend: string | undefined): "native" | "firecrawl" | "ollama" | undefined {
   if (!backend) {
     return undefined;
   }
-  return backend === "ollama" ? "ollama" : undefined;
+  const normalized = backend.toLowerCase();
+  if (normalized === "native" || normalized === "firecrawl" || normalized === "ollama") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeBrowserReadBackend(backend: string | undefined): "native" | "firecrawl" {
+  return backend?.toLowerCase() === "firecrawl" ? "firecrawl" : "native";
 }
 
 function resolveSearchEngineCandidates(engine: "auto" | "duckduckgo" | "bing" | "google"): Array<"duckduckgo" | "bing" | "google"> {
@@ -1648,6 +1800,13 @@ function asString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
 }
 
 function asNonEmptyString(value: unknown, field: string): string {
@@ -1719,8 +1878,8 @@ async function applySearchBackend(
     signal?: AbortSignal;
   },
 ): Promise<typeof base & {
-  backend?: "ollama";
-  backendUsed?: boolean;
+  summaryBackend?: "ollama";
+  summaryBackendUsed?: boolean;
   backendWarning?: string;
   summary?: string;
 }> {
@@ -1735,15 +1894,15 @@ async function applySearchBackend(
     const summary = await summarizeSearchResultsWithOllama(base.query, base.results, input);
     return {
       ...base,
-      backend: "ollama",
-      backendUsed: true,
+      summaryBackend: "ollama",
+      summaryBackendUsed: true,
       summary,
     };
   } catch (error) {
     return {
       ...base,
-      backend: "ollama",
-      backendUsed: false,
+      summaryBackend: "ollama",
+      summaryBackendUsed: false,
       backendWarning: (error as Error).message,
     };
   }
@@ -1813,6 +1972,212 @@ function resolveOllamaSearchEndpoint(args: Record<string, unknown>): string {
   const envHost = process.env.OLLAMA_HOST?.trim() || process.env.GOATCITADEL_OLLAMA_SEARCH_URL?.trim();
   const base = envHost && envHost.length > 0 ? envHost.replace(/\/+$/u, "") : "http://127.0.0.1:11434";
   return base.endsWith("/api/generate") ? base : `${base}/api/generate`;
+}
+
+function resolveFirecrawlRuntimeConfig(args: Record<string, unknown>): {
+  baseUrl: string;
+  timeoutMs: number;
+  apiKey?: string;
+} {
+  const baseUrl = asString(args.firecrawlBaseUrl)
+    ?? process.env.FIRECRAWL_BASE_URL?.trim()
+    ?? "http://127.0.0.1:3002";
+  const timeoutMs = clampInt(args.firecrawlTimeoutMs, 20_000, 1_000, 120_000);
+  const apiKeyEnv = asString(args.firecrawlApiKeyEnv)
+    ?? process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV?.trim()
+    ?? "FIRECRAWL_API_KEY";
+  const apiKey = apiKeyEnv ? process.env[apiKeyEnv]?.trim() : undefined;
+  return {
+    baseUrl: baseUrl.replace(/\/+$/u, ""),
+    timeoutMs,
+    apiKey: apiKey || undefined,
+  };
+}
+
+async function executeBrowserSearchViaFirecrawl(
+  query: string,
+  limit: number,
+  args: Record<string, unknown>,
+  config: ToolPolicyConfig,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const firecrawl = resolveFirecrawlRuntimeConfig(args);
+  assertAllowedHttpUrl(firecrawl.baseUrl);
+  assertHostAllowed(firecrawl.baseUrl, config.sandbox.networkAllowlist);
+  const response = await fetch(`${firecrawl.baseUrl}/v2/search`, {
+    method: "POST",
+    signal: composeAbortSignal(firecrawl.timeoutMs, signal),
+    headers: {
+      "Content-Type": "application/json",
+      ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
+    },
+    body: JSON.stringify({
+      query,
+      limit,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Firecrawl search failed (${response.status} ${response.statusText}).`);
+  }
+  const payload = await response.json() as Record<string, unknown>;
+  const payloadData = asRecord(payload.data);
+  const data = Array.isArray(payload.data)
+    ? payload.data
+    : Array.isArray(payloadData.results)
+      ? payloadData.results as unknown[]
+      : [];
+  const results = data
+    .map((item) => normalizeFirecrawlSearchResult(item))
+    .filter((item): item is { title: string; url: string; snippet: string } => Boolean(item))
+    .slice(0, limit);
+  return {
+    query,
+    engine: "firecrawl",
+    finalUrl: `${firecrawl.baseUrl}/v2/search`,
+    results,
+    summary: asString(payloadData.summary) ?? asString(payload.summary),
+  };
+}
+
+function normalizeFirecrawlSearchResult(value: unknown): { title: string; url: string; snippet: string } | undefined {
+  const item = asRecord(value);
+  const url = asString(item.url) ?? asString(item.sourceURL) ?? asString(item.sourceUrl);
+  if (!url) {
+    return undefined;
+  }
+  return {
+    title: asString(item.title) ?? url,
+    url,
+    snippet: asString(item.description) ?? asString(item.snippet) ?? asString(item.markdown) ?? "",
+  };
+}
+
+async function executeBrowserNavigateViaFirecrawl(
+  url: string,
+  maxChars: number,
+  args: Record<string, unknown>,
+  config: ToolPolicyConfig,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const scrape = await executeFirecrawlScrape(url, ["markdown", "html"], args, config, signal);
+  return {
+    url,
+    finalUrl: scrape.finalUrl,
+    title: scrape.title,
+    status: scrape.status,
+    textSnippet: (scrape.markdown || extractHtmlText(scrape.html, maxChars)).slice(0, maxChars),
+    extractionMode: scrape.markdown ? "firecrawl-markdown" : "firecrawl-html",
+  };
+}
+
+async function executeBrowserExtractViaFirecrawl(
+  url: string,
+  selector: string,
+  maxChars: number,
+  args: Record<string, unknown>,
+  config: ToolPolicyConfig,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const scrape = await executeFirecrawlScrape(url, ["html", "markdown"], args, config, signal);
+  const extracted = await extractHtmlSelectorText(scrape.html, selector, maxChars, signal);
+  return {
+    url,
+    finalUrl: scrape.finalUrl,
+    title: scrape.title,
+    selector,
+    status: scrape.status,
+    text: extracted.text,
+    extractionMode: extracted.extractionMode,
+  };
+}
+
+async function executeFirecrawlScrape(
+  url: string,
+  formats: string[],
+  args: Record<string, unknown>,
+  config: ToolPolicyConfig,
+  signal?: AbortSignal,
+): Promise<{
+  finalUrl: string;
+  title: string;
+  status: number;
+  markdown: string;
+  html: string;
+}> {
+  const firecrawl = resolveFirecrawlRuntimeConfig(args);
+  assertAllowedHttpUrl(firecrawl.baseUrl);
+  assertHostAllowed(firecrawl.baseUrl, config.sandbox.networkAllowlist);
+  const response = await fetch(`${firecrawl.baseUrl}/v2/scrape`, {
+    method: "POST",
+    signal: composeAbortSignal(firecrawl.timeoutMs, signal),
+    headers: {
+      "Content-Type": "application/json",
+      ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
+    },
+    body: JSON.stringify({
+      url,
+      formats,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Firecrawl scrape failed (${response.status} ${response.statusText}).`);
+  }
+  const payload = await response.json() as Record<string, unknown>;
+  const data = asRecord(payload.data);
+  const metadata = asRecord(data.metadata);
+  const html = asString(data.html) ?? "";
+  const markdown = asString(data.markdown) ?? asString(data.content) ?? "";
+  const finalUrl = asString(metadata.sourceURL)
+    ?? asString(metadata.sourceUrl)
+    ?? asString(data.url)
+    ?? url;
+  return {
+    finalUrl,
+    title: asString(metadata.title) ?? asString(data.title) ?? extractHtmlTitle(html) ?? finalUrl,
+    status: typeof metadata.statusCode === "number" ? metadata.statusCode : response.status,
+    markdown,
+    html,
+  };
+}
+
+async function extractHtmlSelectorText(
+  html: string,
+  selector: string,
+  maxChars: number,
+  signal?: AbortSignal,
+): Promise<{ text: string; extractionMode: string }> {
+  if (!html) {
+    return {
+      text: "",
+      extractionMode: selector === "body" ? "firecrawl-html" : "firecrawl-html-body-fallback",
+    };
+  }
+
+  try {
+    const playwright = await loadPlaywright();
+    const browser = await launchPlaywrightChromium(playwright, true);
+    try {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      if (!page.setContent) {
+        throw new Error("Playwright page.setContent is unavailable.");
+      }
+      throwIfBrowserExecutionAborted(signal);
+      await page.setContent(html, { waitUntil: "domcontentloaded" });
+      const text = await page.locator(selector).first().innerText({ timeout: 5_000 });
+      return {
+        text: text.replace(/\s+/g, " ").trim().slice(0, maxChars),
+        extractionMode: "firecrawl-html-selector",
+      };
+    } finally {
+      await browser.close().catch(() => undefined);
+    }
+  } catch {
+    return {
+      text: extractHtmlText(html, maxChars),
+      extractionMode: selector === "body" ? "firecrawl-html" : "firecrawl-html-body-fallback",
+    };
+  }
 }
 
 async function executeBrowserNavigateFallback(
@@ -2186,6 +2551,10 @@ type PlaywrightPage = {
     url: string,
     options: { timeout: number; waitUntil: "load" | "domcontentloaded" | "networkidle" },
   ) => Promise<{ status: () => number } | null>;
+  setContent?: (
+    html: string,
+    options?: { waitUntil?: "load" | "domcontentloaded" | "networkidle" },
+  ) => Promise<void>;
   waitForLoadState: (state: "domcontentloaded" | "load" | "networkidle") => Promise<void>;
   waitForSelector: (selector: string, options: { timeout: number }) => Promise<void>;
   waitForTimeout: (timeoutMs: number) => Promise<void>;

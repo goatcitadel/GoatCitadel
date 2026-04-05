@@ -72,6 +72,11 @@ const READ_ACCESS_MODE_OPTIONS: SelectOption[] = [
   { value: "full_disk", label: "full disk read access" },
 ];
 
+const FIRECRAWL_DEFAULT_READ_BACKEND_OPTIONS: SelectOption[] = [
+  { value: "native", label: "Native browser tools" },
+  { value: "firecrawl", label: "Firecrawl for read tools" },
+];
+
 const ALLOWLIST_PRESETS: Array<{ id: string; label: string; hosts: string[] }> = [
   { id: "strict", label: "Strict (no outbound hosts)", hosts: [] },
   { id: "local", label: "Local models only", hosts: ["127.0.0.1", "localhost"] },
@@ -151,6 +156,18 @@ const SETTINGS_SECTIONS = [
 export type SettingsSectionId = typeof SETTINGS_SECTIONS[number]["id"];
 
 type ProviderApiStyle = RuntimeSettingsResponse["llm"]["providers"][number]["apiStyle"];
+type NormalizedRuntimeSettingsResponse = RuntimeSettingsResponse & {
+  web: {
+    firecrawl: {
+      enabled: boolean;
+      baseUrl: string;
+      apiKeyEnv?: string;
+      timeoutMs: number;
+      defaultReadBackend: "native" | "firecrawl";
+      fallbackToNative: boolean;
+    };
+  };
+};
 
 const PROVIDER_API_STYLE_OPTIONS: Array<{ value: ProviderApiStyle; label: string }> = [
   { value: "openai-responses", label: "OpenAI Responses" },
@@ -206,13 +223,35 @@ export function resolveSettingsTabSections(tab: SettingsTab): SettingsSectionId[
   }
 }
 
+function normalizeRuntimeSettingsResponse(settings: RuntimeSettingsResponse): NormalizedRuntimeSettingsResponse {
+  return {
+    ...settings,
+    web: {
+      firecrawl: {
+        enabled: settings.web?.firecrawl?.enabled ?? false,
+        baseUrl: settings.web?.firecrawl?.baseUrl ?? "http://127.0.0.1:3002",
+        apiKeyEnv: settings.web?.firecrawl?.apiKeyEnv ?? "FIRECRAWL_API_KEY",
+        timeoutMs: settings.web?.firecrawl?.timeoutMs ?? 20000,
+        defaultReadBackend: settings.web?.firecrawl?.defaultReadBackend ?? "native",
+        fallbackToNative: settings.web?.firecrawl?.fallbackToNative ?? true,
+      },
+    },
+  };
+}
+
 export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = {}) {
-  const [settings, setSettings] = useState<RuntimeSettingsResponse | null>(null);
+  const [settings, setSettings] = useState<NormalizedRuntimeSettingsResponse | null>(null);
   const [deploymentProfile, setDeploymentProfile] = useState<"local_dev" | "trusted_local" | "remote_hardened">("local_dev");
   const [profile, setProfile] = useState("");
   const [budgetMode, setBudgetMode] = useState<"saver" | "balanced" | "power">("balanced");
   const [readAccessMode, setReadAccessMode] = useState<"roots_only" | "approval_required" | "full_disk">("roots_only");
   const [networkAllowlistText, setNetworkAllowlistText] = useState("");
+  const [firecrawlEnabled, setFirecrawlEnabled] = useState(false);
+  const [firecrawlBaseUrl, setFirecrawlBaseUrl] = useState("http://127.0.0.1:3002");
+  const [firecrawlApiKeyEnv, setFirecrawlApiKeyEnv] = useState("FIRECRAWL_API_KEY");
+  const [firecrawlTimeoutMs, setFirecrawlTimeoutMs] = useState(20000);
+  const [firecrawlDefaultReadBackend, setFirecrawlDefaultReadBackend] = useState<"native" | "firecrawl">("native");
+  const [firecrawlFallbackToNative, setFirecrawlFallbackToNative] = useState(true);
 
   const [activeProviderId, setActiveProviderId] = useState("");
   const [activeModel, setActiveModel] = useState("");
@@ -384,7 +423,8 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
   const load = (options: { preserveModelDrafts?: boolean } = {}) => {
     const preserveModelDrafts = options.preserveModelDrafts ?? false;
     void fetchSettings()
-      .then((res) => {
+      .then((raw) => {
+        const res = normalizeRuntimeSettingsResponse(raw);
         const hydrateDrafts = resolveModelDraftHydration(
           preserveModelDrafts,
           hasUnsavedActiveLlmDraft,
@@ -397,6 +437,12 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
         setReadAccessMode(res.readAccessMode ?? "roots_only");
         setNetworkAllowlistText(res.networkAllowlist.join("\n"));
         setAllowlistPreset(matchAllowlistPreset(res.networkAllowlist));
+        setFirecrawlEnabled(res.web.firecrawl.enabled);
+        setFirecrawlBaseUrl(res.web.firecrawl.baseUrl);
+        setFirecrawlApiKeyEnv(res.web.firecrawl.apiKeyEnv ?? "FIRECRAWL_API_KEY");
+        setFirecrawlTimeoutMs(res.web.firecrawl.timeoutMs);
+        setFirecrawlDefaultReadBackend(res.web.firecrawl.defaultReadBackend);
+        setFirecrawlFallbackToNative(res.web.firecrawl.fallbackToNative);
         setAuthMode(res.auth.mode);
         setAllowLoopbackBypass(res.auth.allowLoopbackBypass);
 
@@ -519,6 +565,8 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       { field: "budgetMode", from: settings.budgetMode, to: budgetMode },
       { field: "readAccessMode", from: settings.readAccessMode ?? "roots_only", to: readAccessMode },
       { field: "networkAllowlist", from: settings.networkAllowlist.join("\n"), to: networkAllowlistText },
+      { field: "firecrawlEnabled", from: String(settings.web.firecrawl.enabled), to: String(firecrawlEnabled) },
+      { field: "firecrawlBaseUrl", from: settings.web.firecrawl.baseUrl, to: firecrawlBaseUrl },
       { field: "authMode", from: settings.auth.mode, to: authMode },
       { field: "providerBaseUrl", from: settings.llm.providers.find((p) => p.providerId === providerId)?.baseUrl ?? "", to: providerBaseUrl },
     ];
@@ -564,7 +612,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       }
       riskAbortRef.current?.abort();
     };
-  }, [settings, deploymentProfile, profile, budgetMode, readAccessMode, networkAllowlistText, authMode, providerId, providerBaseUrl]);
+  }, [settings, deploymentProfile, profile, budgetMode, readAccessMode, networkAllowlistText, firecrawlEnabled, firecrawlBaseUrl, authMode, providerId, providerBaseUrl]);
 
   useEffect(() => {
     providerSecretAbortRef.current?.abort();
@@ -606,8 +654,18 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
         budgetMode,
         readAccessMode,
         networkAllowlist: allowlist,
+        web: {
+          firecrawl: {
+            enabled: firecrawlEnabled,
+            baseUrl: firecrawlBaseUrl.trim(),
+            apiKeyEnv: firecrawlApiKeyEnv.trim() || undefined,
+            timeoutMs: firecrawlTimeoutMs,
+            defaultReadBackend: firecrawlDefaultReadBackend,
+            fallbackToNative: firecrawlFallbackToNative,
+          },
+        },
       });
-      setSettings(next);
+      setSettings(normalizeRuntimeSettingsResponse(next));
       await reloadProviderCatalog();
     } catch (err) {
       setError((err as Error).message);
@@ -627,7 +685,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
           activeModel,
         },
       });
-      setSettings(next);
+      setSettings(normalizeRuntimeSettingsResponse(next));
       setHasUnsavedActiveLlmDraft(false);
       await reloadProviderCatalog();
     } catch (err) {
@@ -659,7 +717,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
           },
         },
       });
-      setSettings(next);
+      setSettings(normalizeRuntimeSettingsResponse(next));
       setHasUnsavedProviderDraft(false);
       await reloadProviderCatalog();
       if (providerApiKey.trim()) {
@@ -684,7 +742,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       setProviderSecretStatus(status);
       setProviderApiKey("");
       const next = await fetchSettings();
-      setSettings(next);
+      setSettings(normalizeRuntimeSettingsResponse(next));
       await reloadProviderCatalog();
     } catch (err) {
       setError((err as Error).message);
@@ -697,7 +755,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       const status = await deleteProviderSecret(providerId);
       setProviderSecretStatus(status);
       const next = await fetchSettings();
-      setSettings(next);
+      setSettings(normalizeRuntimeSettingsResponse(next));
       await reloadProviderCatalog();
     } catch (err) {
       setError((err as Error).message);
@@ -1025,7 +1083,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
           basicPassword: basicPassword,
         },
       });
-      setSettings(next);
+      setSettings(normalizeRuntimeSettingsResponse(next));
       const nextStorageMode = resolveAuthStorageMode(authMode, authStorageMode === "persistent");
       if (authMode === "none") {
         clearGatewayAuthState();
@@ -1690,6 +1748,64 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
                 })),
                 { value: "custom", label: "custom" },
               ]}
+            />
+          </div>
+          <div className="controls-row">
+            <label htmlFor="firecrawlEnabled">Firecrawl Read Backend</label>
+            <GCSwitch
+              id="firecrawlEnabled"
+              checked={firecrawlEnabled}
+              onCheckedChange={(checked: boolean) => setFirecrawlEnabled(Boolean(checked))}
+            />
+          </div>
+          <FieldHelp>
+            Firecrawl only powers read-heavy browser work here: `browser.search`, `browser.navigate`, `browser.extract`, and URL-based `docs.ingest`. Interactive browser state stays native.
+          </FieldHelp>
+          <div className="controls-row">
+            <label htmlFor="firecrawlDefaultReadBackend">Default Read Backend</label>
+            <GCSelect
+              id="firecrawlDefaultReadBackend"
+              value={firecrawlDefaultReadBackend}
+              onChange={(value) => setFirecrawlDefaultReadBackend(value as "native" | "firecrawl")}
+              options={FIRECRAWL_DEFAULT_READ_BACKEND_OPTIONS}
+            />
+          </div>
+          <div className="controls-row">
+            <label htmlFor="firecrawlBaseUrl">Firecrawl Base URL</label>
+            <input
+              id="firecrawlBaseUrl"
+              type="url"
+              value={firecrawlBaseUrl}
+              onChange={(event) => setFirecrawlBaseUrl(event.target.value)}
+              placeholder="http://127.0.0.1:3002"
+            />
+          </div>
+          <div className="controls-row">
+            <label htmlFor="firecrawlApiKeyEnv">Firecrawl API Key Env</label>
+            <input
+              id="firecrawlApiKeyEnv"
+              value={firecrawlApiKeyEnv}
+              onChange={(event) => setFirecrawlApiKeyEnv(event.target.value)}
+              placeholder="FIRECRAWL_API_KEY"
+            />
+          </div>
+          <div className="controls-row">
+            <label htmlFor="firecrawlTimeoutMs">Firecrawl Timeout (ms)</label>
+            <input
+              id="firecrawlTimeoutMs"
+              type="number"
+              min={1000}
+              step={1000}
+              value={firecrawlTimeoutMs}
+              onChange={(event) => setFirecrawlTimeoutMs(Math.max(1000, Number.parseInt(event.target.value || "0", 10) || 20000))}
+            />
+          </div>
+          <div className="controls-row">
+            <label htmlFor="firecrawlFallbackToNative">Fallback To Native</label>
+            <GCSwitch
+              id="firecrawlFallbackToNative"
+              checked={firecrawlFallbackToNative}
+              onCheckedChange={(checked: boolean) => setFirecrawlFallbackToNative(Boolean(checked))}
             />
           </div>
           <label htmlFor="allowlist">Network Allowlist (one host/pattern per line)</label>

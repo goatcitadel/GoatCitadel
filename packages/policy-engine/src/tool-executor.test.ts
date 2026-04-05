@@ -3538,4 +3538,83 @@ describe("executeTool", () => {
       backend: "native",
     });
   });
+
+  it("ingests URL documents through Firecrawl v2 scrape", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const documents: Array<Record<string, unknown>> = [];
+    const chunksByDocId = new Map<string, Array<Record<string, unknown>>>();
+    let documentSeq = 0;
+    let chunkSeq = 0;
+    const storage = {
+      knowledge: {
+        listDocuments: vi.fn(() => documents),
+        createDocument: vi.fn((input: Record<string, unknown>) => {
+          const doc = {
+            docId: `doc-${++documentSeq}`,
+            namespace: input.namespace,
+            sourceType: input.sourceType,
+            sourceRef: input.sourceRef,
+            title: input.title,
+            metadata: input.metadata ?? {},
+            createdAt: new Date().toISOString(),
+          };
+          documents.unshift(doc);
+          return doc;
+        }),
+        appendChunks: vi.fn((docId: string, entries: Array<Record<string, unknown>>) => {
+          const saved = entries.map((entry, index) => ({
+            chunkId: `chunk-${++chunkSeq}`,
+            docId,
+            seq: index,
+            content: entry.content,
+            embedding: entry.embedding,
+            tokenEstimate: 1,
+            createdAt: new Date().toISOString(),
+          }));
+          chunksByDocId.set(docId, saved);
+          return saved;
+        }),
+        listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
+        listChunksByNamespace: vi.fn(() => []),
+      },
+    } as unknown as Storage;
+
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      expect(url).toContain("/v2/scrape");
+      return new Response(JSON.stringify({
+        data: {
+          markdown: "# Firecrawl\n\nNormalized markdown content.",
+          metadata: {
+            title: "Firecrawl",
+          },
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch);
+
+    const result = await executeTool({
+      toolName: "docs.ingest",
+      args: {
+        sourceType: "url",
+        source: "https://example.com/firecrawl",
+        namespace: "research",
+        backend: "firecrawl",
+        firecrawlBaseUrl: "http://127.0.0.1:3002",
+      },
+      agentId: "agent",
+      sessionId: "sess-firecrawl",
+      trustLevel: "trusted_workspace",
+    }, policyConfig, storage);
+
+    expect(result.backend).toMatchObject({ backend: "firecrawl" });
+    expect(result.fetchResult).toMatchObject({
+      backend: "firecrawl",
+      sourceType: "url",
+      title: "Firecrawl",
+    });
+    expect(String((result.document as Record<string, unknown>).text)).toContain("Normalized markdown content");
+  });
 });

@@ -670,6 +670,16 @@ export interface RuntimeSettings {
       distillerModel?: string;
     };
   };
+  web: {
+    firecrawl: {
+      enabled: boolean;
+      baseUrl: string;
+      apiKeyEnv?: string;
+      timeoutMs: number;
+      defaultReadBackend: "native" | "firecrawl";
+      fallbackToNative: boolean;
+    };
+  };
   auth: AuthRuntimeSettings;
   llm: LlmRuntimeConfig;
   mesh: {
@@ -9095,7 +9105,7 @@ export class GatewayService {
   }
 
   public async invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
-    const normalizedRequest = this.resolveToolInvokeRequestPaths(request);
+    const normalizedRequest = this.applyRuntimeBrowserBackendDefaults(this.resolveToolInvokeRequestPaths(request));
     const toolHookWorkspaceId = this.resolveToolHookWorkspaceId(normalizedRequest);
     const toolHookEntityId = `${normalizedRequest.sessionId}:${randomUUID()}`;
     const deploymentGuard = evaluateDeploymentProfileToolAccess(
@@ -9236,6 +9246,45 @@ export class GatewayService {
       projectRoot,
       projectWorkspacePath: project?.workspacePath,
     });
+  }
+
+  private applyRuntimeBrowserBackendDefaults(request: ToolInvokeRequest): ToolInvokeRequest {
+    if (!request.args || typeof request.args !== "object") {
+      return request;
+    }
+    const firecrawl = this.config.assistant.web.firecrawl;
+    const args = { ...request.args } as Record<string, unknown>;
+    const explicitBackend = typeof args.backend === "string" ? args.backend.trim().toLowerCase() : undefined;
+    const wantsFirecrawl = firecrawl.enabled
+      && (explicitBackend === "firecrawl"
+        || (!explicitBackend && firecrawl.defaultReadBackend === "firecrawl"));
+
+    if (request.toolName === "browser.search" || request.toolName === "browser.navigate" || request.toolName === "browser.extract") {
+      if (!explicitBackend && firecrawl.enabled) {
+        args.backend = firecrawl.defaultReadBackend;
+      }
+      if (wantsFirecrawl) {
+        args.firecrawlBaseUrl = args.firecrawlBaseUrl ?? firecrawl.baseUrl;
+        args.firecrawlTimeoutMs = args.firecrawlTimeoutMs ?? firecrawl.timeoutMs;
+        args.firecrawlApiKeyEnv = args.firecrawlApiKeyEnv ?? firecrawl.apiKeyEnv;
+        args.firecrawlFallbackToNative = args.firecrawlFallbackToNative ?? firecrawl.fallbackToNative;
+      }
+      return { ...request, args };
+    }
+
+    if (request.toolName === "docs.ingest" && args.sourceType === "url") {
+      if (!explicitBackend && firecrawl.enabled && firecrawl.defaultReadBackend === "firecrawl") {
+        args.backend = "firecrawl";
+      }
+      if (args.backend === "firecrawl") {
+        args.firecrawlBaseUrl = args.firecrawlBaseUrl ?? firecrawl.baseUrl;
+        args.firecrawlTimeoutMs = args.firecrawlTimeoutMs ?? firecrawl.timeoutMs;
+        args.firecrawlApiKeyEnv = args.firecrawlApiKeyEnv ?? firecrawl.apiKeyEnv;
+      }
+      return { ...request, args };
+    }
+
+    return request;
   }
 
   public listToolCatalog(): ToolCatalogEntry[] {
@@ -11213,6 +11262,16 @@ export class GatewayService {
           distillerModel: this.config.assistant.memory.qmd.distiller.model,
         },
       },
+      web: {
+        firecrawl: {
+          enabled: this.config.assistant.web.firecrawl.enabled,
+          baseUrl: this.config.assistant.web.firecrawl.baseUrl,
+          apiKeyEnv: this.config.assistant.web.firecrawl.apiKeyEnv,
+          timeoutMs: this.config.assistant.web.firecrawl.timeoutMs,
+          defaultReadBackend: this.config.assistant.web.firecrawl.defaultReadBackend,
+          fallbackToNative: this.config.assistant.web.firecrawl.fallbackToNative,
+        },
+      },
       auth: this.getAuthRuntimeSettings(),
       llm: this.llmService.getRuntimeConfig({
         includeKeychainForActiveProvider: true,
@@ -11390,6 +11449,16 @@ export class GatewayService {
       qmdDistillerProviderId?: string;
       qmdDistillerModel?: string;
     };
+    web?: {
+      firecrawl?: {
+        enabled?: boolean;
+        baseUrl?: string;
+        apiKeyEnv?: string;
+        timeoutMs?: number;
+        defaultReadBackend?: "native" | "firecrawl";
+        fallbackToNative?: boolean;
+      };
+    };
     mesh?: {
       enabled?: boolean;
       mode?: "lan" | "wan" | "tailnet";
@@ -11407,6 +11476,7 @@ export class GatewayService {
     features?: Partial<RuntimeSettings["features"]>;
   }): RuntimeSettings {
     this.assertDeploymentProfileUpdate(input);
+    this.assertFirecrawlRuntimeUpdate(input);
 
     let persistAssistant = false;
     let persistToolPolicy = false;
@@ -11477,6 +11547,33 @@ export class GatewayService {
       }
       if (input.memory.qmdDistillerModel !== undefined) {
         this.config.assistant.memory.qmd.distiller.model = input.memory.qmdDistillerModel.trim() || undefined;
+      }
+      persistAssistant = true;
+    }
+
+    if (input.web?.firecrawl) {
+      const firecrawl = input.web.firecrawl;
+      if (firecrawl.enabled !== undefined) {
+        this.config.assistant.web.firecrawl.enabled = firecrawl.enabled;
+      }
+      if (firecrawl.baseUrl !== undefined) {
+        const trimmed = firecrawl.baseUrl.trim();
+        if (!trimmed) {
+          throw new Error("web.firecrawl.baseUrl cannot be empty");
+        }
+        this.config.assistant.web.firecrawl.baseUrl = trimmed;
+      }
+      if (firecrawl.apiKeyEnv !== undefined) {
+        this.config.assistant.web.firecrawl.apiKeyEnv = firecrawl.apiKeyEnv.trim() || undefined;
+      }
+      if (firecrawl.timeoutMs !== undefined) {
+        this.config.assistant.web.firecrawl.timeoutMs = Math.max(1_000, Math.min(firecrawl.timeoutMs, 120_000));
+      }
+      if (firecrawl.defaultReadBackend !== undefined) {
+        this.config.assistant.web.firecrawl.defaultReadBackend = firecrawl.defaultReadBackend;
+      }
+      if (firecrawl.fallbackToNative !== undefined) {
+        this.config.assistant.web.firecrawl.fallbackToNative = firecrawl.fallbackToNative;
       }
       persistAssistant = true;
     }
@@ -11601,6 +11698,12 @@ export class GatewayService {
     deploymentProfile?: DeploymentProfile;
     auth?: AuthSettingsUpdateInput;
     networkAllowlist?: string[];
+    web?: {
+      firecrawl?: {
+        enabled?: boolean;
+        baseUrl?: string;
+      };
+    };
   }): void {
     const nextProfile = input.deploymentProfile ?? this.config.assistant.deploymentProfile;
     if (nextProfile !== "remote_hardened") {
@@ -11629,6 +11732,29 @@ export class GatewayService {
 
     if (errors.length > 0) {
       throw new Error(errors.join(" "));
+    }
+  }
+
+  private assertFirecrawlRuntimeUpdate(input: {
+    networkAllowlist?: string[];
+    web?: {
+      firecrawl?: {
+        enabled?: boolean;
+        baseUrl?: string;
+      };
+    };
+  }): void {
+    const nextAllowlist = (input.networkAllowlist ?? this.config.toolPolicy.sandbox.networkAllowlist)
+      .map((host) => host.trim())
+      .filter(Boolean);
+    const nextEnabled = input.web?.firecrawl?.enabled ?? this.config.assistant.web.firecrawl.enabled;
+    const nextBaseUrl = input.web?.firecrawl?.baseUrl?.trim() || this.config.assistant.web.firecrawl.baseUrl;
+
+    if (!nextEnabled) {
+      return;
+    }
+    if (!this.isUrlAllowlistedInList(nextBaseUrl, nextAllowlist)) {
+      throw new Error(`web.firecrawl.baseUrl must be present in the outbound allowlist before Firecrawl can be enabled: ${nextBaseUrl}`);
     }
   }
 
@@ -16917,21 +17043,38 @@ export class GatewayService {
   private isConnectionUrlAllowlisted(urlValue: string): boolean {
     try {
       const url = new URL(urlValue);
-      return this.isHostAllowlisted(url.hostname);
+      return this.isUrlAllowlisted(url.toString());
+    } catch {
+      return false;
+    }
+  }
+
+  private isUrlAllowlisted(urlValue: string): boolean {
+    return this.isUrlAllowlistedInList(urlValue, this.config.toolPolicy.sandbox.networkAllowlist);
+  }
+
+  private isUrlAllowlistedInList(urlValue: string, allowlist: string[]): boolean {
+    try {
+      const url = new URL(urlValue);
+      return this.isHostAllowlistedInList(url.host, allowlist) || this.isHostAllowlistedInList(url.hostname, allowlist);
     } catch {
       return false;
     }
   }
 
   private isHostAllowlisted(hostname: string): boolean {
+    return this.isHostAllowlistedInList(hostname, this.config.toolPolicy.sandbox.networkAllowlist);
+  }
+
+  private isHostAllowlistedInList(hostname: string, allowlist: string[]): boolean {
     const normalizedHost = hostname.trim().toLowerCase();
-    const allowlist = this.config.toolPolicy.sandbox.networkAllowlist
+    const normalizedAllowlist = allowlist
       .map((host) => host.trim().toLowerCase())
       .filter(Boolean);
-    if (allowlist.length === 0) {
+    if (normalizedAllowlist.length === 0) {
       return false;
     }
-    return allowlist.some((allowed) => {
+    return normalizedAllowlist.some((allowed) => {
       if (allowed === "*" || allowed === normalizedHost) {
         return true;
       }
@@ -19406,6 +19549,7 @@ export class GatewayService {
       },
       approvalExplainer: this.config.assistant.approvalExplainer,
       memory: this.config.assistant.memory,
+      web: this.config.assistant.web,
       mesh: this.config.assistant.mesh,
       npu: this.config.assistant.npu,
       sqlite: this.config.assistant.sqlite,
@@ -19449,6 +19593,7 @@ export class GatewayService {
       },
       approvalExplainer: this.config.assistant.approvalExplainer,
       memory: this.config.assistant.memory,
+      web: this.config.assistant.web,
       mesh: this.config.assistant.mesh,
       npu: this.config.assistant.npu,
       sqlite: this.config.assistant.sqlite,

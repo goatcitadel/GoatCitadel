@@ -528,13 +528,14 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       properties: {
         query: { type: "string" },
         maxResults: { type: "integer", minimum: 1, maximum: 10 },
+        backend: { type: "string", enum: ["native", "firecrawl"] },
       },
       required: ["query"],
     },
     examples: [
       {
         title: "Search for authoritative sources before extracting",
-        args: { query: "OpenAI background mode docs", maxResults: 5 },
+        args: { query: "OpenAI background mode docs", maxResults: 5, backend: "firecrawl" },
       },
     ],
   },
@@ -555,13 +556,14 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       properties: {
         url: { type: "string", format: "uri" },
         maxChars: { type: "integer", minimum: 200, maximum: 50000 },
+        backend: { type: "string", enum: ["native", "firecrawl"] },
       },
       required: ["url"],
     },
     examples: [
       {
         title: "Read a known documentation page",
-        args: { url: "https://example.com/docs/guide", maxChars: 12000 },
+        args: { url: "https://example.com/docs/guide", maxChars: 12000, backend: "firecrawl" },
       },
     ],
   },
@@ -583,13 +585,14 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
         url: { type: "string", format: "uri" },
         selector: { type: "string" },
         maxChars: { type: "integer", minimum: 200, maximum: 50000 },
+        backend: { type: "string", enum: ["native", "firecrawl"] },
       },
       required: ["url", "selector"],
     },
     examples: [
       {
         title: "Extract a specific results panel",
-        args: { url: "https://example.com/results", selector: "main article", maxChars: 8000 },
+        args: { url: "https://example.com/results", selector: "main article", maxChars: 8000, backend: "firecrawl" },
       },
     ],
   },

@@ -254,6 +254,22 @@ export const AssistantConfigInputSchema = z
       })
       .passthrough()
       .optional(),
+    web: z
+      .object({
+        firecrawl: z
+          .object({
+            enabled: z.boolean().optional(),
+            baseUrl: z.string().url().optional(),
+            apiKeyEnv: z.string().optional(),
+            timeoutMs: z.number().optional(),
+            defaultReadBackend: z.enum(["native", "firecrawl"]).optional(),
+            fallbackToNative: z.boolean().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
     mesh: z
       .object({
         enabled: z.boolean().optional(),

@@ -54,6 +54,16 @@
         }
       }
     },
+    "web": {
+      "firecrawl": {
+        "enabled": false,
+        "baseUrl": "http://127.0.0.1:3002",
+        "apiKeyEnv": "FIRECRAWL_API_KEY",
+        "timeoutMs": 20000,
+        "defaultReadBackend": "native",
+        "fallbackToNative": true
+      }
+    },
     "mesh": {
       "enabled": false,
       "mode": "lan",
