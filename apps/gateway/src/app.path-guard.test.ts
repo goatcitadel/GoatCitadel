@@ -20,4 +20,11 @@ describe("gateway encoded-path guard", () => {
   it("rejects malformed encoded paths", () => {
     expect(isSuspiciousEncodedPath("/api/v1/%zz/inbound")).toBe(true);
   });
+
+  it("rejects Windows UNC, ADS, and reserved-device path segments", () => {
+    expect(isSuspiciousEncodedPath("//server/share/secrets.txt")).toBe(true);
+    expect(isSuspiciousEncodedPath("/api/v1/file.txt::$DATA")).toBe(true);
+    expect(isSuspiciousEncodedPath("/api/v1/CON/logs")).toBe(true);
+    expect(isSuspiciousEncodedPath("/C:/Windows/System32/drivers/etc/hosts")).toBe(true);
+  });
 });

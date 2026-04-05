@@ -2400,7 +2400,7 @@ function normalizeToolOutputContent(content: ChatCompletionRequest["messages"][n
   if (typeof content === "string") {
     return content;
   }
-  return mapOpenAiResponsesContent(content);
+  return mapOpenAiResponsesContent("tool", content);
 }
 
 function normalizeStringMessageContent(content: ChatCompletionRequest["messages"][number]["content"]): string {

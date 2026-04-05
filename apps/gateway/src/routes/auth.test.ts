@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import rateLimit from "@fastify/rate-limit";
 import { authPlugin } from "../plugins/auth.js";
 import { authRoutes } from "./auth.js";
 import type { AuthConfig } from "../config.js";
@@ -21,7 +22,10 @@ function baseAuthConfig(mode: AuthConfig["mode"]): AuthConfig {
 
 const COMPANION_SESSION_ID = "4b229ee9-bf83-4012-86c8-620f6e5306e0";
 
-async function buildApp(mode: AuthConfig["mode"]): Promise<FastifyInstance> {
+async function buildApp(
+  mode: AuthConfig["mode"],
+  options: { registerRateLimit?: boolean } = {},
+): Promise<FastifyInstance> {
   const app = Fastify();
   app.decorate("gateway", {
     getAuthCredentialPlan: () => ({
@@ -239,6 +243,28 @@ async function buildApp(mode: AuthConfig["mode"]): Promise<FastifyInstance> {
       auth: baseAuthConfig(mode),
     },
   } as never);
+  if (options.registerRateLimit) {
+    await app.register(rateLimit, {
+      global: false,
+      timeWindow: "1 minute",
+      keyGenerator: (request) => request.ip,
+      allowList: [],
+      max: 20,
+    });
+    app.addHook("onRoute", (routeOptions) => {
+      const currentConfig = (routeOptions.config ?? {}) as Record<string, unknown>;
+      const currentRateLimit = currentConfig.rateLimit && typeof currentConfig.rateLimit === "object"
+        ? currentConfig.rateLimit as Record<string, unknown>
+        : {};
+      routeOptions.config = {
+        ...currentConfig,
+        rateLimit: {
+          ...currentRateLimit,
+          max: typeof currentRateLimit.max === "number" ? currentRateLimit.max : 20,
+        },
+      };
+    });
+  }
   await app.register(authPlugin);
   await app.register(authRoutes);
   return app;
@@ -567,5 +593,33 @@ describe("auth routes", () => {
     expect(response.json()).toMatchObject({
       error: "Companion session admin access requires operator authentication.",
     });
+  });
+
+  it("applies tighter per-route rate limits on device request creation", async () => {
+    app = await buildApp("token", { registerRateLimit: true });
+
+    let limitedResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/device-requests",
+      remoteAddress: "203.0.113.10",
+      payload: {
+        deviceLabel: "LAN laptop",
+        deviceType: "desktop",
+      },
+    });
+
+    for (let index = 0; index < 5; index += 1) {
+      limitedResponse = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/device-requests",
+        remoteAddress: "203.0.113.10",
+        payload: {
+          deviceLabel: `LAN laptop ${index}`,
+          deviceType: "desktop",
+        },
+      });
+    }
+
+    expect(limitedResponse.statusCode).toBe(429);
   });
 });

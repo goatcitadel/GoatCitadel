@@ -647,6 +647,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
 
       const signatureHeader = readHeaderValue(request.headers["x-hub-signature-256"]);
       if (!verifyWhatsAppWebhookSignature(signatureHeader, rawBody, appSecret)) {
+        logWebhookVerificationFailure(request, "whatsapp", params.data.connectionId, "signature_mismatch");
         return reply.code(401).send({ error: "Invalid WhatsApp webhook signature" });
       }
 
@@ -754,6 +755,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
         rawBody,
         secret: signingSecret,
       })) {
+        logWebhookVerificationFailure(request, "slack", params.data.connectionId, "signature_mismatch");
         return reply.code(401).send({ error: "Invalid Slack webhook signature" });
       }
 
@@ -859,6 +861,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
 
       const signatureHeader = readHeaderValue(request.headers["x-line-signature"]);
       if (!verifyLineWebhookSignature(signatureHeader, rawBody, channelSecret)) {
+        logWebhookVerificationFailure(request, "line", params.data.connectionId, "signature_mismatch");
         return reply.code(401).send({ error: "Invalid LINE webhook signature" });
       }
 
@@ -962,6 +965,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       const signatureHeader = readHeaderValue(request.headers["x-nextcloud-talk-signature"]);
       const backendHeader = readHeaderValue(request.headers["x-nextcloud-talk-backend"]);
       if (!verifyNextcloudTalkSignature(randomHeader, signatureHeader, rawBody, secret)) {
+        logWebhookVerificationFailure(request, "nextcloud-talk", params.data.connectionId, "signature_mismatch");
         return reply.code(401).send({ error: "Invalid Nextcloud Talk webhook signature" });
       }
 
@@ -1199,6 +1203,22 @@ function readHeaderValue(value: string | string[] | undefined): string | undefin
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function logWebhookVerificationFailure(
+  request: { log: { warn: (...args: unknown[]) => void } },
+  channel: "whatsapp" | "slack" | "line" | "nextcloud-talk",
+  connectionId: string,
+  reason: string,
+): void {
+  request.log.warn(
+    {
+      channel,
+      connectionId,
+      reason,
+    },
+    "Rejected inbound webhook because verification failed.",
+  );
 }
 
 function resolveNextcloudTalkSecret(config: Record<string, unknown>): string | undefined {

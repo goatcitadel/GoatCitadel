@@ -811,6 +811,7 @@ describe("integrations inbound route guards", () => {
 
   it("rejects unsigned WhatsApp webhooks", async () => {
     app = Fastify();
+    const warn = vi.spyOn(app.log, "warn").mockImplementation(() => undefined);
     app.decorate("gateway", {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection: vi.fn(() => ({
@@ -846,6 +847,15 @@ describe("integrations inbound route guards", () => {
     });
 
     expect(response.statusCode).toBe(401);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        reason: "signature_mismatch",
+      }),
+      "Rejected inbound webhook because verification failed.",
+    );
+    warn.mockRestore();
   });
 
   it("accepts signed LINE webhooks without standard auth or idempotency headers", async () => {

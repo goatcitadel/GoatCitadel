@@ -19,10 +19,10 @@ describe("shipped config defaults", () => {
     const llm = JSON.parse(llmRaw) as { activeProviderId?: string; activeModel?: string };
 
     expect(assistant.auth?.mode ?? "none").toBe("none");
-    expect(assistant.web?.firecrawl?.enabled ?? false).toBe(false);
+    expect(assistant.web?.firecrawl?.enabled ?? false).toBe(true);
     expect(assistant.web?.firecrawl?.baseUrl ?? "").toBe("http://127.0.0.1:3002");
     expect(unified.assistant?.auth?.mode ?? "none").toBe("none");
-    expect(unified.assistant?.web?.firecrawl?.enabled ?? false).toBe(false);
+    expect(unified.assistant?.web?.firecrawl?.enabled ?? false).toBe(true);
     expect(unified.llm?.activeProviderId ?? "").toBe("");
     expect(unified.llm?.activeModel ?? "").toBe("");
     expect(llm.activeProviderId ?? "").toBe("");

@@ -705,6 +705,26 @@ describe("browser tools coverage sweep", () => {
     expect(nav.action).toBe("navigate");
   });
 
+  it("still blocks metadata hosts under the danger profile", async () => {
+    const baseConfig = createConfig(tempRoot);
+    const config: ToolPolicyConfig = {
+      ...baseConfig,
+      tools: {
+        profile: "danger",
+        allow: [],
+        deny: [],
+      },
+      sandbox: {
+        ...baseConfig.sandbox,
+        networkAllowlist: ["localhost"],
+      },
+    };
+
+    await expect(
+      executeBrowserTool("browser.navigate", { url: "http://169.254.169.254/latest/meta-data" }, config),
+    ).rejects.toThrow(/blocked/i);
+  });
+
   it("manages browser cookies and storage in session-scoped state", async () => {
     const config = createConfig(tempRoot);
     const executionContext = { sessionId: "sess-browser-state" };

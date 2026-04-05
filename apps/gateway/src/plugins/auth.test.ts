@@ -410,6 +410,28 @@ describe("auth plugin", () => {
     expect(response.json()).toMatchObject({ actorSource: "sse" });
   });
 
+  it("evicts the oldest SSE bridge token when one actor exceeds the per-actor cap", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "sse-bearer", queryParam: "access_token" },
+    });
+
+    const issued = Array.from({ length: 51 }, () => app!.issueSseToken("events:stream", 30_000, "token:test-actor"));
+
+    const oldest = await app.inject({
+      method: "GET",
+      url: `/api/v1/events/stream?sse_token=${encodeURIComponent(issued[0]!.token)}`,
+    });
+    expect(oldest.statusCode).toBe(401);
+
+    const newest = await app.inject({
+      method: "GET",
+      url: `/api/v1/events/stream?sse_token=${encodeURIComponent(issued.at(-1)?.token ?? "")}`,
+    });
+    expect(newest.statusCode).toBe(200);
+    expect(newest.json()).toMatchObject({ actorSource: "sse" });
+  });
+
   it("accepts approved device bearer tokens across auth modes", async () => {
     app = await buildApp({
       mode: "basic",

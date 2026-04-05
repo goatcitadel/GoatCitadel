@@ -94,7 +94,25 @@ function ChatMarkdown({ content }: { content: string }) {
   return (
     <div className="chat-v11-markdown">
       <ReactMarkdown
+        skipHtml
         remarkPlugins={[remarkGfm]}
+        allowedElements={[
+          "a",
+          "blockquote",
+          "br",
+          "code",
+          "em",
+          "h1",
+          "h2",
+          "h3",
+          "hr",
+          "li",
+          "ol",
+          "p",
+          "pre",
+          "strong",
+          "ul",
+        ]}
         components={{
           a: ({ node: _node, onClick, ...props }) => (
             <a
@@ -132,11 +150,21 @@ function ChatBranchSwitcher({
     : undefined;
   return (
     <div className="chat-v11-branch-switcher">
-      <button type="button" disabled={!previousTurnId} onClick={() => previousTurnId && onSwitch(previousTurnId)}>
+      <button
+        type="button"
+        aria-label={`Show previous variant for turn ${turn.turnId}`}
+        disabled={!previousTurnId}
+        onClick={() => previousTurnId && onSwitch(previousTurnId)}
+      >
         Previous variant
       </button>
       <span>{currentIndex + 1} / {turn.branch.siblingCount}</span>
-      <button type="button" disabled={!nextTurnId} onClick={() => nextTurnId && onSwitch(nextTurnId)}>
+      <button
+        type="button"
+        aria-label={`Show next variant for turn ${turn.turnId}`}
+        disabled={!nextTurnId}
+        onClick={() => nextTurnId && onSwitch(nextTurnId)}
+      >
         Next variant
       </button>
     </div>
@@ -178,8 +206,22 @@ function ChatTurnDetails({
       <summary>Review run details</summary>
       <ChatBranchSwitcher turn={turn} onSwitch={onSwitchBranch} />
       <div className="chat-v11-row-actions">
-        {turn.assistantMessage ? <button type="button" onClick={() => onRetryTurn(turn.turnId)}>Retry answer</button> : null}
-        <button type="button" onClick={() => onEditTurn(turn.turnId)}>Edit and resend</button>
+        {turn.assistantMessage ? (
+          <button
+            type="button"
+            aria-label={`Retry assistant answer for turn ${turn.turnId}`}
+            onClick={() => onRetryTurn(turn.turnId)}
+          >
+            Retry answer
+          </button>
+        ) : null}
+        <button
+          type="button"
+          aria-label={`Edit and resend turn ${turn.turnId}`}
+          onClick={() => onEditTurn(turn.turnId)}
+        >
+          Edit and resend
+        </button>
       </div>
       {turn.toolRuns.length > 0 ? (
         <div className="chat-v11-turn-section">
@@ -312,6 +354,7 @@ function ChatTurnCard({
     <article className={`chat-v11-turn-card${selected ? " selected" : ""}`}>
       <div
         aria-pressed={selected}
+        aria-label={`Select turn ${turn.turnId}`}
         className="chat-v11-turn-surface"
         onClick={() => onSelect(turn.turnId)}
         onKeyDown={handleSurfaceKeyDown}

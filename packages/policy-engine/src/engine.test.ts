@@ -123,6 +123,71 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(evaluation.requiresApproval).toBe(false);
   });
 
+  it("still blocks metadata hosts under the danger profile", () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine({
+      ...policyConfig,
+      tools: {
+        ...policyConfig.tools,
+        allow: [],
+      },
+    }, storage);
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "browser.navigate",
+      args: { url: "http://169.254.169.254/latest/meta-data" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toContain("structural_safety_block");
+  });
+
+  it("audits public-host bypasses under the danger profile", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine({
+      ...policyConfig,
+      tools: {
+        ...policyConfig.tools,
+        allow: [],
+      },
+    }, storage);
+
+    vi.mocked(storage.toolGrants.list).mockReturnValue([{
+      grantId: "grant-browser-navigate",
+      toolPattern: "browser.navigate",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "session",
+      grantType: "persistent",
+      createdBy: "test",
+      createdAt: new Date().toISOString(),
+    }]);
+
+    const result = await engine.invoke({
+      toolName: "browser.navigate",
+      args: { url: "https://apnews.com/oddities" },
+      agentId: "agent",
+      sessionId: "session",
+      dryRun: true,
+    });
+
+    expect(result.outcome).toBe("executed");
+    expect(vi.mocked(storage.audit.append)).toHaveBeenCalledWith(
+      "tool_invocations",
+      expect.objectContaining({
+        event: "danger_profile_network_bypass",
+        toolName: "browser.navigate",
+        targets: [
+          expect.objectContaining({
+            target: "https://apnews.com/oddities",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("persists a default approval expiry when a tool action is gated", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T12:00:00.000Z"));

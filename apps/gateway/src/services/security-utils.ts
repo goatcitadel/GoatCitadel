@@ -15,6 +15,12 @@ export interface NormalizedMemoryForgetCriteria {
   query?: string;
 }
 
+export interface OutsideRootPathWarning {
+  fingerprint: string;
+  baseName: string;
+  normalizedPath: string;
+}
+
 export function normalizeMemoryForgetCriteria(input: MemoryForgetCriteriaInput = {}): NormalizedMemoryForgetCriteria {
   const itemIds = Array.isArray(input.itemIds)
     ? [...new Set(input.itemIds.map((itemId) => itemId.trim()).filter(Boolean))]
@@ -36,6 +42,7 @@ export function serializePathWithinRoot(
   rootDir: string,
   fullPath: string,
   warnedOutsideRootPathFingerprints?: Set<string>,
+  onOutsideRootPathWarning?: (warning: OutsideRootPathWarning) => void,
 ): string {
   const normalizedPath = path.resolve(fullPath);
   const relative = path.relative(rootDir, normalizedPath).replaceAll("\\", "/");
@@ -51,10 +58,11 @@ export function serializePathWithinRoot(
   const fingerprint = createHash("sha256").update(normalizedPath).digest("hex").slice(0, 12);
   if (warnedOutsideRootPathFingerprints && !warnedOutsideRootPathFingerprints.has(fingerprint)) {
     warnedOutsideRootPathFingerprints.add(fingerprint);
-    console.warn(
-      `[goatcitadel:security] refusing to expose non-root filesystem path (fingerprint=${fingerprint}, base=${path.basename(normalizedPath)})`,
-    );
+    onOutsideRootPathWarning?.({
+      fingerprint,
+      baseName: path.basename(normalizedPath),
+      normalizedPath,
+    });
   }
   return "[outside-root]";
 }
-

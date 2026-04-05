@@ -18,7 +18,11 @@ import { resolveEffectivePolicy } from "./policy-resolver.js";
 import { createDefaultToolRegistry, type ToolDefinition, type ToolRegistry } from "./tool-registry.js";
 import { matchesAnyToolPattern, matchesToolPattern } from "./tool-patterns.js";
 import { assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
-import { assertHostAllowed } from "./sandbox/network-guard.js";
+import {
+  assertHostAllowed,
+  assertHostAllowedInDangerProfile,
+  evaluateDangerousHostBypass,
+} from "./sandbox/network-guard.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { executeTool } from "./tool-executor.js";
 import {
@@ -46,6 +50,7 @@ function shouldEnforceNetworkAllowlist(config: ToolPolicyConfig): boolean {
 
 function assertHostAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
   if (!shouldEnforceNetworkAllowlist(config)) {
+    assertHostAllowedInDangerProfile(hostOrUrl, config.sandbox.networkAllowlist);
     return;
   }
   assertHostAllowed(hostOrUrl, config.sandbox.networkAllowlist);
@@ -184,6 +189,8 @@ export class ToolPolicyEngine {
         audit,
       };
     }
+
+    await this.recordDangerProfileNetworkBypassIfNeeded(auditEventId, request);
 
     if (request.dryRun) {
       const result = {
@@ -965,6 +972,37 @@ export class ToolPolicyEngine {
       result: sanitizedResult,
     });
   }
+
+  private async recordDangerProfileNetworkBypassIfNeeded(
+    auditEventId: string,
+    request: ToolInvokeRequest,
+  ): Promise<void> {
+    if (this.config.tools.profile !== "danger") {
+      return;
+    }
+    const bypassedTargets = extractOutboundHostCandidates(request).flatMap((target) => {
+      const decision = evaluateDangerousHostBypass(target, this.config.sandbox.networkAllowlist);
+      return decision.shouldAudit
+        ? [{
+            target,
+            hostname: decision.hostname,
+            reason: decision.reason,
+          }]
+        : [];
+    });
+    if (bypassedTargets.length === 0) {
+      return;
+    }
+    await this.storage.audit.append("tool_invocations", {
+      auditEventId,
+      event: "danger_profile_network_bypass",
+      agentId: request.agentId,
+      sessionId: request.sessionId,
+      taskId: request.taskId,
+      toolName: request.toolName,
+      targets: bypassedTargets,
+    });
+  }
 }
 
 function buildScopeCandidates(request: ToolAccessEvaluateRequest): Array<{ scope: "task" | "agent" | "session" | "global"; scopeRef: string }> {
@@ -976,6 +1014,37 @@ function buildScopeCandidates(request: ToolAccessEvaluateRequest): Array<{ scope
   out.push({ scope: "session", scopeRef: request.sessionId });
   out.push({ scope: "global", scopeRef: "global" });
   return out;
+}
+
+function extractOutboundHostCandidates(request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">): string[] {
+  if (request.toolName.startsWith("http.") || request.toolName === "webhook.send") {
+    return stringTargets(request.args?.url, request.args?.host);
+  }
+  if (request.toolName.startsWith("bankr.")) {
+    const targets = ["https://api.bankr.bot"];
+    if (request.args?.useLlmGateway === true) {
+      targets.push("https://llm.bankr.bot");
+    }
+    return targets;
+  }
+  if (request.toolName === "docs.ingest" && request.args?.sourceType === "url") {
+    const targets = stringTargets(request.args?.source);
+    if (request.args?.backend === "firecrawl") {
+      targets.push(String(request.args?.firecrawlBaseUrl ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002"));
+    }
+    return targets;
+  }
+  if (request.toolName.startsWith("browser.")) {
+    return stringTargets(request.args?.url);
+  }
+  return [];
+}
+
+function stringTargets(...values: unknown[]): string[] {
+  return values
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 function isGrantActive(grant: ToolGrantRecord): boolean {

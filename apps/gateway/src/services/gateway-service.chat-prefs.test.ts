@@ -34,14 +34,7 @@ function createPrefs(
 
 describe("GatewayService chat session provider normalization", () => {
   it("treats outbound hosts as implicitly allowed under the danger tool profile", () => {
-    const gateway = Object.create(GatewayService.prototype) as GatewayService & {
-      config: {
-        toolPolicy: {
-          tools: { profile: string };
-          sandbox: { networkAllowlist: string[] };
-        };
-      };
-    };
+    const gateway = Object.create(GatewayService.prototype) as any;
 
     gateway.config = {
       toolPolicy: {
@@ -55,22 +48,7 @@ describe("GatewayService chat session provider normalization", () => {
   });
 
   it("defaults browser tools to Firecrawl and keeps native fallback enabled", () => {
-    const gateway = Object.create(GatewayService.prototype) as GatewayService & {
-      config: {
-        assistant: {
-          web: {
-            firecrawl: {
-              enabled: boolean;
-              baseUrl: string;
-              apiKeyEnv?: string;
-              timeoutMs: number;
-              defaultReadBackend: "native" | "firecrawl";
-              fallbackToNative: boolean;
-            };
-          };
-        };
-      };
-    };
+    const gateway = Object.create(GatewayService.prototype) as any;
 
     gateway.config = {
       assistant: {

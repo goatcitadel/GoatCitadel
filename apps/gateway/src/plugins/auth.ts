@@ -11,7 +11,11 @@ import fp from "fastify-plugin";
 
 declare module "fastify" {
   interface FastifyInstance {
-    issueSseToken: (scope: "events:stream" | "dev:diagnostics:stream", ttlMs?: number) => SseTokenIssueResponse;
+    issueSseToken: (
+      scope: "events:stream" | "dev:diagnostics:stream",
+      ttlMs?: number,
+      actorId?: string,
+    ) => SseTokenIssueResponse;
   }
 
   interface FastifyRequest {
@@ -25,6 +29,7 @@ declare module "fastify" {
 
 interface SseTokenRecord {
   token: string;
+  actorId: string;
   scope: "events:stream" | "dev:diagnostics:stream";
   expiresAt: number;
 }
@@ -32,6 +37,7 @@ interface SseTokenRecord {
 const MAX_AUTH_TOKEN_LENGTH = 4096;
 const MAX_BASIC_CREDENTIAL_LENGTH = 8192;
 const MAX_ACTIVE_SSE_TOKENS = 10_000;
+const MAX_ACTIVE_SSE_TOKENS_PER_ACTOR = 50;
 
 export const authPlugin = fp(async (fastify) => {
   const sseTokens = new Map<string, SseTokenRecord>();
@@ -51,13 +57,18 @@ export const authPlugin = fp(async (fastify) => {
   fastify.decorateRequest("authGrantId", undefined);
   fastify.decorateRequest("authCompanionSessionId", undefined);
 
-  fastify.decorate("issueSseToken", (scope: "events:stream" | "dev:diagnostics:stream", ttlMs = 2 * 60 * 1000) => {
+  fastify.decorate("issueSseToken", (
+    scope: "events:stream" | "dev:diagnostics:stream",
+    ttlMs = 2 * 60 * 1000,
+    actorId = "anonymous",
+  ) => {
     purgeExpiredSseTokens(sseTokens);
-    enforceSseTokenCapacity(sseTokens, MAX_ACTIVE_SSE_TOKENS);
+    enforceSseTokenCapacity(sseTokens, MAX_ACTIVE_SSE_TOKENS, actorId, MAX_ACTIVE_SSE_TOKENS_PER_ACTOR);
     const token = randomBytes(32).toString("base64url");
     const expiresAt = Date.now() + Math.max(30_000, Math.min(10 * 60 * 1000, ttlMs));
     sseTokens.set(token, {
       token,
+      actorId,
       scope,
       expiresAt,
     });
@@ -288,7 +299,12 @@ function isAuthMisconfigured(auth: {
 function isOnboardingComplete(fastify: FastifyInstance): boolean {
   try {
     return Boolean(fastify.gateway?.getOnboardingStartupState?.().completed);
-  } catch {
+  } catch (error) {
+    // Safe default: "complete" disables the onboarding recovery bypass and keeps auth enforced.
+    fastify.log.warn(
+      { err: error },
+      "Failed to inspect onboarding startup state; treating onboarding as complete to keep auth restrictive.",
+    );
     return true;
   }
 }
@@ -400,7 +416,19 @@ function purgeExpiredSseTokens(store: Map<string, SseTokenRecord>): void {
   }
 }
 
-function enforceSseTokenCapacity(store: Map<string, SseTokenRecord>, maxItems: number): void {
+function enforceSseTokenCapacity(
+  store: Map<string, SseTokenRecord>,
+  maxItems: number,
+  actorId: string,
+  maxItemsPerActor: number,
+): void {
+  while (countSseTokensForActor(store, actorId) >= maxItemsPerActor) {
+    const oldestActorKey = findOldestSseTokenKey(store, actorId);
+    if (!oldestActorKey) {
+      break;
+    }
+    store.delete(oldestActorKey);
+  }
   while (store.size >= maxItems) {
     const oldestKey = store.keys().next().value as string | undefined;
     if (!oldestKey) {
@@ -408,6 +436,25 @@ function enforceSseTokenCapacity(store: Map<string, SseTokenRecord>, maxItems: n
     }
     store.delete(oldestKey);
   }
+}
+
+function countSseTokensForActor(store: Map<string, SseTokenRecord>, actorId: string): number {
+  let count = 0;
+  for (const record of store.values()) {
+    if (record.actorId === actorId) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function findOldestSseTokenKey(store: Map<string, SseTokenRecord>, actorId: string): string | undefined {
+  for (const [key, record] of store.entries()) {
+    if (record.actorId === actorId) {
+      return key;
+    }
+  }
+  return undefined;
 }
 
 function setAuthActor(
