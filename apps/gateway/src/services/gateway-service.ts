@@ -475,6 +475,7 @@ import { BackupRetentionService } from "./backup-retention-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
+import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import * as chatSessionService from "./chat-session-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
@@ -10978,40 +10979,11 @@ export class GatewayService {
   }
 
   public recordConnectorHealthRun(report: ConnectorDiagnosticReport): void {
-    this.gatewaySql
-      .prepare(
-        `
-      INSERT INTO connector_health_runs (
-        health_run_id, connector_type, connector_id, status, checks_json, recommendation, checked_at
-      ) VALUES (
-        @healthRunId, @connectorType, @connectorId, @status, @checksJson, @recommendation, @checkedAt
-      )
-    `,
-      )
-      .run({
-        healthRunId: randomUUID(),
-        connectorType: report.connectorType,
-        connectorId: report.connectorId,
-        status: report.status,
-        checksJson: JSON.stringify(report.checks),
-        recommendation: report.recommendedNextAction ?? null,
-        checkedAt: report.checkedAt,
-      });
+    return connectorDiagnosticsHelpers.recordConnectorHealthRun(this, report);
   }
 
   public pickConnectorDiagnosticAction(checks: ConnectorDiagnosticReport["checks"]): string | undefined {
-    if (checks.some((check) => check.key === "status" && check.status === "fail")) {
-      return "Reconnect the connector and resolve the reported status error first.";
-    }
-    if (checks.some((check) => check.key === "auth" && check.status !== "pass")) {
-      return "Provide valid credentials and rerun health check.";
-    }
-    if (checks.some((check) => check.key === "url" && check.status !== "pass")) {
-      return "Set a reachable URL/endpoint and rerun health check.";
-    }
-    return checks.some((check) => check.status === "warn")
-      ? "Review warning checks and tighten policy before production use."
-      : undefined;
+    return connectorDiagnosticsHelpers.pickConnectorDiagnosticAction(checks);
   }
 
   private buildDefaultChannelSetupDraft(definition: ChannelSetupDefinition): Record<string, unknown> {
