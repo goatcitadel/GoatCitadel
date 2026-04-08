@@ -477,6 +477,7 @@ import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import * as discordPairingHelpers from "./discord-pairing-helpers.js";
+import * as channelSetupHelpers from "./channel-setup-helpers.js";
 import * as chatSessionService from "./chat-session-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
@@ -10988,15 +10989,7 @@ export class GatewayService {
   }
 
   private buildDefaultChannelSetupDraft(definition: ChannelSetupDefinition): Record<string, unknown> {
-    const defaults: Record<string, unknown> = {};
-    for (const step of definition.wizard.steps) {
-      for (const field of step.fields ?? []) {
-        if (field.defaultValue !== undefined) {
-          defaults[field.key] = field.defaultValue;
-        }
-      }
-    }
-    return defaults;
+    return channelSetupHelpers.buildDefaultChannelSetupDraft(definition);
   }
 
   private buildChannelSetupValidationResult(
@@ -11004,60 +10997,15 @@ export class GatewayService {
     levels: ChannelSetupValidationLevel[],
     issues: ChannelSetupIssue[],
   ): ChannelSetupValidationResult {
-    const status = issues.some((issue) => issue.level === "error")
-      ? "error"
-      : issues.some((issue) => issue.level === "warn")
-        ? "warn"
-        : "ok";
-    return {
-      draftId: draft.draftId,
-      status,
-      levels,
-      issues,
-      checkedAt: new Date().toISOString(),
-    };
+    return channelSetupHelpers.buildChannelSetupValidationResult(draft, levels, issues);
   }
 
   private getReusableChannelSetupTestResult(draft: ChannelSetupDraft): ChannelSetupTestResult | undefined {
-    const runtime = requireChannelSetupDefinition(draft.catalogId);
-    const connection = this.buildEphemeralChannelConnection(draft, runtime.definition.adapter.secretFieldKeys);
-    return resolveReusableChannelSetupTestResult({
-      cache: this.recentChannelSetupTests,
-      draft,
-      connection,
-      testVersion: runtime.definition.testing.testVersion,
-    });
+    return channelSetupHelpers.getReusableChannelSetupTestResult(this, this.recentChannelSetupTests, draft);
   }
 
   private buildEphemeralChannelConnection(draft: ChannelSetupDraft, secretFieldKeys?: string[]): IntegrationConnection {
-    const runtime = requireChannelSetupDefinition(draft.catalogId);
-    const catalog = INTEGRATION_CATALOG.find((entry) => entry.catalogId === draft.catalogId);
-    if (!catalog) {
-      throw new Error(`Unknown integration catalog id: ${draft.catalogId}`);
-    }
-    const nextConfig = runtime.normalize(draft);
-    const currentConfig = draft.connectionId ? this.getIntegrationConnection(draft.connectionId).config : {};
-    const preservedSecrets = Object.fromEntries(
-      (secretFieldKeys ?? runtime.definition.adapter.secretFieldKeys)
-        .filter((key) => nextConfig[key] === undefined && currentConfig[key] !== undefined)
-        .map((key) => [key, currentConfig[key]]),
-    );
-    return {
-      connectionId: draft.connectionId ?? draft.draftId,
-      catalogId: catalog.catalogId,
-      kind: catalog.kind,
-      key: catalog.key,
-      label: draft.label?.trim() || catalog.label,
-      enabled: draft.enabled,
-      status: "connected",
-      config: {
-        ...currentConfig,
-        ...preservedSecrets,
-        ...nextConfig,
-      },
-      createdAt: draft.createdAt,
-      updatedAt: new Date().toISOString(),
-    };
+    return channelSetupHelpers.buildEphemeralChannelConnection(this, draft, secretFieldKeys);
   }
 
   public buildIntegrationConnectionChecks(connection: IntegrationConnection): ConnectorDiagnosticReport["checks"] {
