@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 /**
  * Settings/auth service.
  *
@@ -24,11 +25,21 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
 import {
+  clampInt,
+  ConflictError,
   NotFoundError,
+  ValidationError,
   type AuthRuntimeSettings,
   type AuthSettingsUpdateInput,
+  type CompanionAuditEventRecord,
+  type CompanionSessionAdminRecord,
   type CompanionSessionExchangeInput,
   type CompanionSessionExchangeResponse,
+  type CompanionSessionInfoResponse,
+  type CompanionSessionListResponse,
+  type CompanionSessionRefreshInput,
+  type CompanionSessionRefreshResponse,
+  type CompanionSessionRevokeResponse,
   type DeploymentProfile,
   type DeviceAccessGrantRecord as DeviceAccessGrantContractRecord,
   type DeviceAccessRequestCreateInput,
@@ -67,7 +78,18 @@ import {
   createGatewayAuthCredentialPlan,
   readAssistantAuthConfigSnapshotSync,
 } from "./gateway/auth-credential-planner.js";
-import type { GatewayService, RuntimeSettings } from "./gateway-service.js";
+import {
+  isCompanionSessionCurrentlyActive,
+  isCompanionSessionOperatorActive,
+  isRecord,
+  mapCompanionSessionRow,
+  normalizeCompanionAuditEvent,
+  toCompanionSessionAdminRecord,
+  toCompanionSessionInfoResponse,
+  type CompanionAccessValidationResult,
+  type GatewayService,
+  type RuntimeSettings,
+} from "./gateway-service.js";
 
 export type SettingsAuthHost = GatewayService;
 
@@ -898,5 +920,342 @@ export async function exchangeCompanionSessionFromDeviceGrant(
     refreshTokenExpiresAt,
     issuedAt,
     signatureAlgorithm: COMPANION_SIGNATURE_ALGORITHM,
+  };
+}
+
+export async function rotateCompanionSession(
+  host: SettingsAuthHost,
+  input: CompanionSessionRefreshInput,
+): Promise<CompanionSessionRefreshResponse> {
+  const refreshToken = input.refreshToken.trim();
+  if (!refreshToken) {
+    throw new ValidationError({
+      message: "Refresh token is required.",
+    });
+  }
+
+  const session = host.getActiveCompanionSessionByRefreshToken(refreshToken);
+  if (!session) {
+    throw new NotFoundError("Companion session not found.");
+  }
+
+  const now = Date.now();
+  const issuedAt = new Date(now).toISOString();
+  const accessTokenExpiresAt = new Date(now + COMPANION_ACCESS_TOKEN_TTL_MS).toISOString();
+  const refreshTokenExpiresAt = new Date(now + COMPANION_REFRESH_TOKEN_TTL_MS).toISOString();
+  const nextAccessToken = `gcca_${randomBytes(COMPANION_ACCESS_TOKEN_BYTES).toString("base64url")}`;
+  const nextRefreshToken = `gccr_${randomBytes(COMPANION_REFRESH_TOKEN_BYTES).toString("base64url")}`;
+
+  const result = host.gatewaySql
+    .prepare(
+      `
+    UPDATE companion_sessions
+    SET access_token_hash = @accessTokenHash,
+        access_token_expires_at = @accessTokenExpiresAt,
+        refresh_token_hash = @refreshTokenHash,
+        refresh_token_expires_at = @refreshTokenExpiresAt,
+        last_rotated_at = @lastRotatedAt,
+        last_seen_at = @lastSeenAt
+    WHERE session_id = @sessionId
+      AND refresh_token_hash = @currentRefreshTokenHash
+      AND revoked_at IS NULL
+  `,
+    )
+    .run({
+      sessionId: session.sessionId,
+      currentRefreshTokenHash: hashSensitiveToken(refreshToken),
+      accessTokenHash: hashSensitiveToken(nextAccessToken),
+      accessTokenExpiresAt,
+      refreshTokenHash: hashSensitiveToken(nextRefreshToken),
+      refreshTokenExpiresAt,
+      lastRotatedAt: issuedAt,
+      lastSeenAt: issuedAt,
+    });
+  if (result.changes === 0) {
+    throw new ConflictError({
+      message: "Companion session refresh token has already been rotated.",
+    });
+  }
+
+  await host.storage.audit.append("approvals", {
+    event: "auth.companion_session.refresh",
+    actorId: `companion:${session.sessionId}`,
+    deviceId: session.grantId,
+    grantId: session.grantId,
+    companionSessionId: session.sessionId,
+    contractId: COMPANION_CONTRACT_ID,
+    accessTokenExpiresAt,
+    refreshTokenExpiresAt,
+  });
+
+  return {
+    contractId: COMPANION_CONTRACT_ID,
+    sessionId: session.sessionId,
+    grantId: session.grantId,
+    actorId: `companion:${session.sessionId}`,
+    accessToken: nextAccessToken,
+    accessTokenExpiresAt,
+    refreshToken: nextRefreshToken,
+    refreshTokenExpiresAt,
+    issuedAt,
+    signatureAlgorithm: session.signatureAlgorithm,
+  };
+}
+
+export function getCompanionSessionInfo(host: SettingsAuthHost, sessionId: string): CompanionSessionInfoResponse {
+  const session = host.getActiveCompanionSessionById(sessionId);
+  if (!session) {
+    throw new NotFoundError("Companion session not found.");
+  }
+  return toCompanionSessionInfoResponse(session);
+}
+
+export function listCompanionSessions(
+  host: SettingsAuthHost,
+  options?: {
+    view?: "active" | "all";
+    grantId?: string;
+    limit?: number;
+  },
+): CompanionSessionListResponse {
+  const view = options?.view === "all" ? "all" : "active";
+  const limit = clampInt(options?.limit, 50, 1, 200);
+  const grantId = options?.grantId?.trim();
+  const now = new Date().toISOString();
+  const query = grantId
+    ? `
+    SELECT
+      s.*,
+      g.device_label,
+      g.device_type,
+      g.platform,
+      g.expires_at AS grant_expires_at,
+      g.revoked_at AS grant_revoked_at
+    FROM companion_sessions s
+    INNER JOIN auth_device_grants g
+      ON g.grant_id = s.grant_id
+    WHERE s.grant_id = @grantId
+    ORDER BY s.created_at DESC, s.session_id DESC
+    LIMIT @limit
+  `
+    : `
+    SELECT
+      s.*,
+      g.device_label,
+      g.device_type,
+      g.platform,
+      g.expires_at AS grant_expires_at,
+      g.revoked_at AS grant_revoked_at
+    FROM companion_sessions s
+    INNER JOIN auth_device_grants g
+      ON g.grant_id = s.grant_id
+    ORDER BY s.created_at DESC, s.session_id DESC
+    LIMIT @limit
+  `;
+  const rows = host.gatewaySql
+    .prepare(
+      `
+    ${query}
+  `,
+    )
+    .all(grantId ? { grantId, limit } : { limit }) as Record<string, unknown>[];
+
+  return {
+    items: rows
+      .map(mapCompanionSessionRow)
+      .filter((session) => view === "all" || isCompanionSessionOperatorActive(session, now))
+      .map(toCompanionSessionAdminRecord),
+  };
+}
+
+export function getCompanionSessionRecord(host: SettingsAuthHost, sessionId: string): CompanionSessionAdminRecord {
+  const session = host.getCompanionSessionById(sessionId);
+  if (!session) {
+    throw new NotFoundError("Companion session not found.");
+  }
+  return toCompanionSessionAdminRecord(session);
+}
+
+export async function revokeCompanionSession(
+  host: SettingsAuthHost,
+  sessionId: string,
+  revokedBy: string,
+): Promise<CompanionSessionRevokeResponse> {
+  const session = host.getCompanionSessionById(sessionId);
+  if (!session) {
+    throw new NotFoundError("Companion session not found.");
+  }
+
+  const revokedAt = new Date().toISOString();
+  host.gatewaySql
+    .prepare(
+      `
+    UPDATE companion_sessions
+    SET revoked_at = COALESCE(revoked_at, @revokedAt)
+    WHERE session_id = @sessionId
+  `,
+    )
+    .run({
+      sessionId,
+      revokedAt,
+    });
+
+  const updated = host.getCompanionSessionById(sessionId) ?? {
+    ...session,
+    revokedAt,
+  };
+  const record = toCompanionSessionAdminRecord(updated);
+
+  await host.storage.audit.append("approvals", {
+    event: "auth.companion_session.revoke",
+    actorId: `companion:${record.sessionId}`,
+    deviceId: record.grantId,
+    grantId: record.grantId,
+    companionSessionId: record.sessionId,
+    contractId: record.contractId,
+    revokedAt: record.revokedAt,
+    revokedBy,
+    deviceLabel: record.deviceLabel,
+    deviceType: record.deviceType,
+    platform: record.platform,
+  });
+
+  host.publishRealtime("auth_companion_session_revoked", "auth", {
+    sessionId: record.sessionId,
+    grantId: record.grantId,
+    actorId: record.actorId,
+    deviceLabel: record.deviceLabel,
+    deviceType: record.deviceType,
+    platform: record.platform,
+    revokedAt: record.revokedAt,
+    revokedBy,
+  });
+
+  return { session: record };
+}
+
+export async function listCompanionAuditEvents(
+  host: SettingsAuthHost,
+  options?: {
+    sessionId?: string;
+    grantId?: string;
+    limit?: number;
+  },
+): Promise<CompanionAuditEventRecord[]> {
+  const sessionId = options?.sessionId?.trim();
+  const grantId = options?.grantId?.trim();
+  const limit = clampInt(options?.limit, 50, 1, 200);
+  const records = await host.storage.audit.list("approvals");
+
+  return records
+    .filter((record) => {
+      const event = typeof record.event === "string" ? record.event : "";
+      if (!event.startsWith("auth.companion_")) {
+        return false;
+      }
+      if (sessionId && record.companionSessionId !== sessionId) {
+        return false;
+      }
+      if (grantId && record.grantId !== grantId) {
+        return false;
+      }
+      return true;
+    })
+    .sort((left, right) => String(right.timestamp ?? "").localeCompare(String(left.timestamp ?? "")))
+    .slice(0, limit)
+    .map((record) => ({
+      timestamp: typeof record.timestamp === "string" ? record.timestamp : new Date(0).toISOString(),
+      event: normalizeCompanionAuditEvent(record.event),
+      actorId: typeof record.actorId === "string" ? record.actorId : undefined,
+      deviceId: typeof record.deviceId === "string" ? record.deviceId : undefined,
+      grantId: typeof record.grantId === "string" ? record.grantId : undefined,
+      companionSessionId: typeof record.companionSessionId === "string" ? record.companionSessionId : undefined,
+      contractId: record.contractId === COMPANION_CONTRACT_ID ? COMPANION_CONTRACT_ID : undefined,
+      method: typeof record.method === "string" ? record.method : undefined,
+      path: typeof record.path === "string" ? record.path : undefined,
+      nonce: typeof record.nonce === "string" ? record.nonce : undefined,
+      requestHash: typeof record.requestHash === "string" ? record.requestHash : undefined,
+      detail: typeof record.detail === "string" ? record.detail : undefined,
+      metadata: isRecord(record.metadata) ? record.metadata : undefined,
+    }));
+}
+
+export function validateCompanionAccessToken(
+  host: SettingsAuthHost,
+  token: string,
+): CompanionAccessValidationResult | undefined {
+  const tokenHash = hashSensitiveToken(token);
+  const now = new Date().toISOString();
+  const row = host.gatewaySql
+    .prepare(
+      `
+    SELECT
+      s.*,
+      g.device_label,
+      g.device_type,
+      g.platform,
+      g.expires_at AS grant_expires_at,
+      g.revoked_at AS grant_revoked_at
+    FROM companion_sessions s
+    INNER JOIN auth_device_grants g
+      ON g.grant_id = s.grant_id
+    WHERE s.access_token_hash = @tokenHash
+    LIMIT 1
+  `,
+    )
+    .get({
+      tokenHash,
+    }) as Record<string, unknown> | undefined;
+  if (!row) {
+    return undefined;
+  }
+
+  const session = mapCompanionSessionRow(row);
+  if (!isCompanionSessionCurrentlyActive(session, now)) {
+    host.gatewaySql
+      .prepare(
+        `
+      UPDATE companion_sessions
+      SET revoked_at = COALESCE(revoked_at, @revokedAt)
+      WHERE session_id = @sessionId
+    `,
+      )
+      .run({
+        sessionId: session.sessionId,
+        revokedAt: now,
+      });
+    return undefined;
+  }
+
+  host.gatewaySql
+    .prepare(
+      `
+    UPDATE companion_sessions
+    SET last_seen_at = @lastSeenAt
+    WHERE session_id = @sessionId
+  `,
+    )
+    .run({
+      sessionId: session.sessionId,
+      lastSeenAt: now,
+    });
+  host.gatewaySql
+    .prepare(
+      `
+    UPDATE auth_device_grants
+    SET last_used_at = @lastUsedAt
+    WHERE grant_id = @grantId
+  `,
+    )
+    .run({
+      grantId: session.grantId,
+      lastUsedAt: now,
+    });
+
+  return {
+    actorId: `companion:${session.sessionId}`,
+    deviceId: session.grantId,
+    grantId: session.grantId,
+    sessionId: session.sessionId,
   };
 }

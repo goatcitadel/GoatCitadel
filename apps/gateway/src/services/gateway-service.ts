@@ -578,7 +578,7 @@ export interface ApprovalReplayResult {
   durableRunId?: string;
 }
 
-interface CompanionSessionRecord {
+export interface CompanionSessionRecord {
   sessionId: string;
   grantId: string;
   accessTokenHash: string;
@@ -599,7 +599,7 @@ interface CompanionSessionRecord {
   grantRevokedAt?: string;
 }
 
-interface CompanionAccessValidationResult {
+export interface CompanionAccessValidationResult {
   actorId: string;
   deviceId: string;
   grantId: string;
@@ -8772,88 +8772,12 @@ export class GatewayService {
     return settingsAuthService.exchangeCompanionSessionFromDeviceGrant(this, grantId, input);
   }
 
-  public async rotateCompanionSession(input: CompanionSessionRefreshInput): Promise<CompanionSessionRefreshResponse> {
-    const refreshToken = input.refreshToken.trim();
-    if (!refreshToken) {
-      throw new ValidationError({
-        message: "Refresh token is required.",
-      });
-    }
-
-    const session = this.getActiveCompanionSessionByRefreshToken(refreshToken);
-    if (!session) {
-      throw new NotFoundError("Companion session not found.");
-    }
-
-    const now = Date.now();
-    const issuedAt = new Date(now).toISOString();
-    const accessTokenExpiresAt = new Date(now + COMPANION_ACCESS_TOKEN_TTL_MS).toISOString();
-    const refreshTokenExpiresAt = new Date(now + COMPANION_REFRESH_TOKEN_TTL_MS).toISOString();
-    const nextAccessToken = `gcca_${randomBytes(COMPANION_ACCESS_TOKEN_BYTES).toString("base64url")}`;
-    const nextRefreshToken = `gccr_${randomBytes(COMPANION_REFRESH_TOKEN_BYTES).toString("base64url")}`;
-
-    const result = this.gatewaySql
-      .prepare(
-        `
-      UPDATE companion_sessions
-      SET access_token_hash = @accessTokenHash,
-          access_token_expires_at = @accessTokenExpiresAt,
-          refresh_token_hash = @refreshTokenHash,
-          refresh_token_expires_at = @refreshTokenExpiresAt,
-          last_rotated_at = @lastRotatedAt,
-          last_seen_at = @lastSeenAt
-      WHERE session_id = @sessionId
-        AND refresh_token_hash = @currentRefreshTokenHash
-        AND revoked_at IS NULL
-    `,
-      )
-      .run({
-        sessionId: session.sessionId,
-        currentRefreshTokenHash: hashSensitiveToken(refreshToken),
-        accessTokenHash: hashSensitiveToken(nextAccessToken),
-        accessTokenExpiresAt,
-        refreshTokenHash: hashSensitiveToken(nextRefreshToken),
-        refreshTokenExpiresAt,
-        lastRotatedAt: issuedAt,
-        lastSeenAt: issuedAt,
-      });
-    if (result.changes === 0) {
-      throw new ConflictError({
-        message: "Companion session refresh token has already been rotated.",
-      });
-    }
-
-    await this.storage.audit.append("approvals", {
-      event: "auth.companion_session.refresh",
-      actorId: `companion:${session.sessionId}`,
-      deviceId: session.grantId,
-      grantId: session.grantId,
-      companionSessionId: session.sessionId,
-      contractId: COMPANION_CONTRACT_ID,
-      accessTokenExpiresAt,
-      refreshTokenExpiresAt,
-    });
-
-    return {
-      contractId: COMPANION_CONTRACT_ID,
-      sessionId: session.sessionId,
-      grantId: session.grantId,
-      actorId: `companion:${session.sessionId}`,
-      accessToken: nextAccessToken,
-      accessTokenExpiresAt,
-      refreshToken: nextRefreshToken,
-      refreshTokenExpiresAt,
-      issuedAt,
-      signatureAlgorithm: session.signatureAlgorithm,
-    };
+  public rotateCompanionSession(input: CompanionSessionRefreshInput): Promise<CompanionSessionRefreshResponse> {
+    return settingsAuthService.rotateCompanionSession(this, input);
   }
 
   public getCompanionSessionInfo(sessionId: string): CompanionSessionInfoResponse {
-    const session = this.getActiveCompanionSessionById(sessionId);
-    if (!session) {
-      throw new NotFoundError("Companion session not found.");
-    }
-    return toCompanionSessionInfoResponse(session);
+    return settingsAuthService.getCompanionSessionInfo(this, sessionId);
   }
 
   public listCompanionSessions(options?: {
@@ -8861,236 +8785,27 @@ export class GatewayService {
     grantId?: string;
     limit?: number;
   }): CompanionSessionListResponse {
-    const view = options?.view === "all" ? "all" : "active";
-    const limit = clampInt(options?.limit, 50, 1, 200);
-    const grantId = options?.grantId?.trim();
-    const now = new Date().toISOString();
-    const query = grantId
-      ? `
-      SELECT
-        s.*,
-        g.device_label,
-        g.device_type,
-        g.platform,
-        g.expires_at AS grant_expires_at,
-        g.revoked_at AS grant_revoked_at
-      FROM companion_sessions s
-      INNER JOIN auth_device_grants g
-        ON g.grant_id = s.grant_id
-      WHERE s.grant_id = @grantId
-      ORDER BY s.created_at DESC, s.session_id DESC
-      LIMIT @limit
-    `
-      : `
-      SELECT
-        s.*,
-        g.device_label,
-        g.device_type,
-        g.platform,
-        g.expires_at AS grant_expires_at,
-        g.revoked_at AS grant_revoked_at
-      FROM companion_sessions s
-      INNER JOIN auth_device_grants g
-        ON g.grant_id = s.grant_id
-      ORDER BY s.created_at DESC, s.session_id DESC
-      LIMIT @limit
-    `;
-    const rows = this.gatewaySql
-      .prepare(
-        `
-      ${query}
-    `,
-      )
-      .all(grantId ? { grantId, limit } : { limit }) as Record<string, unknown>[];
-
-    return {
-      items: rows
-        .map(mapCompanionSessionRow)
-        .filter((session) => view === "all" || isCompanionSessionOperatorActive(session, now))
-        .map(toCompanionSessionAdminRecord),
-    };
+    return settingsAuthService.listCompanionSessions(this, options);
   }
 
   public getCompanionSessionRecord(sessionId: string): CompanionSessionAdminRecord {
-    const session = this.getCompanionSessionById(sessionId);
-    if (!session) {
-      throw new NotFoundError("Companion session not found.");
-    }
-    return toCompanionSessionAdminRecord(session);
+    return settingsAuthService.getCompanionSessionRecord(this, sessionId);
   }
 
-  public async revokeCompanionSession(sessionId: string, revokedBy: string): Promise<CompanionSessionRevokeResponse> {
-    const session = this.getCompanionSessionById(sessionId);
-    if (!session) {
-      throw new NotFoundError("Companion session not found.");
-    }
-
-    const revokedAt = new Date().toISOString();
-    this.gatewaySql
-      .prepare(
-        `
-      UPDATE companion_sessions
-      SET revoked_at = COALESCE(revoked_at, @revokedAt)
-      WHERE session_id = @sessionId
-    `,
-      )
-      .run({
-        sessionId,
-        revokedAt,
-      });
-
-    const updated = this.getCompanionSessionById(sessionId) ?? {
-      ...session,
-      revokedAt,
-    };
-    const record = toCompanionSessionAdminRecord(updated);
-
-    await this.storage.audit.append("approvals", {
-      event: "auth.companion_session.revoke",
-      actorId: `companion:${record.sessionId}`,
-      deviceId: record.grantId,
-      grantId: record.grantId,
-      companionSessionId: record.sessionId,
-      contractId: record.contractId,
-      revokedAt: record.revokedAt,
-      revokedBy,
-      deviceLabel: record.deviceLabel,
-      deviceType: record.deviceType,
-      platform: record.platform,
-    });
-
-    this.publishRealtime("auth_companion_session_revoked", "auth", {
-      sessionId: record.sessionId,
-      grantId: record.grantId,
-      actorId: record.actorId,
-      deviceLabel: record.deviceLabel,
-      deviceType: record.deviceType,
-      platform: record.platform,
-      revokedAt: record.revokedAt,
-      revokedBy,
-    });
-
-    return { session: record };
+  public revokeCompanionSession(sessionId: string, revokedBy: string): Promise<CompanionSessionRevokeResponse> {
+    return settingsAuthService.revokeCompanionSession(this, sessionId, revokedBy);
   }
 
-  public async listCompanionAuditEvents(options?: {
+  public listCompanionAuditEvents(options?: {
     sessionId?: string;
     grantId?: string;
     limit?: number;
   }): Promise<CompanionAuditEventRecord[]> {
-    const sessionId = options?.sessionId?.trim();
-    const grantId = options?.grantId?.trim();
-    const limit = clampInt(options?.limit, 50, 1, 200);
-    const records = await this.storage.audit.list("approvals");
-
-    return records
-      .filter((record) => {
-        const event = typeof record.event === "string" ? record.event : "";
-        if (!event.startsWith("auth.companion_")) {
-          return false;
-        }
-        if (sessionId && record.companionSessionId !== sessionId) {
-          return false;
-        }
-        if (grantId && record.grantId !== grantId) {
-          return false;
-        }
-        return true;
-      })
-      .sort((left, right) => String(right.timestamp ?? "").localeCompare(String(left.timestamp ?? "")))
-      .slice(0, limit)
-      .map((record) => ({
-        timestamp: typeof record.timestamp === "string" ? record.timestamp : new Date(0).toISOString(),
-        event: normalizeCompanionAuditEvent(record.event),
-        actorId: typeof record.actorId === "string" ? record.actorId : undefined,
-        deviceId: typeof record.deviceId === "string" ? record.deviceId : undefined,
-        grantId: typeof record.grantId === "string" ? record.grantId : undefined,
-        companionSessionId: typeof record.companionSessionId === "string" ? record.companionSessionId : undefined,
-        contractId: record.contractId === COMPANION_CONTRACT_ID ? COMPANION_CONTRACT_ID : undefined,
-        method: typeof record.method === "string" ? record.method : undefined,
-        path: typeof record.path === "string" ? record.path : undefined,
-        nonce: typeof record.nonce === "string" ? record.nonce : undefined,
-        requestHash: typeof record.requestHash === "string" ? record.requestHash : undefined,
-        detail: typeof record.detail === "string" ? record.detail : undefined,
-        metadata: isRecord(record.metadata) ? record.metadata : undefined,
-      }));
+    return settingsAuthService.listCompanionAuditEvents(this, options);
   }
 
   public validateCompanionAccessToken(token: string): CompanionAccessValidationResult | undefined {
-    const tokenHash = hashSensitiveToken(token);
-    const now = new Date().toISOString();
-    const row = this.gatewaySql
-      .prepare(
-        `
-      SELECT
-        s.*,
-        g.device_label,
-        g.device_type,
-        g.platform,
-        g.expires_at AS grant_expires_at,
-        g.revoked_at AS grant_revoked_at
-      FROM companion_sessions s
-      INNER JOIN auth_device_grants g
-        ON g.grant_id = s.grant_id
-      WHERE s.access_token_hash = @tokenHash
-      LIMIT 1
-    `,
-      )
-      .get({
-        tokenHash,
-      }) as Record<string, unknown> | undefined;
-    if (!row) {
-      return undefined;
-    }
-
-    const session = mapCompanionSessionRow(row);
-    if (!isCompanionSessionCurrentlyActive(session, now)) {
-      this.gatewaySql
-        .prepare(
-          `
-        UPDATE companion_sessions
-        SET revoked_at = COALESCE(revoked_at, @revokedAt)
-        WHERE session_id = @sessionId
-      `,
-        )
-        .run({
-          sessionId: session.sessionId,
-          revokedAt: now,
-        });
-      return undefined;
-    }
-
-    this.gatewaySql
-      .prepare(
-        `
-      UPDATE companion_sessions
-      SET last_seen_at = @lastSeenAt
-      WHERE session_id = @sessionId
-    `,
-      )
-      .run({
-        sessionId: session.sessionId,
-        lastSeenAt: now,
-      });
-    this.gatewaySql
-      .prepare(
-        `
-      UPDATE auth_device_grants
-      SET last_used_at = @lastUsedAt
-      WHERE grant_id = @grantId
-    `,
-      )
-      .run({
-        grantId: session.grantId,
-        lastUsedAt: now,
-      });
-
-    return {
-      actorId: `companion:${session.sessionId}`,
-      deviceId: session.grantId,
-      grantId: session.grantId,
-      sessionId: session.sessionId,
-    };
+    return settingsAuthService.validateCompanionAccessToken(this, token);
   }
 
   public verifyCompanionRequestSignature(input: {
@@ -13264,7 +12979,7 @@ export class GatewayService {
     return grant;
   }
 
-  private getActiveCompanionSessionById(sessionId: string): CompanionSessionRecord | undefined {
+  /** @internal */ public getActiveCompanionSessionById(sessionId: string): CompanionSessionRecord | undefined {
     const now = new Date().toISOString();
     const session = this.getCompanionSessionById(sessionId);
     if (!session) {
@@ -13288,7 +13003,7 @@ export class GatewayService {
     return session;
   }
 
-  private getCompanionSessionById(sessionId: string): CompanionSessionRecord | undefined {
+  /** @internal */ public getCompanionSessionById(sessionId: string): CompanionSessionRecord | undefined {
     const row = this.gatewaySql
       .prepare(
         `
@@ -13315,7 +13030,9 @@ export class GatewayService {
     return mapCompanionSessionRow(row);
   }
 
-  private getActiveCompanionSessionByRefreshToken(refreshToken: string): CompanionSessionRecord | undefined {
+  /** @internal */ public getActiveCompanionSessionByRefreshToken(
+    refreshToken: string,
+  ): CompanionSessionRecord | undefined {
     const now = new Date().toISOString();
     const row = this.gatewaySql
       .prepare(
@@ -17506,7 +17223,7 @@ function grantPatternMatches(pattern: string, toolName: string): boolean {
   return regex.test(toolName);
 }
 
-function mapCompanionSessionRow(row: Record<string, unknown>): CompanionSessionRecord {
+export function mapCompanionSessionRow(row: Record<string, unknown>): CompanionSessionRecord {
   return {
     sessionId: String(row.session_id ?? ""),
     grantId: String(row.grant_id ?? ""),
@@ -17532,7 +17249,7 @@ function mapCompanionSessionRow(row: Record<string, unknown>): CompanionSessionR
   };
 }
 
-function toCompanionSessionInfoResponse(session: CompanionSessionRecord): CompanionSessionInfoResponse {
+export function toCompanionSessionInfoResponse(session: CompanionSessionRecord): CompanionSessionInfoResponse {
   return {
     contractId: COMPANION_CONTRACT_ID,
     sessionId: session.sessionId,
@@ -17550,7 +17267,7 @@ function toCompanionSessionInfoResponse(session: CompanionSessionRecord): Compan
   };
 }
 
-function toCompanionSessionAdminRecord(session: CompanionSessionRecord): CompanionSessionAdminRecord {
+export function toCompanionSessionAdminRecord(session: CompanionSessionRecord): CompanionSessionAdminRecord {
   return {
     ...toCompanionSessionInfoResponse(session),
     lastRotatedAt: session.lastRotatedAt,
@@ -17560,7 +17277,7 @@ function toCompanionSessionAdminRecord(session: CompanionSessionRecord): Compani
   };
 }
 
-function isCompanionSessionCurrentlyActive(session: CompanionSessionRecord, nowIso: string): boolean {
+export function isCompanionSessionCurrentlyActive(session: CompanionSessionRecord, nowIso: string): boolean {
   if (session.revokedAt || session.grantRevokedAt) {
     return false;
   }
@@ -17596,7 +17313,7 @@ function isCompanionSessionRefreshable(session: CompanionSessionRecord, nowIso: 
   return true;
 }
 
-function isCompanionSessionOperatorActive(session: CompanionSessionRecord, nowIso: string): boolean {
+export function isCompanionSessionOperatorActive(session: CompanionSessionRecord, nowIso: string): boolean {
   if (session.revokedAt || session.grantRevokedAt) {
     return false;
   }
@@ -17614,7 +17331,7 @@ function isCompanionSessionOperatorActive(session: CompanionSessionRecord, nowIs
   return true;
 }
 
-function normalizeCompanionAuditEvent(value: unknown): CompanionAuditEventRecord["event"] {
+export function normalizeCompanionAuditEvent(value: unknown): CompanionAuditEventRecord["event"] {
   switch (value) {
     case "auth.companion_session.exchange":
     case "auth.companion_session.refresh":
@@ -17630,7 +17347,7 @@ function normalizeCompanionAuditEvent(value: unknown): CompanionAuditEventRecord
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
