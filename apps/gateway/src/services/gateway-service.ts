@@ -1233,7 +1233,7 @@ export interface PreparedChatExecutionPlanResolution {
   };
 }
 
-interface DurableChatTurnExecutionPayload {
+export interface DurableChatTurnExecutionPayload {
   version: "chat.turn.execute.v1";
   sessionId: string;
   turnId: string;
@@ -1371,7 +1371,7 @@ export class GatewayService {
   /** @internal */ public readonly hooksService: HooksService;
   private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
   private readonly promptPackService: PromptPackService;
-  private readonly chatProactiveService: ChatProactiveService;
+  /** @internal */ public readonly chatProactiveService: ChatProactiveService;
   private readonly improvementService: ImprovementService;
   /** @internal */ public readonly memoryMaintenanceService: MemoryMaintenanceService;
   private readonly backupRetentionService: BackupRetentionService;
@@ -5778,117 +5778,23 @@ export class GatewayService {
   }
 
   private parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatTurnExecutionPayload | undefined {
-    const payload = run.payload as Partial<DurableChatTurnExecutionPayload> | undefined;
-    if (!payload || payload.version !== "chat.turn.execute.v1") {
-      return undefined;
-    }
-    if (
-      typeof payload.sessionId !== "string" ||
-      typeof payload.turnId !== "string" ||
-      typeof payload.userMessageId !== "string" ||
-      typeof payload.assistantMessageId !== "string" ||
-      typeof payload.branchKind !== "string" ||
-      typeof payload.threadEventType !== "string" ||
-      !payload.request ||
-      typeof payload.request !== "object"
-    ) {
-      return undefined;
-    }
-    return payload as DurableChatTurnExecutionPayload;
+    return durableExecutionService.parseDurableChatTurnPayload(run);
   }
 
   private parseApprovalWaitWorkflowPayload(run: DurableRunRecord): ApprovalWaitWorkflowPayload | undefined {
-    const payload = run.payload as Partial<ApprovalWaitWorkflowPayload> | undefined;
-    if (!payload || payload.version !== "approval.wait.v1") {
-      return undefined;
-    }
-    if (
-      typeof payload.approvalId !== "string" ||
-      typeof payload.approvalKind !== "string" ||
-      typeof payload.createdAt !== "string"
-    ) {
-      return undefined;
-    }
-    return payload as ApprovalWaitWorkflowPayload;
+    return durableExecutionService.parseApprovalWaitWorkflowPayload(run);
   }
 
   private parseProactiveTickWorkflowPayload(run: DurableRunRecord): ProactiveTickWorkflowPayload | undefined {
-    const payload = run.payload as Partial<ProactiveTickWorkflowPayload> | undefined;
-    if (!payload || payload.version !== "proactive.tick.v1") {
-      return undefined;
-    }
-    if (
-      typeof payload.sessionId !== "string" ||
-      typeof payload.proactiveRunId !== "string" ||
-      typeof payload.originSurface !== "string" ||
-      typeof payload.triggerSource !== "string" ||
-      typeof payload.requestedAt !== "string" ||
-      !payload.policySnapshot ||
-      typeof payload.policySnapshot !== "object"
-    ) {
-      return undefined;
-    }
-    return payload as ProactiveTickWorkflowPayload;
+    return durableExecutionService.parseProactiveTickWorkflowPayload(run);
   }
 
   private parseConnectorDeliveryWorkflowPayload(run: DurableRunRecord): ConnectorDeliveryWorkflowPayload | undefined {
-    const payload = run.payload as Partial<ConnectorDeliveryWorkflowPayload> | undefined;
-    if (!payload || payload.version !== "connector.delivery.v1") {
-      return undefined;
-    }
-    if (typeof payload.connectorId !== "string" || typeof payload.action !== "string") {
-      return undefined;
-    }
-    if (payload.payload !== undefined && (typeof payload.payload !== "object" || Array.isArray(payload.payload))) {
-      return undefined;
-    }
-    return payload as ConnectorDeliveryWorkflowPayload;
+    return durableExecutionService.parseConnectorDeliveryWorkflowPayload(run);
   }
 
-  private parseHookDeliveryWorkflowPayload(run: DurableRunRecord):
-    | {
-        version: "hook.delivery.v1";
-        hookRunId: string;
-        hookId: string;
-        workspaceId: string;
-        trigger: HookTrigger;
-        entityType: string;
-        entityId: string;
-      }
-    | undefined {
-    const payload = run.payload as
-      | Partial<{
-          version: "hook.delivery.v1";
-          hookRunId: string;
-          hookId: string;
-          workspaceId: string;
-          trigger: HookTrigger;
-          entityType: string;
-          entityId: string;
-        }>
-      | undefined;
-    if (!payload || payload.version !== "hook.delivery.v1") {
-      return undefined;
-    }
-    if (
-      typeof payload.hookRunId !== "string" ||
-      typeof payload.hookId !== "string" ||
-      typeof payload.workspaceId !== "string" ||
-      typeof payload.trigger !== "string" ||
-      typeof payload.entityType !== "string" ||
-      typeof payload.entityId !== "string"
-    ) {
-      return undefined;
-    }
-    return payload as {
-      version: "hook.delivery.v1";
-      hookRunId: string;
-      hookId: string;
-      workspaceId: string;
-      trigger: HookTrigger;
-      entityType: string;
-      entityId: string;
-    };
+  private parseHookDeliveryWorkflowPayload(run: DurableRunRecord) {
+    return durableExecutionService.parseHookDeliveryWorkflowPayload(run);
   }
 
   private parseMemoryMaintenanceWorkflowPayload(run: DurableRunRecord) {
@@ -6163,28 +6069,7 @@ export class GatewayService {
   }
 
   private async executeDurableWorkflowRun(run: DurableRunRecord): Promise<void> {
-    switch (run.workflowKey) {
-      case "memory.maintenance":
-        this.completeDurableWorkflowRun(run.runId, await this.memoryMaintenanceService.executeDurableRun(run));
-        return;
-      case "chat.turn.execute":
-        await this.executeDurableChatTurnRun(run);
-        return;
-      case "proactive.tick":
-        await this.chatProactiveService.executeDurableProactiveTickRun(run);
-        return;
-      case "approval.wait":
-        await this.executeDurableApprovalWaitRun(run);
-        return;
-      case "connector.delivery":
-        await this.executeDurableConnectorDeliveryRun(run);
-        return;
-      case "hook.delivery":
-        await this.executeDurableHookDeliveryRun(run);
-        return;
-      default:
-        throw new Error(`Unsupported durable workflow: ${run.workflowKey}`);
-    }
+    return durableExecutionService.executeDurableWorkflowRun(this, run);
   }
 
   private isDurableWorkflowRecoverable(run: DurableRunRecord): { recoverable: boolean; reason?: string } {
@@ -6352,152 +6237,6 @@ export class GatewayService {
       },
       run.runId,
     );
-  }
-
-  private async executeDurableApprovalWaitRun(run: DurableRunRecord): Promise<void> {
-    const payload = this.parseApprovalWaitWorkflowPayload(run);
-    if (!payload) {
-      throw new Error("Durable approval wait payload is invalid or incomplete.");
-    }
-    const approval = this.storage.approvals.get(payload.approvalId);
-    if (approval.status === "pending") {
-      throw new ConflictError({
-        message: `Approval ${payload.approvalId} is still pending and cannot complete its durable wait workflow.`,
-      });
-    }
-    const checkpointState = {
-      approvalId: approval.approvalId,
-      approvalKind: approval.kind,
-      status: approval.status,
-      resolvedAt: approval.resolvedAt,
-      resolvedBy: approval.resolvedBy,
-    };
-    await this.storage.audit.append("approvals", {
-      event: "durable.approval_wait.complete",
-      runId: run.runId,
-      workflowKey: run.workflowKey,
-      ...checkpointState,
-    });
-    this.completeDurableWorkflowRun(run.runId, checkpointState);
-  }
-
-  private async executeDurableConnectorDeliveryRun(run: DurableRunRecord): Promise<void> {
-    const payload = this.parseConnectorDeliveryWorkflowPayload(run);
-    if (!payload) {
-      throw new Error("Durable connector delivery payload is invalid or incomplete.");
-    }
-    const connector = this.requireConnectorRecord(payload.connectorId);
-    if (payload.simulateFailureReason?.trim()) {
-      throw new Error(payload.simulateFailureReason.trim());
-    }
-    const dispatch = await dispatchConnectorDelivery(connector, payload, {
-      commsSend: (input) => this.commsSend(input),
-      commsReply: (input) => this.commsReply(input),
-      commsReact: (input) => this.commsReact(input),
-      commsUnsend: (input) => this.commsUnsend(input),
-      commsTyping: (input) => this.commsTyping(input),
-      invokeMcpTool: (input) => this.invokeMcpTool(input),
-      publishRealtime: (eventType, source, eventPayload) => this.publishRealtime(eventType, source, eventPayload),
-    });
-    const checkpointState = {
-      connectorId: connector.connectorId,
-      connectorType: connector.connectorType,
-      action: payload.action,
-      capabilityId: dispatch.capabilityId,
-      dispatchKind: dispatch.dispatchKind,
-      result: dispatch.result ?? null,
-    };
-    this.publishRealtime("connector_delivery_completed", "connectors", {
-      runId: run.runId,
-      ...checkpointState,
-    });
-    this.completeDurableWorkflowRun(run.runId, checkpointState);
-  }
-
-  private async executeDurableHookDeliveryRun(run: DurableRunRecord): Promise<void> {
-    const payload = this.parseHookDeliveryWorkflowPayload(run);
-    if (!payload) {
-      throw new Error("Durable hook delivery payload is invalid or incomplete.");
-    }
-    try {
-      const delivered = await this.hooksService.executeHookDelivery(payload.hookRunId, run.attemptCount + 1);
-      this.completeDurableWorkflowRun(run.runId, {
-        hookRunId: delivered.runId,
-        hookId: delivered.hookId,
-        status: delivered.status,
-        trigger: delivered.trigger,
-      });
-    } catch (error) {
-      const retry = this.durableRunService.retryDurableRun(
-        run.runId,
-        error instanceof Error ? error.message : "hook delivery failed",
-        "hooks",
-      );
-      if (retry.status === "queued") {
-        const nextDelayMs = this.computeDurableRetryDelayMs(retry, retry.attemptCount);
-        setTimeout(() => {
-          this.durableRunService.requestRunProcessing(run.runId);
-        }, nextDelayMs);
-        return;
-      }
-      this.hooksService.markHookRunDeadLettered(
-        payload.hookRunId,
-        error instanceof Error ? error.message : "hook delivery failed",
-      );
-    }
-  }
-
-  private async executeDurableChatTurnRun(run: DurableRunRecord): Promise<void> {
-    const payload = this.parseDurableChatTurnPayload(run);
-    if (!payload) {
-      throw new Error("Durable chat run payload is invalid or incomplete.");
-    }
-    const userMessage = this.storage.chatMessages.get(payload.userMessageId);
-    if (!userMessage) {
-      throw new NotFoundError({ entity: "Chat message", id: payload.userMessageId });
-    }
-    const prepared = await this.prepareAgentChatTurn(payload.sessionId, payload.request, {
-      branchKind: payload.branchKind,
-      sourceTurnId: payload.sourceTurnId,
-      parentTurnId: payload.parentTurnId,
-      existingUserMessage: userMessage,
-      ingestUserMessage: false,
-      turnId: payload.turnId,
-      assistantMessageId: payload.assistantMessageId,
-    });
-    this.registerActiveChatTurnStream(payload.sessionId, payload.turnId, run.runId);
-    await this.executePreparedAgentChatTurnBackground(
-      payload.sessionId,
-      payload.request,
-      prepared,
-      payload.threadEventType,
-      run.runId,
-      undefined,
-      { skipMessageStart: true },
-    );
-  }
-
-  private completeDurableWorkflowRun(runId: string, checkpointState: Record<string, unknown>): void {
-    const now = new Date().toISOString();
-    this.storage.durableRuns.updateRun({
-      runId,
-      status: "completed",
-      updatedAt: now,
-      finishedAt: now,
-      lastError: undefined,
-    });
-    this.storage.durableRuns.createCheckpoint({
-      runId,
-      checkpointKind: "run_completed",
-      state: checkpointState,
-      createdAt: now,
-    });
-    this.recordDurableTimelineEvent(runId, "run_completed", checkpointState);
-    this.publishRealtime("system", "durable", {
-      type: "durable_run_completed",
-      runId,
-      checkpoint: checkpointState,
-    });
   }
 
   public async *resumeAgentChatTurnStream(
@@ -10876,11 +10615,11 @@ export class GatewayService {
     return this.durableRunService.normalizeDurableRetryPolicy(input);
   }
 
-  private computeDurableRetryDelayMs(current: DurableRunRecord, attemptNo: number): number {
+  /** @internal */ public computeDurableRetryDelayMs(current: DurableRunRecord, attemptNo: number): number {
     return this.durableRunService.computeDurableRetryDelayMs(current, attemptNo);
   }
 
-  private recordDurableTimelineEvent(
+  /** @internal */ public recordDurableTimelineEvent(
     runId: string,
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
