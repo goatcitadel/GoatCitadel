@@ -479,6 +479,7 @@ import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js
 import * as discordPairingHelpers from "./discord-pairing-helpers.js";
 import * as channelSetupHelpers from "./channel-setup-helpers.js";
 import * as memoryItemHelpers from "./memory-item-helpers.js";
+import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import * as chatSessionService from "./chat-session-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
@@ -11779,27 +11780,11 @@ export class GatewayService {
   }
 
   private isConnectionValueLocalUrl(urlValue: string | undefined): boolean {
-    if (!urlValue) {
-      return false;
-    }
-    try {
-      const url = new URL(urlValue);
-      return url.hostname === "127.0.0.1" || url.hostname === "localhost";
-    } catch {
-      return false;
-    }
+    return connectionUrlHelpers.isConnectionValueLocalUrl(urlValue);
   }
 
   private isConnectionUrlRemoteSafe(urlValue: string): boolean {
-    try {
-      const url = new URL(urlValue);
-      if (url.protocol === "https:") {
-        return true;
-      }
-      return url.hostname === "127.0.0.1" || url.hostname === "localhost";
-    } catch {
-      return false;
-    }
+    return connectionUrlHelpers.isConnectionUrlRemoteSafe(urlValue);
   }
 
   public isConnectionUrlAllowlisted(urlValue: string): boolean {
@@ -11819,12 +11804,7 @@ export class GatewayService {
   }
 
   /** @internal */ public isUrlAllowlistedInList(urlValue: string, allowlist: string[]): boolean {
-    try {
-      const url = new URL(urlValue);
-      return this.isHostAllowlistedInList(url.host, allowlist) || this.isHostAllowlistedInList(url.hostname, allowlist);
-    } catch {
-      return false;
-    }
+    return connectionUrlHelpers.isUrlAllowlistedInList(urlValue, allowlist);
   }
 
   private isHostAllowlisted(hostname: string): boolean {
@@ -11839,32 +11819,11 @@ export class GatewayService {
   }
 
   private isHostAllowlistedInList(hostname: string, allowlist: string[]): boolean {
-    const normalizedHost = hostname.trim().toLowerCase();
-    const normalizedAllowlist = allowlist.map((host) => host.trim().toLowerCase()).filter(Boolean);
-    if (normalizedAllowlist.length === 0) {
-      return false;
-    }
-    return normalizedAllowlist.some((allowed) => {
-      if (allowed === "*" || allowed === normalizedHost) {
-        return true;
-      }
-      if (allowed.startsWith("*.")) {
-        const suffix = allowed.slice(1);
-        return normalizedHost.endsWith(suffix);
-      }
-      return false;
-    });
+    return connectionUrlHelpers.isHostAllowlistedInList(hostname, allowlist);
   }
 
   /** @internal */ public tryParseJson<T>(raw: string | null | undefined, fallback: T): T {
-    if (!raw) {
-      return fallback;
-    }
-    try {
-      return JSON.parse(raw) as T;
-    } catch {
-      return fallback;
-    }
+    return connectionUrlHelpers.tryParseJson(raw, fallback);
   }
 
   public readIntegrationPlugins(): IntegrationPluginRecord[] {
