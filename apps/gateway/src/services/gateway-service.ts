@@ -474,6 +474,7 @@ import { verifyBackupAtPath } from "./gateway/backup-verify.js";
 import { BackupRetentionService } from "./backup-retention-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
+import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import * as chatSessionService from "./chat-session-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
@@ -9507,84 +9508,19 @@ export class GatewayService {
   }
 
   public createMcpServer(input: McpServerCreateInput): McpServerRecord {
-    const now = new Date().toISOString();
-    const created: McpServerRecord = {
-      serverId: randomUUID(),
-      label: input.label.trim(),
-      transport: input.transport,
-      command: input.command?.trim() || undefined,
-      args: input.args?.map((item) => item.trim()).filter(Boolean),
-      url: input.url?.trim() || undefined,
-      authType: input.authType ?? "none",
-      enabled: input.enabled ?? true,
-      category: input.category ?? inferMcpCategory(input.transport),
-      trustTier: input.trustTier ?? "restricted",
-      costTier: input.costTier ?? "unknown",
-      policy: normalizeMcpPolicy(input.policy),
-      verifiedAt: input.verifiedAt,
-      status: "disconnected",
-      createdAt: now,
-      updatedAt: now,
-    };
-    const servers = [created, ...this.readMcpServers()];
-    this.writeMcpServers(servers);
-    this.publishRealtime("system", "mcp", {
-      type: "mcp_server_created",
-      serverId: created.serverId,
-      transport: created.transport,
-    });
-    return created;
+    return mcpServerAdminService.createMcpServer(this, input);
   }
 
   public updateMcpServer(serverId: string, input: McpServerUpdateInput): McpServerRecord {
-    const now = new Date().toISOString();
-    let updated: McpServerRecord | undefined;
-    const servers = this.readMcpServers().map((item) => {
-      if (item.serverId !== serverId) {
-        return item;
-      }
-      updated = {
-        ...item,
-        label: input.label?.trim() || item.label,
-        command: input.command === undefined ? item.command : input.command.trim() || undefined,
-        args: input.args === undefined ? item.args : input.args.map((entry) => entry.trim()).filter(Boolean),
-        url: input.url === undefined ? item.url : input.url.trim() || undefined,
-        authType: input.authType ?? item.authType,
-        enabled: input.enabled ?? item.enabled,
-        category: input.category ?? item.category,
-        trustTier: input.trustTier ?? item.trustTier,
-        costTier: input.costTier ?? item.costTier,
-        policy: input.policy ? normalizeMcpPolicy({ ...item.policy, ...input.policy }) : item.policy,
-        verifiedAt: input.verifiedAt ?? item.verifiedAt,
-        updatedAt: now,
-      };
-      return updated;
-    });
-    if (!updated) {
-      throw new Error(`Unknown MCP server: ${serverId}`);
-    }
-    this.writeMcpServers(servers);
-    return updated;
+    return mcpServerAdminService.updateMcpServer(this, serverId, input);
   }
 
   public updateMcpServerPolicy(serverId: string, policy: Partial<McpServerPolicy>): McpServerRecord {
-    return this.updateMcpServer(serverId, { policy });
+    return mcpServerAdminService.updateMcpServerPolicy(this, serverId, policy);
   }
 
   public deleteMcpServer(serverId: string): { deleted: boolean } {
-    const previous = this.readMcpServers();
-    const next = previous.filter((item) => item.serverId !== serverId);
-    const deleted = next.length !== previous.length;
-    if (deleted) {
-      this.writeMcpServers(next);
-      this.writeMcpTools(this.readMcpTools().filter((tool) => tool.serverId !== serverId));
-      this.storage.approvalInbox.deleteByReceiver("mcp", serverId);
-      this.publishRealtime("system", "mcp", {
-        type: "mcp_server_deleted",
-        serverId,
-      });
-    }
-    return { deleted };
+    return mcpServerAdminService.deleteMcpServer(this, serverId);
   }
 
   public async connectMcpServer(serverId: string): Promise<McpServerRecord> {
@@ -12208,7 +12144,7 @@ export class GatewayService {
       }));
   }
 
-  private writeMcpServers(servers: McpServerRecord[]): void {
+  /** @internal */ public writeMcpServers(servers: McpServerRecord[]): void {
     this.storage.systemSettings.set(MCP_SERVERS_SETTING_KEY, servers);
   }
 
@@ -12265,7 +12201,7 @@ export class GatewayService {
     return inferMcpToolsForServer(server, existingTools);
   }
 
-  private readMcpTools(): McpToolRecord[] {
+  /** @internal */ public readMcpTools(): McpToolRecord[] {
     const stored = this.storage.systemSettings.get<McpToolRecord[]>(MCP_TOOLS_SETTING_KEY)?.value;
     if (!Array.isArray(stored)) {
       return [];
@@ -12273,7 +12209,7 @@ export class GatewayService {
     return stored.filter((item): item is McpToolRecord => Boolean(item?.serverId && item?.toolName));
   }
 
-  private writeMcpTools(tools: McpToolRecord[]): void {
+  /** @internal */ public writeMcpTools(tools: McpToolRecord[]): void {
     this.storage.systemSettings.set(MCP_TOOLS_SETTING_KEY, tools);
   }
 
@@ -15135,7 +15071,7 @@ function computeSkillActivationConfidence(reasons: string[], isExplicit: boolean
   return 0.5;
 }
 
-function inferMcpCategory(transport: McpServerRecord["transport"]): McpServerCategory {
+export function inferMcpCategory(transport: McpServerRecord["transport"]): McpServerCategory {
   if (transport === "stdio") {
     return "development";
   }
@@ -15145,7 +15081,7 @@ function inferMcpCategory(transport: McpServerRecord["transport"]): McpServerCat
   return "automation";
 }
 
-function normalizeMcpPolicy(policy?: Partial<McpServerPolicy>): McpServerPolicy {
+export function normalizeMcpPolicy(policy?: Partial<McpServerPolicy>): McpServerPolicy {
   return {
     requireFirstToolApproval: policy?.requireFirstToolApproval ?? DEFAULT_MCP_SERVER_POLICY.requireFirstToolApproval,
     redactionMode: policy?.redactionMode ?? DEFAULT_MCP_SERVER_POLICY.redactionMode,
