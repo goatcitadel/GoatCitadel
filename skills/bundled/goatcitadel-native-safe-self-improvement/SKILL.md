@@ -1,6 +1,6 @@
 ---
-name: GoatCitadel Native Safe Improvement
-description: GoatCitadel-native self-improvement with bounded local memory, structured learning logs, and review-gated proposals for AGENTS.md, TOOLS.md, SOUL.md, and playbooks.
+name: goatcitadel-native-safe-self-improvement
+description: "Capture corrections, log operational learnings, and draft review-gated improvement proposals for GoatCitadel guidance surfaces. Use when the user corrects GoatCitadel, a tool call fails, a routing choice was weak, a workflow succeeds unusually well, or GoatCitadel finishes a substantial task and should self-review."
 metadata:
   version: "0.2.0"
   tags:
@@ -27,19 +27,14 @@ metadata:
     - goatcitadel regression idea
 ---
 
-# GoatCitadel Native Safe Improvement
+# GoatCitadel Native Safe Self-Improvement
 
-Use this skill to help GoatCitadel get better over time **without** granting autonomous self-rewrite.
+Help GoatCitadel get better over time **without** granting autonomous self-rewrite. All changes go through human review.
 
-This skill merges two useful patterns into one safer workflow:
+This skill combines two patterns:
 
-1. **Bounded reflection memory**
-   - store explicit corrections, stable preferences, and post-task reflections
-   - keep all operational memory inside a local GoatCitadel improvement folder
-
-2. **Structured operational learnings**
-   - log errors, knowledge gaps, feature requests, routing gaps, and repeatable wins
-   - convert recurring patterns into **reviewable proposals** instead of direct edits
+1. **Bounded reflection memory** — store corrections, preferences, and post-task reflections inside `.goatcitadel/self-improvement/`
+2. **Structured operational learnings** — log errors, gaps, and wins, then convert recurring patterns into **reviewable proposals**
 
 ## Primary Goal
 
