@@ -473,6 +473,7 @@ import {
 import { verifyBackupAtPath } from "./gateway/backup-verify.js";
 import { BackupRetentionService } from "./backup-retention-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
+import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as chatSessionService from "./chat-session-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
@@ -794,7 +795,7 @@ const DEFAULT_MCP_SERVER_POLICY: McpServerPolicy = {
   allowedToolPatterns: [],
   blockedToolPatterns: [],
 };
-const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
+export const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
   {
     templateId: "approval-inbox",
     label: "GoatCitadel Approval Inbox",
@@ -9498,106 +9499,11 @@ export class GatewayService {
   }
 
   public listMcpTemplateDiscovery(): McpTemplateDiscoveryResult[] {
-    this.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
-    const installed = new Map(this.readMcpServers().map((server) => [server.label.toLowerCase(), server]));
-    return MCP_SERVER_TEMPLATES.map((template) => {
-      const checks: McpTemplateDiscoveryResult["dependencyChecks"] = [];
-      if (template.transport === "stdio") {
-        checks.push({
-          key: "command",
-          status: template.command?.trim() ? "pass" : "fail",
-          message: template.command?.trim() ? `Command ${template.command} is configured.` : "Missing command.",
-        });
-      }
-      if (template.transport === "http" || template.transport === "sse") {
-        checks.push({
-          key: "url",
-          status: template.url?.trim() ? "pass" : "warn",
-          message: template.url?.trim() ? `Endpoint ${template.url} provided.` : "Provide endpoint URL before connect.",
-        });
-      }
-      if (template.authType !== "none") {
-        checks.push({
-          key: "auth",
-          status: "warn",
-          message: `${template.authType} credentials required before first connect.`,
-        });
-      } else {
-        checks.push({
-          key: "auth",
-          status: "pass",
-          message: "No auth required.",
-        });
-      }
-      const missingCommand = checks.some((check) => check.key === "command" && check.status === "fail");
-      const missingUrl = checks.some((check) => check.key === "url" && check.status === "fail");
-      const readiness = missingCommand
-        ? "needs_command"
-        : missingUrl
-          ? "needs_url"
-          : template.authType !== "none"
-            ? "needs_auth"
-            : "ready";
-      return {
-        templateId: template.templateId,
-        label: template.label,
-        installed: installed.has(template.label.toLowerCase()),
-        readiness,
-        dependencyChecks: checks,
-      };
-    });
+    return mcpDiagnosticsService.listMcpTemplateDiscovery(this);
   }
 
   public runMcpServerHealthCheck(serverId: string): ConnectorDiagnosticReport {
-    this.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
-    const server = this.requireMcpServer(serverId);
-    const checks: ConnectorDiagnosticReport["checks"] = [];
-    checks.push({
-      key: "enabled",
-      status: server.enabled ? "pass" : "warn",
-      message: server.enabled ? "MCP server is enabled." : "Server is disabled.",
-    });
-    checks.push({
-      key: "status",
-      status: server.status === "connected" ? "pass" : server.status === "connecting" ? "warn" : "fail",
-      message: `Server status is ${server.status}.`,
-    });
-    if (server.transport === "stdio") {
-      checks.push({
-        key: "command",
-        status: server.command?.trim() ? "pass" : "fail",
-        message: server.command?.trim() ? `Command ${server.command} configured.` : "Missing stdio command.",
-      });
-    } else {
-      checks.push({
-        key: "url",
-        status: server.url?.trim() ? "pass" : "fail",
-        message: server.url?.trim() ? `URL ${server.url} configured.` : "Missing server URL.",
-      });
-    }
-    checks.push({
-      key: "policy",
-      status:
-        server.policy.blockedToolPatterns.length > 0 || server.policy.allowedToolPatterns.length > 0 ? "pass" : "warn",
-      message:
-        server.policy.blockedToolPatterns.length > 0 || server.policy.allowedToolPatterns.length > 0
-          ? "Tool policy constraints are configured."
-          : "Consider setting allow/block patterns for safer operation.",
-    });
-    const report: ConnectorDiagnosticReport = {
-      connectorType: "mcp_server",
-      connectorId: serverId,
-      status: checks.some((check) => check.status === "fail")
-        ? "error"
-        : checks.some((check) => check.status === "warn")
-          ? "warn"
-          : "ok",
-      checks,
-      recommendedNextAction: this.pickConnectorDiagnosticAction(checks),
-      checkedAt: new Date().toISOString(),
-    };
-    this.recordConnectorHealthRun(report);
-    return report;
+    return mcpDiagnosticsService.runMcpServerHealthCheck(this, serverId);
   }
 
   public createMcpServer(input: McpServerCreateInput): McpServerRecord {
@@ -12286,7 +12192,7 @@ export class GatewayService {
     this.storage.systemSettings.set(INTEGRATION_PLUGINS_SETTING_KEY, plugins);
   }
 
-  private readMcpServers(): McpServerRecord[] {
+  /** @internal */ public readMcpServers(): McpServerRecord[] {
     const stored = this.storage.systemSettings.get<McpServerRecord[]>(MCP_SERVERS_SETTING_KEY)?.value;
     if (!Array.isArray(stored)) {
       return [];
@@ -12306,7 +12212,7 @@ export class GatewayService {
     this.storage.systemSettings.set(MCP_SERVERS_SETTING_KEY, servers);
   }
 
-  private requireMcpServer(serverId: string): McpServerRecord {
+  /** @internal */ public requireMcpServer(serverId: string): McpServerRecord {
     const server = this.readMcpServers().find((item) => item.serverId === serverId);
     if (!server) {
       throw new Error(`Unknown MCP server: ${serverId}`);
