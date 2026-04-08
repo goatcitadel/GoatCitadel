@@ -14,6 +14,7 @@ import {
   ConflictError,
   NotFoundError,
   type ApprovalWaitWorkflowPayload,
+  type ChatTurnTraceRecord,
   type ConnectorDeliveryWorkflowPayload,
   type DurableCheckpointRecord,
   type DurableDeadLetterRecord,
@@ -283,6 +284,180 @@ export async function executeDurableChatTurnRun(host: DurableExecutionHost, run:
     run.runId,
     undefined,
     { skipMessageStart: true },
+  );
+}
+
+export function isDurableWorkflowRecoverable(
+  host: DurableExecutionHost,
+  run: DurableRunRecord,
+): { recoverable: boolean; reason?: string } {
+  switch (run.workflowKey) {
+    case "memory.maintenance":
+      return host.memoryMaintenanceService.parseWorkflowPayload(run)
+        ? { recoverable: true }
+        : { recoverable: false, reason: "Durable memory maintenance payload is invalid or incomplete." };
+    case "chat.turn.execute":
+      break;
+    case "proactive.tick":
+      return parseProactiveTickWorkflowPayload(run)
+        ? { recoverable: true }
+        : { recoverable: false, reason: "Durable proactive tick payload is invalid or incomplete." };
+    case "approval.wait":
+      return parseApprovalWaitWorkflowPayload(run)
+        ? { recoverable: true }
+        : { recoverable: false, reason: "Durable approval wait payload is invalid or incomplete." };
+    case "connector.delivery":
+      return parseConnectorDeliveryWorkflowPayload(run)
+        ? { recoverable: true }
+        : { recoverable: false, reason: "Durable connector delivery payload is invalid or incomplete." };
+    case "hook.delivery":
+      return parseHookDeliveryWorkflowPayload(run)
+        ? { recoverable: true }
+        : { recoverable: false, reason: "Durable hook delivery payload is invalid or incomplete." };
+    default:
+      return { recoverable: false, reason: `Unsupported durable workflow: ${run.workflowKey}` };
+  }
+  const payload = parseDurableChatTurnPayload(run);
+  if (!payload) {
+    return { recoverable: false, reason: "Durable chat run payload is invalid or incomplete." };
+  }
+  let trace: ChatTurnTraceRecord | undefined;
+  try {
+    trace = host.storage.chatTurnTraces.get(payload.turnId);
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) {
+      throw error;
+    }
+  }
+  if (!trace) {
+    return { recoverable: true };
+  }
+  if (trace.assistantMessageId) {
+    return { recoverable: false, reason: "Assistant output was already persisted before interruption." };
+  }
+  const toolRuns = host.storage.chatToolRuns.listByTurn(payload.turnId);
+  if (toolRuns.length > 0) {
+    return {
+      recoverable: false,
+      reason: "Durable chat run was interrupted after tool execution began and cannot be safely replayed.",
+    };
+  }
+  return { recoverable: true };
+}
+
+export async function markDurableWorkflowUnrecoverable(
+  host: DurableExecutionHost,
+  run: DurableRunRecord,
+  reason: string,
+): Promise<void> {
+  if (run.workflowKey === "memory.maintenance") {
+    host.memoryMaintenanceService.syncFromDurableRun(run);
+    host.publishRealtime("system", "durable", {
+      type: "durable_workflow_unrecoverable",
+      runId: run.runId,
+      workflowKey: run.workflowKey,
+      reason,
+    });
+    return;
+  }
+  if (run.workflowKey === "proactive.tick") {
+    const payload = parseProactiveTickWorkflowPayload(run);
+    if (payload) {
+      const proactiveRun = host
+        .listChatSessionProactiveRuns(payload.sessionId, 100)
+        .find((candidate) => candidate.runId === payload.proactiveRunId);
+      if (proactiveRun) {
+        host.gatewaySql
+          .prepare(
+            `
+          UPDATE proactive_runs
+          SET
+            status = 'failed',
+            stop_reason = 'terminal_failure',
+            error = @reason,
+            finished_at = @finishedAt
+          WHERE run_id = @runId
+        `,
+          )
+          .run({
+            runId: proactiveRun.runId,
+            reason,
+            finishedAt: new Date().toISOString(),
+          });
+      }
+    }
+    host.publishRealtime("system", "durable", {
+      type: "durable_workflow_unrecoverable",
+      runId: run.runId,
+      workflowKey: run.workflowKey,
+      reason,
+    });
+    return;
+  }
+  if (run.workflowKey === "approval.wait" || run.workflowKey === "connector.delivery") {
+    host.publishRealtime("system", "durable", {
+      type: "durable_workflow_unrecoverable",
+      runId: run.runId,
+      workflowKey: run.workflowKey,
+      reason,
+    });
+    return;
+  }
+  if (run.workflowKey === "hook.delivery") {
+    const payload = parseHookDeliveryWorkflowPayload(run);
+    if (payload) {
+      host.hooksService.markHookRunDeadLettered(payload.hookRunId, reason);
+    }
+    host.publishRealtime("system", "durable", {
+      type: "durable_workflow_unrecoverable",
+      runId: run.runId,
+      workflowKey: run.workflowKey,
+      reason,
+    });
+    return;
+  }
+  const payload = parseDurableChatTurnPayload(run);
+  if (!payload) {
+    return;
+  }
+  let trace: ChatTurnTraceRecord | undefined;
+  try {
+    trace = host.storage.chatTurnTraces.get(payload.turnId);
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) {
+      throw error;
+    }
+  }
+  if (trace) {
+    host.storage.chatTurnTraces.patch(payload.turnId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+      failure: {
+        failureClass: "unknown",
+        message: reason,
+        retryable: true,
+        recommendedAction: "retry",
+      },
+      completion: {
+        finishReason: trace.completion?.finishReason,
+        status: "interrupted",
+        repaired: Boolean(trace.completion?.repaired),
+      },
+      durable: {
+        runId: run.runId,
+        status: "failed",
+        checkpointKind: "run_failed",
+      },
+    });
+  }
+  host.persistChatStreamChunk(
+    {
+      type: "error",
+      sessionId: payload.sessionId,
+      turnId: payload.turnId,
+      error: reason,
+    },
+    run.runId,
   );
 }
 
