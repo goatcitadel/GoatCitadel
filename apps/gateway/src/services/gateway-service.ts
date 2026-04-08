@@ -476,6 +476,7 @@ import * as settingsAuthService from "./settings-auth-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
+import * as discordPairingHelpers from "./discord-pairing-helpers.js";
 import * as chatSessionService from "./chat-session-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
@@ -11621,14 +11622,8 @@ export class GatewayService {
     this.storage.systemSettings.set(DISCORD_PAIRINGS_SETTING_KEY, records);
   }
 
-  private generateDiscordPairingCode(): string {
-    return randomBytes(3).toString("hex").toUpperCase();
-  }
-
   private findApprovedDiscordPairing(connectionId: string, userId: string): DiscordPairingRecord | undefined {
-    return this.readDiscordPairings().find(
-      (item) => item.connectionId === connectionId && item.userId === userId && item.status === "approved",
-    );
+    return discordPairingHelpers.findApprovedDiscordPairing(this, connectionId, userId);
   }
 
   private ensurePendingDiscordPairing(
@@ -11636,47 +11631,11 @@ export class GatewayService {
     userId: string,
     displayName?: string,
   ): DiscordPairingRecord {
-    const records = this.readDiscordPairings();
-    const now = new Date().toISOString();
-    const existing = records.find(
-      (item) => item.connectionId === connectionId && item.userId === userId && item.status === "pending",
-    );
-    if (existing) {
-      const updated: DiscordPairingRecord = {
-        ...existing,
-        displayName: displayName?.trim() || existing.displayName,
-        updatedAt: now,
-      };
-      this.writeDiscordPairings(records.map((item) => (item.pairingId === updated.pairingId ? updated : item)));
-      return updated;
-    }
-    const created: DiscordPairingRecord = {
-      pairingId: randomUUID(),
-      connectionId,
-      userId,
-      displayName: displayName?.trim() || undefined,
-      code: this.generateDiscordPairingCode(),
-      status: "pending",
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.writeDiscordPairings([created, ...records]);
-    return created;
+    return discordPairingHelpers.ensurePendingDiscordPairing(this, connectionId, userId, displayName);
   }
 
   private touchDiscordPairing(pairingId: string): void {
-    const now = new Date().toISOString();
-    this.writeDiscordPairings(
-      this.readDiscordPairings().map((item) =>
-        item.pairingId === pairingId
-          ? {
-              ...item,
-              lastInboundAt: now,
-              updatedAt: now,
-            }
-          : item,
-      ),
-    );
+    return discordPairingHelpers.touchDiscordPairing(this, pairingId);
   }
 
   private readDiscordRouteSessions(): DiscordRouteSessionRecord[] {
