@@ -22,7 +22,7 @@
  * Pattern reference: comms-service.ts, memory-facade-service.ts.
  */
 
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
 import {
   clampInt,
@@ -57,6 +57,8 @@ import {
   COMPANION_CONTRACT_ID,
   COMPANION_REFRESH_TOKEN_BYTES,
   COMPANION_REFRESH_TOKEN_TTL_MS,
+  COMPANION_REQUEST_CLOCK_SKEW_MS,
+  COMPANION_REQUEST_REPLAY_TTL_MS,
   COMPANION_SIGNATURE_ALGORITHM,
   DEVICE_ACCESS_APPROVAL_KIND,
   DEVICE_ACCESS_REQUEST_POLL_AFTER_MS,
@@ -79,11 +81,16 @@ import {
   readAssistantAuthConfigSnapshotSync,
 } from "./gateway/auth-credential-planner.js";
 import {
+  buildCompanionSigningPayload,
+  decodeBase64Url,
   isCompanionSessionCurrentlyActive,
   isCompanionSessionOperatorActive,
   isRecord,
   mapCompanionSessionRow,
   normalizeCompanionAuditEvent,
+  normalizeCompanionNonce,
+  normalizeCompanionRequestPath,
+  normalizeCompanionSignature,
   toCompanionSessionAdminRecord,
   toCompanionSessionInfoResponse,
   type CompanionAccessValidationResult,
@@ -1258,4 +1265,150 @@ export function validateCompanionAccessToken(
     grantId: session.grantId,
     sessionId: session.sessionId,
   };
+}
+
+export function verifyCompanionRequestSignature(
+  host: SettingsAuthHost,
+  input: {
+    sessionId: string;
+    method: string;
+    path: string;
+    timestamp: string;
+    nonce: string;
+    signature: string;
+    body: unknown;
+  },
+): void {
+  const session = host.getActiveCompanionSessionById(input.sessionId);
+  if (!session) {
+    void host.storage.audit.append("approvals", {
+      event: "auth.companion_request.session_inactive",
+      actorId: `companion:${input.sessionId}`,
+      companionSessionId: input.sessionId,
+      detail: "Companion session is no longer active.",
+      method: input.method.toUpperCase(),
+      path: input.path,
+    });
+    throw new Error("Companion session is no longer active.");
+  }
+
+  const timestamp = Date.parse(input.timestamp);
+  if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > COMPANION_REQUEST_CLOCK_SKEW_MS) {
+    void host.storage.audit.append("approvals", {
+      event: "auth.companion_request.timestamp_invalid",
+      actorId: `companion:${session.sessionId}`,
+      deviceId: session.grantId,
+      grantId: session.grantId,
+      companionSessionId: session.sessionId,
+      contractId: COMPANION_CONTRACT_ID,
+      detail: "Companion request timestamp is outside the accepted skew window.",
+      method: input.method.toUpperCase(),
+      path: input.path,
+      nonce: input.nonce,
+    });
+    throw new Error("Companion request timestamp is outside the accepted skew window.");
+  }
+
+  const nonce = normalizeCompanionNonce(input.nonce);
+  const signature = normalizeCompanionSignature(input.signature);
+  const path = normalizeCompanionRequestPath(input.path);
+  const payload = buildCompanionSigningPayload({
+    method: input.method,
+    path,
+    timestamp: input.timestamp,
+    nonce,
+    body: input.body,
+  });
+  const method = input.method.toUpperCase();
+  const requestHash = createHash("sha256").update(payload, "utf8").digest("hex");
+  const signatureBuffer = decodeBase64Url(signature);
+  const publicKey = createPublicKey(session.signingPublicKeyPem);
+  if (!verify(null, Buffer.from(payload, "utf8"), publicKey, signatureBuffer)) {
+    void host.storage.audit.append("approvals", {
+      event: "auth.companion_request.signature_invalid",
+      actorId: `companion:${session.sessionId}`,
+      deviceId: session.grantId,
+      grantId: session.grantId,
+      companionSessionId: session.sessionId,
+      contractId: COMPANION_CONTRACT_ID,
+      detail: "Invalid companion request signature.",
+      method,
+      path,
+      nonce,
+      requestHash,
+    });
+    throw new Error("Invalid companion request signature.");
+  }
+
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + COMPANION_REQUEST_REPLAY_TTL_MS).toISOString();
+  host.gatewaySql
+    .prepare(
+      `
+    DELETE FROM companion_request_replays
+    WHERE expires_at <= @now
+  `,
+    )
+    .run({ now });
+  try {
+    host.gatewaySql
+      .prepare(
+        `
+      INSERT INTO companion_request_replays (
+        session_id,
+        nonce,
+        method,
+        path,
+        request_hash,
+        created_at,
+        expires_at
+      ) VALUES (
+        @sessionId,
+        @nonce,
+        @method,
+        @path,
+        @requestHash,
+        @createdAt,
+        @expiresAt
+      )
+    `,
+      )
+      .run({
+        sessionId: session.sessionId,
+        nonce,
+        method,
+        path,
+        requestHash,
+        createdAt: now,
+        expiresAt,
+      });
+  } catch {
+    void host.storage.audit.append("approvals", {
+      event: "auth.companion_request.replay_rejected",
+      actorId: `companion:${session.sessionId}`,
+      deviceId: session.grantId,
+      grantId: session.grantId,
+      companionSessionId: session.sessionId,
+      contractId: COMPANION_CONTRACT_ID,
+      detail: "Companion request replay detected.",
+      method,
+      path,
+      nonce,
+      requestHash,
+    });
+    throw new Error("Companion request replay detected.");
+  }
+
+  void host.storage.audit.append("approvals", {
+    event: "auth.companion_request.accepted",
+    actorId: `companion:${session.sessionId}`,
+    deviceId: session.grantId,
+    grantId: session.grantId,
+    companionSessionId: session.sessionId,
+    contractId: COMPANION_CONTRACT_ID,
+    method,
+    path,
+    nonce,
+    requestHash,
+  });
 }
