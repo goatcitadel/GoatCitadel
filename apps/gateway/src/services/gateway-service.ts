@@ -480,6 +480,9 @@ import * as discordPairingHelpers from "./discord-pairing-helpers.js";
 import * as channelSetupHelpers from "./channel-setup-helpers.js";
 import * as memoryItemHelpers from "./memory-item-helpers.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
+import * as onboardingMarkerHelpers from "./onboarding-marker-helpers.js";
+import * as guidanceDocumentHelpers from "./guidance-document-helpers.js";
+import * as cronJobConfigHelpers from "./cron-job-config-helpers.js";
 import * as chatSessionService from "./chat-session-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
@@ -1016,13 +1019,13 @@ const DEFAULT_DELEGATION_ROLES = ["product", "architect", "coder", "qa", "ops"];
 const IMPROVEMENT_WEEKLY_TIME_ZONE = "America/Los_Angeles";
 const IMPROVEMENT_WEEKLY_SCHEDULE_LABEL = "0 2 * * 0 America/Los_Angeles";
 const PRIVATE_BETA_BACKUP_TIME_ZONE = "America/Los_Angeles";
-const PRIVATE_BETA_BACKUP_SCHEDULE_LABEL = "30 2 * * * America/Los_Angeles";
+export const PRIVATE_BETA_BACKUP_SCHEDULE_LABEL = "30 2 * * * America/Los_Angeles";
 const MEMORY_FLUSH_DAILY_TIME_ZONE = "America/Los_Angeles";
-const MEMORY_FLUSH_DAILY_SCHEDULE_LABEL = "0 3 * * * America/Los_Angeles";
+export const MEMORY_FLUSH_DAILY_SCHEDULE_LABEL = "0 3 * * * America/Los_Angeles";
 const COST_REPORT_HOURLY_TIME_ZONE = "America/Los_Angeles";
-const COST_REPORT_HOURLY_SCHEDULE_LABEL = "0 * * * * America/Los_Angeles";
+export const COST_REPORT_HOURLY_SCHEDULE_LABEL = "0 * * * * America/Los_Angeles";
 const UPDATE_REVIEW_DAILY_TIME_ZONE = "America/Los_Angeles";
-const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angeles";
+export const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angeles";
 const PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY = "private_beta_backup_last_day_key_v1";
 const MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY = "memory_flush_daily_last_day_key_v1";
 const COST_REPORT_HOURLY_DEDUP_SETTING_KEY = "cost_report_hourly_last_hour_key_v1";
@@ -1057,7 +1060,7 @@ const PIPELINE_TEMPLATES: Record<string, string[]> = {
 };
 export const DEFAULT_WORKSPACE_ID = "default";
 const REPLAY_SCRATCH_SESSION_TITLE_PREFIX = "[Replay scratch]";
-const GUIDANCE_DOC_FILE_MAP: Record<GuidanceDocType, string> = {
+export const GUIDANCE_DOC_FILE_MAP: Record<GuidanceDocType, string> = {
   goatcitadel: "GOATCITADEL.md",
   agents: "AGENTS.md",
   claude: "CLAUDE.md",
@@ -1383,10 +1386,10 @@ export class GatewayService {
   private readonly recentChannelSetupTests = new Map<string, ChannelSetupRecentTestCacheEntry>();
   private lastChatStreamPurgeAt = 0;
   /** @internal */ public readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
-  private readonly onboardingMarkerPath: string;
+  /** @internal */ public readonly onboardingMarkerPath: string;
   private maintenanceScheduler?: NodeJS.Timeout;
   private closing = false;
-  private onboardingMarker: { completedAt?: string; completedBy?: string } = {};
+  /** @internal */ public onboardingMarker: { completedAt?: string; completedBy?: string } = {};
   private criticalInitComplete = false;
   private deferredInitPromise?: Promise<void>;
 
@@ -13070,21 +13073,7 @@ export class GatewayService {
     scope: "global" | "workspace",
     workspaceId?: string,
   ): { fileName: string; absolutePath: string } {
-    const fileName = GUIDANCE_DOC_FILE_MAP[docType];
-    if (!fileName) {
-      throw new Error(`Unsupported guidance doc type: ${docType}`);
-    }
-    if (scope === "global") {
-      return {
-        fileName,
-        absolutePath: path.resolve(this.config.rootDir, fileName),
-      };
-    }
-    const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
-    return {
-      fileName,
-      absolutePath: path.resolve(this.config.rootDir, "workspaces", normalizedWorkspaceId, fileName),
-    };
+    return guidanceDocumentHelpers.resolveGuidancePath(this, docType, scope, workspaceId);
   }
 
   private async readGuidanceDocument(
@@ -13092,34 +13081,7 @@ export class GatewayService {
     scope: "global" | "workspace",
     workspaceId?: string,
   ): Promise<GuidanceDocumentRecord> {
-    const normalizedWorkspaceId = scope === "workspace" ? this.normalizeWorkspaceId(workspaceId) : undefined;
-    const resolved = this.resolveGuidancePath(docType, scope, normalizedWorkspaceId);
-    try {
-      const [content, stat] = await Promise.all([
-        fs.readFile(resolved.absolutePath, "utf8"),
-        fs.stat(resolved.absolutePath),
-      ]);
-      return {
-        docType,
-        scope,
-        workspaceId: normalizedWorkspaceId,
-        fileName: resolved.fileName,
-        absolutePath: resolved.absolutePath,
-        exists: true,
-        content,
-        updatedAt: stat.mtime.toISOString(),
-      };
-    } catch {
-      return {
-        docType,
-        scope,
-        workspaceId: normalizedWorkspaceId,
-        fileName: resolved.fileName,
-        absolutePath: resolved.absolutePath,
-        exists: false,
-        content: "",
-      };
-    }
+    return guidanceDocumentHelpers.readGuidanceDocument(this, docType, scope, workspaceId);
   }
 
   private async writeGuidanceDocument(
@@ -13128,10 +13090,7 @@ export class GatewayService {
     workspaceId: string | undefined,
     content: string,
   ): Promise<void> {
-    const resolved = this.resolveGuidancePath(docType, scope, workspaceId);
-    await fs.mkdir(path.dirname(resolved.absolutePath), { recursive: true });
-    const normalizedContent = content.replace(/\r\n/g, "\n").trimEnd() + "\n";
-    await fs.writeFile(resolved.absolutePath, normalizedContent, "utf8");
+    return guidanceDocumentHelpers.writeGuidanceDocument(this, docType, scope, workspaceId, content);
   }
 
   /** @internal */ public async resolveRuntimeGuidance(workspaceId: string): Promise<ResolvedRuntimeGuidance> {
@@ -13769,149 +13728,41 @@ export class GatewayService {
   }
 
   private async loadOnboardingMarker(): Promise<void> {
-    let raw: string;
-    try {
-      raw = await fs.readFile(this.onboardingMarkerPath, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.onboardingMarker = {};
-        return;
-      }
-      throw error;
-    }
-
-    try {
-      const parsed = JSON.parse(raw) as { completedAt?: string; completedBy?: string };
-      this.onboardingMarker = {
-        completedAt: parsed.completedAt?.trim() || undefined,
-        completedBy: parsed.completedBy?.trim() || undefined,
-      };
-    } catch {
-      this.onboardingMarker = {};
-    }
+    return onboardingMarkerHelpers.loadOnboardingMarker(this);
   }
 
   private persistOnboardingMarker(): void {
-    fsSync.mkdirSync(path.dirname(this.onboardingMarkerPath), { recursive: true });
-    fsSync.writeFileSync(this.onboardingMarkerPath, JSON.stringify(this.onboardingMarker, null, 2), "utf8");
+    return onboardingMarkerHelpers.persistOnboardingMarker(this);
   }
 
   private async loadCronJobsFromConfig(): Promise<void> {
-    const filePath = this.getCronJobsConfigPath();
-    let raw: string;
-
-    try {
-      raw = await fs.readFile(filePath, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return;
-      }
-      throw error;
-    }
-
-    const parsed = JSON.parse(raw) as { jobs?: CronJobRecord[] } | CronJobRecord[];
-    const jobs = Array.isArray(parsed) ? parsed : (parsed.jobs ?? []);
-
-    this.storage.runImmediateTransaction(() => {
-      for (const job of jobs) {
-        const normalizedJobId = normalizeCronJobId(job.jobId);
-        const existing = this.storage.cronJobs.get(normalizedJobId);
-        this.storage.cronJobs.upsertIfChanged({
-          ...job,
-          jobId: normalizedJobId,
-          name: normalizeCronJobName(job.name),
-          schedule: normalizeCronSchedule(job.schedule),
-          enabled: Boolean(job.enabled),
-          lastRunAt: job.lastRunAt ?? existing?.lastRunAt,
-          nextRunAt: job.nextRunAt ?? existing?.nextRunAt,
-        });
-      }
-    });
+    return cronJobConfigHelpers.loadCronJobsFromConfig(this);
   }
 
   private persistCronJobsConfig(): void {
-    const filePath = this.getCronJobsConfigPath();
-    fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
-    const jobs = this.storage.cronJobs.list().map((job) => ({
-      jobId: job.jobId,
-      name: job.name,
-      schedule: job.schedule,
-      enabled: job.enabled,
-      lastRunAt: job.lastRunAt,
-      nextRunAt: job.nextRunAt,
-    }));
-    fsSync.writeFileSync(filePath, JSON.stringify({ jobs }, null, 2), "utf8");
-    this.persistUnifiedConfig();
+    return cronJobConfigHelpers.persistCronJobsConfig(this);
   }
 
   private getCronJobsConfigPath(): string {
-    return path.join(this.config.rootDir, "config", "cron-jobs.json");
+    return cronJobConfigHelpers.getCronJobsConfigPath(this);
   }
 
   // ensureWeeklyImprovementCronJob moved to ImprovementService
 
   private ensurePrivateBetaBackupCronJob(): void {
-    const existing = this.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
-    const now = new Date().toISOString();
-    this.storage.cronJobs.upsertIfChanged(
-      {
-        jobId: PRIVATE_BETA_BACKUP_JOB_ID,
-        name: "Private Beta Daily Backup",
-        schedule: PRIVATE_BETA_BACKUP_SCHEDULE_LABEL,
-        enabled: existing?.enabled ?? true,
-        lastRunAt: existing?.lastRunAt,
-        nextRunAt: existing?.nextRunAt,
-      },
-      now,
-    );
+    return cronJobConfigHelpers.ensurePrivateBetaBackupCronJob(this);
   }
 
   private ensureMemoryFlushCronJob(): void {
-    const existing = this.storage.cronJobs.get(MEMORY_FLUSH_DAILY_JOB_ID);
-    const now = new Date().toISOString();
-    this.storage.cronJobs.upsertIfChanged(
-      {
-        jobId: MEMORY_FLUSH_DAILY_JOB_ID,
-        name: "Memory Flush Daily",
-        schedule: MEMORY_FLUSH_DAILY_SCHEDULE_LABEL,
-        enabled: existing?.enabled ?? true,
-        lastRunAt: existing?.lastRunAt,
-        nextRunAt: existing?.nextRunAt,
-      },
-      now,
-    );
+    return cronJobConfigHelpers.ensureMemoryFlushCronJob(this);
   }
 
   private ensureCostReportCronJob(): void {
-    const existing = this.storage.cronJobs.get(COST_REPORT_HOURLY_JOB_ID);
-    const now = new Date().toISOString();
-    this.storage.cronJobs.upsertIfChanged(
-      {
-        jobId: COST_REPORT_HOURLY_JOB_ID,
-        name: "Cost Report Hourly",
-        schedule: COST_REPORT_HOURLY_SCHEDULE_LABEL,
-        enabled: existing?.enabled ?? true,
-        lastRunAt: existing?.lastRunAt,
-        nextRunAt: existing?.nextRunAt,
-      },
-      now,
-    );
+    return cronJobConfigHelpers.ensureCostReportCronJob(this);
   }
 
   private ensureUpdateReviewCronJob(): void {
-    const existing = this.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
-    const now = new Date().toISOString();
-    this.storage.cronJobs.upsertIfChanged(
-      {
-        jobId: UPDATE_REVIEW_DAILY_JOB_ID,
-        name: "Daily Update Review",
-        schedule: UPDATE_REVIEW_DAILY_SCHEDULE_LABEL,
-        enabled: existing?.enabled ?? true,
-        lastRunAt: existing?.lastRunAt,
-        nextRunAt: existing?.nextRunAt,
-      },
-      now,
-    );
+    return cronJobConfigHelpers.ensureUpdateReviewCronJob(this);
   }
 
   /** @internal */ public persistLlmConfig(): void {
@@ -13977,7 +13828,7 @@ export class GatewayService {
     this.persistUnifiedConfig();
   }
 
-  private persistUnifiedConfig(): void {
+  /** @internal */ public persistUnifiedConfig(): void {
     const filePath = path.join(this.config.rootDir, "config", "goatcitadel.json");
     const cronJobs = {
       jobs: this.storage.cronJobs.list().map((job) => ({
