@@ -9524,71 +9524,19 @@ export class GatewayService {
   }
 
   public async connectMcpServer(serverId: string): Promise<McpServerRecord> {
-    const connecting = this.patchMcpServerState(serverId, {
-      status: "connecting",
-      lastError: undefined,
-    });
-    try {
-      const tools = this.readMcpTools();
-      const existing = tools.filter((item) => item.serverId === serverId);
-      const resolvedTools = await this.resolveConnectedMcpTools(connecting, existing);
-      if (resolvedTools.length > 0) {
-        this.writeMcpTools([...tools.filter((item) => item.serverId !== serverId), ...resolvedTools]);
-      }
-      return this.patchMcpServerState(serverId, {
-        status: "connected",
-        lastConnectedAt: new Date().toISOString(),
-        lastError: undefined,
-      });
-    } catch (error) {
-      this.patchMcpServerState(serverId, {
-        status: "error",
-        lastError: (error as Error).message,
-      });
-      throw error;
-    }
+    return mcpServerAdminService.connectMcpServer(this, serverId);
   }
 
   public disconnectMcpServer(serverId: string): McpServerRecord {
-    return this.patchMcpServerState(serverId, {
-      status: "disconnected",
-    });
+    return mcpServerAdminService.disconnectMcpServer(this, serverId);
   }
 
   public startMcpOAuth(serverId: string): McpOAuthStartResponse {
-    const server = this.requireMcpServer(serverId);
-    const state = randomUUID();
-    const callback = encodeURIComponent("http://127.0.0.1:8787/api/v1/mcp/oauth/callback");
-    const authorizeUrl = `${server.url ?? "https://example-mcp-provider.local/oauth/authorize"}?state=${encodeURIComponent(state)}&redirect_uri=${callback}`;
-    const authRows = this.readMcpAuthState();
-    authRows[serverId] = {
-      ...(authRows[serverId] ?? {}),
-      oauthState: state,
-      updatedAt: new Date().toISOString(),
-    };
-    this.writeMcpAuthState(authRows);
-    return { authorizeUrl, state };
+    return mcpServerAdminService.startMcpOAuth(this, serverId);
   }
 
   public async completeMcpOAuth(serverId: string, code: string, state?: string): Promise<McpServerRecord> {
-    const authRows = this.readMcpAuthState();
-    const authRow = authRows[serverId];
-    if (!authRow) {
-      throw new Error("No OAuth handshake in progress for this server.");
-    }
-    if (state && authRow.oauthState && authRow.oauthState !== state) {
-      throw new Error("OAuth state mismatch.");
-    }
-    authRows[serverId] = {
-      ...authRow,
-      accessTokenRef: `keychain:goatcitadel:mcp:${serverId}:access-token`,
-      refreshTokenRef: `keychain:goatcitadel:mcp:${serverId}:refresh-token`,
-      oauthState: undefined,
-      updatedAt: new Date().toISOString(),
-      lastCodePreview: code.slice(0, 8),
-    };
-    this.writeMcpAuthState(authRows);
-    return this.connectMcpServer(serverId);
+    return mcpServerAdminService.completeMcpOAuth(this, serverId, code, state);
   }
 
   public listMcpTools(serverId: string): McpToolRecord[] {
@@ -12156,7 +12104,7 @@ export class GatewayService {
     return server;
   }
 
-  private patchMcpServerState(
+  /** @internal */ public patchMcpServerState(
     serverId: string,
     patch: Partial<Pick<McpServerRecord, "status" | "lastConnectedAt" | "lastError">>,
   ): McpServerRecord {
@@ -12185,7 +12133,7 @@ export class GatewayService {
     return updated;
   }
 
-  private async resolveConnectedMcpTools(
+  /** @internal */ public async resolveConnectedMcpTools(
     server: McpServerRecord,
     existingTools: McpToolRecord[],
   ): Promise<McpToolRecord[]> {
@@ -12213,11 +12161,11 @@ export class GatewayService {
     this.storage.systemSettings.set(MCP_TOOLS_SETTING_KEY, tools);
   }
 
-  private readMcpAuthState(): Record<string, McpAuthStateRecord> {
+  /** @internal */ public readMcpAuthState(): Record<string, McpAuthStateRecord> {
     return this.storage.systemSettings.get<Record<string, McpAuthStateRecord>>("mcp_auth_state_v1")?.value ?? {};
   }
 
-  private writeMcpAuthState(state: Record<string, McpAuthStateRecord>): void {
+  /** @internal */ public writeMcpAuthState(state: Record<string, McpAuthStateRecord>): void {
     this.storage.systemSettings.set("mcp_auth_state_v1", state);
   }
 

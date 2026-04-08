@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  McpOAuthStartResponse,
   McpServerCreateInput,
   McpServerPolicy,
   McpServerRecord,
@@ -80,6 +81,79 @@ export function updateMcpServerPolicy(
   policy: Partial<McpServerPolicy>,
 ): McpServerRecord {
   return updateMcpServer(host, serverId, { policy });
+}
+
+export async function connectMcpServer(host: McpServerAdminHost, serverId: string): Promise<McpServerRecord> {
+  const connecting = host.patchMcpServerState(serverId, {
+    status: "connecting",
+    lastError: undefined,
+  });
+  try {
+    const tools = host.readMcpTools();
+    const existing = tools.filter((item) => item.serverId === serverId);
+    const resolvedTools = await host.resolveConnectedMcpTools(connecting, existing);
+    if (resolvedTools.length > 0) {
+      host.writeMcpTools([...tools.filter((item) => item.serverId !== serverId), ...resolvedTools]);
+    }
+    return host.patchMcpServerState(serverId, {
+      status: "connected",
+      lastConnectedAt: new Date().toISOString(),
+      lastError: undefined,
+    });
+  } catch (error) {
+    host.patchMcpServerState(serverId, {
+      status: "error",
+      lastError: (error as Error).message,
+    });
+    throw error;
+  }
+}
+
+export function disconnectMcpServer(host: McpServerAdminHost, serverId: string): McpServerRecord {
+  return host.patchMcpServerState(serverId, {
+    status: "disconnected",
+  });
+}
+
+export function startMcpOAuth(host: McpServerAdminHost, serverId: string): McpOAuthStartResponse {
+  const server = host.requireMcpServer(serverId);
+  const state = randomUUID();
+  const callback = encodeURIComponent("http://127.0.0.1:8787/api/v1/mcp/oauth/callback");
+  const authorizeUrl = `${server.url ?? "https://example-mcp-provider.local/oauth/authorize"}?state=${encodeURIComponent(state)}&redirect_uri=${callback}`;
+  const authRows = host.readMcpAuthState();
+  authRows[serverId] = {
+    ...(authRows[serverId] ?? {}),
+    oauthState: state,
+    updatedAt: new Date().toISOString(),
+  };
+  host.writeMcpAuthState(authRows);
+  return { authorizeUrl, state };
+}
+
+export async function completeMcpOAuth(
+  host: McpServerAdminHost,
+  serverId: string,
+  code: string,
+  state?: string,
+): Promise<McpServerRecord> {
+  const authRows = host.readMcpAuthState();
+  const authRow = authRows[serverId];
+  if (!authRow) {
+    throw new Error("No OAuth handshake in progress for this server.");
+  }
+  if (state && authRow.oauthState && authRow.oauthState !== state) {
+    throw new Error("OAuth state mismatch.");
+  }
+  authRows[serverId] = {
+    ...authRow,
+    accessTokenRef: `keychain:goatcitadel:mcp:${serverId}:access-token`,
+    refreshTokenRef: `keychain:goatcitadel:mcp:${serverId}:refresh-token`,
+    oauthState: undefined,
+    updatedAt: new Date().toISOString(),
+    lastCodePreview: code.slice(0, 8),
+  };
+  host.writeMcpAuthState(authRows);
+  return connectMcpServer(host, serverId);
 }
 
 export function deleteMcpServer(host: McpServerAdminHost, serverId: string): { deleted: boolean } {
