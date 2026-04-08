@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   SkillMergedSourceResult,
@@ -29,92 +30,34 @@ import { GCSelect, GCSwitch } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { useUiPreferences } from "../state/ui-preferences";
+import {
+  BANKR_MIGRATION_CARD_TITLE,
+  BANKR_MIGRATION_DOC_PATH,
+  BANKR_MIGRATION_TEMPLATE_PATH,
+  IMPORT_PROVIDER_OPTIONS,
+  SKILL_CATEGORY_RULES,
+  SKILL_FAMILY_TO_CATEGORY,
+  STATE_OPTIONS,
+  deriveCategoryLabel,
+  deriveSkillCategoryLabel,
+  deriveSourceCategoryLabel,
+  describeValidationTrust,
+  formatValidationList,
+  groupByCategory,
+} from "./skills/skills-page-helpers";
+
+export {
+  BANKR_MIGRATION_CARD_TITLE,
+  BANKR_MIGRATION_DOC_PATH,
+  BANKR_MIGRATION_TEMPLATE_PATH,
+  SKILL_FAMILY_TO_CATEGORY,
+  deriveSkillCategoryLabel,
+  deriveSourceCategoryLabel,
+} from "./skills/skills-page-helpers";
 
 interface SkillActivationPolicyState {
   guardedAutoThreshold: number;
   requireFirstUseConfirmation: boolean;
-}
-
-const STATE_OPTIONS: SkillRuntimeState[] = ["enabled", "sleep", "disabled"];
-export const BANKR_MIGRATION_CARD_TITLE = "Bankr is Optional";
-export const BANKR_MIGRATION_DOC_PATH = "docs/OPTIONAL_BANKR_SKILL.md";
-export const BANKR_MIGRATION_TEMPLATE_PATH = "templates/skills/bankr-optional/SKILL.md";
-// "external" is intentionally omitted: external sources are reference-only and not importable.
-const IMPORT_PROVIDER_OPTIONS: SkillSourceProvider[] = ["local", "github", "clawhub", "agentskill", "skillsmp"];
-
-const SKILL_CATEGORY_RULES: Array<{ label: string; tokens: string[] }> = [
-  { label: "Games & Experiments", tokens: ["animalhouse", "game", "virtual-pet", "creature", "pixel-art", "tamagotchi", "playful"] },
-  { label: "Browser & Automation", tokens: ["browser", "playwright", "devtools", "automation", "screenshot", "web", "e2e", "chrome"] },
-  { label: "Code & Engineering", tokens: ["code", "coding", "engineering", "implement", "refactor", "git", "fs.read", "fs.write", "shell.exec", "qa", "test"] },
-  { label: "Ops & Reliability", tokens: ["ops", "runtime", "sre", "incident", "monitoring", "safety", "observability"] },
-  { label: "Research & Knowledge", tokens: ["research", "investigate", "source", "citations", "knowledge", "notebook", "discovery"] },
-  { label: "Planning & Product", tokens: ["plan", "planning", "scope", "roadmap", "architecture", "product", "milestone"] },
-  { label: "Docs & Writing", tokens: ["docs", "documentation", "readme", "runbook", "writing", "guide", "changelog"] },
-  { label: "Communication & Productivity", tokens: ["assistant", "coordination", "productivity", "reminder", "follow-up", "organize", "summarize"] },
-  { label: "Integrations & MCP", tokens: ["mcp", "connector", "integration", "server", "tooling"] },
-];
-
-export function deriveSkillCategoryLabel(skill: Pick<SkillListItem, "skillId" | "name" | "tags" | "declaredTools" | "requires" | "keywords">): string {
-  const corpus = [
-    skill.skillId,
-    skill.name,
-    ...(skill.tags ?? []),
-    ...skill.declaredTools,
-    ...skill.requires,
-    ...skill.keywords,
-  ].join(" ").toLowerCase();
-  return deriveCategoryLabel(corpus);
-}
-
-export const SKILL_FAMILY_TO_CATEGORY: Record<string, string> = {
-  browser_automation: "Browser & Automation",
-  mcp_integrations: "Integrations & MCP",
-  docs_authoring: "Docs & Writing",
-  notebook_research: "Research & Knowledge",
-  games_and_experiments: "Games & Experiments",
-};
-
-export function deriveSourceCategoryLabel(item: Pick<SkillMergedSourceResult, "name" | "description" | "tags" | "skillFamily" | "sourceUrl" | "repositoryUrl" | "upstreamUrl">): string {
-  const familyCategory = item.skillFamily ? SKILL_FAMILY_TO_CATEGORY[item.skillFamily] : undefined;
-  if (familyCategory) {
-    return familyCategory;
-  }
-  const corpus = [
-    item.name,
-    item.description,
-    ...(item.tags ?? []),
-    item.sourceUrl,
-    item.repositoryUrl ?? "",
-    item.upstreamUrl ?? "",
-  ].join(" ").toLowerCase();
-  return deriveCategoryLabel(corpus);
-}
-
-// Rules are evaluated in priority order: first matching rule wins.
-// Place higher-priority categories earlier in SKILL_CATEGORY_RULES.
-function deriveCategoryLabel(corpus: string): string {
-  for (const rule of SKILL_CATEGORY_RULES) {
-    if (rule.tokens.some((token) => corpus.includes(token))) {
-      return rule.label;
-    }
-  }
-  return "General";
-}
-
-function groupByCategory<T>(items: T[], derive: (item: T) => string): Array<{ category: string; items: T[] }> {
-  const grouped = new Map<string, T[]>();
-  for (const item of items) {
-    const category = derive(item);
-    const existing = grouped.get(category);
-    if (existing) {
-      existing.push(item);
-    } else {
-      grouped.set(category, [item]);
-    }
-  }
-  return [...grouped.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([category, categoryItems]) => ({ category, items: categoryItems }));
 }
 
 export function SkillsPage() {
@@ -143,7 +86,9 @@ export function SkillsPage() {
   const [importSourceRef, setImportSourceRef] = useState("");
   const [importSourceType, setImportSourceType] = useState<"local_path" | "local_zip" | "git_url">("local_path");
   const [importSourceProvider, setImportSourceProvider] = useState<SkillSourceProvider>("local");
-  const [validationResult, setValidationResult] = useState<Awaited<ReturnType<typeof validateSkillImport>> | null>(null);
+  const [validationResult, setValidationResult] = useState<Awaited<ReturnType<typeof validateSkillImport>> | null>(
+    null,
+  );
   const [importHistory, setImportHistory] = useState<Awaited<ReturnType<typeof fetchSkillImportHistory>>["items"]>([]);
   const [importBusy, setImportBusy] = useState<null | "validate" | "install">(null);
   const [confirmHighRiskImport, setConfirmHighRiskImport] = useState(false);
@@ -172,14 +117,26 @@ export function SkillsPage() {
       if (importHistoryResponse) {
         setImportHistory(importHistoryResponse.items);
       }
-      setStateDraftBySkill((current) => Object.fromEntries(skillsResponse.items.map((skill) => [
-        skill.skillId,
-        dirtyStateDraftSkillIdsRef.current.has(skill.skillId) ? (current[skill.skillId] ?? skill.state) : skill.state,
-      ])));
-      setNoteDraftBySkill((current) => Object.fromEntries(skillsResponse.items.map((skill) => [
-        skill.skillId,
-        dirtyNoteDraftSkillIdsRef.current.has(skill.skillId) ? (current[skill.skillId] ?? skill.note ?? "") : (skill.note ?? ""),
-      ])));
+      setStateDraftBySkill((current) =>
+        Object.fromEntries(
+          skillsResponse.items.map((skill) => [
+            skill.skillId,
+            dirtyStateDraftSkillIdsRef.current.has(skill.skillId)
+              ? (current[skill.skillId] ?? skill.state)
+              : skill.state,
+          ]),
+        ),
+      );
+      setNoteDraftBySkill((current) =>
+        Object.fromEntries(
+          skillsResponse.items.map((skill) => [
+            skill.skillId,
+            dirtyNoteDraftSkillIdsRef.current.has(skill.skillId)
+              ? (current[skill.skillId] ?? skill.note ?? "")
+              : (skill.note ?? ""),
+          ]),
+        ),
+      );
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -210,17 +167,11 @@ export function SkillsPage() {
   );
 
   const filteredSkills = useMemo(
-    () => skills.filter((skill) => stateFilter === "all" ? true : skill.state === stateFilter),
+    () => skills.filter((skill) => (stateFilter === "all" ? true : skill.state === stateFilter)),
     [skills, stateFilter],
   );
-  const groupedSkills = useMemo(
-    () => groupByCategory(filteredSkills, deriveSkillCategoryLabel),
-    [filteredSkills],
-  );
-  const groupedSourceItems = useMemo(
-    () => groupByCategory(sourceItems, deriveSourceCategoryLabel),
-    [sourceItems],
-  );
+  const groupedSkills = useMemo(() => groupByCategory(filteredSkills, deriveSkillCategoryLabel), [filteredSkills]);
+  const groupedSourceItems = useMemo(() => groupByCategory(sourceItems, deriveSourceCategoryLabel), [sourceItems]);
 
   const onReload = useCallback(async () => {
     try {
@@ -255,26 +206,29 @@ export function SkillsPage() {
     }
   }, [policy]);
 
-  const onSaveSkillState = useCallback(async (skill: SkillListItem) => {
-    const draftState = stateDraftBySkill[skill.skillId] ?? skill.state;
-    const draftNote = noteDraftBySkill[skill.skillId] ?? "";
-    setBusySkillId(skill.skillId);
-    try {
-      await updateSkillState(skill.skillId, {
-        state: draftState,
-        note: draftNote.trim() || undefined,
-      });
-      dirtyStateDraftSkillIdsRef.current.delete(skill.skillId);
-      dirtyNoteDraftSkillIdsRef.current.delete(skill.skillId);
-      await load({ background: true, includeStatic: false });
-      setStatus(`Updated ${skill.name} to ${draftState}.`);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusySkillId(null);
-    }
-  }, [load, noteDraftBySkill, stateDraftBySkill]);
+  const onSaveSkillState = useCallback(
+    async (skill: SkillListItem) => {
+      const draftState = stateDraftBySkill[skill.skillId] ?? skill.state;
+      const draftNote = noteDraftBySkill[skill.skillId] ?? "";
+      setBusySkillId(skill.skillId);
+      try {
+        await updateSkillState(skill.skillId, {
+          state: draftState,
+          note: draftNote.trim() || undefined,
+        });
+        dirtyStateDraftSkillIdsRef.current.delete(skill.skillId);
+        dirtyNoteDraftSkillIdsRef.current.delete(skill.skillId);
+        await load({ background: true, includeStatic: false });
+        setStatus(`Updated ${skill.name} to ${draftState}.`);
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusySkillId(null);
+      }
+    },
+    [load, noteDraftBySkill, stateDraftBySkill],
+  );
 
   const onLoadSources = useCallback(async () => {
     setSourcesLoading(true);
@@ -335,9 +289,11 @@ export function SkillsPage() {
         sourceProvider: importSourceProvider,
       });
       setValidationResult(validation);
-      setStatus(validation.valid
-        ? `Validation passed (${validation.riskLevel} risk).`
-        : "Validation completed with blocking errors.");
+      setStatus(
+        validation.valid
+          ? `Validation passed (${validation.riskLevel} risk).`
+          : "Validation completed with blocking errors.",
+      );
       setError(null);
       await load({ background: true, includeStatic: true });
     } catch (err) {
@@ -388,7 +344,7 @@ export function SkillsPage() {
         title={pageCopy.skills.title}
         subtitle={pageCopy.skills.subtitle}
         hint="Discover, validate, install, and govern reusable playbook skills without leaving the operator workflow."
-        actions={(
+        actions={
           <>
             <StatusChip tone="muted">{filteredSkills.length} visible</StatusChip>
             <StatusChip tone="default">{sourceItems.length} sources</StatusChip>
@@ -396,7 +352,7 @@ export function SkillsPage() {
             <StatusChip tone="warning">{skills.filter((skill) => skill.state === "sleep").length} sleeping</StatusChip>
             {isRefreshing ? <StatusChip tone="live">Refreshing</StatusChip> : null}
           </>
-        )}
+        }
       />
       <PageGuideCard
         pageId="skills"
@@ -412,21 +368,25 @@ export function SkillsPage() {
         {isRefreshing ? <p className="status-banner">Refreshing skills and activation policy...</p> : null}
       </div>
 
-      <Panel
-        title="What are skills?"
-        subtitle="Reusable instruction packs for specific jobs and workflows."
-      >
+      <Panel title="What are skills?" subtitle="Reusable instruction packs for specific jobs and workflows.">
         <p className="table-subtext">
           Skills teach GoatCitadel how to do repeatable jobs. Keep them off, guarded, or fully enabled.
         </p>
         <ul>
-          <li><strong>enabled</strong>: skill can be selected automatically.</li>
-          <li><strong>sleep</strong>: skill only auto-runs when confidence is high enough.</li>
-          <li><strong>disabled</strong>: skill is ignored until you enable it.</li>
+          <li>
+            <strong>enabled</strong>: skill can be selected automatically.
+          </li>
+          <li>
+            <strong>sleep</strong>: skill only auto-runs when confidence is high enough.
+          </li>
+          <li>
+            <strong>disabled</strong>: skill is ignored until you enable it.
+          </li>
         </ul>
         {mode === "advanced" ? (
           <p className="table-subtext">
-            Skills are loaded from local <code>SKILL.md</code> folders and evaluated against activation policy and tool governance before use.
+            Skills are loaded from local <code>SKILL.md</code> folders and evaluated against activation policy and tool
+            governance before use.
           </p>
         ) : null}
       </Panel>
@@ -436,11 +396,14 @@ export function SkillsPage() {
         subtitle="Browse curated sources first, validate before install, and keep imported skills disabled until you explicitly enable them."
       >
         <DataToolbar
-          primary={(
+          primary={
             <div className="controls-row">
               <label htmlFor="skillSourceQuery">
                 Search sources
-                <HelpHint label="Search skill sources help" text="Searches curated marketplaces and supported GitHub-backed sources for installable skills related to the capability you need." />
+                <HelpHint
+                  label="Search skill sources help"
+                  text="Searches curated marketplaces and supported GitHub-backed sources for installable skills related to the capability you need."
+                />
               </label>
               <input
                 id="skillSourceQuery"
@@ -452,20 +415,22 @@ export function SkillsPage() {
                 {sourcesLoading ? "Searching..." : sourceQuery.trim() ? "Lookup" : "Browse"}
               </button>
             </div>
-          )}
-          secondary={sourceProviders.length > 0 ? (
-            <div className="token-row">
-              {sourceProviders.map((provider) => (
-                <span
-                  key={provider.provider}
-                  className={`token-chip ${provider.available ? "token-chip-active" : ""}`}
-                  title={provider.error || ""}
-                >
-                  {provider.providerLabel}: {provider.status}
-                </span>
-              ))}
-            </div>
-          ) : undefined}
+          }
+          secondary={
+            sourceProviders.length > 0 ? (
+              <div className="token-row">
+                {sourceProviders.map((provider) => (
+                  <span
+                    key={provider.provider}
+                    className={`token-chip ${provider.available ? "token-chip-active" : ""}`}
+                    title={provider.error || ""}
+                  >
+                    {provider.providerLabel}: {provider.status}
+                  </span>
+                ))}
+              </div>
+            ) : undefined
+          }
         />
         {sourceLookupMeta?.bestMatch ? (
           <div className="status-banner">
@@ -477,7 +442,8 @@ export function SkillsPage() {
         ) : null}
         {sourceLookupMeta?.parsedSource && !sourceLookupMeta.bestMatch ? (
           <div className="status-banner">
-            <strong>Lookup:</strong> {sourceLookupMeta.parsedSource.sourceProvider} {sourceLookupMeta.parsedSource.sourceKind}
+            <strong>Lookup:</strong> {sourceLookupMeta.parsedSource.sourceProvider}{" "}
+            {sourceLookupMeta.parsedSource.sourceKind}
             {sourceLookupMeta.parsedSource.installability ? ` · ${sourceLookupMeta.parsedSource.installability}` : ""}
           </div>
         ) : null}
@@ -532,7 +498,10 @@ export function SkillsPage() {
         <div className="controls-row">
           <label htmlFor="importSourceType">
             Source type
-            <HelpHint label="Skill source type help" text="Choose where the import comes from: a local folder, a local zip, or a git URL." />
+            <HelpHint
+              label="Skill source type help"
+              text="Choose where the import comes from: a local folder, a local zip, or a git URL."
+            />
           </label>
           <GCSelect
             id="importSourceType"
@@ -546,7 +515,10 @@ export function SkillsPage() {
           />
           <label htmlFor="importSourceProvider">
             Source provider
-            <HelpHint label="Skill source provider help" text="Provider identifies the marketplace or source family. It helps GoatCitadel apply the right validation rules before install." />
+            <HelpHint
+              label="Skill source provider help"
+              text="Provider identifies the marketplace or source family. It helps GoatCitadel apply the right validation rules before install."
+            />
           </label>
           <GCSelect
             id="importSourceProvider"
@@ -558,13 +530,22 @@ export function SkillsPage() {
         <div className="controls-row">
           <label htmlFor="importSourceRef">
             Source ref
-            <HelpHint label="Skill source reference help" text="The actual path or URL GoatCitadel should validate and import. Imported skills stay disabled until you enable them." />
+            <HelpHint
+              label="Skill source reference help"
+              text="The actual path or URL GoatCitadel should validate and import. Imported skills stay disabled until you enable them."
+            />
           </label>
           <input
             id="importSourceRef"
             value={importSourceRef}
             onChange={(event) => setImportSourceRef(event.target.value)}
-            placeholder={importSourceType === "git_url" ? "https://github.com/owner/repo.git" : importSourceType === "local_zip" ? "F:\\skills\\skill.zip" : "F:\\skills\\my-skill-folder"}
+            placeholder={
+              importSourceType === "git_url"
+                ? "https://github.com/owner/repo.git"
+                : importSourceType === "local_zip"
+                  ? "F:\\skills\\skill.zip"
+                  : "F:\\skills\\my-skill-folder"
+            }
           />
           <button type="button" onClick={() => void onValidateImport()} disabled={importBusy !== null}>
             {importBusy === "validate" ? "Validating..." : "Validate import"}
@@ -591,9 +572,7 @@ export function SkillsPage() {
         ) : null}
         {validationResult ? (
           <div className="stack-md">
-            <p className="field-help">
-              Trust report: {describeValidationTrust(validationResult)}
-            </p>
+            <p className="field-help">Trust report: {describeValidationTrust(validationResult)}</p>
             <ul className="improvement-simple-list">
               <li>Declared tools: {formatValidationList(validationResult.declaredTools, "none declared")}</li>
               <li>Network signals: {formatValidationList(validationResult.networkSignals, "none detected")}</li>
@@ -703,12 +682,25 @@ export function SkillsPage() {
           ))}
         </div>
         <ul>
-          <li><strong>AgentSkill</strong>: curated marketplace and guided install surface.</li>
-          <li><strong>SkillsMP</strong>: broader multi-agent catalog.</li>
-          <li><strong>ClawHub</strong>: optional external directory for skills and shards.</li>
-          <li><strong>Animal House</strong>: external game/integration with hosted instructions, not a standard importable skill.</li>
-          <li><strong>GitHub</strong>: flexible fallback when curated catalogs do not have the skill you need.</li>
-          <li><strong>local</strong>: local path or zip import for private/internal skills.</li>
+          <li>
+            <strong>AgentSkill</strong>: curated marketplace and guided install surface.
+          </li>
+          <li>
+            <strong>SkillsMP</strong>: broader multi-agent catalog.
+          </li>
+          <li>
+            <strong>ClawHub</strong>: optional external directory for skills and shards.
+          </li>
+          <li>
+            <strong>Animal House</strong>: external game/integration with hosted instructions, not a standard importable
+            skill.
+          </li>
+          <li>
+            <strong>GitHub</strong>: flexible fallback when curated catalogs do not have the skill you need.
+          </li>
+          <li>
+            <strong>local</strong>: local path or zip import for private/internal skills.
+          </li>
         </ul>
       </Panel>
 
@@ -734,17 +726,21 @@ export function SkillsPage() {
             onChange={(event) => {
               const raw = Number(event.target.value);
               const clamped = Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.72;
-              setPolicy((current) => current
-                ? { ...current, guardedAutoThreshold: clamped }
-                : { guardedAutoThreshold: clamped, requireFirstUseConfirmation: true });
+              setPolicy((current) =>
+                current
+                  ? { ...current, guardedAutoThreshold: clamped }
+                  : { guardedAutoThreshold: clamped, requireFirstUseConfirmation: true },
+              );
             }}
           />
           <GCSwitch
             checked={policy?.requireFirstUseConfirmation ?? true}
-            onCheckedChange={(checked) => setPolicy((current) => ({
-              guardedAutoThreshold: current?.guardedAutoThreshold ?? 0.72,
-              requireFirstUseConfirmation: checked,
-            }))}
+            onCheckedChange={(checked) =>
+              setPolicy((current) => ({
+                guardedAutoThreshold: current?.guardedAutoThreshold ?? 0.72,
+                requireFirstUseConfirmation: checked,
+              }))
+            }
             label="Require first-use confirmation for sleep skills"
           />
           <button type="button" onClick={() => void onSavePolicy()} disabled={savingPolicy}>
@@ -763,8 +759,12 @@ export function SkillsPage() {
           it in <code>disabled</code> or <code>sleep</code> until policy grants are reviewed.
         </p>
         <ul>
-          <li>Install guide: <code>{BANKR_MIGRATION_DOC_PATH}</code></li>
-          <li>Starter template: <code>{BANKR_MIGRATION_TEMPLATE_PATH}</code></li>
+          <li>
+            Install guide: <code>{BANKR_MIGRATION_DOC_PATH}</code>
+          </li>
+          <li>
+            Starter template: <code>{BANKR_MIGRATION_TEMPLATE_PATH}</code>
+          </li>
           <li>Legacy built-in endpoints return migration guidance (`410`) while disabled.</li>
         </ul>
       </Panel>
@@ -774,12 +774,14 @@ export function SkillsPage() {
         subtitle="Review installed skills, change runtime state, and attach operator notes without leaving the page."
       >
         <DataToolbar
-          primary={(
+          primary={
             <>
-              <button type="button" onClick={() => void onReload()}>Reload Playbook</button>
+              <button type="button" onClick={() => void onReload()}>
+                Reload Playbook
+              </button>
             </>
-          )}
-          secondary={(
+          }
+          secondary={
             <div className="controls-row">
               <label htmlFor="skillsFilter">Filter</label>
               <GCSelect
@@ -794,7 +796,7 @@ export function SkillsPage() {
                 ]}
               />
             </div>
-          )}
+          }
         />
 
         <div className="stack-md">
@@ -815,7 +817,10 @@ export function SkillsPage() {
                     <th>Requires</th>
                     <th>
                       State
-                      <HelpHint label="Skill state help" text="Enabled means the skill can activate automatically. Sleep means it only auto-activates when confidence is high enough. Disabled means it will not activate at all." />
+                      <HelpHint
+                        label="Skill state help"
+                        text="Enabled means the skill can activate automatically. Sleep means it only auto-activates when confidence is high enough. Disabled means it will not activate at all."
+                      />
                     </th>
                     <th>Note</th>
                     <th>Action</th>
@@ -873,7 +878,8 @@ export function SkillsPage() {
                           />
                         </td>
                         <td>
-                          <button type="button"
+                          <button
+                            type="button"
                             disabled={!changed || busySkillId === skill.skillId}
                             onClick={() => void onSaveSkillState(skill)}
                           >
@@ -891,18 +897,4 @@ export function SkillsPage() {
       </Panel>
     </section>
   );
-}
-
-function formatValidationList(items: string[], fallback: string): string {
-  if (items.length === 0) {
-    return fallback;
-  }
-  return items.join(", ");
-}
-
-function describeValidationTrust(validation: Awaited<ReturnType<typeof validateSkillImport>>): string {
-  const status = validation.valid ? "ready for operator review" : "not installable yet";
-  const network = validation.networkSignals.length > 0 ? "network-touching" : "self-contained";
-  const suspicious = validation.suspiciousSignals.length > 0 ? "flagged signals detected" : "no suspicious signals detected";
-  return `${validation.riskLevel} risk, ${network}, ${suspicious}, and ${status}.`;
 }

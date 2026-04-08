@@ -1,0 +1,118 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+
+const projectViewSchema = z.object({
+  workspaceId: z.string().min(1).optional(),
+  view: z.enum(["active", "archived", "all"]).default("active"),
+  limit: z.coerce.number().int().positive().max(1000).default(300),
+});
+
+const createProjectSchema = z.object({
+  workspaceId: z.string().min(1).optional(),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  workspacePath: z.string().min(1),
+  color: z.string().optional(),
+});
+
+const updateProjectSchema = z.object({
+  workspaceId: z.string().min(1).optional(),
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  workspacePath: z.string().min(1).optional(),
+  color: z.string().optional(),
+});
+
+const projectParamsSchema = z.object({
+  projectId: z.string().min(1),
+});
+
+const deleteProjectQuerySchema = z.object({
+  mode: z.enum(["hard", "soft"]).default("hard"),
+});
+
+export function registerChatProjectRoutes(fastify: FastifyInstance): void {
+  fastify.get("/api/v1/chat/projects", async (request, reply) => {
+    const parsed = projectViewSchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send({
+      items: fastify.gateway.listChatProjects(parsed.data.view, parsed.data.limit, parsed.data.workspaceId),
+      view: parsed.data.view,
+    });
+  });
+
+  fastify.post("/api/v1/chat/projects", async (request, reply) => {
+    const parsed = createProjectSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const created = fastify.gateway.createChatProject(parsed.data);
+      return reply.code(201).send(created);
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.patch("/api/v1/chat/projects/:projectId", async (request, reply) => {
+    const params = projectParamsSchema.safeParse(request.params);
+    const body = updateProjectSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(fastify.gateway.updateChatProject(params.data.projectId, body.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/projects/:projectId/archive", async (request, reply) => {
+    const params = projectParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.archiveChatProject(params.data.projectId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/projects/:projectId/restore", async (request, reply) => {
+    const params = projectParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.restoreChatProject(params.data.projectId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.delete("/api/v1/chat/projects/:projectId", async (request, reply) => {
+    const params = projectParamsSchema.safeParse(request.params);
+    const query = deleteProjectQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    if (query.data.mode !== "hard") {
+      return reply.code(400).send({ error: "Only hard delete is supported for chat projects." });
+    }
+    const deleted = fastify.gateway.hardDeleteChatProject(params.data.projectId);
+    return reply.send({ deleted, projectId: params.data.projectId, mode: "hard" as const });
+  });
+}

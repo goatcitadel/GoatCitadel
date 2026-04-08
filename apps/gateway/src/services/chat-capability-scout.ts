@@ -1,3 +1,4 @@
+import { logger } from "@goatcitadel/gateway-core";
 import type {
   ChatCapabilityUpgradeSuggestion,
   ChatTurnTraceRecord,
@@ -43,18 +44,51 @@ interface RankedSuggestion {
   suggestion: ChatCapabilityUpgradeSuggestion;
 }
 
+const log = logger.child("chat-capability-scout");
+
 function logScoutFailure(stage: string, error: unknown): void {
-  console.warn(`[chat-capability-scout] ${stage} failed`, error);
+  log.warn(`${stage} failed`, { error: error instanceof Error ? error.message : String(error) });
 }
 
 const STOP_WORDS = new Set([
-  "a", "an", "and", "are", "be", "can", "do", "for", "from", "get", "give", "have", "i",
-  "if", "in", "is", "it", "make", "me", "my", "of", "on", "or", "please", "show", "something",
-  "that", "the", "this", "to", "with", "you",
+  "a",
+  "an",
+  "and",
+  "are",
+  "be",
+  "can",
+  "do",
+  "for",
+  "from",
+  "get",
+  "give",
+  "have",
+  "i",
+  "if",
+  "in",
+  "is",
+  "it",
+  "make",
+  "me",
+  "my",
+  "of",
+  "on",
+  "or",
+  "please",
+  "show",
+  "something",
+  "that",
+  "the",
+  "this",
+  "to",
+  "with",
+  "you",
 ]);
 
-const ACTION_INTENT = /\b(add|book|browse|build|call|calendar|capture|change|check|clone|connect|create|debug|deploy|download|email|fetch|find|fix|install|invoke|list|lookup|open|read|run|schedule|search|send|set up|setup|sync|use|write)\b/i;
-const GAP_SIGNAL = /\b(can't|cannot|couldn't|do not have|don't have|missing|not available|not installed|not connected|unable)\b/i;
+const ACTION_INTENT =
+  /\b(add|book|browse|build|call|calendar|capture|change|check|clone|connect|create|debug|deploy|download|email|fetch|find|fix|install|invoke|list|lookup|open|read|run|schedule|search|send|set up|setup|sync|use|write)\b/i;
+const GAP_SIGNAL =
+  /\b(can't|cannot|couldn't|do not have|don't have|missing|not available|not installed|not connected|unable)\b/i;
 
 export async function scoutCapabilityUpgradeSuggestions(
   input: CapabilityScoutInput,
@@ -78,7 +112,9 @@ export async function scoutCapabilityUpgradeSuggestions(
       ...(skill?.keywords ?? []),
       ...(skill?.declaredTools ?? []),
       ...(skill?.requires ?? []),
-    ].filter(Boolean).join(" ");
+    ]
+      .filter(Boolean)
+      .join(" ");
     const score = scoreMatch(input.content, searchBlob) + (item.state === "disabled" ? 0.45 : 0.3);
     if (score < 0.42) {
       continue;
@@ -88,9 +124,10 @@ export async function scoutCapabilityUpgradeSuggestions(
       suggestion: {
         kind: "existing_but_disabled",
         title: `${skill?.name ?? item.skill} is available but currently ${item.state}`,
-        summary: item.state === "disabled"
-          ? "A matching installed skill exists, but it is disabled right now."
-          : "A matching installed skill exists, but GoatCitadel is keeping it inactive for this request.",
+        summary:
+          item.state === "disabled"
+            ? "A matching installed skill exists, but it is disabled right now."
+            : "A matching installed skill exists, but GoatCitadel is keeping it inactive for this request.",
         reason: humanizeSuppressionReason(item.reason),
         riskLevel: "low",
         recommendedAction: "enable_skill",
@@ -122,9 +159,10 @@ export async function scoutCapabilityUpgradeSuggestions(
         kind: "existing_but_disabled",
         title: `${tool.toolName} exists but is not currently allowed`,
         summary: tool.description,
-        reason: access.reasonCodes.length > 0
-          ? `Current tool/profile policy blocked this capability: ${access.reasonCodes.join(", ")}.`
-          : "Current tool/profile policy is blocking this capability.",
+        reason:
+          access.reasonCodes.length > 0
+            ? `Current tool/profile policy blocked this capability: ${access.reasonCodes.join(", ")}.`
+            : "Current tool/profile policy is blocking this capability.",
         riskLevel: tool.riskLevel === "danger" || tool.riskLevel === "nuclear" ? "high" : "medium",
         recommendedAction: "switch_tool_profile",
         candidateId: tool.toolName,
@@ -141,24 +179,27 @@ export async function scoutCapabilityUpgradeSuggestions(
         ? await input.deps.lookupSkillSources(directSourceUrl, 3)
         : await input.deps.listSkillSources(searchQuery, 6);
       for (const item of sourceResults.items) {
-        const score = scoreMatch(input.content, `${item.name} ${item.description} ${item.tags.join(" ")}`) + (item.combinedScore / 10);
+        const score =
+          scoreMatch(input.content, `${item.name} ${item.description} ${item.tags.join(" ")}`) +
+          item.combinedScore / 10;
         if (score < 0.4) {
           continue;
         }
-        const recommendedAction = directSourceUrl && item.installability === "direct"
-          ? "install_skill_enable"
-          : "install_skill_disabled";
+        const recommendedAction =
+          directSourceUrl && item.installability === "direct" ? "install_skill_enable" : "install_skill_disabled";
         ranked.push({
           score,
           suggestion: {
             kind: "skill_import",
-            title: recommendedAction === "install_skill_enable"
-              ? `Install and enable skill: ${item.name}`
-              : `Install skill: ${item.name}`,
+            title:
+              recommendedAction === "install_skill_enable"
+                ? `Install and enable skill: ${item.name}`
+                : `Install skill: ${item.name}`,
             summary: item.description,
-            reason: recommendedAction === "install_skill_enable"
-              ? "The request already points to a direct hosted skill source GoatCitadel can import and activate."
-              : "No active installed capability matched cleanly, but a curated skill source looks relevant.",
+            reason:
+              recommendedAction === "install_skill_enable"
+                ? "The request already points to a direct hosted skill source GoatCitadel can import and activate."
+                : "No active installed capability matched cleanly, but a curated skill source looks relevant.",
             sourceProvider: item.sourceProvider === "local" ? undefined : item.sourceProvider,
             sourceRef: item.repositoryUrl ?? item.sourceUrl,
             riskLevel: item.sourceProvider === "github" ? "medium" : "low",
@@ -181,10 +222,11 @@ export async function scoutCapabilityUpgradeSuggestions(
       if (!template || item.installed) {
         continue;
       }
-      const score = scoreMatch(
-        input.content,
-        `${template.label} ${template.description} ${template.category} ${template.transport}`,
-      ) + readinessScore(item.readiness);
+      const score =
+        scoreMatch(
+          input.content,
+          `${template.label} ${template.description} ${template.category} ${template.transport}`,
+        ) + readinessScore(item.readiness);
       if (score < 0.45) {
         continue;
       }
@@ -246,7 +288,9 @@ function rankToolMatches(content: string, catalog: ToolCatalogEntry[]): Array<To
 }
 
 function buildCapabilitySearchQuery(content: string): string | undefined {
-  const tokens = tokenize(content).filter((token) => !STOP_WORDS.has(token)).slice(0, 6);
+  const tokens = tokenize(content)
+    .filter((token) => !STOP_WORDS.has(token))
+    .slice(0, 6);
   if (tokens.length === 0) {
     return undefined;
   }

@@ -1,65 +1,55 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import {
+  asRecord,
+  asString,
+  hashRawBodyDigest,
+  timingSafeStringEqual,
+  type JsonRecord,
+} from "./webhook-json-helpers.js";
 
-const TELEGRAM_WEBHOOK_PATH =
-  /^\/api\/v1\/integrations\/connections\/[^/]+\/telegram\/webhook$/i;
-
-type JsonRecord = Record<string, unknown>;
+const TELEGRAM_WEBHOOK_PATH = /^\/api\/v1\/integrations\/connections\/[^/]+\/telegram\/webhook$/i;
 
 export type TelegramWebhookNormalization =
   | {
-    kind: "message";
-    eventType: "message" | "channel_post";
-    eventId: string;
-    account: string;
-    actorId: string;
-    actorType: "user" | "system";
-    content: string;
-    room?: string;
-    peer?: string;
-    threadId?: string;
-    deliveryReplyToMessageId: string;
-    metadata: Record<string, unknown>;
-  }
+      kind: "message";
+      eventType: "message" | "channel_post";
+      eventId: string;
+      account: string;
+      actorId: string;
+      actorType: "user" | "system";
+      content: string;
+      room?: string;
+      peer?: string;
+      threadId?: string;
+      deliveryReplyToMessageId: string;
+      metadata: Record<string, unknown>;
+    }
   | {
-    kind: "ignore";
-    eventType?: string;
-    reason: string;
-  };
+      kind: "ignore";
+      eventType?: string;
+      reason: string;
+    };
 
 export function isTelegramWebhookPath(url: string): boolean {
   const pathname = url.split("?", 1)[0] ?? url;
   return TELEGRAM_WEBHOOK_PATH.test(pathname);
 }
 
-export function verifyTelegramWebhookSecretToken(
-  providedToken: string | undefined,
-  expectedToken: string,
-): boolean {
+export function verifyTelegramWebhookSecretToken(providedToken: string | undefined, expectedToken: string): boolean {
   const provided = providedToken?.trim();
   const expected = expectedToken.trim();
   if (!provided || !expected) {
     return false;
   }
-  const providedBuffer = Buffer.from(provided, "utf8");
-  const expectedBuffer = Buffer.from(expected, "utf8");
-  if (providedBuffer.length !== expectedBuffer.length) {
-    return false;
-  }
-  return timingSafeEqual(providedBuffer, expectedBuffer);
+  return timingSafeStringEqual(provided, expected);
 }
 
-export function deriveTelegramWebhookIdempotencyKey(
-  connectionId: string,
-  payload: unknown,
-  rawBody: Buffer,
-): string {
+export function deriveTelegramWebhookIdempotencyKey(connectionId: string, payload: unknown, rawBody: Buffer): string {
   const root = asRecord(payload);
   const updateId = valueToIdString(root.update_id);
   if (updateId) {
     return `telegram:${connectionId}:${updateId}`;
   }
-  const digest = createHash("sha256").update(rawBody).digest("hex");
-  return `telegram:${connectionId}:${digest}`;
+  return `telegram:${connectionId}:${hashRawBodyDigest(rawBody)}`;
 }
 
 export function normalizeTelegramWebhookPayload(input: {
@@ -69,16 +59,14 @@ export function normalizeTelegramWebhookPayload(input: {
   const root = asRecord(input.payload);
   const message = asRecord(root.message);
   const channelPost = asRecord(root.channel_post);
-  const effectiveMessage = Object.keys(message).length > 0
-    ? message
-    : Object.keys(channelPost).length > 0
-      ? channelPost
-      : undefined;
-  const eventType = effectiveMessage === message
-    ? "message"
-    : effectiveMessage === channelPost
-      ? "channel_post"
-      : detectUnsupportedTelegramEventType(root);
+  const effectiveMessage =
+    Object.keys(message).length > 0 ? message : Object.keys(channelPost).length > 0 ? channelPost : undefined;
+  const eventType =
+    effectiveMessage === message
+      ? "message"
+      : effectiveMessage === channelPost
+        ? "channel_post"
+        : detectUnsupportedTelegramEventType(root);
 
   if (!effectiveMessage) {
     return {
@@ -168,19 +156,7 @@ function renderTelegramDisplayName(from: JsonRecord): string | undefined {
 }
 
 function compactRecord(record: JsonRecord): JsonRecord {
-  return Object.fromEntries(
-    Object.entries(record).filter(([, value]) => value !== undefined),
-  );
-}
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : {};
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
 }
 
 function valueToIdString(value: unknown): string | undefined {

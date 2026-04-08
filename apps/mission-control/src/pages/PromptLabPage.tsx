@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PromptPackBenchmarkStatusRecord,
@@ -32,6 +33,24 @@ import { pageCopy } from "../content/copy";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import "../styles/prompt-lab.css";
+import {
+  PROMPT_PACK_PASS_THRESHOLD,
+  classifyTestResultCategory,
+  dedupeStrings,
+  extractPromptPlaceholders,
+  formatDateTime,
+  formatPromptPackProviderModel,
+  formatResultCategory,
+  formatRunStatus,
+  matchesTestResultFilter,
+  normalizePromptPlaceholderKey,
+  parseBenchmarkProviders,
+  parseBenchmarkTestCodes,
+  resolvePromptPackRunModelUsage,
+  resultCategoryClass,
+  statusChipClass,
+  type TestResultFilter,
+} from "./prompt-lab/prompt-lab-helpers";
 
 interface ScoreDraft {
   routingScore: 0 | 1 | 2;
@@ -56,15 +75,6 @@ interface ActiveRunState {
   testId?: string;
   testCode?: string;
 }
-
-type TestResultFilter =
-  | "all"
-  | "approval_paused"
-  | "run_failed"
-  | "score_failed"
-  | "needs_score"
-  | "not_run"
-  | "passing";
 
 const DEFAULT_BENCHMARK_TEST_CODES = "TEST-03, TEST-06, TEST-10, TEST-12, TEST-15, TEST-28";
 
@@ -122,7 +132,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   const [benchmarkPending, setBenchmarkPending] = useState(false);
   const [regressionRunId, setRegressionRunId] = useState<string | null>(null);
   const [regressionPending, setRegressionPending] = useState(false);
-  const [regressionStatus, setRegressionStatus] = useState<Awaited<ReturnType<typeof fetchPromptPackReplayRegressionStatus>> | null>(null);
+  const [regressionStatus, setRegressionStatus] = useState<Awaited<
+    ReturnType<typeof fetchPromptPackReplayRegressionStatus>
+  > | null>(null);
   const [trendSeries, setTrendSeries] = useState<Awaited<ReturnType<typeof fetchPromptPackTrends>>["items"]>([]);
   const [exportInfo, setExportInfo] = useState<{
     packId: string;
@@ -134,10 +146,12 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   const [scoreDraft, setScoreDraft] = useState<ScoreDraft>(DEFAULT_SCORE_DRAFT);
   const running = activeRun !== null;
   const benchmarkActive = Boolean(
-    benchmarkRunId && (benchmarkPending || benchmarkStatus?.run.status === "queued" || benchmarkStatus?.run.status === "running"),
+    benchmarkRunId &&
+    (benchmarkPending || benchmarkStatus?.run.status === "queued" || benchmarkStatus?.run.status === "running"),
   );
   const regressionActive = Boolean(
-    regressionRunId && (regressionPending || regressionStatus?.run.status === "queued" || regressionStatus?.run.status === "running"),
+    regressionRunId &&
+    (regressionPending || regressionStatus?.run.status === "queued" || regressionStatus?.run.status === "running"),
   );
   const {
     config: runtimeLlmConfig,
@@ -176,49 +190,57 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       summary: reportResponse.summary,
     });
     setExportInfo(exportResponse);
-    setSelectedTestId((current) => current && testsResponse.items.some((item) => item.testId === current)
-      ? current
-      : testsResponse.items[0]?.testId ?? null);
+    setSelectedTestId((current) =>
+      current && testsResponse.items.some((item) => item.testId === current)
+        ? current
+        : (testsResponse.items[0]?.testId ?? null),
+    );
   }, []);
 
-  const load = useCallback(async (options?: { background?: boolean }) => {
-    const background = options?.background ?? hasLoadedOnceRef.current;
-    if (background) {
-      setIsRefreshing(true);
-    } else {
-      setInitialLoading(true);
-    }
-    try {
-      const response = await fetchPromptPacks();
-      setPacks(response.items.map((item) => ({
-        packId: item.packId,
-        name: item.name,
-        testCount: item.testCount,
-      })));
-      const currentSelectedPackId = selectedPackIdRef.current;
-      const resolvedPackId = currentSelectedPackId && response.items.some((item) => item.packId === currentSelectedPackId)
-        ? currentSelectedPackId
-        : response.items[0]?.packId ?? null;
-      setSelectedPackId(resolvedPackId);
-      if (resolvedPackId) {
-        await loadPack(resolvedPackId);
-      } else {
-        setTests([]);
-        setReport(null);
-        setExportInfo(null);
-      }
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
+  const load = useCallback(
+    async (options?: { background?: boolean }) => {
+      const background = options?.background ?? hasLoadedOnceRef.current;
       if (background) {
-        setIsRefreshing(false);
+        setIsRefreshing(true);
       } else {
-        setInitialLoading(false);
-        hasLoadedOnceRef.current = true;
+        setInitialLoading(true);
       }
-    }
-  }, [loadPack]);
+      try {
+        const response = await fetchPromptPacks();
+        setPacks(
+          response.items.map((item) => ({
+            packId: item.packId,
+            name: item.name,
+            testCount: item.testCount,
+          })),
+        );
+        const currentSelectedPackId = selectedPackIdRef.current;
+        const resolvedPackId =
+          currentSelectedPackId && response.items.some((item) => item.packId === currentSelectedPackId)
+            ? currentSelectedPackId
+            : (response.items[0]?.packId ?? null);
+        setSelectedPackId(resolvedPackId);
+        if (resolvedPackId) {
+          await loadPack(resolvedPackId);
+        } else {
+          setTests([]);
+          setReport(null);
+          setExportInfo(null);
+        }
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        if (background) {
+          setIsRefreshing(false);
+        } else {
+          setInitialLoading(false);
+          hasLoadedOnceRef.current = true;
+        }
+      }
+    },
+    [loadPack],
+  );
 
   useEffect(() => {
     void load();
@@ -286,17 +308,15 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   const selectedTest = tests.find((item) => item.testId === selectedTestId) ?? null;
   const selectedRun = selectedTest ? latestRunByTest.get(selectedTest.testId) : undefined;
   const selectedScore = selectedTest ? latestScoreByTest.get(selectedTest.testId) : undefined;
-  const selectedRunModelUsage = useMemo(
-    () => resolvePromptPackRunModelUsage(selectedRun),
-    [selectedRun],
-  );
+  const selectedRunModelUsage = useMemo(() => resolvePromptPackRunModelUsage(selectedRun), [selectedRun]);
   const passThreshold = report?.summary.passThreshold ?? PROMPT_PACK_PASS_THRESHOLD;
   const selectedPlaceholders = useMemo(
-    () => selectedTest ? extractPromptPlaceholders(selectedTest.prompt) : [],
+    () => (selectedTest ? extractPromptPlaceholders(selectedTest.prompt) : []),
     [selectedTest],
   );
   const selectedMissingPlaceholders = useMemo(
-    () => selectedPlaceholders.filter((token) => !(placeholderValues[normalizePromptPlaceholderKey(token)] ?? "").trim()),
+    () =>
+      selectedPlaceholders.filter((token) => !(placeholderValues[normalizePromptPlaceholderKey(token)] ?? "").trim()),
     [placeholderValues, selectedPlaceholders],
   );
 
@@ -309,11 +329,15 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     return undefined;
   }, [report?.runs]);
 
-  const unscoredCompletedCount = useMemo(() => tests.filter((test) => {
-    const run = latestRunByTest.get(test.testId);
-    const score = latestScoreByTest.get(test.testId);
-    return run?.status === "completed" && !score;
-  }).length, [latestRunByTest, latestScoreByTest, tests]);
+  const unscoredCompletedCount = useMemo(
+    () =>
+      tests.filter((test) => {
+        const run = latestRunByTest.get(test.testId);
+        const score = latestScoreByTest.get(test.testId);
+        return run?.status === "completed" && !score;
+      }).length,
+    [latestRunByTest, latestScoreByTest, tests],
+  );
 
   const testOutcomeSummary = useMemo(() => {
     let runFailureCount = 0;
@@ -355,12 +379,15 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   }, [latestRunByTest, latestScoreByTest, passThreshold, tests]);
 
   const filteredTests = useMemo(
-    () => tests.filter((test) => matchesTestResultFilter(
-      testResultFilter,
-      latestRunByTest.get(test.testId),
-      latestScoreByTest.get(test.testId),
-      passThreshold,
-    )),
+    () =>
+      tests.filter((test) =>
+        matchesTestResultFilter(
+          testResultFilter,
+          latestRunByTest.get(test.testId),
+          latestScoreByTest.get(test.testId),
+          passThreshold,
+        ),
+      ),
     [latestRunByTest, latestScoreByTest, passThreshold, testResultFilter, tests],
   );
 
@@ -369,9 +396,10 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       setSelectedModel("");
       return;
     }
-    const activeProvider = providerOptions.find((item) => item.providerId === selectedProviderId)
-      ?? providerOptions.find((item) => item.providerId === runtimeLlmConfig?.activeProviderId)
-      ?? providerOptions[0];
+    const activeProvider =
+      providerOptions.find((item) => item.providerId === selectedProviderId) ??
+      providerOptions.find((item) => item.providerId === runtimeLlmConfig?.activeProviderId) ??
+      providerOptions[0];
     if (!activeProvider) {
       setSelectedModel("");
       return;
@@ -379,9 +407,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     if (!selectedProviderId || !providerOptions.some((item) => item.providerId === selectedProviderId)) {
       setSelectedProviderId(activeProvider.providerId);
     }
-    setSelectedModel((current) => current && activeProvider.models.includes(current)
-      ? current
-      : activeProvider.models[0] ?? "");
+    setSelectedModel((current) =>
+      current && activeProvider.models.includes(current) ? current : (activeProvider.models[0] ?? ""),
+    );
   }, [providerOptions, runtimeLlmConfig?.activeProviderId, selectedProviderId]);
 
   useEffect(() => {
@@ -436,74 +464,80 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     setScoreDraft(DEFAULT_SCORE_DRAFT);
   }, [selectedScore, selectedTestId]);
 
-  const buildRunInput = useCallback((test: PromptPackTestRecord): {
-    input: {
-      sessionId?: string;
-      providerId?: string;
-      model?: string;
-      placeholderValues?: Record<string, string>;
-    };
-    missingPlaceholders: string[];
-  } => {
-    const placeholders = extractPromptPlaceholders(test.prompt);
-    const missingPlaceholders: string[] = [];
-    const resolvedPlaceholderValues: Record<string, string> = {};
-
-    for (const placeholder of placeholders) {
-      const key = normalizePromptPlaceholderKey(placeholder);
-      const value = (placeholderValues[key] ?? "").trim();
-      if (!value) {
-        missingPlaceholders.push(placeholder);
-        continue;
-      }
-      resolvedPlaceholderValues[key] = value;
-    }
-
-    return {
+  const buildRunInput = useCallback(
+    (
+      test: PromptPackTestRecord,
+    ): {
       input: {
-        ...selectedRunModel,
-        placeholderValues: Object.keys(resolvedPlaceholderValues).length > 0 ? resolvedPlaceholderValues : undefined,
-      },
-      missingPlaceholders,
-    };
-  }, [placeholderValues, selectedRunModel]);
+        sessionId?: string;
+        providerId?: string;
+        model?: string;
+        placeholderValues?: Record<string, string>;
+      };
+      missingPlaceholders: string[];
+    } => {
+      const placeholders = extractPromptPlaceholders(test.prompt);
+      const missingPlaceholders: string[] = [];
+      const resolvedPlaceholderValues: Record<string, string> = {};
 
-  const runOne = useCallback(async (test: PromptPackTestRecord, mode: ActiveRunState["mode"] = "single") => {
-    if (!selectedPackId) {
-      return;
-    }
-    const { input, missingPlaceholders } = buildRunInput(test);
-    if (missingPlaceholders.length > 0) {
-      setError(
-        `Missing placeholder values for ${test.code}: ${missingPlaceholders.join(", ")}.`,
-      );
-      return;
-    }
-    setActiveRun({ mode, testId: test.testId, testCode: test.code });
-    setError(null);
-    setSuccess(null);
-    try {
-      const run = await runPromptPackTest(selectedPackId, test.testId, input);
-      let autoScoreSummary = "";
-      if (autoScoreOnRun && run.status === "completed") {
-        const auto = await autoScorePromptPackTest(selectedPackId, test.testId, {
-          runId: run.runId,
-        });
-        autoScoreSummary = ` Auto-scored ${auto.score.totalScore}/10.`;
+      for (const placeholder of placeholders) {
+        const key = normalizePromptPlaceholderKey(placeholder);
+        const value = (placeholderValues[key] ?? "").trim();
+        if (!value) {
+          missingPlaceholders.push(placeholder);
+          continue;
+        }
+        resolvedPlaceholderValues[key] = value;
       }
-      await loadPack(selectedPackId);
-      setSelectedTestId(test.testId);
-      if (run.status === "failed") {
-        setError(`Ran ${test.code}, but it failed: ${run.error ?? "Unknown error"}`);
-      } else {
-        setSuccess(`Ran ${test.code}.${autoScoreSummary}`);
+
+      return {
+        input: {
+          ...selectedRunModel,
+          placeholderValues: Object.keys(resolvedPlaceholderValues).length > 0 ? resolvedPlaceholderValues : undefined,
+        },
+        missingPlaceholders,
+      };
+    },
+    [placeholderValues, selectedRunModel],
+  );
+
+  const runOne = useCallback(
+    async (test: PromptPackTestRecord, mode: ActiveRunState["mode"] = "single") => {
+      if (!selectedPackId) {
+        return;
       }
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setActiveRun(null);
-    }
-  }, [autoScoreOnRun, buildRunInput, loadPack, selectedPackId]);
+      const { input, missingPlaceholders } = buildRunInput(test);
+      if (missingPlaceholders.length > 0) {
+        setError(`Missing placeholder values for ${test.code}: ${missingPlaceholders.join(", ")}.`);
+        return;
+      }
+      setActiveRun({ mode, testId: test.testId, testCode: test.code });
+      setError(null);
+      setSuccess(null);
+      try {
+        const run = await runPromptPackTest(selectedPackId, test.testId, input);
+        let autoScoreSummary = "";
+        if (autoScoreOnRun && run.status === "completed") {
+          const auto = await autoScorePromptPackTest(selectedPackId, test.testId, {
+            runId: run.runId,
+          });
+          autoScoreSummary = ` Auto-scored ${auto.score.totalScore}/10.`;
+        }
+        await loadPack(selectedPackId);
+        setSelectedTestId(test.testId);
+        if (run.status === "failed") {
+          setError(`Ran ${test.code}, but it failed: ${run.error ?? "Unknown error"}`);
+        } else {
+          setSuccess(`Ran ${test.code}.${autoScoreSummary}`);
+        }
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setActiveRun(null);
+      }
+    },
+    [autoScoreOnRun, buildRunInput, loadPack, selectedPackId],
+  );
 
   const runAll = useCallback(async () => {
     if (!selectedPackId || tests.length === 0) {
@@ -608,9 +642,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         clearScores: resetClearScores,
       });
       await loadPack(selectedPackId);
-      setSuccess(
-        `Reset complete: removed ${result.deletedRuns} run(s) and ${result.deletedScores} score(s).`,
-      );
+      setSuccess(`Reset complete: removed ${result.deletedRuns} run(s) and ${result.deletedScores} score(s).`);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -697,16 +729,19 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     }
   }, [loadPack, selectedPackId]);
 
-  const loadBenchmarkStatus = useCallback(async (runId: string) => {
-    const status = await fetchPromptPackBenchmark(runId);
-    setBenchmarkStatus(status);
-    if (status.run.status === "completed" || status.run.status === "failed") {
-      setBenchmarkPending(false);
-      await loadPack(status.run.packId);
-    } else {
-      setBenchmarkPending(true);
-    }
-  }, [loadPack]);
+  const loadBenchmarkStatus = useCallback(
+    async (runId: string) => {
+      const status = await fetchPromptPackBenchmark(runId);
+      setBenchmarkStatus(status);
+      if (status.run.status === "completed" || status.run.status === "failed") {
+        setBenchmarkPending(false);
+        await loadPack(status.run.packId);
+      } else {
+        setBenchmarkPending(true);
+      }
+    },
+    [loadPack],
+  );
 
   const runBenchmark = useCallback(async () => {
     if (!selectedPackId) {
@@ -824,9 +859,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     {
       label: "Coverage",
       value: `${tests.length - testOutcomeSummary.notRunCount}/${tests.length || 0}`,
-      detail: tests.length > 0
-        ? `${testOutcomeSummary.notRunCount} tests still not run`
-        : "No prompt tests loaded yet",
+      detail: tests.length > 0 ? `${testOutcomeSummary.notRunCount} tests still not run` : "No prompt tests loaded yet",
     },
     {
       label: "Quality",
@@ -837,11 +870,12 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     },
     {
       label: "Model lane",
-      value: reuseLastModel && lastSuccessfulModel
-        ? `${lastSuccessfulModel.providerId}/${lastSuccessfulModel.model}`
-        : selectedRunModel?.providerId
-          ? `${selectedRunModel.providerId}/${selectedRunModel.model ?? "provider default"}`
-          : "No model selected",
+      value:
+        reuseLastModel && lastSuccessfulModel
+          ? `${lastSuccessfulModel.providerId}/${lastSuccessfulModel.model}`
+          : selectedRunModel?.providerId
+            ? `${selectedRunModel.providerId}/${selectedRunModel.model ?? "provider default"}`
+            : "No model selected",
       detail: activeRun
         ? `Currently running ${activeRun.testCode ?? "prompt-pack run"} in ${activeRun.mode} mode`
         : unscoredCompletedCount > 0
@@ -867,7 +901,8 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
           <h2>{pageCopy.promptLab.title}</h2>
           <p className="prompt-lab-intro">{pageCopy.promptLab.subtitle}</p>
           <p className="office-subtitle">
-            Re-running a test creates a fresh run. Historical scores stay attached to older runs until you rescore the new output.
+            Re-running a test creates a fresh run. Historical scores stay attached to older runs until you rescore the
+            new output.
           </p>
         </div>
         <div className="prompt-lab-actions prompt-lab-hero-actions">
@@ -936,13 +971,11 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         ) : null}
         {benchmarkStatus ? (
           <div className="status-banner">
-            Benchmark {benchmarkStatus.run.benchmarkRunId}: {benchmarkStatus.run.status}
-            {" "}({benchmarkStatus.progress.completedItems}/{benchmarkStatus.progress.totalItems})
+            Benchmark {benchmarkStatus.run.benchmarkRunId}: {benchmarkStatus.run.status} (
+            {benchmarkStatus.progress.completedItems}/{benchmarkStatus.progress.totalItems})
           </div>
         ) : null}
-        {isRefreshing ? (
-          <div className="status-banner">Refreshing prompt-pack results in the background...</div>
-        ) : null}
+        {isRefreshing ? <div className="status-banner">Refreshing prompt-pack results in the background...</div> : null}
         {isFallbackRefreshing ? (
           <div className="status-banner warning">Live updates degraded, checking periodically.</div>
         ) : null}
@@ -974,9 +1007,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
           {unscoredCompletedCount > 0 ? ` ${unscoredCompletedCount} run(s) still need scoring.` : ""}
         </div>
         <div className="status-banner">
-          Run failures: <strong>{testOutcomeSummary.runFailureCount}</strong>
-          {" "} | Score failures: <strong>{testOutcomeSummary.scoreFailureCount}</strong>
-          {" "} | Needs score: <strong>{testOutcomeSummary.needsScoreCount}</strong>
+          Run failures: <strong>{testOutcomeSummary.runFailureCount}</strong> | Score failures:{" "}
+          <strong>{testOutcomeSummary.scoreFailureCount}</strong> | Needs score:{" "}
+          <strong>{testOutcomeSummary.needsScoreCount}</strong>
         </div>
         {exportInfo?.path ? (
           <div className="status-banner prompt-lab-export-banner">
@@ -1162,9 +1195,15 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
                     {test.code} - {test.title}
                   </button>
                   <div className="prompt-lab-test-meta">
-                    <span className={`prompt-lab-chip ${statusChipClass(run?.status)}`}>{formatRunStatus(run?.status)}</span>
-                    <span className={`prompt-lab-chip ${score ? "score-ready" : "score-missing"}`}>{score ? `${score.totalScore}/10` : "Needs score"}</span>
-                    <span className={`prompt-lab-chip ${resultCategoryClass(categoryWithThreshold)}`}>{formatResultCategory(categoryWithThreshold)}</span>
+                    <span className={`prompt-lab-chip ${statusChipClass(run?.status)}`}>
+                      {formatRunStatus(run?.status)}
+                    </span>
+                    <span className={`prompt-lab-chip ${score ? "score-ready" : "score-missing"}`}>
+                      {score ? `${score.totalScore}/10` : "Needs score"}
+                    </span>
+                    <span className={`prompt-lab-chip ${resultCategoryClass(categoryWithThreshold)}`}>
+                      {formatResultCategory(categoryWithThreshold)}
+                    </span>
                   </div>
                   <ActionButton
                     label="Run"
@@ -1176,19 +1215,19 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
               );
             })}
           </ul>
-          {filteredTests.length === 0 ? (
-            <p className="office-subtitle">No tests match this filter.</p>
-          ) : null}
+          {filteredTests.length === 0 ? <p className="office-subtitle">No tests match this filter.</p> : null}
         </article>
 
         <article className="card prompt-lab-surface prompt-lab-detail">
           <h3>{selectedTest ? `${selectedTest.code} - ${selectedTest.title}` : "Select a test"}</h3>
-          {selectedTest ? <pre>{selectedTest.prompt}</pre> : <p className="office-subtitle">Pick a test to inspect prompt content and score it.</p>}
+          {selectedTest ? (
+            <pre>{selectedTest.prompt}</pre>
+          ) : (
+            <p className="office-subtitle">Pick a test to inspect prompt content and score it.</p>
+          )}
           {selectedTest && selectedPlaceholders.length > 0 ? (
             <section className="status-banner warning prompt-lab-placeholder-banner">
-              <p className="prompt-lab-placeholder-copy">
-                This test has placeholder tokens. Fill them before running.
-              </p>
+              <p className="prompt-lab-placeholder-copy">This test has placeholder tokens. Fill them before running.</p>
               <div className="prompt-lab-placeholder-fields">
                 {selectedPlaceholders.map((placeholder) => {
                   const key = normalizePromptPlaceholderKey(placeholder);
@@ -1211,9 +1250,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
                 })}
               </div>
               {selectedMissingPlaceholders.length > 0 ? (
-                <p className="prompt-lab-placeholder-note">
-                  Missing: {selectedMissingPlaceholders.join(", ")}
-                </p>
+                <p className="prompt-lab-placeholder-note">Missing: {selectedMissingPlaceholders.join(", ")}</p>
               ) : (
                 <p className="prompt-lab-placeholder-note">All placeholders set for this test.</p>
               )}
@@ -1228,9 +1265,17 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
                 {selectedRun.finishedAt ? ` • finished ${formatDateTime(selectedRun.finishedAt)}` : ""}
               </p>
               <p className="office-subtitle">
-                Requested model: {formatPromptPackProviderModel(selectedRunModelUsage.requestedProviderId, selectedRunModelUsage.requestedModel)}
+                Requested model:{" "}
+                {formatPromptPackProviderModel(
+                  selectedRunModelUsage.requestedProviderId,
+                  selectedRunModelUsage.requestedModel,
+                )}
                 {" • "}
-                Actual model used: {formatPromptPackProviderModel(selectedRunModelUsage.actualProviderId, selectedRunModelUsage.actualModel)}
+                Actual model used:{" "}
+                {formatPromptPackProviderModel(
+                  selectedRunModelUsage.actualProviderId,
+                  selectedRunModelUsage.actualModel,
+                )}
                 {selectedRunModelUsage.actualApiStyle ? ` • upstream API: ${selectedRunModelUsage.actualApiStyle}` : ""}
                 {selectedRunModelUsage.fallbackUsed
                   ? ` • fallback: ${formatPromptPackProviderModel(selectedRunModelUsage.fallbackProviderId, selectedRunModelUsage.fallbackModel)}`
@@ -1239,7 +1284,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
               {selectedRunModelUsage.fallbackReason ? (
                 <p className="office-subtitle">Fallback reason: {selectedRunModelUsage.fallbackReason}</p>
               ) : null}
-              {selectedRun.status === "failed" && selectedRun.error ? <p className="error">{selectedRun.error}</p> : null}
+              {selectedRun.status === "failed" && selectedRun.error ? (
+                <p className="error">{selectedRun.error}</p>
+              ) : null}
               {selectedRun.responseText ? (
                 <details>
                   <summary>Assistant output</summary>
@@ -1247,9 +1294,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
                 </details>
               ) : null}
               {selectedRun.trace ? (
-                <p className="office-subtitle">
-                  Tools used: {selectedRun.trace.toolRuns.length}
-                </p>
+                <p className="office-subtitle">Tools used: {selectedRun.trace.toolRuns.length}</p>
               ) : null}
               {selectedRun.citations && selectedRun.citations.length > 0 ? (
                 <p className="office-subtitle">Citations captured: {selectedRun.citations.length}</p>
@@ -1259,11 +1304,31 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
             <p className="office-subtitle">No run yet for this test.</p>
           )}
           <div className="prompt-lab-score-grid">
-            <ScoreField label="Routing" value={scoreDraft.routingScore} onChange={(value) => setScoreDraft((current) => ({ ...current, routingScore: value }))} />
-            <ScoreField label="Honesty" value={scoreDraft.honestyScore} onChange={(value) => setScoreDraft((current) => ({ ...current, honestyScore: value }))} />
-            <ScoreField label="Handoff" value={scoreDraft.handoffScore} onChange={(value) => setScoreDraft((current) => ({ ...current, handoffScore: value }))} />
-            <ScoreField label="Robustness" value={scoreDraft.robustnessScore} onChange={(value) => setScoreDraft((current) => ({ ...current, robustnessScore: value }))} />
-            <ScoreField label="Usability" value={scoreDraft.usabilityScore} onChange={(value) => setScoreDraft((current) => ({ ...current, usabilityScore: value }))} />
+            <ScoreField
+              label="Routing"
+              value={scoreDraft.routingScore}
+              onChange={(value) => setScoreDraft((current) => ({ ...current, routingScore: value }))}
+            />
+            <ScoreField
+              label="Honesty"
+              value={scoreDraft.honestyScore}
+              onChange={(value) => setScoreDraft((current) => ({ ...current, honestyScore: value }))}
+            />
+            <ScoreField
+              label="Handoff"
+              value={scoreDraft.handoffScore}
+              onChange={(value) => setScoreDraft((current) => ({ ...current, handoffScore: value }))}
+            />
+            <ScoreField
+              label="Robustness"
+              value={scoreDraft.robustnessScore}
+              onChange={(value) => setScoreDraft((current) => ({ ...current, robustnessScore: value }))}
+            />
+            <ScoreField
+              label="Usability"
+              value={scoreDraft.usabilityScore}
+              onChange={(value) => setScoreDraft((current) => ({ ...current, usabilityScore: value }))}
+            />
           </div>
           <textarea
             rows={3}
@@ -1282,7 +1347,8 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
           </div>
           {selectedRun?.status === "failed" ? (
             <div className="status-banner warning">
-              Latest run failed. Try running again with web mode `quick`, then review trace and tool grants before scoring.
+              Latest run failed. Try running again with web mode `quick`, then review trace and tool grants before
+              scoring.
             </div>
           ) : null}
         </article>
@@ -1303,17 +1369,22 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
           <p>Backgrounded latest runs: {report.summary.backgroundedRuns ?? 0}</p>
           <p>Passing tests: {testOutcomeSummary.passingCount}</p>
           <p>Average score: {report.summary.averageTotalScore.toFixed(2)}/10</p>
-          <p>Pass rate: {(report.summary.passRate * 100).toFixed(1)}% (threshold {passThreshold}/10)</p>
-          <p>Failing tests: {report.summary.failingCodes.length > 0 ? report.summary.failingCodes.join(", ") : "none"}</p>
+          <p>
+            Pass rate: {(report.summary.passRate * 100).toFixed(1)}% (threshold {passThreshold}/10)
+          </p>
+          <p>
+            Failing tests: {report.summary.failingCodes.length > 0 ? report.summary.failingCodes.join(", ") : "none"}
+          </p>
           <p className="office-subtitle">
-            Run failures indicate execution/runtime blockers. Score failures indicate model quality gaps on completed runs.
+            Run failures indicate execution/runtime blockers. Score failures indicate model quality gaps on completed
+            runs.
           </p>
           {benchmarkStatus ? (
             <section>
               <h4>Latest benchmark</h4>
               <p>
-                Run: <code>{benchmarkStatus.run.benchmarkRunId}</code> • {benchmarkStatus.run.status}
-                {" "}({benchmarkStatus.progress.completedItems}/{benchmarkStatus.progress.totalItems})
+                Run: <code>{benchmarkStatus.run.benchmarkRunId}</code> • {benchmarkStatus.run.status} (
+                {benchmarkStatus.progress.completedItems}/{benchmarkStatus.progress.totalItems})
               </p>
               {benchmarkStatus.modelSummaries.length > 0 ? (
                 <table className="prompt-lab-benchmark-table">
@@ -1329,7 +1400,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
                   <tbody>
                     {benchmarkStatus.modelSummaries.map((summary) => (
                       <tr key={`${summary.providerId}/${summary.model}`}>
-                        <td>{summary.providerId}/{summary.model}</td>
+                        <td>
+                          {summary.providerId}/{summary.model}
+                        </td>
                         <td>{(summary.passRate * 100).toFixed(1)}%</td>
                         <td>{summary.averageTotalScore.toFixed(2)}</td>
                         <td>{summary.runFailures}</td>
@@ -1352,7 +1425,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
               <h4>Latest replay regression</h4>
               <p>
                 Run: <code>{regressionStatus.run.regressionRunId}</code> • {regressionStatus.run.status}
-                {regressionStatus.run.finishedAt ? ` • finished ${formatDateTime(regressionStatus.run.finishedAt)}` : ""}
+                {regressionStatus.run.finishedAt
+                  ? ` • finished ${formatDateTime(regressionStatus.run.finishedAt)}`
+                  : ""}
               </p>
               {regressionStatus.run.error ? <p className="error">{regressionStatus.run.error}</p> : null}
               {regressionStatus.results.length > 0 ? (
@@ -1388,11 +1463,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
               <h4>Capability trend alerts</h4>
               <div className="token-row">
                 {trendSeries.map((series) => (
-                  <span
-                    key={series.capability}
-                    className={`token-chip${series.breached ? " token-chip-alert" : ""}`}
-                  >
-                    {series.capability}: {series.points.length > 0 ? series.points[series.points.length - 1]?.value.toFixed(2) : "n/a"}
+                  <span key={series.capability} className={`token-chip${series.breached ? " token-chip-alert" : ""}`}>
+                    {series.capability}:{" "}
+                    {series.points.length > 0 ? series.points[series.points.length - 1]?.value.toFixed(2) : "n/a"}
                     {series.breached ? " (threshold breached)" : ""}
                   </span>
                 ))}
@@ -1405,11 +1478,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         open={confirmResetOpen}
         title="Reset Prompt Pack"
         message={`Reset this prompt pack? This will clear ${
-          resetClearRuns && resetClearScores
-            ? "run history and scores"
-            : resetClearRuns
-              ? "run history"
-              : "scores"
+          resetClearRuns && resetClearScores ? "run history and scores" : resetClearRuns ? "run history" : "scores"
         } for this pack.`}
         confirmLabel="Reset"
         danger
@@ -1427,11 +1496,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   );
 }
 
-function ScoreField(props: {
-  label: string;
-  value: 0 | 1 | 2;
-  onChange: (value: 0 | 1 | 2) => void;
-}) {
+function ScoreField(props: { label: string; value: 0 | 1 | 2; onChange: (value: 0 | 1 | 2) => void }) {
   return (
     <label className="chat-v11-select">
       {props.label}
@@ -1446,208 +1511,4 @@ function ScoreField(props: {
       />
     </label>
   );
-}
-
-function extractPromptPlaceholders(prompt: string): string[] {
-  const matches = prompt.match(/<[^<>\n]{3,160}>/g) ?? [];
-  const unique = new Set<string>();
-  for (const match of matches) {
-    const trimmed = match.trim();
-    const inner = trimmed.slice(1, -1).trim();
-    if (!inner) {
-      continue;
-    }
-    const looksLikePlaceholder = /[A-Z]{2,}/.test(inner)
-      || /[_ ]/.test(inner)
-      || /\b(PASTE|LOCAL|URL|TOPIC|PATH|EXAMPLE|YOUR)\b/i.test(inner);
-    if (!looksLikePlaceholder) {
-      continue;
-    }
-    unique.add(`<${inner}>`);
-  }
-  return Array.from(unique);
-}
-
-function normalizePromptPlaceholderKey(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const inner = trimmed.startsWith("<") && trimmed.endsWith(">")
-    ? trimmed.slice(1, -1).trim()
-    : trimmed;
-  return inner.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function parseBenchmarkTestCodes(value: string): string[] {
-  return dedupeStrings(
-    value
-      .split(/[\s,]+/g)
-      .map((item) => item.trim())
-      .filter(Boolean),
-  );
-}
-
-function parseBenchmarkProviders(value: string): Array<{ providerId: string; model: string }> {
-  const out: Array<{ providerId: string; model: string }> = [];
-  const seen = new Set<string>();
-  for (const rawLine of value.split(/\r?\n/g)) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-    const slash = line.indexOf("/");
-    if (slash < 1 || slash === line.length - 1) {
-      continue;
-    }
-    const providerId = line.slice(0, slash).trim();
-    const model = line.slice(slash + 1).trim();
-    if (!providerId || !model) {
-      continue;
-    }
-    const key = `${providerId}/${model}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push({ providerId, model });
-  }
-  return out;
-}
-
-function formatRunStatus(status?: PromptPackRunRecord["status"]): string {
-  if (!status) return "Not run";
-  if (status === "completed") return "Run completed";
-  if (status === "approval_paused") return "Waiting for approval";
-  if (status === "failed") return "Run failed";
-  return status;
-}
-
-function resolvePromptPackRunModelUsage(
-  run: Pick<PromptPackRunRecord, "providerId" | "model" | "trace"> | null | undefined,
-): {
-  requestedProviderId?: string;
-  requestedModel?: string;
-  requestedApiStyle?: string;
-  actualProviderId?: string;
-  actualModel?: string;
-  actualApiStyle?: string;
-  fallbackProviderId?: string;
-  fallbackModel?: string;
-  fallbackReason?: string;
-  fallbackUsed: boolean;
-} {
-  const routing = run?.trace?.routing;
-  return {
-    requestedProviderId: run?.providerId ?? routing?.primaryProviderId,
-    requestedModel: run?.model ?? routing?.primaryModel,
-    requestedApiStyle: routing?.primaryApiStyle,
-    actualProviderId: routing?.effectiveProviderId ?? run?.providerId ?? routing?.primaryProviderId,
-    actualModel: routing?.effectiveModel ?? run?.trace?.model ?? run?.model ?? routing?.primaryModel,
-    actualApiStyle: routing?.effectiveApiStyle,
-    fallbackProviderId: routing?.fallbackProviderId,
-    fallbackModel: routing?.fallbackModel,
-    fallbackReason: routing?.fallbackReason,
-    fallbackUsed: routing?.fallbackUsed ?? false,
-  };
-}
-
-function formatPromptPackProviderModel(providerId?: string, model?: string): string {
-  if (!providerId && !model) {
-    return "unknown";
-  }
-  return `${providerId ?? "provider auto"}/${model ?? "provider default"}`;
-}
-
-function formatDateTime(value?: string): string {
-  if (!value) {
-    return "unknown";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function statusChipClass(status?: PromptPackRunRecord["status"]): string {
-  if (!status) return "run-not-run";
-  if (status === "completed") return "run-completed";
-  if (status === "approval_paused") return "run-paused";
-  if (status === "failed") return "run-failed";
-  return "run-not-run";
-}
-
-function classifyTestResultCategory(
-  run: PromptPackRunRecord | undefined,
-  score: PromptPackScoreRecord | undefined,
-  passThreshold = PROMPT_PACK_PASS_THRESHOLD,
-): Exclude<TestResultFilter, "all"> {
-  if (!run) {
-    return "not_run";
-  }
-  if (run.status === "approval_paused") {
-    return "approval_paused";
-  }
-  if (run.status === "failed") {
-    return "run_failed";
-  }
-  if (run.status !== "completed") {
-    return "not_run";
-  }
-  if (!score) {
-    return "needs_score";
-  }
-  return score.totalScore >= passThreshold ? "passing" : "score_failed";
-}
-
-function matchesTestResultFilter(
-  filter: TestResultFilter,
-  run: PromptPackRunRecord | undefined,
-  score: PromptPackScoreRecord | undefined,
-  passThreshold = PROMPT_PACK_PASS_THRESHOLD,
-): boolean {
-  if (filter === "all") {
-    return true;
-  }
-  return classifyTestResultCategory(run, score, passThreshold) === filter;
-}
-
-function formatResultCategory(category: Exclude<TestResultFilter, "all">): string {
-  if (category === "approval_paused") return "Approval paused";
-  if (category === "run_failed") return "Run failure";
-  if (category === "score_failed") return "Score failure";
-  if (category === "needs_score") return "Needs score";
-  if (category === "passing") return "Passing";
-  return "Not run";
-}
-
-function resultCategoryClass(category: Exclude<TestResultFilter, "all">): string {
-  if (category === "approval_paused") return "result-run-paused";
-  if (category === "run_failed") return "result-run-failed";
-  if (category === "score_failed") return "result-score-failed";
-  if (category === "needs_score") return "result-needs-score";
-  if (category === "passing") return "result-passing";
-  return "result-not-run";
-}
-
-const PROMPT_PACK_PASS_THRESHOLD = 7;
-
-function dedupeStrings(values: Array<string | undefined>): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const normalized = value?.trim();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
 }

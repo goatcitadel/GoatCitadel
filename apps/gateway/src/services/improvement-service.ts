@@ -1,5 +1,9 @@
+/* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import { createHash, randomUUID } from "node:crypto";
 import { clampInt } from "@goatcitadel/contracts";
+import { logger } from "@goatcitadel/gateway-core";
+
+const log = logger.child("improvement-service");
 import type {
   CapabilityGapCauseClass,
   CapabilityGapEventRecord,
@@ -268,7 +272,7 @@ export class ImprovementService {
     }
     this.scheduler = setInterval(() => {
       const task = this.runSchedulerTick().catch((error) => {
-        console.error("[goatcitadel] improvement scheduler tick failed", error);
+        log.error("scheduler tick failed", { error: error instanceof Error ? error.message : String(error) });
         this.ctx.publishRealtime("system", "improvement", {
           type: "improvement_scheduler_error",
           message: (error as Error).message,
@@ -319,43 +323,57 @@ export class ImprovementService {
     });
     this.ctx.storage.systemSettings.set(IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY, weekKey);
     const finishedAt = new Date().toISOString();
-    this.ctx.storage.cronJobs.upsert({
-      ...job,
-      lastRunAt: finishedAt,
-      nextRunAt: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)).toISOString(),
-    }, finishedAt);
+    this.ctx.storage.cronJobs.upsert(
+      {
+        ...job,
+        lastRunAt: finishedAt,
+        nextRunAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      finishedAt,
+    );
   }
 
   ensureWeeklyImprovementCronJob(): void {
     const existing = this.ctx.storage.cronJobs.get("improvement_weekly");
     const now = new Date().toISOString();
-    this.ctx.storage.cronJobs.upsertIfChanged({
-      jobId: "improvement_weekly",
-      name: "Self-Improvement Weekly Replay",
-      schedule: IMPROVEMENT_WEEKLY_SCHEDULE_LABEL,
-      enabled: existing?.enabled ?? true,
-      lastRunAt: existing?.lastRunAt,
-      nextRunAt: existing?.nextRunAt,
-    }, now);
+    this.ctx.storage.cronJobs.upsertIfChanged(
+      {
+        jobId: "improvement_weekly",
+        name: "Self-Improvement Weekly Replay",
+        schedule: IMPROVEMENT_WEEKLY_SCHEDULE_LABEL,
+        enabled: existing?.enabled ?? true,
+        lastRunAt: existing?.lastRunAt,
+        nextRunAt: existing?.nextRunAt,
+      },
+      now,
+    );
   }
 
   markInterruptedDecisionReplayRuns(): void {
-    const running = this.ctx.gatewaySql.prepare(`
+    const running = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT run_id
       FROM decision_replay_runs
       WHERE status = 'running'
-    `).all() as Array<{ run_id: string }>;
+    `,
+      )
+      .all() as Array<{ run_id: string }>;
     if (running.length === 0) {
       return;
     }
     const finishedAt = new Date().toISOString();
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       UPDATE decision_replay_runs
       SET status = 'failed',
           error_text = COALESCE(error_text, 'Replay interrupted before completion (service restarted).'),
           finished_at = @finishedAt
       WHERE status = 'running'
-    `).run({ finishedAt });
+    `,
+      )
+      .run({ finishedAt });
     this.ctx.publishRealtime("system", "improvement", {
       type: "improvement_replay_interrupted_runs_recovered",
       recoveredCount: running.length,
@@ -364,12 +382,16 @@ export class ImprovementService {
   }
 
   listImprovementReports(limit = 24): WeeklyImprovementReportRecord[] {
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT *
       FROM improvement_reports
       ORDER BY week_end DESC, created_at DESC
       LIMIT ?
-    `).all(Math.max(1, Math.min(limit, 260))) as Array<{
+    `,
+      )
+      .all(Math.max(1, Math.min(limit, 260))) as Array<{
       report_id: string;
       run_id: string;
       week_start: string;
@@ -386,12 +408,16 @@ export class ImprovementService {
   }
 
   listDecisionReplayRuns(limit = 24): DecisionReplayRunRecord[] {
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT *
       FROM decision_replay_runs
       ORDER BY started_at DESC
       LIMIT ?
-    `).all(Math.max(1, Math.min(limit, 300))) as Array<{
+    `,
+      )
+      .all(Math.max(1, Math.min(limit, 300))) as Array<{
       run_id: string;
       trigger_mode: "scheduled" | "manual";
       sample_size: number;
@@ -412,23 +438,35 @@ export class ImprovementService {
 
   listCapabilityGapEvents(limit = 100): CapabilityGapEventRecord[] {
     this.ensureCapabilityGapTables();
-    const rows = toCapabilityGapEventRows(this.ctx.gatewaySql.prepare(`
+    const rows = toCapabilityGapEventRows(
+      this.ctx.gatewaySql
+        .prepare(
+          `
       SELECT *
       FROM capability_gap_events
       ORDER BY updated_at DESC, created_at DESC
       LIMIT ?
-    `).all(Math.max(1, Math.min(limit, 500))));
+    `,
+        )
+        .all(Math.max(1, Math.min(limit, 500))),
+    );
     return rows.map((row) => mapCapabilityGapEventRow(row));
   }
 
   listRepairCandidates(limit = 60): RepairCandidateRecord[] {
     this.ensureCapabilityGapTables();
-    const rows = toRepairCandidateRows(this.ctx.gatewaySql.prepare(`
+    const rows = toRepairCandidateRows(
+      this.ctx.gatewaySql
+        .prepare(
+          `
       SELECT *
       FROM repair_candidates
       ORDER BY last_seen_at DESC, updated_at DESC
       LIMIT ?
-    `).all(Math.max(1, Math.min(limit, 300))));
+    `,
+        )
+        .all(Math.max(1, Math.min(limit, 300))),
+    );
     return rows.map((row) => mapRepairCandidateRow(row));
   }
 
@@ -437,37 +475,51 @@ export class ImprovementService {
     input: RepairCandidateValidationUpdateInput,
   ): RepairCandidateRecord {
     this.ensureCapabilityGapTables();
-    const existing = toRepairCandidateRow(this.ctx.gatewaySql.prepare(`
+    const existing = toRepairCandidateRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
       SELECT *
       FROM repair_candidates
       WHERE candidate_id = ?
       LIMIT 1
-    `).get(candidateId));
+    `,
+        )
+        .get(candidateId),
+    );
     if (!existing) {
       throw new Error(`Repair candidate not found: ${candidateId}`);
     }
     const now = new Date().toISOString();
-    const normalizedStatus = REPAIR_VALIDATION_STATUSES.has(input.status)
-      ? input.status
-      : "not_started";
+    const normalizedStatus = REPAIR_VALIDATION_STATUSES.has(input.status) ? input.status : "not_started";
     const normalizedSummary = input.summary?.trim() || null;
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       UPDATE repair_candidates
       SET validation_status = @validationStatus,
           validation_summary = @validationSummary,
           updated_at = @updatedAt
       WHERE candidate_id = @candidateId
-    `).run({
-      validationStatus: normalizedStatus,
-      validationSummary: normalizedSummary,
-      updatedAt: now,
-      candidateId,
-    });
-    const row = toRepairCandidateRow(this.ctx.gatewaySql.prepare(`
+    `,
+      )
+      .run({
+        validationStatus: normalizedStatus,
+        validationSummary: normalizedSummary,
+        updatedAt: now,
+        candidateId,
+      });
+    const row = toRepairCandidateRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
       SELECT *
       FROM repair_candidates
       WHERE candidate_id = ?
-    `).get(candidateId));
+    `,
+        )
+        .get(candidateId),
+    );
     if (!row) {
       throw new Error(`Repair candidate not found after update: ${candidateId}`);
     }
@@ -488,17 +540,25 @@ export class ImprovementService {
       toolProfile: input.toolProfile,
       providerId: input.providerId,
     });
-    const existing = toCapabilityGapEventRow(this.ctx.gatewaySql.prepare(`
+    const existing = toCapabilityGapEventRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
       SELECT *
       FROM capability_gap_events
       WHERE fingerprint = ?
       LIMIT 1
-    `).get(fingerprint));
+    `,
+        )
+        .get(fingerprint),
+    );
     const eventId = existing?.event_id ?? randomUUID();
     const repeatCount = (existing?.repeat_count ?? 0) + 1;
     const recoveryOptionsJson = JSON.stringify(normalizedRecoveryOptions);
 
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       INSERT INTO capability_gap_events (
         event_id,
         fingerprint,
@@ -574,58 +634,71 @@ export class ImprovementService {
         repeat_count = excluded.repeat_count,
         recovery_options_json = excluded.recovery_options_json,
         updated_at = excluded.updated_at
-    `).run({
-      eventId,
-      fingerprint,
-      sessionId: input.sessionId,
-      turnId: input.turnId ?? null,
-      runId: input.runId ?? null,
-      causeClass: normalizedCauseClass,
-      failureClass: input.failureClass ?? null,
-      promptExcerpt: input.promptExcerpt ?? null,
-      promptRef: input.promptRef ?? null,
-      requestedTool: input.requestedTool ?? null,
-      toolFamily: input.toolFamily ?? null,
-      toolProfile: input.toolProfile ?? null,
-      policyReason: input.policyReason ?? null,
-      providerId: input.providerId ?? null,
-      model: input.model ?? null,
-      configArea: input.configArea ?? null,
-      suggestedRepairClass: input.suggestedRepairClass ?? null,
-      confidence,
-      repeatCount,
-      recoveryOptionsJson,
-      replayRunId: existing?.replay_run_id ?? null,
-      replayStatus: existing?.replay_status ?? "not_run",
-      repairCandidateId: existing?.repair_candidate_id ?? null,
-      createdAt: existing?.created_at ?? now,
-      updatedAt: now,
-    });
-
-    const candidate = repeatCount >= 2
-      ? this.upsertRepairCandidate({
+    `,
+      )
+      .run({
+        eventId,
+        fingerprint,
+        sessionId: input.sessionId,
+        turnId: input.turnId ?? null,
+        runId: input.runId ?? null,
         causeClass: normalizedCauseClass,
-        requestedTool: input.requestedTool,
-        toolProfile: input.toolProfile,
-        providerId: input.providerId,
-        configArea: input.configArea,
+        failureClass: input.failureClass ?? null,
+        promptExcerpt: input.promptExcerpt ?? null,
+        promptRef: input.promptRef ?? null,
+        requestedTool: input.requestedTool ?? null,
+        toolFamily: input.toolFamily ?? null,
+        toolProfile: input.toolProfile ?? null,
+        policyReason: input.policyReason ?? null,
+        providerId: input.providerId ?? null,
+        model: input.model ?? null,
+        configArea: input.configArea ?? null,
+        suggestedRepairClass: input.suggestedRepairClass ?? null,
         confidence,
-        eventCount: repeatCount,
-      })
-      : undefined;
+        repeatCount,
+        recoveryOptionsJson,
+        replayRunId: existing?.replay_run_id ?? null,
+        replayStatus: existing?.replay_status ?? "not_run",
+        repairCandidateId: existing?.repair_candidate_id ?? null,
+        createdAt: existing?.created_at ?? now,
+        updatedAt: now,
+      });
+
+    const candidate =
+      repeatCount >= 2
+        ? this.upsertRepairCandidate({
+            causeClass: normalizedCauseClass,
+            requestedTool: input.requestedTool,
+            toolProfile: input.toolProfile,
+            providerId: input.providerId,
+            configArea: input.configArea,
+            confidence,
+            eventCount: repeatCount,
+          })
+        : undefined;
     if (candidate) {
-      this.ctx.gatewaySql.prepare(`
+      this.ctx.gatewaySql
+        .prepare(
+          `
         UPDATE capability_gap_events
         SET repair_candidate_id = ?,
             updated_at = ?
         WHERE event_id = ?
-      `).run(candidate.candidateId, now, eventId);
+      `,
+        )
+        .run(candidate.candidateId, now, eventId);
     }
-    const row = toCapabilityGapEventRow(this.ctx.gatewaySql.prepare(`
+    const row = toCapabilityGapEventRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
       SELECT *
       FROM capability_gap_events
       WHERE event_id = ?
-    `).get(eventId));
+    `,
+        )
+        .get(eventId),
+    );
     if (!row) {
       throw new Error(`Capability gap event not found after upsert: ${eventId}`);
     }
@@ -633,23 +706,29 @@ export class ImprovementService {
   }
 
   getImprovementReport(reportId: string): WeeklyImprovementReportRecord {
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT *
       FROM improvement_reports
       WHERE report_id = ?
-    `).get(reportId) as {
-      report_id: string;
-      run_id: string;
-      week_start: string;
-      week_end: string;
-      summary_json: string;
-      top_findings_json: string;
-      applied_tunes_json: string;
-      queued_tunes_json: string;
-      week_over_week_json: string;
-      previous_report_id: string | null;
-      created_at: string;
-    } | undefined;
+    `,
+      )
+      .get(reportId) as
+      | {
+          report_id: string;
+          run_id: string;
+          week_start: string;
+          week_end: string;
+          summary_json: string;
+          top_findings_json: string;
+          applied_tunes_json: string;
+          queued_tunes_json: string;
+          week_over_week_json: string;
+          previous_report_id: string | null;
+          created_at: string;
+        }
+      | undefined;
     if (!row) {
       throw new Error(`Improvement report ${reportId} not found`);
     }
@@ -671,9 +750,7 @@ export class ImprovementService {
     return { run, items, findings, autoTunes, report };
   }
 
-  async runImprovementReplayManually(
-    input: ImprovementReplayTriggerInput = {},
-  ): Promise<{
+  async runImprovementReplayManually(input: ImprovementReplayTriggerInput = {}): Promise<{
     run: DecisionReplayRunRecord;
     report?: WeeklyImprovementReportRecord;
   }> {
@@ -714,18 +791,22 @@ export class ImprovementService {
       this.ctx.storage.systemSettings.set(settingKey, previousValue);
     }
     const revertedAt = new Date().toISOString();
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       UPDATE decision_autotunes
       SET status = 'reverted', reverted_at = @revertedAt, result_json = @resultJson
       WHERE tune_id = @tuneId
-    `).run({
-      tuneId,
-      revertedAt,
-      resultJson: JSON.stringify({
-        revertedBy: "operator",
-        restoredSetting: settingKey,
-      }),
-    });
+    `,
+      )
+      .run({
+        tuneId,
+        revertedAt,
+        resultJson: JSON.stringify({
+          revertedBy: "operator",
+          restoredSetting: settingKey,
+        }),
+      });
     this.ctx.publishRealtime("improvement_autotune_reverted", "improvement", {
       tuneId,
       settingKey,
@@ -743,22 +824,26 @@ export class ImprovementService {
     const now = new Date().toISOString();
     const replayRunId = randomUUID();
     const normalized = this.normalizeReplayOverrides(overrides);
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       INSERT INTO replay_override_runs (
         replay_run_id, source_run_id, status, override_summary_json, diff_summary_json, created_at, updated_at
       ) VALUES (
         @replayRunId, @sourceRunId, 'draft', @overrideSummaryJson, NULL, @createdAt, @updatedAt
       )
-    `).run({
-      replayRunId,
-      sourceRunId,
-      overrideSummaryJson: JSON.stringify({
-        count: normalized.length,
-        stepKeys: normalized.map((item) => item.stepKey),
-      }),
-      createdAt: now,
-      updatedAt: now,
-    });
+    `,
+      )
+      .run({
+        replayRunId,
+        sourceRunId,
+        overrideSummaryJson: JSON.stringify({
+          count: normalized.length,
+          stepKeys: normalized.map((item) => item.stepKey),
+        }),
+        createdAt: now,
+        updatedAt: now,
+      });
     this.replaceReplayOverrideSteps(replayRunId, normalized);
     return {
       replayRunId,
@@ -778,28 +863,36 @@ export class ImprovementService {
     this.ctx.requireFeatureEnabled("replayOverridesV1Enabled");
     const draft = this.createReplayOverrideDraft(sourceRunId, overrides, links);
     const runningAt = new Date().toISOString();
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       UPDATE replay_override_runs
       SET status = 'running', updated_at = @updatedAt
       WHERE replay_run_id = @replayRunId
-    `).run({
-      replayRunId: draft.replayRunId,
-      updatedAt: runningAt,
-    });
+    `,
+      )
+      .run({
+        replayRunId: draft.replayRunId,
+        updatedAt: runningAt,
+      });
 
     const summary = this.computeReplayDiffSummary(sourceRunId, draft.replayRunId, draft.overrides);
     const finishedAt = new Date().toISOString();
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       UPDATE replay_override_runs
       SET status = 'completed',
           diff_summary_json = @diffSummaryJson,
           updated_at = @updatedAt
       WHERE replay_run_id = @replayRunId
-    `).run({
-      replayRunId: draft.replayRunId,
-      diffSummaryJson: JSON.stringify(summary),
-      updatedAt: finishedAt,
-    });
+    `,
+      )
+      .run({
+        replayRunId: draft.replayRunId,
+        diffSummaryJson: JSON.stringify(summary),
+        updatedAt: finishedAt,
+      });
     this.ctx.publishRealtime("system", "improvement", {
       type: "replay_override_completed",
       replayRunId: draft.replayRunId,
@@ -815,17 +908,23 @@ export class ImprovementService {
 
   getReplayDiffSummary(replayRunId: string): ReplayDiffSummary {
     this.ctx.requireFeatureEnabled("replayOverridesV1Enabled");
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT replay_run_id, source_run_id, status, diff_summary_json, updated_at
       FROM replay_override_runs
       WHERE replay_run_id = ?
-    `).get(replayRunId) as {
-      replay_run_id: string;
-      source_run_id: string;
-      status: ReplayOverrideDraft["status"];
-      diff_summary_json: string | null;
-      updated_at: string;
-    } | undefined;
+    `,
+      )
+      .get(replayRunId) as
+      | {
+          replay_run_id: string;
+          source_run_id: string;
+          status: ReplayOverrideDraft["status"];
+          diff_summary_json: string | null;
+          updated_at: string;
+        }
+      | undefined;
     if (!row) {
       throw new Error(`Replay override run not found: ${replayRunId}`);
     }
@@ -838,7 +937,9 @@ export class ImprovementService {
         latencyDeltaMs: Number.isFinite(Number(parsed.latencyDeltaMs)) ? Number(parsed.latencyDeltaMs) : 0,
         inputTokensDelta: Number.isFinite(Number(parsed.inputTokensDelta)) ? Number(parsed.inputTokensDelta) : 0,
         outputTokensDelta: Number.isFinite(Number(parsed.outputTokensDelta)) ? Number(parsed.outputTokensDelta) : 0,
-        cachedInputTokensDelta: Number.isFinite(Number(parsed.cachedInputTokensDelta)) ? Number(parsed.cachedInputTokensDelta) : 0,
+        cachedInputTokensDelta: Number.isFinite(Number(parsed.cachedInputTokensDelta))
+          ? Number(parsed.cachedInputTokensDelta)
+          : 0,
         costUsdDelta: Number.isFinite(Number(parsed.costUsdDelta)) ? Number(parsed.costUsdDelta) : 0,
         errorChanged: Boolean(parsed.errorChanged),
       },
@@ -905,18 +1006,24 @@ export class ImprovementService {
   }): RepairCandidateRecord {
     const now = new Date().toISOString();
     const fingerprint = buildCapabilityGapFingerprint(input);
-    const existing = this.ctx.gatewaySql.prepare(`
+    const existing = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT *
       FROM repair_candidates
       WHERE fingerprint = ?
       LIMIT 1
-    `).get(fingerprint) as RepairCandidateRow | undefined;
+    `,
+      )
+      .get(fingerprint) as RepairCandidateRow | undefined;
     const candidateId = existing?.candidate_id ?? randomUUID();
     const title = buildRepairCandidateTitle(input.causeClass, input.requestedTool);
     const summary = buildRepairCandidateSummary(input);
     const suggestedPatch = buildSuggestedRepairPatch(input);
 
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       INSERT INTO repair_candidates (
         candidate_id,
         fingerprint,
@@ -971,32 +1078,40 @@ export class ImprovementService {
         END,
         updated_at = excluded.updated_at,
         last_seen_at = excluded.last_seen_at
-    `).run({
-      candidateId,
-      fingerprint,
-      causeClass: input.causeClass,
-      title,
-      summary,
-      requestedTool: input.requestedTool ?? null,
-      toolProfile: input.toolProfile ?? null,
-      providerId: input.providerId ?? null,
-      configArea: input.configArea ?? null,
-      suggestedPatch: suggestedPatch ?? null,
-      replayRunId: existing?.replay_run_id ?? null,
-      validationStatus: existing?.validation_status ?? "not_started",
-      validationSummary: existing?.validation_summary ?? null,
-      eventCount: Math.max(1, input.eventCount),
-      confidence: clamp01(input.confidence),
-      createdAt: existing?.created_at ?? now,
-      updatedAt: now,
-      lastSeenAt: now,
-    });
+    `,
+      )
+      .run({
+        candidateId,
+        fingerprint,
+        causeClass: input.causeClass,
+        title,
+        summary,
+        requestedTool: input.requestedTool ?? null,
+        toolProfile: input.toolProfile ?? null,
+        providerId: input.providerId ?? null,
+        configArea: input.configArea ?? null,
+        suggestedPatch: suggestedPatch ?? null,
+        replayRunId: existing?.replay_run_id ?? null,
+        validationStatus: existing?.validation_status ?? "not_started",
+        validationSummary: existing?.validation_summary ?? null,
+        eventCount: Math.max(1, input.eventCount),
+        confidence: clamp01(input.confidence),
+        createdAt: existing?.created_at ?? now,
+        updatedAt: now,
+        lastSeenAt: now,
+      });
 
-    const row = toRepairCandidateRow(this.ctx.gatewaySql.prepare(`
+    const row = toRepairCandidateRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
       SELECT *
       FROM repair_candidates
       WHERE candidate_id = ?
-    `).get(candidateId));
+    `,
+        )
+        .get(candidateId),
+    );
     if (!row) {
       throw new Error(`Repair candidate not found after upsert: ${candidateId}`);
     }
@@ -1066,24 +1181,30 @@ export class ImprovementService {
   }
 
   private readDecisionReplayRun(runId: string): DecisionReplayRunRecord {
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT * FROM decision_replay_runs WHERE run_id = ?
-    `).get(runId) as {
-      run_id: string;
-      trigger_mode: "scheduled" | "manual";
-      sample_size: number;
-      window_start: string;
-      window_end: string;
-      status: string;
-      report_id: string | null;
-      total_candidates: number;
-      total_scored: number;
-      likely_wrong_count: number;
-      model_judged_count: number;
-      started_at: string;
-      finished_at: string | null;
-      error_text: string | null;
-    } | undefined;
+    `,
+      )
+      .get(runId) as
+      | {
+          run_id: string;
+          trigger_mode: "scheduled" | "manual";
+          sample_size: number;
+          window_start: string;
+          window_end: string;
+          status: string;
+          report_id: string | null;
+          total_candidates: number;
+          total_scored: number;
+          likely_wrong_count: number;
+          model_judged_count: number;
+          started_at: string;
+          finished_at: string | null;
+          error_text: string | null;
+        }
+      | undefined;
     if (!row) {
       throw new Error(`Decision replay run ${runId} not found`);
     }
@@ -1091,28 +1212,51 @@ export class ImprovementService {
   }
 
   private listDecisionReplayItems(runId: string, limit = 500): DecisionReplayItemRecord[] {
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT * FROM decision_replay_items WHERE run_id = ?
       ORDER BY wrongness_probability DESC, occurred_at DESC LIMIT ?
-    `).all(runId, Math.max(1, Math.min(limit, 5000))) as Array<{
-      item_id: string; run_id: string; decision_type: "chat_turn" | "tool_run";
-      session_id: string | null; turn_id: string | null; tool_run_id: string | null;
-      occurred_at: string; wrongness_probability: number;
-      label: DecisionReplayItemRecord["label"]; cause_class: string;
-      cluster_key: string; rule_scores_json: string; model_scores_json: string | null;
-      evidence_json: string; summary_text: string | null;
-      input_excerpt: string | null; output_excerpt: string | null; created_at: string;
+    `,
+      )
+      .all(runId, Math.max(1, Math.min(limit, 5000))) as Array<{
+      item_id: string;
+      run_id: string;
+      decision_type: "chat_turn" | "tool_run";
+      session_id: string | null;
+      turn_id: string | null;
+      tool_run_id: string | null;
+      occurred_at: string;
+      wrongness_probability: number;
+      label: DecisionReplayItemRecord["label"];
+      cause_class: string;
+      cluster_key: string;
+      rule_scores_json: string;
+      model_scores_json: string | null;
+      evidence_json: string;
+      summary_text: string | null;
+      input_excerpt: string | null;
+      output_excerpt: string | null;
+      created_at: string;
     }>;
     return rows.map((row) => ({
-      itemId: row.item_id, runId: row.run_id, decisionType: row.decision_type,
-      sessionId: row.session_id ?? undefined, turnId: row.turn_id ?? undefined,
-      toolRunId: row.tool_run_id ?? undefined, occurredAt: row.occurred_at,
+      itemId: row.item_id,
+      runId: row.run_id,
+      decisionType: row.decision_type,
+      sessionId: row.session_id ?? undefined,
+      turnId: row.turn_id ?? undefined,
+      toolRunId: row.tool_run_id ?? undefined,
+      occurredAt: row.occurred_at,
       wrongnessProbability: Number(row.wrongness_probability),
       label: row.label,
       causeClass: normalizeDecisionReplayCauseClass(row.cause_class),
       clusterKey: row.cluster_key,
       ruleScores: safeJsonParse<DecisionReplayItemRuleScores>(row.rule_scores_json, {
-        honesty: 0.5, blockerQuality: 0.5, retryQuality: 0.5, toolEvidence: 0.5, actionability: 0.5,
+        honesty: 0.5,
+        blockerQuality: 0.5,
+        retryQuality: 0.5,
+        toolEvidence: 0.5,
+        actionability: 0.5,
       }),
       modelScores: row.model_scores_json
         ? safeJsonParse<DecisionReplayItemModelScores | undefined>(row.model_scores_json, undefined)
@@ -1126,23 +1270,44 @@ export class ImprovementService {
   }
 
   private listDecisionReplayFindings(runId: string, limit = 100): DecisionReplayFindingRecord[] {
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT * FROM decision_replay_findings WHERE run_id = ?
       ORDER BY is_duplicate ASC, recurrence_count DESC, avg_wrongness DESC LIMIT ?
-    `).all(runId, Math.max(1, Math.min(limit, 1000))) as Array<{
-      finding_id: string; run_id: string; fingerprint: string; cause_class: string;
-      cluster_key: string; severity: "low" | "medium" | "high"; recurrence_count: number;
-      impacted_sessions: number; impacted_turns: number; avg_wrongness: number;
-      title: string; summary: string; recommendation: string | null;
-      is_duplicate: number; duplicate_of_fingerprint: string | null; created_at: string;
+    `,
+      )
+      .all(runId, Math.max(1, Math.min(limit, 1000))) as Array<{
+      finding_id: string;
+      run_id: string;
+      fingerprint: string;
+      cause_class: string;
+      cluster_key: string;
+      severity: "low" | "medium" | "high";
+      recurrence_count: number;
+      impacted_sessions: number;
+      impacted_turns: number;
+      avg_wrongness: number;
+      title: string;
+      summary: string;
+      recommendation: string | null;
+      is_duplicate: number;
+      duplicate_of_fingerprint: string | null;
+      created_at: string;
     }>;
     return rows.map((row) => ({
-      findingId: row.finding_id, runId: row.run_id, fingerprint: row.fingerprint,
+      findingId: row.finding_id,
+      runId: row.run_id,
+      fingerprint: row.fingerprint,
       causeClass: normalizeDecisionReplayCauseClass(row.cause_class),
-      clusterKey: row.cluster_key, severity: row.severity,
-      recurrenceCount: row.recurrence_count, impactedSessions: row.impacted_sessions,
-      impactedTurns: row.impacted_turns, avgWrongness: row.avg_wrongness,
-      title: row.title, summary: row.summary,
+      clusterKey: row.cluster_key,
+      severity: row.severity,
+      recurrenceCount: row.recurrence_count,
+      impactedSessions: row.impacted_sessions,
+      impactedTurns: row.impacted_turns,
+      avgWrongness: row.avg_wrongness,
+      title: row.title,
+      summary: row.summary,
       recommendation: row.recommendation ?? undefined,
       isDuplicate: Boolean(row.is_duplicate),
       duplicateOfFingerprint: row.duplicate_of_fingerprint ?? undefined,
@@ -1151,33 +1316,55 @@ export class ImprovementService {
   }
 
   private listDecisionAutoTunes(runId: string, limit = 100): DecisionAutoTuneRecord[] {
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT * FROM decision_autotunes WHERE run_id = ?
       ORDER BY created_at DESC LIMIT ?
-    `).all(runId, Math.max(1, Math.min(limit, 1000))) as Array<{
-      tune_id: string; run_id: string; finding_id: string | null;
+    `,
+      )
+      .all(runId, Math.max(1, Math.min(limit, 1000))) as Array<{
+      tune_id: string;
+      run_id: string;
+      finding_id: string | null;
       tune_class: DecisionAutoTuneRecord["tuneClass"];
       risk_level: DecisionAutoTuneRecord["riskLevel"];
       status: DecisionAutoTuneRecord["status"];
-      description: string; patch_json: string; snapshot_json: string | null;
-      result_json: string | null; created_at: string;
-      applied_at: string | null; reverted_at: string | null;
+      description: string;
+      patch_json: string;
+      snapshot_json: string | null;
+      result_json: string | null;
+      created_at: string;
+      applied_at: string | null;
+      reverted_at: string | null;
     }>;
     return rows.map((row) => mapDecisionAutoTuneRow(row));
   }
 
   private readDecisionAutoTune(tuneId: string): DecisionAutoTuneRecord {
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT * FROM decision_autotunes WHERE tune_id = ?
-    `).get(tuneId) as {
-      tune_id: string; run_id: string; finding_id: string | null;
-      tune_class: DecisionAutoTuneRecord["tuneClass"];
-      risk_level: DecisionAutoTuneRecord["riskLevel"];
-      status: DecisionAutoTuneRecord["status"];
-      description: string; patch_json: string; snapshot_json: string | null;
-      result_json: string | null; created_at: string;
-      applied_at: string | null; reverted_at: string | null;
-    } | undefined;
+    `,
+      )
+      .get(tuneId) as
+      | {
+          tune_id: string;
+          run_id: string;
+          finding_id: string | null;
+          tune_class: DecisionAutoTuneRecord["tuneClass"];
+          risk_level: DecisionAutoTuneRecord["riskLevel"];
+          status: DecisionAutoTuneRecord["status"];
+          description: string;
+          patch_json: string;
+          snapshot_json: string | null;
+          result_json: string | null;
+          created_at: string;
+          applied_at: string | null;
+          reverted_at: string | null;
+        }
+      | undefined;
     if (!row) {
       throw new Error(`Auto-tune ${tuneId} not found`);
     }
@@ -1196,33 +1383,38 @@ export class ImprovementService {
     const nextValue = tune.patch.nextValue;
     this.ctx.storage.systemSettings.set(settingKey, nextValue);
     const appliedAt = new Date().toISOString();
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       UPDATE decision_autotunes
       SET status = 'applied', applied_at = @appliedAt, result_json = @resultJson
       WHERE tune_id = @tuneId
-    `).run({
-      tuneId,
-      appliedAt,
-      resultJson: JSON.stringify({ appliedBy: mode, settingKey, nextValue }),
-    });
+    `,
+      )
+      .run({
+        tuneId,
+        appliedAt,
+        resultJson: JSON.stringify({ appliedBy: mode, settingKey, nextValue }),
+      });
     this.ctx.publishRealtime("improvement_autotune_applied", "improvement", {
-      tuneId, settingKey, mode,
+      tuneId,
+      settingKey,
+      mode,
     });
     return this.readDecisionAutoTune(tuneId);
   }
 
-  private async runDecisionReplayAudit(input: {
-    triggerMode: "scheduled" | "manual";
-    sampleSize: number;
-  }): Promise<{
+  private async runDecisionReplayAudit(input: { triggerMode: "scheduled" | "manual"; sampleSize: number }): Promise<{
     run: DecisionReplayRunRecord;
     report?: WeeklyImprovementReportRecord;
   }> {
     const startedAt = new Date();
     const windowEnd = startedAt.toISOString();
-    const windowStart = new Date(startedAt.getTime() - (7 * 24 * 60 * 60 * 1000)).toISOString();
+    const windowStart = new Date(startedAt.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const runId = randomUUID();
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       INSERT INTO decision_replay_runs (
         run_id, trigger_mode, sample_size, window_start, window_end, status,
         total_candidates, total_scored, likely_wrong_count, model_judged_count, started_at
@@ -1230,31 +1422,51 @@ export class ImprovementService {
         @runId, @triggerMode, @sampleSize, @windowStart, @windowEnd, 'running',
         0, 0, 0, 0, @startedAt
       )
-    `).run({
-      runId, triggerMode: input.triggerMode, sampleSize: input.sampleSize,
-      windowStart, windowEnd, startedAt: startedAt.toISOString(),
-    });
+    `,
+      )
+      .run({
+        runId,
+        triggerMode: input.triggerMode,
+        sampleSize: input.sampleSize,
+        windowStart,
+        windowEnd,
+        startedAt: startedAt.toISOString(),
+      });
     this.ctx.publishRealtime("improvement_replay_started", "improvement", {
-      runId, triggerMode: input.triggerMode, sampleSize: input.sampleSize, windowStart, windowEnd,
+      runId,
+      triggerMode: input.triggerMode,
+      sampleSize: input.sampleSize,
+      windowStart,
+      windowEnd,
     });
 
     try {
       const candidates = await this.selectDecisionReplayCandidates(windowStart, windowEnd, input.sampleSize);
       const sample = sampleDecisionReplayCandidates(candidates, input.sampleSize);
-      this.ctx.gatewaySql.prepare(`
+      this.ctx.gatewaySql
+        .prepare(
+          `
         UPDATE decision_replay_runs SET total_candidates = @totalCandidates WHERE run_id = @runId
-      `).run({ runId, totalCandidates: candidates.length });
+      `,
+        )
+        .run({ runId, totalCandidates: candidates.length });
 
       const scored = await this.scoreDecisionReplayCandidates(runId, sample, {
         onProgress: (progress) => {
-          this.ctx.gatewaySql.prepare(`
+          this.ctx.gatewaySql
+            .prepare(
+              `
             UPDATE decision_replay_runs
             SET total_scored = @totalScored, model_judged_count = @modelJudgedCount
             WHERE run_id = @runId
-          `).run({ runId, totalScored: progress.totalScored, modelJudgedCount: progress.modelJudgedCount });
+          `,
+            )
+            .run({ runId, totalScored: progress.totalScored, modelJudgedCount: progress.modelJudgedCount });
           if (progress.totalScored % 20 === 0 || progress.totalScored === sample.length) {
             this.ctx.publishRealtime("improvement_replay_progress", "improvement", {
-              runId, totalScored: progress.totalScored, totalCandidates: candidates.length,
+              runId,
+              totalScored: progress.totalScored,
+              totalCandidates: candidates.length,
               modelJudgedCount: progress.modelJudgedCount,
             });
           }
@@ -1277,18 +1489,26 @@ export class ImprovementService {
         }
       }
       const report = this.createWeeklyImprovementReport({
-        runId, windowStart, windowEnd, items,
-        findings: dedupedFindings, appliedAutoTunes, queuedRecommendations,
+        runId,
+        windowStart,
+        windowEnd,
+        items,
+        findings: dedupedFindings,
+        appliedAutoTunes,
+        queuedRecommendations,
       });
       this.markDecisionReplayRunCompleted({
-        runId, reportId: report.reportId,
-        totalCandidates: candidates.length, totalScored: items.length,
+        runId,
+        reportId: report.reportId,
+        totalCandidates: candidates.length,
+        totalScored: items.length,
         likelyWrongCount: items.filter((item) => item.label === "likely_wrong").length,
         modelJudgedCount: scored.filter((entry) => entry.judgeUsed).length,
       });
       this.persistDecisionReplayDedup(dedupedFindings, report.reportId);
       this.ctx.publishRealtime("improvement_replay_completed", "improvement", {
-        runId, reportId: report.reportId,
+        runId,
+        reportId: report.reportId,
         sampledDecisions: items.length,
         likelyWrongCount: items.filter((item) => item.label === "likely_wrong").length,
         appliedAutoTunes: appliedAutoTunes.length,
@@ -1297,13 +1517,18 @@ export class ImprovementService {
       return { run: this.readDecisionReplayRun(runId), report };
     } catch (error) {
       const finishedAt = new Date().toISOString();
-      this.ctx.gatewaySql.prepare(`
+      this.ctx.gatewaySql
+        .prepare(
+          `
         UPDATE decision_replay_runs
         SET status = 'failed', error_text = @errorText, finished_at = @finishedAt
         WHERE run_id = @runId
-      `).run({ runId, errorText: (error as Error).message, finishedAt });
+      `,
+        )
+        .run({ runId, errorText: (error as Error).message, finishedAt });
       this.ctx.publishRealtime("improvement_replay_failed", "improvement", {
-        runId, message: (error as Error).message,
+        runId,
+        message: (error as Error).message,
       });
       throw error;
     }
@@ -1313,24 +1538,34 @@ export class ImprovementService {
   // They are included here to keep the service self-contained.
 
   private async selectDecisionReplayCandidates(
-    windowStart: string, windowEnd: string, sampleSize: number,
+    windowStart: string,
+    windowEnd: string,
+    sampleSize: number,
   ): Promise<DecisionReplayCandidate[]> {
     const fetchLimit = Math.max(1000, Math.min(sampleSize * 8, 6000));
-    const turnRows = this.ctx.gatewaySql.prepare(`
+    const turnRows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT turn_id, session_id, user_message_id, assistant_message_id, status, mode, model,
              web_mode, memory_mode, thinking_level, routing_json, retrieval_json, reflection_json,
              started_at, finished_at
       FROM chat_turn_traces
       WHERE started_at >= @windowStart AND started_at <= @windowEnd
       ORDER BY started_at DESC LIMIT @limit
-    `).all({ windowStart, windowEnd, limit: fetchLimit }) as Array<Record<string, unknown>>;
+    `,
+      )
+      .all({ windowStart, windowEnd, limit: fetchLimit }) as Array<Record<string, unknown>>;
 
-    const toolRows = this.ctx.gatewaySql.prepare(`
+    const toolRows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT tool_run_id, turn_id, session_id, tool_name, status, error, args_json, result_json, started_at
       FROM chat_tool_runs
       WHERE started_at >= @windowStart AND started_at <= @windowEnd
       ORDER BY started_at DESC LIMIT @limit
-    `).all({ windowStart, windowEnd, limit: fetchLimit }) as Array<Record<string, unknown>>;
+    `,
+      )
+      .all({ windowStart, windowEnd, limit: fetchLimit }) as Array<Record<string, unknown>>;
 
     const turns: DecisionReplayCandidate[] = turnRows.map((row: Record<string, unknown>) => ({
       decisionType: "chat_turn" as const,
@@ -1344,8 +1579,14 @@ export class ImprovementService {
       memoryMode: row.memory_mode as ChatMemoryMode,
       thinkingLevel: row.thinking_level as ChatThinkingLevel,
       routing: safeJsonParse<ChatTurnTraceRecord["routing"]>(row.routing_json as string, {}),
-      retrieval: safeJsonParse<ChatTurnTraceRecord["retrieval"] | undefined>((row.retrieval_json as string) ?? "", undefined),
-      reflection: safeJsonParse<ChatTurnTraceRecord["reflection"] | undefined>((row.reflection_json as string) ?? "", undefined),
+      retrieval: safeJsonParse<ChatTurnTraceRecord["retrieval"] | undefined>(
+        (row.retrieval_json as string) ?? "",
+        undefined,
+      ),
+      reflection: safeJsonParse<ChatTurnTraceRecord["reflection"] | undefined>(
+        (row.reflection_json as string) ?? "",
+        undefined,
+      ),
       userMessageId: row.user_message_id as string,
       assistantMessageId: (row.assistant_message_id as string) ?? undefined,
     }));
@@ -1365,7 +1606,8 @@ export class ImprovementService {
   }
 
   private async scoreDecisionReplayCandidates(
-    runId: string, candidates: DecisionReplayCandidate[],
+    runId: string,
+    candidates: DecisionReplayCandidate[],
     options?: { onProgress?: (p: { totalScored: number; modelJudgedCount: number }) => void },
   ): Promise<ReplayScoredItemResult[]> {
     const byTurn = new Map<string, DecisionReplayCandidate[]>();
@@ -1381,31 +1623,51 @@ export class ImprovementService {
     for (const candidate of candidates) {
       const excerpts = await this.buildDecisionReplayExcerpts(candidate, messageCache);
       const turnTools = candidate.turnId
-        ? (byTurn.get(candidate.turnId) ?? []).filter((i) => i.decisionType === "tool_run") : [];
+        ? (byTurn.get(candidate.turnId) ?? []).filter((i) => i.decisionType === "tool_run")
+        : [];
       const ruleEval = evaluateDecisionReplayRuleScores(candidate, turnTools);
       let modelScores: DecisionReplayItemModelScores | undefined;
       let judgeUsed = false;
-      if (modelJudgeCount < IMPROVEMENT_JUDGE_SAMPLE_LIMIT
-        && (candidate.decisionType === "chat_turn" || candidate.status === "failed")) {
+      if (
+        modelJudgeCount < IMPROVEMENT_JUDGE_SAMPLE_LIMIT &&
+        (candidate.decisionType === "chat_turn" || candidate.status === "failed")
+      ) {
         modelScores = await this.judgeDecisionReplayCandidate(candidate, excerpts, ruleEval.scores);
-        if (modelScores) { judgeUsed = true; modelJudgeCount += 1; }
+        if (modelScores) {
+          judgeUsed = true;
+          modelJudgeCount += 1;
+        }
       }
       const wrongnessProbability = computeDecisionWrongnessProbability(candidate, ruleEval.scores, modelScores);
       const causeClass = inferDecisionReplayCauseClass(candidate, ruleEval.scores, wrongnessProbability);
-      const clusterKey = `${causeClass}:${candidate.decisionType}:${candidate.toolName ?? candidate.status}`.slice(0, 140);
-      const label: DecisionReplayItemRecord["label"] = wrongnessProbability >= 0.68 ? "likely_wrong"
-        : wrongnessProbability >= 0.45 ? "uncertain" : "ok";
+      const clusterKey = `${causeClass}:${candidate.decisionType}:${candidate.toolName ?? candidate.status}`.slice(
+        0,
+        140,
+      );
+      const label: DecisionReplayItemRecord["label"] =
+        wrongnessProbability >= 0.68 ? "likely_wrong" : wrongnessProbability >= 0.45 ? "uncertain" : "ok";
       const evidence = [...ruleEval.signals];
       if (judgeUsed) evidence.push("model_judged");
       if (candidate.toolName) evidence.push(`tool:${candidate.toolName}`);
       results.push({
         item: {
-          itemId: randomUUID(), runId, decisionType: candidate.decisionType,
-          sessionId: candidate.sessionId, turnId: candidate.turnId, toolRunId: candidate.toolRunId,
-          occurredAt: candidate.occurredAt, wrongnessProbability, label, causeClass, clusterKey,
-          ruleScores: ruleEval.scores, modelScores, evidence,
+          itemId: randomUUID(),
+          runId,
+          decisionType: candidate.decisionType,
+          sessionId: candidate.sessionId,
+          turnId: candidate.turnId,
+          toolRunId: candidate.toolRunId,
+          occurredAt: candidate.occurredAt,
+          wrongnessProbability,
+          label,
+          causeClass,
+          clusterKey,
+          ruleScores: ruleEval.scores,
+          modelScores,
+          evidence,
           summary: buildDecisionReplayItemSummary(candidate, causeClass),
-          inputExcerpt: excerpts.inputExcerpt, outputExcerpt: excerpts.outputExcerpt,
+          inputExcerpt: excerpts.inputExcerpt,
+          outputExcerpt: excerpts.outputExcerpt,
           createdAt: new Date().toISOString(),
         },
         judgeUsed,
@@ -1416,12 +1678,16 @@ export class ImprovementService {
   }
 
   private async buildDecisionReplayExcerpts(
-    candidate: DecisionReplayCandidate, messageCache: Map<string, Map<string, string>>,
+    candidate: DecisionReplayCandidate,
+    messageCache: Map<string, Map<string, string>>,
   ): Promise<{ inputExcerpt?: string; outputExcerpt?: string }> {
     if (candidate.decisionType === "tool_run") {
       return {
         inputExcerpt: truncateForModelJudge(candidate.args ? JSON.stringify(candidate.args, null, 2) : "", 1800),
-        outputExcerpt: truncateForModelJudge(candidate.error ?? (candidate.result ? JSON.stringify(candidate.result, null, 2) : ""), 1800),
+        outputExcerpt: truncateForModelJudge(
+          candidate.error ?? (candidate.result ? JSON.stringify(candidate.result, null, 2) : ""),
+          1800,
+        ),
       };
     }
     if (!candidate.sessionId) return {};
@@ -1440,8 +1706,12 @@ export class ImprovementService {
       sessionMessages = map;
     }
     return {
-      inputExcerpt: candidate.userMessageId ? truncateForModelJudge(sessionMessages.get(candidate.userMessageId) ?? "", 2200) : undefined,
-      outputExcerpt: candidate.assistantMessageId ? truncateForModelJudge(sessionMessages.get(candidate.assistantMessageId) ?? "", 2500) : undefined,
+      inputExcerpt: candidate.userMessageId
+        ? truncateForModelJudge(sessionMessages.get(candidate.userMessageId) ?? "", 2200)
+        : undefined,
+      outputExcerpt: candidate.assistantMessageId
+        ? truncateForModelJudge(sessionMessages.get(candidate.assistantMessageId) ?? "", 2500)
+        : undefined,
     };
   }
 
@@ -1456,17 +1726,28 @@ export class ImprovementService {
       "You are grading one agent decision replay item.",
       "Return JSON only with keys: correctnessLikelihood, missedToolProbability, betterResponsePotential, rationale.",
       "Each probability must be a number between 0 and 1.",
-      `Decision type: ${candidate.decisionType}`, `Decision status: ${candidate.status}`,
-      `Tool: ${candidate.toolName ?? "n/a"}`, `Rule score snapshot: ${JSON.stringify(ruleScores)}`,
-      "", "Input excerpt:", excerpts.inputExcerpt ?? "(none)",
-      "", "Output excerpt:", excerpts.outputExcerpt ?? "(none)",
+      `Decision type: ${candidate.decisionType}`,
+      `Decision status: ${candidate.status}`,
+      `Tool: ${candidate.toolName ?? "n/a"}`,
+      `Rule score snapshot: ${JSON.stringify(ruleScores)}`,
+      "",
+      "Input excerpt:",
+      excerpts.inputExcerpt ?? "(none)",
+      "",
+      "Output excerpt:",
+      excerpts.outputExcerpt ?? "(none)",
     ].join("\n");
     try {
       const completion = await withTimeout(
         this.callbacks.createChatCompletion({
-          providerId: defaults.providerId, model: defaults.model,
-          messages: [{ role: "system", content: "Grade strictly. JSON only." }, { role: "user", content: prompt }],
-          temperature: 0, max_tokens: 220,
+          providerId: defaults.providerId,
+          model: defaults.model,
+          messages: [
+            { role: "system", content: "Grade strictly. JSON only." },
+            { role: "user", content: prompt },
+          ],
+          temperature: 0,
+          max_tokens: 220,
         }),
         IMPROVEMENT_JUDGE_TIMEOUT_MS,
         `Decision replay judge timed out after ${IMPROVEMENT_JUDGE_TIMEOUT_MS}ms`,
@@ -1479,7 +1760,9 @@ export class ImprovementService {
         betterResponsePotential: clampProbability(payload.betterResponsePotential),
         rationale: typeof payload.rationale === "string" ? payload.rationale.slice(0, 500) : undefined,
       };
-    } catch { return undefined; }
+    } catch {
+      return undefined;
+    }
   }
 
   private insertDecisionReplayItems(items: DecisionReplayItemRecord[]): void {
@@ -1498,11 +1781,17 @@ export class ImprovementService {
     try {
       for (const item of items) {
         insert.run({
-          itemId: item.itemId, runId: item.runId, decisionType: item.decisionType,
-          sessionId: item.sessionId ?? null, turnId: item.turnId ?? null,
-          toolRunId: item.toolRunId ?? null, occurredAt: item.occurredAt,
-          wrongnessProbability: item.wrongnessProbability, label: item.label,
-          causeClass: item.causeClass, clusterKey: item.clusterKey,
+          itemId: item.itemId,
+          runId: item.runId,
+          decisionType: item.decisionType,
+          sessionId: item.sessionId ?? null,
+          turnId: item.turnId ?? null,
+          toolRunId: item.toolRunId ?? null,
+          occurredAt: item.occurredAt,
+          wrongnessProbability: item.wrongnessProbability,
+          label: item.label,
+          causeClass: item.causeClass,
+          clusterKey: item.clusterKey,
           ruleScoresJson: JSON.stringify(item.ruleScores),
           modelScoresJson: item.modelScores ? JSON.stringify(item.modelScores) : null,
           evidenceJson: JSON.stringify(item.evidence),
@@ -1513,7 +1802,10 @@ export class ImprovementService {
         });
       }
       this.ctx.gatewaySql.exec("COMMIT");
-    } catch (error) { this.ctx.gatewaySql.exec("ROLLBACK"); throw error; }
+    } catch (error) {
+      this.ctx.gatewaySql.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   private buildDecisionReplayFindings(runId: string, items: DecisionReplayItemRecord[]): DecisionReplayFindingRecord[] {
@@ -1529,11 +1821,22 @@ export class ImprovementService {
       if (group.length === 0) continue;
       const causeClass = group[0]?.causeClass ?? "other";
       const avgWrongness = group.reduce((sum, i) => sum + i.wrongnessProbability, 0) / group.length;
-      const severity: DecisionReplayFindingRecord["severity"] = group.length >= 8 || avgWrongness >= 0.78
-        ? "high" : group.length >= 4 || avgWrongness >= 0.62 ? "medium" : "low";
-      const fingerprint = createHash("sha1").update(`${causeClass}|${clusterKey}|${group[0]?.summary ?? ""}`).digest("hex");
+      const severity: DecisionReplayFindingRecord["severity"] =
+        group.length >= 8 || avgWrongness >= 0.78
+          ? "high"
+          : group.length >= 4 || avgWrongness >= 0.62
+            ? "medium"
+            : "low";
+      const fingerprint = createHash("sha1")
+        .update(`${causeClass}|${clusterKey}|${group[0]?.summary ?? ""}`)
+        .digest("hex");
       findings.push({
-        findingId: randomUUID(), runId, fingerprint, causeClass, clusterKey, severity,
+        findingId: randomUUID(),
+        runId,
+        fingerprint,
+        causeClass,
+        clusterKey,
+        severity,
         recurrenceCount: group.length,
         impactedSessions: new Set(group.map((i) => i.sessionId).filter(Boolean)).size,
         impactedTurns: new Set(group.map((i) => i.turnId).filter(Boolean)).size,
@@ -1541,10 +1844,16 @@ export class ImprovementService {
         title: titleForDecisionReplayCause(causeClass),
         summary: summarizeDecisionReplayFinding(group),
         recommendation: recommendationForDecisionReplayCause(causeClass),
-        isDuplicate: false, createdAt: new Date().toISOString(),
+        isDuplicate: false,
+        createdAt: new Date().toISOString(),
       });
     }
-    return findings.sort((l, r) => severityRank(r.severity) - severityRank(l.severity) || r.recurrenceCount - l.recurrenceCount || r.avgWrongness - l.avgWrongness);
+    return findings.sort(
+      (l, r) =>
+        severityRank(r.severity) - severityRank(l.severity) ||
+        r.recurrenceCount - l.recurrenceCount ||
+        r.avgWrongness - l.avgWrongness,
+    );
   }
 
   private tagDuplicateDecisionReplayFindings(findings: DecisionReplayFindingRecord[]): DecisionReplayFindingRecord[] {
@@ -1572,18 +1881,29 @@ export class ImprovementService {
     try {
       for (const f of findings) {
         insert.run({
-          findingId: f.findingId, runId: f.runId, fingerprint: f.fingerprint,
-          causeClass: f.causeClass, clusterKey: f.clusterKey, severity: f.severity,
-          recurrenceCount: f.recurrenceCount, impactedSessions: f.impactedSessions,
-          impactedTurns: f.impactedTurns, avgWrongness: f.avgWrongness,
-          title: f.title, summary: f.summary, recommendation: f.recommendation ?? null,
+          findingId: f.findingId,
+          runId: f.runId,
+          fingerprint: f.fingerprint,
+          causeClass: f.causeClass,
+          clusterKey: f.clusterKey,
+          severity: f.severity,
+          recurrenceCount: f.recurrenceCount,
+          impactedSessions: f.impactedSessions,
+          impactedTurns: f.impactedTurns,
+          avgWrongness: f.avgWrongness,
+          title: f.title,
+          summary: f.summary,
+          recommendation: f.recommendation ?? null,
           isDuplicate: f.isDuplicate ? 1 : 0,
           duplicateOfFingerprint: f.duplicateOfFingerprint ?? null,
           createdAt: f.createdAt,
         });
       }
       this.ctx.gatewaySql.exec("COMMIT");
-    } catch (error) { this.ctx.gatewaySql.exec("ROLLBACK"); throw error; }
+    } catch (error) {
+      this.ctx.gatewaySql.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   private planDecisionAutoTunes(runId: string, findings: DecisionReplayFindingRecord[]): DecisionAutoTuneRecord[] {
@@ -1592,33 +1912,73 @@ export class ImprovementService {
       if (f.isDuplicate) continue;
       if (f.causeClass === "weak_blocker_explanation" && f.recurrenceCount >= 3) {
         const current = this.ctx.storage.systemSettings.get<number>(IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE)?.value ?? 1;
-        plans.push({ tuneId: randomUUID(), runId, findingId: f.findingId, tuneClass: "prompt_contract", riskLevel: "low", status: "queued",
+        plans.push({
+          tuneId: randomUUID(),
+          runId,
+          findingId: f.findingId,
+          tuneClass: "prompt_contract",
+          riskLevel: "low",
+          status: "queued",
           description: "Increase blocker template strictness to improve blocker specificity.",
           patch: { settingKey: IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE, nextValue: Math.min(10, current + 1) },
-          snapshot: { settingKey: IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE, previousValue: current }, createdAt: new Date().toISOString() });
+          snapshot: { settingKey: IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE, previousValue: current },
+          createdAt: new Date().toISOString(),
+        });
       } else if (f.causeClass === "incomplete_retry_repair" && f.recurrenceCount >= 3) {
         const current = this.ctx.storage.systemSettings.get<number>(IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD)?.value ?? 1;
-        plans.push({ tuneId: randomUUID(), runId, findingId: f.findingId, tuneClass: "threshold", riskLevel: "low", status: "queued",
+        plans.push({
+          tuneId: randomUUID(),
+          runId,
+          findingId: f.findingId,
+          tuneClass: "threshold",
+          riskLevel: "low",
+          status: "queued",
           description: "Lower retry trigger threshold so failed turns attempt one repair more often.",
           patch: { settingKey: IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD, nextValue: Math.max(0, current - 1) },
-          snapshot: { settingKey: IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD, previousValue: current }, createdAt: new Date().toISOString() });
-      } else if ((f.causeClass === "retrieval_miss" || f.causeClass === "false_refusal_tone") && f.recurrenceCount >= 3) {
+          snapshot: { settingKey: IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD, previousValue: current },
+          createdAt: new Date().toISOString(),
+        });
+      } else if (
+        (f.causeClass === "retrieval_miss" || f.causeClass === "false_refusal_tone") &&
+        f.recurrenceCount >= 3
+      ) {
         const current = this.ctx.storage.systemSettings.get<number>(IMPROVEMENT_TUNE_KEY_LIVE_INTENT)?.value ?? 0.6;
-        plans.push({ tuneId: randomUUID(), runId, findingId: f.findingId, tuneClass: "threshold", riskLevel: "low", status: "queued",
+        plans.push({
+          tuneId: randomUUID(),
+          runId,
+          findingId: f.findingId,
+          tuneClass: "threshold",
+          riskLevel: "low",
+          status: "queued",
           description: "Raise live-data intent sensitivity so web retrieval is triggered more reliably.",
-          patch: { settingKey: IMPROVEMENT_TUNE_KEY_LIVE_INTENT, nextValue: Number(Math.min(0.95, current + 0.05).toFixed(2)) },
-          snapshot: { settingKey: IMPROVEMENT_TUNE_KEY_LIVE_INTENT, previousValue: current }, createdAt: new Date().toISOString() });
+          patch: {
+            settingKey: IMPROVEMENT_TUNE_KEY_LIVE_INTENT,
+            nextValue: Number(Math.min(0.95, current + 0.05).toFixed(2)),
+          },
+          snapshot: { settingKey: IMPROVEMENT_TUNE_KEY_LIVE_INTENT, previousValue: current },
+          createdAt: new Date().toISOString(),
+        });
       } else if (f.causeClass === "tool_mismatch" && f.recurrenceCount >= 4) {
-        plans.push({ tuneId: randomUUID(), runId, findingId: f.findingId, tuneClass: "ranking_weight", riskLevel: "medium", status: "queued",
+        plans.push({
+          tuneId: randomUUID(),
+          runId,
+          findingId: f.findingId,
+          tuneClass: "ranking_weight",
+          riskLevel: "medium",
+          status: "queued",
           description: "Review tool routing weights for this cluster before auto-applying.",
-          patch: { settingKey: "improvement_tune_tool_routing_weights_v1", suggestedDelta: 1 }, createdAt: new Date().toISOString() });
+          patch: { settingKey: "improvement_tune_tool_routing_weights_v1", suggestedDelta: 1 },
+          createdAt: new Date().toISOString(),
+        });
       }
     }
     return plans.slice(0, 12);
   }
 
   private insertDecisionAutoTune(tune: DecisionAutoTuneRecord): void {
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       INSERT INTO decision_autotunes (
         tune_id, run_id, finding_id, tune_class, risk_level, status, description,
         patch_json, snapshot_json, result_json, created_at, applied_at, reverted_at
@@ -1626,19 +1986,32 @@ export class ImprovementService {
         @tuneId, @runId, @findingId, @tuneClass, @riskLevel, @status, @description,
         @patchJson, @snapshotJson, NULL, @createdAt, @appliedAt, @revertedAt
       )
-    `).run({
-      tuneId: tune.tuneId, runId: tune.runId, findingId: tune.findingId ?? null,
-      tuneClass: tune.tuneClass, riskLevel: tune.riskLevel, status: tune.status,
-      description: tune.description, patchJson: JSON.stringify(tune.patch),
-      snapshotJson: tune.snapshot ? JSON.stringify(tune.snapshot) : null,
-      createdAt: tune.createdAt, appliedAt: tune.appliedAt ?? null, revertedAt: tune.revertedAt ?? null,
-    });
+    `,
+      )
+      .run({
+        tuneId: tune.tuneId,
+        runId: tune.runId,
+        findingId: tune.findingId ?? null,
+        tuneClass: tune.tuneClass,
+        riskLevel: tune.riskLevel,
+        status: tune.status,
+        description: tune.description,
+        patchJson: JSON.stringify(tune.patch),
+        snapshotJson: tune.snapshot ? JSON.stringify(tune.snapshot) : null,
+        createdAt: tune.createdAt,
+        appliedAt: tune.appliedAt ?? null,
+        revertedAt: tune.revertedAt ?? null,
+      });
   }
 
   private createWeeklyImprovementReport(input: {
-    runId: string; windowStart: string; windowEnd: string;
-    items: DecisionReplayItemRecord[]; findings: DecisionReplayFindingRecord[];
-    appliedAutoTunes: DecisionAutoTuneRecord[]; queuedRecommendations: DecisionAutoTuneRecord[];
+    runId: string;
+    windowStart: string;
+    windowEnd: string;
+    items: DecisionReplayItemRecord[];
+    findings: DecisionReplayFindingRecord[];
+    appliedAutoTunes: DecisionAutoTuneRecord[];
+    queuedRecommendations: DecisionAutoTuneRecord[];
   }): WeeklyImprovementReportRecord {
     const currentCounts = new Map<DecisionReplayCauseClass, number>();
     for (const item of input.items) {
@@ -1646,35 +2019,58 @@ export class ImprovementService {
       currentCounts.set(item.causeClass, (currentCounts.get(item.causeClass) ?? 0) + 1);
     }
     const topCauseClasses = Array.from(currentCounts.entries())
-      .sort((l, r) => r[1] - l[1]).slice(0, 6).map(([causeClass, count]) => ({ causeClass, count }));
-    const previous = this.ctx.gatewaySql.prepare(`
+      .sort((l, r) => r[1] - l[1])
+      .slice(0, 6)
+      .map(([causeClass, count]) => ({ causeClass, count }));
+    const previous = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT * FROM improvement_reports ORDER BY week_end DESC, created_at DESC LIMIT 1
-    `).get() as { report_id: string; summary_json: string } | undefined;
+    `,
+      )
+      .get() as { report_id: string; summary_json: string } | undefined;
     const previousSummary = previous
       ? safeJsonParse<WeeklyImprovementReportRecord["summary"]>(previous.summary_json, {
-        sampledDecisions: 0, likelyWrongCount: 0, wrongnessRate: 0, topCauseClasses: [],
-        duplicateSuppressedCount: 0, improvedCount: 0, regressedCount: 0,
-      }) : undefined;
+          sampledDecisions: 0,
+          likelyWrongCount: 0,
+          wrongnessRate: 0,
+          topCauseClasses: [],
+          duplicateSuppressedCount: 0,
+          improvedCount: 0,
+          regressedCount: 0,
+        })
+      : undefined;
     const previousCounts = new Map<DecisionReplayCauseClass, number>(
       (previousSummary?.topCauseClasses ?? []).map((e) => [e.causeClass, e.count]),
     );
     const weekOverWeek = compareDecisionCauseCounts(currentCounts, previousCounts);
     const report: WeeklyImprovementReportRecord = {
-      reportId: randomUUID(), runId: input.runId, weekStart: input.windowStart, weekEnd: input.windowEnd,
+      reportId: randomUUID(),
+      runId: input.runId,
+      weekStart: input.windowStart,
+      weekEnd: input.windowEnd,
       summary: {
         sampledDecisions: input.items.length,
         likelyWrongCount: input.items.filter((i) => i.label === "likely_wrong").length,
-        wrongnessRate: input.items.length > 0
-          ? Number((input.items.reduce((s, i) => s + i.wrongnessProbability, 0) / input.items.length).toFixed(4)) : 0,
-        topCauseClasses, duplicateSuppressedCount: input.findings.filter((f) => f.isDuplicate).length,
-        improvedCount: weekOverWeek.improved.length, regressedCount: weekOverWeek.regressed.length,
+        wrongnessRate:
+          input.items.length > 0
+            ? Number((input.items.reduce((s, i) => s + i.wrongnessProbability, 0) / input.items.length).toFixed(4))
+            : 0,
+        topCauseClasses,
+        duplicateSuppressedCount: input.findings.filter((f) => f.isDuplicate).length,
+        improvedCount: weekOverWeek.improved.length,
+        regressedCount: weekOverWeek.regressed.length,
       },
       topFindings: input.findings.filter((f) => !f.isDuplicate).slice(0, 10),
       appliedAutoTunes: input.appliedAutoTunes,
       queuedRecommendations: input.queuedRecommendations,
-      weekOverWeek, previousReportId: previous?.report_id, createdAt: new Date().toISOString(),
+      weekOverWeek,
+      previousReportId: previous?.report_id,
+      createdAt: new Date().toISOString(),
     };
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       INSERT INTO improvement_reports (
         report_id, run_id, week_start, week_end, summary_json, top_findings_json,
         applied_tunes_json, queued_tunes_json, week_over_week_json, previous_report_id, created_at
@@ -1682,29 +2078,44 @@ export class ImprovementService {
         @reportId, @runId, @weekStart, @weekEnd, @summaryJson, @topFindingsJson,
         @appliedTunesJson, @queuedTunesJson, @weekOverWeekJson, @previousReportId, @createdAt
       )
-    `).run({
-      reportId: report.reportId, runId: report.runId, weekStart: report.weekStart, weekEnd: report.weekEnd,
-      summaryJson: JSON.stringify(report.summary), topFindingsJson: JSON.stringify(report.topFindings),
-      appliedTunesJson: JSON.stringify(report.appliedAutoTunes),
-      queuedTunesJson: JSON.stringify(report.queuedRecommendations),
-      weekOverWeekJson: JSON.stringify(report.weekOverWeek),
-      previousReportId: report.previousReportId ?? null, createdAt: report.createdAt,
-    });
+    `,
+      )
+      .run({
+        reportId: report.reportId,
+        runId: report.runId,
+        weekStart: report.weekStart,
+        weekEnd: report.weekEnd,
+        summaryJson: JSON.stringify(report.summary),
+        topFindingsJson: JSON.stringify(report.topFindings),
+        appliedTunesJson: JSON.stringify(report.appliedAutoTunes),
+        queuedTunesJson: JSON.stringify(report.queuedRecommendations),
+        weekOverWeekJson: JSON.stringify(report.weekOverWeek),
+        previousReportId: report.previousReportId ?? null,
+        createdAt: report.createdAt,
+      });
     return report;
   }
 
   private markDecisionReplayRunCompleted(input: {
-    runId: string; reportId: string; totalCandidates: number;
-    totalScored: number; likelyWrongCount: number; modelJudgedCount: number;
+    runId: string;
+    reportId: string;
+    totalCandidates: number;
+    totalScored: number;
+    likelyWrongCount: number;
+    modelJudgedCount: number;
   }): void {
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       UPDATE decision_replay_runs SET
         status = 'completed', report_id = @reportId,
         total_candidates = @totalCandidates, total_scored = @totalScored,
         likely_wrong_count = @likelyWrongCount, model_judged_count = @modelJudgedCount,
         finished_at = @finishedAt
       WHERE run_id = @runId
-    `).run({ ...input, finishedAt: new Date().toISOString() });
+    `,
+      )
+      .run({ ...input, finishedAt: new Date().toISOString() });
   }
 
   private persistDecisionReplayDedup(findings: DecisionReplayFindingRecord[], reportId: string): void {
@@ -1718,7 +2129,8 @@ export class ImprovementService {
     `);
     for (const f of findings) {
       upsert.run({
-        fingerprint: f.fingerprint, reportId,
+        fingerprint: f.fingerprint,
+        reportId,
         lastSeenAt: new Date().toISOString(),
         summaryHash: createHash("sha1").update(f.summary).digest("hex"),
       });
@@ -1729,64 +2141,110 @@ export class ImprovementService {
 // ── free-standing helpers ────────────────────────────────────────────
 
 function mapDecisionReplayRunRow(row: {
-  run_id: string; trigger_mode: "scheduled" | "manual"; sample_size: number;
-  window_start: string; window_end: string; status: string;
-  report_id: string | null; total_candidates: number; total_scored: number;
-  likely_wrong_count: number; model_judged_count: number;
-  started_at: string; finished_at: string | null; error_text: string | null;
+  run_id: string;
+  trigger_mode: "scheduled" | "manual";
+  sample_size: number;
+  window_start: string;
+  window_end: string;
+  status: string;
+  report_id: string | null;
+  total_candidates: number;
+  total_scored: number;
+  likely_wrong_count: number;
+  model_judged_count: number;
+  started_at: string;
+  finished_at: string | null;
+  error_text: string | null;
 }): DecisionReplayRunRecord {
   return {
-    runId: row.run_id, triggerMode: row.trigger_mode, sampleSize: row.sample_size,
-    windowStart: row.window_start, windowEnd: row.window_end,
-    status: IMPROVEMENT_RUN_STATUS_VALUES.has(row.status) ? (row.status as DecisionReplayRunRecord["status"]) : "failed",
+    runId: row.run_id,
+    triggerMode: row.trigger_mode,
+    sampleSize: row.sample_size,
+    windowStart: row.window_start,
+    windowEnd: row.window_end,
+    status: IMPROVEMENT_RUN_STATUS_VALUES.has(row.status)
+      ? (row.status as DecisionReplayRunRecord["status"])
+      : "failed",
     reportId: row.report_id ?? undefined,
-    totalCandidates: row.total_candidates, totalScored: row.total_scored,
-    likelyWrongCount: row.likely_wrong_count, modelJudgedCount: row.model_judged_count,
-    startedAt: row.started_at, finishedAt: row.finished_at ?? undefined,
+    totalCandidates: row.total_candidates,
+    totalScored: row.total_scored,
+    likelyWrongCount: row.likely_wrong_count,
+    modelJudgedCount: row.model_judged_count,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at ?? undefined,
     error: row.error_text ?? undefined,
   };
 }
 
 function mapDecisionAutoTuneRow(row: {
-  tune_id: string; run_id: string; finding_id: string | null;
+  tune_id: string;
+  run_id: string;
+  finding_id: string | null;
   tune_class: DecisionAutoTuneRecord["tuneClass"];
   risk_level: DecisionAutoTuneRecord["riskLevel"];
   status: DecisionAutoTuneRecord["status"];
-  description: string; patch_json: string; snapshot_json: string | null;
-  result_json: string | null; created_at: string;
-  applied_at: string | null; reverted_at: string | null;
+  description: string;
+  patch_json: string;
+  snapshot_json: string | null;
+  result_json: string | null;
+  created_at: string;
+  applied_at: string | null;
+  reverted_at: string | null;
 }): DecisionAutoTuneRecord {
   return {
-    tuneId: row.tune_id, runId: row.run_id, findingId: row.finding_id ?? undefined,
-    tuneClass: row.tune_class, riskLevel: row.risk_level, status: row.status,
+    tuneId: row.tune_id,
+    runId: row.run_id,
+    findingId: row.finding_id ?? undefined,
+    tuneClass: row.tune_class,
+    riskLevel: row.risk_level,
+    status: row.status,
     description: row.description,
     patch: safeJsonParse<Record<string, unknown>>(row.patch_json, {}),
     snapshot: row.snapshot_json ? safeJsonParse<Record<string, unknown>>(row.snapshot_json, {}) : undefined,
     result: row.result_json ? safeJsonParse<Record<string, unknown>>(row.result_json, {}) : undefined,
-    createdAt: row.created_at, appliedAt: row.applied_at ?? undefined,
+    createdAt: row.created_at,
+    appliedAt: row.applied_at ?? undefined,
     revertedAt: row.reverted_at ?? undefined,
   };
 }
 
 function mapImprovementReportRow(row: {
-  report_id: string; run_id: string; week_start: string; week_end: string;
-  summary_json: string; top_findings_json: string; applied_tunes_json: string;
-  queued_tunes_json: string; week_over_week_json: string;
-  previous_report_id: string | null; created_at: string;
+  report_id: string;
+  run_id: string;
+  week_start: string;
+  week_end: string;
+  summary_json: string;
+  top_findings_json: string;
+  applied_tunes_json: string;
+  queued_tunes_json: string;
+  week_over_week_json: string;
+  previous_report_id: string | null;
+  created_at: string;
 }): WeeklyImprovementReportRecord {
   return {
-    reportId: row.report_id, runId: row.run_id, weekStart: row.week_start, weekEnd: row.week_end,
+    reportId: row.report_id,
+    runId: row.run_id,
+    weekStart: row.week_start,
+    weekEnd: row.week_end,
     summary: safeJsonParse<WeeklyImprovementReportRecord["summary"]>(row.summary_json, {
-      sampledDecisions: 0, likelyWrongCount: 0, wrongnessRate: 0, topCauseClasses: [],
-      duplicateSuppressedCount: 0, improvedCount: 0, regressedCount: 0,
+      sampledDecisions: 0,
+      likelyWrongCount: 0,
+      wrongnessRate: 0,
+      topCauseClasses: [],
+      duplicateSuppressedCount: 0,
+      improvedCount: 0,
+      regressedCount: 0,
     }),
     topFindings: safeJsonParse<DecisionReplayFindingRecord[]>(row.top_findings_json, []),
     appliedAutoTunes: safeJsonParse<DecisionAutoTuneRecord[]>(row.applied_tunes_json, []),
     queuedRecommendations: safeJsonParse<DecisionAutoTuneRecord[]>(row.queued_tunes_json, []),
     weekOverWeek: safeJsonParse<WeeklyImprovementReportRecord["weekOverWeek"]>(row.week_over_week_json, {
-      improved: [], regressed: [], unchanged: [],
+      improved: [],
+      regressed: [],
+      unchanged: [],
     }),
-    previousReportId: row.previous_report_id ?? undefined, createdAt: row.created_at,
+    previousReportId: row.previous_report_id ?? undefined,
+    createdAt: row.created_at,
   };
 }
 
@@ -1797,7 +2255,7 @@ function mapCapabilityGapEventRow(row: CapabilityGapEventRow): CapabilityGapEven
     turnId: row.turn_id ?? undefined,
     runId: row.run_id ?? undefined,
     causeClass: CAPABILITY_GAP_CAUSE_CLASSES.has(row.cause_class as CapabilityGapCauseClass)
-      ? row.cause_class as CapabilityGapCauseClass
+      ? (row.cause_class as CapabilityGapCauseClass)
       : "policy_denied_by_config",
     failureClass: row.failure_class ?? undefined,
     promptExcerpt: row.prompt_excerpt ?? undefined,
@@ -1826,7 +2284,7 @@ function mapRepairCandidateRow(row: RepairCandidateRow): RepairCandidateRecord {
     candidateId: row.candidate_id,
     fingerprint: row.fingerprint,
     causeClass: CAPABILITY_GAP_CAUSE_CLASSES.has(row.cause_class as CapabilityGapCauseClass)
-      ? row.cause_class as CapabilityGapCauseClass
+      ? (row.cause_class as CapabilityGapCauseClass)
       : "policy_denied_by_config",
     title: row.title,
     summary: row.summary,
@@ -1857,9 +2315,13 @@ function normalizeRecoveryOptions(values: string[] | undefined): CapabilityGapEv
     "replay_failed_turn",
     "patch_config",
   ]);
-  return [...new Set((values ?? []).filter((value): value is CapabilityGapEventRecord["recoveryOptions"][number] => (
-    allowed.has(value as CapabilityGapEventRecord["recoveryOptions"][number])
-  )))];
+  return [
+    ...new Set(
+      (values ?? []).filter((value): value is CapabilityGapEventRecord["recoveryOptions"][number] =>
+        allowed.has(value as CapabilityGapEventRecord["recoveryOptions"][number]),
+      ),
+    ),
+  ];
 }
 
 function normalizeReplayStatus(value: string | null | undefined): CapabilityGapEventRecord["replayStatus"] {
@@ -1871,12 +2333,12 @@ function normalizeReplayStatus(value: string | null | undefined): CapabilityGapE
 
 function normalizeRepairValidationStatus(value: string | null | undefined): RepairCandidateRecord["validationStatus"] {
   if (
-    value === "not_started"
-    || value === "queued"
-    || value === "running"
-    || value === "needs_review"
-    || value === "passed"
-    || value === "failed"
+    value === "not_started" ||
+    value === "queued" ||
+    value === "running" ||
+    value === "needs_review" ||
+    value === "passed" ||
+    value === "failed"
   ) {
     return value;
   }
@@ -1958,54 +2420,58 @@ function isCapabilityGapEventRow(value: unknown): value is CapabilityGapEventRow
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.event_id === "string"
-    && typeof value.session_id === "string"
-    && (typeof value.turn_id === "string" || value.turn_id === null)
-    && (typeof value.run_id === "string" || value.run_id === null)
-    && typeof value.cause_class === "string"
-    && (typeof value.failure_class === "string" || value.failure_class === null)
-    && (typeof value.prompt_excerpt === "string" || value.prompt_excerpt === null)
-    && (typeof value.prompt_ref === "string" || value.prompt_ref === null)
-    && (typeof value.requested_tool === "string" || value.requested_tool === null)
-    && (typeof value.tool_family === "string" || value.tool_family === null)
-    && (typeof value.tool_profile === "string" || value.tool_profile === null)
-    && (typeof value.policy_reason === "string" || value.policy_reason === null)
-    && (typeof value.provider_id === "string" || value.provider_id === null)
-    && (typeof value.model === "string" || value.model === null)
-    && (typeof value.config_area === "string" || value.config_area === null)
-    && (typeof value.suggested_repair_class === "string" || value.suggested_repair_class === null)
-    && typeof value.confidence === "number"
-    && typeof value.repeat_count === "number"
-    && typeof value.recovery_options_json === "string"
-    && (typeof value.replay_run_id === "string" || value.replay_run_id === null)
-    && (typeof value.replay_status === "string" || value.replay_status === null)
-    && (typeof value.repair_candidate_id === "string" || value.repair_candidate_id === null)
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.event_id === "string" &&
+    typeof value.session_id === "string" &&
+    (typeof value.turn_id === "string" || value.turn_id === null) &&
+    (typeof value.run_id === "string" || value.run_id === null) &&
+    typeof value.cause_class === "string" &&
+    (typeof value.failure_class === "string" || value.failure_class === null) &&
+    (typeof value.prompt_excerpt === "string" || value.prompt_excerpt === null) &&
+    (typeof value.prompt_ref === "string" || value.prompt_ref === null) &&
+    (typeof value.requested_tool === "string" || value.requested_tool === null) &&
+    (typeof value.tool_family === "string" || value.tool_family === null) &&
+    (typeof value.tool_profile === "string" || value.tool_profile === null) &&
+    (typeof value.policy_reason === "string" || value.policy_reason === null) &&
+    (typeof value.provider_id === "string" || value.provider_id === null) &&
+    (typeof value.model === "string" || value.model === null) &&
+    (typeof value.config_area === "string" || value.config_area === null) &&
+    (typeof value.suggested_repair_class === "string" || value.suggested_repair_class === null) &&
+    typeof value.confidence === "number" &&
+    typeof value.repeat_count === "number" &&
+    typeof value.recovery_options_json === "string" &&
+    (typeof value.replay_run_id === "string" || value.replay_run_id === null) &&
+    (typeof value.replay_status === "string" || value.replay_status === null) &&
+    (typeof value.repair_candidate_id === "string" || value.repair_candidate_id === null) &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isRepairCandidateRow(value: unknown): value is RepairCandidateRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.candidate_id === "string"
-    && typeof value.fingerprint === "string"
-    && typeof value.cause_class === "string"
-    && typeof value.title === "string"
-    && typeof value.summary === "string"
-    && (typeof value.requested_tool === "string" || value.requested_tool === null)
-    && (typeof value.tool_profile === "string" || value.tool_profile === null)
-    && (typeof value.provider_id === "string" || value.provider_id === null)
-    && (typeof value.config_area === "string" || value.config_area === null)
-    && (typeof value.suggested_patch === "string" || value.suggested_patch === null)
-    && (typeof value.replay_run_id === "string" || value.replay_run_id === null)
-    && typeof value.validation_status === "string"
-    && (typeof value.validation_summary === "string" || value.validation_summary === null)
-    && typeof value.event_count === "number"
-    && typeof value.confidence === "number"
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string"
-    && typeof value.last_seen_at === "string";
+  return (
+    typeof value.candidate_id === "string" &&
+    typeof value.fingerprint === "string" &&
+    typeof value.cause_class === "string" &&
+    typeof value.title === "string" &&
+    typeof value.summary === "string" &&
+    (typeof value.requested_tool === "string" || value.requested_tool === null) &&
+    (typeof value.tool_profile === "string" || value.tool_profile === null) &&
+    (typeof value.provider_id === "string" || value.provider_id === null) &&
+    (typeof value.config_area === "string" || value.config_area === null) &&
+    (typeof value.suggested_patch === "string" || value.suggested_patch === null) &&
+    (typeof value.replay_run_id === "string" || value.replay_run_id === null) &&
+    typeof value.validation_status === "string" &&
+    (typeof value.validation_summary === "string" || value.validation_summary === null) &&
+    typeof value.event_count === "number" &&
+    typeof value.confidence === "number" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string" &&
+    typeof value.last_seen_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2034,12 +2500,19 @@ function buildSuggestedRepairPatch(input: {
 }
 
 function normalizeDecisionReplayCauseClass(value: string): DecisionReplayCauseClass {
-  return IMPROVEMENT_CAUSE_CLASSES.has(value as DecisionReplayCauseClass) ? (value as DecisionReplayCauseClass) : "other";
+  return IMPROVEMENT_CAUSE_CLASSES.has(value as DecisionReplayCauseClass)
+    ? (value as DecisionReplayCauseClass)
+    : "other";
 }
 
-function sampleDecisionReplayCandidates(candidates: DecisionReplayCandidate[], sampleSize: number): DecisionReplayCandidate[] {
+function sampleDecisionReplayCandidates(
+  candidates: DecisionReplayCandidate[],
+  sampleSize: number,
+): DecisionReplayCandidate[] {
   const cap = Math.max(1, Math.min(sampleSize, candidates.length));
-  const critical = candidates.filter((c) => c.status === "failed" || c.status === "blocked" || c.status === "approval_required");
+  const critical = candidates.filter(
+    (c) => c.status === "failed" || c.status === "blocked" || c.status === "approval_required",
+  );
   const normal = candidates.filter((c) => !critical.includes(c));
   const criticalTarget = Math.min(critical.length, Math.max(1, Math.floor(cap * 0.45)));
   const selected = [...critical.slice(0, criticalTarget), ...normal.slice(0, cap - criticalTarget)];
@@ -2053,69 +2526,120 @@ function sampleDecisionReplayCandidates(candidates: DecisionReplayCandidate[], s
 }
 
 function evaluateDecisionReplayRuleScores(
-  candidate: DecisionReplayCandidate, turnTools: DecisionReplayCandidate[],
+  candidate: DecisionReplayCandidate,
+  turnTools: DecisionReplayCandidate[],
 ): { scores: DecisionReplayItemRuleScores; signals: string[] } {
   const signals: string[] = [];
-  let honesty = 0.7, blockerQuality = 0.7, retryQuality = 0.7, toolEvidence = 0.65, actionability = 0.7;
+  let honesty = 0.7,
+    blockerQuality = 0.7,
+    retryQuality = 0.7,
+    toolEvidence = 0.65,
+    actionability = 0.7;
   if (candidate.decisionType === "chat_turn") {
     const executedTools = turnTools.filter((i) => i.status === "executed");
     const failedTools = turnTools.filter((i) => i.status === "failed");
     const blockedTools = turnTools.filter((i) => i.status === "blocked" || i.status === "approval_required");
     if (candidate.status === "failed") {
-      blockerQuality = 0.38; actionability = 0.35; signals.push("chat_turn_failed");
-      if (failedTools.length > 0) { blockerQuality = 0.56; signals.push("failed_tools_present"); }
+      blockerQuality = 0.38;
+      actionability = 0.35;
+      signals.push("chat_turn_failed");
+      if (failedTools.length > 0) {
+        blockerQuality = 0.56;
+        signals.push("failed_tools_present");
+      }
     } else if (candidate.status === "approval_required") {
-      blockerQuality = 0.82; actionability = 0.62; signals.push("approval_required_gate");
+      blockerQuality = 0.82;
+      actionability = 0.62;
+      signals.push("approval_required_gate");
     }
     if ((candidate.routing?.liveDataIntent ?? false) && !(candidate.retrieval?.l2Used ?? false)) {
-      honesty = 0.48; toolEvidence = Math.min(toolEvidence, 0.42); signals.push("live_data_without_l2");
+      honesty = 0.48;
+      toolEvidence = Math.min(toolEvidence, 0.42);
+      signals.push("live_data_without_l2");
     }
     if (executedTools.length > 0) {
-      toolEvidence = 0.88; honesty = Math.max(honesty, 0.82); signals.push("tool_execution_evidence");
-    } else if ((candidate.routing?.liveDataIntent ?? false) || candidate.webMode === "quick" || candidate.webMode === "deep") {
-      toolEvidence = 0.44; signals.push("web_intent_without_execution");
+      toolEvidence = 0.88;
+      honesty = Math.max(honesty, 0.82);
+      signals.push("tool_execution_evidence");
+    } else if (
+      (candidate.routing?.liveDataIntent ?? false) ||
+      candidate.webMode === "quick" ||
+      candidate.webMode === "deep"
+    ) {
+      toolEvidence = 0.44;
+      signals.push("web_intent_without_execution");
     }
     const attemptedRepair = (candidate.reflection?.attemptCount ?? 0) > 0;
     if ((candidate.status === "failed" || failedTools.length > 0) && !attemptedRepair) {
-      retryQuality = 0.32; signals.push("missing_reflection_retry");
-    } else if (attemptedRepair) { retryQuality = 0.86; signals.push("reflection_retry_attempted"); }
-    if (blockedTools.length > 0 && blockerQuality < 0.7) { blockerQuality = 0.74; signals.push("blocked_with_reason"); }
+      retryQuality = 0.32;
+      signals.push("missing_reflection_retry");
+    } else if (attemptedRepair) {
+      retryQuality = 0.86;
+      signals.push("reflection_retry_attempted");
+    }
+    if (blockedTools.length > 0 && blockerQuality < 0.7) {
+      blockerQuality = 0.74;
+      signals.push("blocked_with_reason");
+    }
   } else {
     const status = candidate.status;
     if (status === "executed") {
-      toolEvidence = 0.9; blockerQuality = 0.8; actionability = 0.8; signals.push("tool_executed");
+      toolEvidence = 0.9;
+      blockerQuality = 0.8;
+      actionability = 0.8;
+      signals.push("tool_executed");
     } else if (status === "failed") {
-      honesty = 0.58; blockerQuality = candidate.error?.trim().length ? 0.62 : 0.34;
-      retryQuality = 0.35; toolEvidence = 0.45; actionability = 0.42; signals.push("tool_failed");
+      honesty = 0.58;
+      blockerQuality = candidate.error?.trim().length ? 0.62 : 0.34;
+      retryQuality = 0.35;
+      toolEvidence = 0.45;
+      actionability = 0.42;
+      signals.push("tool_failed");
     } else if (status === "blocked" || status === "approval_required") {
-      blockerQuality = candidate.error?.trim().length ? 0.78 : 0.5; actionability = 0.55;
+      blockerQuality = candidate.error?.trim().length ? 0.78 : 0.5;
+      actionability = 0.55;
       signals.push("tool_blocked_or_approval");
     }
   }
-  return { scores: { honesty: clampProbability(honesty) as number, blockerQuality: clampProbability(blockerQuality) as number,
-    retryQuality: clampProbability(retryQuality) as number, toolEvidence: clampProbability(toolEvidence) as number,
-    actionability: clampProbability(actionability) as number }, signals };
+  return {
+    scores: {
+      honesty: clampProbability(honesty) as number,
+      blockerQuality: clampProbability(blockerQuality) as number,
+      retryQuality: clampProbability(retryQuality) as number,
+      toolEvidence: clampProbability(toolEvidence) as number,
+      actionability: clampProbability(actionability) as number,
+    },
+    signals,
+  };
 }
 
 function computeDecisionWrongnessProbability(
-  candidate: DecisionReplayCandidate, ruleScores: DecisionReplayItemRuleScores,
+  candidate: DecisionReplayCandidate,
+  ruleScores: DecisionReplayItemRuleScores,
   modelScores?: DecisionReplayItemModelScores,
 ): number {
-  const ruleQuality = (ruleScores.honesty * 0.28) + (ruleScores.blockerQuality * 0.2)
-    + (ruleScores.retryQuality * 0.2) + (ruleScores.toolEvidence * 0.2) + (ruleScores.actionability * 0.12);
+  const ruleQuality =
+    ruleScores.honesty * 0.28 +
+    ruleScores.blockerQuality * 0.2 +
+    ruleScores.retryQuality * 0.2 +
+    ruleScores.toolEvidence * 0.2 +
+    ruleScores.actionability * 0.12;
   let ruleWrongness = 1 - ruleQuality;
   if (candidate.status === "failed") ruleWrongness += 0.18;
   else if (candidate.status === "blocked") ruleWrongness += 0.08;
   else if (candidate.status === "approval_required") ruleWrongness += 0.05;
   ruleWrongness = clampProbability(ruleWrongness) as number;
   if (!modelScores) return ruleWrongness;
-  const modelWrongness = ((1 - modelScores.correctnessLikelihood) * 0.55)
-    + (modelScores.missedToolProbability * 0.3) + (modelScores.betterResponsePotential * 0.15);
-  return clampProbability((ruleWrongness * 0.55) + (modelWrongness * 0.45)) as number;
+  const modelWrongness =
+    (1 - modelScores.correctnessLikelihood) * 0.55 +
+    modelScores.missedToolProbability * 0.3 +
+    modelScores.betterResponsePotential * 0.15;
+  return clampProbability(ruleWrongness * 0.55 + modelWrongness * 0.45) as number;
 }
 
 function inferDecisionReplayCauseClass(
-  candidate: DecisionReplayCandidate, ruleScores: DecisionReplayItemRuleScores,
+  candidate: DecisionReplayCandidate,
+  ruleScores: DecisionReplayItemRuleScores,
   wrongnessProbability: number,
 ): DecisionReplayCauseClass {
   if (wrongnessProbability < 0.45) return "other";
@@ -2136,7 +2660,10 @@ function inferDecisionReplayCauseClass(
   return "other";
 }
 
-function buildDecisionReplayItemSummary(candidate: DecisionReplayCandidate, causeClass: DecisionReplayCauseClass): string {
+function buildDecisionReplayItemSummary(
+  candidate: DecisionReplayCandidate,
+  causeClass: DecisionReplayCauseClass,
+): string {
   return candidate.decisionType === "chat_turn"
     ? `Chat turn ${candidate.turnId ?? "unknown"} was tagged ${causeClass} (${candidate.status}).`
     : `Tool ${candidate.toolName ?? "unknown"} run ${candidate.toolRunId ?? "unknown"} was tagged ${causeClass} (${candidate.status}).`;
@@ -2152,11 +2679,15 @@ function titleForDecisionReplayCause(c: DecisionReplayCauseClass): string {
 }
 
 function recommendationForDecisionReplayCause(c: DecisionReplayCauseClass): string {
-  if (c === "false_refusal_tone") return "Tighten refusal wording contract and require explicit tool-attempt summary before refusal.";
-  if (c === "weak_blocker_explanation") return "Improve blocker template with concrete cause, failing step, and next-step fallback fields.";
-  if (c === "tool_mismatch") return "Re-rank tool selection heuristics and add tie-break preference for higher-evidence tools.";
+  if (c === "false_refusal_tone")
+    return "Tighten refusal wording contract and require explicit tool-attempt summary before refusal.";
+  if (c === "weak_blocker_explanation")
+    return "Improve blocker template with concrete cause, failing step, and next-step fallback fields.";
+  if (c === "tool_mismatch")
+    return "Re-rank tool selection heuristics and add tie-break preference for higher-evidence tools.";
   if (c === "retrieval_miss") return "Raise live-data intent sensitivity and escalate layered retrieval earlier.";
-  if (c === "incomplete_retry_repair") return "Trigger one alternate-strategy retry for failed turns before final response.";
+  if (c === "incomplete_retry_repair")
+    return "Trigger one alternate-strategy retry for failed turns before final response.";
   return "Review trace samples and add targeted heuristics for this cluster.";
 }
 
@@ -2175,12 +2706,16 @@ function severityRank(severity: DecisionReplayFindingRecord["severity"]): number
 }
 
 function compareDecisionCauseCounts(
-  current: Map<DecisionReplayCauseClass, number>, previous: Map<DecisionReplayCauseClass, number>,
+  current: Map<DecisionReplayCauseClass, number>,
+  previous: Map<DecisionReplayCauseClass, number>,
 ): WeeklyImprovementReportRecord["weekOverWeek"] {
   const keys = new Set<DecisionReplayCauseClass>([...current.keys(), ...previous.keys()]);
-  const improved: string[] = [], regressed: string[] = [], unchanged: string[] = [];
+  const improved: string[] = [],
+    regressed: string[] = [],
+    unchanged: string[] = [];
   for (const key of keys) {
-    const c = current.get(key) ?? 0, p = previous.get(key) ?? 0;
+    const c = current.get(key) ?? 0,
+      p = previous.get(key) ?? 0;
     if (c < p) improved.push(`${key}: ${p} -> ${c}`);
     else if (c > p) regressed.push(`${key}: ${p} -> ${c}`);
     else unchanged.push(`${key}: ${c}`);
@@ -2190,13 +2725,27 @@ function compareDecisionCauseCounts(
 
 function getZonedDateParts(date: Date, timeZone: string): { weekday: number; hour: number } {
   const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone, weekday: "short", hour: "2-digit", hour12: false,
+    timeZone,
+    weekday: "short",
+    hour: "2-digit",
+    hour12: false,
   });
   const parts = formatter.formatToParts(date);
   const read = (type: string): string => parts.find((p) => p.type === type)?.value ?? "";
   const wd = read("weekday").toLowerCase();
-  const weekday = wd.startsWith("sun") ? 0 : wd.startsWith("mon") ? 1 : wd.startsWith("tue") ? 2
-    : wd.startsWith("wed") ? 3 : wd.startsWith("thu") ? 4 : wd.startsWith("fri") ? 5 : 6;
+  const weekday = wd.startsWith("sun")
+    ? 0
+    : wd.startsWith("mon")
+      ? 1
+      : wd.startsWith("tue")
+        ? 2
+        : wd.startsWith("wed")
+          ? 3
+          : wd.startsWith("thu")
+            ? 4
+            : wd.startsWith("fri")
+              ? 5
+              : 6;
   return { weekday, hour: Number.parseInt(read("hour"), 10) };
 }
 
@@ -2207,5 +2756,5 @@ function toWeekKeyForTimezone(date: Date, timeZone: string): string {
   const dayOfWeek = d.getDay();
   const diff = d.getDate() - dayOfWeek;
   const weekStart = new Date(d.setDate(diff));
-  return `${weekStart.getFullYear()}-W${String(Math.ceil((weekStart.getDate()) / 7)).padStart(2, "0")}`;
+  return `${weekStart.getFullYear()}-W${String(Math.ceil(weekStart.getDate() / 7)).padStart(2, "0")}`;
 }

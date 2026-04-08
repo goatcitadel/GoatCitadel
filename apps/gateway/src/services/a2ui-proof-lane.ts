@@ -1,5 +1,11 @@
 import type { A2UIProofLaneDraft, FollowOnParityReport, FollowOnProofLaneStepRecord } from "@goatcitadel/contracts";
 import { GATEWAY_FOLLOW_ON_PROOF_LANE_SPECS } from "./follow-on-proof-lane-metadata.js";
+import {
+  buildProofLaneArtifactPath,
+  formatProofLaneMarkdownHeader,
+  formatProofLaneStepsSection,
+  mergeProofLaneBlockingIssues,
+} from "./proof-lane-helpers.js";
 
 const A2UI_PROOF_LANE = GATEWAY_FOLLOW_ON_PROOF_LANE_SPECS.a2ui;
 
@@ -7,15 +13,16 @@ export function buildA2UIProofLaneDraft(report: FollowOnParityReport): A2UIProof
   const generatedAt = new Date().toISOString();
   const contract = report.canvas.contract;
   const canvasCatalogReady = Boolean(
-    report.canvas.automationCatalog
-    && report.canvas.automationCatalog.maturity !== "planned"
-    && report.canvas.automationCatalog.maturity !== "disabled",
+    report.canvas.automationCatalog &&
+    report.canvas.automationCatalog.maturity !== "planned" &&
+    report.canvas.automationCatalog.maturity !== "disabled",
   );
   const missionControlReady = (contract?.scopes.includes("ui_canvas") ?? false) && canvasCatalogReady;
   const companionDeclared = report.canvas.platformTargets.length > 0;
-  const proofCurrent = report.canvas.artifactStatus.hasArtifact
-    && report.canvas.artifactStatus.freshness === "current"
-    && report.canvas.artifactStatus.matchedCurrentProfile;
+  const proofCurrent =
+    report.canvas.artifactStatus.hasArtifact &&
+    report.canvas.artifactStatus.freshness === "current" &&
+    report.canvas.artifactStatus.matchedCurrentProfile;
   const steps: FollowOnProofLaneStepRecord[] = [
     {
       stepId: "preflight",
@@ -24,7 +31,8 @@ export function buildA2UIProofLaneDraft(report: FollowOnParityReport): A2UIProof
       instructions: contract
         ? `Confirm ${contract.contractId}, scopes (${contract.scopes.join(", ")}), transports (${contract.transports.join(", ")}), and the current canvas summary from System before starting operator proof.`
         : "Resolve the missing A2UI contract before attempting any proof-lane claim.",
-      evidenceHint: "Capture the System-page contract summary, parity summary, and current canvas/companion target list.",
+      evidenceHint:
+        "Capture the System-page contract summary, parity summary, and current canvas/companion target list.",
     },
     {
       stepId: "mission-control",
@@ -35,7 +43,8 @@ export function buildA2UIProofLaneDraft(report: FollowOnParityReport): A2UIProof
         : !canvasCatalogReady
           ? "Canvas + A2UI is still marked below an operator-ready catalog maturity, so the Mission Control proof lane should stay blocked."
           : "Mission Control canvas scope is not currently resolved in the contract.",
-      evidenceHint: "Capture before/after screenshots or notes showing the zone-to-agent handoff, then the directed seat/tile command appearing in the readout and Inspector canvas-command field.",
+      evidenceHint:
+        "Capture before/after screenshots or notes showing the zone-to-agent handoff, then the directed seat/tile command appearing in the readout and Inspector canvas-command field.",
     },
     {
       stepId: "boundary",
@@ -55,19 +64,18 @@ export function buildA2UIProofLaneDraft(report: FollowOnParityReport): A2UIProof
       title: "Complete the A2UI proof bundle",
       status: contract && missionControlReady ? "ready" : "blocked",
       instructions: `Fill ${A2UI_PROOF_LANE.templatePath} using ${A2UI_PROOF_LANE.checklistPath}.`,
-      evidenceHint: "Attach System-page notes, canvas screenshots, operator notes, and any blocked companion-session expectations.",
+      evidenceHint:
+        "Attach System-page notes, canvas screenshots, operator notes, and any blocked companion-session expectations.",
     },
   ];
 
-  const blockingIssues = [
-    ...report.canvas.blockingIssues,
-    ...steps.filter((step) => step.status === "blocked").map((step) => `${step.title} is blocked.`),
-  ];
-  const summary = contract && missionControlReady
-    ? proofCurrent
-      ? `A2UI proof lane is current for ${contract.contractId}; Android Canvas proof is on file for the active deployment profile and should only be rerun when runtime truth changes.`
-      : `A2UI proof lane is ready for a Mission-Control-first Office Lab handoff and directed-move pass with ${contract.contractId}; companion-session expansion remains unproven.`
-    : "A2UI proof lane is blocked until the live contract, Mission Control canvas scope, and an operator-ready canvas catalog entry are all available.";
+  const blockingIssues = mergeProofLaneBlockingIssues(report.canvas.blockingIssues, steps);
+  const summary =
+    contract && missionControlReady
+      ? proofCurrent
+        ? `A2UI proof lane is current for ${contract.contractId}; Android Canvas proof is on file for the active deployment profile and should only be rerun when runtime truth changes.`
+        : `A2UI proof lane is ready for a Mission-Control-first Office Lab handoff and directed-move pass with ${contract.contractId}; companion-session expansion remains unproven.`
+      : "A2UI proof lane is blocked until the live contract, Mission Control canvas scope, and an operator-ready canvas catalog entry are all available.";
 
   return {
     generatedAt,
@@ -76,18 +84,19 @@ export function buildA2UIProofLaneDraft(report: FollowOnParityReport): A2UIProof
     summary,
     checklistPath: A2UI_PROOF_LANE.checklistPath,
     templatePath: A2UI_PROOF_LANE.templatePath,
-    blockingIssues: Array.from(new Set(blockingIssues)),
+    blockingIssues,
     steps,
     markdown: buildA2UIProofLaneMarkdown(report, generatedAt, summary, steps),
   };
 }
 
 export function buildA2UIProofLaneArtifactPath(draft: A2UIProofLaneDraft): string {
-  const day = draft.generatedAt.slice(0, 10);
-  const timestamp = draft.generatedAt
-    .replaceAll(":", "-")
-    .replaceAll(".", "-");
-  return `${A2UI_PROOF_LANE.artifactRoot}/${day}/a2ui-proof-bundle-${draft.deploymentProfile}-${timestamp}.md`;
+  return buildProofLaneArtifactPath({
+    spec: A2UI_PROOF_LANE,
+    generatedAt: draft.generatedAt,
+    deploymentProfile: draft.deploymentProfile,
+    slug: "a2ui-proof-bundle",
+  });
 }
 
 function buildA2UIProofLaneMarkdown(
@@ -98,17 +107,14 @@ function buildA2UIProofLaneMarkdown(
 ): string {
   const contract = report.canvas.contract;
   return [
-    "# A2UI Proof Bundle Draft",
-    "",
-    `Generated: ${generatedAt}`,
-    `Deployment profile: ${report.deploymentProfile}`,
-    `Auth mode: ${report.authMode}`,
-    `Checklist: ${A2UI_PROOF_LANE.checklistPath}`,
-    `Template: ${A2UI_PROOF_LANE.templatePath}`,
-    "",
-    "## Summary",
-    summary,
-    "",
+    ...formatProofLaneMarkdownHeader({
+      title: "A2UI Proof Bundle Draft",
+      generatedAt,
+      deploymentProfile: report.deploymentProfile,
+      authMode: report.authMode,
+      spec: A2UI_PROOF_LANE,
+      summary,
+    }),
     "## Live Runtime Snapshot",
     `- Contract: ${contract?.contractId ?? "missing"}`,
     `- Operator surface: ${contract?.operatorSurface ?? "missing"}`,
@@ -117,12 +123,6 @@ function buildA2UIProofLaneMarkdown(
     `- Canvas summary: ${report.canvas.paritySummary}`,
     `- Platform targets: ${report.canvas.platformTargets.length}`,
     "",
-    "## Lane Steps",
-    ...steps.flatMap((step, index) => [
-      `${index + 1}. ${step.title} [${step.status}]`,
-      `Instructions: ${step.instructions}`,
-      `Evidence: ${step.evidenceHint}`,
-      "",
-    ]),
+    ...formatProofLaneStepsSection(steps),
   ].join("\n");
 }

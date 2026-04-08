@@ -8,10 +8,13 @@ import { McpPage } from "./pages/McpPage";
 import { PromptLabPage } from "./pages/PromptLabPage";
 
 const testState = vi.hoisted(() => {
-  const refreshRegistrations = new Map<string, {
-    callback: (signal: unknown) => Promise<void> | void;
-    options: Record<string, unknown>;
-  }>();
+  const refreshRegistrations = new Map<
+    string,
+    {
+      callback: (signal: unknown) => Promise<void> | void;
+      options: Record<string, unknown>;
+    }
+  >();
 
   return {
     refreshRegistrations,
@@ -52,10 +55,7 @@ const testState = vi.hoisted(() => {
 });
 
 vi.mock("react-virtuoso", () => ({
-  Virtuoso: (props: {
-    data?: unknown[];
-    itemContent?: (index: number, item: unknown) => React.ReactNode;
-  }) => (
+  Virtuoso: (props: { data?: unknown[]; itemContent?: (index: number, item: unknown) => React.ReactNode }) => (
     <div>
       {(props.data ?? []).map((item, index) => (
         <div key={index}>{props.itemContent?.(index, item)}</div>
@@ -92,7 +92,12 @@ vi.mock("./components/ActionButton", () => ({
     danger?: boolean;
     onClick?: () => void;
   }) => (
-    <button type="button" disabled={props.disabled} data-danger={props.danger ? "true" : "false"} onClick={props.onClick}>
+    <button
+      type="button"
+      disabled={props.disabled}
+      data-danger={props.danger ? "true" : "false"}
+      onClick={props.onClick}
+    >
       {props.pending ? "Working..." : props.label}
     </button>
   ),
@@ -143,11 +148,7 @@ vi.mock("./components/ui", () => ({
       ))}
     </select>
   ),
-  GCSwitch: (props: {
-    checked: boolean;
-    onCheckedChange: (checked: boolean) => void;
-    label?: string;
-  }) => (
+  GCSwitch: (props: { checked: boolean; onCheckedChange: (checked: boolean) => void; label?: string }) => (
     <label>
       <input
         type="checkbox"
@@ -330,8 +331,9 @@ describe("mission-control hardening", () => {
     );
 
     const modal = renderer.root.findByProps({ "data-mock-modal": "true" });
+    expect(modal.props["data-dismiss-disabled"]).toBe("true");
     act(() => {
-      modal.props.onRequestClose();
+      modal.props.onClick();
     });
 
     expect(onCancel).not.toHaveBeenCalled();
@@ -360,7 +362,8 @@ describe("mission-control hardening", () => {
 
     const modal = renderer.root.findByProps({ "data-mock-modal": "true" });
     expect(modal.props["data-confirm-disabled"]).toBe("true");
-    expect(renderer.root.findByType("button").props.disabled).toBe(true);
+    const rejectButton = renderer.root.findAllByType("button").find((node) => node.props.className === "danger");
+    expect(rejectButton?.props.disabled).toBe(true);
     expect(
       renderer.root.findAllByType("p").some((node) => textContent(node).includes("This approval token expired")),
     ).toBe(true);
@@ -433,51 +436,53 @@ describe("mission-control hardening", () => {
   });
 
   it("shows requested and actual models for prompt-pack runs when fallback routing occurs", async () => {
-    testState.api.fetchPromptPackReport.mockResolvedValue(createPromptPackReport({
-      runs: [
-        {
-          runId: "run-1",
-          packId: "pack-a",
-          testId: "pack-a-test-1",
-          status: "completed",
-          providerId: "openai",
-          model: "gpt-5.4",
-          responseText: "Done",
-          trace: {
-            turnId: "turn-1",
-            sessionId: "sess-1",
-            userMessageId: "user-1",
-            branchKind: "append",
+    testState.api.fetchPromptPackReport.mockResolvedValue(
+      createPromptPackReport({
+        runs: [
+          {
+            runId: "run-1",
+            packId: "pack-a",
+            testId: "pack-a-test-1",
             status: "completed",
-            mode: "chat",
-            model: "gpt-4.1-mini",
-            webMode: "off",
-            memoryMode: "off",
-            thinkingLevel: "standard",
+            providerId: "openai",
+            model: "gpt-5.4",
+            responseText: "Done",
+            trace: {
+              turnId: "turn-1",
+              sessionId: "sess-1",
+              userMessageId: "user-1",
+              branchKind: "append",
+              status: "completed",
+              mode: "chat",
+              model: "gpt-4.1-mini",
+              webMode: "off",
+              memoryMode: "off",
+              thinkingLevel: "standard",
+              startedAt: "2026-03-21T12:00:00.000Z",
+              finishedAt: "2026-03-21T12:00:05.000Z",
+              toolRuns: [],
+              citations: [],
+              routing: {
+                primaryProviderId: "openai",
+                primaryModel: "gpt-5.4",
+                effectiveProviderId: "openai",
+                effectiveModel: "gpt-4.1-mini",
+                fallbackProviderId: "openai",
+                fallbackModel: "gpt-4.1-mini",
+                fallbackUsed: true,
+                fallbackReason: "primary failed (timeout)",
+              },
+            },
             startedAt: "2026-03-21T12:00:00.000Z",
             finishedAt: "2026-03-21T12:00:05.000Z",
-            toolRuns: [],
-            citations: [],
-            routing: {
-              primaryProviderId: "openai",
-              primaryModel: "gpt-5.4",
-              effectiveProviderId: "openai",
-              effectiveModel: "gpt-4.1-mini",
-              fallbackProviderId: "openai",
-              fallbackModel: "gpt-4.1-mini",
-              fallbackUsed: true,
-              fallbackReason: "primary failed (timeout)",
-            },
           },
-          startedAt: "2026-03-21T12:00:00.000Z",
-          finishedAt: "2026-03-21T12:00:05.000Z",
+        ],
+        summary: {
+          ...createPromptPackReportBase().summary,
+          completedRuns: 1,
         },
-      ],
-      summary: {
-        ...createPromptPackReportBase().summary,
-        completedRuns: 1,
-      },
-    }));
+      }),
+    );
 
     let renderer: ReturnType<typeof create>;
     await act(async () => {
@@ -486,7 +491,9 @@ describe("mission-control hardening", () => {
     await flush();
 
     const paragraphs = renderer!.root.findAllByType("p").map((node) => textContent(node));
-    expect(paragraphs.some((text) => text.includes("New runs will reuse the last successful request: openai/gpt-5.4"))).toBe(true);
+    expect(
+      paragraphs.some((text) => text.includes("New runs will reuse the last successful request: openai/gpt-5.4")),
+    ).toBe(true);
     expect(paragraphs.some((text) => text.includes("Requested model: openai/gpt-5.4"))).toBe(true);
     expect(paragraphs.some((text) => text.includes("Actual model used: openai/gpt-4.1-mini"))).toBe(true);
     expect(paragraphs.some((text) => text.includes("fallback: openai/gpt-4.1-mini"))).toBe(true);

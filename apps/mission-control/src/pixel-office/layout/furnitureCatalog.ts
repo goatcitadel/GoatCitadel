@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment, no-console */
 // @ts-nocheck
 import type { FurnitureCatalogEntry, SpriteData } from "../types";
 
@@ -25,14 +26,7 @@ export interface LoadedAssetData {
   sprites: Record<string, SpriteData>;
 }
 
-export type FurnitureCategory =
-  | 'desks'
-  | 'chairs'
-  | 'storage'
-  | 'decor'
-  | 'electronics'
-  | 'wall'
-  | 'misc';
+export type FurnitureCategory = "desks" | "chairs" | "storage" | "decor" | "electronics" | "wall" | "misc";
 
 export interface CatalogEntryWithCategory extends FurnitureCatalogEntry {
   category: FurnitureCategory;
@@ -105,13 +99,13 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
   // Create virtual ":left" entries for mirrorSide assets.
   // These share the same sprite but have a distinct type ID so rotation groups work.
   for (const asset of assets.catalog) {
-    if (asset.mirrorSide && asset.orientation === 'side') {
+    if (asset.mirrorSide && asset.orientation === "side") {
       const sideEntry = allEntries.find((e) => e.type === asset.id);
       if (sideEntry) {
         allEntries.push({
           ...sideEntry,
           type: `${asset.id}:left`,
-          orientation: 'left',
+          orientation: "left",
           mirrorSide: true,
         });
       }
@@ -133,19 +127,19 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
   for (const asset of assets.catalog) {
     if (asset.groupId && asset.orientation) {
       // For rotation groups, only use the "off" or stateless variant
-      if (asset.state && asset.state !== 'off') continue;
+      if (asset.state && asset.state !== "off") continue;
       let orientMap = groupMap.get(asset.groupId);
       if (!orientMap) {
         orientMap = new Map();
         groupMap.set(asset.groupId, orientMap);
       }
 
-      if (asset.orientation === 'side') {
+      if (asset.orientation === "side") {
         // "side" is registered as "right" in the rotation group
-        orientMap.set('right', asset.id);
+        orientMap.set("right", asset.id);
         if (asset.mirrorSide) {
           // Register the virtual ":left" entry with a distinct type ID
-          orientMap.set('left', `${asset.id}:left`);
+          orientMap.set("left", `${asset.id}:left`);
         }
       } else {
         orientMap.set(asset.orientation, asset.id);
@@ -164,15 +158,15 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
 
   // Phase 2: Register rotation groups with 2+ orientations
   const nonFrontIds = new Set<string>();
-  const orientationOrder = ['front', 'right', 'back', 'left'];
+  const orientationOrder = ["front", "right", "back", "left"];
   for (const [groupId, orientMap] of groupMap) {
     if (orientMap.size < 2) continue;
     const scheme = rotationSchemes.get(groupId);
 
     // For 2-way scheme, only use front and right (side)
     let allowedOrients = orientationOrder;
-    if (scheme === '2-way') {
-      allowedOrients = ['front', 'right'];
+    if (scheme === "2-way") {
+      allowedOrients = ["front", "right"];
     }
 
     // Build ordered list of available orientations
@@ -193,7 +187,7 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
     }
     // Track non-front IDs to exclude from visible catalog
     for (const [orient, id] of Object.entries(members)) {
-      if (orient !== 'front') nonFrontIds.add(id);
+      if (orient !== "front") nonFrontIds.add(id);
     }
   }
 
@@ -201,7 +195,7 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
   const stateMap = new Map<string, Map<string, string>>(); // "groupId|orientation" → (state → assetId)
   for (const asset of assets.catalog) {
     if (asset.groupId && asset.state) {
-      const key = `${asset.groupId}|${asset.orientation || ''}`;
+      const key = `${asset.groupId}|${asset.orientation || ""}`;
       let sm = stateMap.get(key);
       if (!sm) {
         sm = new Map();
@@ -213,8 +207,8 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
     }
   }
   for (const sm of stateMap.values()) {
-    const onId = sm.get('on');
-    const offId = sm.get('off');
+    const onId = sm.get("on");
+    const offId = sm.get("off");
     if (onId && offId) {
       stateGroups.set(onId, offId);
       stateGroups.set(offId, onId);
@@ -225,7 +219,7 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
 
   // Also register rotation groups for "on" state variants (so rotation works on on-state items too)
   for (const asset of assets.catalog) {
-    if (asset.groupId && asset.orientation && asset.state === 'on') {
+    if (asset.groupId && asset.orientation && asset.state === "on") {
       // Skip non-first animation frames
       if (asset.animationGroup && asset.frame !== undefined && asset.frame > 0) continue;
 
@@ -279,24 +273,22 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
   // Track "on" variant IDs and animation frame IDs (non-first) to exclude from visible catalog
   const onStateIds = new Set<string>();
   for (const asset of assets.catalog) {
-    if (asset.state === 'on') onStateIds.add(asset.id);
+    if (asset.state === "on") onStateIds.add(asset.id);
   }
 
   // Store full internal catalog (all variants — for getCatalogEntry lookups)
   internalCatalog = allEntries;
 
   // Visible catalog: exclude non-front variants and "on" state variants
-  const visibleEntries = allEntries.filter(
-    (e) => !nonFrontIds.has(e.type) && !onStateIds.has(e.type),
-  );
+  const visibleEntries = allEntries.filter((e) => !nonFrontIds.has(e.type) && !onStateIds.has(e.type));
 
   // Strip orientation/state suffix from labels for grouped variants
   for (const entry of visibleEntries) {
     if (rotationGroups.has(entry.type) || stateGroups.has(entry.type)) {
       entry.label = entry.label
-        .replace(/ - Front - Off$/, '')
-        .replace(/ - Front$/, '')
-        .replace(/ - Off$/, '');
+        .replace(/ - Front - Off$/, "")
+        .replace(/ - Front$/, "")
+        .replace(/ - Off$/, "");
     }
   }
 
@@ -305,11 +297,6 @@ export function buildDynamicCatalog(assets: LoadedAssetData): boolean {
     .filter((c): c is FurnitureCategory => !!c)
     .sort();
 
-  const rotGroupCount = new Set(Array.from(rotationGroups.values())).size;
-  const animGroupCount = animationGroups.size;
-  console.log(
-    `✓ Built dynamic catalog with ${allEntries.length} assets (${visibleEntries.length} visible, ${rotGroupCount} rotation groups, ${stateGroups.size / 2} state pairs, ${animGroupCount} animation groups)`,
-  );
   return true;
 }
 
@@ -336,25 +323,25 @@ export function getActiveCategories(): Array<{ id: FurnitureCategory; label: str
 }
 
 export const FURNITURE_CATEGORIES: Array<{ id: FurnitureCategory; label: string }> = [
-  { id: 'desks', label: 'Desks' },
-  { id: 'chairs', label: 'Chairs' },
-  { id: 'storage', label: 'Storage' },
-  { id: 'electronics', label: 'Tech' },
-  { id: 'decor', label: 'Decor' },
-  { id: 'wall', label: 'Wall' },
-  { id: 'misc', label: 'Misc' },
+  { id: "desks", label: "Desks" },
+  { id: "chairs", label: "Chairs" },
+  { id: "storage", label: "Storage" },
+  { id: "electronics", label: "Tech" },
+  { id: "decor", label: "Decor" },
+  { id: "wall", label: "Wall" },
+  { id: "misc", label: "Misc" },
 ];
 
 // ── Rotation helpers ─────────────────────────────────────────────
 
 /** Returns the next asset ID in the rotation group (cw or ccw), or null if not rotatable. */
-export function getRotatedType(currentType: string, direction: 'cw' | 'ccw'): string | null {
+export function getRotatedType(currentType: string, direction: "cw" | "ccw"): string | null {
   const group = rotationGroups.get(currentType);
   if (!group) return null;
   const order = group.orientations.map((o) => group.members[o]);
   const idx = order.indexOf(currentType);
   if (idx === -1) return null;
-  const step = direction === 'cw' ? 1 : -1;
+  const step = direction === "cw" ? 1 : -1;
   const nextIdx = (idx + step + order.length) % order.length;
   return order[nextIdx];
 }

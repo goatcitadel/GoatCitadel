@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars, max-lines, react-hooks/exhaustive-deps */
 import {
   useCallback,
   useEffect,
@@ -95,6 +96,9 @@ import {
 import { ActionButton } from "../components/ActionButton";
 import { CardSkeleton } from "../components/CardSkeleton";
 import { ChatPlanningPill } from "../components/chat/ChatPlanningPill";
+import { ChatLearnedMemoryPanel } from "./chat/ChatLearnedMemoryPanel";
+import { ChatSessionManagementPanel } from "./chat/ChatSessionManagementPanel";
+import { ChatExternalBindingPanel } from "./chat/ChatExternalBindingPanel";
 import {
   isThreadMutatingStreamChunk,
   type PendingStreamTurnSeed,
@@ -125,14 +129,24 @@ import {
   setDevDiagnosticsActiveChatSession,
   setDevDiagnosticsLatestTraceSummary,
 } from "../state/dev-diagnostics-store";
+import { buildModelCommandSuggestions, type CommandSuggestionItem } from "./chat-command-suggestions";
+import { isLikelyLocalProviderUrl, resolveProviderModelSelection } from "./chat/chat-page-helpers";
 import {
-  buildModelCommandSuggestions,
-  type CommandSuggestionItem,
-} from "./chat-command-suggestions";
+  flattenThreadMessages,
+  normalizeComparableAssistantContent,
+  normalizeSpecialistFingerprint,
+  toTitleCase,
+} from "./chat/chat-page-normalizers";
+import { dedupeStrings, deriveCoworkItems, formatCommandResult, isAbortError } from "./chat/chat-page-derivations";
 import {
-  isLikelyLocalProviderUrl,
-  resolveProviderModelSelection,
-} from "./chat/chat-page-helpers";
+  getCapabilitySuggestionConfirmationCopy,
+  getDeleteSessionConfirmationMessage,
+  resolveChatRefreshPlan,
+  resolveOptimisticChatPrefs,
+  shouldApplyFetchedMessagesAfterStream,
+  shouldExecuteLocalChatCommand,
+  type FinalizedStreamMessageState,
+} from "./chat/chat-page-pure-helpers";
 import { ChatComposerShell } from "./chat/ChatComposerShell";
 import { ChatSessionSidebar } from "./chat/ChatSessionSidebar";
 import { ChatThreadShell } from "./chat/ChatThreadShell";
@@ -172,6 +186,14 @@ export {
   shouldShowSuggestionsPanel,
   shouldShowTracePanel,
 } from "./chat/useMissionControlSurfaceState";
+export {
+  getCapabilitySuggestionConfirmationCopy,
+  getDeleteSessionConfirmationMessage,
+  resolveChatRefreshPlan,
+  resolveOptimisticChatPrefs,
+  shouldApplyFetchedMessagesAfterStream,
+  shouldExecuteLocalChatCommand,
+} from "./chat/chat-page-pure-helpers";
 
 const STREAM_PREF_KEY = "goatcitadel.chat.agent.stream.enabled";
 
@@ -198,7 +220,8 @@ const CODE_DELEGATION_PRESETS = {
     label: "Ship cycle",
     mode: "sequential" as const,
     roles: ["Architect", "Coder", "QA"],
-    prefix: "Run an implement-review-test cycle for this task, then stitch the result into one operator-ready handoff. ",
+    prefix:
+      "Run an implement-review-test cycle for this task, then stitch the result into one operator-ready handoff. ",
   },
 } as const;
 
@@ -223,252 +246,9 @@ interface ActiveChatStreamState {
   runId?: string;
 }
 
-interface FinalizedStreamMessageState {
-  sessionId: string;
-  placeholderId: string;
-  messageId?: string;
-  content: string;
-}
-
-type ChatRefreshPlan = {
-  refreshSidebar: boolean;
-  refreshSession: "none" | "light" | "full";
-};
-
-export function resolveChatRefreshPlan(signal: Pick<RefreshSignal, "eventType" | "reason" | "source">, recentLocalPrefMutation = false): ChatRefreshPlan {
-  const eventType = (signal.eventType ?? "").toLowerCase();
-  const haystack = `${signal.reason} ${signal.eventType ?? ""} ${signal.source ?? ""}`.toLowerCase();
-  const isPrefEcho = recentLocalPrefMutation
-    && /\b(pref|policy|session|proactive|retrieval|reflection|mode)\b/.test(haystack);
-  if (eventType === "fallback_poll") {
-    return {
-      refreshSidebar: true,
-      refreshSession: "light",
-    };
-  }
-  if (isPrefEcho) {
-    return {
-      refreshSidebar: false,
-      refreshSession: "none",
-    };
-  }
-  if (eventType === "chat_thread_updated") {
-    return {
-      refreshSidebar: false,
-      refreshSession: "full",
-    };
-  }
-  if (eventType === "chat_session_title_updated") {
-    return {
-      refreshSidebar: true,
-      refreshSession: "none",
-    };
-  }
-  if (eventType === "memory_qmd_generated") {
-    return {
-      refreshSidebar: false,
-      refreshSession: "light",
-    };
-  }
-  if (eventType === "tool_invoked" || eventType === "session_event") {
-    return {
-      refreshSidebar: false,
-      refreshSession: "none",
-    };
-  }
-  const refreshSidebar = /\b(project|archive|restore|pin|unpin|binding|workspace|external|session_created|session_deleted|title|rename|chat_session_title_updated|chat_session_updated)\b/.test(haystack);
-  const refreshSession = /\b(chat_thread_updated|message|thread|turn|assistant|user)\b/.test(haystack)
-    ? "full"
-    : (/\b(pref|policy|proactive|retrieval|reflection|mode|learned_memory)\b/.test(haystack) ? "light" : "none");
-  return {
-    refreshSidebar,
-    refreshSession,
-  };
-}
-
-type SessionControlPending =
-  | null
-  | "rename"
-  | "pin"
-  | "archive"
-  | "delete"
-  | "project"
-  | "binding";
+type SessionControlPending = null | "rename" | "pin" | "archive" | "delete" | "project" | "binding";
 
 type ChatHistoryView = "active" | "archived";
-type ConfirmableCapabilityAction =
-  | "enable_skill"
-  | "install_skill_disabled"
-  | "install_skill_enable"
-  | "add_mcp_template";
-
-interface CapabilitySuggestionConfirmationCopy {
-  title: string;
-  message: string;
-  confirmLabel: string;
-  danger: boolean;
-}
-
-function isConfirmableCapabilityAction(
-  action: ChatCapabilityUpgradeSuggestion["recommendedAction"],
-): action is ConfirmableCapabilityAction {
-  return action === "enable_skill"
-    || action === "install_skill_disabled"
-    || action === "install_skill_enable"
-    || action === "add_mcp_template";
-}
-
-export function getCapabilitySuggestionConfirmationCopy(
-  suggestion: ChatCapabilityUpgradeSuggestion,
-): CapabilitySuggestionConfirmationCopy | null {
-  if (!isConfirmableCapabilityAction(suggestion.recommendedAction)) {
-    return null;
-  }
-
-  switch (suggestion.recommendedAction) {
-    case "enable_skill":
-      return {
-        title: "Enable skill",
-        message: `Enable ${suggestion.title}? GoatCitadel will turn it on and then resume the original request.`,
-        confirmLabel: "Enable and resume",
-        danger: false,
-      };
-    case "install_skill_disabled":
-      return {
-        title: "Install skill for review",
-        message: `Install ${suggestion.title} in a disabled state first? You can review it in Skills before enabling live use.`,
-        confirmLabel: "Install disabled",
-        danger: false,
-      };
-    case "install_skill_enable":
-      return {
-        title: "Install and enable hosted skill",
-        message: `Approve GoatCitadel to install and enable ${suggestion.title} now? The original request will resume automatically afterward.`,
-        confirmLabel: "Install and enable",
-        danger: suggestion.riskLevel === "high",
-      };
-    case "add_mcp_template":
-      return {
-        title: "Add MCP template",
-        message: `Add MCP template "${suggestion.title}" now? Review trust and auth details in MCP Servers before first live use.`,
-        confirmLabel: "Add template",
-        danger: false,
-      };
-    default:
-      return null;
-  }
-}
-
-export function getDeleteSessionConfirmationMessage(label: string): string {
-  return `Delete "${label}" permanently? This removes its messages, traces, session history, and attached files.`;
-}
-
-function normalizeComparableAssistantContent(value: string | undefined): string {
-  return (value ?? "").replace(/\s+/g, " ").trim();
-}
-
-export function resolveOptimisticChatPrefs(
-  current: ChatSessionPrefsRecord,
-  patch: ChatSessionPrefsPatch,
-): ChatSessionPrefsRecord {
-  const normalizedPatch = applyChatModePresetToPatch(patch);
-  const presetAutonomyBudget = CHAT_MODE_PRESETS[current.mode].defaultPrefs.autonomyBudget;
-  const baseAutonomyBudget = current.autonomyBudget ?? presetAutonomyBudget;
-  const providerChanged = normalizedPatch.providerId !== undefined
-    && normalizedPatch.providerId !== current.providerId;
-  return {
-    ...current,
-    mode: normalizedPatch.mode ?? current.mode,
-    planningMode: normalizedPatch.planningMode ?? current.planningMode,
-    providerId: normalizedPatch.providerId ?? current.providerId,
-    model: normalizedPatch.model ?? (providerChanged ? undefined : current.model),
-    webMode: normalizedPatch.webMode ?? current.webMode,
-    memoryMode: normalizedPatch.memoryMode ?? current.memoryMode,
-    thinkingLevel: normalizedPatch.thinkingLevel ?? current.thinkingLevel,
-    toolAutonomy: normalizedPatch.toolAutonomy ?? current.toolAutonomy,
-    visionFallbackModel: normalizedPatch.visionFallbackModel ?? current.visionFallbackModel,
-    orchestrationEnabled: normalizedPatch.orchestrationEnabled ?? current.orchestrationEnabled,
-    orchestrationIntensity: normalizedPatch.orchestrationIntensity ?? current.orchestrationIntensity,
-    orchestrationVisibility: normalizedPatch.orchestrationVisibility ?? current.orchestrationVisibility,
-    orchestrationProviderPreference: normalizedPatch.orchestrationProviderPreference ?? current.orchestrationProviderPreference,
-    orchestrationReviewDepth: normalizedPatch.orchestrationReviewDepth ?? current.orchestrationReviewDepth,
-    orchestrationParallelism: normalizedPatch.orchestrationParallelism ?? current.orchestrationParallelism,
-    codeAutoApply: normalizedPatch.codeAutoApply ?? current.codeAutoApply,
-    proactiveMode: normalizedPatch.proactiveMode ?? current.proactiveMode,
-    autonomyBudget: normalizedPatch.autonomyBudget
-      ? {
-        ...baseAutonomyBudget,
-        ...normalizedPatch.autonomyBudget,
-      }
-      : current.autonomyBudget ?? presetAutonomyBudget,
-    retrievalMode: normalizedPatch.retrievalMode ?? current.retrievalMode,
-    reflectionMode: normalizedPatch.reflectionMode ?? current.reflectionMode,
-  };
-}
-
-export function shouldApplyFetchedMessagesAfterStream(
-  currentMessages: ChatMessagesResponse["items"],
-  fetchedMessages: ChatMessagesResponse["items"],
-  finalizedStreamMessage: FinalizedStreamMessageState | null,
-): boolean {
-  if (!finalizedStreamMessage) {
-    return true;
-  }
-  const currentPlaceholder = currentMessages.find((item) => (
-    item.messageId === finalizedStreamMessage.messageId || item.messageId === finalizedStreamMessage.placeholderId
-  ));
-  if (!currentPlaceholder) {
-    return true;
-  }
-  if (finalizedStreamMessage.messageId) {
-    return fetchedMessages.some((item) => (
-      item.role === "assistant" && item.messageId === finalizedStreamMessage.messageId
-    ));
-  }
-  const finalizedContent = normalizeComparableAssistantContent(finalizedStreamMessage.content);
-  if (!finalizedContent) {
-    return true;
-  }
-  const fetchedHasEquivalentAssistant = fetchedMessages.some((item) => (
-    item.role === "assistant" && normalizeComparableAssistantContent(item.content) === finalizedContent
-  ));
-  return fetchedHasEquivalentAssistant;
-}
-
-export function shouldExecuteLocalChatCommand(action: OutboundQueueItem["action"], content: string): boolean {
-  return action === "send" && content.trim().startsWith("/");
-}
-
-function toTitleCase(value: string): string {
-  return value
-    .split(/[\s_-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function normalizeSpecialistFingerprint(input: { title?: string; role?: string }): string {
-  const normalize = (value?: string) => (value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return `${normalize(input.role)}:${normalize(input.title)}`;
-}
-
-function flattenThreadMessages(thread: ChatThreadResponse | null): ChatMessagesResponse["items"] {
-  if (!thread) {
-    return [];
-  }
-  return thread.turns.flatMap((turn) => {
-    const items: ChatMessageRecord[] = [turn.userMessage];
-    if (turn.assistantMessage) {
-      items.push(turn.assistantMessage);
-    }
-    return items;
-  });
-}
 
 export function ChatPage({
   workspaceId = "default",
@@ -521,7 +301,8 @@ export function ChatPage({
   const [projectPath, setProjectPath] = useState("chat/default");
   const [showProjectCreate, setShowProjectCreate] = useState(false);
   const [renameTitle, setRenameTitle] = useState("");
-  const [capabilitySuggestionConfirm, setCapabilitySuggestionConfirm] = useState<ChatCapabilityUpgradeSuggestion | null>(null);
+  const [capabilitySuggestionConfirm, setCapabilitySuggestionConfirm] =
+    useState<ChatCapabilityUpgradeSuggestion | null>(null);
   const [capabilitySuggestionPending, setCapabilitySuggestionPending] = useState(false);
   const [sessionControlPending, setSessionControlPending] = useState<SessionControlPending>(null);
   const [sessionDeleteConfirm, setSessionDeleteConfirm] = useState<{ sessionId: string; label: string } | null>(null);
@@ -556,10 +337,9 @@ export function ChatPage({
   const executeOutboundItemRef = useRef<(item: OutboundQueueItem) => Promise<void>>(async () => undefined);
   const tryBeginOutboundExecutionRef = useRef<() => boolean>(() => false);
   const pushLocalNoticeRef = useRef<(message: string, tone?: ChatThreadNotice["tone"]) => void>(() => undefined);
-  const loadSessionCoreStateRef = useRef<(
-    sessionId: string,
-    options?: { background?: boolean; includeThread?: boolean },
-  ) => Promise<void>>(async () => undefined);
+  const loadSessionCoreStateRef = useRef<
+    (sessionId: string, options?: { background?: boolean; includeThread?: boolean }) => Promise<void>
+  >(async () => undefined);
   const {
     config: runtimeLlmConfig,
     providers: runtimeProviderCatalog,
@@ -597,29 +377,32 @@ export function ChatPage({
     abortActiveChatStream,
   });
 
-  const loadSidebar = useCallback(async (nextHistoryView: ChatHistoryView = historyView) => {
-    recordClientDiagnostic({
-      level: "debug",
-      category: "chat",
-      event: "sidebar.load",
-      message: "Refreshing chat sidebar data",
-      context: { workspaceId, historyView: nextHistoryView },
-    });
-    const [nextProjects, nextSessions] = await Promise.all([
-      fetchChatProjects("all", 250, workspaceId),
-      fetchChatSessions({ scope: "all", view: nextHistoryView, limit: 250, workspaceId }),
-    ]);
-    setProjects(nextProjects);
-    setSessions(nextSessions);
-    setSelectedSessionId((current) => {
-      if (!current) {
-        return nextSessions.items[0]?.sessionId ?? null;
-      }
-      return nextSessions.items.some((item) => item.sessionId === current)
-        ? current
-        : (nextSessions.items[0]?.sessionId ?? null);
-    });
-  }, [historyView, workspaceId]);
+  const loadSidebar = useCallback(
+    async (nextHistoryView: ChatHistoryView = historyView) => {
+      recordClientDiagnostic({
+        level: "debug",
+        category: "chat",
+        event: "sidebar.load",
+        message: "Refreshing chat sidebar data",
+        context: { workspaceId, historyView: nextHistoryView },
+      });
+      const [nextProjects, nextSessions] = await Promise.all([
+        fetchChatProjects("all", 250, workspaceId),
+        fetchChatSessions({ scope: "all", view: nextHistoryView, limit: 250, workspaceId }),
+      ]);
+      setProjects(nextProjects);
+      setSessions(nextSessions);
+      setSelectedSessionId((current) => {
+        if (!current) {
+          return nextSessions.items[0]?.sessionId ?? null;
+        }
+        return nextSessions.items.some((item) => item.sessionId === current)
+          ? current
+          : (nextSessions.items[0]?.sessionId ?? null);
+      });
+    },
+    [historyView, workspaceId],
+  );
 
   const loadRuntimeCatalog = useCallback(async () => {
     const [runtimeSettings, commands, skills, servers, templates] = await Promise.all([
@@ -640,225 +423,243 @@ export function ChatPage({
     if (!runtimeLlmConfig) {
       return;
     }
-    setSettings((current) => current ? { ...current, llm: runtimeLlmConfig } : current);
+    setSettings((current) => (current ? { ...current, llm: runtimeLlmConfig } : current));
   }, [runtimeLlmConfig]);
 
-  const pushLocalNotice = useCallback((
-    content: string,
-    tone: ChatThreadNotice["tone"] = "neutral",
-  ) => {
-    setLocalNotices((current) => [{
-      id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      content,
-      tone,
-      timestamp: new Date().toISOString(),
-    }, ...current].slice(0, 12));
+  const pushLocalNotice = useCallback((content: string, tone: ChatThreadNotice["tone"] = "neutral") => {
+    setLocalNotices((current) =>
+      [
+        {
+          id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          content,
+          tone,
+          timestamp: new Date().toISOString(),
+        },
+        ...current,
+      ].slice(0, 12),
+    );
   }, []);
 
   useEffect(() => {
     pushLocalNoticeRef.current = pushLocalNotice;
   }, [pushLocalNotice]);
 
-  const commitThreadUpdate = useCallback((
-    updater: ChatThreadResponse | null | ((current: ChatThreadResponse | null) => ChatThreadResponse | null),
-  ) => {
-    setThread((current) => {
-      const next = typeof updater === "function" ? updater(current) : updater;
-      if (next !== current) {
-        messageMutationVersionRef.current += 1;
-      }
-      return next;
-    });
-  }, []);
+  const commitThreadUpdate = useCallback(
+    (updater: ChatThreadResponse | null | ((current: ChatThreadResponse | null) => ChatThreadResponse | null)) => {
+      setThread((current) => {
+        const next = typeof updater === "function" ? updater(current) : updater;
+        if (next !== current) {
+          messageMutationVersionRef.current += 1;
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
-  const applyFetchedThread = useCallback((
-    nextThread: ChatThreadResponse,
-    requestVersion: number | null,
-  ) => {
-    recordClientDiagnostic({
-      level: "debug",
-      category: "chat",
-      event: "thread.reconcile",
-      message: "Applying fetched thread state",
-      sessionId: nextThread.sessionId,
-      context: {
-        requestVersion,
-        turnCount: nextThread.turns.length,
-      },
-    });
-    if (requestVersion !== null && requestVersion !== messageMutationVersionRef.current) {
-      return false;
-    }
-    const items = flattenThreadMessages(nextThread);
-    if (!shouldApplyFetchedMessagesAfterStream(latestMessagesRef.current, items, finalizedStreamMessageRef.current)) {
-      return false;
-    }
-    const activeStream = activeStreamRef.current;
-    if (activeStream?.sessionId === nextThread.sessionId && activeStream.turnId) {
-      const includesActiveTurn = nextThread.turns.some((turn) => turn.turnId === activeStream.turnId);
-      if (!includesActiveTurn) {
+  const applyFetchedThread = useCallback(
+    (nextThread: ChatThreadResponse, requestVersion: number | null) => {
+      recordClientDiagnostic({
+        level: "debug",
+        category: "chat",
+        event: "thread.reconcile",
+        message: "Applying fetched thread state",
+        sessionId: nextThread.sessionId,
+        context: {
+          requestVersion,
+          turnCount: nextThread.turns.length,
+        },
+      });
+      if (requestVersion !== null && requestVersion !== messageMutationVersionRef.current) {
         return false;
       }
-    }
-    if (finalizedStreamMessageRef.current) {
-      finalizedStreamMessageRef.current = null;
-    }
-    commitThreadUpdate(nextThread);
-    return true;
-  }, [commitThreadUpdate]);
+      const items = flattenThreadMessages(nextThread);
+      if (!shouldApplyFetchedMessagesAfterStream(latestMessagesRef.current, items, finalizedStreamMessageRef.current)) {
+        return false;
+      }
+      const activeStream = activeStreamRef.current;
+      if (activeStream?.sessionId === nextThread.sessionId && activeStream.turnId) {
+        const includesActiveTurn = nextThread.turns.some((turn) => turn.turnId === activeStream.turnId);
+        if (!includesActiveTurn) {
+          return false;
+        }
+      }
+      if (finalizedStreamMessageRef.current) {
+        finalizedStreamMessageRef.current = null;
+      }
+      commitThreadUpdate(nextThread);
+      return true;
+    },
+    [commitThreadUpdate],
+  );
 
-  const loadSessionCoreState = useCallback(async (
-    sessionId: string,
-    options: {
-      background?: boolean;
-      includeThread?: boolean;
-    } = {},
-  ) => {
-    const generation = ++loadCoreGenerationRef.current;
-    const background = options.background ?? false;
-    const includeThread = options.includeThread ?? true;
-    const messageVersionAtStart = includeThread ? messageMutationVersionRef.current : null;
-    if (!background) {
-      setMessagesLoading(true);
-    }
-    try {
-      const [nextThread, nextBinding, nextPrefs] = await Promise.all([
-        includeThread ? fetchChatThread(sessionId) : Promise.resolve(undefined),
-        fetchChatSessionBinding(sessionId),
-        fetchChatSessionPrefs(sessionId),
-      ]);
-      if (generation !== loadCoreGenerationRef.current) return; // stale response
-      if (nextThread) {
-        applyFetchedThread(nextThread, messageVersionAtStart);
-      }
-      setBinding(nextBinding.item);
-      setPrefs(nextPrefs);
-    } finally {
+  const loadSessionCoreState = useCallback(
+    async (
+      sessionId: string,
+      options: {
+        background?: boolean;
+        includeThread?: boolean;
+      } = {},
+    ) => {
+      const generation = ++loadCoreGenerationRef.current;
+      const background = options.background ?? false;
+      const includeThread = options.includeThread ?? true;
+      const messageVersionAtStart = includeThread ? messageMutationVersionRef.current : null;
       if (!background) {
-        setMessagesLoading(false);
+        setMessagesLoading(true);
       }
-    }
-  }, [applyFetchedThread]);
+      try {
+        const [nextThread, nextBinding, nextPrefs] = await Promise.all([
+          includeThread ? fetchChatThread(sessionId) : Promise.resolve(undefined),
+          fetchChatSessionBinding(sessionId),
+          fetchChatSessionPrefs(sessionId),
+        ]);
+        if (generation !== loadCoreGenerationRef.current) return; // stale response
+        if (nextThread) {
+          applyFetchedThread(nextThread, messageVersionAtStart);
+        }
+        setBinding(nextBinding.item);
+        setPrefs(nextPrefs);
+      } finally {
+        if (!background) {
+          setMessagesLoading(false);
+        }
+      }
+    },
+    [applyFetchedThread],
+  );
 
   useEffect(() => {
     loadSessionCoreStateRef.current = loadSessionCoreState;
   }, [loadSessionCoreState]);
 
-  const scheduleStreamMessageReconciliation = useCallback((sessionId: string) => {
-    if (streamReconcileTimeoutRef.current) {
-      clearTimeout(streamReconcileTimeoutRef.current);
-    }
-    const versionAtSchedule = messageMutationVersionRef.current;
-    streamReconcileTimeoutRef.current = setTimeout(() => {
-      streamReconcileTimeoutRef.current = null;
-      if (selectedSessionIdRef.current !== sessionId) {
-        return;
+  const scheduleStreamMessageReconciliation = useCallback(
+    (sessionId: string) => {
+      if (streamReconcileTimeoutRef.current) {
+        clearTimeout(streamReconcileTimeoutRef.current);
       }
-      if (messageMutationVersionRef.current !== versionAtSchedule) {
-        // A new stream event arrived during the reconciliation window.
-        // Re-schedule instead of applying potentially stale data.
-        scheduleStreamMessageReconciliation(sessionId);
-        return;
-      }
-      void loadSessionCoreState(sessionId, {
-        background: true,
-        includeThread: true,
-      }).catch((err: Error) => setError(err.message));
-    }, 400);
-  }, [loadSessionCoreState]);
+      const versionAtSchedule = messageMutationVersionRef.current;
+      streamReconcileTimeoutRef.current = setTimeout(() => {
+        streamReconcileTimeoutRef.current = null;
+        if (selectedSessionIdRef.current !== sessionId) {
+          return;
+        }
+        if (messageMutationVersionRef.current !== versionAtSchedule) {
+          // A new stream event arrived during the reconciliation window.
+          // Re-schedule instead of applying potentially stale data.
+          scheduleStreamMessageReconciliation(sessionId);
+          return;
+        }
+        void loadSessionCoreState(sessionId, {
+          background: true,
+          includeThread: true,
+        }).catch((err: Error) => setError(err.message));
+      }, 400);
+    },
+    [loadSessionCoreState],
+  );
 
-  const loadSessionSecondaryState = useCallback(async (
-    sessionId: string,
-    options: {
-      background?: boolean;
-    } = {},
-  ) => {
-    const generation = ++loadSecondaryGenerationRef.current;
-    const background = options.background ?? false;
-    if (!background) {
-      setSecondaryLoading(true);
-    }
-    try {
-      const [nextProactiveStatus, nextProactiveRuns, nextMemory, nextSpecialists] = await Promise.all([
-        fetchChatProactiveStatus(sessionId),
-        fetchChatProactiveRuns(sessionId, 30),
-        fetchChatLearnedMemory(sessionId, 80),
-        fetchChatSpecialistCandidates(sessionId, 80),
-      ]);
-      if (generation !== loadSecondaryGenerationRef.current) return; // stale response
-      setProactiveStatus(nextProactiveStatus.policy);
-      setProactiveRuns(nextProactiveRuns.items);
-      setLearnedMemory(nextMemory.items);
-      setSpecialistCandidates(nextSpecialists.items);
-    } finally {
+  const loadSessionSecondaryState = useCallback(
+    async (
+      sessionId: string,
+      options: {
+        background?: boolean;
+      } = {},
+    ) => {
+      const generation = ++loadSecondaryGenerationRef.current;
+      const background = options.background ?? false;
       if (!background) {
-        setSecondaryLoading(false);
+        setSecondaryLoading(true);
       }
-    }
-  }, []);
-
-  const loadSessionState = useCallback(async (
-    sessionId: string,
-    options: {
-      background?: boolean;
-      includeThread?: boolean;
-      deferSecondary?: boolean;
-    } = {},
-  ) => {
-    const background = options.background ?? false;
-    const includeThread = options.includeThread ?? true;
-    const deferSecondary = options.deferSecondary ?? false;
-    await loadSessionCoreState(sessionId, { background, includeThread });
-    if (deferSecondary) {
-      void loadSessionSecondaryState(sessionId, { background: false }).catch((err: Error) => setError(err.message));
-      return;
-    }
-    await loadSessionSecondaryState(sessionId, { background });
-  }, [loadSessionCoreState, loadSessionSecondaryState]);
-
-  const refreshViewState = useCallback(async (
-    options: {
-      refreshSidebar?: boolean;
-      refreshSession?: "none" | "light" | "full";
-      showIndicator?: boolean;
-    } = {},
-  ) => {
-    if (!initializedRef.current) {
-      return;
-    }
-    const shouldRefreshSidebar = options.refreshSidebar ?? true;
-    const refreshSession = options.refreshSession ?? "light";
-    const showIndicator = options.showIndicator ?? false;
-    if (!shouldRefreshSidebar && refreshSession === "none") {
-      return;
-    }
-    if (showIndicator) {
-      setIsRefreshing(true);
-    }
-    try {
-      if (shouldRefreshSidebar) {
-        await loadSidebar();
-      }
-      if (selectedSessionId && refreshSession !== "none") {
-        if (refreshSession === "full") {
-          await loadSessionState(selectedSessionId, {
-            background: true,
-            includeThread: true,
-          });
-        } else {
-          await loadSessionSecondaryState(selectedSessionId, {
-            background: true,
-          });
+      try {
+        const [nextProactiveStatus, nextProactiveRuns, nextMemory, nextSpecialists] = await Promise.all([
+          fetchChatProactiveStatus(sessionId),
+          fetchChatProactiveRuns(sessionId, 30),
+          fetchChatLearnedMemory(sessionId, 80),
+          fetchChatSpecialistCandidates(sessionId, 80),
+        ]);
+        if (generation !== loadSecondaryGenerationRef.current) return; // stale response
+        setProactiveStatus(nextProactiveStatus.policy);
+        setProactiveRuns(nextProactiveRuns.items);
+        setLearnedMemory(nextMemory.items);
+        setSpecialistCandidates(nextSpecialists.items);
+      } finally {
+        if (!background) {
+          setSecondaryLoading(false);
         }
       }
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      if (showIndicator) {
-        setIsRefreshing(false);
+    },
+    [],
+  );
+
+  const loadSessionState = useCallback(
+    async (
+      sessionId: string,
+      options: {
+        background?: boolean;
+        includeThread?: boolean;
+        deferSecondary?: boolean;
+      } = {},
+    ) => {
+      const background = options.background ?? false;
+      const includeThread = options.includeThread ?? true;
+      const deferSecondary = options.deferSecondary ?? false;
+      await loadSessionCoreState(sessionId, { background, includeThread });
+      if (deferSecondary) {
+        void loadSessionSecondaryState(sessionId, { background: false }).catch((err: Error) => setError(err.message));
+        return;
       }
-    }
-  }, [loadSessionSecondaryState, loadSessionState, loadSidebar, selectedSessionId]);
+      await loadSessionSecondaryState(sessionId, { background });
+    },
+    [loadSessionCoreState, loadSessionSecondaryState],
+  );
+
+  const refreshViewState = useCallback(
+    async (
+      options: {
+        refreshSidebar?: boolean;
+        refreshSession?: "none" | "light" | "full";
+        showIndicator?: boolean;
+      } = {},
+    ) => {
+      if (!initializedRef.current) {
+        return;
+      }
+      const shouldRefreshSidebar = options.refreshSidebar ?? true;
+      const refreshSession = options.refreshSession ?? "light";
+      const showIndicator = options.showIndicator ?? false;
+      if (!shouldRefreshSidebar && refreshSession === "none") {
+        return;
+      }
+      if (showIndicator) {
+        setIsRefreshing(true);
+      }
+      try {
+        if (shouldRefreshSidebar) {
+          await loadSidebar();
+        }
+        if (selectedSessionId && refreshSession !== "none") {
+          if (refreshSession === "full") {
+            await loadSessionState(selectedSessionId, {
+              background: true,
+              includeThread: true,
+            });
+          } else {
+            await loadSessionSecondaryState(selectedSessionId, {
+              background: true,
+            });
+          }
+        }
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        if (showIndicator) {
+          setIsRefreshing(false);
+        }
+      }
+    },
+    [loadSessionSecondaryState, loadSessionState, loadSidebar, selectedSessionId],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -924,7 +725,10 @@ export function ChatPage({
       abortActiveChatStream(activeStreamRef.current);
       activeStreamRef.current = null;
       if (hadActiveStream) {
-        pushLocalNotice("Stream interrupted - switched sessions. The previous turn may still be processing on the server.", "warning");
+        pushLocalNotice(
+          "Stream interrupted - switched sessions. The previous turn may still be processing on the server.",
+          "warning",
+        );
       }
       setPendingAttachments([]);
       setThread(null);
@@ -963,19 +767,23 @@ export function ChatPage({
       setDevDiagnosticsLatestTraceSummary(undefined);
       return;
     }
-    const selectedTurn = thread.turns.find((turn) => turn.turnId === (thread.selectedTurnId ?? thread.activeLeafTurnId));
-    setDevDiagnosticsLatestTraceSummary(selectedTurn?.trace
-      ? {
-        sessionId: thread.sessionId,
-        turnId: selectedTurn.turnId,
-        providerId: selectedTurn.trace.routing.effectiveProviderId ?? selectedTurn.trace.routing.primaryProviderId,
-        modelId: selectedTurn.trace.routing.effectiveModel ?? selectedTurn.trace.model,
-        state: selectedTurn.trace.status,
-      }
-      : {
-        sessionId: thread.sessionId,
-        turnCount: thread.turns.length,
-      });
+    const selectedTurn = thread.turns.find(
+      (turn) => turn.turnId === (thread.selectedTurnId ?? thread.activeLeafTurnId),
+    );
+    setDevDiagnosticsLatestTraceSummary(
+      selectedTurn?.trace
+        ? {
+            sessionId: thread.sessionId,
+            turnId: selectedTurn.turnId,
+            providerId: selectedTurn.trace.routing.effectiveProviderId ?? selectedTurn.trace.routing.primaryProviderId,
+            modelId: selectedTurn.trace.routing.effectiveModel ?? selectedTurn.trace.model,
+            state: selectedTurn.trace.status,
+          }
+        : {
+            sessionId: thread.sessionId,
+            turnCount: thread.turns.length,
+          },
+    );
   }, [thread]);
 
   useEffect(() => {
@@ -1000,11 +808,11 @@ export function ChatPage({
       const draftRaw = window.localStorage.getItem(createDraftStorageKey(workspaceId, selectedSessionId));
       setDraft(draftRaw ?? "");
       const attachmentsRaw = window.localStorage.getItem(createAttachmentStorageKey(workspaceId, selectedSessionId));
-      setPendingAttachments(attachmentsRaw ? JSON.parse(attachmentsRaw) as ChatAttachmentRecord[] : []);
+      setPendingAttachments(attachmentsRaw ? (JSON.parse(attachmentsRaw) as ChatAttachmentRecord[]) : []);
       const queueRaw = window.localStorage.getItem(createQueueStorageKey(workspaceId, selectedSessionId));
-      setQueuedOutbound(queueRaw
-        ? (JSON.parse(queueRaw) as OutboundQueueItem[]).map((item) => ({ ...item, paused: true }))
-        : []);
+      setQueuedOutbound(
+        queueRaw ? (JSON.parse(queueRaw) as OutboundQueueItem[]).map((item) => ({ ...item, paused: true })) : [],
+      );
     } catch {
       setDraft("");
       setPendingAttachments([]);
@@ -1022,14 +830,17 @@ export function ChatPage({
     JSON.stringify(queuedOutbound),
   );
 
-  useEffect(() => () => {
-    abortActiveChatStream(activeStreamRef.current);
-    activeStreamRef.current = null;
-    if (streamReconcileTimeoutRef.current) {
-      clearTimeout(streamReconcileTimeoutRef.current);
-      streamReconcileTimeoutRef.current = null;
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      abortActiveChatStream(activeStreamRef.current);
+      activeStreamRef.current = null;
+      if (streamReconcileTimeoutRef.current) {
+        clearTimeout(streamReconcileTimeoutRef.current);
+        streamReconcileTimeoutRef.current = null;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1073,20 +884,17 @@ export function ChatPage({
         }
       }
       if (!q) return true;
-      const haystack = [item.title, item.sessionKey, item.projectName, item.channel, item.account].join(" ").toLowerCase();
+      const haystack = [item.title, item.sessionKey, item.projectName, item.channel, item.account]
+        .join(" ")
+        .toLowerCase();
       return haystack.includes(q);
     });
   }, [search, selectedProjectId, sessions?.items]);
 
-  const missionSessions = useMemo(
-    () => visibleSessions.filter((item) => item.scope === "mission"),
-    [visibleSessions],
-  );
+  const missionSessions = useMemo(() => visibleSessions.filter((item) => item.scope === "mission"), [visibleSessions]);
 
   const workspaceMissionSessionCount = useMemo(
-    () => historyView === "active"
-      ? (sessions?.items ?? []).filter((item) => item.scope === "mission").length
-      : 0,
+    () => (historyView === "active" ? (sessions?.items ?? []).filter((item) => item.scope === "mission").length : 0),
     [historyView, sessions?.items],
   );
 
@@ -1098,9 +906,10 @@ export function ChatPage({
     () => (sessions?.items ?? []).filter((item) => item.scope === "mission" && Boolean(item.projectId)).length,
     [sessions?.items],
   );
-  const visibleSessionLabelById = useMemo(() => new Map(
-    visibleSessions.map((session) => [session.sessionId, formatSessionLabel(session)]),
-  ), [visibleSessions]);
+  const visibleSessionLabelById = useMemo(
+    () => new Map(visibleSessions.map((session) => [session.sessionId, formatSessionLabel(session)])),
+    [visibleSessions],
+  );
 
   const providerOptions = useMemo<ChatModelProviderOption[]>(() => {
     const activeProviderId = runtimeLlmConfig?.activeProviderId ?? settings?.llm.activeProviderId;
@@ -1110,12 +919,14 @@ export function ChatPage({
       label: provider.label,
       defaultModel: provider.defaultModel,
       disabled: !provider.hasApiKey && !isLikelyLocalProviderUrl(provider.baseUrl),
-      availabilityLabel: !provider.hasApiKey && !isLikelyLocalProviderUrl(provider.baseUrl)
-        ? `${provider.label} · setup required`
-        : undefined,
-      availabilityHint: !provider.hasApiKey && !isLikelyLocalProviderUrl(provider.baseUrl)
-        ? `${provider.label} is not configured yet. Add an API key before using it.`
-        : undefined,
+      availabilityLabel:
+        !provider.hasApiKey && !isLikelyLocalProviderUrl(provider.baseUrl)
+          ? `${provider.label} · setup required`
+          : undefined,
+      availabilityHint:
+        !provider.hasApiKey && !isLikelyLocalProviderUrl(provider.baseUrl)
+          ? `${provider.label} is not configured yet. Add an API key before using it.`
+          : undefined,
       models: dedupeStrings([
         ...provider.models,
         provider.providerId === activeProviderId ? activeModel : undefined,
@@ -1133,7 +944,8 @@ export function ChatPage({
   ]);
 
   const selectedProviderId = useMemo(() => {
-    const preferredProviderId = prefs?.providerId ?? runtimeLlmConfig?.activeProviderId ?? settings?.llm.activeProviderId;
+    const preferredProviderId =
+      prefs?.providerId ?? runtimeLlmConfig?.activeProviderId ?? settings?.llm.activeProviderId;
     return providerOptions.find((provider) => provider.providerId === preferredProviderId)?.providerId;
   }, [prefs?.providerId, providerOptions, runtimeLlmConfig?.activeProviderId, settings?.llm.activeProviderId]);
 
@@ -1314,9 +1126,8 @@ export function ChatPage({
     () => deriveCoworkItems(messages, localNotices, latestOrchestration),
     [latestOrchestration, localNotices, messages],
   );
-  const canSend = Boolean(
-    resolveOutboundDraftContent(draft, pendingAttachments.length, editingTurnId ? "edit" : "send"),
-  ) && !sending;
+  const canSend =
+    Boolean(resolveOutboundDraftContent(draft, pendingAttachments.length, editingTurnId ? "edit" : "send")) && !sending;
 
   useEffect(() => {
     if (!lockSurface || !surface || !selectedSessionId) {
@@ -1370,27 +1181,30 @@ export function ChatPage({
     setSending(false);
   }, []);
 
-  const handleCreateSession = useCallback(async (mode: ChatMode) => {
-    const nextHistoryView: ChatHistoryView = historyView === "archived" ? "active" : historyView;
-    setCreatingSessionMode(mode);
-    setError(null);
-    try {
-      const created = await createChatSession(
-        selectedProjectId !== "all" && selectedProjectId !== "none"
-          ? { workspaceId, projectId: selectedProjectId, mode }
-          : { workspaceId, mode },
-      );
-      if (nextHistoryView !== historyView) {
-        setHistoryView(nextHistoryView);
+  const handleCreateSession = useCallback(
+    async (mode: ChatMode) => {
+      const nextHistoryView: ChatHistoryView = historyView === "archived" ? "active" : historyView;
+      setCreatingSessionMode(mode);
+      setError(null);
+      try {
+        const created = await createChatSession(
+          selectedProjectId !== "all" && selectedProjectId !== "none"
+            ? { workspaceId, projectId: selectedProjectId, mode }
+            : { workspaceId, mode },
+        );
+        if (nextHistoryView !== historyView) {
+          setHistoryView(nextHistoryView);
+        }
+        await loadSidebar(nextHistoryView);
+        setSelectedSessionId(created.sessionId);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setCreatingSessionMode(null);
       }
-      await loadSidebar(nextHistoryView);
-      setSelectedSessionId(created.sessionId);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setCreatingSessionMode(null);
-    }
-  }, [historyView, loadSidebar, selectedProjectId, workspaceId]);
+    },
+    [historyView, loadSidebar, selectedProjectId, workspaceId],
+  );
 
   const ensureSession = useCallback(async (): Promise<ChatSessionRecord> => {
     if (selectedSession) return selectedSession;
@@ -1427,28 +1241,33 @@ export function ChatPage({
     }
   }, [loadSidebar, pushLocalNotice, workspaceId]);
 
-  const uploadAttachments = useCallback(async (files: File[]) => {
-    if (files.length === 0) return;
-    setSending(true);
-    try {
-      const session = await ensureSession();
-      const uploaded: ChatAttachmentRecord[] = [];
-      for (const file of files) {
-        uploaded.push(await uploadChatAttachment({
-          sessionId: session.sessionId,
-          projectId: session.projectId,
-          file,
-        }));
+  const uploadAttachments = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+      setSending(true);
+      try {
+        const session = await ensureSession();
+        const uploaded: ChatAttachmentRecord[] = [];
+        for (const file of files) {
+          uploaded.push(
+            await uploadChatAttachment({
+              sessionId: session.sessionId,
+              projectId: session.projectId,
+              file,
+            }),
+          );
+        }
+        setPendingAttachments((current) => [...current, ...uploaded]);
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setSending(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
       }
-      setPendingAttachments((current) => [...current, ...uploaded]);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSending(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  }, [ensureSession]);
+    },
+    [ensureSession],
+  );
 
   const handleRunQuickResearch = useCallback(async () => {
     if (sending) return;
@@ -1475,8 +1294,8 @@ export function ChatPage({
     }
   }, [draft, ensureSession, messages, prefs?.model, prefs?.providerId, prefs?.webMode, pushLocalNotice, sending]);
 
-  const handleProactivePolicyPatch = useCallback(async (
-    patch: {
+  const handleProactivePolicyPatch = useCallback(
+    async (patch: {
       proactiveMode?: "off" | "suggest" | "auto_safe" | "auto_full";
       autonomyBudget?: {
         maxActionsPerHour?: number;
@@ -1485,24 +1304,29 @@ export function ChatPage({
       };
       retrievalMode?: "standard" | "layered";
       reflectionMode?: "off" | "on";
+    }) => {
+      if (!selectedSession) return;
+      lastLocalPrefMutationAtRef.current = Date.now();
+      try {
+        const updated = await updateChatProactivePolicy(selectedSession.sessionId, patch);
+        setProactiveStatus(updated);
+        setPrefs((current) =>
+          current
+            ? {
+                ...current,
+                proactiveMode: updated.mode,
+                autonomyBudget: updated.autonomyBudget,
+                retrievalMode: updated.retrievalMode,
+                reflectionMode: updated.reflectionMode,
+              }
+            : current,
+        );
+      } catch (err) {
+        setError((err as Error).message);
+      }
     },
-  ) => {
-    if (!selectedSession) return;
-    lastLocalPrefMutationAtRef.current = Date.now();
-    try {
-      const updated = await updateChatProactivePolicy(selectedSession.sessionId, patch);
-      setProactiveStatus(updated);
-      setPrefs((current) => current ? {
-        ...current,
-        proactiveMode: updated.mode,
-        autonomyBudget: updated.autonomyBudget,
-        retrievalMode: updated.retrievalMode,
-        reflectionMode: updated.reflectionMode,
-      } : current);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }, [selectedSession]);
+    [selectedSession],
+  );
 
   const handleTriggerProactive = useCallback(async () => {
     if (!selectedSession || sending) return;
@@ -1523,7 +1347,13 @@ export function ChatPage({
 
   const handleSuggestDelegation = useCallback(async () => {
     if (!selectedSession || sending) return;
-    const objective = draft.trim() || messages.filter((item) => item.role === "user").at(-1)?.content?.trim() || "";
+    const objective =
+      draft.trim() ||
+      messages
+        .filter((item) => item.role === "user")
+        .at(-1)
+        ?.content?.trim() ||
+      "";
     if (!objective) {
       setError("Write a request first so I can suggest a delegation plan.");
       return;
@@ -1539,54 +1369,59 @@ export function ChatPage({
     }
   }, [draft, messages, selectedSession, sending]);
 
-  const runDelegationAction = useCallback(async (
-    sessionId: string,
-    request: ChatDelegateRequest,
-    label: string,
-  ) => {
-    if (!streamEnabled) {
-      return runChatDelegation(sessionId, request);
-    }
-
-    let finalResult: Awaited<ReturnType<typeof runChatDelegation>> | null = null;
-    await streamChatDelegation(sessionId, request, (chunk) => {
-      if (chunk.type === "status" && chunk.message) {
-        pushLocalNotice(chunk.message);
-        return;
+  const runDelegationAction = useCallback(
+    async (sessionId: string, request: ChatDelegateRequest, label: string) => {
+      if (!streamEnabled) {
+        return runChatDelegation(sessionId, request);
       }
-      if (chunk.type === "step" && chunk.step) {
-        if (chunk.step.status === "completed") {
-          pushLocalNotice(`${toTitleCase(chunk.step.role)} completed ${label.toLowerCase()} step ${chunk.step.index + 1}/${request.roles.length}.`);
-        } else if (chunk.step.status === "failed") {
-          pushLocalNotice(
-            `${toTitleCase(chunk.step.role)} failed ${label.toLowerCase()} step ${chunk.step.index + 1}/${request.roles.length}: ${chunk.step.error ?? "Unknown failure."}`,
-            "warning",
-          );
+
+      let finalResult: Awaited<ReturnType<typeof runChatDelegation>> | null = null;
+      await streamChatDelegation(sessionId, request, (chunk) => {
+        if (chunk.type === "status" && chunk.message) {
+          pushLocalNotice(chunk.message);
+          return;
         }
-        return;
-      }
-      if (chunk.type === "done" && chunk.result) {
-        finalResult = chunk.result;
-      }
-    });
+        if (chunk.type === "step" && chunk.step) {
+          if (chunk.step.status === "completed") {
+            pushLocalNotice(
+              `${toTitleCase(chunk.step.role)} completed ${label.toLowerCase()} step ${chunk.step.index + 1}/${request.roles.length}.`,
+            );
+          } else if (chunk.step.status === "failed") {
+            pushLocalNotice(
+              `${toTitleCase(chunk.step.role)} failed ${label.toLowerCase()} step ${chunk.step.index + 1}/${request.roles.length}: ${chunk.step.error ?? "Unknown failure."}`,
+              "warning",
+            );
+          }
+          return;
+        }
+        if (chunk.type === "done" && chunk.result) {
+          finalResult = chunk.result;
+        }
+      });
 
-    if (!finalResult) {
-      throw new Error(`${label} finished without a final result payload.`);
-    }
-    return finalResult;
-  }, [pushLocalNotice, streamEnabled]);
+      if (!finalResult) {
+        throw new Error(`${label} finished without a final result payload.`);
+      }
+      return finalResult;
+    },
+    [pushLocalNotice, streamEnabled],
+  );
 
   const handleAcceptDelegation = useCallback(async () => {
     if (!selectedSession || !delegationSuggestion || sending) return;
     setSending(true);
     try {
-      const accepted = await runDelegationAction(selectedSession.sessionId, {
-        objective: delegationSuggestion.objective,
-        roles: delegationSuggestion.roles,
-        mode: delegationSuggestion.mode,
-        providerId: prefs?.providerId,
-        model: prefs?.model,
-      }, "Delegation");
+      const accepted = await runDelegationAction(
+        selectedSession.sessionId,
+        {
+          objective: delegationSuggestion.objective,
+          roles: delegationSuggestion.roles,
+          mode: delegationSuggestion.mode,
+          providerId: prefs?.providerId,
+          model: prefs?.model,
+        },
+        "Delegation",
+      );
       pushLocalNotice(`Delegation completed:\n${accepted.stitchedOutput}`, "success");
       setDelegationSuggestion(null);
       await loadSidebar();
@@ -1595,49 +1430,9 @@ export function ChatPage({
     } finally {
       setSending(false);
     }
-  }, [delegationSuggestion, loadSidebar, prefs?.model, prefs?.providerId, pushLocalNotice, runDelegationAction, selectedSession, sending]);
-
-  const handleRunCodeDelegation = useCallback(async (
-    presetKey: keyof typeof CODE_DELEGATION_PRESETS,
-  ) => {
-    if (!selectedSession || sending) {
-      return;
-    }
-    if (codeModeNeedsProjectBinding) {
-      setError("Bind this Code session to a project before running delegated implementation work.");
-      return;
-    }
-    const baseObjective = draft.trim()
-      || messages.filter((item) => item.role === "user").at(-1)?.content?.trim()
-      || selectedSession.title?.trim()
-      || "";
-    if (!baseObjective) {
-      setError("Write a coding objective first so GoatCitadel has something concrete to implement or review.");
-      return;
-    }
-    const preset = CODE_DELEGATION_PRESETS[presetKey];
-    setSending(true);
-    try {
-      const result = await runDelegationAction(selectedSession.sessionId, {
-        objective: `${preset.prefix}${baseObjective}`,
-        roles: [...preset.roles],
-        mode: preset.mode,
-        providerId: prefs?.providerId,
-        model: prefs?.model,
-      }, preset.label);
-      pushLocalNotice(`${preset.label} completed:\n${result.stitchedOutput}`, "success");
-      setDelegationSuggestion(null);
-      await loadSidebar();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSending(false);
-    }
   }, [
-    codeModeNeedsProjectBinding,
-    draft,
+    delegationSuggestion,
     loadSidebar,
-    messages,
     prefs?.model,
     prefs?.providerId,
     pushLocalNotice,
@@ -1646,25 +1441,83 @@ export function ChatPage({
     sending,
   ]);
 
+  const handleRunCodeDelegation = useCallback(
+    async (presetKey: keyof typeof CODE_DELEGATION_PRESETS) => {
+      if (!selectedSession || sending) {
+        return;
+      }
+      if (codeModeNeedsProjectBinding) {
+        setError("Bind this Code session to a project before running delegated implementation work.");
+        return;
+      }
+      const baseObjective =
+        draft.trim() ||
+        messages
+          .filter((item) => item.role === "user")
+          .at(-1)
+          ?.content?.trim() ||
+        selectedSession.title?.trim() ||
+        "";
+      if (!baseObjective) {
+        setError("Write a coding objective first so GoatCitadel has something concrete to implement or review.");
+        return;
+      }
+      const preset = CODE_DELEGATION_PRESETS[presetKey];
+      setSending(true);
+      try {
+        const result = await runDelegationAction(
+          selectedSession.sessionId,
+          {
+            objective: `${preset.prefix}${baseObjective}`,
+            roles: [...preset.roles],
+            mode: preset.mode,
+            providerId: prefs?.providerId,
+            model: prefs?.model,
+          },
+          preset.label,
+        );
+        pushLocalNotice(`${preset.label} completed:\n${result.stitchedOutput}`, "success");
+        setDelegationSuggestion(null);
+        await loadSidebar();
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setSending(false);
+      }
+    },
+    [
+      codeModeNeedsProjectBinding,
+      draft,
+      loadSidebar,
+      messages,
+      prefs?.model,
+      prefs?.providerId,
+      pushLocalNotice,
+      runDelegationAction,
+      selectedSession,
+      sending,
+    ],
+  );
+
   const primeComposer = useCallback((prompt: string) => {
-    setDraft((current) => current.trim() ? current : prompt);
+    setDraft((current) => (current.trim() ? current : prompt));
     window.setTimeout(() => {
       composerRef.current?.focus();
     }, 0);
   }, []);
 
-  const handleMemoryStatusUpdate = useCallback(async (
-    itemId: string,
-    status: "active" | "superseded" | "conflict" | "disabled",
-  ) => {
-    if (!selectedSession) return;
-    try {
-      const updated = await updateChatLearnedMemoryItem(selectedSession.sessionId, itemId, { status });
-      setLearnedMemory((current) => current.map((item) => item.itemId === itemId ? updated : item));
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }, [selectedSession]);
+  const handleMemoryStatusUpdate = useCallback(
+    async (itemId: string, status: "active" | "superseded" | "conflict" | "disabled") => {
+      if (!selectedSession) return;
+      try {
+        const updated = await updateChatLearnedMemoryItem(selectedSession.sessionId, itemId, { status });
+        setLearnedMemory((current) => current.map((item) => (item.itemId === itemId ? updated : item)));
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    },
+    [selectedSession],
+  );
 
   const handleRebuildLearnedMemory = useCallback(async () => {
     if (!selectedSession || sending) return;
@@ -1679,69 +1532,74 @@ export function ChatPage({
     }
   }, [selectedSession, sending]);
 
-  const handleCreateSpecialistDraft = useCallback(async (
-    suggestion: ChatSpecialistCandidateSuggestionRecord,
-  ) => {
-    if (!selectedSession || sending) {
-      return;
-    }
-    setSending(true);
-    try {
-      const created = await createChatSpecialistCandidate(selectedSession.sessionId, {
-        turnId: selectedTurn?.turnId,
-        suggestion,
-      });
-      setSpecialistCandidates((current) => {
-        const withoutCurrent = current.filter((item) => item.candidateId !== created.candidateId);
-        return [created, ...withoutCurrent];
-      });
-      setSpecialistSuggestions((current) => current.filter((item) => (
-        normalizeSpecialistFingerprint(item) !== normalizeSpecialistFingerprint(suggestion)
-      )));
-      pushLocalNotice(`Drafted specialist candidate: ${created.title}.`, "success");
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSending(false);
-    }
-  }, [pushLocalNotice, selectedSession, selectedTurn?.turnId, sending]);
+  const handleCreateSpecialistDraft = useCallback(
+    async (suggestion: ChatSpecialistCandidateSuggestionRecord) => {
+      if (!selectedSession || sending) {
+        return;
+      }
+      setSending(true);
+      try {
+        const created = await createChatSpecialistCandidate(selectedSession.sessionId, {
+          turnId: selectedTurn?.turnId,
+          suggestion,
+        });
+        setSpecialistCandidates((current) => {
+          const withoutCurrent = current.filter((item) => item.candidateId !== created.candidateId);
+          return [created, ...withoutCurrent];
+        });
+        setSpecialistSuggestions((current) =>
+          current.filter((item) => normalizeSpecialistFingerprint(item) !== normalizeSpecialistFingerprint(suggestion)),
+        );
+        pushLocalNotice(`Drafted specialist candidate: ${created.title}.`, "success");
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setSending(false);
+      }
+    },
+    [pushLocalNotice, selectedSession, selectedTurn?.turnId, sending],
+  );
 
-  const handleSpecialistCandidatePatch = useCallback(async (
-    candidateId: string,
-    patch: Parameters<typeof updateChatSpecialistCandidate>[2],
-    notice: string,
-  ) => {
-    if (!selectedSession || sending) {
-      return;
-    }
-    setSending(true);
-    try {
-      const updated = await updateChatSpecialistCandidate(selectedSession.sessionId, candidateId, patch);
-      setSpecialistCandidates((current) => current.map((item) => item.candidateId === updated.candidateId ? updated : item));
-      pushLocalNotice(notice, "success");
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSending(false);
-    }
-  }, [pushLocalNotice, selectedSession, sending]);
+  const handleSpecialistCandidatePatch = useCallback(
+    async (candidateId: string, patch: Parameters<typeof updateChatSpecialistCandidate>[2], notice: string) => {
+      if (!selectedSession || sending) {
+        return;
+      }
+      setSending(true);
+      try {
+        const updated = await updateChatSpecialistCandidate(selectedSession.sessionId, candidateId, patch);
+        setSpecialistCandidates((current) =>
+          current.map((item) => (item.candidateId === updated.candidateId ? updated : item)),
+        );
+        pushLocalNotice(notice, "success");
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setSending(false);
+      }
+    },
+    [pushLocalNotice, selectedSession, sending],
+  );
 
-  const handleComposerPaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(event.clipboardData.files ?? []);
-    if (files.length > 0) {
-      event.preventDefault();
-      void uploadAttachments(files);
-      return;
-    }
-    const itemFiles = Array.from(event.clipboardData.items ?? [])
-      .filter((item) => item.kind === "file")
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => Boolean(file));
-    if (itemFiles.length > 0) {
-      event.preventDefault();
-      void uploadAttachments(itemFiles);
-    }
-  }, [uploadAttachments]);
+  const handleComposerPaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = Array.from(event.clipboardData.files ?? []);
+      if (files.length > 0) {
+        event.preventDefault();
+        void uploadAttachments(files);
+        return;
+      }
+      const itemFiles = Array.from(event.clipboardData.items ?? [])
+        .filter((item) => item.kind === "file")
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => Boolean(file));
+      if (itemFiles.length > 0) {
+        event.preventDefault();
+        void uploadAttachments(itemFiles);
+      }
+    },
+    [uploadAttachments],
+  );
 
   const handleDragEnter = useCallback((event: DragEvent<HTMLDivElement>) => {
     if (!Array.from(event.dataTransfer.types).includes("Files")) return;
@@ -1763,14 +1621,17 @@ export function ChatPage({
     if (dragDepthRef.current === 0) setIsDragActive(false);
   }, []);
 
-  const handleDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
-    if (!Array.from(event.dataTransfer.types).includes("Files")) return;
-    event.preventDefault();
-    dragDepthRef.current = 0;
-    setIsDragActive(false);
-    const files = Array.from(event.dataTransfer.files ?? []);
-    if (files.length > 0) void uploadAttachments(files);
-  }, [uploadAttachments]);
+  const handleDrop = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+      event.preventDefault();
+      dragDepthRef.current = 0;
+      setIsDragActive(false);
+      const files = Array.from(event.dataTransfer.files ?? []);
+      if (files.length > 0) void uploadAttachments(files);
+    },
+    [uploadAttachments],
+  );
 
   const applyDraftCommand = useCallback((command: string) => {
     setDraft(`${command} `);
@@ -1778,10 +1639,13 @@ export function ChatPage({
   }, []);
 
   const dismissCapabilitySuggestion = useCallback((suggestion: ChatCapabilityUpgradeSuggestion) => {
-    setCapabilitySuggestions((current) => current.filter((item) => (
-      item.kind !== suggestion.kind
-      || (item.candidateId ?? item.title) !== (suggestion.candidateId ?? suggestion.title)
-    )));
+    setCapabilitySuggestions((current) =>
+      current.filter(
+        (item) =>
+          item.kind !== suggestion.kind ||
+          (item.candidateId ?? item.title) !== (suggestion.candidateId ?? suggestion.title),
+      ),
+    );
   }, []);
 
   const resumeCapabilitySuggestionTurn = useCallback(async () => {
@@ -1806,127 +1670,144 @@ export function ChatPage({
     await executeOutboundItemRef.current(nextItem);
   }, [pushLocalNotice, selectedSessionId, selectedTurn?.turnId, tryBeginOutboundExecution]);
 
-  const runCapabilitySuggestionAction = useCallback(async (suggestion: ChatCapabilityUpgradeSuggestion) => {
-    try {
-      setError(null);
-      if (suggestion.recommendedAction === "enable_skill") {
-        if (!suggestion.candidateId) {
-          throw new Error("This suggestion is missing the installed skill identifier.");
+  const runCapabilitySuggestionAction = useCallback(
+    async (suggestion: ChatCapabilityUpgradeSuggestion) => {
+      try {
+        setError(null);
+        if (suggestion.recommendedAction === "enable_skill") {
+          if (!suggestion.candidateId) {
+            throw new Error("This suggestion is missing the installed skill identifier.");
+          }
+          const updated = await updateSkillState(suggestion.candidateId, {
+            state: "enabled",
+            note: "Enabled from chat capability suggestion.",
+          });
+          pushLocalNotice(`Enabled skill ${updated.skillId}. Resuming the original request now.`, "success");
+          setInstalledSkills(await fetchSkills().then((result) => result.items));
+          dismissCapabilitySuggestion(suggestion);
+          await resumeCapabilitySuggestionTurn();
+          return;
         }
-        const updated = await updateSkillState(suggestion.candidateId, {
-          state: "enabled",
-          note: "Enabled from chat capability suggestion.",
-        });
-        pushLocalNotice(`Enabled skill ${updated.skillId}. Resuming the original request now.`, "success");
-        setInstalledSkills(await fetchSkills().then((result) => result.items));
-        dismissCapabilitySuggestion(suggestion);
-        await resumeCapabilitySuggestionTurn();
-        return;
-      }
 
-      if (suggestion.recommendedAction === "install_skill_disabled") {
-        if (!suggestion.sourceRef) {
-          throw new Error("This suggestion is missing the import source.");
+        if (suggestion.recommendedAction === "install_skill_disabled") {
+          if (!suggestion.sourceRef) {
+            throw new Error("This suggestion is missing the import source.");
+          }
+          const installed = await installSkillImport({
+            sourceRef: suggestion.sourceRef,
+            sourceProvider:
+              suggestion.sourceProvider && suggestion.sourceProvider !== "mcp_template"
+                ? suggestion.sourceProvider
+                : undefined,
+            confirmHighRisk: suggestion.riskLevel === "high",
+          });
+          pushLocalNotice(
+            installed.installedSkillId
+              ? `Installed ${installed.installedSkillId}. It remains disabled by default until you enable it.`
+              : "Installed the suggested skill. It remains disabled by default until you enable it.",
+            "success",
+          );
+          setInstalledSkills(await fetchSkills().then((result) => result.items));
+          dismissCapabilitySuggestion(suggestion);
+          window.location.hash = "skills";
+          return;
         }
-        const installed = await installSkillImport({
-          sourceRef: suggestion.sourceRef,
-          sourceProvider: suggestion.sourceProvider && suggestion.sourceProvider !== "mcp_template"
-            ? suggestion.sourceProvider
-            : undefined,
-          confirmHighRisk: suggestion.riskLevel === "high",
-        });
-        pushLocalNotice(
-          installed.installedSkillId
-            ? `Installed ${installed.installedSkillId}. It remains disabled by default until you enable it.`
-            : "Installed the suggested skill. It remains disabled by default until you enable it.",
-          "success",
-        );
-        setInstalledSkills(await fetchSkills().then((result) => result.items));
-        dismissCapabilitySuggestion(suggestion);
-        window.location.hash = "skills";
-        return;
-      }
 
-      if (suggestion.recommendedAction === "install_skill_enable") {
-        if (!suggestion.sourceRef) {
-          throw new Error("This suggestion is missing the import source.");
+        if (suggestion.recommendedAction === "install_skill_enable") {
+          if (!suggestion.sourceRef) {
+            throw new Error("This suggestion is missing the import source.");
+          }
+          const installed = await installSkillImport({
+            sourceRef: suggestion.sourceRef,
+            sourceProvider:
+              suggestion.sourceProvider && suggestion.sourceProvider !== "mcp_template"
+                ? suggestion.sourceProvider
+                : undefined,
+            confirmHighRisk: suggestion.riskLevel === "high",
+          });
+          if (!installed.installedSkillId) {
+            throw new Error("The skill installed, but GoatCitadel could not resolve its installed skill identifier.");
+          }
+          await updateSkillState(installed.installedSkillId, {
+            state: "enabled",
+            note: "Enabled immediately from chat capability suggestion.",
+          });
+          pushLocalNotice(
+            `Installed and enabled ${installed.installedSkillId}. Resuming the original request now.`,
+            "success",
+          );
+          setInstalledSkills(await fetchSkills().then((result) => result.items));
+          dismissCapabilitySuggestion(suggestion);
+          await resumeCapabilitySuggestionTurn();
+          return;
         }
-        const installed = await installSkillImport({
-          sourceRef: suggestion.sourceRef,
-          sourceProvider: suggestion.sourceProvider && suggestion.sourceProvider !== "mcp_template"
-            ? suggestion.sourceProvider
-            : undefined,
-          confirmHighRisk: suggestion.riskLevel === "high",
-        });
-        if (!installed.installedSkillId) {
-          throw new Error("The skill installed, but GoatCitadel could not resolve its installed skill identifier.");
-        }
-        await updateSkillState(installed.installedSkillId, {
-          state: "enabled",
-          note: "Enabled immediately from chat capability suggestion.",
-        });
-        pushLocalNotice(`Installed and enabled ${installed.installedSkillId}. Resuming the original request now.`, "success");
-        setInstalledSkills(await fetchSkills().then((result) => result.items));
-        dismissCapabilitySuggestion(suggestion);
-        await resumeCapabilitySuggestionTurn();
-        return;
-      }
 
-      if (suggestion.recommendedAction === "add_mcp_template") {
-        const templateId = suggestion.candidateId ?? suggestion.sourceRef;
-        if (!templateId) {
-          throw new Error("This suggestion is missing the MCP template identifier.");
-        }
-        const templates = await fetchMcpTemplates();
-        const template = templates.items.find((item) => item.templateId === templateId);
-        if (!template) {
-          throw new Error("The suggested MCP template is no longer available.");
-        }
-        if (template.installed) {
-          pushLocalNotice(`${template.label} is already installed. Review it in MCP Servers.`);
+        if (suggestion.recommendedAction === "add_mcp_template") {
+          const templateId = suggestion.candidateId ?? suggestion.sourceRef;
+          if (!templateId) {
+            throw new Error("This suggestion is missing the MCP template identifier.");
+          }
+          const templates = await fetchMcpTemplates();
+          const template = templates.items.find((item) => item.templateId === templateId);
+          if (!template) {
+            throw new Error("The suggested MCP template is no longer available.");
+          }
+          if (template.installed) {
+            pushLocalNotice(`${template.label} is already installed. Review it in MCP Servers.`);
+            dismissCapabilitySuggestion(suggestion);
+            window.location.hash = "mcp";
+            return;
+          }
+          await createMcpServer({
+            label: template.label,
+            transport: template.transport,
+            command: template.command,
+            args: template.args,
+            url: template.url,
+            authType: template.authType,
+            enabled: template.enabledByDefault,
+            category: template.category,
+            trustTier: template.trustTier,
+            costTier: template.costTier,
+            policy: template.policy,
+          });
+          pushLocalNotice(
+            `${template.label} was added. Review trust/auth details in MCP before first live use.`,
+            "success",
+          );
+          setMcpServers(await fetchMcpServers().then((result) => result.items));
+          setMcpTemplates(await fetchMcpTemplates().then((result) => result.items));
           dismissCapabilitySuggestion(suggestion);
           window.location.hash = "mcp";
           return;
         }
-        await createMcpServer({
-          label: template.label,
-          transport: template.transport,
-          command: template.command,
-          args: template.args,
-          url: template.url,
-          authType: template.authType,
-          enabled: template.enabledByDefault,
-          category: template.category,
-          trustTier: template.trustTier,
-          costTier: template.costTier,
-          policy: template.policy,
-        });
-        pushLocalNotice(`${template.label} was added. Review trust/auth details in MCP before first live use.`, "success");
-        setMcpServers(await fetchMcpServers().then((result) => result.items));
-        setMcpTemplates(await fetchMcpTemplates().then((result) => result.items));
-        dismissCapabilitySuggestion(suggestion);
-        window.location.hash = "mcp";
+
+        if (suggestion.recommendedAction === "switch_tool_profile") {
+          pushLocalNotice(
+            "This request is blocked by the current tool/profile policy. Review Tool Access and retry.",
+            "warning",
+          );
+          window.location.hash = "tools";
+          return;
+        }
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    },
+    [dismissCapabilitySuggestion, pushLocalNotice, resumeCapabilitySuggestionTurn],
+  );
+
+  const handleCapabilitySuggestionAction = useCallback(
+    (suggestion: ChatCapabilityUpgradeSuggestion) => {
+      const confirmation = getCapabilitySuggestionConfirmationCopy(suggestion);
+      if (confirmation) {
+        setCapabilitySuggestionConfirm(suggestion);
         return;
       }
-
-      if (suggestion.recommendedAction === "switch_tool_profile") {
-        pushLocalNotice("This request is blocked by the current tool/profile policy. Review Tool Access and retry.", "warning");
-        window.location.hash = "tools";
-        return;
-      }
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }, [dismissCapabilitySuggestion, pushLocalNotice, resumeCapabilitySuggestionTurn]);
-
-  const handleCapabilitySuggestionAction = useCallback((suggestion: ChatCapabilityUpgradeSuggestion) => {
-    const confirmation = getCapabilitySuggestionConfirmationCopy(suggestion);
-    if (confirmation) {
-      setCapabilitySuggestionConfirm(suggestion);
-      return;
-    }
-    void runCapabilitySuggestionAction(suggestion);
-  }, [runCapabilitySuggestionAction]);
+      void runCapabilitySuggestionAction(suggestion);
+    },
+    [runCapabilitySuggestionAction],
+  );
 
   const confirmCapabilitySuggestionAction = useCallback(async () => {
     if (!capabilitySuggestionConfirm) {
@@ -1951,7 +1832,7 @@ export function ChatPage({
       clearChatSessionLocalState(workspaceId, sessionDeleteConfirm.sessionId);
       setQueuedOutbound((current) => current.filter((item) => item.sessionId !== sessionDeleteConfirm.sessionId));
       setThread(null);
-      setSelectedSessionId((current) => current === sessionDeleteConfirm.sessionId ? null : current);
+      setSelectedSessionId((current) => (current === sessionDeleteConfirm.sessionId ? null : current));
       await loadSidebar();
     } catch (err) {
       setError((err as Error).message);
@@ -1961,375 +1842,393 @@ export function ChatPage({
     }
   }, [loadSidebar, sessionDeleteConfirm, workspaceId]);
 
-  const handleCommandExecution = useCallback(async (sessionId: string, commandText: string) => {
-    const result = await parseChatCommand(sessionId, commandText);
-    if (result.prefs) setPrefs(result.prefs);
-    pushLocalNotice(formatCommandResult(result), result.ok ? "success" : "warning");
-    if (result.command === "/project" || result.command === "/new") {
-      await loadSidebar();
-    }
-    if (result.command === "/plan" && result.prefs) {
-      setPrefs(result.prefs);
-    }
-    if (result.session) {
-      setSelectedSessionId(result.session.sessionId);
-    }
-    if (result.command === "/skill" || result.command === "/skills") {
-      setInstalledSkills(await fetchSkills().then((payload) => payload.items));
-    }
-    if (result.command === "/mcp") {
-      const [servers, templates] = await Promise.all([
-        fetchMcpServers(),
-        fetchMcpTemplates(),
-      ]);
-      setMcpServers(servers.items);
-      setMcpTemplates(templates.items);
-    }
-  }, [loadSidebar, pushLocalNotice]);
-
-  const executeOutboundItem = useCallback(async (item: OutboundQueueItem) => {
-    const trimmedContent = item.content.trim();
-    const attachmentsSnapshot = item.attachments;
-    const attachmentIds = attachmentsSnapshot.map((entry) => entry.attachmentId);
-    const currentPrefs = prefsRef.current;
-    const currentProviderId = currentPrefs?.providerId ?? selectedProviderId;
-    const currentProvider = providerOptions.find((provider) => provider.providerId === currentProviderId);
-    const currentProviderSelection = resolveProviderModelSelection({
-      provider: currentProvider,
-      loadedModels: currentProviderId ? getCachedModels(currentProviderId) : [],
-      selectedModel: currentPrefs?.model ?? selectedModel,
-    });
-    const effectiveProviderId = currentProvider?.providerId;
-    const effectiveModel = currentProviderSelection.model;
-    const localAttachments = attachmentsSnapshot.map((entry) => ({
-      attachmentId: entry.attachmentId,
-      fileName: entry.fileName,
-      mimeType: entry.mimeType,
-      sizeBytes: entry.sizeBytes,
-    }));
-    let session: ChatSessionRecord | null = null;
-    try {
-      recordClientDiagnostic({
-        level: "info",
-        category: "chat",
-        event: "send.start",
-        message: `Starting ${item.action} action`,
-        sessionId: item.sessionId,
-        turnId: item.targetTurnId,
-        context: {
-          action: item.action,
-          attachmentCount: attachmentsSnapshot.length,
-          contentLength: trimmedContent.length,
-          streamEnabled,
-        },
-      });
-      setError(null);
-      setPendingApproval(null);
-      session = await ensureSession();
-      if (shouldExecuteLocalChatCommand(item.action, trimmedContent)) {
-        await handleCommandExecution(session.sessionId, trimmedContent);
+  const handleCommandExecution = useCallback(
+    async (sessionId: string, commandText: string) => {
+      const result = await parseChatCommand(sessionId, commandText);
+      if (result.prefs) setPrefs(result.prefs);
+      pushLocalNotice(formatCommandResult(result), result.ok ? "success" : "warning");
+      if (result.command === "/project" || result.command === "/new") {
         await loadSidebar();
-        return;
       }
-      if (!effectiveProviderId) {
-        throw new Error("No model provider is configured yet. Open Configure and connect a provider first.");
+      if (result.command === "/plan" && result.prefs) {
+        setPrefs(result.prefs);
       }
-      if (currentProviderSelection.blockedMessage) {
-        throw new Error(currentProviderSelection.blockedMessage);
+      if (result.session) {
+        setSelectedSessionId(result.session.sessionId);
       }
-      if (!effectiveModel) {
-        throw new Error(
-          currentProviderSelection.missingModelMessage
-          ?? `No model is selected for ${currentProvider?.label ?? effectiveProviderId}. Choose a model and try again.`,
-        );
+      if (result.command === "/skill" || result.command === "/skills") {
+        setInstalledSkills(await fetchSkills().then((payload) => payload.items));
       }
-      const targetTurn = item.targetTurnId
-        ? (threadRef.current?.turns.find((turn) => turn.turnId === item.targetTurnId) ?? null)
-        : null;
-      if ((item.action === "edit" || item.action === "retry") && !targetTurn) {
-        throw new Error("The selected branch turn is no longer available.");
+      if (result.command === "/mcp") {
+        const [servers, templates] = await Promise.all([fetchMcpServers(), fetchMcpTemplates()]);
+        setMcpServers(servers.items);
+        setMcpTemplates(templates.items);
       }
-      const effectiveUserMessage: ChatMessageRecord = item.action === "retry" && targetTurn
-        ? targetTurn.userMessage
-        : {
-          messageId: `local-user-${Date.now()}`,
-          sessionId: session.sessionId,
-          role: "user",
-          actorType: "user",
-          actorId: "operator",
-          content: trimmedContent,
-          timestamp: new Date().toISOString(),
-          attachments: localAttachments.length > 0 ? localAttachments : undefined,
-        };
-      if (streamEnabled) {
-        const streamToken = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const controller = new AbortController();
-        const activeStream: ActiveChatStreamState = {
-          sessionId: session.sessionId,
-          streamToken,
-          controller,
-        };
-        activeStreamRef.current = activeStream;
-        const streamSeed: PendingStreamTurnSeed = {
-          userMessage: effectiveUserMessage,
-          parentTurnId: item.action === "send" ? threadRef.current?.activeLeafTurnId : targetTurn?.parentTurnId,
-          branchKind: item.action === "send" ? "append" : item.action === "edit" ? "edit" : "retry",
-          sourceTurnId: item.action === "send" ? undefined : item.targetTurnId,
-          mode: item.action,
-        };
-        const onChunk = (chunk: ChatStreamChunk) => {
-          const liveStream = activeStreamRef.current;
-          if (
-            liveStream?.streamToken !== streamToken
-            || liveStream.sessionId !== session!.sessionId
-            || selectedSessionIdRef.current !== session!.sessionId
-          ) {
-            return;
-          }
-          liveStream.lastEventId = chunk.eventId;
-          if (chunk.runId) {
-            liveStream.runId = chunk.runId;
-          }
-          if (chunk.type === "message_start") {
-            liveStream.turnId = chunk.turnId;
-          }
-          if (chunk.type === "trace_update" && chunk.trace.durable?.runId) {
-            liveStream.runId = chunk.trace.durable.runId;
-          }
-          if (chunk.type === "message_done") {
-            finalizedStreamMessageRef.current = {
-              sessionId: session!.sessionId,
-              placeholderId: chunk.messageId,
-              messageId: chunk.messageId,
-              content: chunk.content,
-            };
-          }
-          if (chunk.type === "trace_update" && chunk.trace.capabilityUpgradeSuggestions !== undefined) {
-            setCapabilitySuggestions(chunk.trace.capabilityUpgradeSuggestions);
-          }
-          if (chunk.type === "trace_update" && chunk.trace.specialistCandidateSuggestions !== undefined) {
-            setSpecialistSuggestions(chunk.trace.specialistCandidateSuggestions);
-          }
-          if (chunk.type === "capability_upgrade_suggestion") {
-            setCapabilitySuggestions(chunk.capabilityUpgradeSuggestions ?? []);
-          }
-          if (chunk.type === "approval_required") {
-            setPendingApproval({
-              approvalId: chunk.approval.approvalId,
-              toolName: chunk.approval.toolName,
-              reason: chunk.approval.reason,
-            });
-          }
-          if (chunk.type === "error") {
-            setError(chunk.error || "Streaming request failed.");
+    },
+    [loadSidebar, pushLocalNotice],
+  );
+
+  const executeOutboundItem = useCallback(
+    async (item: OutboundQueueItem) => {
+      const trimmedContent = item.content.trim();
+      const attachmentsSnapshot = item.attachments;
+      const attachmentIds = attachmentsSnapshot.map((entry) => entry.attachmentId);
+      const currentPrefs = prefsRef.current;
+      const currentProviderId = currentPrefs?.providerId ?? selectedProviderId;
+      const currentProvider = providerOptions.find((provider) => provider.providerId === currentProviderId);
+      const currentProviderSelection = resolveProviderModelSelection({
+        provider: currentProvider,
+        loadedModels: currentProviderId ? getCachedModels(currentProviderId) : [],
+        selectedModel: currentPrefs?.model ?? selectedModel,
+      });
+      const effectiveProviderId = currentProvider?.providerId;
+      const effectiveModel = currentProviderSelection.model;
+      const localAttachments = attachmentsSnapshot.map((entry) => ({
+        attachmentId: entry.attachmentId,
+        fileName: entry.fileName,
+        mimeType: entry.mimeType,
+        sizeBytes: entry.sizeBytes,
+      }));
+      let session: ChatSessionRecord | null = null;
+      try {
+        recordClientDiagnostic({
+          level: "info",
+          category: "chat",
+          event: "send.start",
+          message: `Starting ${item.action} action`,
+          sessionId: item.sessionId,
+          turnId: item.targetTurnId,
+          context: {
+            action: item.action,
+            attachmentCount: attachmentsSnapshot.length,
+            contentLength: trimmedContent.length,
+            streamEnabled,
+          },
+        });
+        setError(null);
+        setPendingApproval(null);
+        session = await ensureSession();
+        if (shouldExecuteLocalChatCommand(item.action, trimmedContent)) {
+          await handleCommandExecution(session.sessionId, trimmedContent);
+          await loadSidebar();
+          return;
+        }
+        if (!effectiveProviderId) {
+          throw new Error("No model provider is configured yet. Open Configure and connect a provider first.");
+        }
+        if (currentProviderSelection.blockedMessage) {
+          throw new Error(currentProviderSelection.blockedMessage);
+        }
+        if (!effectiveModel) {
+          throw new Error(
+            currentProviderSelection.missingModelMessage ??
+              `No model is selected for ${currentProvider?.label ?? effectiveProviderId}. Choose a model and try again.`,
+          );
+        }
+        const targetTurn = item.targetTurnId
+          ? (threadRef.current?.turns.find((turn) => turn.turnId === item.targetTurnId) ?? null)
+          : null;
+        if ((item.action === "edit" || item.action === "retry") && !targetTurn) {
+          throw new Error("The selected branch turn is no longer available.");
+        }
+        const effectiveUserMessage: ChatMessageRecord =
+          item.action === "retry" && targetTurn
+            ? targetTurn.userMessage
+            : {
+                messageId: `local-user-${Date.now()}`,
+                sessionId: session.sessionId,
+                role: "user",
+                actorType: "user",
+                actorId: "operator",
+                content: trimmedContent,
+                timestamp: new Date().toISOString(),
+                attachments: localAttachments.length > 0 ? localAttachments : undefined,
+              };
+        if (streamEnabled) {
+          const streamToken = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const controller = new AbortController();
+          const activeStream: ActiveChatStreamState = {
+            sessionId: session.sessionId,
+            streamToken,
+            controller,
+          };
+          activeStreamRef.current = activeStream;
+          const streamSeed: PendingStreamTurnSeed = {
+            userMessage: effectiveUserMessage,
+            parentTurnId: item.action === "send" ? threadRef.current?.activeLeafTurnId : targetTurn?.parentTurnId,
+            branchKind: item.action === "send" ? "append" : item.action === "edit" ? "edit" : "retry",
+            sourceTurnId: item.action === "send" ? undefined : item.targetTurnId,
+            mode: item.action,
+          };
+          const onChunk = (chunk: ChatStreamChunk) => {
+            const liveStream = activeStreamRef.current;
+            if (
+              liveStream?.streamToken !== streamToken ||
+              liveStream.sessionId !== session!.sessionId ||
+              selectedSessionIdRef.current !== session!.sessionId
+            ) {
+              return;
+            }
+            liveStream.lastEventId = chunk.eventId;
+            if (chunk.runId) {
+              liveStream.runId = chunk.runId;
+            }
+            if (chunk.type === "message_start") {
+              liveStream.turnId = chunk.turnId;
+            }
+            if (chunk.type === "trace_update" && chunk.trace.durable?.runId) {
+              liveStream.runId = chunk.trace.durable.runId;
+            }
+            if (chunk.type === "message_done") {
+              finalizedStreamMessageRef.current = {
+                sessionId: session!.sessionId,
+                placeholderId: chunk.messageId,
+                messageId: chunk.messageId,
+                content: chunk.content,
+              };
+            }
+            if (chunk.type === "trace_update" && chunk.trace.capabilityUpgradeSuggestions !== undefined) {
+              setCapabilitySuggestions(chunk.trace.capabilityUpgradeSuggestions);
+            }
+            if (chunk.type === "trace_update" && chunk.trace.specialistCandidateSuggestions !== undefined) {
+              setSpecialistSuggestions(chunk.trace.specialistCandidateSuggestions);
+            }
+            if (chunk.type === "capability_upgrade_suggestion") {
+              setCapabilitySuggestions(chunk.capabilityUpgradeSuggestions ?? []);
+            }
+            if (chunk.type === "approval_required") {
+              setPendingApproval({
+                approvalId: chunk.approval.approvalId,
+                toolName: chunk.approval.toolName,
+                reason: chunk.approval.reason,
+              });
+            }
+            if (chunk.type === "error") {
+              setError(chunk.error || "Streaming request failed.");
+              recordClientDiagnostic({
+                level: "error",
+                category: "chat",
+                event: "stream.chunk_error",
+                message: chunk.error || "Streaming request failed.",
+                sessionId: session!.sessionId,
+                turnId: chunk.turnId,
+              });
+            }
+            if (!isThreadMutatingStreamChunk(chunk)) {
+              return;
+            }
             recordClientDiagnostic({
-              level: "error",
+              level: "debug",
               category: "chat",
-              event: "stream.chunk_error",
-              message: chunk.error || "Streaming request failed.",
+              event: "thread.render_path",
+              message: `Applying ${chunk.type} chunk to thread`,
               sessionId: session!.sessionId,
               turnId: chunk.turnId,
+              context: {
+                chunkType: chunk.type,
+              },
             });
-          }
-          if (!isThreadMutatingStreamChunk(chunk)) {
-            return;
-          }
-          recordClientDiagnostic({
-            level: "debug",
-            category: "chat",
-            event: "thread.render_path",
-            message: `Applying ${chunk.type} chunk to thread`,
-            sessionId: session!.sessionId,
-            turnId: chunk.turnId,
-            context: {
-              chunkType: chunk.type,
-            },
-          });
-          commitThreadUpdate((current) => updateThreadFromStreamChunk(
-            current,
-            chunk,
-            streamSeed,
-            session!.sessionId,
-            prefsRef.current,
-          ));
-        };
-        let resumeAttempts = 0;
-        for (;;) {
-          try {
-            if (resumeAttempts > 0) {
-              const liveStream = activeStreamRef.current;
-              if (!liveStream?.turnId) {
-                throw new Error("Streaming request failed before the turn could be resumed.");
-              }
-              setError(null);
-              pushLocalNotice(`Stream interrupted. Reconnecting to turn ${liveStream.turnId.slice(-6)}.`, "warning");
-              await resumeChatTurnStream(session.sessionId, liveStream.turnId, onChunk, {
-                signal: controller.signal,
-                sinceEventId: liveStream.lastEventId,
-              });
-            } else if (item.action === "retry" && item.targetTurnId) {
-              await streamRetryChatTurn(session.sessionId, item.targetTurnId, {
-                providerId: effectiveProviderId,
-                model: effectiveModel,
-                mode: currentPrefs?.mode,
-                webMode: currentPrefs?.webMode,
-                memoryMode: currentPrefs?.memoryMode,
-                thinkingLevel: currentPrefs?.thinkingLevel,
-              }, onChunk, { signal: controller.signal });
-            } else if (item.action === "edit" && item.targetTurnId) {
-              await streamEditChatTurn(session.sessionId, item.targetTurnId, {
-                content: trimmedContent,
-                attachments: attachmentIds,
-                useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
-                mode: currentPrefs?.mode ?? "chat",
-                providerId: effectiveProviderId,
-                model: effectiveModel,
-                webMode: currentPrefs?.webMode ?? "auto",
-                memoryMode: currentPrefs?.memoryMode ?? "auto",
-                thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
-              }, onChunk, { signal: controller.signal });
-            } else {
-              await streamAgentChatMessage(session.sessionId, {
-                content: trimmedContent,
-                attachments: attachmentIds,
-                useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
-                mode: currentPrefs?.mode ?? "chat",
-                providerId: effectiveProviderId,
-                model: effectiveModel,
-                webMode: currentPrefs?.webMode ?? "auto",
-                memoryMode: currentPrefs?.memoryMode ?? "auto",
-                thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
-              }, onChunk, { signal: controller.signal });
-            }
-            break;
-          } catch (streamError) {
-            if (isAbortError(streamError)) {
-              throw streamError;
-            }
-            const liveStream = activeStreamRef.current;
-            const canResume = Boolean(
-              liveStream
-              && liveStream.streamToken === streamToken
-              && liveStream.sessionId === session.sessionId
-              && liveStream.turnId,
+            commitThreadUpdate((current) =>
+              updateThreadFromStreamChunk(current, chunk, streamSeed, session!.sessionId, prefsRef.current),
             );
-            if (!canResume || resumeAttempts >= 2) {
-              throw streamError;
+          };
+          let resumeAttempts = 0;
+          for (;;) {
+            try {
+              if (resumeAttempts > 0) {
+                const liveStream = activeStreamRef.current;
+                if (!liveStream?.turnId) {
+                  throw new Error("Streaming request failed before the turn could be resumed.");
+                }
+                setError(null);
+                pushLocalNotice(`Stream interrupted. Reconnecting to turn ${liveStream.turnId.slice(-6)}.`, "warning");
+                await resumeChatTurnStream(session.sessionId, liveStream.turnId, onChunk, {
+                  signal: controller.signal,
+                  sinceEventId: liveStream.lastEventId,
+                });
+              } else if (item.action === "retry" && item.targetTurnId) {
+                await streamRetryChatTurn(
+                  session.sessionId,
+                  item.targetTurnId,
+                  {
+                    providerId: effectiveProviderId,
+                    model: effectiveModel,
+                    mode: currentPrefs?.mode,
+                    webMode: currentPrefs?.webMode,
+                    memoryMode: currentPrefs?.memoryMode,
+                    thinkingLevel: currentPrefs?.thinkingLevel,
+                  },
+                  onChunk,
+                  { signal: controller.signal },
+                );
+              } else if (item.action === "edit" && item.targetTurnId) {
+                await streamEditChatTurn(
+                  session.sessionId,
+                  item.targetTurnId,
+                  {
+                    content: trimmedContent,
+                    attachments: attachmentIds,
+                    useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
+                    mode: currentPrefs?.mode ?? "chat",
+                    providerId: effectiveProviderId,
+                    model: effectiveModel,
+                    webMode: currentPrefs?.webMode ?? "auto",
+                    memoryMode: currentPrefs?.memoryMode ?? "auto",
+                    thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
+                  },
+                  onChunk,
+                  { signal: controller.signal },
+                );
+              } else {
+                await streamAgentChatMessage(
+                  session.sessionId,
+                  {
+                    content: trimmedContent,
+                    attachments: attachmentIds,
+                    useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
+                    mode: currentPrefs?.mode ?? "chat",
+                    providerId: effectiveProviderId,
+                    model: effectiveModel,
+                    webMode: currentPrefs?.webMode ?? "auto",
+                    memoryMode: currentPrefs?.memoryMode ?? "auto",
+                    thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
+                  },
+                  onChunk,
+                  { signal: controller.signal },
+                );
+              }
+              break;
+            } catch (streamError) {
+              if (isAbortError(streamError)) {
+                throw streamError;
+              }
+              const liveStream = activeStreamRef.current;
+              const canResume = Boolean(
+                liveStream &&
+                liveStream.streamToken === streamToken &&
+                liveStream.sessionId === session.sessionId &&
+                liveStream.turnId,
+              );
+              if (!canResume || resumeAttempts >= 2) {
+                throw streamError;
+              }
+              resumeAttempts += 1;
             }
-            resumeAttempts += 1;
           }
+          scheduleStreamMessageReconciliation(session.sessionId);
+        } else {
+          const sent =
+            item.action === "retry" && item.targetTurnId
+              ? await retryChatTurn(session.sessionId, item.targetTurnId, {
+                  providerId: effectiveProviderId,
+                  model: effectiveModel,
+                  mode: currentPrefs?.mode,
+                  webMode: currentPrefs?.webMode,
+                  memoryMode: currentPrefs?.memoryMode,
+                  thinkingLevel: currentPrefs?.thinkingLevel,
+                })
+              : item.action === "edit" && item.targetTurnId
+                ? await editChatTurn(session.sessionId, item.targetTurnId, {
+                    content: trimmedContent,
+                    attachments: attachmentIds,
+                    useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
+                    mode: currentPrefs?.mode ?? "chat",
+                    providerId: effectiveProviderId,
+                    model: effectiveModel,
+                    webMode: currentPrefs?.webMode ?? "auto",
+                    memoryMode: currentPrefs?.memoryMode ?? "auto",
+                    thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
+                  })
+                : await sendAgentChatMessage(session.sessionId, {
+                    content: trimmedContent,
+                    attachments: attachmentIds,
+                    useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
+                    mode: currentPrefs?.mode ?? "chat",
+                    providerId: effectiveProviderId,
+                    model: effectiveModel,
+                    webMode: currentPrefs?.webMode ?? "auto",
+                    memoryMode: currentPrefs?.memoryMode ?? "auto",
+                    thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
+                  });
+          if (sent.trace) {
+            setCapabilitySuggestions(sent.trace.capabilityUpgradeSuggestions ?? []);
+            setSpecialistSuggestions(sent.trace.specialistCandidateSuggestions ?? []);
+          }
+          await loadSessionCoreState(session.sessionId, {
+            background: true,
+            includeThread: true,
+          });
         }
-        scheduleStreamMessageReconciliation(session.sessionId);
-      } else {
-        const sent = item.action === "retry" && item.targetTurnId
-          ? await retryChatTurn(session.sessionId, item.targetTurnId, {
-            providerId: effectiveProviderId,
-            model: effectiveModel,
-            mode: currentPrefs?.mode,
-            webMode: currentPrefs?.webMode,
-            memoryMode: currentPrefs?.memoryMode,
-            thinkingLevel: currentPrefs?.thinkingLevel,
-          })
-          : item.action === "edit" && item.targetTurnId
-            ? await editChatTurn(session.sessionId, item.targetTurnId, {
-              content: trimmedContent,
-              attachments: attachmentIds,
-              useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
-              mode: currentPrefs?.mode ?? "chat",
-              providerId: effectiveProviderId,
-              model: effectiveModel,
-              webMode: currentPrefs?.webMode ?? "auto",
-              memoryMode: currentPrefs?.memoryMode ?? "auto",
-              thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
-            })
-            : await sendAgentChatMessage(session.sessionId, {
-              content: trimmedContent,
-              attachments: attachmentIds,
-              useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
-              mode: currentPrefs?.mode ?? "chat",
-              providerId: effectiveProviderId,
-              model: effectiveModel,
-              webMode: currentPrefs?.webMode ?? "auto",
-              memoryMode: currentPrefs?.memoryMode ?? "auto",
-              thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
-            });
-        if (sent.trace) {
-          setCapabilitySuggestions(sent.trace.capabilityUpgradeSuggestions ?? []);
-          setSpecialistSuggestions(sent.trace.specialistCandidateSuggestions ?? []);
-        }
-        await loadSessionCoreState(session.sessionId, {
-          background: true,
-          includeThread: true,
-        });
-      }
-      setEditingTurnId(null);
-      await loadSidebar();
-      recordClientDiagnostic({
-        level: "info",
-        category: "chat",
-        event: "send.complete",
-        message: `${item.action} action completed`,
-        sessionId: session.sessionId,
-        turnId: item.targetTurnId,
-      });
-    } catch (err) {
-      if (isAbortError(err)) {
+        setEditingTurnId(null);
+        await loadSidebar();
         recordClientDiagnostic({
-          level: "warn",
+          level: "info",
           category: "chat",
-          event: "send.aborted",
-          message: `${item.action} action aborted`,
-          sessionId: session?.sessionId ?? item.sessionId,
+          event: "send.complete",
+          message: `${item.action} action completed`,
+          sessionId: session.sessionId,
           turnId: item.targetTurnId,
         });
-        return;
-      }
-      if (session) {
-        void loadSessionCoreState(session.sessionId, {
-          background: true,
-          includeThread: true,
-        }).catch(() => undefined);
-      }
-      if (item.action !== "retry") {
-        setDraft((current) => current.trim().length > 0 ? current : item.content);
-        setPendingAttachments((current) => current.length > 0 ? current : attachmentsSnapshot);
-        if (item.action === "edit" && item.targetTurnId) {
-          setEditingTurnId(item.targetTurnId);
+      } catch (err) {
+        if (isAbortError(err)) {
+          recordClientDiagnostic({
+            level: "warn",
+            category: "chat",
+            event: "send.aborted",
+            message: `${item.action} action aborted`,
+            sessionId: session?.sessionId ?? item.sessionId,
+            turnId: item.targetTurnId,
+          });
+          return;
         }
+        if (session) {
+          void loadSessionCoreState(session.sessionId, {
+            background: true,
+            includeThread: true,
+          }).catch(() => undefined);
+        }
+        if (item.action !== "retry") {
+          setDraft((current) => (current.trim().length > 0 ? current : item.content));
+          setPendingAttachments((current) => (current.length > 0 ? current : attachmentsSnapshot));
+          if (item.action === "edit" && item.targetTurnId) {
+            setEditingTurnId(item.targetTurnId);
+          }
+        }
+        setError((err as Error).message);
+        recordClientDiagnostic({
+          level: "error",
+          category: "chat",
+          event: "send.failed",
+          message: `${item.action} action failed`,
+          sessionId: session?.sessionId ?? item.sessionId,
+          turnId: item.targetTurnId,
+          context: {
+            error: (err as Error).message,
+          },
+        });
+      } finally {
+        const activeStream = activeStreamRef.current;
+        if (session && activeStream?.sessionId === session.sessionId) {
+          activeStreamRef.current = null;
+        }
+        finishOutboundExecution();
       }
-      setError((err as Error).message);
-      recordClientDiagnostic({
-        level: "error",
-        category: "chat",
-        event: "send.failed",
-        message: `${item.action} action failed`,
-        sessionId: session?.sessionId ?? item.sessionId,
-        turnId: item.targetTurnId,
-        context: {
-          error: (err as Error).message,
-        },
-      });
-    } finally {
-      const activeStream = activeStreamRef.current;
-      if (session && activeStream?.sessionId === session.sessionId) {
-        activeStreamRef.current = null;
-      }
-      finishOutboundExecution();
-    }
-  }, [
-    commitThreadUpdate,
-    ensureSession,
-    finishOutboundExecution,
-    getCachedModels,
-    handleCommandExecution,
-    loadSessionCoreState,
-    providerOptions,
-    loadSidebar,
-    scheduleStreamMessageReconciliation,
-    selectedModel,
-    selectedProviderId,
-    streamEnabled,
-  ]);
+    },
+    [
+      commitThreadUpdate,
+      ensureSession,
+      finishOutboundExecution,
+      getCachedModels,
+      handleCommandExecution,
+      loadSessionCoreState,
+      providerOptions,
+      loadSidebar,
+      scheduleStreamMessageReconciliation,
+      selectedModel,
+      selectedProviderId,
+      streamEnabled,
+    ],
+  );
 
   useEffect(() => {
     executeOutboundItemRef.current = executeOutboundItem;
@@ -2346,58 +2245,67 @@ export function ChatPage({
     }
   }, []);
 
-  const handleSelectBranchTurn = useCallback(async (turnId: string) => {
-    if (!selectedSessionId) {
-      return;
-    }
-    try {
-      recordClientDiagnostic({
-        level: "info",
-        category: "chat",
-        event: "branch.select",
-        message: "Selecting chat branch turn",
-        sessionId: selectedSessionId,
-        turnId,
-      });
-      const nextThread = await selectChatBranchTurn(selectedSessionId, turnId);
-      commitThreadUpdate(nextThread);
-      setSelectedTurnId(nextThread.activeLeafTurnId ?? turnId);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }, [commitThreadUpdate, selectedSessionId]);
+  const handleSelectBranchTurn = useCallback(
+    async (turnId: string) => {
+      if (!selectedSessionId) {
+        return;
+      }
+      try {
+        recordClientDiagnostic({
+          level: "info",
+          category: "chat",
+          event: "branch.select",
+          message: "Selecting chat branch turn",
+          sessionId: selectedSessionId,
+          turnId,
+        });
+        const nextThread = await selectChatBranchTurn(selectedSessionId, turnId);
+        commitThreadUpdate(nextThread);
+        setSelectedTurnId(nextThread.activeLeafTurnId ?? turnId);
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    },
+    [commitThreadUpdate, selectedSessionId],
+  );
 
-  const handleComposerKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (commandSuggestions.length > 0) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setCommandIndex((current) => Math.min(current + 1, commandSuggestions.length - 1));
-        return;
+  const handleComposerKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (commandSuggestions.length > 0) {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          setCommandIndex((current) => Math.min(current + 1, commandSuggestions.length - 1));
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          setCommandIndex((current) => Math.max(current - 1, 0));
+          return;
+        }
+        if (event.key === "Tab") {
+          event.preventDefault();
+          const suggestion = commandSuggestions[commandIndex];
+          if (suggestion) applyDraftCommand(suggestion.applyValue);
+          return;
+        }
       }
-      if (event.key === "ArrowUp") {
+      if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
-        setCommandIndex((current) => Math.max(current - 1, 0));
-        return;
+        void handleSend();
       }
-      if (event.key === "Tab") {
-        event.preventDefault();
-        const suggestion = commandSuggestions[commandIndex];
-        if (suggestion) applyDraftCommand(suggestion.applyValue);
-        return;
-      }
-    }
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      void handleSend();
-    }
-  }, [applyDraftCommand, commandIndex, commandSuggestions, handleSend]);
+    },
+    [applyDraftCommand, commandIndex, commandSuggestions, handleSend],
+  );
 
   const handleApprovePending = useCallback(async () => {
     if (!selectedSession || !pendingApproval) return;
     setApprovalPending(true);
     try {
       await approveChatTool(selectedSession.sessionId, pendingApproval.approvalId);
-      pushLocalNotice(`Approved request ${pendingApproval.approvalId}. Send your message again and I will continue.`, "success");
+      pushLocalNotice(
+        `Approved request ${pendingApproval.approvalId}. Send your message again and I will continue.`,
+        "success",
+      );
       setPendingApproval(null);
     } catch (err) {
       setError((err as Error).message);
@@ -2420,32 +2328,35 @@ export function ChatPage({
     }
   }, [pendingApproval, pushLocalNotice, selectedSession]);
 
-  const handlePrefPatch = useCallback(async (patch: ChatSessionPrefsPatch) => {
-    if (!selectedSession) return;
-    lastLocalPrefMutationAtRef.current = Date.now();
-    const previousPrefs = prefsRef.current;
-    const optimisticPrefs = previousPrefs ? resolveOptimisticChatPrefs(previousPrefs, patch) : null;
-    const mutationId = prefMutationSequenceRef.current + 1;
-    prefMutationSequenceRef.current = mutationId;
-    if (optimisticPrefs) {
-      prefsRef.current = optimisticPrefs;
-      setPrefs(optimisticPrefs);
-    }
-    try {
-      const updated = await updateChatSessionPrefs(selectedSession.sessionId, patch);
-      if (prefMutationSequenceRef.current !== mutationId) {
-        return;
+  const handlePrefPatch = useCallback(
+    async (patch: ChatSessionPrefsPatch) => {
+      if (!selectedSession) return;
+      lastLocalPrefMutationAtRef.current = Date.now();
+      const previousPrefs = prefsRef.current;
+      const optimisticPrefs = previousPrefs ? resolveOptimisticChatPrefs(previousPrefs, patch) : null;
+      const mutationId = prefMutationSequenceRef.current + 1;
+      prefMutationSequenceRef.current = mutationId;
+      if (optimisticPrefs) {
+        prefsRef.current = optimisticPrefs;
+        setPrefs(optimisticPrefs);
       }
-      prefsRef.current = updated;
-      setPrefs(updated);
-    } catch (err) {
-      if (prefMutationSequenceRef.current === mutationId && previousPrefs) {
-        prefsRef.current = previousPrefs;
-        setPrefs(previousPrefs);
+      try {
+        const updated = await updateChatSessionPrefs(selectedSession.sessionId, patch);
+        if (prefMutationSequenceRef.current !== mutationId) {
+          return;
+        }
+        prefsRef.current = updated;
+        setPrefs(updated);
+      } catch (err) {
+        if (prefMutationSequenceRef.current === mutationId && previousPrefs) {
+          prefsRef.current = previousPrefs;
+          setPrefs(previousPrefs);
+        }
+        setError((err as Error).message);
       }
-      setError((err as Error).message);
-    }
-  }, [selectedSession]);
+    },
+    [selectedSession],
+  );
 
   const rootClassName = `chat-v11 mode-${messageMode}${lockSurface ? " shell-owned-surface" : ""}`;
   const workspaceSummaryText = selectedSession
@@ -2455,9 +2366,12 @@ export function ChatPage({
       : isCodeSurface
         ? "Pick a code session or start a new one. Bind a project only when you want execution-heavy work."
         : `Use the queue to reopen a session or start a new ${activeModePreset.label.toLowerCase()} run from the left rail.`;
-  const dockSectionStyle = useCallback((sectionId: MissionControlDockSectionId) => ({
-    order: Math.max(0, dockSectionOrder.indexOf(sectionId)),
-  }), [dockSectionOrder]);
+  const dockSectionStyle = useCallback(
+    (sectionId: MissionControlDockSectionId) => ({
+      order: Math.max(0, dockSectionOrder.indexOf(sectionId)),
+    }),
+    [dockSectionOrder],
+  );
 
   if (loading) {
     return (
@@ -2480,21 +2394,27 @@ export function ChatPage({
         <PageHeader
           title={surfaceHeaderTitle}
           subtitle={surfaceHeaderSubtitle}
-          hint={isCodeSurface
-            ? undefined
-            : "Stay in the main thread by default. Open trace, memory, and approvals only when you need them."}
+          hint={
+            isCodeSurface
+              ? undefined
+              : "Stay in the main thread by default. Open trace, memory, and approvals only when you need them."
+          }
           className="page-header-command chat-v11-header"
-          actions={(
+          actions={
             <div className="chat-v11-page-actions">
-              <StatusChip tone={selectedSessionId ? "live" : "muted"}>{selectedSessionId ? "Session selected" : "No session"}</StatusChip>
+              <StatusChip tone={selectedSessionId ? "live" : "muted"}>
+                {selectedSessionId ? "Session selected" : "No session"}
+              </StatusChip>
               {selectedSession ? (
                 <StatusChip tone={selectedSession.scope === "external" ? "warning" : "success"}>
                   {selectedSession.scope === "external" ? "External writeback" : "Mission session"}
                 </StatusChip>
               ) : null}
-              {!isCodeSurface && selectedTurn ? <StatusChip tone="muted">{selectedTurn.trace.status}</StatusChip> : null}
+              {!isCodeSurface && selectedTurn ? (
+                <StatusChip tone="muted">{selectedTurn.trace.status}</StatusChip>
+              ) : null}
             </div>
-          )}
+          }
         />
       ) : null}
       {error ? <p className="error">{error}</p> : null}
@@ -2559,7 +2479,9 @@ export function ChatPage({
                 dockOpen={dockOpen}
                 onToggleDock={() => setDockOpen((current) => !current)}
               />
-              <div className={`chat-v11-main-grid${isCoworkSurface ? " with-cowork" : ""}${isCodeSurface ? " with-code" : ""}${dockOpen ? " with-dock-open" : " with-dock-collapsed"}`}>
+              <div
+                className={`chat-v11-main-grid${isCoworkSurface ? " with-cowork" : ""}${isCodeSurface ? " with-code" : ""}${dockOpen ? " with-dock-open" : " with-dock-collapsed"}`}
+              >
                 <article className={`card chat-v11-thread mode-${messageMode}`}>
                   <ChatThreadShell
                     mode={messageMode}
@@ -2590,7 +2512,9 @@ export function ChatPage({
                     queueItems={queuedOutbound.map((item) => ({
                       id: item.id,
                       action: item.action,
-                      label: item.content.trim() ? item.content.trim().slice(0, 96) : `Turn ${item.targetTurnId?.slice(-6) ?? "queued"}`,
+                      label: item.content.trim()
+                        ? item.content.trim().slice(0, 96)
+                        : `Turn ${item.targetTurnId?.slice(-6) ?? "queued"}`,
                       createdAt: item.createdAt,
                       paused: item.paused,
                     }))}
@@ -2627,806 +2551,1000 @@ export function ChatPage({
                     onComposerKeyDown={handleComposerKeyDown}
                     onComposerPaste={handleComposerPaste}
                     onApplyDraftCommand={applyDraftCommand}
-                    onRemoveAttachment={(attachmentId) => setPendingAttachments((current) => current.filter((entry) => entry.attachmentId !== attachmentId))}
+                    onRemoveAttachment={(attachmentId) =>
+                      setPendingAttachments((current) => current.filter((entry) => entry.attachmentId !== attachmentId))
+                    }
                     onAttachFiles={() => fileInputRef.current?.click()}
                     onUploadFiles={(files) => {
                       if (!files || files.length === 0) return;
                       void uploadAttachments(Array.from(files));
                     }}
-                    onRunQuickResearch={() => { void handleRunQuickResearch(); }}
+                    onRunQuickResearch={() => {
+                      void handleRunQuickResearch();
+                    }}
                     onStopActiveTurn={() => void handleStopActiveTurn()}
                     onSend={() => void handleSend()}
                   />
                 </article>
                 <MissionControlContextDock mode={messageMode} open={dockOpen}>
-                {isCoworkSurface ? (
-                  <div className="mission-dock-section" style={dockSectionStyle("workflow")}>
-                    <CoworkCanvasPanel items={coworkItems} orchestration={latestOrchestration} />
-                  </div>
-                ) : null}
-                {isCodeSurface ? (
-                  <div className="mission-dock-section" style={dockSectionStyle("workflow")}>
-                    <CodeWorkbenchPanel
-                      selectedTurn={selectedTurn}
-                      projectName={selectedProject?.name}
-                      needsProjectBinding={codeModeNeedsProjectBinding}
-                    />
-                  </div>
-                ) : null}
-                <div className="mission-dock-section" style={dockSectionStyle("surface")}>
-                <Panel
-                  className="chat-v11-topbar-panel chat-v11-panel-surface"
-                  padding="compact"
-                  title={isCodeSurface ? "Execution posture" : isCoworkSurface ? "Now / next / controls" : "Surface controls"}
-                  subtitle={isCodeSurface ? "Project binding, model, and review posture for this session." : isCoworkSurface ? "Guide the workflow lane without crowding the central thread." : activeModePreset.summary}
-                >
-                  <ChatPlanningPill planningMode={planningMode} effectiveToolAutonomy={effectiveToolAutonomy} />
-                  <div className="chat-v11-surface-identity">
-                    <div className="chat-v11-surface-chip-row">
-                      <StatusChip tone={isChatSurface ? "live" : isCoworkSurface ? "warning" : "critical"}>
-                        {activeModePreset.teamBehaviorLabel}
-                      </StatusChip>
-                      <StatusChip tone={activeModePreset.allowsDynamicTeamGrowth ? "warning" : "muted"}>
-                        {activeModePreset.growthPolicyLabel}
-                      </StatusChip>
-                    </div>
-                    <p className="chat-v11-surface-copy">{activeModePreset.teamBehaviorSummary}</p>
-                    <p className="chat-v11-surface-copy secondary">{activeModePreset.growthPolicySummary}</p>
-                  </div>
-                  {codeModeNeedsProjectBinding ? (
-                    <div className="status-banner warning">
-                      Code mode is unbound. Assign a project in Session management before execution-heavy work. Until then GoatCitadel stays in manual execution posture.
-                      {selectedSession && selectedProjectBindingCandidateId ? (
-                        <>
-                          {" "}
-                          <button
-                            type="button"
-                            disabled={sending || Boolean(sessionControlPending)}
-                            onClick={() => {
-                              setSessionControlPending("project");
-                              void assignChatSessionProject(selectedSession.sessionId, selectedProjectBindingCandidateId)
-                                .then(() => loadSidebar())
-                                .catch((err) => setError((err as Error).message))
-                                .finally(() => setSessionControlPending(null));
-                            }}
-                          >
-                            Bind {selectedProjectBindingCandidateName ?? "selected project"}
-                          </button>
-                        </>
-                      ) : null}
+                  {isCoworkSurface ? (
+                    <div className="mission-dock-section" style={dockSectionStyle("workflow")}>
+                      <CoworkCanvasPanel items={coworkItems} orchestration={latestOrchestration} />
                     </div>
                   ) : null}
                   {isCodeSurface ? (
-                    <div className="chat-v11-settings-grid">
-                      {!lockSurface ? (
-                        <div className="chat-v11-setting-row chat-v11-setting-row-stack chat-v11-setting-row-wide">
-                          <div className="chat-v11-setting-copy">
-                            <span className="chat-v11-setting-label">Surface</span>
-                            <span className="chat-v11-setting-hint">Switch between Chat, Cowork, and Code.</span>
+                    <div className="mission-dock-section" style={dockSectionStyle("workflow")}>
+                      <CodeWorkbenchPanel
+                        selectedTurn={selectedTurn}
+                        projectName={selectedProject?.name}
+                        needsProjectBinding={codeModeNeedsProjectBinding}
+                      />
+                    </div>
+                  ) : null}
+                  <div className="mission-dock-section" style={dockSectionStyle("surface")}>
+                    <Panel
+                      className="chat-v11-topbar-panel chat-v11-panel-surface"
+                      padding="compact"
+                      title={
+                        isCodeSurface
+                          ? "Execution posture"
+                          : isCoworkSurface
+                            ? "Now / next / controls"
+                            : "Surface controls"
+                      }
+                      subtitle={
+                        isCodeSurface
+                          ? "Project binding, model, and review posture for this session."
+                          : isCoworkSurface
+                            ? "Guide the workflow lane without crowding the central thread."
+                            : activeModePreset.summary
+                      }
+                    >
+                      <ChatPlanningPill planningMode={planningMode} effectiveToolAutonomy={effectiveToolAutonomy} />
+                      <div className="chat-v11-surface-identity">
+                        <div className="chat-v11-surface-chip-row">
+                          <StatusChip tone={isChatSurface ? "live" : isCoworkSurface ? "warning" : "critical"}>
+                            {activeModePreset.teamBehaviorLabel}
+                          </StatusChip>
+                          <StatusChip tone={activeModePreset.allowsDynamicTeamGrowth ? "warning" : "muted"}>
+                            {activeModePreset.growthPolicyLabel}
+                          </StatusChip>
+                        </div>
+                        <p className="chat-v11-surface-copy">{activeModePreset.teamBehaviorSummary}</p>
+                        <p className="chat-v11-surface-copy secondary">{activeModePreset.growthPolicySummary}</p>
+                      </div>
+                      {codeModeNeedsProjectBinding ? (
+                        <div className="status-banner warning">
+                          Code mode is unbound. Assign a project in Session management before execution-heavy work.
+                          Until then GoatCitadel stays in manual execution posture.
+                          {selectedSession && selectedProjectBindingCandidateId ? (
+                            <>
+                              {" "}
+                              <button
+                                type="button"
+                                disabled={sending || Boolean(sessionControlPending)}
+                                onClick={() => {
+                                  setSessionControlPending("project");
+                                  void assignChatSessionProject(
+                                    selectedSession.sessionId,
+                                    selectedProjectBindingCandidateId,
+                                  )
+                                    .then(() => loadSidebar())
+                                    .catch((err) => setError((err as Error).message))
+                                    .finally(() => setSessionControlPending(null));
+                                }}
+                              >
+                                Bind {selectedProjectBindingCandidateName ?? "selected project"}
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {isCodeSurface ? (
+                        <div className="chat-v11-settings-grid">
+                          {!lockSurface ? (
+                            <div className="chat-v11-setting-row chat-v11-setting-row-stack chat-v11-setting-row-wide">
+                              <div className="chat-v11-setting-copy">
+                                <span className="chat-v11-setting-label">Surface</span>
+                                <span className="chat-v11-setting-hint">Switch between Chat, Cowork, and Code.</span>
+                              </div>
+                              <div className="chat-v11-setting-control">
+                                <ChatModeSwitch
+                                  value={messageMode}
+                                  disabled={!selectedSessionId || sending}
+                                  onChange={(mode) => void handlePrefPatch({ mode })}
+                                />
+                              </div>
+                            </div>
+                          ) : null}
+                          <div className="chat-v11-setting-row chat-v11-setting-row-stack chat-v11-setting-row-wide">
+                            <div className="chat-v11-setting-copy">
+                              <span className="chat-v11-setting-label">Model</span>
+                              <span className="chat-v11-setting-hint">
+                                Provider and model used for this code session.
+                              </span>
+                            </div>
+                            <div className="chat-v11-setting-control">
+                              <ChatModelPicker
+                                providers={providerOptions}
+                                providerId={selectedProviderId}
+                                model={selectedModel}
+                                disabled={!selectedSessionId || sending}
+                                onChangeProvider={(providerId) => {
+                                  const provider = providerOptions.find((item) => item.providerId === providerId);
+                                  const selection = resolveProviderModelSelection({
+                                    provider,
+                                    loadedModels: providerId ? getCachedModels(providerId) : [],
+                                    selectedModel: undefined,
+                                  });
+                                  void loadModelsForProvider(providerId);
+                                  void handlePrefPatch({ providerId, model: selection.model ?? "" });
+                                }}
+                                onChangeModel={(model) => void handlePrefPatch({ model })}
+                              />
+                            </div>
                           </div>
-                          <div className="chat-v11-setting-control">
-                            <ChatModeSwitch value={messageMode} disabled={!selectedSessionId || sending} onChange={(mode) => void handlePrefPatch({ mode })} />
+                          <div className="chat-v11-setting-row">
+                            <span className="chat-v11-setting-label">Thinking</span>
+                            <div className="chat-v11-setting-control">
+                              <GCSelect
+                                value={prefs?.thinkingLevel ?? "standard"}
+                                disabled={!selectedSessionId || sending}
+                                onChange={(value) =>
+                                  void handlePrefPatch({ thinkingLevel: value as "minimal" | "standard" | "extended" })
+                                }
+                                options={[
+                                  { value: "minimal", label: "Minimal" },
+                                  { value: "standard", label: "Standard" },
+                                  { value: "extended", label: "Extended" },
+                                ]}
+                              />
+                            </div>
+                          </div>
+                          <div className="chat-v11-setting-row">
+                            <span className="chat-v11-setting-label">Web</span>
+                            <div className="chat-v11-setting-control">
+                              <GCSelect
+                                value={prefs?.webMode ?? "auto"}
+                                disabled={!selectedSessionId || sending}
+                                onChange={(value) =>
+                                  void handlePrefPatch({ webMode: value as "auto" | "off" | "quick" | "deep" })
+                                }
+                                options={[
+                                  { value: "auto", label: "Auto" },
+                                  { value: "off", label: "Off" },
+                                  { value: "quick", label: "Quick" },
+                                  { value: "deep", label: "Deep" },
+                                ]}
+                              />
+                            </div>
+                          </div>
+                          <div className="chat-v11-setting-row">
+                            <span className="chat-v11-setting-label">Stream</span>
+                            <div className="chat-v11-setting-control">
+                              <GCSwitch checked={streamEnabled} onCheckedChange={setStreamEnabled} />
+                            </div>
+                          </div>
+                          <div className="chat-v11-setting-row">
+                            <span className="chat-v11-setting-label">Orchestration</span>
+                            <div className="chat-v11-setting-control">
+                              <GCSwitch
+                                checked={prefs?.orchestrationEnabled ?? true}
+                                disabled={!selectedSessionId || sending}
+                                onCheckedChange={(checked) => void handlePrefPatch({ orchestrationEnabled: checked })}
+                              />
+                            </div>
+                          </div>
+                          <div className="chat-v11-setting-row">
+                            <span className="chat-v11-setting-label">Intensity</span>
+                            <div className="chat-v11-setting-control">
+                              <GCSelect
+                                value={prefs?.orchestrationIntensity ?? "balanced"}
+                                disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
+                                onChange={(value) =>
+                                  void handlePrefPatch({
+                                    orchestrationIntensity: value as "minimal" | "balanced" | "deep",
+                                  })
+                                }
+                                options={[
+                                  { value: "minimal", label: "Minimal" },
+                                  { value: "balanced", label: "Balanced" },
+                                  { value: "deep", label: "Deep" },
+                                ]}
+                              />
+                            </div>
+                          </div>
+                          <div className="chat-v11-setting-row">
+                            <span className="chat-v11-setting-label">Visibility</span>
+                            <div className="chat-v11-setting-control">
+                              <GCSelect
+                                value={prefs?.orchestrationVisibility ?? "expandable"}
+                                disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
+                                onChange={(value) =>
+                                  void handlePrefPatch({
+                                    orchestrationVisibility: value as
+                                      | "hidden"
+                                      | "summarized"
+                                      | "expandable"
+                                      | "explicit",
+                                  })
+                                }
+                                options={[
+                                  { value: "hidden", label: "Hidden" },
+                                  { value: "summarized", label: "Summarized" },
+                                  { value: "expandable", label: "Expandable" },
+                                  { value: "explicit", label: "Explicit" },
+                                ]}
+                              />
+                            </div>
+                          </div>
+                          <div className="chat-v11-setting-row">
+                            <span className="chat-v11-setting-label">Provider posture</span>
+                            <div className="chat-v11-setting-control">
+                              <GCSelect
+                                value={prefs?.orchestrationProviderPreference ?? "balanced"}
+                                disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
+                                onChange={(value) =>
+                                  void handlePrefPatch({
+                                    orchestrationProviderPreference: value as
+                                      | "speed"
+                                      | "quality"
+                                      | "balanced"
+                                      | "low_cost",
+                                  })
+                                }
+                                options={[
+                                  { value: "speed", label: "Speed" },
+                                  { value: "quality", label: "Quality" },
+                                  { value: "balanced", label: "Balanced" },
+                                  { value: "low_cost", label: "Low cost" },
+                                ]}
+                              />
+                            </div>
+                          </div>
+                          <div className="chat-v11-setting-row">
+                            <span className="chat-v11-setting-label">Review depth</span>
+                            <div className="chat-v11-setting-control">
+                              <GCSelect
+                                value={prefs?.orchestrationReviewDepth ?? "standard"}
+                                disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
+                                onChange={(value) =>
+                                  void handlePrefPatch({
+                                    orchestrationReviewDepth: value as "off" | "standard" | "strict",
+                                  })
+                                }
+                                options={[
+                                  { value: "off", label: "Off" },
+                                  { value: "standard", label: "Standard" },
+                                  { value: "strict", label: "Strict" },
+                                ]}
+                              />
+                            </div>
+                          </div>
+                          <div className="chat-v11-setting-row">
+                            <span className="chat-v11-setting-label">Parallelism</span>
+                            <div className="chat-v11-setting-control">
+                              <GCSelect
+                                value={prefs?.orchestrationParallelism ?? "auto"}
+                                disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
+                                onChange={(value) =>
+                                  void handlePrefPatch({
+                                    orchestrationParallelism: value as "auto" | "sequential" | "parallel",
+                                  })
+                                }
+                                options={[
+                                  { value: "auto", label: "Auto" },
+                                  { value: "sequential", label: "Sequential" },
+                                  { value: "parallel", label: "Parallel" },
+                                ]}
+                              />
+                            </div>
+                          </div>
+                          <div className="chat-v11-setting-row">
+                            <span className="chat-v11-setting-label">Code apply</span>
+                            <div className="chat-v11-setting-control">
+                              <GCSelect
+                                value={prefs?.codeAutoApply ?? "manual"}
+                                disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
+                                onChange={(value) =>
+                                  void handlePrefPatch({
+                                    codeAutoApply: value as "manual" | "low_risk_auto" | "aggressive_auto",
+                                  })
+                                }
+                                options={[
+                                  { value: "manual", label: "Manual" },
+                                  { value: "low_risk_auto", label: "Low risk auto" },
+                                  { value: "aggressive_auto", label: "Aggressive auto" },
+                                ]}
+                              />
+                            </div>
                           </div>
                         </div>
                       ) : null}
-                      <div className="chat-v11-setting-row chat-v11-setting-row-stack chat-v11-setting-row-wide">
-                        <div className="chat-v11-setting-copy">
-                          <span className="chat-v11-setting-label">Model</span>
-                          <span className="chat-v11-setting-hint">Provider and model used for this code session.</span>
-                        </div>
-                        <div className="chat-v11-setting-control">
-                          <ChatModelPicker
-                            providers={providerOptions}
-                            providerId={selectedProviderId}
-                            model={selectedModel}
-                            disabled={!selectedSessionId || sending}
-                            onChangeProvider={(providerId) => {
-                              const provider = providerOptions.find((item) => item.providerId === providerId);
-                              const selection = resolveProviderModelSelection({
-                                provider,
-                                loadedModels: providerId ? getCachedModels(providerId) : [],
-                                selectedModel: undefined,
-                              });
-                              void loadModelsForProvider(providerId);
-                              void handlePrefPatch({ providerId, model: selection.model ?? "" });
-                            }}
-                            onChangeModel={(model) => void handlePrefPatch({ model })}
-                          />
-                        </div>
-                      </div>
-                      <div className="chat-v11-setting-row">
-                        <span className="chat-v11-setting-label">Thinking</span>
-                        <div className="chat-v11-setting-control">
-                          <GCSelect
-                            value={prefs?.thinkingLevel ?? "standard"}
-                            disabled={!selectedSessionId || sending}
-                            onChange={(value) => void handlePrefPatch({ thinkingLevel: value as "minimal" | "standard" | "extended" })}
-                            options={[
-                              { value: "minimal", label: "Minimal" },
-                              { value: "standard", label: "Standard" },
-                              { value: "extended", label: "Extended" },
-                            ]}
-                          />
-                        </div>
-                      </div>
-                      <div className="chat-v11-setting-row">
-                        <span className="chat-v11-setting-label">Web</span>
-                        <div className="chat-v11-setting-control">
-                          <GCSelect
-                            value={prefs?.webMode ?? "auto"}
-                            disabled={!selectedSessionId || sending}
-                            onChange={(value) => void handlePrefPatch({ webMode: value as "auto" | "off" | "quick" | "deep" })}
-                            options={[
-                              { value: "auto", label: "Auto" },
-                              { value: "off", label: "Off" },
-                              { value: "quick", label: "Quick" },
-                              { value: "deep", label: "Deep" },
-                            ]}
-                          />
-                        </div>
-                      </div>
-                      <div className="chat-v11-setting-row">
-                        <span className="chat-v11-setting-label">Stream</span>
-                        <div className="chat-v11-setting-control">
-                          <GCSwitch checked={streamEnabled} onCheckedChange={setStreamEnabled} />
-                        </div>
-                      </div>
-                      <div className="chat-v11-setting-row">
-                        <span className="chat-v11-setting-label">Orchestration</span>
-                        <div className="chat-v11-setting-control">
+                      {isCodeSurface ? null : (
+                        <DataToolbar
+                          primary={
+                            <>
+                              {!lockSurface ? (
+                                <ChatModeSwitch
+                                  value={messageMode}
+                                  disabled={!selectedSessionId || sending}
+                                  onChange={(mode) => void handlePrefPatch({ mode })}
+                                />
+                              ) : null}
+                              <ChatModelPicker
+                                providers={providerOptions}
+                                providerId={selectedProviderId}
+                                model={selectedModel}
+                                disabled={!selectedSessionId || sending}
+                                onChangeProvider={(providerId) => {
+                                  const provider = providerOptions.find((item) => item.providerId === providerId);
+                                  const selection = resolveProviderModelSelection({
+                                    provider,
+                                    loadedModels: providerId ? getCachedModels(providerId) : [],
+                                    selectedModel: undefined,
+                                  });
+                                  void loadModelsForProvider(providerId);
+                                  void handlePrefPatch({ providerId, model: selection.model ?? "" });
+                                }}
+                                onChangeModel={(model) => void handlePrefPatch({ model })}
+                              />
+                              <label className="chat-v11-select">
+                                Thinking
+                                <GCSelect
+                                  value={prefs?.thinkingLevel ?? "standard"}
+                                  disabled={!selectedSessionId || sending}
+                                  onChange={(value) =>
+                                    void handlePrefPatch({
+                                      thinkingLevel: value as "minimal" | "standard" | "extended",
+                                    })
+                                  }
+                                  options={[
+                                    { value: "minimal", label: "Minimal" },
+                                    { value: "standard", label: "Standard" },
+                                    { value: "extended", label: "Extended" },
+                                  ]}
+                                />
+                              </label>
+                              <label className="chat-v11-select">
+                                Web
+                                <GCSelect
+                                  value={prefs?.webMode ?? "auto"}
+                                  disabled={!selectedSessionId || sending}
+                                  onChange={(value) =>
+                                    void handlePrefPatch({ webMode: value as "auto" | "off" | "quick" | "deep" })
+                                  }
+                                  options={[
+                                    { value: "auto", label: "Auto" },
+                                    { value: "off", label: "Off" },
+                                    { value: "quick", label: "Quick" },
+                                    { value: "deep", label: "Deep" },
+                                  ]}
+                                />
+                              </label>
+                            </>
+                          }
+                          secondary={
+                            <>
+                              {!isChatSurface ? (
+                                <>
+                                  <label className="chat-v11-select">
+                                    Proactive
+                                    <GCSelect
+                                      value={proactiveStatus?.mode ?? prefs?.proactiveMode ?? "off"}
+                                      disabled={!selectedSessionId || sending}
+                                      onChange={(value) =>
+                                        void handleProactivePolicyPatch({
+                                          proactiveMode: value as "off" | "suggest" | "auto_safe" | "auto_full",
+                                        })
+                                      }
+                                      options={[
+                                        { value: "off", label: "Off" },
+                                        { value: "suggest", label: "Suggest" },
+                                        { value: "auto_safe", label: "Auto-safe" },
+                                        { value: "auto_full", label: "Auto-full" },
+                                      ]}
+                                    />
+                                  </label>
+                                  <label className="chat-v11-select">
+                                    Retrieval
+                                    <GCSelect
+                                      value={proactiveStatus?.retrievalMode ?? prefs?.retrievalMode ?? "standard"}
+                                      disabled={!selectedSessionId || sending}
+                                      onChange={(value) =>
+                                        void handleProactivePolicyPatch({
+                                          retrievalMode: value as "standard" | "layered",
+                                        })
+                                      }
+                                      options={[
+                                        { value: "standard", label: "Standard" },
+                                        { value: "layered", label: "Layered" },
+                                      ]}
+                                    />
+                                  </label>
+                                  <label className="chat-v11-select">
+                                    Reflection
+                                    <GCSelect
+                                      value={proactiveStatus?.reflectionMode ?? prefs?.reflectionMode ?? "off"}
+                                      disabled={!selectedSessionId || sending}
+                                      onChange={(value) =>
+                                        void handleProactivePolicyPatch({ reflectionMode: value as "off" | "on" })
+                                      }
+                                      options={[
+                                        { value: "off", label: "Off" },
+                                        { value: "on", label: "On" },
+                                      ]}
+                                    />
+                                  </label>
+                                  {isCoworkSurface ? (
+                                    <button
+                                      type="button"
+                                      disabled={!selectedSessionId || sending}
+                                      onClick={() => void handleSuggestDelegation()}
+                                    >
+                                      Suggest delegation
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    disabled={!selectedSessionId || sending}
+                                    onClick={() => void handleTriggerProactive()}
+                                  >
+                                    Run proactive
+                                  </button>
+                                </>
+                              ) : null}
+                              <GCSwitch checked={streamEnabled} onCheckedChange={setStreamEnabled} label="Stream" />
+                            </>
+                          }
+                        />
+                      )}
+                      {!isCodeSurface && !isChatSurface ? (
+                        <div className="chat-v11-orchestration-controls">
                           <GCSwitch
                             checked={prefs?.orchestrationEnabled ?? true}
                             disabled={!selectedSessionId || sending}
+                            label="Orchestration"
                             onCheckedChange={(checked) => void handlePrefPatch({ orchestrationEnabled: checked })}
                           />
-                        </div>
-                      </div>
-                      <div className="chat-v11-setting-row">
-                        <span className="chat-v11-setting-label">Intensity</span>
-                        <div className="chat-v11-setting-control">
-                          <GCSelect
-                            value={prefs?.orchestrationIntensity ?? "balanced"}
-                            disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
-                            onChange={(value) => void handlePrefPatch({ orchestrationIntensity: value as "minimal" | "balanced" | "deep" })}
-                            options={[
-                              { value: "minimal", label: "Minimal" },
-                              { value: "balanced", label: "Balanced" },
-                              { value: "deep", label: "Deep" },
-                            ]}
-                          />
-                        </div>
-                      </div>
-                      <div className="chat-v11-setting-row">
-                        <span className="chat-v11-setting-label">Visibility</span>
-                        <div className="chat-v11-setting-control">
-                          <GCSelect
-                            value={prefs?.orchestrationVisibility ?? "expandable"}
-                            disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
-                            onChange={(value) => void handlePrefPatch({ orchestrationVisibility: value as "hidden" | "summarized" | "expandable" | "explicit" })}
-                            options={[
-                              { value: "hidden", label: "Hidden" },
-                              { value: "summarized", label: "Summarized" },
-                              { value: "expandable", label: "Expandable" },
-                              { value: "explicit", label: "Explicit" },
-                            ]}
-                          />
-                        </div>
-                      </div>
-                      <div className="chat-v11-setting-row">
-                        <span className="chat-v11-setting-label">Provider posture</span>
-                        <div className="chat-v11-setting-control">
-                          <GCSelect
-                            value={prefs?.orchestrationProviderPreference ?? "balanced"}
-                            disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
-                            onChange={(value) => void handlePrefPatch({ orchestrationProviderPreference: value as "speed" | "quality" | "balanced" | "low_cost" })}
-                            options={[
-                              { value: "speed", label: "Speed" },
-                              { value: "quality", label: "Quality" },
-                              { value: "balanced", label: "Balanced" },
-                              { value: "low_cost", label: "Low cost" },
-                            ]}
-                          />
-                        </div>
-                      </div>
-                      <div className="chat-v11-setting-row">
-                        <span className="chat-v11-setting-label">Review depth</span>
-                        <div className="chat-v11-setting-control">
-                          <GCSelect
-                            value={prefs?.orchestrationReviewDepth ?? "standard"}
-                            disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
-                            onChange={(value) => void handlePrefPatch({ orchestrationReviewDepth: value as "off" | "standard" | "strict" })}
-                            options={[
-                              { value: "off", label: "Off" },
-                              { value: "standard", label: "Standard" },
-                              { value: "strict", label: "Strict" },
-                            ]}
-                          />
-                        </div>
-                      </div>
-                      <div className="chat-v11-setting-row">
-                        <span className="chat-v11-setting-label">Parallelism</span>
-                        <div className="chat-v11-setting-control">
-                          <GCSelect
-                            value={prefs?.orchestrationParallelism ?? "auto"}
-                            disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
-                            onChange={(value) => void handlePrefPatch({ orchestrationParallelism: value as "auto" | "sequential" | "parallel" })}
-                            options={[
-                              { value: "auto", label: "Auto" },
-                              { value: "sequential", label: "Sequential" },
-                              { value: "parallel", label: "Parallel" },
-                            ]}
-                          />
-                        </div>
-                      </div>
-                      <div className="chat-v11-setting-row">
-                        <span className="chat-v11-setting-label">Code apply</span>
-                        <div className="chat-v11-setting-control">
-                          <GCSelect
-                            value={prefs?.codeAutoApply ?? "manual"}
-                            disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
-                            onChange={(value) => void handlePrefPatch({ codeAutoApply: value as "manual" | "low_risk_auto" | "aggressive_auto" })}
-                            options={[
-                              { value: "manual", label: "Manual" },
-                              { value: "low_risk_auto", label: "Low risk auto" },
-                              { value: "aggressive_auto", label: "Aggressive auto" },
-                            ]}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                  {isCodeSurface ? null : (
-                  <DataToolbar
-                    primary={(
-                      <>
-                        {!lockSurface ? (
-                          <ChatModeSwitch value={messageMode} disabled={!selectedSessionId || sending} onChange={(mode) => void handlePrefPatch({ mode })} />
-                        ) : null}
-                        <ChatModelPicker
-                          providers={providerOptions}
-                          providerId={selectedProviderId}
-                          model={selectedModel}
-                          disabled={!selectedSessionId || sending}
-                          onChangeProvider={(providerId) => {
-                            const provider = providerOptions.find((item) => item.providerId === providerId);
-                            const selection = resolveProviderModelSelection({
-                              provider,
-                              loadedModels: providerId ? getCachedModels(providerId) : [],
-                              selectedModel: undefined,
-                            });
-                            void loadModelsForProvider(providerId);
-                            void handlePrefPatch({ providerId, model: selection.model ?? "" });
-                          }}
-                          onChangeModel={(model) => void handlePrefPatch({ model })}
-                        />
-                        <label className="chat-v11-select">Thinking
-                          <GCSelect
-                            value={prefs?.thinkingLevel ?? "standard"}
-                            disabled={!selectedSessionId || sending}
-                            onChange={(value) => void handlePrefPatch({ thinkingLevel: value as "minimal" | "standard" | "extended" })}
-                            options={[
-                              { value: "minimal", label: "Minimal" },
-                              { value: "standard", label: "Standard" },
-                              { value: "extended", label: "Extended" },
-                            ]}
-                          />
-                        </label>
-                        <label className="chat-v11-select">Web
-                          <GCSelect
-                            value={prefs?.webMode ?? "auto"}
-                            disabled={!selectedSessionId || sending}
-                            onChange={(value) => void handlePrefPatch({ webMode: value as "auto" | "off" | "quick" | "deep" })}
-                            options={[
-                              { value: "auto", label: "Auto" },
-                              { value: "off", label: "Off" },
-                              { value: "quick", label: "Quick" },
-                              { value: "deep", label: "Deep" },
-                            ]}
-                          />
-                        </label>
-                      </>
-                    )}
-                    secondary={(
-                      <>
-                        {!isChatSurface ? (
-                          <>
-                            <label className="chat-v11-select">Proactive
-                              <GCSelect
-                                value={proactiveStatus?.mode ?? prefs?.proactiveMode ?? "off"}
-                                disabled={!selectedSessionId || sending}
-                                onChange={(value) => void handleProactivePolicyPatch({ proactiveMode: value as "off" | "suggest" | "auto_safe" | "auto_full" })}
-                                options={[
-                                  { value: "off", label: "Off" },
-                                  { value: "suggest", label: "Suggest" },
-                                  { value: "auto_safe", label: "Auto-safe" },
-                                  { value: "auto_full", label: "Auto-full" },
-                                ]}
-                              />
-                            </label>
-                            <label className="chat-v11-select">Retrieval
-                              <GCSelect
-                                value={proactiveStatus?.retrievalMode ?? prefs?.retrievalMode ?? "standard"}
-                                disabled={!selectedSessionId || sending}
-                                onChange={(value) => void handleProactivePolicyPatch({ retrievalMode: value as "standard" | "layered" })}
-                                options={[
-                                  { value: "standard", label: "Standard" },
-                                  { value: "layered", label: "Layered" },
-                                ]}
-                              />
-                            </label>
-                            <label className="chat-v11-select">Reflection
-                              <GCSelect
-                                value={proactiveStatus?.reflectionMode ?? prefs?.reflectionMode ?? "off"}
-                                disabled={!selectedSessionId || sending}
-                                onChange={(value) => void handleProactivePolicyPatch({ reflectionMode: value as "off" | "on" })}
-                                options={[
-                                  { value: "off", label: "Off" },
-                                  { value: "on", label: "On" },
-                                ]}
-                              />
-                            </label>
-                            {isCoworkSurface ? (
-                              <button type="button" disabled={!selectedSessionId || sending} onClick={() => void handleSuggestDelegation()}>
-                                Suggest delegation
-                              </button>
-                            ) : null}
-                            <button type="button" disabled={!selectedSessionId || sending} onClick={() => void handleTriggerProactive()}>
-                              Run proactive
-                            </button>
-                          </>
-                        ) : null}
-                        <GCSwitch checked={streamEnabled} onCheckedChange={setStreamEnabled} label="Stream" />
-                      </>
-                    )}
-                  />
-                  )}
-                  {!isCodeSurface && !isChatSurface ? (
-                    <div className="chat-v11-orchestration-controls">
-                      <GCSwitch
-                        checked={prefs?.orchestrationEnabled ?? true}
-                        disabled={!selectedSessionId || sending}
-                        label="Orchestration"
-                        onCheckedChange={(checked) => void handlePrefPatch({ orchestrationEnabled: checked })}
-                      />
-                      <label className="chat-v11-select">Intensity
-                        <GCSelect
-                          value={prefs?.orchestrationIntensity ?? "balanced"}
-                          disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
-                          onChange={(value) => void handlePrefPatch({ orchestrationIntensity: value as "minimal" | "balanced" | "deep" })}
-                          options={[
-                            { value: "minimal", label: "Minimal" },
-                            { value: "balanced", label: "Balanced" },
-                            { value: "deep", label: "Deep" },
-                          ]}
-                        />
-                      </label>
-                      <label className="chat-v11-select">Visibility
-                        <GCSelect
-                          value={prefs?.orchestrationVisibility ?? (isCodeSurface ? "expandable" : "summarized")}
-                          disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
-                          onChange={(value) => void handlePrefPatch({ orchestrationVisibility: value as "hidden" | "summarized" | "expandable" | "explicit" })}
-                          options={[
-                            { value: "hidden", label: "Hidden" },
-                            { value: "summarized", label: "Summarized" },
-                            { value: "expandable", label: "Expandable" },
-                            { value: "explicit", label: "Explicit" },
-                          ]}
-                        />
-                      </label>
-                      <label className="chat-v11-select">Provider posture
-                        <GCSelect
-                          value={prefs?.orchestrationProviderPreference ?? "balanced"}
-                          disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
-                          onChange={(value) => void handlePrefPatch({ orchestrationProviderPreference: value as "speed" | "quality" | "balanced" | "low_cost" })}
-                          options={[
-                            { value: "speed", label: "Speed" },
-                            { value: "quality", label: "Quality" },
-                            { value: "balanced", label: "Balanced" },
-                            { value: "low_cost", label: "Low cost" },
-                          ]}
-                        />
-                      </label>
-                      <label className="chat-v11-select">Review depth
-                        <GCSelect
-                          value={prefs?.orchestrationReviewDepth ?? "standard"}
-                          disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
-                          onChange={(value) => void handlePrefPatch({ orchestrationReviewDepth: value as "off" | "standard" | "strict" })}
-                          options={[
-                            { value: "off", label: "Off" },
-                            { value: "standard", label: "Standard" },
-                            { value: "strict", label: "Strict" },
-                          ]}
-                        />
-                      </label>
-                      <label className="chat-v11-select">Parallelism
-                        <GCSelect
-                          value={prefs?.orchestrationParallelism ?? "auto"}
-                          disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
-                          onChange={(value) => void handlePrefPatch({ orchestrationParallelism: value as "auto" | "sequential" | "parallel" })}
-                          options={[
-                            { value: "auto", label: "Auto" },
-                            { value: "sequential", label: "Sequential" },
-                            { value: "parallel", label: "Parallel" },
-                          ]}
-                        />
-                      </label>
+                          <label className="chat-v11-select">
+                            Intensity
+                            <GCSelect
+                              value={prefs?.orchestrationIntensity ?? "balanced"}
+                              disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
+                              onChange={(value) =>
+                                void handlePrefPatch({
+                                  orchestrationIntensity: value as "minimal" | "balanced" | "deep",
+                                })
+                              }
+                              options={[
+                                { value: "minimal", label: "Minimal" },
+                                { value: "balanced", label: "Balanced" },
+                                { value: "deep", label: "Deep" },
+                              ]}
+                            />
+                          </label>
+                          <label className="chat-v11-select">
+                            Visibility
+                            <GCSelect
+                              value={prefs?.orchestrationVisibility ?? (isCodeSurface ? "expandable" : "summarized")}
+                              disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
+                              onChange={(value) =>
+                                void handlePrefPatch({
+                                  orchestrationVisibility: value as "hidden" | "summarized" | "expandable" | "explicit",
+                                })
+                              }
+                              options={[
+                                { value: "hidden", label: "Hidden" },
+                                { value: "summarized", label: "Summarized" },
+                                { value: "expandable", label: "Expandable" },
+                                { value: "explicit", label: "Explicit" },
+                              ]}
+                            />
+                          </label>
+                          <label className="chat-v11-select">
+                            Provider posture
+                            <GCSelect
+                              value={prefs?.orchestrationProviderPreference ?? "balanced"}
+                              disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
+                              onChange={(value) =>
+                                void handlePrefPatch({
+                                  orchestrationProviderPreference: value as
+                                    | "speed"
+                                    | "quality"
+                                    | "balanced"
+                                    | "low_cost",
+                                })
+                              }
+                              options={[
+                                { value: "speed", label: "Speed" },
+                                { value: "quality", label: "Quality" },
+                                { value: "balanced", label: "Balanced" },
+                                { value: "low_cost", label: "Low cost" },
+                              ]}
+                            />
+                          </label>
+                          <label className="chat-v11-select">
+                            Review depth
+                            <GCSelect
+                              value={prefs?.orchestrationReviewDepth ?? "standard"}
+                              disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
+                              onChange={(value) =>
+                                void handlePrefPatch({
+                                  orchestrationReviewDepth: value as "off" | "standard" | "strict",
+                                })
+                              }
+                              options={[
+                                { value: "off", label: "Off" },
+                                { value: "standard", label: "Standard" },
+                                { value: "strict", label: "Strict" },
+                              ]}
+                            />
+                          </label>
+                          <label className="chat-v11-select">
+                            Parallelism
+                            <GCSelect
+                              value={prefs?.orchestrationParallelism ?? "auto"}
+                              disabled={!selectedSessionId || sending || !(prefs?.orchestrationEnabled ?? true)}
+                              onChange={(value) =>
+                                void handlePrefPatch({
+                                  orchestrationParallelism: value as "auto" | "sequential" | "parallel",
+                                })
+                              }
+                              options={[
+                                { value: "auto", label: "Auto" },
+                                { value: "sequential", label: "Sequential" },
+                                { value: "parallel", label: "Parallel" },
+                              ]}
+                            />
+                          </label>
                         </div>
                       ) : null}
-                </Panel>
-                </div>
-                {!isCodeSurface && showTracePanel && selectedTurn ? (
-                  <div className="mission-dock-section" style={dockSectionStyle("trace")}>
-                  <Panel
-                    className="chat-v11-agentic-card chat-v11-trace-card chat-v11-panel-trace"
-                    title={isChatSurface ? "Run status" : "Run trace"}
-                    actions={(
-                      <StatusChip tone={selectedTurn.trace.status === "completed" ? "success" : selectedTurn.trace.status === "failed" ? "critical" : "warning"}>
-                        {selectedTurn.trace.status}
-                      </StatusChip>
-                    )}
-                  >
-                    <ChatTraceCard trace={selectedTurn.trace} defaultCollapsed={isChatSurface} />
-                  </Panel>
+                    </Panel>
                   </div>
-                ) : null}
-                {!isCodeSurface && showSuggestionsPanel ? (
-                <div className="mission-dock-section" style={dockSectionStyle("suggestions")}>
-                <Panel
-                  className="chat-v11-agentic-card chat-v11-panel-inbox"
-                  title={isCoworkSurface ? "Cowork inbox" : isCodeSurface ? "Capability inbox" : "Suggestions"}
-                  subtitle={
-                    isCoworkSurface
-                      ? "Review proactive suggestions, capability upgrades, and delegation prompts without losing the active chat context."
-                      : isCodeSurface
-                        ? "Review capability upgrades relevant to this code session."
-                        : "Only relevant suggestions appear here so Chat stays lightweight."
-                  }
-                  actions={<span className="token-chip">{proactiveSuggestionCount} suggested</span>}
-                >
-                  {secondaryLoading && proactiveRuns.length === 0 && capabilitySuggestions.length === 0 && !delegationSuggestion ? (
-                    <CardSkeleton lines={4} />
-                  ) : null}
-                  {capabilitySuggestions.length > 0 ? (
-                    <div className="chat-v11-suggestion-card">
-                      <p><strong>Capability upgrade available:</strong> GoatCitadel found a possible way to add what this request needs, but it still requires your approval.</p>
-                      <ul className="chat-v11-proactive-list">
-                        {capabilitySuggestions.slice(0, 3).map((suggestion) => (
-                          <li key={`${suggestion.kind}-${suggestion.candidateId ?? suggestion.title}`}>
-                            <p><strong>{suggestion.title}</strong>{suggestion.riskLevel ? ` · ${suggestion.riskLevel} risk` : ""}</p>
-                            <p>{suggestion.summary}</p>
-                            <p className="chat-v11-muted">{suggestion.reason}</p>
-                            <div className="chat-v11-row-actions">
-                              {suggestion.recommendedAction === "enable_skill" ? (
-                                <button type="button" onClick={() => void handleCapabilitySuggestionAction(suggestion)}>Enable skill</button>
-                              ) : null}
-                              {suggestion.recommendedAction === "install_skill_disabled" ? (
-                                <button type="button" onClick={() => void handleCapabilitySuggestionAction(suggestion)}>Install disabled</button>
-                              ) : null}
-                              {suggestion.recommendedAction === "install_skill_enable" ? (
-                                <button type="button" onClick={() => void handleCapabilitySuggestionAction(suggestion)}>Approve and install</button>
-                              ) : null}
-                              {suggestion.recommendedAction === "add_mcp_template" ? (
-                                <button type="button" onClick={() => void handleCapabilitySuggestionAction(suggestion)}>Add MCP template</button>
-                              ) : null}
-                              {suggestion.recommendedAction === "switch_tool_profile" ? (
-                                <button type="button" onClick={() => void handleCapabilitySuggestionAction(suggestion)}>Review tool profile</button>
-                              ) : null}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  window.location.hash = suggestion.kind === "mcp_template" ? "mcp" : "skills";
-                                }}
-                              >
-                                {suggestion.kind === "mcp_template" ? "Open MCP" : "Open Skills"}
-                              </button>
-                              <button type="button" onClick={() => dismissCapabilitySuggestion(suggestion)}>Dismiss</button>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
+                  {!isCodeSurface && showTracePanel && selectedTurn ? (
+                    <div className="mission-dock-section" style={dockSectionStyle("trace")}>
+                      <Panel
+                        className="chat-v11-agentic-card chat-v11-trace-card chat-v11-panel-trace"
+                        title={isChatSurface ? "Run status" : "Run trace"}
+                        actions={
+                          <StatusChip
+                            tone={
+                              selectedTurn.trace.status === "completed"
+                                ? "success"
+                                : selectedTurn.trace.status === "failed"
+                                  ? "critical"
+                                  : "warning"
+                            }
+                          >
+                            {selectedTurn.trace.status}
+                          </StatusChip>
+                        }
+                      >
+                        <ChatTraceCard trace={selectedTurn.trace} defaultCollapsed={isChatSurface} />
+                      </Panel>
                     </div>
                   ) : null}
-                  {specialistSuggestions.length > 0 ? (
-                    <div className="chat-v11-suggestion-card">
-                      <p><strong>Specialist candidate suggested:</strong> GoatCitadel detected a recurring role or capability gap and can save it as a dormant specialist for future Cowork or Code runs.</p>
-                      <ul className="chat-v11-proactive-list">
-                        {specialistSuggestions.slice(0, 3).map((suggestion) => {
-                          const existing = specialistCandidates.find((item) => (
-                            normalizeSpecialistFingerprint(item) === normalizeSpecialistFingerprint(suggestion)
-                            && item.status !== "retired"
-                          ));
-                          return (
-                            <li key={suggestion.candidateId}>
-                              <p><strong>{suggestion.title}</strong> · {suggestion.role}</p>
-                              <p>{suggestion.summary}</p>
-                              <p className="chat-v11-muted">{suggestion.reason}</p>
-                              {suggestion.suggestedSkills?.length ? <p className="chat-v11-muted">Skills: {suggestion.suggestedSkills.join(", ")}</p> : null}
-                              {suggestion.suggestedTools?.length ? <p className="chat-v11-muted">Tools: {suggestion.suggestedTools.join(", ")}</p> : null}
-                              <div className="chat-v11-row-actions">
-                                {existing ? (
-                                  <span className="chat-v11-muted">Saved as {existing.status}.</span>
-                                ) : (
-                                  <button type="button" disabled={sending} onClick={() => void handleCreateSpecialistDraft(suggestion)}>
-                                    Draft dormant specialist
-                                  </button>
-                                )}
-                              </div>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  ) : null}
-                  {specialistCandidates.filter((item) => item.status !== "retired").length > 0 ? (
-                    <div className="chat-v11-suggestion-card">
-                      <p><strong>Saved specialists:</strong> Review dormant specialists for this session. Only active strong-match specialists are eligible for automatic reuse in Cowork or Code.</p>
-                      <ul className="chat-v11-proactive-list">
-                        {specialistCandidates.filter((item) => item.status !== "retired").slice(0, 6).map((candidate) => (
-                          <li key={candidate.candidateId}>
-                            <p><strong>{candidate.title}</strong> · {candidate.role}</p>
-                            <p>{candidate.summary}</p>
-                            <p className="chat-v11-muted">
-                              Status: {candidate.status}
-                              {" · "}
-                              Routing: {candidate.routingMode}
-                              {" · "}
-                              Confidence: {Math.round(candidate.confidence * 100)}%
+                  {!isCodeSurface && showSuggestionsPanel ? (
+                    <div className="mission-dock-section" style={dockSectionStyle("suggestions")}>
+                      <Panel
+                        className="chat-v11-agentic-card chat-v11-panel-inbox"
+                        title={isCoworkSurface ? "Cowork inbox" : isCodeSurface ? "Capability inbox" : "Suggestions"}
+                        subtitle={
+                          isCoworkSurface
+                            ? "Review proactive suggestions, capability upgrades, and delegation prompts without losing the active chat context."
+                            : isCodeSurface
+                              ? "Review capability upgrades relevant to this code session."
+                              : "Only relevant suggestions appear here so Chat stays lightweight."
+                        }
+                        actions={<span className="token-chip">{proactiveSuggestionCount} suggested</span>}
+                      >
+                        {secondaryLoading &&
+                        proactiveRuns.length === 0 &&
+                        capabilitySuggestions.length === 0 &&
+                        !delegationSuggestion ? (
+                          <CardSkeleton lines={4} />
+                        ) : null}
+                        {capabilitySuggestions.length > 0 ? (
+                          <div className="chat-v11-suggestion-card">
+                            <p>
+                              <strong>Capability upgrade available:</strong> GoatCitadel found a possible way to add
+                              what this request needs, but it still requires your approval.
                             </p>
-                            {candidate.routingHints.objectiveKeywords?.length ? (
-                              <p className="chat-v11-muted">Match terms: {candidate.routingHints.objectiveKeywords.join(", ")}</p>
-                            ) : null}
+                            <ul className="chat-v11-proactive-list">
+                              {capabilitySuggestions.slice(0, 3).map((suggestion) => (
+                                <li key={`${suggestion.kind}-${suggestion.candidateId ?? suggestion.title}`}>
+                                  <p>
+                                    <strong>{suggestion.title}</strong>
+                                    {suggestion.riskLevel ? ` · ${suggestion.riskLevel} risk` : ""}
+                                  </p>
+                                  <p>{suggestion.summary}</p>
+                                  <p className="chat-v11-muted">{suggestion.reason}</p>
+                                  <div className="chat-v11-row-actions">
+                                    {suggestion.recommendedAction === "enable_skill" ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleCapabilitySuggestionAction(suggestion)}
+                                      >
+                                        Enable skill
+                                      </button>
+                                    ) : null}
+                                    {suggestion.recommendedAction === "install_skill_disabled" ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleCapabilitySuggestionAction(suggestion)}
+                                      >
+                                        Install disabled
+                                      </button>
+                                    ) : null}
+                                    {suggestion.recommendedAction === "install_skill_enable" ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleCapabilitySuggestionAction(suggestion)}
+                                      >
+                                        Approve and install
+                                      </button>
+                                    ) : null}
+                                    {suggestion.recommendedAction === "add_mcp_template" ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleCapabilitySuggestionAction(suggestion)}
+                                      >
+                                        Add MCP template
+                                      </button>
+                                    ) : null}
+                                    {suggestion.recommendedAction === "switch_tool_profile" ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleCapabilitySuggestionAction(suggestion)}
+                                      >
+                                        Review tool profile
+                                      </button>
+                                    ) : null}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        window.location.hash = suggestion.kind === "mcp_template" ? "mcp" : "skills";
+                                      }}
+                                    >
+                                      {suggestion.kind === "mcp_template" ? "Open MCP" : "Open Skills"}
+                                    </button>
+                                    <button type="button" onClick={() => dismissCapabilitySuggestion(suggestion)}>
+                                      Dismiss
+                                    </button>
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                        {specialistSuggestions.length > 0 ? (
+                          <div className="chat-v11-suggestion-card">
+                            <p>
+                              <strong>Specialist candidate suggested:</strong> GoatCitadel detected a recurring role or
+                              capability gap and can save it as a dormant specialist for future Cowork or Code runs.
+                            </p>
+                            <ul className="chat-v11-proactive-list">
+                              {specialistSuggestions.slice(0, 3).map((suggestion) => {
+                                const existing = specialistCandidates.find(
+                                  (item) =>
+                                    normalizeSpecialistFingerprint(item) ===
+                                      normalizeSpecialistFingerprint(suggestion) && item.status !== "retired",
+                                );
+                                return (
+                                  <li key={suggestion.candidateId}>
+                                    <p>
+                                      <strong>{suggestion.title}</strong> · {suggestion.role}
+                                    </p>
+                                    <p>{suggestion.summary}</p>
+                                    <p className="chat-v11-muted">{suggestion.reason}</p>
+                                    {suggestion.suggestedSkills?.length ? (
+                                      <p className="chat-v11-muted">Skills: {suggestion.suggestedSkills.join(", ")}</p>
+                                    ) : null}
+                                    {suggestion.suggestedTools?.length ? (
+                                      <p className="chat-v11-muted">Tools: {suggestion.suggestedTools.join(", ")}</p>
+                                    ) : null}
+                                    <div className="chat-v11-row-actions">
+                                      {existing ? (
+                                        <span className="chat-v11-muted">Saved as {existing.status}.</span>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          disabled={sending}
+                                          onClick={() => void handleCreateSpecialistDraft(suggestion)}
+                                        >
+                                          Draft dormant specialist
+                                        </button>
+                                      )}
+                                    </div>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
+                        ) : null}
+                        {specialistCandidates.filter((item) => item.status !== "retired").length > 0 ? (
+                          <div className="chat-v11-suggestion-card">
+                            <p>
+                              <strong>Saved specialists:</strong> Review dormant specialists for this session. Only
+                              active strong-match specialists are eligible for automatic reuse in Cowork or Code.
+                            </p>
+                            <ul className="chat-v11-proactive-list">
+                              {specialistCandidates
+                                .filter((item) => item.status !== "retired")
+                                .slice(0, 6)
+                                .map((candidate) => (
+                                  <li key={candidate.candidateId}>
+                                    <p>
+                                      <strong>{candidate.title}</strong> · {candidate.role}
+                                    </p>
+                                    <p>{candidate.summary}</p>
+                                    <p className="chat-v11-muted">
+                                      Status: {candidate.status}
+                                      {" · "}
+                                      Routing: {candidate.routingMode}
+                                      {" · "}
+                                      Confidence: {Math.round(candidate.confidence * 100)}%
+                                    </p>
+                                    {candidate.routingHints.objectiveKeywords?.length ? (
+                                      <p className="chat-v11-muted">
+                                        Match terms: {candidate.routingHints.objectiveKeywords.join(", ")}
+                                      </p>
+                                    ) : null}
+                                    <div className="chat-v11-row-actions">
+                                      {candidate.status !== "approved" && candidate.status !== "active" ? (
+                                        <button
+                                          type="button"
+                                          disabled={sending}
+                                          onClick={() =>
+                                            void handleSpecialistCandidatePatch(
+                                              candidate.candidateId,
+                                              { status: "approved" },
+                                              `Approved ${candidate.title}.`,
+                                            )
+                                          }
+                                        >
+                                          Approve
+                                        </button>
+                                      ) : null}
+                                      {candidate.status !== "active" ||
+                                      candidate.routingMode !== "strong_match_only" ? (
+                                        <button
+                                          type="button"
+                                          disabled={sending}
+                                          onClick={() =>
+                                            void handleSpecialistCandidatePatch(
+                                              candidate.candidateId,
+                                              { status: "active", routingMode: "strong_match_only" },
+                                              `Activated ${candidate.title} for strong-match routing.`,
+                                            )
+                                          }
+                                        >
+                                          Activate auto-match
+                                        </button>
+                                      ) : null}
+                                      {candidate.status === "active" ||
+                                      candidate.status === "approved" ||
+                                      candidate.status === "drafted" ? (
+                                        <button
+                                          type="button"
+                                          disabled={sending}
+                                          onClick={() =>
+                                            void handleSpecialistCandidatePatch(
+                                              candidate.candidateId,
+                                              { status: "disabled", routingMode: "manual_only" },
+                                              `Disabled ${candidate.title}.`,
+                                            )
+                                          }
+                                        >
+                                          Disable
+                                        </button>
+                                      ) : null}
+                                      <button
+                                        type="button"
+                                        disabled={sending}
+                                        onClick={() =>
+                                          void handleSpecialistCandidatePatch(
+                                            candidate.candidateId,
+                                            { status: "retired", routingMode: "disabled" },
+                                            `Retired ${candidate.title}.`,
+                                          )
+                                        }
+                                      >
+                                        Retire
+                                      </button>
+                                    </div>
+                                  </li>
+                                ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                        {isCoworkSurface && delegationSuggestion ? (
+                          <div className="chat-v11-suggestion-card">
+                            <p>
+                              <strong>Delegation suggestion:</strong> {delegationSuggestion.reason}
+                            </p>
+                            <p>Roles: {delegationSuggestion.roles.join(" -> ")}</p>
                             <div className="chat-v11-row-actions">
-                              {candidate.status !== "approved" && candidate.status !== "active" ? (
-                                <button
-                                  type="button"
-                                  disabled={sending}
-                                  onClick={() => void handleSpecialistCandidatePatch(
-                                    candidate.candidateId,
-                                    { status: "approved" },
-                                    `Approved ${candidate.title}.`,
-                                  )}
-                                >
-                                  Approve
-                                </button>
-                              ) : null}
-                              {candidate.status !== "active" || candidate.routingMode !== "strong_match_only" ? (
-                                <button
-                                  type="button"
-                                  disabled={sending}
-                                  onClick={() => void handleSpecialistCandidatePatch(
-                                    candidate.candidateId,
-                                    { status: "active", routingMode: "strong_match_only" },
-                                    `Activated ${candidate.title} for strong-match routing.`,
-                                  )}
-                                >
-                                  Activate auto-match
-                                </button>
-                              ) : null}
-                              {candidate.status === "active" || candidate.status === "approved" || candidate.status === "drafted" ? (
-                                <button
-                                  type="button"
-                                  disabled={sending}
-                                  onClick={() => void handleSpecialistCandidatePatch(
-                                    candidate.candidateId,
-                                    { status: "disabled", routingMode: "manual_only" },
-                                    `Disabled ${candidate.title}.`,
-                                  )}
-                                >
-                                  Disable
-                                </button>
-                              ) : null}
-                              <button
-                                type="button"
-                                disabled={sending}
-                                onClick={() => void handleSpecialistCandidatePatch(
-                                  candidate.candidateId,
-                                  { status: "retired", routingMode: "disabled" },
-                                  `Retired ${candidate.title}.`,
-                                )}
-                              >
-                                Retire
+                              <button type="button" disabled={sending} onClick={() => void handleAcceptDelegation()}>
+                                Accept plan
+                              </button>
+                              <button type="button" disabled={sending} onClick={() => setDelegationSuggestion(null)}>
+                                Dismiss
                               </button>
                             </div>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                  {isCoworkSurface && delegationSuggestion ? (
-                    <div className="chat-v11-suggestion-card">
-                      <p><strong>Delegation suggestion:</strong> {delegationSuggestion.reason}</p>
-                      <p>Roles: {delegationSuggestion.roles.join(" -> ")}</p>
-                      <div className="chat-v11-row-actions">
-                        <button type="button" disabled={sending} onClick={() => void handleAcceptDelegation()}>Accept plan</button>
-                        <button type="button" disabled={sending} onClick={() => setDelegationSuggestion(null)}>Dismiss</button>
-                      </div>
-                    </div>
-                  ) : isCoworkSurface ? (
-                    <p className="chat-v11-muted">No pending delegation suggestion. Click “Suggest delegation” to generate one from your current request.</p>
-                  ) : null}
-                  {isCoworkSurface || (isChatSurface && proactiveSuggestionCount > 0) ? (
-                    <ul className="chat-v11-proactive-list">
-                      {proactiveRuns.slice(0, 4).map((run) => (
-                        <li key={run.runId}>
-                          <p><strong>{run.status}</strong> · {new Date(run.startedAt).toLocaleTimeString()}</p>
-                          <p>{run.reasoningSummary}</p>
+                          </div>
+                        ) : isCoworkSurface ? (
                           <p className="chat-v11-muted">
-                            {[
-                              run.originSurface ? `Surface ${run.originSurface}` : null,
-                              run.linkedTaskId ? `Task ${run.linkedTaskId}` : null,
-                              run.linkedDurableRunId ? `Durable ${run.linkedDurableRunId}` : null,
-                              run.approvalId ? `Approval ${run.approvalId}` : null,
-                              run.nextWakeAt ? `Wake ${new Date(run.nextWakeAt).toLocaleString()}` : null,
-                              run.stopReason ? `Stop ${run.stopReason}` : null,
-                            ].filter(Boolean).join(" | ")}
+                            No pending delegation suggestion. Click “Suggest delegation” to generate one from your
+                            current request.
                           </p>
-                          {run.externalReferenceRoots?.length ? (
-                            <p className="chat-v11-muted">
-                              References: {run.externalReferenceRoots.map((root) => `${root.label} (${root.access})`).join(", ")}
-                            </p>
-                          ) : null}
-                        </li>
-                      ))}
-                      {isCoworkSurface && proactiveRuns.length === 0 ? <li className="chat-v11-muted">No proactive runs yet for this session.</li> : null}
-                    </ul>
+                        ) : null}
+                        {isCoworkSurface || (isChatSurface && proactiveSuggestionCount > 0) ? (
+                          <ul className="chat-v11-proactive-list">
+                            {proactiveRuns.slice(0, 4).map((run) => (
+                              <li key={run.runId}>
+                                <p>
+                                  <strong>{run.status}</strong> · {new Date(run.startedAt).toLocaleTimeString()}
+                                </p>
+                                <p>{run.reasoningSummary}</p>
+                                <p className="chat-v11-muted">
+                                  {[
+                                    run.originSurface ? `Surface ${run.originSurface}` : null,
+                                    run.linkedTaskId ? `Task ${run.linkedTaskId}` : null,
+                                    run.linkedDurableRunId ? `Durable ${run.linkedDurableRunId}` : null,
+                                    run.approvalId ? `Approval ${run.approvalId}` : null,
+                                    run.nextWakeAt ? `Wake ${new Date(run.nextWakeAt).toLocaleString()}` : null,
+                                    run.stopReason ? `Stop ${run.stopReason}` : null,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" | ")}
+                                </p>
+                                {run.externalReferenceRoots?.length ? (
+                                  <p className="chat-v11-muted">
+                                    References:{" "}
+                                    {run.externalReferenceRoots
+                                      .map((root) => `${root.label} (${root.access})`)
+                                      .join(", ")}
+                                  </p>
+                                ) : null}
+                              </li>
+                            ))}
+                            {isCoworkSurface && proactiveRuns.length === 0 ? (
+                              <li className="chat-v11-muted">No proactive runs yet for this session.</li>
+                            ) : null}
+                          </ul>
+                        ) : null}
+                      </Panel>
+                    </div>
                   ) : null}
-                </Panel>
-                </div>
-                ) : null}
 
-                {!isCodeSurface && showLearnedMemoryPanel ? (
-                <div className="mission-dock-section" style={dockSectionStyle("memory")}>
-                <Panel
-                  className="chat-v11-agentic-card chat-v11-panel-memory"
-                  title={(
-                    <>
-                      Learned memory <HelpHint label="Learned memory help" text="Learned memory stores facts, goals, preferences, and constraints GoatCitadel may reuse in future turns for this session." />
-                    </>
-                  )}
-                  subtitle="Review what GoatCitadel is carrying forward for future turns in this session."
-                  actions={(
-                    <ActionButton
-                      label="Rebuild"
-                      disabled={sending || !selectedSessionId}
-                      onClick={() => void handleRebuildLearnedMemory()}
+                  {!isCodeSurface && showLearnedMemoryPanel ? (
+                    <div className="mission-dock-section" style={dockSectionStyle("memory")}>
+                      <ChatLearnedMemoryPanel
+                        learnedMemory={learnedMemory}
+                        secondaryLoading={secondaryLoading}
+                        sending={sending}
+                        selectedSessionId={selectedSessionId}
+                        onRebuild={() => void handleRebuildLearnedMemory()}
+                        onUpdateStatus={(itemId, status) => void handleMemoryStatusUpdate(itemId, status)}
+                      />
+                    </div>
+                  ) : null}
+
+                  <div className="mission-dock-section" style={dockSectionStyle("session")}>
+                    <ChatSessionManagementPanel
+                      renameTitle={renameTitle}
+                      onRenameTitleChange={setRenameTitle}
+                      sending={sending}
+                      sessionControlPending={sessionControlPending}
+                      pinned={Boolean(selectedSession.pinned)}
+                      archived={selectedSession.lifecycleStatus === "archived"}
+                      selectedSessionProjectValue={selectedSessionProjectValue}
+                      projectOptions={[
+                        { value: "none", label: "Unassigned" },
+                        ...(projects?.items ?? [])
+                          .filter((item) => item.lifecycleStatus === "active")
+                          .map((project) => ({ value: project.projectId, label: project.name })),
+                      ]}
+                      onRename={() => {
+                        if (!selectedSession) return;
+                        setSessionControlPending("rename");
+                        void (async () => {
+                          try {
+                            await updateChatSession(selectedSession.sessionId, {
+                              title: renameTitle.trim() || undefined,
+                            });
+                            await loadSidebar();
+                          } catch (err) {
+                            setError((err as Error).message);
+                          } finally {
+                            setSessionControlPending(null);
+                          }
+                        })();
+                      }}
+                      onTogglePin={() => {
+                        if (!selectedSession) return;
+                        setSessionControlPending("pin");
+                        void (async () => {
+                          try {
+                            if (selectedSession.pinned) await unpinChatSession(selectedSession.sessionId);
+                            else await pinChatSession(selectedSession.sessionId);
+                            await loadSidebar();
+                          } catch (err) {
+                            setError((err as Error).message);
+                          } finally {
+                            setSessionControlPending(null);
+                          }
+                        })();
+                      }}
+                      onToggleArchive={() => {
+                        if (!selectedSession) return;
+                        setSessionControlPending("archive");
+                        void (async () => {
+                          try {
+                            if (selectedSession.lifecycleStatus === "archived")
+                              await restoreChatSession(selectedSession.sessionId);
+                            else await archiveChatSession(selectedSession.sessionId);
+                            await loadSidebar();
+                          } catch (err) {
+                            setError((err as Error).message);
+                          } finally {
+                            setSessionControlPending(null);
+                          }
+                        })();
+                      }}
+                      onDelete={() => {
+                        if (!selectedSession) return;
+                        setSessionDeleteConfirm({
+                          sessionId: selectedSession.sessionId,
+                          label: formatSessionLabel(selectedSession),
+                        });
+                      }}
+                      onAssignProject={(value) => {
+                        if (!selectedSession) return;
+                        setSessionControlPending("project");
+                        void assignChatSessionProject(selectedSession.sessionId, value === "none" ? undefined : value)
+                          .then(() => loadSidebar())
+                          .catch((err) => setError((err as Error).message))
+                          .finally(() => setSessionControlPending(null));
+                      }}
                     />
-                  )}
-                >
-                  {secondaryLoading && learnedMemory.length === 0 ? <CardSkeleton lines={5} /> : null}
-                  <ul className="chat-v11-memory-list">
-                    {learnedMemory.slice(0, 6).map((item) => (
-                      <li key={item.itemId}>
-                        <p>
-                          <strong>{item.itemType}</strong>
-                          {" · "}
-                          Confidence {Math.round(item.confidence * 100)}%
-                          <HelpHint label="Memory confidence help" text="Confidence is GoatCitadel's estimate of how reliable this memory is for future replies. It is not a completion score; higher means the system is more willing to reuse it." />
-                          {" · "}
-                          {item.status}
-                          <HelpHint label="Memory status help" text={
-                            item.status === "active"
-                              ? "Active memory is currently eligible to influence future turns."
-                              : item.status === "superseded"
-                                ? "Superseded memory was replaced by a newer or more accurate item."
-                                : item.status === "disabled"
-                                  ? "Disabled memory stays in history but no longer influences future turns."
-                                  : "Conflict means the memory needs review before it should influence future turns."
-                          } />
-                        </p>
-                        <p>{item.content}</p>
-                        <div className="chat-v11-row-actions">
-                          <button type="button" title="Keep this memory active so it continues influencing future turns." disabled={sending} onClick={() => void handleMemoryStatusUpdate(item.itemId, "active")}>Keep</button>
-                          <button type="button" title="Mark this memory as replaced by a newer or better one." disabled={sending} onClick={() => void handleMemoryStatusUpdate(item.itemId, "superseded")}>Supersede</button>
-                          <button type="button" title="Stop using this memory without deleting its history." disabled={sending} onClick={() => void handleMemoryStatusUpdate(item.itemId, "disabled")}>Disable</button>
-                        </div>
-                      </li>
-                    ))}
-                    {learnedMemory.length === 0 ? <li className="chat-v11-muted">No learned memory items yet. They appear after completed assistant turns.</li> : null}
-                  </ul>
-                </Panel>
-                </div>
-                ) : null}
-
-                <div className="mission-dock-section" style={dockSectionStyle("session")}>
-                <Panel
-                  className="chat-v11-session-bar chat-v11-panel-session"
-                  title="Session management"
-                  subtitle="Give this chat a human title, pin it, archive it, delete it, or move it into a project without leaving the thread."
-                >
-                  <FieldHelp>Titles replace autogenerated session keys in the chat rail.</FieldHelp>
-                  <input value={renameTitle} onChange={(event) => setRenameTitle(event.target.value)} placeholder="Give this chat a title" />
-                  <ActionButton label="Save" disabled={sending || Boolean(sessionControlPending)} pending={sessionControlPending === "rename"} onClick={async () => {
-                    if (!selectedSession) return;
-                    setSessionControlPending("rename");
-                    try {
-                      await updateChatSession(selectedSession.sessionId, { title: renameTitle.trim() || undefined });
-                      await loadSidebar();
-                    } catch (err) {
-                      setError((err as Error).message);
-                    } finally {
-                      setSessionControlPending(null);
-                    }
-                  }} />
-                  <ActionButton label={selectedSession.pinned ? "Unpin" : "Pin"} disabled={sending || Boolean(sessionControlPending)} pending={sessionControlPending === "pin"} onClick={async () => {
-                    if (!selectedSession) return;
-                    setSessionControlPending("pin");
-                    try {
-                      if (selectedSession.pinned) await unpinChatSession(selectedSession.sessionId); else await pinChatSession(selectedSession.sessionId);
-                      await loadSidebar();
-                    } catch (err) {
-                      setError((err as Error).message);
-                    } finally {
-                      setSessionControlPending(null);
-                    }
-                  }} />
-                  <ActionButton label={selectedSession.lifecycleStatus === "archived" ? "Restore" : "Archive"} disabled={sending || Boolean(sessionControlPending)} pending={sessionControlPending === "archive"} onClick={async () => {
-                    if (!selectedSession) return;
-                    setSessionControlPending("archive");
-                    try {
-                      if (selectedSession.lifecycleStatus === "archived") await restoreChatSession(selectedSession.sessionId); else await archiveChatSession(selectedSession.sessionId);
-                      await loadSidebar();
-                    } catch (err) {
-                      setError((err as Error).message);
-                    } finally {
-                      setSessionControlPending(null);
-                    }
-                  }} />
-                  <ActionButton label="Delete permanently" disabled={sending || Boolean(sessionControlPending)} pending={sessionControlPending === "delete"} onClick={async () => {
-                    if (!selectedSession) return;
-                    setSessionDeleteConfirm({
-                      sessionId: selectedSession.sessionId,
-                      label: formatSessionLabel(selectedSession),
-                    });
-                  }} />
-                  <GCCombobox
-                    value={selectedSessionProjectValue}
-                    onChange={(value) => {
-                      setSessionControlPending("project");
-                      void assignChatSessionProject(
-                        selectedSession.sessionId,
-                        value === "none" ? undefined : value,
-                      )
-                        .then(() => loadSidebar())
-                        .catch((err) => setError((err as Error).message))
-                        .finally(() => setSessionControlPending(null));
-                    }}
-                    placeholder="Pick project"
-                    disabled={sending || Boolean(sessionControlPending)}
-                    options={[
-                      { value: "none", label: "Unassigned" },
-                      ...(projects?.items ?? [])
-                        .filter((item) => item.lifecycleStatus === "active")
-                        .map((project) => ({ value: project.projectId, label: project.name })),
-                    ]}
-                  />
-                </Panel>
-                </div>
-
-                {selectedSession.scope === "external" ? (
-                  <div className="mission-dock-section" style={dockSectionStyle("external")}>
-                  {(!binding || !binding.writable) ? <div className="status-banner warning">This external chat is read-only right now. Set a connection and target before sending replies out.</div> : null}
-                  <Panel
-                    className="chat-v11-external-bind"
-                    title="External connection binding"
-                    subtitle="Bind this session to a writable external channel before trying to send messages out."
-                  >
-                    <input value={integrationConnectionId} onChange={(event) => setIntegrationConnectionId(event.target.value)} placeholder="Connection ID (example: slack:workspace-a)" />
-                    <input value={integrationTarget} onChange={(event) => setIntegrationTarget(event.target.value)} placeholder="Target (example: #ops-room or thread id)" />
-                    <ActionButton label="Save binding" disabled={sending || Boolean(sessionControlPending)} pending={sessionControlPending === "binding"} onClick={async () => {
-                      if (!selectedSession) return;
-                      setSessionControlPending("binding");
-                      try {
-                        const next = await setChatSessionBinding(selectedSession.sessionId, { transport: "integration", connectionId: integrationConnectionId.trim(), target: integrationTarget.trim(), writable: true });
-                        setBinding(next);
-                      } catch (err) {
-                        setError((err as Error).message);
-                      } finally {
-                        setSessionControlPending(null);
-                      }
-                    }} />
-                  </Panel>
                   </div>
-                ) : null}
+
+                  {selectedSession.scope === "external" ? (
+                    <div className="mission-dock-section" style={dockSectionStyle("external")}>
+                      <ChatExternalBindingPanel
+                        writable={Boolean(binding && binding.writable)}
+                        integrationConnectionId={integrationConnectionId}
+                        onIntegrationConnectionIdChange={setIntegrationConnectionId}
+                        integrationTarget={integrationTarget}
+                        onIntegrationTargetChange={setIntegrationTarget}
+                        sending={sending}
+                        pending={sessionControlPending === "binding"}
+                        controlsDisabled={Boolean(sessionControlPending)}
+                        onSaveBinding={() => {
+                          if (!selectedSession) return;
+                          setSessionControlPending("binding");
+                          void (async () => {
+                            try {
+                              const next = await setChatSessionBinding(selectedSession.sessionId, {
+                                transport: "integration",
+                                connectionId: integrationConnectionId.trim(),
+                                target: integrationTarget.trim(),
+                                writable: true,
+                              });
+                              setBinding(next);
+                            } catch (err) {
+                              setError((err as Error).message);
+                            } finally {
+                              setSessionControlPending(null);
+                            }
+                          })();
+                        }}
+                      />
+                    </div>
+                  ) : null}
                 </MissionControlContextDock>
               </div>
             </div>
@@ -3444,7 +3562,9 @@ export function ChatPage({
         open={Boolean(capabilitySuggestionConfirm)}
         title={capabilityConfirmationCopy?.title ?? "Confirm capability action"}
         message={capabilityConfirmationCopy?.message ?? ""}
-        confirmLabel={capabilitySuggestionPending ? "Applying..." : (capabilityConfirmationCopy?.confirmLabel ?? "Confirm")}
+        confirmLabel={
+          capabilitySuggestionPending ? "Applying..." : (capabilityConfirmationCopy?.confirmLabel ?? "Confirm")
+        }
         danger={capabilityConfirmationCopy?.danger ?? false}
         pending={capabilitySuggestionPending}
         cancelDisabled={capabilitySuggestionPending}
@@ -3488,74 +3608,9 @@ export function ChatPage({
   );
 }
 
-function dedupeStrings(values: Array<string | undefined>): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const normalized = value?.trim();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
-}
-
-function formatCommandResult(result: { ok: boolean; message: string; research?: { sources: Array<{ url: string }> } }): string {
-  const status = result.ok ? "Command completed" : "Command failed";
-  if (!result.research) return `${status}: ${result.message}`;
-  return `${status}: ${result.message}\nSources: ${result.research.sources.length}`;
-}
-
-function deriveCoworkItems(
-  messages: ChatMessageRecord[],
-  notices: ChatThreadNotice[],
-  orchestration?: ChatThreadResponse["turns"][number]["trace"]["orchestration"],
-): Array<{ id: string; title: string; note?: string }> {
-  if (orchestration) {
-    return orchestration.steps
-      .slice(0, 5)
-      .map((step) => ({
-        id: step.stepId,
-        title: `${step.role} · ${step.status}`,
-        note: step.summary ?? step.error ?? [step.providerId, step.model].filter(Boolean).join(" · "),
-      }));
-  }
-  const latestAssistant = [...messages].reverse().find((item) => item.role === "assistant");
-  const latestUser = [...messages].reverse().find((item) => item.role === "user");
-  const items: Array<{ id: string; title: string; note?: string }> = [];
-  if (latestAssistant) {
-    const lines = latestAssistant.content.split(/\r?\n/g).map((line) => line.trim()).filter((line) => line.length > 0).slice(0, 4);
-    lines.forEach((line, index) => items.push({ id: `assistant-${index}`, title: line.slice(0, 88) }));
-  }
-  if (items.length < 3 && latestUser) {
-    items.push({ id: "user-goal", title: "Current operator request", note: latestUser.content.slice(0, 180) });
-  }
-  if (items.length < 5) {
-    notices
-      .slice(0, 2)
-      .forEach((notice, index) => {
-        items.push({
-          id: `notice-${notice.id}`,
-          title: index === 0 ? "Latest system notice" : "Recent system notice",
-          note: notice.content.slice(0, 180),
-        });
-      });
-  }
-  return items.slice(0, 5);
-}
-
 function abortActiveChatStream(stream: ActiveChatStreamState | null): void {
   if (!stream || stream.controller.signal.aborted) {
     return;
   }
   stream.controller.abort();
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException
-    ? error.name === "AbortError"
-    : typeof error === "object"
-      && error !== null
-      && "name" in error
-      && (error as { name?: string }).name === "AbortError";
 }

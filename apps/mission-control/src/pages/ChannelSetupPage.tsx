@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars, max-lines, react-hooks/exhaustive-deps */
 import { useEffect, useMemo, useState } from "react";
 import type {
   ChannelSetupDefinition,
@@ -34,17 +35,18 @@ import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
 import { GCEmptyState } from "../components/ui/GCEmptyState";
 import { recordClientDiagnostic } from "../state/dev-diagnostics-store";
+import {
+  describeStepStatus,
+  findResumeStepId,
+  findStartStepId,
+  getStepCompletionState,
+  isFieldSatisfied,
+  isStepVisible,
+  lifecycleDescription,
+  titleCaseLifecycle,
+} from "./channel-setup/channel-setup-page-helpers";
 
-type BusyAction =
-  | "start"
-  | "save"
-  | "validate"
-  | "test"
-  | "finalize"
-  | "repair"
-  | "rotate"
-  | "retest"
-  | null;
+type BusyAction = "start" | "save" | "validate" | "test" | "finalize" | "repair" | "rotate" | "retest" | null;
 
 export function ChannelSetupPage() {
   const [catalog, setCatalog] = useState<IntegrationCatalogEntry[]>([]);
@@ -72,12 +74,14 @@ export function ChannelSetupPage() {
     [guidedDefinitions],
   );
 
-  const guidedChannelLabels = useMemo(() => (
-    guidedDefinitions
-      .map((item) => item.catalog.label)
-      .sort((left, right) => left.localeCompare(right))
-      .join(", ")
-  ), [guidedDefinitions]);
+  const guidedChannelLabels = useMemo(
+    () =>
+      guidedDefinitions
+        .map((item) => item.catalog.label)
+        .sort((left, right) => left.localeCompare(right))
+        .join(", "),
+    [guidedDefinitions],
+  );
 
   useEffect(() => {
     void loadPage();
@@ -116,11 +120,7 @@ export function ChannelSetupPage() {
       return;
     }
     if (!visibleSteps.some((step) => step.id === currentStepId)) {
-      setCurrentStepId(
-        definition && draft
-          ? findResumeStepId(definition, draft)
-          : (visibleSteps[0]?.id ?? ""),
-      );
+      setCurrentStepId(definition && draft ? findResumeStepId(definition, draft) : (visibleSteps[0]?.id ?? ""));
     }
   }, [visibleSteps, currentStepId, definition, draft]);
 
@@ -147,7 +147,7 @@ export function ChannelSetupPage() {
       testVersion: definition.testing.testVersion,
       stepId: currentStep.id,
       manualModeUsed: manualJsonOpen,
-      });
+    });
   }, [currentStep?.id, definition?.catalog.catalogId, draft?.draftId, manualJsonOpen]);
 
   useEffect(() => {
@@ -178,10 +178,10 @@ export function ChannelSetupPage() {
       setGuidedDefinitions(setupDefinitionResponse.items);
       if (!selectedCatalogId) {
         const guidedIds = new Set(setupDefinitionResponse.items.map((item) => item.catalog.catalogId));
-        const preferred = catalogResponse.items.find((item) => (
-          item.catalogId === "channel.discord" && guidedIds.has(item.catalogId)
-        )) ?? catalogResponse.items.find((item) => guidedIds.has(item.catalogId))
-          ?? catalogResponse.items[0];
+        const preferred =
+          catalogResponse.items.find((item) => item.catalogId === "channel.discord" && guidedIds.has(item.catalogId)) ??
+          catalogResponse.items.find((item) => guidedIds.has(item.catalogId)) ??
+          catalogResponse.items[0];
         setSelectedCatalogId(preferred?.catalogId ?? "");
       }
       setPageError(null);
@@ -226,31 +226,37 @@ export function ChannelSetupPage() {
     if (!catalogId) {
       return;
     }
-    setBusyAction(mode === "create" ? "start" : mode === "repair" ? "repair" : mode === "rotate_secret" ? "rotate" : "start");
+    setBusyAction(
+      mode === "create" ? "start" : mode === "repair" ? "repair" : mode === "rotate_secret" ? "rotate" : "start",
+    );
     setPageNotice(null);
     setPageError(null);
     try {
-      const activeDefinition = definition?.catalog.catalogId === catalogId ? definition : await loadDefinition(catalogId);
+      const activeDefinition =
+        definition?.catalog.catalogId === catalogId ? definition : await loadDefinition(catalogId);
       if (!activeDefinition) {
         throw new Error("Guided setup is not available for this channel yet.");
       }
-      const created = mode === "repair" && connection
-        ? await createChannelRepairDraft(connection.connectionId)
-        : mode === "rotate_secret" && connection
-          ? await createChannelRotateSecretDraft(connection.connectionId)
-          : await createChannelSetupDraft({
-            catalogId,
-            connectionId: connection?.connectionId,
-            lifecycleMode: mode,
-          });
+      const created =
+        mode === "repair" && connection
+          ? await createChannelRepairDraft(connection.connectionId)
+          : mode === "rotate_secret" && connection
+            ? await createChannelRotateSecretDraft(connection.connectionId)
+            : await createChannelSetupDraft({
+                catalogId,
+                connectionId: connection?.connectionId,
+                lifecycleMode: mode,
+              });
       setSelectedCatalogId(catalogId);
       setDraft(created);
       upsertRecentDraft(created);
       setValidation(null);
       setTestResult(null);
-      setPageNotice(connection
-        ? `${titleCaseLifecycle(created.lifecycleMode)} draft ready for ${connection.label}.`
-        : `Guided setup started for ${activeDefinition.catalog.label}.`);
+      setPageNotice(
+        connection
+          ? `${titleCaseLifecycle(created.lifecycleMode)} draft ready for ${connection.label}.`
+          : `Guided setup started for ${activeDefinition.catalog.label}.`,
+      );
       setCurrentStepId(preferredStepId ?? findStartStepId(activeDefinition, created.lifecycleMode));
       trackWizardEvent("channel_wizard_started", {
         draftId: created.draftId,
@@ -462,7 +468,11 @@ export function ChannelSetupPage() {
     try {
       const result = await retestChannelConnection(connection.connectionId);
       setTestResult(result);
-      setPageNotice(result.status === "ok" ? `Re-test passed for ${connection.label}.` : `Re-test completed for ${connection.label}.`);
+      setPageNotice(
+        result.status === "ok"
+          ? `Re-test passed for ${connection.label}.`
+          : `Re-test completed for ${connection.label}.`,
+      );
       trackWizardEvent(result.status === "error" ? "channel_test_failed" : "channel_retest_completed", {
         catalogId: connection.catalogId,
         lifecycleMode: "retest",
@@ -476,7 +486,7 @@ export function ChannelSetupPage() {
   }
 
   function updateDraft(mutator: (current: ChannelSetupDraft) => ChannelSetupDraft) {
-    setDraft((current) => current ? mutator(current) : current);
+    setDraft((current) => (current ? mutator(current) : current));
     setValidation(null);
     setTestResult(null);
   }
@@ -512,11 +522,7 @@ export function ChannelSetupPage() {
     setValidation(null);
     setTestResult(null);
     setManualJsonOpen(false);
-    setCurrentStepId(
-      activeDefinition
-        ? findResumeStepId(activeDefinition, nextDraft)
-        : "",
-    );
+    setCurrentStepId(activeDefinition ? findResumeStepId(activeDefinition, nextDraft) : "");
     trackWizardEvent("channel_draft_resumed", {
       draftId: nextDraft.draftId,
       catalogId: nextDraft.catalogId,
@@ -526,9 +532,11 @@ export function ChannelSetupPage() {
   }
 
   function upsertRecentDraft(nextDraft: ChannelSetupDraft) {
-    setRecentDrafts((current) => [nextDraft, ...current.filter((item) => item.draftId !== nextDraft.draftId)]
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .slice(0, 12));
+    setRecentDrafts((current) =>
+      [nextDraft, ...current.filter((item) => item.draftId !== nextDraft.draftId)]
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+        .slice(0, 12),
+    );
   }
 
   function trackWizardEvent(event: string, context: Record<string, unknown>) {
@@ -546,9 +554,10 @@ export function ChannelSetupPage() {
     if (!definition) {
       return;
     }
-    const target = definition.wizard.steps.find((step) => step.kind === "field-collection")?.id
-      ?? definition.wizard.steps[0]?.id
-      ?? "";
+    const target =
+      definition.wizard.steps.find((step) => step.kind === "field-collection")?.id ??
+      definition.wizard.steps[0]?.id ??
+      "";
     if (!draft) {
       void startDraft("create", undefined, target);
       return;
@@ -560,7 +569,9 @@ export function ChannelSetupPage() {
     <div className="stack-lg">
       {pageError ? <div className="channel-setup-banner channel-setup-banner-error">{pageError}</div> : null}
       {pageNotice ? <div className="channel-setup-banner channel-setup-banner-success">{pageNotice}</div> : null}
-      {isInitialLoading ? <LoadingState /> : (
+      {isInitialLoading ? (
+        <LoadingState />
+      ) : (
         <ChannelSetupContent
           catalog={catalog}
           connections={connections}
@@ -641,7 +652,10 @@ function ChannelSetupContent(props: {
   setCurrentStepId: (stepId: string) => void;
   setManualJsonOpen: (value: boolean | ((current: boolean) => boolean)) => void;
   setManualJsonText: (value: string) => void;
-  onStartDraft: (mode: "create" | "edit" | "repair" | "rotate_secret", connection?: IntegrationConnection) => Promise<void>;
+  onStartDraft: (
+    mode: "create" | "edit" | "repair" | "rotate_secret",
+    connection?: IntegrationConnection,
+  ) => Promise<void>;
   onSaveDraft: () => Promise<void>;
   onResumeDraft: (draft: ChannelSetupDraft) => void;
   onValidate: () => Promise<void>;
@@ -655,7 +669,10 @@ function ChannelSetupContent(props: {
   return (
     <div className="split-grid channel-setup-shell">
       <div className="stack-md">
-        <Panel title="Available guided channels" subtitle={`Guided flows are available for ${props.guidedChannelLabels || "the current rollout set"}. Other channels stay on the legacy/manual path for now.`}>
+        <Panel
+          title="Available guided channels"
+          subtitle={`Guided flows are available for ${props.guidedChannelLabels || "the current rollout set"}. Other channels stay on the legacy/manual path for now.`}
+        >
           <div className="channel-setup-catalog">
             {props.catalog.map((item) => {
               const selected = item.catalogId === props.selectedCatalogId;
@@ -669,7 +686,9 @@ function ChannelSetupContent(props: {
                 >
                   <div className="channel-setup-catalog-top">
                     <strong>{item.label}</strong>
-                    <StatusChip tone={supported ? "success" : "muted"}>{supported ? "Guided" : "Manual for now"}</StatusChip>
+                    <StatusChip tone={supported ? "success" : "muted"}>
+                      {supported ? "Guided" : "Manual for now"}
+                    </StatusChip>
                   </div>
                   <FieldHelp>{item.description}</FieldHelp>
                 </button>
@@ -678,7 +697,9 @@ function ChannelSetupContent(props: {
           </div>
           <div className="channel-setup-start-bar">
             <ActionButton
-              label={props.definition ? `Set up ${props.selectedCatalog?.label ?? "channel"}` : "Guided setup coming later"}
+              label={
+                props.definition ? `Set up ${props.selectedCatalog?.label ?? "channel"}` : "Guided setup coming later"
+              }
               disabled={!props.definition || props.busyAction !== null}
               pending={props.busyAction === "start"}
               onClick={() => void props.onStartDraft("create")}
@@ -695,7 +716,9 @@ function ChannelSetupContent(props: {
                   <div className="channel-setup-connection-head">
                     <div className="stack-sm">
                       <strong>{item.label ?? props.selectedCatalog?.label ?? item.catalogId}</strong>
-                      <FieldHelp>{titleCaseLifecycle(item.lifecycleMode)} · Updated {new Date(item.updatedAt).toLocaleString()}</FieldHelp>
+                      <FieldHelp>
+                        {titleCaseLifecycle(item.lifecycleMode)} · Updated {new Date(item.updatedAt).toLocaleString()}
+                      </FieldHelp>
                     </div>
                     <StatusChip tone={item.lastFailureCategory ? "warning" : "success"}>
                       {item.lastFailureCategory ? "Needs attention" : "Draft ready"}
@@ -714,7 +737,10 @@ function ChannelSetupContent(props: {
           </Panel>
         ) : null}
 
-        <Panel title="Existing channel connections" subtitle="Use edit, repair, rotate-secret, and re-test without abandoning the guided flow.">
+        <Panel
+          title="Existing channel connections"
+          subtitle="Use edit, repair, rotate-secret, and re-test without abandoning the guided flow."
+        >
           {props.connections.length === 0 ? (
             <GCEmptyState
               title="No channel connections yet"
@@ -729,15 +755,42 @@ function ChannelSetupContent(props: {
                       <strong>{connection.label}</strong>
                       <FieldHelp>{connection.catalogId}</FieldHelp>
                     </div>
-                    <StatusChip tone={connection.status === "connected" ? "success" : connection.status === "error" ? "critical" : "warning"}>
+                    <StatusChip
+                      tone={
+                        connection.status === "connected"
+                          ? "success"
+                          : connection.status === "error"
+                            ? "critical"
+                            : "warning"
+                      }
+                    >
                       {connection.status}
                     </StatusChip>
                   </div>
                   <div className="channel-setup-connection-actions">
-                    <ActionButton label="Edit" disabled={props.busyAction !== null} onClick={() => void props.onStartDraft("edit", connection)} />
-                    <ActionButton label="Repair" disabled={props.busyAction !== null} pending={props.busyAction === "repair"} onClick={() => void props.onStartDraft("repair", connection)} />
-                    <ActionButton label="Rotate Secret" disabled={props.busyAction !== null} pending={props.busyAction === "rotate"} onClick={() => void props.onStartDraft("rotate_secret", connection)} />
-                    <ActionButton label="Re-test" disabled={props.busyAction !== null} pending={props.busyAction === "retest"} onClick={() => void props.onRetest(connection)} />
+                    <ActionButton
+                      label="Edit"
+                      disabled={props.busyAction !== null}
+                      onClick={() => void props.onStartDraft("edit", connection)}
+                    />
+                    <ActionButton
+                      label="Repair"
+                      disabled={props.busyAction !== null}
+                      pending={props.busyAction === "repair"}
+                      onClick={() => void props.onStartDraft("repair", connection)}
+                    />
+                    <ActionButton
+                      label="Rotate Secret"
+                      disabled={props.busyAction !== null}
+                      pending={props.busyAction === "rotate"}
+                      onClick={() => void props.onStartDraft("rotate_secret", connection)}
+                    />
+                    <ActionButton
+                      label="Re-test"
+                      disabled={props.busyAction !== null}
+                      pending={props.busyAction === "retest"}
+                      onClick={() => void props.onRetest(connection)}
+                    />
                   </div>
                 </article>
               ))}
@@ -757,24 +810,36 @@ function ChannelSetupContent(props: {
           <Panel title={props.selectedCatalog.label} subtitle="Guided setup is not available for this channel yet.">
             <GCEmptyState
               title="Manual path only for now"
-              subtitle={props.definitionError ?? "This channel will move into the new wizard framework in a later phase."}
-              action={<span className="token-chip">Guided coverage: {props.guidedChannelLabels || "Current rollout set only"}</span>}
+              subtitle={
+                props.definitionError ?? "This channel will move into the new wizard framework in a later phase."
+              }
+              action={
+                <span className="token-chip">
+                  Guided coverage: {props.guidedChannelLabels || "Current rollout set only"}
+                </span>
+              }
             />
           </Panel>
         ) : (
           <Panel
             title={`${props.definition.catalog.label} setup wizard`}
             subtitle={props.definition.wizard.introSummary}
-            actions={props.draft ? (
-              <div className="channel-setup-header-actions">
-                <ActionButton label="I already have the values" disabled={props.busyAction !== null} onClick={() => props.onJumpToFieldCollection()} />
-                <ActionButton
-                  label={props.manualJsonOpen ? "Hide Manual JSON" : "Manual JSON"}
-                  disabled={!props.draft || props.busyAction !== null}
-                  onClick={() => props.setManualJsonOpen((current) => !current)}
-                />
-              </div>
-            ) : undefined}
+            actions={
+              props.draft ? (
+                <div className="channel-setup-header-actions">
+                  <ActionButton
+                    label="I already have the values"
+                    disabled={props.busyAction !== null}
+                    onClick={() => props.onJumpToFieldCollection()}
+                  />
+                  <ActionButton
+                    label={props.manualJsonOpen ? "Hide Manual JSON" : "Manual JSON"}
+                    disabled={!props.draft || props.busyAction !== null}
+                    onClick={() => props.setManualJsonOpen((current) => !current)}
+                  />
+                </div>
+              ) : undefined
+            }
           >
             <div className="channel-setup-definition-meta">
               <StatusChip tone="success">{props.definition.telemetry.tier.replace("_", " ").toUpperCase()}</StatusChip>
@@ -808,7 +873,11 @@ function WizardShell(props: Parameters<typeof ChannelSetupContent>[0]) {
                     className={`channel-setup-step-button${step.id === props.currentStepId ? " active" : ""}${getStepCompletionState(step, props.draft, props.validation, props.testResult) === "complete" ? " complete" : ""}`}
                     onClick={() => props.setCurrentStepId(step.id)}
                   >
-                    <span>{getStepCompletionState(step, props.draft, props.validation, props.testResult) === "complete" ? "✓" : index + 1}</span>
+                    <span>
+                      {getStepCompletionState(step, props.draft, props.validation, props.testResult) === "complete"
+                        ? "✓"
+                        : index + 1}
+                    </span>
                     <div>
                       <strong>{step.title}</strong>
                       <FieldHelp>{describeStepStatus(step, props.draft, props.validation, props.testResult)}</FieldHelp>
@@ -827,11 +896,7 @@ function WizardShell(props: Parameters<typeof ChannelSetupContent>[0]) {
             <ol className="channel-setup-step-list">
               {props.visibleSteps.map((step, index) => (
                 <li key={step.id}>
-                  <button
-                    type="button"
-                    className={`channel-setup-step-button${index === 0 ? " active" : ""}`}
-                    disabled
-                  >
+                  <button type="button" className={`channel-setup-step-button${index === 0 ? " active" : ""}`} disabled>
                     <span>{index + 1}</span>
                     <div>
                       <strong>{step.title}</strong>
@@ -849,7 +914,10 @@ function WizardShell(props: Parameters<typeof ChannelSetupContent>[0]) {
         {!props.draft ? (
           <WizardPreviewPanel {...props} />
         ) : !props.currentStep ? (
-          <GCEmptyState title="Wizard ready" subtitle="Start with the guided setup button or choose an existing connection action." />
+          <GCEmptyState
+            title="Wizard ready"
+            subtitle="Start with the guided setup button or choose an existing connection action."
+          />
         ) : (
           <WizardStepPanel {...props} />
         )}
@@ -862,7 +930,8 @@ function WizardShell(props: Parameters<typeof ChannelSetupContent>[0]) {
               {props.definition.volatility.officialDocsUrl}
             </a>
             <FieldHelp>
-              Last reviewed {props.definition.volatility.lastReviewedAt}. Volatility {props.definition.volatility.volatility}; deprecation risk {props.definition.volatility.deprecationRisk}.
+              Last reviewed {props.definition.volatility.lastReviewedAt}. Volatility{" "}
+              {props.definition.volatility.volatility}; deprecation risk {props.definition.volatility.deprecationRisk}.
             </FieldHelp>
           </Panel>
         ) : null}
@@ -875,7 +944,9 @@ function WizardShell(props: Parameters<typeof ChannelSetupContent>[0]) {
                   <FieldHelp>{item.body}</FieldHelp>
                   {item.nextSteps && item.nextSteps.length > 0 ? (
                     <ul className="channel-setup-inline-list">
-                      {item.nextSteps.map((step) => <li key={step}>{step}</li>)}
+                      {item.nextSteps.map((step) => (
+                        <li key={step}>{step}</li>
+                      ))}
                     </ul>
                   ) : null}
                 </div>
@@ -886,7 +957,9 @@ function WizardShell(props: Parameters<typeof ChannelSetupContent>[0]) {
         {props.draft?.hydration?.warnings && props.draft.hydration.warnings.length > 0 ? (
           <Panel title="Edit and repair notes" padding="compact" tone="warning">
             <ul className="channel-setup-inline-list">
-              {props.draft.hydration.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+              {props.draft.hydration.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
             </ul>
           </Panel>
         ) : null}
@@ -925,7 +998,9 @@ function WizardPreviewPanel(props: Parameters<typeof ChannelSetupContent>[0]) {
       {props.definition.wizard.prerequisites.length > 0 ? (
         <Panel title="Prerequisites" padding="compact">
           <ul className="channel-setup-inline-list">
-            {props.definition.wizard.prerequisites.map((item) => <li key={item}>{item}</li>)}
+            {props.definition.wizard.prerequisites.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
           </ul>
         </Panel>
       ) : null}
@@ -999,7 +1074,9 @@ function WizardStepPanel(props: Parameters<typeof ChannelSetupContent>[0]) {
 
       {props.manualJsonOpen ? (
         <div className="channel-setup-manual-json">
-          <label htmlFor="channel-manual-json"><strong>Manual JSON</strong></label>
+          <label htmlFor="channel-manual-json">
+            <strong>Manual JSON</strong>
+          </label>
           <textarea
             id="channel-manual-json"
             className="full-textarea"
@@ -1007,7 +1084,9 @@ function WizardStepPanel(props: Parameters<typeof ChannelSetupContent>[0]) {
             value={props.manualJsonText}
             onChange={(event) => props.setManualJsonText(event.target.value)}
           />
-          {props.manualJsonError ? <FieldHelp className="channel-setup-error-text">{props.manualJsonError}</FieldHelp> : null}
+          {props.manualJsonError ? (
+            <FieldHelp className="channel-setup-error-text">{props.manualJsonError}</FieldHelp>
+          ) : null}
           <ActionButton label="Apply JSON" onClick={() => props.onApplyManualJson()} />
         </div>
       ) : null}
@@ -1016,13 +1095,42 @@ function WizardStepPanel(props: Parameters<typeof ChannelSetupContent>[0]) {
       {props.testResult ? <ResultPanel title="Test Result" result={props.testResult} /> : null}
 
       <footer className="channel-setup-footer">
-        <ActionButton label="Back" disabled={props.busyAction !== null || !previous} onClick={() => previous ? props.setCurrentStepId(previous.id) : undefined} />
+        <ActionButton
+          label="Back"
+          disabled={props.busyAction !== null || !previous}
+          onClick={() => (previous ? props.setCurrentStepId(previous.id) : undefined)}
+        />
         <div className="channel-setup-footer-actions">
-          <ActionButton label="Save Draft" pending={props.busyAction === "save"} disabled={props.busyAction !== null} onClick={() => void props.onSaveDraft()} />
-          <ActionButton label="Validate" pending={props.busyAction === "validate"} disabled={props.busyAction !== null} onClick={() => void props.onValidate()} />
-          <ActionButton label="Test" pending={props.busyAction === "test"} disabled={props.busyAction !== null} onClick={() => void props.onTest()} />
-          <ActionButton label="Finalize" pending={props.busyAction === "finalize"} disabled={props.busyAction !== null} onClick={() => void props.onFinalize()} variant="primary" />
-          <ActionButton label="Next" disabled={props.busyAction !== null || !next} onClick={() => next ? props.setCurrentStepId(next.id) : undefined} />
+          <ActionButton
+            label="Save Draft"
+            pending={props.busyAction === "save"}
+            disabled={props.busyAction !== null}
+            onClick={() => void props.onSaveDraft()}
+          />
+          <ActionButton
+            label="Validate"
+            pending={props.busyAction === "validate"}
+            disabled={props.busyAction !== null}
+            onClick={() => void props.onValidate()}
+          />
+          <ActionButton
+            label="Test"
+            pending={props.busyAction === "test"}
+            disabled={props.busyAction !== null}
+            onClick={() => void props.onTest()}
+          />
+          <ActionButton
+            label="Finalize"
+            pending={props.busyAction === "finalize"}
+            disabled={props.busyAction !== null}
+            onClick={() => void props.onFinalize()}
+            variant="primary"
+          />
+          <ActionButton
+            label="Next"
+            disabled={props.busyAction !== null || !next}
+            onClick={() => (next ? props.setCurrentStepId(next.id) : undefined)}
+          />
         </div>
       </footer>
     </div>
@@ -1051,10 +1159,16 @@ function FieldCard({
         {field.sensitive ? <StatusChip tone="warning">Sensitive</StatusChip> : null}
       </div>
       <FieldHelp>{field.explanation}</FieldHelp>
-      {field.whyNeeded ? <FieldHelp><strong>Why we need it:</strong> {field.whyNeeded}</FieldHelp> : null}
+      {field.whyNeeded ? (
+        <FieldHelp>
+          <strong>Why we need it:</strong> {field.whyNeeded}
+        </FieldHelp>
+      ) : null}
       <FieldInput field={field} value={stringValue} onChange={onChange} />
       {hydrationState === "configured" && !stringValue ? (
-        <FieldHelp className="channel-setup-configured-note">Configured already. Enter a new value only if you need to replace it.</FieldHelp>
+        <FieldHelp className="channel-setup-configured-note">
+          Configured already. Enter a new value only if you need to replace it.
+        </FieldHelp>
       ) : null}
       {field.whereToFind && field.whereToFind.length > 0 ? (
         <div className="channel-setup-field-meta">
@@ -1072,11 +1186,15 @@ function FieldCard({
         <div className="channel-setup-field-meta">
           <strong>Common mistakes</strong>
           <ul className="channel-setup-inline-list">
-            {field.commonMistakes.map((item) => <li key={item}>{item}</li>)}
+            {field.commonMistakes.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
           </ul>
         </div>
       ) : null}
-      {field.canChangeLater ? <FieldHelp>You can update this later without recreating the entire connection.</FieldHelp> : null}
+      {field.canChangeLater ? (
+        <FieldHelp>You can update this later without recreating the entire connection.</FieldHelp>
+      ) : null}
     </div>
   );
 }
@@ -1099,7 +1217,9 @@ function FieldInput({
       >
         {!field.required ? <option value="">Select…</option> : null}
         {(field.options ?? []).map((option) => (
-          <option key={option.value} value={option.value}>{option.label}</option>
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
         ))}
       </select>
     );
@@ -1151,9 +1271,15 @@ function ResultPanel({
   result: ChannelSetupValidationResult | ChannelSetupTestResult;
 }) {
   return (
-    <Panel title={title} padding="compact" tone={result.status === "error" ? "critical" : result.status === "warn" ? "warning" : "accent"}>
+    <Panel
+      title={title}
+      padding="compact"
+      tone={result.status === "error" ? "critical" : result.status === "warn" ? "warning" : "accent"}
+    >
       <div className="channel-setup-result-head">
-        <StatusChip tone={result.status === "error" ? "critical" : result.status === "warn" ? "warning" : "success"}>{result.status}</StatusChip>
+        <StatusChip tone={result.status === "error" ? "critical" : result.status === "warn" ? "warning" : "success"}>
+          {result.status}
+        </StatusChip>
         <FieldHelp>Checked {new Date(result.checkedAt).toLocaleString()}</FieldHelp>
       </div>
       {result.issues.length === 0 ? (
@@ -1166,7 +1292,9 @@ function ResultPanel({
               {issue.detail ? <FieldHelp>{issue.detail}</FieldHelp> : null}
               {issue.nextSteps && issue.nextSteps.length > 0 ? (
                 <ul className="channel-setup-inline-list">
-                  {issue.nextSteps.map((step) => <li key={step}>{step}</li>)}
+                  {issue.nextSteps.map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
                 </ul>
               ) : null}
             </div>
@@ -1174,11 +1302,15 @@ function ResultPanel({
         </div>
       )}
       {"recommendedNextAction" in result && result.recommendedNextAction ? (
-        <FieldHelp><strong>Next:</strong> {result.recommendedNextAction}</FieldHelp>
+        <FieldHelp>
+          <strong>Next:</strong> {result.recommendedNextAction}
+        </FieldHelp>
       ) : null}
       {"probe" in result && result.probe?.steps?.length ? (
         <div className="stack-sm">
-          <FieldHelp><strong>Probe truth</strong></FieldHelp>
+          <FieldHelp>
+            <strong>Probe truth</strong>
+          </FieldHelp>
           <ul className="channel-setup-inline-list">
             {result.probe.steps.map((step) => (
               <li key={`${step.key}-${step.message}`}>
@@ -1206,133 +1338,44 @@ function renderRichBlocks(blocks?: ChannelSetupRichBlock[]) {
         if (block.kind === "list") {
           return block.ordered ? (
             <ol key={key} className="channel-setup-inline-list">
-              {block.items.map((item) => <li key={item}>{item}</li>)}
+              {block.items.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
             </ol>
           ) : (
             <ul key={key} className="channel-setup-inline-list">
-              {block.items.map((item) => <li key={item}>{item}</li>)}
+              {block.items.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
             </ul>
           );
         }
         if (block.kind === "note") {
-          return <div key={key} className={`channel-setup-note tone-${block.tone}`}>{block.title ? <strong>{block.title} </strong> : null}{block.text}</div>;
+          return (
+            <div key={key} className={`channel-setup-note tone-${block.tone}`}>
+              {block.title ? <strong>{block.title} </strong> : null}
+              {block.text}
+            </div>
+          );
         }
         if (block.kind === "link") {
-          return <a key={key} href={block.href} target={block.external ? "_blank" : undefined} rel={block.external ? "noreferrer" : undefined}>{block.label}</a>;
+          return (
+            <a
+              key={key}
+              href={block.href}
+              target={block.external ? "_blank" : undefined}
+              rel={block.external ? "noreferrer" : undefined}
+            >
+              {block.label}
+            </a>
+          );
         }
-        return <pre key={key}><code>{block.code}</code></pre>;
+        return (
+          <pre key={key}>
+            <code>{block.code}</code>
+          </pre>
+        );
       })}
     </div>
   );
-}
-
-function isStepVisible(step: ChannelSetupStepDefinition, draft: Record<string, unknown> | undefined): boolean {
-  if (!step.visibleWhenFieldEquals) {
-    return true;
-  }
-  return draft?.[step.visibleWhenFieldEquals.fieldKey] === step.visibleWhenFieldEquals.value;
-}
-
-function findResumeStepId(definition: ChannelSetupDefinition, draft: ChannelSetupDraft) {
-  const visibleSteps = definition.wizard.steps.filter((step) => isStepVisible(step, draft.draft));
-  const nextIncomplete = visibleSteps.find((step) => getStepCompletionState(step, draft, null, null) !== "complete");
-  return nextIncomplete?.id ?? visibleSteps.at(-1)?.id ?? "";
-}
-
-function getStepCompletionState(
-  step: ChannelSetupStepDefinition,
-  draft: ChannelSetupDraft | null,
-  validation: ChannelSetupValidationResult | null,
-  testResult: ChannelSetupTestResult | null,
-): "pending" | "complete" {
-  if (!draft) {
-    return "pending";
-  }
-  if (step.fields && step.fields.length > 0) {
-    return step.fields.every((field) => isFieldSatisfied(field, draft.draft, draft.hydration?.fieldState[field.key]))
-      ? "complete"
-      : "pending";
-  }
-  if (step.kind === "test") {
-    return testResult?.status === "ok" ? "complete" : "pending";
-  }
-  if (step.kind === "confirm") {
-    return testResult?.status === "ok" && validation?.status === "ok" ? "complete" : "pending";
-  }
-  return "pending";
-}
-
-function describeStepStatus(
-  step: ChannelSetupStepDefinition,
-  draft: ChannelSetupDraft | null,
-  validation: ChannelSetupValidationResult | null,
-  testResult: ChannelSetupTestResult | null,
-) {
-  const state = getStepCompletionState(step, draft, validation, testResult);
-  if (state === "complete") {
-    return "Complete";
-  }
-  switch (step.kind) {
-    case "field-collection":
-      return "Values and context";
-    case "test":
-      return testResult ? "Re-run after changes" : "Run validation and live checks";
-    case "confirm":
-      return "Finalize when validation and tests pass";
-    default:
-      return "Review and continue";
-  }
-}
-
-function isFieldSatisfied(
-  field: ChannelSetupFieldDefinition,
-  draftValues: Record<string, unknown>,
-  hydrationState?: "configured" | "missing" | "needs_replacement" | "unknown",
-) {
-  const value = draftValues[field.key];
-  if (field.type === "boolean") {
-    return typeof value === "boolean" || hydrationState === "configured";
-  }
-  if (!field.required) {
-    return true;
-  }
-  if (typeof value === "string") {
-    return value.trim().length > 0;
-  }
-  return hydrationState === "configured";
-}
-
-function findStartStepId(definition: ChannelSetupDefinition, lifecycleMode: ChannelSetupDraft["lifecycleMode"]) {
-  if (lifecycleMode === "repair" || lifecycleMode === "rotate_secret" || lifecycleMode === "retest") {
-    return definition.wizard.steps.find((step) => step.kind === "field-collection" || step.kind === "test")?.id
-      ?? definition.wizard.steps[0]?.id
-      ?? "";
-  }
-  return definition.wizard.steps[0]?.id ?? "";
-}
-
-function titleCaseLifecycle(mode: ChannelSetupDraft["lifecycleMode"]) {
-  switch (mode) {
-    case "rotate_secret":
-      return "Rotate Secret";
-    case "retest":
-      return "Re-test";
-    default:
-      return mode.charAt(0).toUpperCase() + mode.slice(1);
-  }
-}
-
-function lifecycleDescription(mode: ChannelSetupDraft["lifecycleMode"]) {
-  switch (mode) {
-    case "create":
-      return "Guided first-time setup";
-    case "edit":
-      return "Selective edit of an existing connection";
-    case "repair":
-      return "Diagnostics-forward recovery path";
-    case "rotate_secret":
-      return "Focused credential replacement";
-    case "retest":
-      return "Verification-only run";
-  }
 }

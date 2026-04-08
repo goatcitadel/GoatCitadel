@@ -50,7 +50,8 @@
       "Bash(npx tsx:*)",
       "Bash(cd F:/code/personal-ai && npx tsc --noEmit -p packages/storage/tsconfig.json 2>&1 | tail -5)",
       "Bash(cd:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(python -c \":*)"
     ]
   },
   "hooks": {

@@ -1,30 +1,34 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
+import {
+  asRecord,
+  asString,
+  hashRawBodyDigest,
+  timingSafeStringEqual,
+  type JsonRecord,
+} from "./webhook-json-helpers.js";
 
-const WHATSAPP_WEBHOOK_PATH =
-  /^\/api\/v1\/integrations\/connections\/[^/]+\/whatsapp\/webhook$/i;
+const WHATSAPP_WEBHOOK_PATH = /^\/api\/v1\/integrations\/connections\/[^/]+\/whatsapp\/webhook$/i;
 const WHATSAPP_SIGNATURE_PREFIX = "sha256=";
-
-type JsonRecord = Record<string, unknown>;
 
 export type WhatsAppWebhookNormalization =
   | {
-    kind: "message";
-    eventType: string;
-    eventId: string;
-    account: string;
-    actorId: string;
-    actorType: "user";
-    displayName?: string;
-    content: string;
-    peer: string;
-    deliveryReplyToMessageId: string;
-    metadata: Record<string, unknown>;
-  }
+      kind: "message";
+      eventType: string;
+      eventId: string;
+      account: string;
+      actorId: string;
+      actorType: "user";
+      displayName?: string;
+      content: string;
+      peer: string;
+      deliveryReplyToMessageId: string;
+      metadata: Record<string, unknown>;
+    }
   | {
-    kind: "ignore";
-    eventType?: string;
-    reason: string;
-  };
+      kind: "ignore";
+      eventType?: string;
+      reason: string;
+    };
 
 export function isWhatsAppWebhookPath(url: string): boolean {
   const pathname = url.split("?", 1)[0] ?? url;
@@ -46,23 +50,15 @@ export function verifyWhatsAppWebhookSignature(
     return false;
   }
   const expected = buildWhatsAppWebhookSignature(rawBody, appSecret);
-  if (expected.length !== signature.length) {
-    return false;
-  }
-  return timingSafeEqual(Buffer.from(expected, "utf8"), Buffer.from(signature, "utf8"));
+  return timingSafeStringEqual(expected, signature);
 }
 
-export function deriveWhatsAppWebhookIdempotencyKey(
-  connectionId: string,
-  payload: unknown,
-  rawBody: Buffer,
-): string {
+export function deriveWhatsAppWebhookIdempotencyKey(connectionId: string, payload: unknown, rawBody: Buffer): string {
   const messageId = firstMessageId(payload);
   if (messageId) {
     return `whatsapp:${connectionId}:${messageId}`;
   }
-  const digest = createHash("sha256").update(rawBody).digest("hex");
-  return `whatsapp:${connectionId}:${digest}`;
+  return `whatsapp:${connectionId}:${hashRawBodyDigest(rawBody)}`;
 }
 
 export function normalizeWhatsAppWebhookPayload(input: {
@@ -177,15 +173,7 @@ function renderWhatsAppMessageContent(message: JsonRecord): string | undefined {
 }
 
 function compactRecord(record: JsonRecord): JsonRecord {
-  return Object.fromEntries(
-    Object.entries(record).filter(([, value]) => value !== undefined),
-  );
-}
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : {};
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
 }
 
 function asArray(value: unknown): unknown[] {
@@ -194,9 +182,5 @@ function asArray(value: unknown): unknown[] {
 
 function firstRecord(value: unknown[]): JsonRecord | undefined {
   const first = value.find((item) => item && typeof item === "object" && !Array.isArray(item));
-  return first ? first as JsonRecord : undefined;
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return first ? (first as JsonRecord) : undefined;
 }

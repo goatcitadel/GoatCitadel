@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { buildApp } from "./app.js";
 import {
   resolveAllowUnauthNetwork,
@@ -5,13 +6,14 @@ import {
   shouldWarnUnauthNonLoopbackBind,
 } from "./startup-guard.js";
 import { setGoatcitadelTerminalTitle } from "./runtime-ux.js";
+import { env } from "./env.js";
 
-const port = Number(process.env.GATEWAY_PORT ?? 8787);
-const host = process.env.GATEWAY_HOST ?? "127.0.0.1";
+const port = env.GATEWAY_PORT;
+const host = env.GATEWAY_HOST;
 const warnUnauthNonLoopback = resolveWarnUnauthNonLoopback();
 const allowUnauthNetwork = resolveAllowUnauthNetwork();
 
-setGoatcitadelTerminalTitle(process.env.GOATCITADEL_TERMINAL_TASK?.trim() || "Gateway");
+setGoatcitadelTerminalTitle(env.GOATCITADEL_TERMINAL_TASK?.trim() || "Gateway");
 
 const app = await buildApp();
 let shuttingDown = false;

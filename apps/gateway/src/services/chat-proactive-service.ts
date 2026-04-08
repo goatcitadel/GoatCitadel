@@ -1,4 +1,8 @@
+/* eslint-disable max-lines */
 import { randomUUID } from "node:crypto";
+import { logger } from "@goatcitadel/gateway-core";
+
+const log = logger.child("chat-proactive-service");
 import {
   DEFAULT_SESSION_AUTONOMY_PREFS,
   type SessionAutonomyPrefsPatchInput,
@@ -181,7 +185,7 @@ export class ChatProactiveService {
     }
     this.scheduler = setInterval(() => {
       const task = this.runSchedulerTick().catch((error) => {
-        console.error("[goatcitadel] proactive scheduler tick failed", error);
+        log.error("scheduler tick failed", { error: error instanceof Error ? error.message : String(error) });
         this.ctx.publishRealtime("system", "chat", {
           type: "proactive_scheduler_error",
           message: (error as Error).message,
@@ -249,10 +253,10 @@ export class ChatProactiveService {
             prefs: current.prefs,
           });
         } catch (error) {
-          console.error(
-            "[goatcitadel] proactive scheduler session trigger failed",
-            { sessionId: current.sessionId, error },
-          );
+          log.error("scheduler session trigger failed", {
+            sessionId: current.sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
           this.ctx.publishRealtime("system", "chat", {
             type: "proactive_scheduler_session_error",
             sessionId: current.sessionId,
@@ -297,10 +301,7 @@ export class ChatProactiveService {
     return this.ctx.storage.chatSessionMeta.ensure(sessionId).workspaceId ?? "default";
   }
 
-  private patchSessionAutonomyPrefs(
-    sessionId: string,
-    input: SessionAutonomyPrefsPatchInput,
-  ): SessionAutonomyPrefs {
+  private patchSessionAutonomyPrefs(sessionId: string, input: SessionAutonomyPrefsPatchInput): SessionAutonomyPrefs {
     return this.ctx.storage.sessionAutonomyPrefs.patch(sessionId, input);
   }
 
@@ -317,11 +318,15 @@ export class ChatProactiveService {
 
   private countProactiveActionsLastHour(sessionId: string): number {
     const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT COUNT(*) AS count
       FROM proactive_actions
       WHERE session_id = ? AND status = 'executed' AND created_at >= ?
-    `).get(sessionId, cutoff) as { count?: number } | undefined;
+    `,
+      )
+      .get(sessionId, cutoff) as { count?: number } | undefined;
     return Number(row?.count ?? 0);
   }
 
@@ -382,11 +387,15 @@ export class ChatProactiveService {
   }
 
   private readProactiveRun(runId: string): ProactiveRunRecord {
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT *
       FROM proactive_runs
       WHERE run_id = ?
-    `).get(runId) as ProactiveRunRow | undefined;
+    `,
+      )
+      .get(runId) as ProactiveRunRow | undefined;
     if (!row) {
       throw new Error(`Proactive run ${runId} not found.`);
     }
@@ -396,7 +405,9 @@ export class ChatProactiveService {
   // ── run persistence ──────────────────────────────────────────────
 
   private insertProactiveRun(run: ProactiveRunRecord): void {
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       INSERT INTO proactive_runs (
         run_id, session_id, status, mode, confidence, reasoning_summary, action_count,
         suggested_actions_json, executed_actions_json, linked_task_id, linked_durable_run_id, approval_id,
@@ -408,36 +419,34 @@ export class ChatProactiveService {
         @triggerSource, @originSurface, @nextWakeAt, @stopReason, @externalReferenceRootsJson,
         @resumeMetadataJson, @error, @startedAt, @finishedAt
       )
-    `).run({
-      runId: run.runId,
-      sessionId: run.sessionId,
-      status: run.status,
-      mode: run.mode,
-      confidence: run.confidence,
-      reasoningSummary: run.reasoningSummary,
-      actionCount: run.suggestedActions.length,
-      suggestedActionsJson: JSON.stringify(run.suggestedActions),
-      executedActionsJson: JSON.stringify(run.executedActions),
-      linkedTaskId: run.linkedTaskId ?? null,
-      linkedDurableRunId: run.linkedDurableRunId ?? null,
-      approvalId: run.approvalId ?? null,
-      triggerSource: run.triggerSource ?? null,
-      originSurface: run.originSurface ?? null,
-      nextWakeAt: run.nextWakeAt ?? null,
-      stopReason: run.stopReason ?? null,
-      externalReferenceRootsJson: run.externalReferenceRoots ? JSON.stringify(run.externalReferenceRoots) : null,
-      resumeMetadataJson: run.resumeMetadata ? JSON.stringify(run.resumeMetadata) : null,
-      error: run.error ?? null,
-      startedAt: run.startedAt,
-      finishedAt: run.finishedAt ?? null,
-    });
+    `,
+      )
+      .run({
+        runId: run.runId,
+        sessionId: run.sessionId,
+        status: run.status,
+        mode: run.mode,
+        confidence: run.confidence,
+        reasoningSummary: run.reasoningSummary,
+        actionCount: run.suggestedActions.length,
+        suggestedActionsJson: JSON.stringify(run.suggestedActions),
+        executedActionsJson: JSON.stringify(run.executedActions),
+        linkedTaskId: run.linkedTaskId ?? null,
+        linkedDurableRunId: run.linkedDurableRunId ?? null,
+        approvalId: run.approvalId ?? null,
+        triggerSource: run.triggerSource ?? null,
+        originSurface: run.originSurface ?? null,
+        nextWakeAt: run.nextWakeAt ?? null,
+        stopReason: run.stopReason ?? null,
+        externalReferenceRootsJson: run.externalReferenceRoots ? JSON.stringify(run.externalReferenceRoots) : null,
+        resumeMetadataJson: run.resumeMetadata ? JSON.stringify(run.resumeMetadata) : null,
+        error: run.error ?? null,
+        startedAt: run.startedAt,
+        finishedAt: run.finishedAt ?? null,
+      });
   }
 
-  private patchProactiveRun(
-    runId: string,
-    patch: Partial<ProactiveRunRecord>,
-    finish = false,
-  ): ProactiveRunRecord {
+  private patchProactiveRun(runId: string, patch: Partial<ProactiveRunRecord>, finish = false): ProactiveRunRecord {
     const current = this.readProactiveRun(runId);
     const next: ProactiveRunRecord = {
       ...current,
@@ -447,7 +456,9 @@ export class ChatProactiveService {
       mode: patch.mode ?? current.mode,
       finishedAt: finish ? new Date().toISOString() : (patch.finishedAt ?? current.finishedAt),
     };
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       UPDATE proactive_runs
       SET
         status = @status,
@@ -468,40 +479,41 @@ export class ChatProactiveService {
         error = @error,
         finished_at = @finishedAt
       WHERE run_id = @runId
-    `).run({
-      runId: next.runId,
-      status: next.status,
-      confidence: next.confidence,
-      reasoningSummary: next.reasoningSummary,
-      actionCount: next.suggestedActions.length,
-      suggestedActionsJson: JSON.stringify(next.suggestedActions),
-      executedActionsJson: JSON.stringify(next.executedActions),
-      linkedTaskId: next.linkedTaskId ?? null,
-      linkedDurableRunId: next.linkedDurableRunId ?? null,
-      approvalId: next.approvalId ?? null,
-      triggerSource: next.triggerSource ?? null,
-      originSurface: next.originSurface ?? null,
-      nextWakeAt: next.nextWakeAt ?? null,
-      stopReason: next.stopReason ?? null,
-      externalReferenceRootsJson: next.externalReferenceRoots ? JSON.stringify(next.externalReferenceRoots) : null,
-      resumeMetadataJson: next.resumeMetadata ? JSON.stringify(next.resumeMetadata) : null,
-      error: next.error ?? null,
-      finishedAt: next.finishedAt ?? null,
-    });
+    `,
+      )
+      .run({
+        runId: next.runId,
+        status: next.status,
+        confidence: next.confidence,
+        reasoningSummary: next.reasoningSummary,
+        actionCount: next.suggestedActions.length,
+        suggestedActionsJson: JSON.stringify(next.suggestedActions),
+        executedActionsJson: JSON.stringify(next.executedActions),
+        linkedTaskId: next.linkedTaskId ?? null,
+        linkedDurableRunId: next.linkedDurableRunId ?? null,
+        approvalId: next.approvalId ?? null,
+        triggerSource: next.triggerSource ?? null,
+        originSurface: next.originSurface ?? null,
+        nextWakeAt: next.nextWakeAt ?? null,
+        stopReason: next.stopReason ?? null,
+        externalReferenceRootsJson: next.externalReferenceRoots ? JSON.stringify(next.externalReferenceRoots) : null,
+        resumeMetadataJson: next.resumeMetadata ? JSON.stringify(next.resumeMetadata) : null,
+        error: next.error ?? null,
+        finishedAt: next.finishedAt ?? null,
+      });
     return this.readProactiveRun(runId);
   }
 
-  private finishProactiveRun(
-    runId: string,
-    patch: Partial<ProactiveRunRecord>,
-  ): ProactiveRunRecord {
+  private finishProactiveRun(runId: string, patch: Partial<ProactiveRunRecord>): ProactiveRunRecord {
     return this.patchProactiveRun(runId, patch, true);
   }
 
   // ── action persistence ───────────────────────────────────────────
 
   private insertProactiveAction(action: ProactiveActionRecord): void {
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       INSERT INTO proactive_actions (
         action_id, run_id, session_id, kind, status, tool_name, args_json, result_json,
         linked_task_id, linked_durable_run_id, approval_id, trigger_source, origin_surface,
@@ -511,36 +523,41 @@ export class ChatProactiveService {
         @linkedTaskId, @linkedDurableRunId, @approvalId, @triggerSource, @originSurface,
         @externalReferenceRootsJson, @error, @createdAt, @updatedAt
       )
-    `).run({
-      actionId: action.actionId,
-      runId: action.runId,
-      sessionId: action.sessionId,
-      kind: action.kind,
-      status: action.status,
-      toolName: action.toolName ?? null,
-      argsJson: action.args ? JSON.stringify(action.args) : null,
-      resultJson: action.result ? JSON.stringify(action.result) : null,
-      linkedTaskId: action.linkedTaskId ?? null,
-      linkedDurableRunId: action.linkedDurableRunId ?? null,
-      approvalId: action.approvalId ?? null,
-      triggerSource: action.triggerSource ?? null,
-      originSurface: action.originSurface ?? null,
-      externalReferenceRootsJson: action.externalReferenceRoots ? JSON.stringify(action.externalReferenceRoots) : null,
-      error: action.error ?? null,
-      createdAt: action.createdAt,
-      updatedAt: action.updatedAt ?? action.createdAt,
-    });
+    `,
+      )
+      .run({
+        actionId: action.actionId,
+        runId: action.runId,
+        sessionId: action.sessionId,
+        kind: action.kind,
+        status: action.status,
+        toolName: action.toolName ?? null,
+        argsJson: action.args ? JSON.stringify(action.args) : null,
+        resultJson: action.result ? JSON.stringify(action.result) : null,
+        linkedTaskId: action.linkedTaskId ?? null,
+        linkedDurableRunId: action.linkedDurableRunId ?? null,
+        approvalId: action.approvalId ?? null,
+        triggerSource: action.triggerSource ?? null,
+        originSurface: action.originSurface ?? null,
+        externalReferenceRootsJson: action.externalReferenceRoots
+          ? JSON.stringify(action.externalReferenceRoots)
+          : null,
+        error: action.error ?? null,
+        createdAt: action.createdAt,
+        updatedAt: action.updatedAt ?? action.createdAt,
+      });
   }
 
-  private updateProactiveAction(
-    actionId: string,
-    patch: Partial<ProactiveActionRecord>,
-  ): ProactiveActionRecord {
-    const row = this.ctx.gatewaySql.prepare(`
+  private updateProactiveAction(actionId: string, patch: Partial<ProactiveActionRecord>): ProactiveActionRecord {
+    const row = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT *
       FROM proactive_actions
       WHERE action_id = ?
-    `).get(actionId) as ProactiveActionRow | undefined;
+    `,
+      )
+      .get(actionId) as ProactiveActionRow | undefined;
     if (!row) {
       throw new Error(`Proactive action ${actionId} not found.`);
     }
@@ -558,16 +575,20 @@ export class ChatProactiveService {
       originSurface: patch.originSurface ?? row.origin_surface ?? undefined,
       toolName: row.tool_name ?? undefined,
       args: row.args_json ? safeJsonParse<Record<string, unknown>>(row.args_json, {}) : undefined,
-      result: patch.result ?? (row.result_json ? safeJsonParse<Record<string, unknown>>(row.result_json, {}) : undefined),
+      result:
+        patch.result ?? (row.result_json ? safeJsonParse<Record<string, unknown>>(row.result_json, {}) : undefined),
       error: patch.error ?? row.error ?? undefined,
-      externalReferenceRoots: patch.externalReferenceRoots
-        ?? (row.external_reference_roots_json
+      externalReferenceRoots:
+        patch.externalReferenceRoots ??
+        (row.external_reference_roots_json
           ? safeJsonParse<ProactiveReferenceRootRecord[]>(row.external_reference_roots_json, [])
           : undefined),
       createdAt: row.created_at,
       updatedAt,
     };
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       UPDATE proactive_actions
       SET
         status = @status,
@@ -581,28 +602,36 @@ export class ChatProactiveService {
         error = @error,
         updated_at = @updatedAt
       WHERE action_id = @actionId
-    `).run({
-      actionId: next.actionId,
-      status: next.status,
-      resultJson: next.result ? JSON.stringify(next.result) : null,
-      linkedTaskId: next.linkedTaskId ?? null,
-      linkedDurableRunId: next.linkedDurableRunId ?? null,
-      approvalId: next.approvalId ?? null,
-      triggerSource: next.triggerSource ?? null,
-      originSurface: next.originSurface ?? null,
-      externalReferenceRootsJson: next.externalReferenceRoots ? JSON.stringify(next.externalReferenceRoots) : null,
-      error: next.error ?? null,
-      updatedAt,
-    });
+    `,
+      )
+      .run({
+        actionId: next.actionId,
+        status: next.status,
+        resultJson: next.result ? JSON.stringify(next.result) : null,
+        linkedTaskId: next.linkedTaskId ?? null,
+        linkedDurableRunId: next.linkedDurableRunId ?? null,
+        approvalId: next.approvalId ?? null,
+        triggerSource: next.triggerSource ?? null,
+        originSurface: next.originSurface ?? null,
+        externalReferenceRootsJson: next.externalReferenceRoots ? JSON.stringify(next.externalReferenceRoots) : null,
+        error: next.error ?? null,
+        updatedAt,
+      });
     return next;
   }
 
   private getProactiveAction(actionId: string): ProactiveActionRecord {
-    const row = toProactiveActionRow(this.ctx.gatewaySql.prepare(`
+    const row = toProactiveActionRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
       SELECT *
       FROM proactive_actions
       WHERE action_id = ?
-    `).get(actionId));
+    `,
+        )
+        .get(actionId),
+    );
     if (!row) {
       throw new Error(`Proactive action ${actionId} not found.`);
     }
@@ -610,12 +639,18 @@ export class ChatProactiveService {
   }
 
   private listProactiveRunActions(runId: string): ProactiveActionRecord[] {
-    const rows = toProactiveActionRows(this.ctx.gatewaySql.prepare(`
+    const rows = toProactiveActionRows(
+      this.ctx.gatewaySql
+        .prepare(
+          `
       SELECT *
       FROM proactive_actions
       WHERE run_id = ?
       ORDER BY created_at ASC
-    `).all(runId));
+    `,
+        )
+        .all(runId),
+    );
     return rows.map(mapProactiveActionRow);
   }
 
@@ -625,11 +660,15 @@ export class ChatProactiveService {
     finish = false,
   ): ProactiveRunRecord {
     const actions = this.listProactiveRunActions(runId);
-    return this.patchProactiveRun(runId, {
-      ...patch,
-      suggestedActions: actions,
-      executedActions: actions.filter((action) => action.status !== "suggested"),
-    }, finish);
+    return this.patchProactiveRun(
+      runId,
+      {
+        ...patch,
+        suggestedActions: actions,
+        executedActions: actions.filter((action) => action.status !== "suggested"),
+      },
+      finish,
+    );
   }
 
   private parseProactiveTickWorkflowPayload(run: DurableRunRecord): ProactiveTickWorkflowPayload | undefined {
@@ -638,13 +677,13 @@ export class ChatProactiveService {
       return undefined;
     }
     if (
-      typeof payload.sessionId !== "string"
-      || typeof payload.proactiveRunId !== "string"
-      || typeof payload.originSurface !== "string"
-      || typeof payload.triggerSource !== "string"
-      || typeof payload.requestedAt !== "string"
-      || !payload.policySnapshot
-      || typeof payload.policySnapshot !== "object"
+      typeof payload.sessionId !== "string" ||
+      typeof payload.proactiveRunId !== "string" ||
+      typeof payload.originSurface !== "string" ||
+      typeof payload.triggerSource !== "string" ||
+      typeof payload.requestedAt !== "string" ||
+      !payload.policySnapshot ||
+      typeof payload.policySnapshot !== "object"
     ) {
       return undefined;
     }
@@ -658,7 +697,7 @@ export class ChatProactiveService {
     }
     const proactive = metadata.proactive;
     return {
-      phase: typeof proactive.phase === "string" ? proactive.phase as ProactiveDurableState["phase"] : undefined,
+      phase: typeof proactive.phase === "string" ? (proactive.phase as ProactiveDurableState["phase"]) : undefined,
       taskId: typeof proactive.taskId === "string" ? proactive.taskId : undefined,
       approvalId: typeof proactive.approvalId === "string" ? proactive.approvalId : undefined,
       blockedActionId: typeof proactive.blockedActionId === "string" ? proactive.blockedActionId : undefined,
@@ -696,16 +735,20 @@ export class ChatProactiveService {
     eventType: "run_waiting" | "run_completed",
     payload: Record<string, unknown>,
   ): void {
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       INSERT INTO durable_run_events (event_id, run_id, event_type, step_key, payload_json, created_at)
       VALUES (@eventId, @runId, @eventType, NULL, @payloadJson, @createdAt)
-    `).run({
-      eventId: randomUUID(),
-      runId,
-      eventType,
-      payloadJson: JSON.stringify(payload),
-      createdAt: new Date().toISOString(),
-    });
+    `,
+      )
+      .run({
+        eventId: randomUUID(),
+        runId,
+        eventType,
+        payloadJson: JSON.stringify(payload),
+        createdAt: new Date().toISOString(),
+      });
   }
 
   private markDurableRunWaiting(
@@ -780,7 +823,10 @@ export class ChatProactiveService {
   }
 
   private findActiveProactiveTickRun(sessionId: string): ProactiveRunRecord | undefined {
-    const row = toProactiveRunRow(this.ctx.gatewaySql.prepare(`
+    const row = toProactiveRunRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
       SELECT pr.*
       FROM proactive_runs pr
       JOIN durable_runs dr
@@ -790,13 +836,15 @@ export class ChatProactiveService {
         AND dr.status IN ('queued', 'running', 'waiting', 'paused')
       ORDER BY pr.started_at DESC
       LIMIT 1
-    `).get(sessionId));
+    `,
+        )
+        .get(sessionId),
+    );
     return row ? mapProactiveRunRow(row) : undefined;
   }
 
   private findReusableTask(sessionId: string): TaskRecord | undefined {
-    const latestRun = this.listChatSessionProactiveRuns(sessionId, 20)
-      .find((item) => item.linkedTaskId);
+    const latestRun = this.listChatSessionProactiveRuns(sessionId, 20).find((item) => item.linkedTaskId);
     if (!latestRun?.linkedTaskId) {
       return undefined;
     }
@@ -852,17 +900,20 @@ export class ChatProactiveService {
     return created;
   }
 
-  private syncTaskForRun(taskId: string, patch: {
-    sessionId: string;
-    originSurface: ProactiveOriginSurface;
-    proactiveRunId: string;
-    durableRunId?: string;
-    approvalId?: string;
-    nextWakeAt?: string;
-    stopReason?: ProactiveStopReason;
-    externalReferenceRoots?: ProactiveReferenceRootRecord[];
-    status?: TaskRecord["status"];
-  }): TaskRecord {
+  private syncTaskForRun(
+    taskId: string,
+    patch: {
+      sessionId: string;
+      originSurface: ProactiveOriginSurface;
+      proactiveRunId: string;
+      durableRunId?: string;
+      approvalId?: string;
+      nextWakeAt?: string;
+      stopReason?: ProactiveStopReason;
+      externalReferenceRoots?: ProactiveReferenceRootRecord[];
+      status?: TaskRecord["status"];
+    },
+  ): TaskRecord {
     const updated = this.ctx.storage.tasks.update(taskId, {
       ...(patch.status ? { status: patch.status } : {}),
       proactiveContext: {
@@ -881,7 +932,9 @@ export class ChatProactiveService {
     return updated;
   }
 
-  private detectExternalReferenceRoots(...sources: Array<Record<string, unknown> | undefined>): ProactiveReferenceRootRecord[] | undefined {
+  private detectExternalReferenceRoots(
+    ...sources: Array<Record<string, unknown> | undefined>
+  ): ProactiveReferenceRootRecord[] | undefined {
     const matched = PROACTIVE_REFERENCE_ROOTS.filter((root) =>
       sources.some((source) => source && objectContainsPathPrefix(source, root.rootPath)),
     );
@@ -1074,12 +1127,11 @@ export class ChatProactiveService {
 
     if (approval.status === "approved" || approval.status === "edited") {
       const pendingAction = this.ctx.storage.pendingApprovalActions.find(approvalId);
-      const executedOutcome = typeof pendingAction?.result?.outcome === "string"
-        ? pendingAction.result.outcome
-        : undefined;
+      const executedOutcome =
+        typeof pendingAction?.result?.outcome === "string" ? pendingAction.result.outcome : undefined;
       if (pendingAction?.resolutionStatus === "executed" || executedOutcome === "executed") {
         const approvedResult = isRecord(pendingAction?.result?.result)
-          ? pendingAction?.result?.result as Record<string, unknown>
+          ? (pendingAction?.result?.result as Record<string, unknown>)
           : undefined;
         this.updateProactiveAction(blockedAction.actionId, {
           status: "executed",
@@ -1118,18 +1170,23 @@ export class ChatProactiveService {
         approvalId,
         error: failureMessage,
       });
-      const failed = this.finishProactiveDurableRun(run, proactiveRun.runId, {
-        status: "failed",
-        linkedDurableRunId: run.runId,
-        linkedTaskId: proactiveRun.linkedTaskId,
-        approvalId,
-        stopReason: "terminal_failure",
-        error: failureMessage,
-      }, {
-        approvalId,
-        resolution: approval.status,
-        error: failureMessage,
-      });
+      const failed = this.finishProactiveDurableRun(
+        run,
+        proactiveRun.runId,
+        {
+          status: "failed",
+          linkedDurableRunId: run.runId,
+          linkedTaskId: proactiveRun.linkedTaskId,
+          approvalId,
+          stopReason: "terminal_failure",
+          error: failureMessage,
+        },
+        {
+          approvalId,
+          resolution: approval.status,
+          error: failureMessage,
+        },
+      );
       if (failed.linkedTaskId) {
         this.syncTaskForRun(failed.linkedTaskId, {
           sessionId: proactiveRun.sessionId,
@@ -1155,17 +1212,22 @@ export class ChatProactiveService {
         approvalStatus: approval.status,
       },
     });
-    const completed = this.finishProactiveDurableRun(run, proactiveRun.runId, {
-      status: "blocked",
-      linkedDurableRunId: run.runId,
-      linkedTaskId: proactiveRun.linkedTaskId,
-      approvalId,
-      stopReason: "operator_stop",
-      error: "Approval rejected by operator.",
-    }, {
-      approvalId,
-      resolution: approval.status,
-    });
+    const completed = this.finishProactiveDurableRun(
+      run,
+      proactiveRun.runId,
+      {
+        status: "blocked",
+        linkedDurableRunId: run.runId,
+        linkedTaskId: proactiveRun.linkedTaskId,
+        approvalId,
+        stopReason: "operator_stop",
+        error: "Approval rejected by operator.",
+      },
+      {
+        approvalId,
+        resolution: approval.status,
+      },
+    );
     if (completed.linkedTaskId) {
       this.syncTaskForRun(completed.linkedTaskId, {
         sessionId: proactiveRun.sessionId,
@@ -1194,45 +1256,60 @@ export class ChatProactiveService {
     const originSurface = payload.originSurface;
 
     if (policy.mode === "off") {
-      const completed = this.finishProactiveDurableRun(run, proactiveRunId, {
-        status: "no_action",
-        linkedDurableRunId: run.runId,
-        confidence: 0,
-        reasoningSummary: "Proactive mode is off.",
-        stopReason: "no_action",
-      }, {
-        reason: "mode_off",
-      });
+      const completed = this.finishProactiveDurableRun(
+        run,
+        proactiveRunId,
+        {
+          status: "no_action",
+          linkedDurableRunId: run.runId,
+          confidence: 0,
+          reasoningSummary: "Proactive mode is off.",
+          stopReason: "no_action",
+        },
+        {
+          reason: "mode_off",
+        },
+      );
       this.touchSessionProactiveTick(sessionId, proactiveRunId);
       return completed;
     }
 
     if (this.callbacks.hasRunningTurn(sessionId)) {
-      const completed = this.finishProactiveDurableRun(run, proactiveRunId, {
-        status: "no_action",
-        linkedDurableRunId: run.runId,
-        confidence: 0.2,
-        reasoningSummary: "Skipped because a chat turn is still running.",
-        stopReason: "no_action",
-      }, {
-        reason: "running_turn",
-      });
+      const completed = this.finishProactiveDurableRun(
+        run,
+        proactiveRunId,
+        {
+          status: "no_action",
+          linkedDurableRunId: run.runId,
+          confidence: 0.2,
+          reasoningSummary: "Skipped because a chat turn is still running.",
+          stopReason: "no_action",
+        },
+        {
+          reason: "running_turn",
+        },
+      );
       this.touchSessionProactiveTick(sessionId, proactiveRunId);
       return completed;
     }
 
     const idleSeconds = this.callbacks.getSessionIdleSeconds(sessionId);
     if (idleSeconds < PROACTIVE_MIN_IDLE_SECONDS) {
-      const completed = this.finishProactiveDurableRun(run, proactiveRunId, {
-        status: "no_action",
-        linkedDurableRunId: run.runId,
-        confidence: 0.2,
-        reasoningSummary: `Skipped because session idle time (${idleSeconds}s) is below ${PROACTIVE_MIN_IDLE_SECONDS}s.`,
-        stopReason: "no_action",
-      }, {
-        reason: "idle_below_threshold",
-        idleSeconds,
-      });
+      const completed = this.finishProactiveDurableRun(
+        run,
+        proactiveRunId,
+        {
+          status: "no_action",
+          linkedDurableRunId: run.runId,
+          confidence: 0.2,
+          reasoningSummary: `Skipped because session idle time (${idleSeconds}s) is below ${PROACTIVE_MIN_IDLE_SECONDS}s.`,
+          stopReason: "no_action",
+        },
+        {
+          reason: "idle_below_threshold",
+          idleSeconds,
+        },
+      );
       this.touchSessionProactiveTick(sessionId, proactiveRunId);
       return completed;
     }
@@ -1241,17 +1318,22 @@ export class ChatProactiveService {
     const cooldownRemaining = this.getProactiveCooldownRemainingSeconds(currentPrefs);
     if (cooldownRemaining > 0) {
       const nextWakeAt = new Date(Date.now() + cooldownRemaining * 1000).toISOString();
-      const completed = this.finishProactiveDurableRun(run, proactiveRunId, {
-        status: "no_action",
-        linkedDurableRunId: run.runId,
-        confidence: proactiveRun.confidence,
-        reasoningSummary: `Skipped because cooldown is active (${cooldownRemaining}s remaining).`,
-        stopReason: "cooldown",
-        nextWakeAt,
-      }, {
-        reason: "cooldown",
-        nextWakeAt,
-      });
+      const completed = this.finishProactiveDurableRun(
+        run,
+        proactiveRunId,
+        {
+          status: "no_action",
+          linkedDurableRunId: run.runId,
+          confidence: proactiveRun.confidence,
+          reasoningSummary: `Skipped because cooldown is active (${cooldownRemaining}s remaining).`,
+          stopReason: "cooldown",
+          nextWakeAt,
+        },
+        {
+          reason: "cooldown",
+          nextWakeAt,
+        },
+      );
       this.touchSessionProactiveTick(sessionId, proactiveRunId);
       return completed;
     }
@@ -1261,15 +1343,20 @@ export class ChatProactiveService {
     if (actions.length === 0) {
       const plan = await this.planProactiveActions(sessionId);
       if (plan.actions.length === 0) {
-        const completed = this.finishProactiveDurableRun(run, proactiveRunId, {
-          status: "no_action",
-          linkedDurableRunId: run.runId,
-          confidence: plan.confidence,
-          reasoningSummary: plan.reasoningSummary,
-          stopReason: "no_action",
-        }, {
-          reason: "planner_no_action",
-        });
+        const completed = this.finishProactiveDurableRun(
+          run,
+          proactiveRunId,
+          {
+            status: "no_action",
+            linkedDurableRunId: run.runId,
+            confidence: plan.confidence,
+            reasoningSummary: plan.reasoningSummary,
+            stopReason: "no_action",
+          },
+          {
+            reason: "planner_no_action",
+          },
+        );
         this.ctx.publishRealtime("proactive_no_action", "chat", {
           sessionId,
           runId: proactiveRunId,
@@ -1297,7 +1384,7 @@ export class ChatProactiveService {
         source,
         plan.actions,
       );
-      proactiveRun = this.refreshProactiveRunSummary(proactiveRunId, {
+      this.refreshProactiveRunSummary(proactiveRunId, {
         status: "running",
         linkedTaskId,
         linkedDurableRunId: run.runId,
@@ -1312,18 +1399,23 @@ export class ChatProactiveService {
       });
 
       if (policy.mode === "suggest") {
-        const suggested = this.finishProactiveDurableRun(run, proactiveRunId, {
-          status: "suggested",
-          linkedTaskId,
-          linkedDurableRunId: run.runId,
-          triggerSource: source,
-          originSurface,
-          confidence: plan.confidence,
-          reasoningSummary: plan.reasoningSummary,
-          stopReason: "no_action",
-        }, {
-          reason: "suggest_only",
-        });
+        const suggested = this.finishProactiveDurableRun(
+          run,
+          proactiveRunId,
+          {
+            status: "suggested",
+            linkedTaskId,
+            linkedDurableRunId: run.runId,
+            triggerSource: source,
+            originSurface,
+            confidence: plan.confidence,
+            reasoningSummary: plan.reasoningSummary,
+            stopReason: "no_action",
+          },
+          {
+            reason: "suggest_only",
+          },
+        );
         this.ctx.publishRealtime("proactive_suggestion_created", "chat", {
           sessionId,
           runId: proactiveRunId,
@@ -1346,12 +1438,7 @@ export class ChatProactiveService {
       if (action.status === "failed" || action.status === "blocked") {
         continue;
       }
-      const resolution = this.resolveProactiveAction(
-        action,
-        policy.mode,
-        remainingHourBudget,
-        remainingTurnBudget,
-      );
+      const resolution = this.resolveProactiveAction(action, policy.mode, remainingHourBudget, remainingTurnBudget);
       if (!resolution.execute) {
         this.updateProactiveAction(action.actionId, {
           status: "blocked",
@@ -1397,20 +1484,24 @@ export class ChatProactiveService {
             status: "blocked",
           });
         }
-        this.markDurableRunWaiting(run, {
-          eventKey: "approval.resolved",
-          correlationId: executed.approvalId,
-          payload: {
-            proactiveRunId,
+        this.markDurableRunWaiting(
+          run,
+          {
+            eventKey: "approval.resolved",
+            correlationId: executed.approvalId,
+            payload: {
+              proactiveRunId,
+              approvalId: executed.approvalId,
+              blockedActionId: executed.actionId,
+            },
+          },
+          {
+            phase: "awaiting_approval",
+            taskId: linkedTaskId,
             approvalId: executed.approvalId,
             blockedActionId: executed.actionId,
           },
-        }, {
-          phase: "awaiting_approval",
-          taskId: linkedTaskId,
-          approvalId: executed.approvalId,
-          blockedActionId: executed.actionId,
-        });
+        );
         this.touchSessionProactiveTick(sessionId, proactiveRunId);
         return waiting;
       }
@@ -1424,39 +1515,46 @@ export class ChatProactiveService {
       refreshed.flatMap((action) => action.externalReferenceRoots ?? []),
     );
 
-    const stopReason: ProactiveStopReason | undefined = failedActions.length > 0
-      ? "terminal_failure"
-      : blockedActions.some((action) => action.error?.includes("budget"))
-        ? "budget_exhausted"
-        : blockedActions.length > 0
-          ? "policy_conflict"
-          : executedCount > 0
-            ? "completed"
+    const stopReason: ProactiveStopReason | undefined =
+      failedActions.length > 0
+        ? "terminal_failure"
+        : blockedActions.some((action) => action.error?.includes("budget"))
+          ? "budget_exhausted"
+          : blockedActions.length > 0
+            ? "policy_conflict"
+            : executedCount > 0
+              ? "completed"
+              : "no_action";
+
+    const status: ProactiveRunRecord["status"] =
+      failedActions.length > 0
+        ? "failed"
+        : executedCount > 0
+          ? "executed"
+          : blockedActions.length > 0
+            ? "blocked"
             : "no_action";
 
-    const status: ProactiveRunRecord["status"] = failedActions.length > 0
-      ? "failed"
-      : executedCount > 0
-        ? "executed"
-        : blockedActions.length > 0
-          ? "blocked"
-          : "no_action";
-
-    const completed = this.finishProactiveDurableRun(run, proactiveRunId, {
-      status,
-      linkedTaskId,
-      linkedDurableRunId: run.runId,
-      approvalId: undefined,
-      triggerSource: source,
-      originSurface,
-      stopReason,
-      externalReferenceRoots: externalReferenceRoots.length > 0 ? externalReferenceRoots : undefined,
-      error: failedActions[0]?.error,
-    }, {
-      executedCount,
-      blockedCount: blockedActions.length,
-      failedCount: failedActions.length,
-    });
+    const completed = this.finishProactiveDurableRun(
+      run,
+      proactiveRunId,
+      {
+        status,
+        linkedTaskId,
+        linkedDurableRunId: run.runId,
+        approvalId: undefined,
+        triggerSource: source,
+        originSurface,
+        stopReason,
+        externalReferenceRoots: externalReferenceRoots.length > 0 ? externalReferenceRoots : undefined,
+        error: failedActions[0]?.error,
+      },
+      {
+        executedCount,
+        blockedCount: blockedActions.length,
+        failedCount: failedActions.length,
+      },
+    );
 
     if (linkedTaskId) {
       this.syncTaskForRun(linkedTaskId, {
@@ -1533,9 +1631,9 @@ export class ChatProactiveService {
     const policy = this.toProactivePolicy(sessionId, this.getSessionAutonomyPrefs(sessionId));
     const idleSeconds = this.callbacks.getSessionIdleSeconds(sessionId);
     const hasRunningTurn = this.callbacks.hasRunningTurn(sessionId);
-    const pendingSuggestions = this.ctx.gatewaySql.prepare(
-      "SELECT COUNT(*) AS count FROM proactive_actions WHERE session_id = ? AND status = 'suggested'",
-    ).get(sessionId) as { count?: number } | undefined;
+    const pendingSuggestions = this.ctx.gatewaySql
+      .prepare("SELECT COUNT(*) AS count FROM proactive_actions WHERE session_id = ? AND status = 'suggested'")
+      .get(sessionId) as { count?: number } | undefined;
     const actionsLastHour = this.countProactiveActionsLastHour(sessionId);
     const lastRun = this.listChatSessionProactiveRuns(sessionId, 1)[0];
     return {
@@ -1579,10 +1677,7 @@ export class ChatProactiveService {
     return policy;
   }
 
-  async triggerChatSessionProactive(
-    sessionId: string,
-    input: ProactiveTriggerInput = {},
-  ): Promise<ProactiveRunRecord> {
+  async triggerChatSessionProactive(sessionId: string, input: ProactiveTriggerInput = {}): Promise<ProactiveRunRecord> {
     this.callbacks.getSession(sessionId);
     const prefs = input.prefs ?? this.getSessionAutonomyPrefs(sessionId);
     const source = input.source ?? "manual";
@@ -1596,14 +1691,16 @@ export class ChatProactiveService {
     const policySnapshot = this.toProactivePolicy(sessionId, prefs);
     const durableRun = this.callbacks.createDurableRun({
       workflowKey: "proactive.tick",
-      payload: proactiveTickWorkflowPayloadToRecord(this.createProactiveTickWorkflowPayload({
-        sessionId,
-        proactiveRunId,
-        originSurface,
-        triggerSource: source,
-        policySnapshot,
-        requestedAt: now,
-      })),
+      payload: proactiveTickWorkflowPayloadToRecord(
+        this.createProactiveTickWorkflowPayload({
+          sessionId,
+          proactiveRunId,
+          originSurface,
+          triggerSource: source,
+          policySnapshot,
+          requestedAt: now,
+        }),
+      ),
       metadata: {
         proactive: {
           phase: "planning",
@@ -1638,13 +1735,19 @@ export class ChatProactiveService {
 
   listChatSessionProactiveRuns(sessionId: string, limit = 50): ProactiveRunRecord[] {
     this.callbacks.getSession(sessionId);
-    const rows = toProactiveRunRows(this.ctx.gatewaySql.prepare(`
+    const rows = toProactiveRunRows(
+      this.ctx.gatewaySql
+        .prepare(
+          `
       SELECT *
       FROM proactive_runs
       WHERE session_id = ?
       ORDER BY started_at DESC
       LIMIT ?
-    `).all(sessionId, Math.max(1, Math.min(limit, 500))));
+    `,
+        )
+        .all(sessionId, Math.max(1, Math.min(limit, 500))),
+    );
     return rows.map(mapProactiveRunRow);
   }
 }
@@ -1736,49 +1839,53 @@ function isProactiveRunRow(value: unknown): value is ProactiveRunRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.run_id === "string"
-    && typeof value.session_id === "string"
-    && (typeof value.linked_task_id === "string" || value.linked_task_id === null)
-    && (typeof value.linked_durable_run_id === "string" || value.linked_durable_run_id === null)
-    && (typeof value.approval_id === "string" || value.approval_id === null)
-    && typeof value.status === "string"
-    && typeof value.mode === "string"
-    && (typeof value.trigger_source === "string" || value.trigger_source === null)
-    && (typeof value.origin_surface === "string" || value.origin_surface === null)
-    && typeof value.confidence === "number"
-    && (typeof value.reasoning_summary === "string" || value.reasoning_summary === null)
-    && typeof value.suggested_actions_json === "string"
-    && typeof value.executed_actions_json === "string"
-    && (typeof value.next_wake_at === "string" || value.next_wake_at === null)
-    && (typeof value.stop_reason === "string" || value.stop_reason === null)
-    && (typeof value.external_reference_roots_json === "string" || value.external_reference_roots_json === null)
-    && (typeof value.resume_metadata_json === "string" || value.resume_metadata_json === null)
-    && typeof value.started_at === "string"
-    && (typeof value.finished_at === "string" || value.finished_at === null)
-    && (typeof value.error === "string" || value.error === null);
+  return (
+    typeof value.run_id === "string" &&
+    typeof value.session_id === "string" &&
+    (typeof value.linked_task_id === "string" || value.linked_task_id === null) &&
+    (typeof value.linked_durable_run_id === "string" || value.linked_durable_run_id === null) &&
+    (typeof value.approval_id === "string" || value.approval_id === null) &&
+    typeof value.status === "string" &&
+    typeof value.mode === "string" &&
+    (typeof value.trigger_source === "string" || value.trigger_source === null) &&
+    (typeof value.origin_surface === "string" || value.origin_surface === null) &&
+    typeof value.confidence === "number" &&
+    (typeof value.reasoning_summary === "string" || value.reasoning_summary === null) &&
+    typeof value.suggested_actions_json === "string" &&
+    typeof value.executed_actions_json === "string" &&
+    (typeof value.next_wake_at === "string" || value.next_wake_at === null) &&
+    (typeof value.stop_reason === "string" || value.stop_reason === null) &&
+    (typeof value.external_reference_roots_json === "string" || value.external_reference_roots_json === null) &&
+    (typeof value.resume_metadata_json === "string" || value.resume_metadata_json === null) &&
+    typeof value.started_at === "string" &&
+    (typeof value.finished_at === "string" || value.finished_at === null) &&
+    (typeof value.error === "string" || value.error === null)
+  );
 }
 
 function isProactiveActionRow(value: unknown): value is ProactiveActionRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.action_id === "string"
-    && typeof value.run_id === "string"
-    && typeof value.session_id === "string"
-    && (typeof value.linked_task_id === "string" || value.linked_task_id === null)
-    && (typeof value.linked_durable_run_id === "string" || value.linked_durable_run_id === null)
-    && (typeof value.approval_id === "string" || value.approval_id === null)
-    && typeof value.kind === "string"
-    && typeof value.status === "string"
-    && (typeof value.trigger_source === "string" || value.trigger_source === null)
-    && (typeof value.origin_surface === "string" || value.origin_surface === null)
-    && (typeof value.tool_name === "string" || value.tool_name === null)
-    && (typeof value.args_json === "string" || value.args_json === null)
-    && (typeof value.result_json === "string" || value.result_json === null)
-    && (typeof value.error === "string" || value.error === null)
-    && (typeof value.external_reference_roots_json === "string" || value.external_reference_roots_json === null)
-    && typeof value.created_at === "string"
-    && (typeof value.updated_at === "string" || value.updated_at === null);
+  return (
+    typeof value.action_id === "string" &&
+    typeof value.run_id === "string" &&
+    typeof value.session_id === "string" &&
+    (typeof value.linked_task_id === "string" || value.linked_task_id === null) &&
+    (typeof value.linked_durable_run_id === "string" || value.linked_durable_run_id === null) &&
+    (typeof value.approval_id === "string" || value.approval_id === null) &&
+    typeof value.kind === "string" &&
+    typeof value.status === "string" &&
+    (typeof value.trigger_source === "string" || value.trigger_source === null) &&
+    (typeof value.origin_surface === "string" || value.origin_surface === null) &&
+    (typeof value.tool_name === "string" || value.tool_name === null) &&
+    (typeof value.args_json === "string" || value.args_json === null) &&
+    (typeof value.result_json === "string" || value.result_json === null) &&
+    (typeof value.error === "string" || value.error === null) &&
+    (typeof value.external_reference_roots_json === "string" || value.external_reference_roots_json === null) &&
+    typeof value.created_at === "string" &&
+    (typeof value.updated_at === "string" || value.updated_at === null)
+  );
 }
 
 function objectContainsPathPrefix(value: Record<string, unknown>, prefix: string): boolean {

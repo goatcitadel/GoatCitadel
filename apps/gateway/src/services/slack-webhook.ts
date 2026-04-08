@@ -1,37 +1,42 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+/* eslint-disable @typescript-eslint/no-unused-vars */
+import { createHmac } from "node:crypto";
+import {
+  asRecord,
+  asString,
+  hashRawBodyDigest,
+  timingSafeStringEqual,
+  type JsonRecord,
+} from "./webhook-json-helpers.js";
 
-const SLACK_WEBHOOK_PATH =
-  /^\/api\/v1\/integrations\/connections\/[^/]+\/slack\/webhook$/i;
+const SLACK_WEBHOOK_PATH = /^\/api\/v1\/integrations\/connections\/[^/]+\/slack\/webhook$/i;
 const SLACK_SIGNATURE_PREFIX = "v0=";
 const SLACK_SIGNATURE_VERSION = "v0";
 const SLACK_MAX_TIMESTAMP_SKEW_MS = 5 * 60 * 1000;
 
-type JsonRecord = Record<string, unknown>;
-
 export type SlackWebhookNormalization =
   | {
-    kind: "challenge";
-    challenge: string;
-  }
+      kind: "challenge";
+      challenge: string;
+    }
   | {
-    kind: "message";
-    eventType: "message";
-    eventId: string;
-    account: string;
-    actorId: string;
-    actorType: "user";
-    content: string;
-    room?: string;
-    peer?: string;
-    threadId?: string;
-    deliveryReplyToMessageId: string;
-    metadata: Record<string, unknown>;
-  }
+      kind: "message";
+      eventType: "message";
+      eventId: string;
+      account: string;
+      actorId: string;
+      actorType: "user";
+      content: string;
+      room?: string;
+      peer?: string;
+      threadId?: string;
+      deliveryReplyToMessageId: string;
+      metadata: Record<string, unknown>;
+    }
   | {
-    kind: "ignore";
-    eventType?: string;
-    reason: string;
-  };
+      kind: "ignore";
+      eventType?: string;
+      reason: string;
+    };
 
 export function isSlackWebhookPath(url: string): boolean {
   const pathname = url.split("?", 1)[0] ?? url;
@@ -67,10 +72,7 @@ export function verifySlackSignature(input: {
     return false;
   }
   const expected = buildSlackSignature(timestamp, input.rawBody, input.secret);
-  if (expected.length !== signature.length) {
-    return false;
-  }
-  return timingSafeEqual(Buffer.from(expected, "utf8"), Buffer.from(signature, "utf8"));
+  return timingSafeStringEqual(expected, signature);
 }
 
 export function deriveSlackWebhookIdempotencyKey(connectionId: string, payload: unknown, rawBody: Buffer): string {
@@ -79,8 +81,7 @@ export function deriveSlackWebhookIdempotencyKey(connectionId: string, payload: 
   if (eventId) {
     return `slack:${connectionId}:${eventId}`;
   }
-  const digest = createHash("sha256").update(rawBody).digest("hex");
-  return `slack:${connectionId}:${digest}`;
+  return `slack:${connectionId}:${hashRawBodyDigest(rawBody)}`;
 }
 
 export function normalizeSlackWebhookPayload(input: {
@@ -169,14 +170,4 @@ export function normalizeSlackWebhookPayload(input: {
       eventTime: root.event_time,
     },
   };
-}
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : {};
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }

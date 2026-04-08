@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -6,17 +7,21 @@ import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
 import { createHash, createPublicKey, randomBytes, randomUUID, timingSafeEqual, verify } from "node:crypto";
 import { isVerboseLoggingEnabled } from "../runtime-ux.js";
-import { EventIngestService, describeChannelCapabilities, resolveSessionRoute } from "@goatcitadel/gateway-core";
+import {
+  EventIngestService,
+  describeChannelCapabilities,
+  resolveSessionRoute,
+  logger,
+} from "@goatcitadel/gateway-core";
+
+const log = logger.child("gateway-service");
 import { MeshService } from "@goatcitadel/mesh-core";
+import { estimateTokensFromText, truncateByTokenEstimate } from "@goatcitadel/memory-core";
 import {
-  estimateTokensFromText,
-  truncateByTokenEstimate,
-} from "@goatcitadel/memory-core";
-import { buildInstalledIntegrationPluginRecord, resolveIntegrationPluginInstallMetadata } from "./integration-plugin-author-contract.js";
-import {
-  deleteProviderApiKeyWithFallback,
-  persistProviderApiKeyWithFallback,
-} from "./provider-secret-persistence.js";
+  buildInstalledIntegrationPluginRecord,
+  resolveIntegrationPluginInstallMetadata,
+} from "./integration-plugin-author-contract.js";
+import { deleteProviderApiKeyWithFallback, persistProviderApiKeyWithFallback } from "./provider-secret-persistence.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
 import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
 import {
@@ -392,19 +397,11 @@ import {
   deriveChatSessionTitleFromContent,
   shouldAllowCrossProviderFallback,
 } from "./chat-session-utils.js";
-import {
-  buildChatThreadResponse,
-  buildSelectedPathTurnIds,
-  resolveNewestLeafTurnId,
-} from "./chat-thread-utils.js";
+import { buildChatThreadResponse, buildSelectedPathTurnIds, resolveNewestLeafTurnId } from "./chat-thread-utils.js";
 import { executeOrchestrationPlan } from "../orchestration/engine.js";
 import { CHAT_MODE_POLICY } from "../orchestration/policies/chat-policy.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
-import {
-  buildOrchestrationPlan,
-  resolveModePolicy,
-  shouldUseModeOrchestration,
-} from "../orchestration/router.js";
+import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
 import type {
   OrchestrationExecutionResult,
   OrchestrationPlan as ModeOrchestrationPlan,
@@ -418,10 +415,7 @@ import {
   resolveIntegrationCatalogMaturity,
   resolveIntegrationCatalogRuntimeAvailability,
 } from "./integration-catalog.js";
-import {
-  listChannelSetupDefinitions,
-  requireChannelSetupDefinition,
-} from "./channel-setup-definitions.js";
+import { listChannelSetupDefinitions, requireChannelSetupDefinition } from "./channel-setup-definitions.js";
 import {
   buildChannelSetupRecentTestSignature,
   resolveReusableChannelSetupTestResult,
@@ -453,6 +447,7 @@ import {
 import { getManagedVoiceRuntimeStatus } from "../voice-runtime/status.js";
 import { normalizeMemoryForgetCriteria, serializePathWithinRoot } from "./security-utils.js";
 import { buildVoiceControlStartFailure } from "./voice-control-guard.js";
+import { MediaVoiceService, detectAttachmentMediaType } from "./media-voice-service.js";
 import {
   COST_REPORT_HOURLY_JOB_ID,
   CronAutomationService,
@@ -464,19 +459,30 @@ import {
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
+import * as cronSchedulerService from "./cron-scheduler-service.js";
+import * as approvalLifecycleService from "./approval-lifecycle-service.js";
+import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
-import {
-  createDailyUpdateReview,
-  renderUpdateReviewMarkdown,
-} from "./gateway/update-review.js";
+import { createDailyUpdateReview, renderUpdateReviewMarkdown } from "./gateway/update-review.js";
 import {
   createGatewayAuthCredentialPlan,
   readAssistantAuthConfigSnapshotSync,
   resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner,
 } from "./gateway/auth-credential-planner.js";
 import { verifyBackupAtPath } from "./gateway/backup-verify.js";
+import { BackupRetentionService } from "./backup-retention-service.js";
+import * as settingsAuthService from "./settings-auth-service.js";
+import * as chatSessionService from "./chat-session-service.js";
+import * as llmCompletionService from "./llm-completion-service.js";
+import * as durableExecutionService from "./durable-execution-service.js";
+import * as chatTurnPrepService from "./chat-turn-prep-service.js";
+import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
+import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
+import * as chatTurnStreamService from "./chat-turn-stream-service.js";
+import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
+import * as chatTurnEntryService from "./chat-turn-entry-service.js";
 import { buildDelegatedSessionToolGrantCopies } from "./delegated-session-tool-grants.js";
 import { resolveProjectRootForToolContext, resolveToolRequestPaths } from "./tool-path-resolution.js";
 import type { ServiceContext } from "./service-context.js";
@@ -508,6 +514,42 @@ import {
   runZaloUserBridgeLiveChecks,
 } from "./channel-bot-live-probes.js";
 import { resolveChannelSendAttachments } from "./channel-attachment-payload.js";
+import {
+  commsSend as commsSendImpl,
+  commsReply as commsReplyImpl,
+  commsReact as commsReactImpl,
+  commsUnsend as commsUnsendImpl,
+  commsTyping as commsTypingImpl,
+  commsGmailRead as commsGmailReadImpl,
+  commsGmailSend as commsGmailSendImpl,
+  commsCalendarList as commsCalendarListImpl,
+  commsCalendarCreate as commsCalendarCreateImpl,
+} from "./comms-service.js";
+import {
+  knowledgeMemoryWrite as knowledgeMemoryWriteImpl,
+  knowledgeMemorySearch as knowledgeMemorySearchImpl,
+  knowledgeDocsIngest as knowledgeDocsIngestImpl,
+  knowledgeEmbeddingsIndex as knowledgeEmbeddingsIndexImpl,
+  knowledgeEmbeddingsQuery as knowledgeEmbeddingsQueryImpl,
+} from "./memory-facade-service.js";
+import {
+  listIntegrationConnections as listIntegrationConnectionsImpl,
+  getIntegrationConnection as getIntegrationConnectionImpl,
+  getIntegrationConnectionChannelCapabilities as getIntegrationConnectionChannelCapabilitiesImpl,
+  getIntegrationConnectionChannelRuntimeStatus as getIntegrationConnectionChannelRuntimeStatusImpl,
+  runIntegrationConnectionDiagnostics as runIntegrationConnectionDiagnosticsImpl,
+  createIntegrationConnection as createIntegrationConnectionImpl,
+  updateIntegrationConnection as updateIntegrationConnectionImpl,
+  deleteIntegrationConnection as deleteIntegrationConnectionImpl,
+  listDiscordPairings as listDiscordPairingsImpl,
+  approveDiscordPairing as approveDiscordPairingImpl,
+  revokeDiscordPairing as revokeDiscordPairingImpl,
+  reconnectDiscordRuntime as reconnectDiscordRuntimeImpl,
+  emitTelegramTypingImpl,
+  listIntegrationPlugins as listIntegrationPluginsImpl,
+  installIntegrationPlugin as installIntegrationPluginImpl,
+  setIntegrationPluginEnabled as setIntegrationPluginEnabledImpl,
+} from "./integration-channel-service.js";
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import {
   mergeLatestFollowOnParityArtifacts,
@@ -534,42 +576,6 @@ export interface ApprovalReplayResult {
   events: ApprovalReplayEvent[];
   pendingAction?: PendingApprovalAction;
   durableRunId?: string;
-}
-
-interface AuthDeviceRequestRecord {
-  requestId: string;
-  approvalId: string;
-  requestSecretHash: string;
-  deviceLabel: string;
-  deviceType: string;
-  platform?: string;
-  requestedOrigin?: string;
-  requestedIp?: string;
-  userAgent?: string;
-  status: DeviceAccessRequestStatus;
-  createdAt: string;
-  expiresAt: string;
-  resolvedAt?: string;
-  resolvedBy?: string;
-  resolutionNote?: string;
-  approvedTokenPlaintext?: string;
-  approvedTokenExpiresAt?: string;
-  deliveredAt?: string;
-}
-
-interface AuthDeviceGrantRecord {
-  grantId: string;
-  requestId: string;
-  tokenHash: string;
-  deviceLabel: string;
-  deviceType: string;
-  platform?: string;
-  grantedBy: string;
-  createdAt: string;
-  expiresAt?: string;
-  lastUsedAt?: string;
-  revokedAt?: string;
-  metadata: Record<string, unknown>;
 }
 
 interface CompanionSessionRecord {
@@ -711,7 +717,6 @@ export interface RuntimeSettings {
   };
 }
 
-const RETENTION_SETTINGS_KEY = "retention_policy";
 const MCP_SERVERS_SETTING_KEY = "mcp_servers_v1";
 const MCP_TOOLS_SETTING_KEY = "mcp_tools_v1";
 const MCP_TOOL_FIRST_APPROVAL_SETTING_KEY = "mcp_tool_first_approval_v1";
@@ -720,8 +725,6 @@ const DISCORD_PAIRINGS_SETTING_KEY = "discord_pairings_v1";
 const DISCORD_ROUTE_SESSIONS_SETTING_KEY = "discord_route_sessions_v1";
 const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
 const DAEMON_LOG_TAIL_SETTING_KEY = "daemon_log_tail_v1";
-const VOICE_STATUS_SETTING_KEY = "voice_status_v1";
-const VOICE_WAKE_STATUS_SETTING_KEY = "voice_wake_status_v1";
 const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
 const DURABLE_RETRY_POLICY_DEFAULT: DurableRetryPolicy = {
   maxAttempts: 3,
@@ -731,33 +734,44 @@ const DURABLE_RETRY_POLICY_DEFAULT: DurableRetryPolicy = {
 };
 const CHAT_STREAM_EVENT_POLL_INTERVAL_MS = 200;
 const CHAT_STREAM_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_RETENTION_POLICY: RetentionPolicy = {
-  realtimeEventsDays: 14,
-  backupsKeep: 20,
-  transcriptsDays: undefined,
-  auditDays: undefined,
-};
-const DEVICE_ACCESS_APPROVAL_KIND = "auth.device_access";
-const DEVICE_ACCESS_REQUEST_POLL_AFTER_MS = 2_500;
-const DEVICE_ACCESS_REQUEST_TTL_MS = 10 * 60 * 1000;
-const DEVICE_ACCESS_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const DEVICE_ACCESS_SECRET_BYTES = 24;
-const DEVICE_ACCESS_TOKEN_BYTES = 32;
-const COMPANION_CONTRACT_ID = "companion.android.v1";
-const COMPANION_SIGNATURE_ALGORITHM: CompanionSignatureAlgorithm = "ed25519";
-const COMPANION_ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
-const COMPANION_REFRESH_TOKEN_TTL_MS = 14 * 24 * 60 * 60 * 1000;
-const COMPANION_ACCESS_TOKEN_BYTES = 32;
-const COMPANION_REFRESH_TOKEN_BYTES = 32;
-const COMPANION_MAX_PUBLIC_KEY_PEM_LENGTH = 4_096;
-const COMPANION_REQUEST_NONCE_MAX_LENGTH = 160;
-const COMPANION_REQUEST_SIGNATURE_MAX_LENGTH = 1_024;
-const COMPANION_REQUEST_CLOCK_SKEW_MS = 5 * 60 * 1000;
-const COMPANION_REQUEST_REPLAY_TTL_MS = 10 * 60 * 1000;
+import {
+  COMPANION_ACCESS_TOKEN_BYTES,
+  COMPANION_ACCESS_TOKEN_TTL_MS,
+  COMPANION_CONTRACT_ID,
+  COMPANION_MAX_PUBLIC_KEY_PEM_LENGTH,
+  COMPANION_REFRESH_TOKEN_BYTES,
+  COMPANION_REFRESH_TOKEN_TTL_MS,
+  COMPANION_REQUEST_CLOCK_SKEW_MS,
+  COMPANION_REQUEST_NONCE_MAX_LENGTH,
+  COMPANION_REQUEST_REPLAY_TTL_MS,
+  COMPANION_REQUEST_SIGNATURE_MAX_LENGTH,
+  COMPANION_SIGNATURE_ALGORITHM,
+  DEVICE_ACCESS_APPROVAL_KIND,
+  DEVICE_ACCESS_REQUEST_POLL_AFTER_MS,
+  DEVICE_ACCESS_REQUEST_TTL_MS,
+  DEVICE_ACCESS_SECRET_BYTES,
+  DEVICE_ACCESS_TOKEN_BYTES,
+  DEVICE_ACCESS_TOKEN_TTL_MS,
+  assertCompanionSigningPublicKeyPem,
+  hashSensitiveToken,
+  inferBrowserFromUserAgent,
+  inferPlatformFromUserAgent,
+  mapAuthDeviceGrantRow,
+  mapAuthDeviceRequestRow,
+  mapDeviceAccessStatusResponse,
+  normalizeCompanionSigningPublicKeyPem,
+  normalizeDeviceAccessDeviceType,
+  normalizeDeviceAccessLabel,
+  normalizeDeviceAccessRequestStatus,
+  normalizeOptionalDeviceAccessText,
+  timingSafeStringEqual,
+  toDeviceAccessGrantRecord,
+  type AuthDeviceGrantRecord,
+  type AuthDeviceRequestRecord,
+} from "./device-access-helpers.js";
 
 const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
 
-const DEFAULT_VOICE_PROVIDER: VoiceTranscribeResponse["provider"] = "whisper.cpp";
 const DEFAULT_SKILL_ACTIVATION_POLICY: SkillActivationPolicy = {
   guardedAutoThreshold: 0.72,
   requireFirstUseConfirmation: true,
@@ -784,7 +798,8 @@ const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
   {
     templateId: "approval-inbox",
     label: "GoatCitadel Approval Inbox",
-    description: "Internal MCP receiver for durable approval deliveries, inbox review, and non-browser approval resolution.",
+    description:
+      "Internal MCP receiver for durable approval deliveries, inbox review, and non-browser approval resolution.",
     transport: "http",
     url: MCP_APPROVAL_INBOX_URL,
     authType: "none",
@@ -794,10 +809,7 @@ const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     policy: {
       requireFirstToolApproval: false,
       redactionMode: "basic",
-      allowedToolPatterns: [
-        MCP_APPROVAL_DELIVERY_TOOL_NAME,
-        "goatcitadel.approval.remote_action_inbox.*",
-      ],
+      allowedToolPatterns: [MCP_APPROVAL_DELIVERY_TOOL_NAME, "goatcitadel.approval.remote_action_inbox.*"],
       blockedToolPatterns: [],
     },
     enabledByDefault: false,
@@ -880,7 +892,8 @@ const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
   {
     templateId: "stripe",
     label: "Stripe",
-    description: "Official Stripe remote MCP server for customers, subscriptions, invoices, and billing support workflows.",
+    description:
+      "Official Stripe remote MCP server for customers, subscriptions, invoices, and billing support workflows.",
     transport: "http",
     url: "https://mcp.stripe.com",
     authType: "oauth2",
@@ -917,7 +930,8 @@ const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
   {
     templateId: "microsoft-learn",
     label: "Microsoft Learn",
-    description: "Official Microsoft Learn MCP endpoint for current Microsoft documentation, examples, and how-to guidance.",
+    description:
+      "Official Microsoft Learn MCP endpoint for current Microsoft documentation, examples, and how-to guidance.",
     transport: "http",
     url: "https://learn.microsoft.com/api/mcp",
     authType: "none",
@@ -989,12 +1003,7 @@ const MCP_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     enabledByDefault: false,
   },
 ];
-const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
-  "browser.search",
-  "browser.navigate",
-  "browser.extract",
-  "http.get",
-] as const;
+const CHAT_SESSION_AUTO_ALLOW_TOOLS = ["browser.search", "browser.navigate", "browser.extract", "http.get"] as const;
 
 const DEFAULT_DELEGATION_ROLES = ["product", "architect", "coder", "qa", "ops"];
 const IMPROVEMENT_WEEKLY_TIME_ZONE = "America/Los_Angeles";
@@ -1039,7 +1048,7 @@ const PIPELINE_TEMPLATES: Record<string, string[]> = {
   triage: ["qa", "ops", "product"],
   release: ["qa", "ops", "product"],
 };
-const DEFAULT_WORKSPACE_ID = "default";
+export const DEFAULT_WORKSPACE_ID = "default";
 const REPLAY_SCRATCH_SESSION_TITLE_PREFIX = "[Replay scratch]";
 const GUIDANCE_DOC_FILE_MAP: Record<GuidanceDocType, string> = {
   goatcitadel: "GOATCITADEL.md",
@@ -1118,7 +1127,7 @@ interface RealtimeListener {
   (event: RealtimeEvent): void;
 }
 
-interface ResolvedRuntimeGuidance {
+export interface ResolvedRuntimeGuidance {
   workspaceId: string;
   systemInstruction?: string;
   globalFilesUsed: string[];
@@ -1132,7 +1141,7 @@ class ChatTurnWriteConflictError extends ConflictError {
   }
 }
 
-class ChatTurnCancelledError extends GoatError {
+export class ChatTurnCancelledError extends GoatError {
   readonly code = "TURN_CANCELLED" as const;
   readonly httpStatus = 499;
   public constructor(
@@ -1143,7 +1152,7 @@ class ChatTurnCancelledError extends GoatError {
   }
 }
 
-function isChatTurnCancelledError(error: unknown): boolean {
+export function isChatTurnCancelledError(error: unknown): boolean {
   if (error instanceof ChatTurnCancelledError) {
     return true;
   }
@@ -1172,19 +1181,19 @@ interface ActiveChatTurnStreamExecution {
   completed: boolean;
 }
 
-type PersistableChatStreamChunk = ChatStreamChunkDraft extends infer T
+export type PersistableChatStreamChunk = ChatStreamChunkDraft extends infer T
   ? T extends { turnId?: string }
     ? T & { turnId: string }
     : never
   : never;
 
-type InspectableChatStreamChunk = ChatStreamChunk | ChatStreamChunkDraft;
+export type InspectableChatStreamChunk = ChatStreamChunk | ChatStreamChunkDraft;
 
-function isPersistableChatStreamChunk(chunk: ChatStreamChunkDraft): chunk is PersistableChatStreamChunk {
+export function isPersistableChatStreamChunk(chunk: ChatStreamChunkDraft): chunk is PersistableChatStreamChunk {
   return typeof chunk.turnId === "string" && chunk.turnId.length > 0;
 }
 
-interface PreparedChatExecutionPlanResolution {
+export interface PreparedChatExecutionPlanResolution {
   routerInput: OrchestrationRouterInput;
   orchestrationPlan: ModeOrchestrationPlan;
   executionPlanDraft: {
@@ -1227,7 +1236,7 @@ interface DurableChatTurnExecutionPayload {
   request: ChatSendMessageRequest;
 }
 
-interface RemoteApprovalActionTokenIssueResult extends RemoteActionTokenRecord {
+export interface RemoteApprovalActionTokenIssueResult extends RemoteActionTokenRecord {
   approvalId: string;
   token: string;
 }
@@ -1236,9 +1245,9 @@ const CHAT_COMPACTION_RECENT_TURN_LIMIT = 6;
 const CHAT_COMPACTION_WINDOW_SIZE = 8;
 const CHAT_COMPACTION_TRIGGER_TOKENS = 2200;
 const CHAT_COMPACTION_SUMMARY_TOKEN_BUDGET = 360;
-const CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT = 3;
-const CHAT_PLANNER_MAX_STEPS = 8;
-const CHAT_PLANNER_MIN_STEPS = 3;
+export const CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT = 3;
+export const CHAT_PLANNER_MAX_STEPS = 8;
+export const CHAT_PLANNER_MIN_STEPS = 3;
 const FOLLOW_ON_PARITY_ARTIFACTS_SETTING_KEY = "follow_on_parity_artifacts_v1";
 const FOLLOW_ON_PARITY_ARTIFACT_FRESHNESS_WINDOW_DAYS = 7;
 
@@ -1269,13 +1278,10 @@ function normalizeFollowOnParityArtifactRecord(
   const relativePath = typeof record.relativePath === "string" ? record.relativePath : undefined;
   const fullPath = typeof record.fullPath === "string" ? record.fullPath : undefined;
   const bytes = typeof record.bytes === "number" && Number.isFinite(record.bytes) ? record.bytes : undefined;
-  const proofState = (
-    record.proofState === "draft"
-    || record.proofState === "complete"
-    || record.proofState === "evidence"
-  )
-    ? record.proofState
-    : undefined;
+  const proofState =
+    record.proofState === "draft" || record.proofState === "complete" || record.proofState === "evidence"
+      ? record.proofState
+      : undefined;
   if (!generatedAt || !summary || !relativePath || !fullPath || bytes === undefined) {
     return undefined;
   }
@@ -1318,55 +1324,58 @@ function buildFollowOnProfileCoverage(input: {
 }): FollowOnProfileCoverageRecord {
   const knownProfiles: DeploymentProfile[] = ["local_dev", "trusted_local", "remote_hardened"];
   const uniqueCurrent = knownProfiles.filter((profile) => input.currentProfiles.includes(profile));
-  const uniqueStale = knownProfiles.filter((profile) =>
-    !uniqueCurrent.includes(profile)
-    && Boolean(input.staleProfiles?.includes(profile)),
+  const uniqueStale = knownProfiles.filter(
+    (profile) => !uniqueCurrent.includes(profile) && Boolean(input.staleProfiles?.includes(profile)),
   );
   return {
     currentProfiles: uniqueCurrent,
     staleProfiles: uniqueStale,
-    missingProfiles: knownProfiles.filter((profile) => !uniqueCurrent.includes(profile) && !uniqueStale.includes(profile)),
+    missingProfiles: knownProfiles.filter(
+      (profile) => !uniqueCurrent.includes(profile) && !uniqueStale.includes(profile),
+    ),
   };
 }
 
 export class GatewayService {
-  private readonly storage: Storage;
+  /** @internal */ public readonly storage: Storage;
   private readonly eventIngestService: EventIngestService;
-  private readonly policyEngine: ToolPolicyEngine;
+  /** @internal */ public readonly policyEngine: ToolPolicyEngine;
   private readonly skillsService: SkillsService;
-  private readonly orchestrationEngine: OrchestrationEngine;
-  private readonly llmService: LlmService;
+  /** @internal */ public readonly orchestrationEngine: OrchestrationEngine;
+  /** @internal */ public readonly llmService: LlmService;
   private readonly assemblyService: AssemblyService;
-  private readonly memoryContextService: MemoryContextService;
-  private readonly meshService: MeshService;
-  private readonly npuSidecar: NpuSidecarService;
+  /** @internal */ public readonly memoryContextService: MemoryContextService;
+  /** @internal */ public readonly meshService: MeshService;
+  /** @internal */ public readonly npuSidecar: NpuSidecarService;
   private readonly approvalExplainer: ApprovalExplainerService;
-  private readonly turnRuntime: TurnRuntime;
+  /** @internal */ public readonly turnRuntime: TurnRuntime;
   private readonly researchService: ResearchService;
   private readonly obsidianVaultService: ObsidianVaultService;
   private readonly skillImportService: SkillImportService;
-  private readonly cronAutomationService: CronAutomationService;
+  /** @internal */ public readonly cronAutomationService: CronAutomationService;
   private readonly addonsService: AddonsService;
   private readonly devDiagnostics: GatewayDevDiagnosticsService;
-  private readonly discordRuntimeService: DiscordRuntimeService;
+  /** @internal */ public readonly discordRuntimeService: DiscordRuntimeService;
   private readonly chatProjectService: ChatProjectService;
-  private readonly durableRunService: DurableRunService;
-  private readonly hooksService: HooksService;
+  /** @internal */ public readonly durableRunService: DurableRunService;
+  /** @internal */ public readonly hooksService: HooksService;
   private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
   private readonly promptPackService: PromptPackService;
   private readonly chatProactiveService: ChatProactiveService;
   private readonly improvementService: ImprovementService;
-  private readonly memoryMaintenanceService: MemoryMaintenanceService;
+  /** @internal */ public readonly memoryMaintenanceService: MemoryMaintenanceService;
+  private readonly backupRetentionService: BackupRetentionService;
+  private readonly mediaVoiceService: MediaVoiceService;
   private readonly realtime = new EventEmitter();
-  private readonly backgroundTasks = new Set<Promise<void>>();
+  /** @internal */ public readonly backgroundTasks = new Set<Promise<void>>();
   private readonly warnedOutsideRootPathFingerprints = new Set<string>();
   private readonly chatMessageProjectionBackfillAttempted = new Set<string>();
-  private readonly activeChatTurnWrites = new Map<string, string>();
-  private readonly activeChatTurns = new Map<string, ActiveChatTurnExecution>();
+  /** @internal */ public readonly activeChatTurnWrites = new Map<string, string>();
+  /** @internal */ public readonly activeChatTurns = new Map<string, ActiveChatTurnExecution>();
   private readonly activeChatTurnStreams = new Map<string, ActiveChatTurnStreamExecution>();
   private readonly recentChannelSetupTests = new Map<string, ChannelSetupRecentTestCacheEntry>();
   private lastChatStreamPurgeAt = 0;
-  private readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
+  /** @internal */ public readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
   private readonly onboardingMarkerPath: string;
   private maintenanceScheduler?: NodeJS.Timeout;
   private closing = false;
@@ -1374,11 +1383,11 @@ export class GatewayService {
   private criticalInitComplete = false;
   private deferredInitPromise?: Promise<void>;
 
-  private get gatewaySql() {
+  /** @internal */ public get gatewaySql() {
     return this.storage.gatewaySql;
   }
 
-  public constructor(private readonly config: GatewayRuntimeConfig) {
+  public constructor(/** @internal */ public readonly config: GatewayRuntimeConfig) {
     this.storage = new Storage({
       dbPath: config.dbPath,
       transcriptsDir: path.resolve(config.rootDir, config.assistant.transcriptsDir),
@@ -1389,11 +1398,7 @@ export class GatewayService {
         walAutoCheckpointPages: config.assistant.sqlite.walAutoCheckpointPages,
       },
     });
-    this.onboardingMarkerPath = path.resolve(
-      config.rootDir,
-      config.assistant.dataDir,
-      "onboarding-state.json",
-    );
+    this.onboardingMarkerPath = path.resolve(config.rootDir, config.assistant.dataDir, "onboarding-state.json");
     this.devDiagnostics = new GatewayDevDiagnosticsService(
       resolveDevDiagnosticsEnabled(),
       undefined,
@@ -1401,6 +1406,20 @@ export class GatewayService {
       resolveDevDiagnosticsBufferSize(process.env.GOATCITADEL_DEV_DIAGNOSTICS_GATEWAY_BUFFER),
     );
 
+    this.backupRetentionService = new BackupRetentionService({
+      storage: this.storage,
+      config,
+    });
+    this.mediaVoiceService = new MediaVoiceService({
+      gatewaySql: this.gatewaySql,
+      storage: this.storage,
+      backgroundTasks: this.backgroundTasks,
+      isClosing: () => this.closing,
+      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      readChatAttachmentContent: (id) => this.readChatAttachmentContent(id),
+      getChatAttachment: (id) => this.getChatAttachment(id),
+    });
     this.eventIngestService = new EventIngestService(this.storage);
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       isBankrBuiltinEnabled: () => this.isFeatureEnabled("bankrBuiltinEnabled"),
@@ -1568,7 +1587,9 @@ export class GatewayService {
       createDurableRun: (input) => this.createDurableRun(input),
       requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       backgroundTasks: this.backgroundTasks,
-      get closing() { return self.closing; },
+      get closing() {
+        return self.closing;
+      },
     });
     this.improvementService = new ImprovementService(serviceCtx, {
       createChatCompletion: (request) => this.createChatCompletion(request),
@@ -1576,7 +1597,9 @@ export class GatewayService {
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
       retryChatTurn: (sessionId, turnId, overrides) => this.retryChatTurnInScratchSession(sessionId, turnId, overrides),
       backgroundTasks: this.backgroundTasks,
-      get closing() { return self.closing; },
+      get closing() {
+        return self.closing;
+      },
     });
     this.memoryMaintenanceService = new MemoryMaintenanceService(serviceCtx, {
       createDurableRun: (input) => this.createDurableRun(input),
@@ -1651,7 +1674,12 @@ export class GatewayService {
     this.devDiagnostics.record(input);
   }
 
-  public attachDevDiagnosticsLogger(logger: { debug: Function; info: Function; warn: Function; error: Function }): void {
+  public attachDevDiagnosticsLogger(logger: {
+    debug: (...args: unknown[]) => void;
+    info: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+  }): void {
     this.devDiagnostics.setLogger(logger as never);
   }
 
@@ -1680,7 +1708,7 @@ export class GatewayService {
       return this.deferredInitPromise;
     }
     const task = this.runDeferredInit().catch((error) => {
-      console.error("[goatcitadel] deferred startup failed", error);
+      log.error("deferred startup failed", error);
       throw error;
     });
     this.deferredInitPromise = task;
@@ -1699,14 +1727,14 @@ export class GatewayService {
       closeReason: "process_restart",
     });
     if (closedLeaseCount > 0) {
-      console.warn("[goatcitadel] closed stale realtime stream leases after restart", {
+      log.warn("closed stale realtime stream leases after restart", {
         gatewayNodeId: this.config.assistant.mesh.nodeId,
         closedLeaseCount,
       });
     }
     const flushedTranscriptCount = await this.eventIngestService.flushPendingTranscriptOutbox();
     if (flushedTranscriptCount > 0) {
-      console.info("[goatcitadel] flushed pending transcript outbox entries", {
+      log.info("flushed pending transcript outbox entries", {
         flushedTranscriptCount,
       });
     }
@@ -1731,12 +1759,9 @@ export class GatewayService {
     this.startMaintenanceScheduler();
     this.durableRunService.startWorker();
     if (isVerboseLoggingEnabled()) {
-      console.info(
-        "[goatcitadel] feature flags",
-        JSON.stringify(this.readFeatureFlags()),
-      );
+      log.info("feature flags", { flags: this.readFeatureFlags() });
     } else {
-      console.info("[goatcitadel] runtime ready");
+      log.info("runtime ready");
     }
   }
 
@@ -1784,41 +1809,39 @@ export class GatewayService {
     return this.storage.realtimeStreamLeases.touch(input);
   }
 
-  public closeRealtimeStreamLease(input: {
-    leaseId: string;
-    closedAt?: string;
-    closeReason?: string;
-  }) {
+  public closeRealtimeStreamLease(input: { leaseId: string; closedAt?: string; closeReason?: string }) {
     return this.storage.realtimeStreamLeases.close(input);
   }
 
-  public async ingestEvent(
-    idempotencyKey: string,
-    payload: GatewayEventInput,
-  ): Promise<GatewayEventResult> {
+  public async ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<GatewayEventResult> {
     const result = await this.eventIngestService.ingest({
       endpoint: "/api/v1/gateway/events",
       idempotencyKey,
       payload,
     });
 
-    this.publishRealtime("session_event", "gateway", {
-      eventId: payload.eventId,
-      sessionId: result.session.sessionId,
-      sessionKey: result.session.sessionKey,
-      actorType: payload.actor.type,
-      actorId: payload.actor.id,
-      messageRole: payload.message.role,
-      taskId: payload.taskId,
-      deduped: result.deduped,
-    }, {
-      eventClass: "domain_fact",
-      eventAuthority: "retained_stream",
-      links: {
+    this.publishRealtime(
+      "session_event",
+      "gateway",
+      {
+        eventId: payload.eventId,
         sessionId: result.session.sessionId,
+        sessionKey: result.session.sessionKey,
+        actorType: payload.actor.type,
+        actorId: payload.actor.id,
+        messageRole: payload.message.role,
         taskId: payload.taskId,
+        deduped: result.deduped,
       },
-    });
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: {
+          sessionId: result.session.sessionId,
+          taskId: payload.taskId,
+        },
+      },
+    );
 
     if (!result.deduped) {
       this.operatorSummaryCache.invalidate();
@@ -1904,7 +1927,9 @@ export class GatewayService {
 
   public async listGlobalGuidance(): Promise<GuidanceDocumentRecord[]> {
     const docs = await Promise.all(
-      (Object.keys(GUIDANCE_DOC_FILE_MAP) as GuidanceDocType[]).map((docType) => this.readGuidanceDocument(docType, "global")),
+      (Object.keys(GUIDANCE_DOC_FILE_MAP) as GuidanceDocType[]).map((docType) =>
+        this.readGuidanceDocument(docType, "global"),
+      ),
     );
     return docs;
   }
@@ -1916,7 +1941,8 @@ export class GatewayService {
       this.listGlobalGuidance(),
       Promise.all(
         WORKSPACE_GUIDANCE_DOC_TYPES.map((docType) =>
-          this.readGuidanceDocument(docType, "workspace", normalizedWorkspaceId)),
+          this.readGuidanceDocument(docType, "workspace", normalizedWorkspaceId),
+        ),
       ),
     ]);
     return {
@@ -2147,17 +2173,17 @@ export class GatewayService {
 
     const proactiveRuns = sessionId
       ? this.listChatSessionProactiveRuns(sessionId, 50).filter((run) => {
-        if (taskId && run.linkedTaskId === taskId) {
-          return true;
-        }
-        if (approvalId && run.approvalId === approvalId) {
-          return true;
-        }
-        if (runId && (run.runId === runId || run.linkedDurableRunId === runId)) {
-          return true;
-        }
-        return !taskId && !approvalId && !runId;
-      })
+          if (taskId && run.linkedTaskId === taskId) {
+            return true;
+          }
+          if (approvalId && run.approvalId === approvalId) {
+            return true;
+          }
+          if (runId && (run.runId === runId || run.linkedDurableRunId === runId)) {
+            return true;
+          }
+          return !taskId && !approvalId && !runId;
+        })
       : [];
     for (const proactiveRun of proactiveRuns) {
       linked.proactiveRunIds.add(proactiveRun.runId);
@@ -2166,16 +2192,21 @@ export class GatewayService {
       }
     }
 
-    const proactiveDurableRunId = proactiveRuns
-      .map((candidate) => candidate.linkedDurableRunId)
-      .find((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0)
-      ?? task?.proactiveContext?.durableRunId;
+    const proactiveDurableRunId =
+      proactiveRuns
+        .map((candidate) => candidate.linkedDurableRunId)
+        .find((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0) ??
+      task?.proactiveContext?.durableRunId;
     const approvalWaitDurableRunId = approvalId ? this.findApprovalWaitDurableRunId(approvalId) : undefined;
     const proactiveDurableRun = proactiveDurableRunId
-      ? (durableRun?.runId === proactiveDurableRunId ? durableRun : this.findDurableRunMaybe(proactiveDurableRunId))
+      ? durableRun?.runId === proactiveDurableRunId
+        ? durableRun
+        : this.findDurableRunMaybe(proactiveDurableRunId)
       : undefined;
     const approvalWaitDurableRun = approvalWaitDurableRunId
-      ? (durableRun?.runId === approvalWaitDurableRunId ? durableRun : this.findDurableRunMaybe(approvalWaitDurableRunId))
+      ? durableRun?.runId === approvalWaitDurableRunId
+        ? durableRun
+        : this.findDurableRunMaybe(approvalWaitDurableRunId)
       : undefined;
 
     return {
@@ -2246,13 +2277,16 @@ export class GatewayService {
     return this.chatProjectService.createChatProject(input);
   }
 
-  public updateChatProject(projectId: string, input: {
-    workspaceId?: string;
-    name?: string;
-    description?: string;
-    workspacePath?: string;
-    color?: string;
-  }): ChatProjectRecord {
+  public updateChatProject(
+    projectId: string,
+    input: {
+      workspaceId?: string;
+      name?: string;
+      description?: string;
+      workspacePath?: string;
+      color?: string;
+    },
+  ): ChatProjectRecord {
     return this.chatProjectService.updateChatProject(projectId, input);
   }
 
@@ -2269,283 +2303,46 @@ export class GatewayService {
   }
 
   public listChatSessions(query: ChatSessionListQuery = {}): ChatSessionRecord[] {
-    const workspaceId = this.normalizeWorkspaceId(query.workspaceId);
-    const scope = query.scope ?? "all";
-    const view = query.view ?? "active";
-    const includeHidden = query.includeHidden ?? false;
-    const limit = Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200)));
-    const allSessions = this.storage.sessions.list(20000);
-    const projects = this.storage.chatProjects.list("all", 2000, workspaceId);
-    const projectById = new Map(projects.map((project) => [project.projectId, project]));
-    const sessionIds = allSessions.map((session) => session.sessionId);
-    const metaBySessionId = this.storage.chatSessionMeta.listBySessionIds(sessionIds, workspaceId);
-    const projectLinkBySessionId = this.storage.chatSessionProjects.listBySessionIds(sessionIds);
-
-    let records = allSessions.map((session) => {
-      const meta = metaBySessionId.get(session.sessionId) ?? {
-        workspaceId,
-        includeInHistory: true,
-        pinned: false,
-        lifecycleStatus: "active" as const,
-      };
-      const link = projectLinkBySessionId.get(session.sessionId);
-      const project = link ? projectById.get(link.projectId) : undefined;
-      return toChatSessionRecord(session, meta, project);
-    });
-
-    records = records.filter((record) => this.normalizeWorkspaceId(record.workspaceId) === workspaceId);
-    if (!includeHidden) {
-      records = records.filter((record) => record.includeInHistory);
-    }
-
-    if (scope !== "all") {
-      records = records.filter((record) => record.scope === scope);
-    }
-    if (view !== "all") {
-      records = records.filter((record) => record.lifecycleStatus === view);
-    }
-    if (query.projectId) {
-      records = records.filter((record) => record.projectId === query.projectId);
-    }
-    if (query.q?.trim()) {
-      const q = query.q.trim().toLowerCase();
-      records = records.filter((record) => {
-        const haystack = [
-          record.title ?? "",
-          record.sessionKey,
-          record.channel,
-          record.account,
-          record.projectName ?? "",
-        ].join(" ").toLowerCase();
-        return haystack.includes(q);
-      });
-    }
-
-    records.sort((left, right) => {
-      if (left.pinned !== right.pinned) {
-        return left.pinned ? -1 : 1;
-      }
-      const byUpdated = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
-      if (byUpdated !== 0) {
-        return byUpdated;
-      }
-      return right.sessionId.localeCompare(left.sessionId);
-    });
-
-    if (query.cursor) {
-      const [cursorUpdatedAt, cursorSessionId] = query.cursor.split("|");
-      if (cursorUpdatedAt && cursorSessionId) {
-        records = records.filter((record) => {
-          if (record.updatedAt < cursorUpdatedAt) {
-            return true;
-          }
-          if (record.updatedAt > cursorUpdatedAt) {
-            return false;
-          }
-          return record.sessionId < cursorSessionId;
-        });
-      }
-    }
-
-    return records.slice(0, limit);
+    return chatSessionService.listChatSessions(this, query);
   }
 
   public createChatSession(input: ChatSessionCreateInput = {}): ChatSessionRecord {
-    const workspaceId = this.normalizeWorkspaceId(input.workspaceId);
-    const peer = `chat_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    const route = {
-      channel: "mission",
-      account: "operator",
-      peer,
-    };
-    const resolution = {
-      kind: "dm" as const,
-      sessionKey: `${route.channel}:${route.account}:${route.peer}`,
-      sessionId: `sess_${createHash("sha256").update(`${route.channel}:${route.account}:${route.peer}`).digest("hex").slice(0, 24)}`,
-    };
-    const now = new Date().toISOString();
-    this.storage.sessions.upsert({
-      sessionId: resolution.sessionId,
-      sessionKey: resolution.sessionKey,
-      kind: resolution.kind,
-      channel: route.channel,
-      account: route.account,
-      displayName: input.title?.trim() || undefined,
-      timestamp: now,
-    });
-    this.operatorSummaryCache.invalidate();
-    this.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
-    this.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
-    this.ensureChatSessionRuntimeGrants(resolution.sessionId);
-    this.storage.chatSessionMeta.patch(resolution.sessionId, {
-      workspaceId,
-      title: input.title?.trim() ? input.title.trim() : undefined,
-      origin: input.origin,
-      includeInHistory: input.includeInHistory,
-    }, now);
-    this.storage.chatSessionBindings.upsert({
-      sessionId: resolution.sessionId,
-      workspaceId,
-      transport: "llm",
-      writable: true,
-    }, now);
-    if (input.projectId) {
-      const project = this.storage.chatProjects.get(input.projectId);
-      if (this.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
-        throw new Error("project workspace does not match requested session workspace");
-      }
-      this.storage.chatSessionProjects.assign(resolution.sessionId, input.projectId, now);
-    }
-    if (input.mode) {
-      this.updateChatSessionPrefs(resolution.sessionId, buildChatModePrefsPatch(input.mode));
-    }
-    const created = this.requireChatSession(resolution.sessionId);
-    if (!created) {
-      throw new Error(`Failed to create chat session ${resolution.sessionId}`);
-    }
-    this.publishRealtime("chat_session_updated", "chat", {
-      type: "chat_session_created",
-      sessionId: created.sessionId,
-      sessionKey: created.sessionKey,
-    });
-    return created;
+    return chatSessionService.createChatSession(this, input);
   }
 
   public updateChatSession(sessionId: string, input: { title?: string }): ChatSessionRecord {
-    this.getSession(sessionId);
-    this.storage.chatSessionMeta.patch(sessionId, {
-      title: input.title,
-    });
-    const updated = this.requireChatSession(sessionId);
-    this.publishRealtime("chat_session_title_updated", "chat", {
-      type: "chat_session_title_updated",
-      sessionId: updated.sessionId,
-      title: updated.title,
-    });
-    return updated;
+    return chatSessionService.updateChatSession(this, sessionId, input);
   }
 
-  private maybeAutoTitleChatSession(sessionId: string, content: string): void {
-    const meta = this.storage.chatSessionMeta.ensure(sessionId);
-    if (meta.title?.trim()) {
-      return;
-    }
-    const derivedTitle = deriveChatSessionTitleFromContent(content);
-    if (!derivedTitle) {
-      return;
-    }
-    this.storage.chatSessionMeta.patch(sessionId, { title: derivedTitle });
-    this.publishRealtime("chat_session_title_updated", "chat", {
-      type: "chat_session_title_updated",
-      sessionId,
-      title: derivedTitle,
-    });
+  /** @internal */ public maybeAutoTitleChatSession(sessionId: string, content: string): void {
+    chatSessionService.maybeAutoTitleChatSession(this, sessionId, content);
   }
 
   public pinChatSession(sessionId: string): ChatSessionRecord {
-    this.getSession(sessionId);
-    this.storage.chatSessionMeta.patch(sessionId, { pinned: true });
-    const updated = this.requireChatSession(sessionId);
-    this.publishRealtime("chat_session_updated", "chat", buildChatSessionUpdatedPayload("chat_session_pinned", updated));
-    return updated;
+    return chatSessionService.pinChatSession(this, sessionId);
   }
 
   public unpinChatSession(sessionId: string): ChatSessionRecord {
-    this.getSession(sessionId);
-    this.storage.chatSessionMeta.patch(sessionId, { pinned: false });
-    const updated = this.requireChatSession(sessionId);
-    this.publishRealtime("chat_session_updated", "chat", buildChatSessionUpdatedPayload("chat_session_unpinned", updated));
-    return updated;
+    return chatSessionService.unpinChatSession(this, sessionId);
   }
 
   public archiveChatSession(sessionId: string): ChatSessionRecord {
-    this.getSession(sessionId);
-    this.storage.chatSessionMeta.patch(sessionId, {
-      lifecycleStatus: "archived",
-      archivedAt: new Date().toISOString(),
-    });
-    const updated = this.requireChatSession(sessionId);
-    this.publishRealtime("chat_session_updated", "chat", buildChatSessionUpdatedPayload("chat_session_archived", updated));
-    return updated;
+    return chatSessionService.archiveChatSession(this, sessionId);
   }
 
   public restoreChatSession(sessionId: string): ChatSessionRecord {
-    this.getSession(sessionId);
-    this.storage.chatSessionMeta.patch(sessionId, {
-      lifecycleStatus: "active",
-      archivedAt: undefined,
-    });
-    const updated = this.requireChatSession(sessionId);
-    this.publishRealtime("chat_session_updated", "chat", buildChatSessionUpdatedPayload("chat_session_restored", updated));
-    return updated;
+    return chatSessionService.restoreChatSession(this, sessionId);
   }
 
   public async deleteChatSession(sessionId: string): Promise<{ deleted: boolean; sessionId: string }> {
-    this.getSession(sessionId);
-    const result = this.storage.deleteChatSessionData(sessionId);
-    this.activeChatTurnWrites.delete(sessionId);
-    this.operatorSummaryCache.invalidate();
-    const cleanupResults = await Promise.allSettled([
-      this.storage.transcripts.delete(sessionId),
-      ...result.cleanupRelPaths.map((storageRelPath) => this.removeChatSessionStoredFile(storageRelPath)),
-    ]);
-    for (const cleanupResult of cleanupResults) {
-      if (cleanupResult.status === "rejected") {
-        console.warn("[goatcitadel] chat session delete cleanup failed", {
-          sessionId,
-          error: cleanupResult.reason instanceof Error ? cleanupResult.reason.message : String(cleanupResult.reason),
-        });
-      }
-    }
-    this.publishRealtime("chat_session_deleted", "chat", {
-      type: "chat_session_deleted",
-      sessionId,
-      mode: "hard",
-    });
-    return {
-      deleted: result.deleted,
-      sessionId,
-    };
+    return chatSessionService.deleteChatSession(this, sessionId);
   }
 
   public async archiveChatSessionsBulk(input: ChatSessionBulkArchiveInput = {}): Promise<ChatSessionBulkArchiveResult> {
-    const workspaceId = this.normalizeWorkspaceId(input.workspaceId);
-    const scope = input.scope ?? "mission";
-    const candidates = this.listChatSessions({
-      workspaceId,
-      scope,
-      view: "active",
-      limit: 20_000,
-      includeHidden: input.includeHidden ?? false,
-    });
-    const archivedSessionIds: string[] = [];
-    const failures: ChatSessionBulkArchiveResult["failures"] = [];
-
-    for (const session of candidates) {
-      try {
-        const archived = this.archiveChatSession(session.sessionId);
-        archivedSessionIds.push(archived.sessionId);
-      } catch (error) {
-        failures.push({
-          sessionId: session.sessionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    return {
-      workspaceId,
-      scope,
-      attemptedCount: candidates.length,
-      archivedCount: archivedSessionIds.length,
-      skippedCount: 0,
-      failedCount: failures.length,
-      archivedSessionIds,
-      failures,
-    };
+    return chatSessionService.archiveChatSessionsBulk(this, input);
   }
 
-  private async removeChatSessionStoredFile(storageRelPath: string): Promise<void> {
+  /** @internal */ public async removeChatSessionStoredFile(storageRelPath: string): Promise<void> {
     const normalized = storageRelPath.trim();
     if (!normalized) {
       return;
@@ -2556,28 +2353,11 @@ export class GatewayService {
   }
 
   public assignChatSessionProject(sessionId: string, projectId?: string): ChatSessionRecord {
-    this.getSession(sessionId);
-    const meta = this.storage.chatSessionMeta.ensure(sessionId);
-    const workspaceId = this.normalizeWorkspaceId(meta.workspaceId);
-    if (!projectId) {
-      this.storage.chatSessionProjects.unassign(sessionId);
-      const updated = this.requireChatSession(sessionId);
-      this.publishRealtime("chat_session_updated", "chat", buildChatSessionUpdatedPayload("chat_session_project_unassigned", updated));
-      return updated;
-    }
-    const project = this.storage.chatProjects.get(projectId);
-    if (this.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
-      throw new Error("project workspace does not match session workspace");
-    }
-    this.storage.chatSessionProjects.assign(sessionId, projectId);
-    const updated = this.requireChatSession(sessionId);
-    this.publishRealtime("chat_session_updated", "chat", buildChatSessionUpdatedPayload("chat_session_project_assigned", updated));
-    return updated;
+    return chatSessionService.assignChatSessionProject(this, sessionId, projectId);
   }
 
   public getChatSessionBinding(sessionId: string): ChatSessionBindingRecord | undefined {
-    this.getSession(sessionId);
-    return this.storage.chatSessionBindings.get(sessionId);
+    return chatSessionService.getChatSessionBinding(this, sessionId);
   }
 
   public setChatSessionBinding(input: {
@@ -2587,28 +2367,7 @@ export class GatewayService {
     target?: string;
     writable?: boolean;
   }): ChatSessionBindingRecord {
-    this.getSession(input.sessionId);
-    const sessionMeta = this.storage.chatSessionMeta.ensure(input.sessionId);
-    if (input.transport === "integration") {
-      if (!input.connectionId?.trim() || !input.target?.trim()) {
-        throw new Error("connectionId and target are required for integration transport");
-      }
-      this.storage.integrationConnections.get(input.connectionId);
-    }
-    const binding = this.storage.chatSessionBindings.upsert({
-      sessionId: input.sessionId,
-      workspaceId: this.normalizeWorkspaceId(sessionMeta.workspaceId),
-      transport: input.transport,
-      connectionId: input.connectionId?.trim() || undefined,
-      target: input.target?.trim() || undefined,
-      writable: input.writable,
-    });
-    this.publishRealtime("chat_session_updated", "chat", {
-      type: "chat_session_binding_updated",
-      sessionId: input.sessionId,
-      transport: binding.transport,
-    });
-    return binding;
+    return chatSessionService.setChatSessionBinding(this, input);
   }
 
   public async respondToExistingChatMessage(
@@ -2648,14 +2407,17 @@ export class GatewayService {
       const assistantContent = response.assistantMessage?.content?.trim();
       if (assistantContent) {
         this.ensureSessionInternalToolGrant(sessionId, "channel.send", "system-integration-reply");
-        this.requireExecutedToolResult("channel.send", await this.commsSend({
-          connectionId: binding.connectionId,
-          target: binding.target,
-          message: assistantContent,
-          replyToMessageId: input.deliveryReplyToMessageId?.trim() || prepared.userEventId,
-          sessionId,
-          agentId: "assistant",
-        }));
+        this.requireExecutedToolResult(
+          "channel.send",
+          await this.commsSend({
+            connectionId: binding.connectionId,
+            target: binding.target,
+            message: assistantContent,
+            replyToMessageId: input.deliveryReplyToMessageId?.trim() || prepared.userEventId,
+            sessionId,
+            agentId: "assistant",
+          }),
+        );
       }
       return {
         ...response,
@@ -2671,7 +2433,7 @@ export class GatewayService {
       await this.ensureChatMessageProjection(sessionId);
       return this.storage.chatMessages.list(sessionId, safeLimit, cursor);
     } catch (error) {
-      console.warn("[goatcitadel] chat message projection unavailable, falling back to transcript scan", {
+      log.warn("chat message projection unavailable, falling back to transcript scan", {
         sessionId,
         error: (error as Error).message,
       });
@@ -2679,7 +2441,7 @@ export class GatewayService {
     }
   }
 
-  private async loadChatTurnSessionState(sessionId: string): Promise<{
+  /** @internal */ public async loadChatTurnSessionState(sessionId: string): Promise<{
     traces: ChatTurnTraceRecord[];
     tracesById: Map<string, ChatTurnTraceRecord>;
     turnLineageById: Map<string, { turnId: string; parentTurnId?: string }>;
@@ -2694,10 +2456,15 @@ export class GatewayService {
     return {
       traces,
       tracesById: new Map(traces.map((trace) => [trace.turnId, trace])),
-      turnLineageById: new Map(traces.map((trace) => [trace.turnId, {
-        turnId: trace.turnId,
-        parentTurnId: trace.parentTurnId,
-      }])),
+      turnLineageById: new Map(
+        traces.map((trace) => [
+          trace.turnId,
+          {
+            turnId: trace.turnId,
+            parentTurnId: trace.parentTurnId,
+          },
+        ]),
+      ),
       messages,
       messagesById: new Map(messages.map((message) => [message.messageId, message])),
       childrenByTurnId: this.buildChatTurnChildrenMap(traces),
@@ -2728,10 +2495,15 @@ export class GatewayService {
     }
     const newestLeafTurnId = resolveNewestLeafTurnId(
       turnId,
-      new Map(state.traces.map((trace) => [trace.turnId, {
-        turnId: trace.turnId,
-        startedAtMs: Date.parse(trace.startedAt) || 0,
-      }])),
+      new Map(
+        state.traces.map((trace) => [
+          trace.turnId,
+          {
+            turnId: trace.turnId,
+            startedAtMs: Date.parse(trace.startedAt) || 0,
+          },
+        ]),
+      ),
       state.childrenByTurnId,
     );
     this.storage.chatSessionBranchState.setActiveLeaf(sessionId, newestLeafTurnId);
@@ -2753,33 +2525,17 @@ export class GatewayService {
   }
 
   public getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord {
-    this.getSession(sessionId);
-    const prefs = this.ensureChatSessionModelDefaults(sessionId, this.storage.chatSessionPrefs.ensure(sessionId));
-    return this.hydrateChatPrefsWithAutonomy(sessionId, prefs);
+    return chatSessionService.getChatSessionPrefs(this, sessionId);
   }
 
-  public updateChatSessionPrefs(
+  public updateChatSessionPrefs(sessionId: string, input: ChatSessionPrefsPatch): ChatSessionPrefsRecord {
+    return chatSessionService.updateChatSessionPrefs(this, sessionId, input);
+  }
+
+  /** @internal */ public ensureChatSessionModelDefaults(
     sessionId: string,
-    input: ChatSessionPrefsPatch,
+    prefs: ChatSessionPrefsRecord,
   ): ChatSessionPrefsRecord {
-    this.getSession(sessionId);
-    const normalizedInput = applyChatModePresetToPatch(input);
-    const { basePatch, autonomyPatch } = splitChatPrefsPatch(normalizedInput);
-    if (Object.keys(autonomyPatch).length > 0) {
-      this.patchSessionAutonomyPrefs(sessionId, autonomyPatch);
-    }
-    const updated = this.storage.chatSessionPrefs.patch(sessionId, basePatch);
-    const normalized = this.ensureChatSessionModelDefaults(sessionId, updated);
-    const hydrated = this.hydrateChatPrefsWithAutonomy(sessionId, normalized);
-    this.publishRealtime("chat_session_updated", "chat", {
-      type: "chat_session_prefs_updated",
-      sessionId,
-      prefs: hydrated,
-    });
-    return hydrated;
-  }
-
-  private ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord {
     if (!prefs.providerId || !prefs.model) {
       return prefs;
     }
@@ -2807,7 +2563,10 @@ export class GatewayService {
     });
   }
 
-  private hydrateChatPrefsWithAutonomy(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord {
+  /** @internal */ public hydrateChatPrefsWithAutonomy(
+    sessionId: string,
+    prefs: ChatSessionPrefsRecord,
+  ): ChatSessionPrefsRecord {
     const autonomy = this.getSessionAutonomyPrefs(sessionId);
     return {
       ...prefs,
@@ -2822,11 +2581,11 @@ export class GatewayService {
     };
   }
 
-  private getSessionAutonomyPrefs(sessionId: string): SessionAutonomyPrefs {
+  /** @internal */ public getSessionAutonomyPrefs(sessionId: string): SessionAutonomyPrefs {
     return this.storage.sessionAutonomyPrefs.ensure(sessionId);
   }
 
-  private patchSessionAutonomyPrefs(
+  /** @internal */ public patchSessionAutonomyPrefs(
     sessionId: string,
     input: SessionAutonomyPrefsPatchInput,
   ): SessionAutonomyPrefs {
@@ -2849,7 +2608,7 @@ export class GatewayService {
     }
     this.maintenanceScheduler = setInterval(() => {
       const task = this.runMaintenanceSchedulerTick().catch((error) => {
-        console.error("[goatcitadel] maintenance scheduler tick failed", error);
+        log.error("maintenance scheduler tick failed", error);
       });
       this.backgroundTasks.add(task);
       task.finally(() => this.backgroundTasks.delete(task));
@@ -2867,12 +2626,12 @@ export class GatewayService {
     await this.memoryMaintenanceService.runDueEvaluation();
   }
 
-  private scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void {
+  /** @internal */ public scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void {
     if (this.closing || parentTurnId) {
       return;
     }
     const task = this.memoryMaintenanceService.noteSuccessfulRootTurn(sessionId).catch((error) => {
-      console.error("[goatcitadel] memory maintenance post-turn evaluation failed", error);
+      log.error("memory maintenance post-turn evaluation failed", error);
     });
     this.backgroundTasks.add(task);
     task.finally(() => this.backgroundTasks.delete(task));
@@ -2884,12 +2643,15 @@ export class GatewayService {
       return;
     }
     const now = new Date();
-    if (!options.force && !isCronJobDueNow(job, now, {
-      defaultHour: 2,
-      defaultMinute: 30,
-      defaultWeekday: undefined,
-      defaultTimeZone: PRIVATE_BETA_BACKUP_TIME_ZONE,
-    })) {
+    if (
+      !options.force &&
+      !isCronJobDueNow(job, now, {
+        defaultHour: 2,
+        defaultMinute: 30,
+        defaultWeekday: undefined,
+        defaultTimeZone: PRIVATE_BETA_BACKUP_TIME_ZONE,
+      })
+    ) {
       return;
     }
     const dayKey = toDayKeyForTimezone(now, PRIVATE_BETA_BACKUP_TIME_ZONE);
@@ -2907,7 +2669,7 @@ export class GatewayService {
     this.storage.cronJobs.upsert({
       ...job,
       lastRunAt: finishedAt,
-      nextRunAt: new Date(Date.now() + (24 * 60 * 60 * 1000)).toISOString(),
+      nextRunAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     });
     this.publishRealtime("backup_created", "system", {
       type: "private_beta_daily_backup",
@@ -2923,12 +2685,15 @@ export class GatewayService {
       return;
     }
     const now = new Date();
-    if (!options.force && !isCronJobDueNow(job, now, {
-      defaultHour: 3,
-      defaultMinute: 0,
-      defaultWeekday: undefined,
-      defaultTimeZone: MEMORY_FLUSH_DAILY_TIME_ZONE,
-    })) {
+    if (
+      !options.force &&
+      !isCronJobDueNow(job, now, {
+        defaultHour: 3,
+        defaultMinute: 0,
+        defaultWeekday: undefined,
+        defaultTimeZone: MEMORY_FLUSH_DAILY_TIME_ZONE,
+      })
+    ) {
       return;
     }
     const dayKey = toDayKeyForTimezone(now, MEMORY_FLUSH_DAILY_TIME_ZONE);
@@ -2938,7 +2703,7 @@ export class GatewayService {
     }
 
     const nowIso = now.toISOString();
-    const cutoffIso = new Date(now.getTime() - (MEMORY_FLUSH_HISTORY_DAYS * 24 * 60 * 60 * 1000)).toISOString();
+    const cutoffIso = new Date(now.getTime() - MEMORY_FLUSH_HISTORY_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const prunedExpiredContextPacks = this.storage.memoryContexts.pruneExpired(nowIso);
     const prunedOldContextPacks = this.storage.memoryContexts.pruneOlderThan(cutoffIso);
     const prunedOldQmdRuns = this.storage.memoryQmdRuns.pruneOlderThan(cutoffIso);
@@ -2948,7 +2713,7 @@ export class GatewayService {
     this.storage.cronJobs.upsert({
       ...job,
       lastRunAt: finishedAt,
-      nextRunAt: new Date(Date.now() + (24 * 60 * 60 * 1000)).toISOString(),
+      nextRunAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     });
     this.publishRealtime("cron_job_run", "cron", {
       type: "memory_flush_daily",
@@ -2966,12 +2731,15 @@ export class GatewayService {
       return;
     }
     const now = new Date();
-    if (!options.force && !isCronJobDueNow(job, now, {
-      defaultHour: 0,
-      defaultMinute: 0,
-      defaultWeekday: undefined,
-      defaultTimeZone: COST_REPORT_HOURLY_TIME_ZONE,
-    })) {
+    if (
+      !options.force &&
+      !isCronJobDueNow(job, now, {
+        defaultHour: 0,
+        defaultMinute: 0,
+        defaultWeekday: undefined,
+        defaultTimeZone: COST_REPORT_HOURLY_TIME_ZONE,
+      })
+    ) {
       return;
     }
     const hourKey = toHourKeyForTimezone(now, COST_REPORT_HOURLY_TIME_ZONE);
@@ -2981,7 +2749,7 @@ export class GatewayService {
     }
 
     const windowEndIso = now.toISOString();
-    const windowStartIso = new Date(now.getTime() - (COST_REPORT_LOOKBACK_HOURS * 60 * 60 * 1000)).toISOString();
+    const windowStartIso = new Date(now.getTime() - COST_REPORT_LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
     const byDay = this.storage.costLedger.summary("day", windowStartIso, windowEndIso);
     const bySession = this.storage.costLedger.summary("session", windowStartIso, windowEndIso);
     const byAgent = this.storage.costLedger.summary("agent", windowStartIso, windowEndIso);
@@ -3024,7 +2792,9 @@ export class GatewayService {
       lines.push(`| ${keyLabel} | Token In | Token Out | Cached In | Token Total | Cost USD |`);
       lines.push("| --- | ---: | ---: | ---: | ---: | ---: |");
       for (const row of rows) {
-        lines.push(`| ${row.key || "-"} | ${row.tokenInput} | ${row.tokenOutput} | ${row.tokenCachedInput} | ${row.tokenTotal} | ${row.costUsd.toFixed(6)} |`);
+        lines.push(
+          `| ${row.key || "-"} | ${row.tokenInput} | ${row.tokenOutput} | ${row.tokenCachedInput} | ${row.tokenTotal} | ${row.costUsd.toFixed(6)} |`,
+        );
       }
       lines.push("");
     };
@@ -3045,7 +2815,7 @@ export class GatewayService {
     this.storage.cronJobs.upsert({
       ...job,
       lastRunAt: finishedAt,
-      nextRunAt: new Date(Date.now() + (60 * 60 * 1000)).toISOString(),
+      nextRunAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
     });
     this.publishRealtime("cron_job_run", "cron", {
       type: "cost_report_hourly",
@@ -3066,12 +2836,15 @@ export class GatewayService {
       return;
     }
     const now = new Date();
-    if (!options.force && !isCronJobDueNow(job, now, {
-      defaultHour: 4,
-      defaultMinute: 15,
-      defaultWeekday: undefined,
-      defaultTimeZone: UPDATE_REVIEW_DAILY_TIME_ZONE,
-    })) {
+    if (
+      !options.force &&
+      !isCronJobDueNow(job, now, {
+        defaultHour: 4,
+        defaultMinute: 15,
+        defaultWeekday: undefined,
+        defaultTimeZone: UPDATE_REVIEW_DAILY_TIME_ZONE,
+      })
+    ) {
       return;
     }
     const dayKey = toDayKeyForTimezone(now, UPDATE_REVIEW_DAILY_TIME_ZONE);
@@ -3092,12 +2865,13 @@ export class GatewayService {
     this.storage.cronJobs.upsert({
       ...job,
       lastRunAt: finishedAt,
-      nextRunAt: new Date(Date.now() + (24 * 60 * 60 * 1000)).toISOString(),
+      nextRunAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     });
 
-    const hasAlerts = report.summary.outdatedDependencyCount > 0
-      || report.summary.changedSkillSourceCount > 0
-      || report.summary.warningCount > 0;
+    const hasAlerts =
+      report.summary.outdatedDependencyCount > 0 ||
+      report.summary.changedSkillSourceCount > 0 ||
+      report.summary.warningCount > 0;
     if (this.isFeatureEnabled("cronReviewQueueV1Enabled")) {
       this.cronAutomationService.recordCronReviewItem({
         jobId: UPDATE_REVIEW_DAILY_JOB_ID,
@@ -3138,7 +2912,7 @@ export class GatewayService {
     return latest ? isChatTurnActiveStatus(latest.status) : false;
   }
 
-  private beginActiveChatTurnExecution(
+  /** @internal */ public beginActiveChatTurnExecution(
     sessionId: string,
     turnId: string,
     operation: string,
@@ -3154,7 +2928,7 @@ export class GatewayService {
     return controller;
   }
 
-  private endActiveChatTurnExecution(turnId: string, controller: AbortController): void {
+  /** @internal */ public endActiveChatTurnExecution(turnId: string, controller: AbortController): void {
     const active = this.activeChatTurns.get(turnId);
     if (!active || active.controller !== controller) {
       return;
@@ -3166,7 +2940,11 @@ export class GatewayService {
     return this.activeChatTurns.get(turnId)?.controller.signal.aborted ?? false;
   }
 
-  private registerActiveChatTurnStream(sessionId: string, turnId: string, runId?: string): ActiveChatTurnStreamExecution {
+  /** @internal */ public registerActiveChatTurnStream(
+    sessionId: string,
+    turnId: string,
+    runId?: string,
+  ): ActiveChatTurnStreamExecution {
     const state: ActiveChatTurnStreamExecution = {
       sessionId,
       turnId,
@@ -3179,7 +2957,7 @@ export class GatewayService {
     return state;
   }
 
-  private completeActiveChatTurnStream(turnId: string): void {
+  /** @internal */ public completeActiveChatTurnStream(turnId: string): void {
     const active = this.activeChatTurnStreams.get(turnId);
     if (!active) {
       return;
@@ -3187,16 +2965,13 @@ export class GatewayService {
     active.completed = true;
   }
 
-  private closeActiveChatTurnStream(turnId: string): void {
+  /** @internal */ public closeActiveChatTurnStream(turnId: string): void {
     this.activeChatTurnStreams.delete(turnId);
   }
 
-  private persistChatStreamChunk(
-    chunk: PersistableChatStreamChunk,
-    runId?: string,
-  ): ChatStreamChunk {
+  /** @internal */ public persistChatStreamChunk(chunk: PersistableChatStreamChunk, runId?: string): ChatStreamChunk {
     const active = this.activeChatTurnStreams.get(chunk.turnId);
-    const sequence = active?.nextSequence ?? (this.storage.chatStreamEvents.getLatestSequence(chunk.turnId) + 1);
+    const sequence = active?.nextSequence ?? this.storage.chatStreamEvents.getLatestSequence(chunk.turnId) + 1;
     if (active) {
       active.nextSequence = sequence + 1;
     }
@@ -3231,7 +3006,7 @@ export class GatewayService {
     this.storage.chatStreamEvents.purgeBefore(cutoffIso);
   }
 
-  private async *streamPersistedChatTurnEvents(
+  /** @internal */ public async *streamPersistedChatTurnEvents(
     sessionId: string,
     turnId: string,
     options?: {
@@ -3280,13 +3055,17 @@ export class GatewayService {
   }
 
   private isDurableTurnStillStreaming(turnId: string): boolean {
-    const row = this.gatewaySql.prepare(`
+    const row = this.gatewaySql
+      .prepare(
+        `
       SELECT run_id
       FROM chat_stream_events
       WHERE turn_id = ?
       ORDER BY sequence DESC
       LIMIT 1
-    `).get(turnId) as { run_id: string | null } | undefined;
+    `,
+      )
+      .get(turnId) as { run_id: string | null } | undefined;
     if (!row?.run_id) {
       return false;
     }
@@ -3298,7 +3077,7 @@ export class GatewayService {
     }
   }
 
-  private async *withEphemeralStreamEnvelope(
+  /** @internal */ public async *withEphemeralStreamEnvelope(
     source: AsyncGenerator<ChatStreamChunkDraft>,
     runId?: string,
   ): AsyncGenerator<ChatStreamChunk> {
@@ -3314,50 +3093,52 @@ export class GatewayService {
     }
   }
 
-  private async *streamTurnStateFallback(
-    sessionId: string,
-    turnId: string,
-  ): AsyncGenerator<ChatStreamChunk> {
+  private async *streamTurnStateFallback(sessionId: string, turnId: string): AsyncGenerator<ChatStreamChunk> {
     const trace = this.storage.chatTurnTraces.get(turnId);
     if (trace.sessionId !== sessionId) {
       return;
     }
     const hydratedTrace = this.createHydratedChatTurnTrace(turnId, trace);
-    yield this.persistChatStreamChunk({
-      type: "trace_update",
-      sessionId,
-      turnId,
-      trace: hydratedTrace,
-    }, hydratedTrace.durable?.runId);
+    yield this.persistChatStreamChunk(
+      {
+        type: "trace_update",
+        sessionId,
+        turnId,
+        trace: hydratedTrace,
+      },
+      hydratedTrace.durable?.runId,
+    );
     if (trace.assistantMessageId) {
       const assistantMessage = this.storage.chatMessages.get(trace.assistantMessageId);
       if (assistantMessage) {
-        yield this.persistChatStreamChunk({
-          type: "message_done",
-          sessionId,
-          turnId,
-          messageId: assistantMessage.messageId,
-          content: assistantMessage.content,
-        }, hydratedTrace.durable?.runId);
-        yield this.persistChatStreamChunk({
-          type: "done",
-          sessionId,
-          turnId,
-          messageId: assistantMessage.messageId,
-        }, hydratedTrace.durable?.runId);
+        yield this.persistChatStreamChunk(
+          {
+            type: "message_done",
+            sessionId,
+            turnId,
+            messageId: assistantMessage.messageId,
+            content: assistantMessage.content,
+          },
+          hydratedTrace.durable?.runId,
+        );
+        yield this.persistChatStreamChunk(
+          {
+            type: "done",
+            sessionId,
+            turnId,
+            messageId: assistantMessage.messageId,
+          },
+          hydratedTrace.durable?.runId,
+        );
       }
     }
   }
 
-  private createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): ChatTurnTraceRecord {
-    return {
-      ...trace,
-      toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
-      citations: trace.citations ?? [],
-    };
+  /** @internal */ public createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): ChatTurnTraceRecord {
+    return chatTurnTraceHydration.createHydratedChatTurnTrace(this, turnId, trace);
   }
 
-  private markChatTurnCancelled(
+  /** @internal */ public markChatTurnCancelled(
     sessionId: string,
     turnId: string,
     cancelledBy?: string,
@@ -3440,7 +3221,7 @@ export class GatewayService {
     return clamp01(score);
   }
 
-  private collectSpecialistCandidateSuggestions(input: {
+  /** @internal */ public collectSpecialistCandidateSuggestions(input: {
     sessionId: string;
     mode: ChatMode;
     content: string;
@@ -3451,9 +3232,11 @@ export class GatewayService {
       return [];
     }
     const existingCandidates = this.storage.chatSpecialistCandidates.listBySession(input.sessionId, 200);
-    const seen = new Set<string>(existingCandidates
-      .filter((candidate) => candidate.status !== "retired")
-      .map((candidate) => normalizeSpecialistCandidateFingerprint(candidate)));
+    const seen = new Set<string>(
+      existingCandidates
+        .filter((candidate) => candidate.status !== "retired")
+        .map((candidate) => normalizeSpecialistCandidateFingerprint(candidate)),
+    );
     const suggested = new Map<string, ChatSpecialistCandidateSuggestionRecord>();
     const objectiveKeywords = extractSpecialistObjectiveKeywords(input.content);
     const addSuggestion = (suggestion: ChatSpecialistCandidateSuggestionRecord): void => {
@@ -3465,11 +3248,13 @@ export class GatewayService {
     };
 
     for (const capability of input.capabilitySuggestions) {
-      addSuggestion(buildSpecialistSuggestionFromCapability({
-        capability,
-        mode: input.mode,
-        objectiveKeywords,
-      }));
+      addSuggestion(
+        buildSpecialistSuggestionFromCapability({
+          capability,
+          mode: input.mode,
+          objectiveKeywords,
+        }),
+      );
     }
 
     if (suggested.size === 0 && input.trace.orchestration) {
@@ -3478,22 +3263,24 @@ export class GatewayService {
         if (role === "coder") {
           continue;
         }
-        addSuggestion(buildRoleGapSpecialistSuggestion({
-          role,
-          mode: input.mode,
-          objective: input.content,
-          objectiveKeywords,
-          confidence: this.computeDelegationSuggestionConfidence(input.content, detectedRoles),
-          runId: input.trace.orchestration.runId,
-          turnId: input.trace.turnId,
-        }));
+        addSuggestion(
+          buildRoleGapSpecialistSuggestion({
+            role,
+            mode: input.mode,
+            objective: input.content,
+            objectiveKeywords,
+            confidence: this.computeDelegationSuggestionConfidence(input.content, detectedRoles),
+            runId: input.trace.orchestration.runId,
+            turnId: input.trace.turnId,
+          }),
+        );
       }
     }
 
     return [...suggested.values()].slice(0, 3);
   }
 
-  private extractAndPersistLearnedMemory(
+  /** @internal */ public extractAndPersistLearnedMemory(
     sessionId: string,
     content: string,
     source: {
@@ -3574,7 +3361,7 @@ export class GatewayService {
     };
   }
 
-  private ensureChatSessionRuntimeGrants(sessionId: string): void {
+  /** @internal */ public ensureChatSessionRuntimeGrants(sessionId: string): void {
     const existing = this.listToolGrants("session", sessionId, 1000);
     const active = existing.filter((grant) => isActiveToolGrant(grant));
     const inheritedDeny = [
@@ -3586,11 +3373,15 @@ export class GatewayService {
       if (deniedByInheritedScope) {
         continue;
       }
-      const hasDeny = active.some((grant) => grant.decision === "deny" && grantPatternMatches(grant.toolPattern, toolName));
+      const hasDeny = active.some(
+        (grant) => grant.decision === "deny" && grantPatternMatches(grant.toolPattern, toolName),
+      );
       if (hasDeny) {
         continue;
       }
-      const hasAllow = active.some((grant) => grant.decision === "allow" && grantPatternMatches(grant.toolPattern, toolName));
+      const hasAllow = active.some(
+        (grant) => grant.decision === "allow" && grantPatternMatches(grant.toolPattern, toolName),
+      );
       if (hasAllow) {
         continue;
       }
@@ -3605,7 +3396,7 @@ export class GatewayService {
     }
   }
 
-  private inheritDelegatedSessionToolGrants(parentSessionId: string, childSessionId: string): void {
+  /** @internal */ public inheritDelegatedSessionToolGrants(parentSessionId: string, childSessionId: string): void {
     const inheritedGrants = buildDelegatedSessionToolGrantCopies({
       parentSessionId,
       childSessionId,
@@ -3627,32 +3418,80 @@ export class GatewayService {
       { command: "/new", usage: "/new [title]", description: "Start a fresh session." },
       { command: "/mode", usage: "/mode chat|cowork|code", description: "Switch session mode." },
       { command: "/plan", usage: "/plan [on|off]", description: "Show or set advisory planning mode." },
-      { command: "/model", usage: "/model <model-id|provider-id/model-id>", description: "Override provider/model for this session." },
+      {
+        command: "/model",
+        usage: "/model <model-id|provider-id/model-id>",
+        description: "Override provider/model for this session.",
+      },
       { command: "/web", usage: "/web auto|off|quick|deep", description: "Set web retrieval behavior." },
       { command: "/memory", usage: "/memory auto|on|off", description: "Set memory behavior." },
       { command: "/dream", usage: "/dream", description: "Run workspace memory maintenance now." },
       { command: "/dream", usage: "/dream status", description: "Show workspace memory maintenance status." },
       { command: "/think", usage: "/think minimal|standard|extended", description: "Set thinking depth." },
       { command: "/tool", usage: "/tool safe_auto|manual", description: "Set tool autonomy mode." },
-      { command: "/proactive", usage: "/proactive off|suggest|auto_safe|auto_full", description: "Set proactive mode." },
+      {
+        command: "/proactive",
+        usage: "/proactive off|suggest|auto_safe|auto_full",
+        description: "Set proactive mode.",
+      },
       { command: "/retrieval", usage: "/retrieval standard|layered", description: "Set retrieval routing mode." },
       { command: "/reflect", usage: "/reflect off|on", description: "Toggle reflection retry mode." },
       { command: "/research", usage: "/research <query>", description: "Run quick research for current session." },
-      { command: "/delegate", usage: "/delegate <role1,role2,...> :: <objective>", description: "Run task-backed role delegation." },
-      { command: "/pipeline", usage: "/pipeline prd|build|triage|release :: <objective>", description: "Run a built-in delegation template." },
-      { command: "/score", usage: "/score <TEST-##> <routing> <honesty> <handoff> <robustness> <usability>", description: "Score the latest run for a prompt-pack test." },
+      {
+        command: "/delegate",
+        usage: "/delegate <role1,role2,...> :: <objective>",
+        description: "Run task-backed role delegation.",
+      },
+      {
+        command: "/pipeline",
+        usage: "/pipeline prd|build|triage|release :: <objective>",
+        description: "Run a built-in delegation template.",
+      },
+      {
+        command: "/score",
+        usage: "/score <TEST-##> <routing> <honesty> <handoff> <robustness> <usability>",
+        description: "Score the latest run for a prompt-pack test.",
+      },
       { command: "/pack", usage: "/pack run <TEST-##|all>", description: "Run prompt-pack tests from Prompt Lab." },
       { command: "/skills", usage: "/skills", description: "List installed skills and their runtime state." },
-      { command: "/skill", usage: "/skill enable|sleep|disable <skillId>", description: "Change an installed skill's runtime state." },
+      {
+        command: "/skill",
+        usage: "/skill enable|sleep|disable <skillId>",
+        description: "Change an installed skill's runtime state.",
+      },
       { command: "/skill", usage: "/skill search <query>", description: "Search skill import sources." },
-      { command: "/skill", usage: "/skill lookup <query-or-url>", description: "Resolve the best-fit skill source or listing." },
-      { command: "/skill", usage: "/skill install <sourceRef> [--confirm-high-risk]", description: "Validate and install a skill, disabled by default." },
+      {
+        command: "/skill",
+        usage: "/skill lookup <query-or-url>",
+        description: "Resolve the best-fit skill source or listing.",
+      },
+      {
+        command: "/skill",
+        usage: "/skill install <sourceRef> [--confirm-high-risk]",
+        description: "Validate and install a skill, disabled by default.",
+      },
       { command: "/mcp", usage: "/mcp", description: "List configured MCP servers and connection state." },
-      { command: "/mcp", usage: "/mcp connect|disconnect <serverId>", description: "Connect or disconnect a configured MCP server." },
+      {
+        command: "/mcp",
+        usage: "/mcp connect|disconnect <serverId>",
+        description: "Connect or disconnect a configured MCP server.",
+      },
       { command: "/mcp", usage: "/mcp templates [query]", description: "List known MCP server templates." },
-      { command: "/mcp", usage: "/mcp add-template <templateId>", description: "Add an MCP template definition in a disconnected state." },
-      { command: "/project", usage: "/project <project-id|none>", description: "Assign or clear this session project." },
-      { command: "/attach", usage: "/attach <attachment-id>", description: "Reference an attachment id in your next send." },
+      {
+        command: "/mcp",
+        usage: "/mcp add-template <templateId>",
+        description: "Add an MCP template definition in a disconnected state.",
+      },
+      {
+        command: "/project",
+        usage: "/project <project-id|none>",
+        description: "Assign or clear this session project.",
+      },
+      {
+        command: "/attach",
+        usage: "/attach <attachment-id>",
+        description: "Reference an attachment id in your next send.",
+      },
       { command: "/run", usage: "/run research <query>", description: "Run a named workflow from chat." },
       { command: "/approve", usage: "/approve <approval-id>", description: "Approve a pending inline tool request." },
       { command: "/deny", usage: "/deny <approval-id>", description: "Deny a pending inline tool request." },
@@ -3663,11 +3502,13 @@ export class GatewayService {
   public async listChatModelSuggestions(
     query: string,
     limit = 25,
-  ): Promise<Array<{
-    model: string;
-    providerId: string;
-    providerLabel: string;
-  }>> {
+  ): Promise<
+    Array<{
+      model: string;
+      providerId: string;
+      providerLabel: string;
+    }>
+  > {
     const runtime = this.getSettings().llm;
     const normalizedQuery = query.trim().toLowerCase();
     let activeProviderRemoteModels: string[] = [];
@@ -3699,12 +3540,14 @@ export class GatewayService {
 
     for (const provider of providers) {
       const template = findProviderTemplate(provider.providerId);
-      const candidates = dedupeStrings([
-        provider.defaultModel,
-        provider.providerId === runtime.activeProviderId ? runtime.activeModel : "",
-        ...(template?.knownModels ?? []),
-        ...(provider.providerId === runtime.activeProviderId ? activeProviderRemoteModels : []),
-      ].filter((value) => value.trim().length > 0));
+      const candidates = dedupeStrings(
+        [
+          provider.defaultModel,
+          provider.providerId === runtime.activeProviderId ? runtime.activeModel : "",
+          ...(template?.knownModels ?? []),
+          ...(provider.providerId === runtime.activeProviderId ? activeProviderRemoteModels : []),
+        ].filter((value) => value.trim().length > 0),
+      );
 
       candidates.sort((left, right) => {
         const leftScore = scoreChatModelSuggestion(left, normalizedQuery);
@@ -4039,7 +3882,10 @@ export class GatewayService {
 
     if (command === "/score") {
       const [testCodeRaw, routingRaw, honestyRaw, handoffRaw, robustnessRaw, usabilityRaw, ...noteParts] = args;
-      if (!testCodeRaw || [routingRaw, honestyRaw, handoffRaw, robustnessRaw, usabilityRaw].some((item) => item === undefined)) {
+      if (
+        !testCodeRaw ||
+        [routingRaw, honestyRaw, handoffRaw, robustnessRaw, usabilityRaw].some((item) => item === undefined)
+      ) {
         return {
           ok: false,
           command,
@@ -4208,7 +4054,8 @@ export class GatewayService {
         ok: false,
         command,
         args,
-        message: "Usage: /skill enable|sleep|disable <skillId> | /skill search <query> | /skill lookup <query-or-url> | /skill install <sourceRef> [--confirm-high-risk]",
+        message:
+          "Usage: /skill enable|sleep|disable <skillId> | /skill search <query> | /skill lookup <query-or-url> | /skill install <sourceRef> [--confirm-high-risk]",
       };
     }
 
@@ -4225,7 +4072,9 @@ export class GatewayService {
           args,
           message: servers
             .slice(0, 20)
-            .map((server) => `- ${server.serverId} ${server.label} [${server.status}]${server.enabled ? "" : " disabled"}`)
+            .map(
+              (server) => `- ${server.serverId} ${server.label} [${server.status}]${server.enabled ? "" : " disabled"}`,
+            )
             .join("\n"),
         };
       }
@@ -4236,9 +4085,7 @@ export class GatewayService {
         }
         let updated: McpServerRecord;
         try {
-          updated = action === "connect"
-            ? await this.connectMcpServer(serverId)
-            : this.disconnectMcpServer(serverId);
+          updated = action === "connect" ? await this.connectMcpServer(serverId) : this.disconnectMcpServer(serverId);
         } catch (error) {
           return {
             ok: false,
@@ -4256,16 +4103,20 @@ export class GatewayService {
       }
       if (action === "templates") {
         const query = args.slice(1).join(" ").trim().toLowerCase();
-        const templates = this.listMcpTemplates()
-          .filter((template) => {
-            if (!query) {
-              return true;
-            }
-            const haystack = `${template.templateId} ${template.label} ${template.description}`.toLowerCase();
-            return haystack.includes(query);
-          });
+        const templates = this.listMcpTemplates().filter((template) => {
+          if (!query) {
+            return true;
+          }
+          const haystack = `${template.templateId} ${template.label} ${template.description}`.toLowerCase();
+          return haystack.includes(query);
+        });
         if (templates.length === 0) {
-          return { ok: true, command, args, message: query ? `No MCP templates match "${query}".` : "No MCP templates available." };
+          return {
+            ok: true,
+            command,
+            args,
+            message: query ? `No MCP templates match "${query}".` : "No MCP templates available.",
+          };
         }
         return {
           ok: true,
@@ -4286,7 +4137,9 @@ export class GatewayService {
         if (!template) {
           return { ok: false, command, args, message: `Unknown MCP template ${templateId}.` };
         }
-        const existing = this.listMcpServers().find((server) => server.label.toLowerCase() === template.label.toLowerCase());
+        const existing = this.listMcpServers().find(
+          (server) => server.label.toLowerCase() === template.label.toLowerCase(),
+        );
         if (existing) {
           return {
             ok: true,
@@ -4319,7 +4172,8 @@ export class GatewayService {
         ok: false,
         command,
         args,
-        message: "Usage: /mcp | /mcp connect <serverId> | /mcp disconnect <serverId> | /mcp templates [query] | /mcp add-template <templateId>",
+        message:
+          "Usage: /mcp | /mcp connect <serverId> | /mcp disconnect <serverId> | /mcp templates [query] | /mcp add-template <templateId>",
       };
     }
 
@@ -4333,9 +4187,7 @@ export class GatewayService {
         ok: true,
         command,
         args,
-        message: updated.projectId
-          ? `Session assigned to project ${updated.projectId}.`
-          : "Session project cleared.",
+        message: updated.projectId ? `Session assigned to project ${updated.projectId}.` : "Session project cleared.",
       };
     }
 
@@ -4487,11 +4339,13 @@ export class GatewayService {
       await callbacks?.onStatus?.({
         runId,
         taskId: task.taskId,
-        message: "Parallel delegation was requested but downgraded to sequential execution because parallel worker scheduling is not implemented yet.",
+        message:
+          "Parallel delegation was requested but downgraded to sequential execution because parallel worker scheduling is not implemented yet.",
       });
       this.appendTaskActivity(task.taskId, {
         activityType: "comment",
-        message: "Parallel delegation was requested but downgraded to sequential execution because parallel worker scheduling is not implemented yet.",
+        message:
+          "Parallel delegation was requested but downgraded to sequential execution because parallel worker scheduling is not implemented yet.",
         metadata: { runId, requestedMode, effectiveMode: mode },
       });
     }
@@ -4620,11 +4474,8 @@ export class GatewayService {
 
     const finishedAt = new Date().toISOString();
     const stitchedOutput = stitchedSections.join("\n\n").trim();
-    const status: ChatDelegationRunRecord["status"] = failures === 0
-      ? "completed"
-      : stitchedSections.length > failures
-        ? "partial"
-        : "failed";
+    const status: ChatDelegationRunRecord["status"] =
+      failures === 0 ? "completed" : stitchedSections.length > failures ? "partial" : "failed";
     this.storage.chatDelegationRuns.patch(runId, {
       status,
       stitchedOutput,
@@ -4854,10 +4705,11 @@ export class GatewayService {
     });
     const existing = this.storage.chatSpecialistCandidates
       .listBySession(sessionId, 200)
-      .find((candidate) => (
-        candidate.status !== "retired"
-        && normalizeSpecialistCandidateFingerprint(candidate) === normalizedFingerprint
-      ));
+      .find(
+        (candidate) =>
+          candidate.status !== "retired" &&
+          normalizeSpecialistCandidateFingerprint(candidate) === normalizedFingerprint,
+      );
     const trace = input.turnId
       ? this.storage.chatTurnTraces.listBySession(sessionId, 2000).find((item) => item.turnId === input.turnId)
       : undefined;
@@ -4866,10 +4718,7 @@ export class GatewayService {
         summary: input.suggestion.summary,
         reason: input.suggestion.reason,
         confidence: Math.max(existing.confidence, input.suggestion.confidence),
-        suggestedTools: dedupeStrings([
-          ...(existing.suggestedTools ?? []),
-          ...(input.suggestion.suggestedTools ?? []),
-        ]),
+        suggestedTools: dedupeStrings([...(existing.suggestedTools ?? []), ...(input.suggestion.suggestedTools ?? [])]),
         suggestedSkills: dedupeStrings([
           ...(existing.suggestedSkills ?? []),
           ...(input.suggestion.suggestedSkills ?? []),
@@ -4925,9 +4774,8 @@ export class GatewayService {
     items: LearnedMemoryItemRecord[];
     conflicts: LearnedMemoryConflictRecord[];
   }> {
-    return this.chatLearnedMemoryService.rebuildChatSessionLearnedMemory(
-      sessionId,
-      (sid) => this.readTranscriptOrEmpty(sid),
+    return this.chatLearnedMemoryService.rebuildChatSessionLearnedMemory(sessionId, (sid) =>
+      this.readTranscriptOrEmpty(sid),
     );
   }
 
@@ -4940,7 +4788,9 @@ export class GatewayService {
     if (!objective) {
       throw new Error("No objective provided and no recent user request was found.");
     }
-    const detectedRoles = normalizeDelegationRoles(input.roles?.length ? input.roles : detectDelegationRoles(objective));
+    const detectedRoles = normalizeDelegationRoles(
+      input.roles?.length ? input.roles : detectDelegationRoles(objective),
+    );
     const roles = detectedRoles.length > 0 ? detectedRoles : DEFAULT_DELEGATION_ROLES.slice(0, 3);
     const confidence = this.computeDelegationSuggestionConfidence(objective, roles);
     const suggestion: ChatDelegationSuggestionRecord = {
@@ -4963,17 +4813,19 @@ export class GatewayService {
   ): Promise<ChatDelegateResponse> {
     this.getSession(sessionId);
     if (input.suggestionId) {
-      const actionRow = this.gatewaySql.prepare(`
+      const actionRow = this.gatewaySql
+        .prepare(
+          `
         SELECT args_json
         FROM proactive_actions
         WHERE action_id = ? AND session_id = ?
-      `).get(input.suggestionId, sessionId) as { args_json?: string } | undefined;
+      `,
+        )
+        .get(input.suggestionId, sessionId) as { args_json?: string } | undefined;
       if (actionRow?.args_json) {
         const parsed = safeJsonParse<Record<string, unknown>>(actionRow.args_json, {});
         const objectiveFromSuggestion = typeof parsed.objective === "string" ? parsed.objective.trim() : "";
-        const rolesFromSuggestion = Array.isArray(parsed.roles)
-          ? parsed.roles.map((item) => String(item))
-          : [];
+        const rolesFromSuggestion = Array.isArray(parsed.roles) ? parsed.roles.map((item) => String(item)) : [];
         return this.runChatDelegation(sessionId, {
           objective: objectiveFromSuggestion || input.objective,
           roles: rolesFromSuggestion.length > 0 ? rolesFromSuggestion : input.roles,
@@ -4992,12 +4844,7 @@ export class GatewayService {
     });
   }
 
-  public importPromptPack(input: {
-    content: string;
-    name?: string;
-    sourceLabel?: string;
-    packId?: string;
-  }): {
+  public importPromptPack(input: { content: string; name?: string; sourceLabel?: string; packId?: string }): {
     pack: PromptPackRecord;
     tests: PromptPackTestRecord[];
   } {
@@ -5166,74 +5013,47 @@ export class GatewayService {
   }
 
   public getDurableDiagnostics(): DurableDiagnosticsResponse {
-    return this.durableRunService.getDurableDiagnostics();
+    return durableExecutionService.getDurableDiagnostics(this);
   }
 
   public listDurableRuns(limit = 50): DurableRunRecord[] {
-    return this.durableRunService.listDurableRuns(limit);
+    return durableExecutionService.listDurableRuns(this, limit);
   }
 
   public listDurableDeadLetters(limit = 50): DurableDeadLetterRecord[] {
-    return this.durableRunService.listDurableDeadLetters(limit);
+    return durableExecutionService.listDurableDeadLetters(this, limit);
   }
 
   public listDurableRunCheckpoints(runId: string, limit = 200): DurableCheckpointRecord[] {
-    return this.durableRunService.listDurableRunCheckpoints(runId, limit);
+    return durableExecutionService.listDurableRunCheckpoints(this, runId, limit);
   }
 
   public createDurableRun(input: DurableRunCreateRequest): DurableRunRecord {
-    const run = this.durableRunService.createDurableRun(input);
-    if (run.status === "queued") {
-      this.durableRunService.requestRunProcessing(run.runId);
-    }
-    return run;
+    return durableExecutionService.createDurableRun(this, input);
   }
 
   public getDurableRun(runId: string): DurableRunRecord {
-    return this.durableRunService.getDurableRun(runId);
+    return durableExecutionService.getDurableRun(this, runId);
   }
 
   public listDurableRunTimeline(runId: string, limit = 300): DurableRunTimelineEvent[] {
-    return this.durableRunService.listDurableRunTimeline(runId, limit);
+    return durableExecutionService.listDurableRunTimeline(this, runId, limit);
   }
 
   public pauseDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    return this.durableRunService.pauseDurableRun(runId, actorId);
+    return durableExecutionService.pauseDurableRun(this, runId, actorId);
   }
 
   public resumeDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    const run = this.durableRunService.resumeDurableRun(runId, actorId);
-    this.memoryMaintenanceService.syncFromDurableRun(run);
-    this.durableRunService.requestRunProcessing(runId);
-    return run;
+    return durableExecutionService.resumeDurableRun(this, runId, actorId);
   }
 
   public cancelDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
-    const run = this.durableRunService.cancelDurableRun(runId, actorId);
-    this.memoryMaintenanceService.syncFromDurableRun(run);
-    return run;
+    return durableExecutionService.cancelDurableRun(this, runId, actorId);
   }
 
   public retryDurableRun(runId: string, reason = "manual_retry", actorId = "operator"): DurableRunRecord {
-    const run = this.durableRunService.retryDurableRun(runId, reason, actorId);
-    this.memoryMaintenanceService.syncFromDurableRun(run);
-    if (run.status === "queued") {
-      this.durableRunService.requestRunProcessing(runId);
-    }
-    this.hooksService.enqueueAfterHooks({
-      workspaceId: this.resolveDurableRunHookWorkspaceId(run),
-      trigger: "orchestration.retry.scheduled",
-      entityType: "durable_run",
-      entityId: runId,
-      payload: {
-        runId,
-        reason,
-        actorId,
-        status: run.status,
-        attemptCount: run.attemptCount,
-      },
-    });
-    return run;
+    return durableExecutionService.retryDurableRun(this, runId, reason, actorId);
   }
 
   public getMemoryMaintenancePolicy(workspaceId?: string): MemoryMaintenancePolicyRecord {
@@ -5289,25 +5109,11 @@ export class GatewayService {
       correlationId?: string;
     },
   ): DurableRunRecord {
-    const run = this.durableRunService.wakeDurableRun(runId, event);
-    this.durableRunService.requestRunProcessing(runId);
-    this.hooksService.enqueueAfterHooks({
-      workspaceId: this.resolveDurableRunHookWorkspaceId(run),
-      trigger: "orchestration.run.woken",
-      entityType: "durable_run",
-      entityId: runId,
-      payload: {
-        runId,
-        eventKey: event.eventKey,
-        correlationId: event.correlationId,
-        payload: event.payload ?? {},
-      },
-    });
-    return run;
+    return durableExecutionService.wakeDurableRun(this, runId, event);
   }
 
   public recoverDurableDeadLetter(entryId: string, actorId = "operator"): DurableRunRecord {
-    return this.durableRunService.recoverDurableDeadLetter(entryId, actorId);
+    return durableExecutionService.recoverDurableDeadLetter(this, entryId, actorId);
   }
 
   public getImprovementReport(reportId: string): WeeklyImprovementReportRecord {
@@ -5324,9 +5130,7 @@ export class GatewayService {
     return this.improvementService.getDecisionReplayRun(runId);
   }
 
-  public async runImprovementReplayManually(
-    input: ImprovementReplayTriggerInput = {},
-  ): Promise<{
+  public async runImprovementReplayManually(input: ImprovementReplayTriggerInput = {}): Promise<{
     run: DecisionReplayRunRecord;
     report?: WeeklyImprovementReportRecord;
   }> {
@@ -5367,7 +5171,6 @@ export class GatewayService {
     return this.improvementService.revertDecisionAutoTune(tuneId);
   }
 
-
   // Improvement private helpers moved to ImprovementService
 
   private async runPromptPackFromChat(sessionId: string, selector: string): Promise<PromptPackRunRecord[]> {
@@ -5385,43 +5188,10 @@ export class GatewayService {
     approvalId: string,
     decision: "approve" | "reject",
   ): Promise<void> {
-    const approval = this.storage.approvals.get(approvalId);
-    const approvalSessionId = typeof approval.payload.sessionId === "string"
-      ? approval.payload.sessionId
-      : undefined;
-    if (approvalSessionId && approvalSessionId !== sessionId) {
-      throw new Error(`Approval ${approvalId} does not belong to session ${sessionId}.`);
-    }
-    const existingInlineApproval = this.storage.chatInlineApprovals.get(approvalId);
-    if (existingInlineApproval && existingInlineApproval.sessionId !== sessionId) {
-      throw new Error(`Approval ${approvalId} does not belong to session ${sessionId}.`);
-    }
-    const turn = this.storage.chatToolRuns.listBySession(sessionId, 2000)
-      .find((toolRun) => toolRun.approvalId === approvalId);
-    const turnId = turn?.turnId ?? existingInlineApproval?.turnId;
-    if (!turnId) {
-      throw new Error(`Approval ${approvalId} is not attached to session ${sessionId}.`);
-    }
-    if (approval.status !== "pending") {
-      return;
-    }
-    await this.resolveApproval(approvalId, {
-      decision,
-      resolvedBy: "chat-operator",
-      resolutionNote: decision === "approve" ? "Approved from chat inline control." : "Denied from chat inline control.",
-    });
-    this.storage.chatInlineApprovals.upsert({
-      approvalId,
-      sessionId,
-      turnId,
-      toolName: turn?.toolName ?? existingInlineApproval?.toolName,
-      status: decision === "approve" ? "approved" : "denied",
-      reason: decision === "approve" ? "approved by operator" : "denied by operator",
-      resolvedBy: "chat-operator",
-    });
+    return approvalLifecycleService.resolveChatToolApproval(this, sessionId, approvalId, decision);
   }
 
-  private async requireChatTurnContext(
+  /** @internal */ public async requireChatTurnContext(
     sessionId: string,
     turnId: string,
     state?: Awaited<ReturnType<GatewayService["loadChatTurnSessionState"]>>,
@@ -5430,7 +5200,7 @@ export class GatewayService {
     userMessage: ChatMessageRecord;
     assistantMessage?: ChatMessageRecord;
   }> {
-    const sessionState = state ?? await this.loadChatTurnSessionState(sessionId);
+    const sessionState = state ?? (await this.loadChatTurnSessionState(sessionId));
     const trace = sessionState.traces.find((item) => item.turnId === turnId);
     if (!trace) {
       throw new Error(`Chat turn ${turnId} not found in session ${sessionId}`);
@@ -5483,7 +5253,7 @@ export class GatewayService {
     }
   }
 
-  private async withChatTurnWriteLease<T>(
+  /** @internal */ public async withChatTurnWriteLease<T>(
     sessionId: string,
     operation: string,
     work: () => Promise<T>,
@@ -5496,7 +5266,7 @@ export class GatewayService {
     }
   }
 
-  private async *withChatTurnWriteLeaseStream(
+  /** @internal */ public async *withChatTurnWriteLeaseStream(
     sessionId: string,
     operation: string,
     work: () => AsyncGenerator<ChatStreamChunk>,
@@ -5509,7 +5279,7 @@ export class GatewayService {
     }
   }
 
-  private updateActiveLeafOrThrow(
+  /** @internal */ public updateActiveLeafOrThrow(
     sessionId: string,
     expectedActiveLeafTurnId: string | undefined,
     nextActiveLeafTurnId: string,
@@ -5525,7 +5295,7 @@ export class GatewayService {
       return;
     }
     const current = this.storage.chatSessionBranchState.get(sessionId)?.activeLeafTurnId;
-    console.warn("[goatcitadel] chat turn branch-state conflict", {
+    log.warn("chat turn branch-state conflict", {
       sessionId,
       expectedActiveLeafTurnId,
       nextActiveLeafTurnId,
@@ -5536,7 +5306,7 @@ export class GatewayService {
     );
   }
 
-  private async prepareAgentChatTurn(
+  /** @internal */ public prepareAgentChatTurn(
     sessionId: string,
     input: ChatSendMessageRequest,
     options?: {
@@ -5548,357 +5318,39 @@ export class GatewayService {
       turnId?: string;
       assistantMessageId?: string;
     },
-  ): Promise<{
-    session: SessionMeta;
-    route: ReturnType<GatewayService["routeFromSession"]>;
-    workspaceId: string;
-    content: string;
-    userEventId: string;
-    userMessage: ChatMessageRecord;
-    prefs: ChatSessionPrefsRecord;
-    autonomy: SessionAutonomyPrefsRecord;
-    normalized: ReturnType<typeof normalizeAgentInputFromSend>;
-    retrievalTrace: NonNullable<ChatTurnTraceRecord["retrieval"]>;
-    resolvedGuidance: ResolvedRuntimeGuidance;
-    conversationMessages: ChatMessageRecord[];
-    history: ChatCompletionRequest["messages"];
-    turnId: string;
-    assistantMessageId: string;
-    parentTurnId?: string;
-    branchKind: ChatTurnBranchKind;
-    sourceTurnId?: string;
-    effectiveToolAutonomy: ChatSessionPrefsRecord["toolAutonomy"];
-  }> {
-    const session = this.getSession(sessionId);
-    this.ensureChatSessionRuntimeGrants(sessionId);
-    const sessionMeta = this.storage.chatSessionMeta.ensure(sessionId);
-    assertChatSessionActive(sessionId, sessionMeta.lifecycleStatus);
-    const workspaceId = this.normalizeWorkspaceId(sessionMeta.workspaceId);
-    const branchKind = options?.branchKind ?? "append";
-    const content = (options?.existingUserMessage?.content ?? input.content).trim();
-    if (!content) {
-      throw new Error("content is required");
-    }
-    if (branchKind !== "retry") {
-      this.maybeAutoTitleChatSession(sessionId, content);
-    }
-
-    const route = this.routeFromSession(session);
-    const ingestUserMessage = options?.ingestUserMessage ?? !options?.existingUserMessage;
-    let userEventId = options?.existingUserMessage?.messageId ?? "";
-    let userMessage = options?.existingUserMessage;
-    let attachments = options?.existingUserMessage?.attachments ?? [];
-    if (ingestUserMessage || !userMessage) {
-      const uploadAttachments = this.storage.chatAttachments.listByIds(input.attachments ?? [], workspaceId);
-      const inputParts = normalizeChatInputParts(content, input.parts, uploadAttachments);
-      userEventId = randomUUID();
-      await this.ingestEvent(randomUUID(), {
-        eventId: userEventId,
-        route,
-        actor: {
-          type: "user",
-          id: "operator",
-        },
-        message: {
-          role: "user",
-          content,
-          parts: inputParts,
-          attachments: uploadAttachments.map((item) => ({
-            attachmentId: item.attachmentId,
-            fileName: item.fileName,
-            mimeType: item.mimeType,
-            sizeBytes: item.sizeBytes,
-          })),
-        },
-      });
-      attachments = uploadAttachments.map((item) => ({
-        attachmentId: item.attachmentId,
-        fileName: item.fileName,
-        mimeType: item.mimeType,
-        sizeBytes: item.sizeBytes,
-      }));
-      userMessage = {
-        messageId: userEventId,
-        sessionId,
-        role: "user",
-        actorType: "user",
-        actorId: "operator",
-        content,
-        parts: inputParts.length > 0 ? inputParts : undefined,
-        timestamp: new Date().toISOString(),
-        attachments: attachments.length > 0 ? attachments : undefined,
-      };
-    }
-    if (!userMessage) {
-      throw new Error("user message is required");
-    }
-
-    const prefsOverride = applyChatModePresetToPatch({
-      ...(input.prefsOverride ?? {}),
-      mode: input.mode ?? input.prefsOverride?.mode,
-      providerId: input.providerId ?? input.prefsOverride?.providerId,
-      model: input.model ?? input.prefsOverride?.model,
-      webMode: input.webMode ?? input.prefsOverride?.webMode,
-      memoryMode: input.memoryMode ?? input.prefsOverride?.memoryMode,
-      thinkingLevel: input.thinkingLevel ?? input.prefsOverride?.thinkingLevel,
-    });
-    const splitPrefs = splitChatPrefsPatch(prefsOverride);
-    if (Object.keys(splitPrefs.autonomyPatch).length > 0) {
-      this.patchSessionAutonomyPrefs(sessionId, splitPrefs.autonomyPatch);
-    }
-    const prefsPatched = this.storage.chatSessionPrefs.patch(sessionId, splitPrefs.basePatch);
-    const prefs = this.ensureChatSessionModelDefaults(sessionId, prefsPatched);
-    const autonomy = this.getSessionAutonomyPrefs(sessionId);
-    const normalized = normalizeAgentInputFromSend(input);
-    const projectId = this.storage.chatSessionProjects.get(sessionId)?.projectId;
-    const requiresProjectBinding = chatModeRequiresProjectBinding(prefs.mode);
-    const missingRequiredProjectBinding = requiresProjectBinding && !projectId;
-    const effectiveToolAutonomy = prefs.planningMode === "advisory" || missingRequiredProjectBinding
-      ? "manual"
-      : prefs.toolAutonomy;
-    const retrievalTrace = buildRetrievalTrace({
-      content,
-      retrievalMode: autonomy.retrievalMode,
-      webMode: normalized.webMode ?? prefs.webMode,
-      memoryMode: normalized.memoryMode ?? prefs.memoryMode,
-    });
-    const resolvedGuidance = await this.resolveRuntimeGuidance(workspaceId);
-    const guidanceSystemInstruction = mergeChatSystemInstructions(
-      resolvedGuidance.systemInstruction,
-      buildPlanningModeSystemInstruction(prefs.planningMode),
-      missingRequiredProjectBinding
-        ? "Code mode requires a bound project before execution-heavy work. Until a project is attached, stay in planning and review posture, and do not imply that repository-bound edits or filesystem inspection were executed."
-        : undefined,
-    );
-
-    const sessionState = await this.loadChatTurnSessionState(sessionId);
-    const parentTurnId = options?.parentTurnId ?? sessionState.activeLeafTurnId;
-    const pathTurnIds = parentTurnId ? buildSelectedPathTurnIds(sessionState.turnLineageById, parentTurnId) : [];
-    const conversationMessages = pathTurnIds.flatMap((turnId) => {
-      const trace = sessionState.tracesById.get(turnId);
-      if (!trace) {
-        return [];
-      }
-      const items: ChatMessageRecord[] = [];
-      const userMessageFromState = sessionState.messagesById.get(trace.userMessageId);
-      if (userMessageFromState) {
-        items.push(userMessageFromState);
-      }
-      if (trace.assistantMessageId) {
-        const assistantMessage = sessionState.messagesById.get(trace.assistantMessageId);
-        if (assistantMessage) {
-          items.push(assistantMessage);
-        }
-      }
-      return items;
-    });
-    conversationMessages.push(userMessage);
-    const history = await this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, userMessage, {
-      providerId: input.providerId ?? prefs.providerId,
-      model: input.model ?? prefs.model,
-      guidanceSystemInstruction,
-    }, sessionState);
-
-    return {
-      session,
-      route,
-      workspaceId,
-      content,
-      userEventId,
-      userMessage,
-      prefs,
-      autonomy,
-      normalized,
-      retrievalTrace,
-      resolvedGuidance,
-      conversationMessages,
-      history,
-      turnId: options?.turnId ?? randomUUID(),
-      assistantMessageId: options?.assistantMessageId ?? `assistant-${randomUUID()}`,
-      parentTurnId,
-      branchKind,
-      sourceTurnId: options?.sourceTurnId,
-      effectiveToolAutonomy,
-    };
+  ): Promise<chatTurnPrepService.PreparedAgentChatTurn> {
+    return chatTurnPrepService.prepareAgentChatTurn(this, sessionId, input, options);
   }
 
-  private async resolvePreparedTurnOrchestration(
-    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
+  /** @internal */ public resolvePreparedTurnOrchestration(
+    prepared: chatTurnPrepService.PreparedAgentChatTurn,
   ): Promise<PreparedChatExecutionPlanResolution | undefined> {
-    const mode = prepared.normalized.mode ?? prepared.prefs.mode;
-    const runtime = this.llmService.getRuntimeConfig({
-      useCache: true,
-    });
-    const capabilities = buildProviderCapabilityRegistry(runtime);
-    const policy = resolveModePolicy(mode);
-    const routerInput: OrchestrationRouterInput = {
-      task: {
-        sessionId: prepared.session.sessionId,
-        workspaceId: prepared.workspaceId,
-        mode,
-        objective: prepared.content,
-        prefs: prepared.prefs,
-        conversation: prepared.conversationMessages,
-        historyMessages: prepared.history,
-      },
-      runtime,
-      capabilities,
-      policy,
-    };
-    const advisoryOnly = prepared.prefs.planningMode === "advisory";
-    if (!advisoryOnly && !shouldUseModeOrchestration(routerInput)) {
-      return undefined;
-    }
-    const templatePlan = this.applyApprovedSpecialistsToPlan(prepared, buildOrchestrationPlan(routerInput));
-    const executionPlanDraft = await this.generatePreparedExecutionPlanDraft(prepared, routerInput, templatePlan, advisoryOnly);
-    const plan = applyExecutionPlanDraftToOrchestrationPlan(templatePlan, executionPlanDraft);
-    return {
-      routerInput,
-      orchestrationPlan: plan,
-      executionPlanDraft,
-    };
+    return chatTurnPrepService.resolvePreparedTurnOrchestration(this, prepared);
   }
 
   private applyApprovedSpecialistsToPlan(
-    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
+    prepared: chatTurnPrepService.PreparedAgentChatTurn,
     plan: ReturnType<typeof buildOrchestrationPlan>,
   ): ReturnType<typeof buildOrchestrationPlan> {
-    const mode = prepared.normalized.mode ?? prepared.prefs.mode;
-    if (!chatModeAllowsDynamicTeamGrowth(mode)) {
-      return plan;
-    }
-    const candidates = this.storage.chatSpecialistCandidates.listAutoRoutable(
-      prepared.session.sessionId,
-      mode,
-      Boolean(this.storage.chatSessionProjects.get(prepared.session.sessionId)?.projectId),
-    );
-    if (candidates.length === 0) {
-      return plan;
-    }
-    const objectiveKeywords = extractSpecialistObjectiveKeywords(prepared.content);
-    const nextSteps = plan.steps.map((step) => ({ ...step }));
-    const matchedSelections: NonNullable<typeof plan.routeDecision.specialistCandidates> = [];
-    const usedCandidateIds = new Set<string>();
-    for (const step of nextSteps) {
-      const bestMatch = candidates
-        .filter((candidate) => !usedCandidateIds.has(candidate.candidateId))
-        .map((candidate) => {
-          const baseRole = inferSpecialistBaseRole(candidate.role);
-          const score = scoreSpecialistCandidateMatch(candidate, objectiveKeywords, step.role);
-          return { candidate, baseRole, score };
-        })
-        .filter((item) => item.baseRole === step.role && item.score >= 0.58)
-        .sort((left, right) => right.score - left.score)
-        .at(0);
-      if (!bestMatch) {
-        continue;
-      }
-      const selection = {
-        candidateId: bestMatch.candidate.candidateId,
-        title: bestMatch.candidate.title,
-        role: bestMatch.candidate.role,
-        baseRole: bestMatch.baseRole,
-        summary: bestMatch.candidate.summary,
-        matchReason: buildSpecialistMatchReason(bestMatch.candidate, objectiveKeywords),
-        routingMode: bestMatch.candidate.routingMode,
-      } satisfies NonNullable<typeof plan.routeDecision.specialistCandidates>[number];
-      step.specialistCandidate = selection;
-      matchedSelections.push(selection);
-      usedCandidateIds.add(bestMatch.candidate.candidateId);
-      if (matchedSelections.length >= 2) {
-        break;
-      }
-    }
-    if (matchedSelections.length === 0) {
-      return plan;
-    }
-    return {
-      ...plan,
-      routeDecision: {
-        ...plan.routeDecision,
-        specialistCandidates: matchedSelections,
-      },
-      steps: nextSteps,
-    };
+    return chatTurnPrepService.applyApprovedSpecialistsToPlan(this, prepared, plan);
   }
 
-  private async generatePreparedExecutionPlanDraft(
-    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
+  private generatePreparedExecutionPlanDraft(
+    prepared: chatTurnPrepService.PreparedAgentChatTurn,
     routerInput: OrchestrationRouterInput,
     templatePlan: ModeOrchestrationPlan,
     advisoryOnly: boolean,
   ): Promise<PreparedChatExecutionPlanResolution["executionPlanDraft"]> {
-    const fallbackDraft = buildExecutionPlanDraftFromOrchestrationPlan(templatePlan, {
-      objective: prepared.content,
+    return chatTurnPrepService.generatePreparedExecutionPlanDraft(
+      this,
+      prepared,
+      routerInput,
+      templatePlan,
       advisoryOnly,
-    });
-    try {
-      const completion = await this.createChatCompletion({
-        providerId: prepared.prefs.providerId,
-        model: prepared.prefs.model,
-        stream: false,
-        memory: {
-          enabled: false,
-          mode: "off",
-        },
-        response_format: {
-          type: "json_object",
-        },
-        messages: [
-          {
-            role: "system",
-            content: [
-              "You are GoatCitadel's execution planner.",
-              "Return strict JSON with keys: summary, steps.",
-              `Return between ${CHAT_PLANNER_MIN_STEPS} and ${CHAT_PLANNER_MAX_STEPS} steps.`,
-              "Each step must include: objective, successCriteria, suggestedTools, expectedOutput, parallelizable, dependsOnStepIds, delegatedRole.",
-              "Use delegatedRole only from the allowed role list.",
-              "If the mode is chat, delegatedRole must be null for all steps.",
-              "Keep step objectives specific, practical, and directly tied to the user request.",
-            ].join("\n"),
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              mode: routerInput.task.mode,
-              planningMode: prepared.prefs.planningMode,
-              objective: prepared.content,
-              workflowTemplate: templatePlan.workflowTemplate,
-              routeDecision: templatePlan.routeDecision,
-              allowedRoles: [...new Set(templatePlan.steps.map((step) => step.role))],
-              templateSteps: templatePlan.steps.map((step) => ({
-                stepId: step.stepId,
-                role: step.role,
-                objective: step.objective,
-                successCriteria: step.successCriteria,
-                suggestedTools: step.suggestedTools,
-                expectedOutput: step.expectedOutput,
-                parallelizable: step.parallelizable,
-                dependsOnStepIds: step.dependsOnStepIds,
-                delegatedRole: step.delegatedRole ?? null,
-              })),
-            }),
-          },
-        ],
-      });
-      const payload = parseLooseJsonRecord(extractCompletionText(completion));
-      const planned = payload
-        ? coercePlannerExecutionPlanDraft(payload, templatePlan, {
-          advisoryOnly,
-          mode: routerInput.task.mode,
-          objective: prepared.content,
-        })
-        : undefined;
-      if (!planned) {
-        return fallbackDraft;
-      }
-      return planned;
-    } catch {
-      return fallbackDraft;
-    }
+    );
   }
 
-  private buildChatOrchestrationSummary(input: {
+  /** @internal */ public buildChatOrchestrationSummary(input: {
     runId: string;
     objective: string;
     modePolicy: ChatMode;
@@ -5908,65 +5360,11 @@ export class GatewayService {
     finalized?: boolean;
     advisoryOnly?: boolean;
   }): NonNullable<ChatTurnTraceRecord["orchestration"]> {
-    const completedCount = input.stepResults.filter((step) => step.status === "completed").length;
-    const failedCount = input.stepResults.filter((step) => step.status === "failed").length;
-    const status: ChatDelegationRunRecord["status"] = !input.finalized
-      ? "running"
-      : input.advisoryOnly
-        ? "completed"
-      : completedCount === 0
-        ? "failed"
-        : failedCount > 0
-          ? "partial"
-          : "completed";
-    return {
-      runId: input.runId,
-      objective: input.objective,
-      workflowTemplate: input.routeDecision.workflowTemplate,
-      status,
-      modePolicy: input.modePolicy,
-      visibility: input.routeDecision.visibility,
-      finalSummary: input.finalSummary,
-      routeDecision: input.routeDecision,
-      steps: input.stepResults.map((step) => ({
-        stepId: step.stepId,
-        role: step.role,
-        index: step.index,
-        status: step.status,
-        specialistCandidateId: step.specialistCandidateId,
-        specialistTitle: step.specialistTitle,
-        specialistRole: step.specialistRole,
-        providerId: step.providerId,
-        model: step.model,
-        startedAt: step.startedAt,
-        finishedAt: step.finishedAt,
-        durationMs: step.durationMs,
-        summary: step.summary,
-        error: step.error,
-      })),
-    };
+    return chatTurnPrepService.buildChatOrchestrationSummary(input);
   }
 
   private collectOrchestrationToolRuns(runId: string): ChatToolRunRecord[] {
-    const steps = this.storage.chatDelegationSteps.listByRun(runId);
-    const childTurnIds = steps
-      .map((step) => step.childTurnId)
-      .filter((value): value is string => Boolean(value));
-    if (childTurnIds.length === 0) {
-      return [];
-    }
-    const toolRunsByTurnId = this.storage.chatToolRuns.listByTurnIds(childTurnIds);
-    const orderedToolRuns: ChatToolRunRecord[] = [];
-    for (const step of steps) {
-      if (!step.childTurnId) {
-        continue;
-      }
-      const toolRuns = toolRunsByTurnId.get(step.childTurnId);
-      if (toolRuns?.length) {
-        orderedToolRuns.push(...toolRuns);
-      }
-    }
-    return orderedToolRuns;
+    return chatTurnStreamService.collectOrchestrationToolRuns(this, runId);
   }
 
   private async executePreparedModeOrchestration(
@@ -5976,264 +5374,19 @@ export class GatewayService {
     onProgress?: (summary: NonNullable<ChatTurnTraceRecord["orchestration"]>) => Promise<void> | void,
     resolvedOrchestration?: PreparedChatExecutionPlanResolution,
   ): Promise<
-    OrchestrationExecutionResult
-    & {
+    OrchestrationExecutionResult & {
       summary: NonNullable<ChatTurnTraceRecord["orchestration"]>;
       executionPlanId: string;
     }
   > {
-    const orchestration = resolvedOrchestration ?? await this.resolvePreparedTurnOrchestration(prepared);
-    if (!orchestration) {
-      throw new Error("Prepared chat turn is not eligible for orchestration");
-    }
-    const runId = randomUUID();
-    const runMode = orchestration.orchestrationPlan.routeDecision.parallelism === "parallel" ? "parallel" : "sequential";
-    const persistedExecutionPlan = this.storage.chatExecutionPlans.create({
-      sessionId: prepared.session.sessionId,
-      turnId: prepared.turnId,
-      mode: orchestration.routerInput.task.mode,
-      planningMode: prepared.prefs.planningMode,
-      source: orchestration.executionPlanDraft.source,
-      advisoryOnly: orchestration.executionPlanDraft.advisoryOnly,
-      objective: orchestration.executionPlanDraft.objective,
-      summary: orchestration.executionPlanDraft.summary,
-      status: "running",
-      startedAt: new Date().toISOString(),
-      steps: orchestration.executionPlanDraft.steps,
-    });
-    this.recordDevDiagnostic({
-      level: "info",
-      category: "orchestration",
-      event: "orchestration.run.start",
-      message: "Starting chat orchestration run",
-      sessionId: prepared.session.sessionId,
-      turnId: prepared.turnId,
-      providerId: orchestration.orchestrationPlan.steps.at(0)?.providerId,
-      modelId: orchestration.orchestrationPlan.steps.at(0)?.model,
-      context: {
-        workflowTemplate: orchestration.orchestrationPlan.workflowTemplate,
-        visibility: orchestration.orchestrationPlan.routeDecision.visibility,
-        roles: orchestration.orchestrationPlan.routeDecision.selectedRoles,
-        parallelism: runMode,
-      },
-    });
-    const runTrace = {
-      primaryProviderId: input.providerId ?? prepared.prefs.providerId,
-      primaryModel: input.model ?? prepared.prefs.model,
-      effectiveProviderId: orchestration.orchestrationPlan.steps.at(-1)?.providerId ?? input.providerId ?? prepared.prefs.providerId,
-      effectiveModel: orchestration.orchestrationPlan.steps.at(-1)?.model ?? input.model ?? prepared.prefs.model,
-    } satisfies ChatTurnTraceRecord["routing"];
-    this.storage.chatDelegationRuns.create({
-      runId,
-      sessionId: prepared.session.sessionId,
-      taskId: `chat-orchestration:${prepared.turnId}`,
-      objective: prepared.content,
-      roles: orchestration.orchestrationPlan.routeDecision.selectedRoles,
-      mode: runMode,
-      providerId: input.providerId ?? prepared.prefs.providerId,
-      model: input.model ?? prepared.prefs.model,
-      status: "running",
-      visibility: orchestration.orchestrationPlan.routeDecision.visibility,
-      workflowTemplate: orchestration.orchestrationPlan.workflowTemplate,
-      executionPlanId: persistedExecutionPlan.planId,
-      routeDecision: orchestration.orchestrationPlan.routeDecision,
-      citations: [],
-      trace: runTrace,
-    });
-
-    const persistedStepIds = new Map<string, string>();
-    for (const [index, step] of orchestration.orchestrationPlan.steps.entries()) {
-      const persistedStepId = `${runId}:${step.stepId}`;
-      persistedStepIds.set(step.stepId, persistedStepId);
-      this.storage.chatDelegationSteps.create({
-        stepId: persistedStepId,
-        runId,
-        role: step.role,
-        index,
-        status: "pending",
-        providerId: step.providerId,
-        model: step.model,
-      });
-    }
-
-    let currentSteps: OrchestrationStepExecutionResult[] = [];
-    const initialSummary = this.buildChatOrchestrationSummary({
-      runId,
-      objective: prepared.content,
-      modePolicy: orchestration.routerInput.task.mode,
-      routeDecision: orchestration.orchestrationPlan.routeDecision,
-      stepResults: currentSteps,
-      finalized: false,
-    });
-    await onProgress?.(initialSummary);
-
-    if (orchestration.executionPlanDraft.advisoryOnly) {
-      const advisoryOutput = renderExecutionPlanAsMarkdown({
-        mode: orchestration.routerInput.task.mode,
-        objective: orchestration.executionPlanDraft.objective,
-        summary: orchestration.executionPlanDraft.summary,
-        steps: persistedExecutionPlan.steps,
-      });
-      const advisorySummary = this.buildChatOrchestrationSummary({
-        runId,
-        objective: prepared.content,
-        modePolicy: orchestration.routerInput.task.mode,
-        routeDecision: orchestration.orchestrationPlan.routeDecision,
-        stepResults: [],
-        finalSummary: orchestration.executionPlanDraft.summary,
-        finalized: true,
-        advisoryOnly: true,
-      });
-      this.storage.chatDelegationRuns.patch(runId, {
-        status: "completed",
-        visibility: advisorySummary.visibility,
-        workflowTemplate: advisorySummary.workflowTemplate,
-        routeDecision: advisorySummary.routeDecision,
-        finalSummary: orchestration.executionPlanDraft.summary,
-        stitchedOutput: advisoryOutput,
-        citations: [],
-        trace: runTrace,
-        finishedAt: new Date().toISOString(),
-      });
-      this.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
-        status: "ready",
-        summary: orchestration.executionPlanDraft.summary,
-        finishedAt: new Date().toISOString(),
-      });
-      await onProgress?.(advisorySummary);
-      return {
-        finalOutput: advisoryOutput,
-        finalSummary: orchestration.executionPlanDraft.summary,
-        citations: [],
-        routeDecision: orchestration.orchestrationPlan.routeDecision,
-        stepResults: [],
-        summary: advisorySummary,
-        executionPlanId: persistedExecutionPlan.planId,
-      };
-    }
-
-    const result = await executeOrchestrationPlan({
-      task: orchestration.routerInput.task,
-      plan: orchestration.orchestrationPlan,
-      callbacks: {
-        createChatCompletion: (request) => this.createChatCompletion({
-          ...request,
-          signal,
-        }),
-        executeDelegatedStep: async ({ task, plan, priorSteps, step, stepIndex }) =>
-          this.executeDelegatedPlanStep(prepared, {
-            task,
-            plan,
-            priorSteps,
-            step,
-            stepIndex,
-            runId,
-            signal,
-          }),
-        onStepResult: async (step, allSteps) => {
-          currentSteps = [...allSteps];
-          this.recordDevDiagnostic({
-            level: step.status === "failed" ? "warn" : "info",
-            category: "orchestration",
-            event: "orchestration.step.complete",
-            message: `Completed orchestration step ${step.role}`,
-            sessionId: prepared.session.sessionId,
-            turnId: prepared.turnId,
-            providerId: step.providerId,
-            modelId: step.model,
-            context: {
-              stepId: step.stepId,
-              role: step.role,
-              status: step.status,
-              index: step.index,
-            },
-          });
-          this.storage.chatDelegationSteps.patch(persistedStepIds.get(step.stepId) ?? step.stepId, {
-            status: step.status,
-            providerId: step.providerId,
-            model: step.model,
-            summary: step.summary,
-            output: step.output,
-            error: step.error,
-            failureGuidance: step.failureGuidance ?? (step.error ? buildDelegationFailureGuidance(step.error, step.role) : undefined),
-            childSessionId: step.childSessionId,
-            childTurnId: step.childTurnId,
-            citations: step.citations,
-            finishedAt: step.finishedAt,
-            durationMs: step.durationMs,
-          });
-          this.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
-            steps: mergeExecutionPlanStepStatuses(
-              this.storage.chatExecutionPlans.get(persistedExecutionPlan.planId).steps,
-              allSteps,
-            ),
-          });
-          const summary = this.buildChatOrchestrationSummary({
-            runId,
-            objective: prepared.content,
-            modePolicy: orchestration.routerInput.task.mode,
-            routeDecision: orchestration.orchestrationPlan.routeDecision,
-            stepResults: currentSteps,
-            finalized: false,
-          });
-          await onProgress?.(summary);
-        },
-      },
-    });
-
-    const summary = this.buildChatOrchestrationSummary({
-      runId,
-      objective: prepared.content,
-      modePolicy: orchestration.routerInput.task.mode,
-      routeDecision: orchestration.orchestrationPlan.routeDecision,
-      stepResults: result.stepResults,
-      finalSummary: result.finalSummary,
-      finalized: true,
-    });
-    this.storage.chatDelegationRuns.patch(runId, {
-      status: summary.status,
-      visibility: summary.visibility,
-      workflowTemplate: summary.workflowTemplate,
-      routeDecision: summary.routeDecision,
-      finalSummary: result.finalSummary,
-      stitchedOutput: result.finalOutput,
-      citations: result.citations,
-      trace: {
-        ...runTrace,
-        effectiveProviderId: result.finalStep?.providerId ?? result.stepResults.at(-1)?.providerId ?? runTrace.effectiveProviderId,
-        effectiveModel: result.finalStep?.model ?? result.stepResults.at(-1)?.model ?? runTrace.effectiveModel,
-      },
-      finishedAt: new Date().toISOString(),
-    });
-    this.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
-      status: summary.status === "failed" ? "failed" : "completed",
-      summary: result.finalSummary,
-      finishedAt: new Date().toISOString(),
-      steps: mergeExecutionPlanStepStatuses(
-        this.storage.chatExecutionPlans.get(persistedExecutionPlan.planId).steps,
-        result.stepResults,
-      ),
-    });
-    await onProgress?.(summary);
-    this.recordDevDiagnostic({
-      level: summary.status === "failed" ? "warn" : "info",
-      category: "orchestration",
-      event: "orchestration.run.complete",
-      message: "Completed chat orchestration run",
-      sessionId: prepared.session.sessionId,
-      turnId: prepared.turnId,
-      providerId: result.finalStep?.providerId ?? result.stepResults.at(-1)?.providerId,
-      modelId: result.finalStep?.model ?? result.stepResults.at(-1)?.model,
-      context: {
-        status: summary.status,
-        workflowTemplate: summary.workflowTemplate,
-      },
-    });
-    return {
-      ...result,
-      summary,
-      executionPlanId: persistedExecutionPlan.planId,
-    };
+    return chatTurnStreamService.executePreparedModeOrchestration(
+      this,
+      prepared,
+      input,
+      signal,
+      onProgress,
+      resolvedOrchestration,
+    );
   }
 
   private async executeDelegatedPlanStep(
@@ -6248,140 +5401,7 @@ export class GatewayService {
       signal?: AbortSignal;
     },
   ): Promise<OrchestrationStepExecutionResult> {
-    const startedAt = new Date().toISOString();
-    const delegatedRole = input.step.delegatedRole ?? input.step.role;
-    const parentProjectId = this.storage.chatSessionProjects.get(prepared.session.sessionId)?.projectId;
-    const childSession = this.createChatSession({
-      workspaceId: prepared.workspaceId,
-      title: `Delegate · ${toTitleCase(delegatedRole)}`,
-      projectId: parentProjectId,
-      mode: input.task.mode,
-    });
-    this.inheritDelegatedSessionToolGrants(prepared.session.sessionId, childSession.sessionId);
-
-    this.updateChatSessionPrefs(childSession.sessionId, {
-      mode: input.task.mode,
-      planningMode: "off",
-      providerId: input.step.providerId ?? prepared.prefs.providerId,
-      model: input.step.model ?? prepared.prefs.model,
-      webMode: prepared.prefs.webMode,
-      memoryMode: prepared.prefs.memoryMode,
-      thinkingLevel: prepared.prefs.thinkingLevel,
-      toolAutonomy: prepared.effectiveToolAutonomy,
-      orchestrationEnabled: false,
-      orchestrationIntensity: "minimal",
-      orchestrationVisibility: "explicit",
-      orchestrationProviderPreference: prepared.prefs.orchestrationProviderPreference,
-      orchestrationReviewDepth: prepared.prefs.orchestrationReviewDepth,
-      orchestrationParallelism: "sequential",
-      codeAutoApply: prepared.prefs.codeAutoApply,
-      proactiveMode: "off",
-      retrievalMode: prepared.autonomy.retrievalMode,
-      reflectionMode: "off",
-    });
-
-    const conversationContext = input.task.conversation
-      .slice(-6)
-      .map((message) => `${message.role.toUpperCase()}: ${truncateSummaryLine(message.content, 320)}`)
-      .join("\n");
-    const priorStepContext = input.priorSteps
-      .slice(-4)
-      .map((step) => [
-        `${toTitleCase(step.role)} (${step.status})`,
-        truncateSummaryLine(step.summary ?? step.output ?? step.error ?? "No handoff provided.", 320),
-      ].join(": "))
-      .join("\n");
-    const content = [
-      `Delegated role: ${delegatedRole}`,
-      `Parent objective: ${input.task.objective}`,
-      `Plan summary: ${input.plan.summary}`,
-      `Current step objective: ${input.step.objective}`,
-      input.step.successCriteria ? `Success criteria: ${input.step.successCriteria}` : undefined,
-      input.step.expectedOutput ? `Expected output: ${input.step.expectedOutput}` : undefined,
-      input.step.suggestedTools?.length ? `Suggested tools: ${input.step.suggestedTools.join(", ")}` : undefined,
-      input.step.dependsOnStepIds?.length ? `Depends on: ${input.step.dependsOnStepIds.join(", ")}` : undefined,
-      conversationContext ? `Conversation context:\n${conversationContext}` : undefined,
-      priorStepContext ? `Prior handoffs:\n${priorStepContext}` : undefined,
-      "Produce only the delegated output for this step. Be concrete, cite evidence when available, and name any blocking issue explicitly.",
-    ].filter(Boolean).join("\n\n");
-
-    try {
-      if (input.signal?.aborted) {
-        throw new ChatTurnCancelledError(prepared.turnId);
-      }
-      const response = await this.agentSendChatMessage(
-        childSession.sessionId,
-        buildDelegatedChatSendRequest({
-          content,
-          providerId: input.step.providerId ?? prepared.prefs.providerId,
-          model: input.step.model ?? prepared.prefs.model,
-          mode: input.task.mode,
-          webMode: prepared.prefs.webMode,
-          memoryMode: prepared.prefs.memoryMode,
-          thinkingLevel: prepared.prefs.thinkingLevel,
-          retrievalMode: prepared.autonomy.retrievalMode,
-        }),
-      );
-      if (input.signal?.aborted) {
-        throw new ChatTurnCancelledError(prepared.turnId);
-      }
-
-      const output = response.assistantMessage?.content?.trim()
-        || response.trace?.failure?.message?.trim()
-        || "(delegate returned no output)";
-      const finishedAt = new Date().toISOString();
-      const failed = response.trace?.status === "failed" || response.trace?.status === "cancelled";
-      const failureGuidance = failed && response.trace?.failure?.message
-        ? buildDelegationFailureGuidance(response.trace.failure.message, delegatedRole)
-        : undefined;
-
-      return {
-        stepId: input.step.stepId,
-        role: input.step.role,
-        index: input.stepIndex,
-        specialistCandidateId: input.step.specialistCandidate?.candidateId,
-        specialistTitle: input.step.specialistCandidate?.title,
-        specialistRole: input.step.specialistCandidate?.role,
-        providerId: response.trace?.routing?.effectiveProviderId ?? input.step.providerId ?? prepared.prefs.providerId,
-        model: response.trace?.model ?? input.step.model ?? prepared.prefs.model,
-        startedAt,
-        finishedAt,
-        durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
-        status: failed ? "failed" : "completed",
-        output,
-        summary: truncateSummaryLine(output, 180),
-        error: failed ? response.trace?.failure?.message ?? output : undefined,
-        failureGuidance,
-        citations: response.citations ?? [],
-        routing: response.routing,
-        childRunId: input.runId,
-        childSessionId: childSession.sessionId,
-        childTurnId: response.turnId,
-      };
-    } catch (error) {
-      const finishedAt = new Date().toISOString();
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        stepId: input.step.stepId,
-        role: input.step.role,
-        index: input.stepIndex,
-        specialistCandidateId: input.step.specialistCandidate?.candidateId,
-        specialistTitle: input.step.specialistCandidate?.title,
-        specialistRole: input.step.specialistCandidate?.role,
-        providerId: input.step.providerId ?? prepared.prefs.providerId,
-        model: input.step.model ?? prepared.prefs.model,
-        startedAt,
-        finishedAt,
-        durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
-        status: "failed",
-        summary: `${toTitleCase(delegatedRole)} failed`,
-        error: message,
-        failureGuidance: buildDelegationFailureGuidance(message, delegatedRole),
-        citations: [],
-        childRunId: input.runId,
-        childSessionId: childSession.sessionId,
-      };
-    }
+    return chatTurnStreamService.executeDelegatedPlanStep(this, prepared, input);
   }
 
   private async *streamPreparedAgentChatTurn(
@@ -6394,844 +5414,22 @@ export class GatewayService {
       skipMessageStart?: boolean;
     },
   ): AsyncGenerator<ChatStreamChunkDraft> {
-    const turnId = prepared.turnId;
-    const assistantMessageId = prepared.assistantMessageId;
-    const controller = this.beginActiveChatTurnExecution(sessionId, turnId, threadEventType);
-
-    try {
-      if (!options?.skipMessageStart) {
-        yield {
-          type: "message_start",
-          sessionId,
-          turnId,
-          messageId: assistantMessageId,
-          parentTurnId: prepared.parentTurnId,
-          branchKind: prepared.branchKind,
-          sourceTurnId: prepared.sourceTurnId,
-        };
-      }
-
-      const modeOrchestration = resolvedOrchestration ?? await this.resolvePreparedTurnOrchestration(prepared);
-      if (modeOrchestration) {
-        const mode = prepared.normalized.mode ?? prepared.prefs.mode;
-        const initialTrace = this.storage.chatTurnTraces.create({
-          turnId,
-          sessionId,
-          userMessageId: prepared.userEventId,
-          parentTurnId: prepared.parentTurnId,
-          branchKind: prepared.branchKind,
-          sourceTurnId: prepared.sourceTurnId,
-          status: "running",
-          mode,
-          model: modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
-          webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
-          memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
-          thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
-          effectiveToolAutonomy: prepared.effectiveToolAutonomy,
-          routing: {
-            primaryProviderId: input.providerId ?? prepared.prefs.providerId,
-            primaryModel: input.model ?? prepared.prefs.model,
-            effectiveProviderId: modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ?? input.providerId ?? prepared.prefs.providerId,
-            effectiveModel: modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
-          },
-        });
-        yield {
-          type: "trace_update",
-          sessionId,
-          turnId,
-          trace: initialTrace,
-        };
-
-        let executionPlanId: string | undefined;
-        const orchestrationResult = await this.executePreparedModeOrchestration(prepared, input, controller.signal, async (summary) => {
-          this.storage.chatTurnTraces.patch(turnId, {
-            executionPlanId,
-            orchestration: summary,
-            model: summary.steps.at(-1)?.model ?? modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
-            routing: {
-              primaryProviderId: input.providerId ?? prepared.prefs.providerId,
-              primaryModel: input.model ?? prepared.prefs.model,
-              effectiveProviderId: summary.steps.at(-1)?.providerId ?? modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ?? input.providerId ?? prepared.prefs.providerId,
-              effectiveModel: summary.steps.at(-1)?.model ?? modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
-            },
-          });
-        }, modeOrchestration);
-        executionPlanId = orchestrationResult.executionPlanId;
-
-        let finalText = orchestrationResult.finalOutput.trim();
-        if (!finalText) {
-          finalText = buildEmptyAssistantTurnFallbackText();
-        }
-
-        await this.ingestEvent(randomUUID(), {
-          eventId: assistantMessageId,
-          route: prepared.route,
-          actor: {
-            type: "agent",
-            id: "assistant",
-          },
-          message: {
-            role: "assistant",
-            content: finalText,
-          },
-        });
-
-        for (const citation of orchestrationResult.citations) {
-          yield {
-            type: "citation",
-            sessionId,
-            turnId,
-            citation,
-          };
-        }
-        const orchestrationToolRuns = this.collectOrchestrationToolRuns(orchestrationResult.summary.runId);
-
-        let hydratedTrace: ChatTurnTraceRecord = {
-          ...this.storage.chatTurnTraces.patch(turnId, {
-            assistantMessageId,
-            executionPlanId: orchestrationResult.executionPlanId,
-            status: orchestrationResult.summary.status === "failed" ? "failed" : "completed",
-            finishedAt: new Date().toISOString(),
-            model: orchestrationResult.finalStep?.model ?? orchestrationResult.summary.steps.at(-1)?.model ?? modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
-            routing: {
-              primaryProviderId: input.providerId ?? prepared.prefs.providerId,
-              primaryModel: input.model ?? prepared.prefs.model,
-              effectiveProviderId: orchestrationResult.finalStep?.providerId ?? orchestrationResult.summary.steps.at(-1)?.providerId ?? modeOrchestration.orchestrationPlan.steps.at(0)?.providerId ?? input.providerId ?? prepared.prefs.providerId,
-              effectiveModel: orchestrationResult.finalStep?.model ?? orchestrationResult.summary.steps.at(-1)?.model ?? modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
-            },
-            retrieval: prepared.retrievalTrace,
-            reflection: {
-              attempted: false,
-              attemptCount: 0,
-              outcome: "not_needed",
-            },
-            proactive: {
-              runId: prepared.autonomy.lastProactiveRunId,
-              mode: prepared.autonomy.proactiveMode,
-            },
-            orchestration: orchestrationResult.summary,
-            guidance: {
-              workspaceId: prepared.workspaceId,
-              globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
-              workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
-              truncated: prepared.resolvedGuidance.truncated,
-            },
-            citations: orchestrationResult.citations,
-          }),
-          toolRuns: orchestrationToolRuns,
-        };
-        this.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-        yield {
-          type: "message_done",
-          sessionId,
-          turnId,
-          messageId: assistantMessageId,
-          content: finalText,
-        };
-        const capabilityUpgradeSuggestions = await this.collectCapabilityUpgradeSuggestions({
-          sessionId,
-          content: prepared.content,
-          assistantText: finalText,
-          trace: hydratedTrace,
-        });
-        const specialistCandidateSuggestions = this.collectSpecialistCandidateSuggestions({
-          sessionId,
-          mode: prepared.normalized.mode ?? prepared.prefs.mode,
-          content: prepared.content,
-          capabilitySuggestions: capabilityUpgradeSuggestions,
-          trace: hydratedTrace,
-        });
-        if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
-          hydratedTrace = {
-            ...this.storage.chatTurnTraces.patch(turnId, {
-              capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
-              specialistCandidateSuggestions: specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
-            }),
-            toolRuns: orchestrationToolRuns,
-          };
-          if (capabilityUpgradeSuggestions.length > 0) {
-            yield {
-              type: "capability_upgrade_suggestion",
-              sessionId,
-              turnId,
-              capabilityUpgradeSuggestions,
-            };
-          }
-        }
-        yield {
-          type: "trace_update",
-          sessionId,
-          turnId,
-          trace: hydratedTrace,
-        };
-        this.publishRealtime("chat_thread_updated", "chat", {
-          type: threadEventType,
-          sessionId,
-          turnId,
-          activeLeafTurnId: turnId,
-        });
-        this.extractAndPersistLearnedMemory(sessionId, prepared.content, {
-          role: "user",
-          sourceRef: prepared.userEventId,
-          trace: hydratedTrace,
-        });
-        this.extractAndPersistLearnedMemory(sessionId, finalText, {
-          role: "assistant",
-          sourceRef: assistantMessageId,
-          trace: hydratedTrace,
-        });
-        this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, prepared.parentTurnId);
-        if ((hydratedTrace.completion?.status ?? "complete") === "complete" && hydratedTrace.status === "completed") {
-          yield {
-            type: "done",
-            sessionId,
-            turnId,
-            messageId: assistantMessageId,
-          };
-        }
-        return;
-      }
-
-      let finalText = "";
-      let assistantUsage: {
-        inputTokens?: number;
-        outputTokens?: number;
-        cachedInputTokens?: number;
-        costUsd?: number;
-      } | undefined;
-      let hasStreamedDelta = false;
-      let approvalRequired = false;
-      const streamCitations: ChatCitationRecord[] = [];
-      for await (const chunk of this.turnRuntime.runStream({
-        sessionId,
-        turnId,
-        userMessageId: prepared.userEventId,
-        parentTurnId: prepared.parentTurnId,
-        branchKind: prepared.branchKind,
-        sourceTurnId: prepared.sourceTurnId,
-        outputMessageId: assistantMessageId,
-        content: prepared.content,
-        mode: prepared.normalized.mode ?? prepared.prefs.mode,
-        providerId: input.providerId ?? prepared.prefs.providerId,
-        model: input.model ?? prepared.prefs.model,
-        webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
-        memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
-        thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
-        toolAutonomy: prepared.effectiveToolAutonomy,
-        historyMessages: prepared.history,
-        signal: controller.signal,
-      })) {
-        if (chunk.type === "message_done" && chunk.content) {
-          finalText = chunk.content;
-        }
-        if (chunk.type === "approval_required") {
-          approvalRequired = true;
-          yield chunk;
-        }
-        if (chunk.type === "usage") {
-          assistantUsage = chunk.usage;
-          yield chunk;
-        }
-        if (chunk.type === "message_done") {
-          if (chunk.content.trim() && !hasStreamedDelta) {
-            finalText = chunk.content;
-            for (const slice of splitIntoChunks(chunk.content, 120)) {
-              yield {
-                type: "delta",
-                sessionId,
-                turnId,
-                messageId: assistantMessageId,
-                delta: slice,
-              };
-            }
-          }
-        }
-        if (chunk.type === "citation") {
-          const nextCitations = dedupeChatCitations([...streamCitations, chunk.citation]);
-          streamCitations.length = 0;
-          streamCitations.push(...nextCitations);
-          yield chunk;
-        }
-        if (chunk.type === "tool_start" || chunk.type === "tool_result" || chunk.type === "trace_update" || chunk.type === "error") {
-          yield chunk;
-        }
-        if (chunk.type === "delta") {
-          hasStreamedDelta = true;
-          yield {
-            ...chunk,
-            messageId: chunk.messageId ?? assistantMessageId,
-          };
-        }
-      }
-
-      if (!approvalRequired && !finalText.trim()) {
-        finalText = buildEmptyAssistantTurnFallbackText();
-        if (!hasStreamedDelta) {
-          for (const slice of splitIntoChunks(finalText, 120)) {
-            yield {
-              type: "delta",
-              sessionId,
-              turnId,
-              messageId: assistantMessageId,
-              delta: slice,
-            };
-          }
-        }
-      }
-
-      if (approvalRequired) {
-        this.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-        this.publishRealtime("chat_thread_updated", "chat", {
-          type: threadEventType,
-          sessionId,
-          turnId,
-          activeLeafTurnId: turnId,
-        });
-        const traceWithMeta = this.storage.chatTurnTraces.patch(turnId, {
-          retrieval: prepared.retrievalTrace,
-          reflection: {
-            attempted: false,
-            attemptCount: 0,
-            outcome: "not_needed",
-          },
-          proactive: {
-            runId: prepared.autonomy.lastProactiveRunId,
-            mode: prepared.autonomy.proactiveMode,
-          },
-          guidance: {
-            workspaceId: prepared.workspaceId,
-            globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
-            workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
-            truncated: prepared.resolvedGuidance.truncated,
-          },
-          citations: dedupeChatCitations(streamCitations),
-        });
-        const approvalTraceBase: ChatTurnTraceRecord = {
-          ...traceWithMeta,
-          toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
-        };
-        const capabilityUpgradeSuggestions = await this.collectCapabilityUpgradeSuggestions({
-          sessionId,
-          content: prepared.content,
-          assistantText: finalText,
-          trace: approvalTraceBase,
-        });
-        const approvalTrace = capabilityUpgradeSuggestions.length > 0
-          ? {
-            ...this.storage.chatTurnTraces.patch(turnId, {
-              capabilityUpgradeSuggestions,
-            }),
-            toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
-          }
-          : approvalTraceBase;
-        if (capabilityUpgradeSuggestions.length > 0) {
-          yield {
-            type: "capability_upgrade_suggestion",
-            sessionId,
-            turnId,
-            capabilityUpgradeSuggestions,
-          };
-        }
-        this.recordCapabilityGapFromTrace({
-          sessionId,
-          turnId,
-          content: prepared.content,
-          trace: approvalTrace,
-        });
-        yield {
-          type: "trace_update",
-          sessionId,
-          turnId,
-          trace: approvalTrace,
-        };
-        return;
-      }
-
-      if (finalText.trim()) {
-        await this.ingestEvent(randomUUID(), {
-          eventId: assistantMessageId,
-          route: prepared.route,
-          actor: {
-            type: "agent",
-            id: "assistant",
-          },
-          message: {
-            role: "assistant",
-            content: finalText,
-          },
-          usage: assistantUsage,
-        });
-        let hydratedTrace: ChatTurnTraceRecord = {
-          ...this.storage.chatTurnTraces.patch(turnId, {
-            assistantMessageId,
-            status: "completed",
-            finishedAt: new Date().toISOString(),
-            retrieval: prepared.retrievalTrace,
-            reflection: {
-              attempted: false,
-              attemptCount: 0,
-              outcome: "not_needed",
-            },
-            proactive: {
-              runId: prepared.autonomy.lastProactiveRunId,
-              mode: prepared.autonomy.proactiveMode,
-            },
-            guidance: {
-              workspaceId: prepared.workspaceId,
-              globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
-              workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
-              truncated: prepared.resolvedGuidance.truncated,
-            },
-            citations: dedupeChatCitations(streamCitations),
-          }),
-          toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
-        };
-        this.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-        yield {
-          type: "message_done",
-          sessionId,
-          turnId,
-          messageId: assistantMessageId,
-          content: finalText,
-        };
-        const capabilityUpgradeSuggestions = await this.collectCapabilityUpgradeSuggestions({
-          sessionId,
-          content: prepared.content,
-          assistantText: finalText,
-          trace: hydratedTrace,
-        });
-        const specialistCandidateSuggestions = this.collectSpecialistCandidateSuggestions({
-          sessionId,
-          mode: prepared.normalized.mode ?? prepared.prefs.mode,
-          content: prepared.content,
-          capabilitySuggestions: capabilityUpgradeSuggestions,
-          trace: hydratedTrace,
-        });
-        if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
-          hydratedTrace = {
-            ...this.storage.chatTurnTraces.patch(turnId, {
-              capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
-              specialistCandidateSuggestions: specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
-            }),
-            toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
-          };
-          if (capabilityUpgradeSuggestions.length > 0) {
-            yield {
-              type: "capability_upgrade_suggestion",
-              sessionId,
-              turnId,
-              capabilityUpgradeSuggestions,
-            };
-          }
-        }
-        this.recordCapabilityGapFromTrace({
-          sessionId,
-          turnId,
-          content: prepared.content,
-          trace: hydratedTrace,
-        });
-        yield {
-          type: "trace_update",
-          sessionId,
-          turnId,
-          trace: hydratedTrace,
-        };
-        this.publishRealtime("chat_thread_updated", "chat", {
-          type: threadEventType,
-          sessionId,
-          turnId,
-          activeLeafTurnId: turnId,
-        });
-        this.extractAndPersistLearnedMemory(sessionId, prepared.content, {
-          role: "user",
-          sourceRef: prepared.userEventId,
-          trace: hydratedTrace,
-        });
-        this.extractAndPersistLearnedMemory(sessionId, finalText, {
-          role: "assistant",
-          sourceRef: assistantMessageId,
-          trace: hydratedTrace,
-        });
-        this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, prepared.parentTurnId);
-      }
-
-      const completedTrace = this.storage.chatTurnTraces.get(turnId);
-      if (completedTrace.completion?.status === "complete") {
-        yield {
-          type: "done",
-          sessionId,
-          turnId,
-          messageId: assistantMessageId,
-        };
-      }
-    } catch (error) {
-      if (controller.signal.aborted || isChatTurnCancelledError(error)) {
-        const trace = this.markChatTurnCancelled(sessionId, turnId);
-        yield {
-          type: "trace_update",
-          sessionId,
-          turnId,
-          trace,
-        };
-        return;
-      }
-      throw error;
-    } finally {
-      this.endActiveChatTurnExecution(turnId, controller);
-    }
+    yield* chatTurnStreamService.streamPreparedAgentChatTurn(
+      this,
+      sessionId,
+      input,
+      prepared,
+      threadEventType,
+      resolvedOrchestration,
+      options,
+    );
   }
 
   public async agentSendChatMessage(
     sessionId: string,
     input: ChatSendMessageRequest,
   ): Promise<ChatSendMessageResponse> {
-    return this.withChatTurnWriteLease(sessionId, "agent-send", async () => {
-      this.recordDevDiagnostic({
-        level: "info",
-        category: "chat",
-        event: "chat.turn.start",
-        message: "Starting mission chat turn",
-        sessionId,
-        providerId: input.providerId,
-        modelId: input.model,
-        context: {
-          mode: input.mode,
-          webMode: input.webMode,
-          thinkingLevel: input.thinkingLevel,
-        },
-      });
-      const prepared = await this.prepareAgentChatTurn(sessionId, input, {
-        branchKind: "append",
-      });
-      const binding = this.storage.chatSessionBindings.get(sessionId)
-        ?? this.storage.chatSessionBindings.upsert({
-          sessionId,
-          workspaceId: prepared.workspaceId,
-          transport: "llm",
-          writable: true,
-        });
-      if (binding.transport !== "llm") {
-        return this.sendPreparedIntegrationChatTurn(
-          sessionId,
-          prepared,
-          binding,
-          "chat_thread_turn_appended",
-        );
-      }
-      const modeOrchestration = await this.resolvePreparedTurnOrchestration(prepared);
-      if (modeOrchestration) {
-        this.recordDevDiagnostic({
-          level: "info",
-          category: "orchestration",
-          event: "chat.orchestration.selected",
-          message: "Routing mission chat turn through orchestration",
-          sessionId,
-          turnId: prepared.turnId,
-        });
-        return this.consumePreparedAgentChatTurn(
-          sessionId,
-          input,
-          prepared,
-          "chat_thread_turn_appended",
-          modeOrchestration,
-        );
-      }
-      if (this.shouldUseDurableExecution(prepared, input)) {
-        return this.consumePreparedAgentChatTurn(
-          sessionId,
-          input,
-          prepared,
-          "chat_thread_turn_appended",
-        );
-      }
-      const controller = this.beginActiveChatTurnExecution(sessionId, prepared.turnId, "agent-send");
-      try {
-        let turnId = prepared.turnId;
-        let turnResult = await this.turnRuntime.run({
-          sessionId,
-          turnId,
-          userMessageId: prepared.userEventId,
-          parentTurnId: prepared.parentTurnId,
-          branchKind: prepared.branchKind,
-          sourceTurnId: prepared.sourceTurnId,
-          content: prepared.content,
-          mode: prepared.normalized.mode ?? prepared.prefs.mode,
-          providerId: input.providerId ?? prepared.prefs.providerId,
-          model: input.model ?? prepared.prefs.model,
-          webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
-          memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
-          thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
-          toolAutonomy: prepared.effectiveToolAutonomy,
-          historyMessages: prepared.history,
-          outputMessageId: prepared.assistantMessageId,
-          signal: controller.signal,
-        });
-        let reflectionTrace: ChatTurnTraceRecord["reflection"] = {
-          attempted: false,
-          attemptCount: 0,
-          outcome: "not_needed",
-        };
-
-        const shouldAttemptReflection = prepared.autonomy.reflectionMode === "on"
-          && prepared.prefs.planningMode !== "advisory"
-          && !controller.signal.aborted
-          && !turnResult.requiresApproval
-          && (turnResult.turnTrace.status === "failed" || looksLowConfidenceResponse(turnResult.assistantContent));
-
-        if (shouldAttemptReflection) {
-          const retryTurnId = randomUUID();
-          const retryReason = turnResult.turnTrace.status === "failed"
-            ? "tool failure or completion failure"
-            : "low confidence response";
-          reflectionTrace = {
-            attempted: true,
-            attemptCount: 1,
-            reason: retryReason,
-            outcome: "still_failed",
-          };
-          this.gatewaySql.prepare(`
-        INSERT INTO chat_reflection_attempts (
-          attempt_id, turn_id, session_id, reason, outcome, attempt_count, strategy, error, created_at
-        ) VALUES (
-          @attemptId, @turnId, @sessionId, @reason, @outcome, @attemptCount, @strategy, @error, @createdAt
-        )
-          `).run({
-            attemptId: randomUUID(),
-            turnId: retryTurnId,
-            sessionId,
-            reason: retryReason,
-            outcome: "still_failed",
-            attemptCount: 1,
-            strategy: "single retry with alternate tool/query strategy",
-            error: turnResult.turnTrace.status === "failed" ? turnResult.assistantContent.slice(0, 500) : null,
-            createdAt: new Date().toISOString(),
-          });
-
-          const retryHistory = prepared.history;
-          const retryPrompt = `${prepared.content}\n\nRetry guidance: last attempt was incomplete. Use a different approach or tool and be explicit about limits.`;
-          const retryResult = await this.turnRuntime.run({
-            sessionId,
-            turnId: retryTurnId,
-            userMessageId: prepared.userEventId,
-            parentTurnId: prepared.parentTurnId,
-            branchKind: "retry",
-            sourceTurnId: turnId,
-            content: retryPrompt,
-            mode: prepared.normalized.mode ?? prepared.prefs.mode,
-            providerId: input.providerId ?? prepared.prefs.providerId,
-            model: input.model ?? prepared.prefs.model,
-            webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
-            memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
-            thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
-            toolAutonomy: prepared.effectiveToolAutonomy,
-            historyMessages: retryHistory,
-            outputMessageId: prepared.assistantMessageId,
-            signal: controller.signal,
-          });
-          if (retryResult.turnTrace.status === "completed" && retryResult.assistantContent.trim().length > 0) {
-            turnId = retryTurnId;
-            turnResult = retryResult;
-            reflectionTrace = {
-              attempted: true,
-              attemptCount: 1,
-              reason: retryReason,
-              outcome: "recovered",
-            };
-          }
-        }
-
-        const dedupedTurnCitations = dedupeChatCitations(turnResult.turnTrace.citations ?? []);
-        const persistedTurnFailure = turnResult.turnTrace.failure
-          ?? inferDegradedAssistantTurnFailure(turnResult.assistantContent);
-        if (turnResult.requiresApproval || turnResult.turnTrace.status === "cancelled") {
-          let traceWithMeta: ChatTurnTraceRecord = this.storage.chatTurnTraces.patch(turnId, {
-            retrieval: prepared.retrievalTrace,
-            reflection: reflectionTrace,
-            proactive: {
-              runId: prepared.autonomy.lastProactiveRunId,
-              mode: prepared.autonomy.proactiveMode,
-            },
-            guidance: {
-              workspaceId: prepared.workspaceId,
-              globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
-              workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
-              truncated: prepared.resolvedGuidance.truncated,
-            },
-            citations: dedupedTurnCitations,
-            failure: persistedTurnFailure,
-          });
-          const capabilityUpgradeSuggestions = await this.collectCapabilityUpgradeSuggestions({
-            sessionId,
-            content: prepared.content,
-            assistantText: turnResult.assistantContent,
-            trace: {
-              ...traceWithMeta,
-              toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
-            },
-          });
-          if (capabilityUpgradeSuggestions.length > 0) {
-            traceWithMeta = this.storage.chatTurnTraces.patch(turnId, {
-              capabilityUpgradeSuggestions,
-            });
-          }
-          this.recordCapabilityGapFromTrace({
-            sessionId,
-            turnId,
-            content: prepared.content,
-            trace: {
-              ...traceWithMeta,
-              citations: dedupedTurnCitations,
-              toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
-            },
-          });
-          if (turnResult.turnTrace.status !== "cancelled") {
-            this.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-            this.publishRealtime("chat_thread_updated", "chat", {
-              type: "chat_thread_turn_appended",
-              sessionId,
-              turnId,
-              activeLeafTurnId: turnId,
-            });
-          }
-          return {
-            sessionId,
-            userMessage: prepared.userMessage,
-            assistantMessage: undefined,
-            transport: "llm",
-            model: turnResult.assistantModel,
-            turnId,
-            trace: {
-              ...traceWithMeta,
-              citations: dedupedTurnCitations,
-              toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
-            },
-            citations: dedupedTurnCitations,
-            routing: turnResult.turnTrace.routing,
-          };
-        }
-
-        const assistantText = turnResult.assistantContent.trim().length > 0
-          ? turnResult.assistantContent
-          : buildEmptyAssistantTurnFallbackText();
-        const assistantUsage = turnResult.usage;
-        const assistantEventId = prepared.assistantMessageId;
-        await this.ingestEvent(randomUUID(), {
-          eventId: assistantEventId,
-          route: prepared.route,
-          actor: {
-            type: "agent",
-            id: "assistant",
-          },
-          message: {
-            role: "assistant",
-            content: assistantText,
-          },
-          usage: assistantUsage,
-        });
-        const assistantMessage: ChatMessageRecord = {
-          messageId: assistantEventId,
-          sessionId,
-          role: "assistant",
-          actorType: "agent",
-          actorId: "assistant",
-          content: assistantText,
-          timestamp: new Date().toISOString(),
-        };
-        const finalTraceStatus = turnResult.turnTrace.status === "failed" ? "failed" : "completed";
-        const trace = this.storage.chatTurnTraces.patch(turnId, {
-          assistantMessageId: assistantEventId,
-          status: finalTraceStatus,
-          finishedAt: new Date().toISOString(),
-          retrieval: prepared.retrievalTrace,
-          reflection: reflectionTrace,
-          proactive: {
-            runId: prepared.autonomy.lastProactiveRunId,
-            mode: prepared.autonomy.proactiveMode,
-          },
-          guidance: {
-            workspaceId: prepared.workspaceId,
-            globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
-            workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
-            truncated: prepared.resolvedGuidance.truncated,
-          },
-          citations: dedupedTurnCitations,
-          failure: persistedTurnFailure,
-        });
-        let hydratedTrace: ChatTurnTraceRecord = {
-          ...trace,
-          citations: dedupedTurnCitations,
-          toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
-        };
-        const capabilityUpgradeSuggestions = await this.collectCapabilityUpgradeSuggestions({
-          sessionId,
-          content: prepared.content,
-          assistantText,
-          trace: hydratedTrace,
-        });
-        const specialistCandidateSuggestions = this.collectSpecialistCandidateSuggestions({
-          sessionId,
-          mode: prepared.normalized.mode ?? prepared.prefs.mode,
-          content: prepared.content,
-          capabilitySuggestions: capabilityUpgradeSuggestions,
-          trace: hydratedTrace,
-        });
-        if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
-          hydratedTrace = this.storage.chatTurnTraces.patch(turnId, {
-            capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
-            specialistCandidateSuggestions: specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
-          });
-          hydratedTrace = {
-            ...hydratedTrace,
-            toolRuns: this.storage.chatToolRuns.listByTurn(turnId),
-          };
-        }
-        this.recordCapabilityGapFromTrace({
-          sessionId,
-          turnId,
-          content: prepared.content,
-          trace: hydratedTrace,
-        });
-
-        this.extractAndPersistLearnedMemory(sessionId, prepared.content, {
-          role: "user",
-          sourceRef: prepared.userEventId,
-          trace: hydratedTrace,
-        });
-        this.extractAndPersistLearnedMemory(sessionId, assistantText, {
-          role: "assistant",
-          sourceRef: assistantEventId,
-          trace: hydratedTrace,
-        });
-        this.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-        this.publishRealtime("chat_thread_updated", "chat", {
-          type: "chat_thread_turn_appended",
-          sessionId,
-          turnId,
-          activeLeafTurnId: turnId,
-        });
-        const delegationDetection = detectDelegationRoles(prepared.content);
-        if (!this.isReplayScratchSession(sessionId) && prepared.prefs.planningMode !== "advisory" && delegationDetection.length > 1) {
-          await this.triggerChatSessionProactive(sessionId, {
-            source: "chat",
-            reason: "Detected multi-role phrasing; generated delegation suggestion.",
-          });
-        }
-
-        return {
-          sessionId,
-          userMessage: prepared.userMessage,
-          assistantMessage,
-          transport: "llm",
-          model: turnResult.assistantModel,
-          turnId,
-          trace: hydratedTrace,
-          citations: hydratedTrace.citations,
-          routing: hydratedTrace.routing,
-        };
-      } finally {
-        this.endActiveChatTurnExecution(prepared.turnId, controller);
-      }
-    });
+    return chatTurnEntryService.agentSendChatMessage(this, sessionId, input);
   }
 
   public async *agentSendChatMessageStream(
@@ -7239,48 +5437,7 @@ export class GatewayService {
     input: ChatSendMessageRequest,
     _signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
-    yield* this.withChatTurnWriteLeaseStream(sessionId, "agent-send/stream", () => {
-      const self = this;
-      return (async function* (): AsyncGenerator<ChatStreamChunk> {
-        self.recordDevDiagnostic({
-          level: "info",
-          category: "chat",
-          event: "chat.stream.start",
-          message: "Starting streamed mission chat turn",
-          sessionId,
-          providerId: input.providerId,
-          modelId: input.model,
-          context: {
-            mode: input.mode,
-            webMode: input.webMode,
-            thinkingLevel: input.thinkingLevel,
-          },
-        });
-        const prepared = await self.prepareAgentChatTurn(sessionId, input, {
-          branchKind: "append",
-        });
-        const binding = self.storage.chatSessionBindings.get(sessionId)
-          ?? self.storage.chatSessionBindings.upsert({
-            sessionId,
-            workspaceId: prepared.workspaceId,
-            transport: "llm",
-            writable: true,
-          });
-        if (binding.transport !== "llm") {
-          yield* self.withEphemeralStreamEnvelope(
-            self.streamPreparedIntegrationChatTurn(
-              sessionId,
-              prepared,
-              binding,
-              "chat_thread_turn_appended",
-            ),
-          );
-          return;
-        }
-        self.launchPreparedAgentChatTurnStream(sessionId, input, prepared, "chat_thread_turn_appended");
-        yield* self.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true });
-      })();
-    });
+    yield* chatTurnEntryService.agentSendChatMessageStream(this, sessionId, input);
   }
 
   public async retryChatTurn(
@@ -7288,40 +5445,7 @@ export class GatewayService {
     turnId: string,
     overrides: Partial<ChatSendMessageRequest> = {},
   ): Promise<ChatSendMessageResponse> {
-    return this.withChatTurnWriteLease(sessionId, "retry-turn", async () => {
-      const current = await this.requireChatTurnContext(sessionId, turnId);
-      const request: ChatSendMessageRequest = {
-        content: current.userMessage.content,
-        attachments: current.userMessage.attachments?.map((item) => item.attachmentId),
-        providerId: overrides.providerId,
-        model: overrides.model,
-        useMemory: overrides.useMemory,
-        mode: overrides.mode,
-        webMode: overrides.webMode,
-        memoryMode: overrides.memoryMode,
-        thinkingLevel: overrides.thinkingLevel,
-        commandText: overrides.commandText,
-        prefsOverride: overrides.prefsOverride,
-      };
-      const prepared = await this.prepareAgentChatTurn(sessionId, request, {
-        branchKind: "retry",
-        sourceTurnId: turnId,
-        parentTurnId: current.trace.parentTurnId,
-        existingUserMessage: current.userMessage,
-        ingestUserMessage: false,
-      });
-      const binding = this.storage.chatSessionBindings.get(sessionId)
-        ?? this.storage.chatSessionBindings.upsert({
-          sessionId,
-          workspaceId: prepared.workspaceId,
-          transport: "llm",
-          writable: true,
-        });
-      if (binding.transport !== "llm") {
-        return this.sendPreparedIntegrationChatTurn(sessionId, prepared, binding, "chat_thread_turn_retried");
-      }
-      return this.consumePreparedAgentChatTurn(sessionId, request, prepared, "chat_thread_turn_retried");
-    });
+    return chatTurnEntryService.retryChatTurn(this, sessionId, turnId, overrides);
   }
 
   private async retryChatTurnInScratchSession(
@@ -7347,7 +5471,7 @@ export class GatewayService {
       try {
         this.archiveChatSession(scratch.sessionId);
       } catch (error) {
-        console.warn("[goatcitadel] failed to archive replay scratch session", {
+        log.warn("failed to archive replay scratch session", {
           sourceSessionId,
           sourceTurnId,
           scratchSessionId: scratch.sessionId,
@@ -7516,47 +5640,7 @@ export class GatewayService {
     overrides: Partial<ChatSendMessageRequest> = {},
     _signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
-    yield* this.withChatTurnWriteLeaseStream(sessionId, "retry-turn/stream", () => {
-      const self = this;
-      return (async function* (): AsyncGenerator<ChatStreamChunk> {
-        const current = await self.requireChatTurnContext(sessionId, turnId);
-        const request: ChatSendMessageRequest = {
-          content: current.userMessage.content,
-          attachments: current.userMessage.attachments?.map((item) => item.attachmentId),
-          providerId: overrides.providerId,
-          model: overrides.model,
-          useMemory: overrides.useMemory,
-          mode: overrides.mode,
-          webMode: overrides.webMode,
-          memoryMode: overrides.memoryMode,
-          thinkingLevel: overrides.thinkingLevel,
-          commandText: overrides.commandText,
-          prefsOverride: overrides.prefsOverride,
-        };
-        const prepared = await self.prepareAgentChatTurn(sessionId, request, {
-          branchKind: "retry",
-          sourceTurnId: turnId,
-          parentTurnId: current.trace.parentTurnId,
-          existingUserMessage: current.userMessage,
-          ingestUserMessage: false,
-        });
-        const binding = self.storage.chatSessionBindings.get(sessionId)
-          ?? self.storage.chatSessionBindings.upsert({
-            sessionId,
-            workspaceId: prepared.workspaceId,
-            transport: "llm",
-            writable: true,
-          });
-        if (binding.transport !== "llm") {
-          yield* self.withEphemeralStreamEnvelope(
-            self.streamPreparedIntegrationChatTurn(sessionId, prepared, binding, "chat_thread_turn_retried"),
-          );
-          return;
-        }
-        self.launchPreparedAgentChatTurnStream(sessionId, request, prepared, "chat_thread_turn_retried");
-        yield* self.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true });
-      })();
-    });
+    yield* chatTurnEntryService.retryChatTurnStream(this, sessionId, turnId, overrides);
   }
 
   public async editChatTurn(
@@ -7564,29 +5648,7 @@ export class GatewayService {
     turnId: string,
     input: ChatSendMessageRequest,
   ): Promise<ChatSendMessageResponse> {
-    return this.withChatTurnWriteLease(sessionId, "edit-turn", async () => {
-      const current = await this.requireChatTurnContext(sessionId, turnId);
-      const request: ChatSendMessageRequest = {
-        ...input,
-        attachments: input.attachments ?? current.userMessage.attachments?.map((item) => item.attachmentId),
-      };
-      const prepared = await this.prepareAgentChatTurn(sessionId, request, {
-        branchKind: "edit",
-        sourceTurnId: turnId,
-        parentTurnId: current.trace.parentTurnId,
-      });
-      const binding = this.storage.chatSessionBindings.get(sessionId)
-        ?? this.storage.chatSessionBindings.upsert({
-          sessionId,
-          workspaceId: prepared.workspaceId,
-          transport: "llm",
-          writable: true,
-        });
-      if (binding.transport !== "llm") {
-        return this.sendPreparedIntegrationChatTurn(sessionId, prepared, binding, "chat_thread_turn_edited");
-      }
-      return this.consumePreparedAgentChatTurn(sessionId, request, prepared, "chat_thread_turn_edited");
-    });
+    return chatTurnEntryService.editChatTurn(this, sessionId, turnId, input);
   }
 
   public async *editChatTurnStream(
@@ -7595,36 +5657,7 @@ export class GatewayService {
     input: ChatSendMessageRequest,
     _signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
-    yield* this.withChatTurnWriteLeaseStream(sessionId, "edit-turn/stream", () => {
-      const self = this;
-      return (async function* (): AsyncGenerator<ChatStreamChunk> {
-        const current = await self.requireChatTurnContext(sessionId, turnId);
-        const request: ChatSendMessageRequest = {
-          ...input,
-          attachments: input.attachments ?? current.userMessage.attachments?.map((item) => item.attachmentId),
-        };
-        const prepared = await self.prepareAgentChatTurn(sessionId, request, {
-          branchKind: "edit",
-          sourceTurnId: turnId,
-          parentTurnId: current.trace.parentTurnId,
-        });
-        const binding = self.storage.chatSessionBindings.get(sessionId)
-          ?? self.storage.chatSessionBindings.upsert({
-            sessionId,
-            workspaceId: prepared.workspaceId,
-            transport: "llm",
-            writable: true,
-          });
-        if (binding.transport !== "llm") {
-          yield* self.withEphemeralStreamEnvelope(
-            self.streamPreparedIntegrationChatTurn(sessionId, prepared, binding, "chat_thread_turn_edited"),
-          );
-          return;
-        }
-        self.launchPreparedAgentChatTurnStream(sessionId, request, prepared, "chat_thread_turn_edited");
-        yield* self.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true });
-      })();
-    });
+    yield* chatTurnEntryService.editChatTurnStream(this, sessionId, turnId, input);
   }
 
   public async cancelChatTurn(
@@ -7632,24 +5665,10 @@ export class GatewayService {
     turnId: string,
     cancelledBy?: string,
   ): Promise<ChatCancelTurnResponse> {
-    const current = this.storage.chatTurnTraces.get(turnId);
-    if (current.sessionId !== sessionId) {
-      throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
-    }
-    const active = this.activeChatTurns.get(turnId);
-    if (active?.sessionId === sessionId && !active.controller.signal.aborted) {
-      active.controller.abort(new ChatTurnCancelledError(turnId));
-    }
-    const trace = this.markChatTurnCancelled(sessionId, turnId, cancelledBy);
-    return {
-      sessionId,
-      turnId,
-      cancelled: trace.status === "cancelled",
-      trace,
-    };
+    return chatTurnEntryService.cancelChatTurn(this, sessionId, turnId, cancelledBy);
   }
 
-  private async collectCapabilityUpgradeSuggestions(input: {
+  /** @internal */ public async collectCapabilityUpgradeSuggestions(input: {
     sessionId: string;
     content: string;
     assistantText: string;
@@ -7676,7 +5695,7 @@ export class GatewayService {
     });
   }
 
-  private recordCapabilityGapFromTrace(input: {
+  /** @internal */ public recordCapabilityGapFromTrace(input: {
     sessionId: string;
     turnId: string;
     content: string;
@@ -7720,7 +5739,7 @@ export class GatewayService {
         recoveryOptions: classified.recoveryOptions,
       });
     } catch (error) {
-      console.warn("[goatcitadel] failed to record capability gap", error);
+      log.warn("failed to record capability gap", { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -7731,89 +5750,21 @@ export class GatewayService {
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
     resolvedOrchestration?: PreparedChatExecutionPlanResolution,
   ): Promise<ChatSendMessageResponse> {
-    let assistantMessage: ChatMessageRecord | undefined;
-    let trace: ChatTurnTraceRecord | undefined;
-    let citations: ChatCitationRecord[] = [];
-    const useDurableExecution = this.shouldUseDurableExecution(prepared, input);
-    if (useDurableExecution) {
-      this.launchPreparedAgentChatTurnStream(sessionId, input, prepared, threadEventType, resolvedOrchestration);
-    }
-    const source: AsyncGenerator<InspectableChatStreamChunk> = useDurableExecution
-      ? this.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true })
-      : this.streamPreparedAgentChatTurn(
-        sessionId,
-        input,
-        prepared,
-        threadEventType,
-        resolvedOrchestration,
-      );
-    for await (const chunk of source) {
-      if (chunk.type === "message_done") {
-        assistantMessage = {
-          messageId: chunk.messageId,
-          sessionId,
-          role: "assistant",
-          actorType: "agent",
-          actorId: "assistant",
-          content: chunk.content,
-          timestamp: new Date().toISOString(),
-        };
-      } else if (chunk.type === "trace_update") {
-        trace = chunk.trace;
-      } else if (chunk.type === "citation") {
-        citations = dedupeChatCitations([...citations, chunk.citation]);
-      }
-    }
-    const dedupedTraceCitations = dedupeChatCitations(trace?.citations ?? []);
-    return {
+    return chatTurnDispatchService.consumePreparedAgentChatTurn(
+      this,
       sessionId,
-      userMessage: prepared.userMessage,
-      assistantMessage,
-      transport: "llm",
-      model: trace?.model ?? input.model ?? prepared.prefs.model,
-      turnId: prepared.turnId,
-      trace: trace ? { ...trace, citations: dedupedTraceCitations } : trace,
-      citations: dedupeChatCitations(citations),
-      routing: trace?.routing,
-    };
-  }
-
-  private isDurableExecutionEnabled(): boolean {
-    return this.config.assistant.durable.enabled
-      && this.config.assistant.durable.executionEnabled
-      && this.isFeatureEnabled("durableKernelV1Enabled");
+      input,
+      prepared,
+      threadEventType,
+      resolvedOrchestration,
+    );
   }
 
   private shouldUseDurableExecution(
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
   ): boolean {
-    if (!this.isDurableExecutionEnabled()) {
-      return false;
-    }
-    const mode = prepared.normalized.mode ?? prepared.prefs.mode;
-    if (mode === "cowork" || mode === "code") {
-      return true;
-    }
-    if (mode !== "chat" || !this.config.assistant.durable.chatAutoPromoteEnabled) {
-      return false;
-    }
-    const webMode = prepared.normalized.webMode ?? prepared.prefs.webMode;
-    if (webMode === "deep") {
-      return true;
-    }
-    if (prepared.autonomy.reflectionMode === "on" || prepared.prefs.reflectionMode === "on") {
-      return true;
-    }
-    const content = prepared.content.toLowerCase();
-    return content.includes("http://")
-      || content.includes("https://")
-      || content.includes("browser.navigate")
-      || content.includes("browser.extract")
-      || content.includes("http.get")
-      || content.includes("http.post")
-      || /\b(fetch|scrape|extract|browse|navigate|research|look up|find on the web|http get|http post)\b/i.test(content)
-      || Boolean(input.attachments?.length);
+    return chatTurnDispatchService.shouldUseDurableExecution(this, prepared, input);
   }
 
   private parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatTurnExecutionPayload | undefined {
@@ -7822,14 +5773,14 @@ export class GatewayService {
       return undefined;
     }
     if (
-      typeof payload.sessionId !== "string"
-      || typeof payload.turnId !== "string"
-      || typeof payload.userMessageId !== "string"
-      || typeof payload.assistantMessageId !== "string"
-      || typeof payload.branchKind !== "string"
-      || typeof payload.threadEventType !== "string"
-      || !payload.request
-      || typeof payload.request !== "object"
+      typeof payload.sessionId !== "string" ||
+      typeof payload.turnId !== "string" ||
+      typeof payload.userMessageId !== "string" ||
+      typeof payload.assistantMessageId !== "string" ||
+      typeof payload.branchKind !== "string" ||
+      typeof payload.threadEventType !== "string" ||
+      !payload.request ||
+      typeof payload.request !== "object"
     ) {
       return undefined;
     }
@@ -7842,9 +5793,9 @@ export class GatewayService {
       return undefined;
     }
     if (
-      typeof payload.approvalId !== "string"
-      || typeof payload.approvalKind !== "string"
-      || typeof payload.createdAt !== "string"
+      typeof payload.approvalId !== "string" ||
+      typeof payload.approvalKind !== "string" ||
+      typeof payload.createdAt !== "string"
     ) {
       return undefined;
     }
@@ -7857,13 +5808,13 @@ export class GatewayService {
       return undefined;
     }
     if (
-      typeof payload.sessionId !== "string"
-      || typeof payload.proactiveRunId !== "string"
-      || typeof payload.originSurface !== "string"
-      || typeof payload.triggerSource !== "string"
-      || typeof payload.requestedAt !== "string"
-      || !payload.policySnapshot
-      || typeof payload.policySnapshot !== "object"
+      typeof payload.sessionId !== "string" ||
+      typeof payload.proactiveRunId !== "string" ||
+      typeof payload.originSurface !== "string" ||
+      typeof payload.triggerSource !== "string" ||
+      typeof payload.requestedAt !== "string" ||
+      !payload.policySnapshot ||
+      typeof payload.policySnapshot !== "object"
     ) {
       return undefined;
     }
@@ -7875,49 +5826,47 @@ export class GatewayService {
     if (!payload || payload.version !== "connector.delivery.v1") {
       return undefined;
     }
-    if (
-      typeof payload.connectorId !== "string"
-      || typeof payload.action !== "string"
-    ) {
+    if (typeof payload.connectorId !== "string" || typeof payload.action !== "string") {
       return undefined;
     }
-    if (
-      payload.payload !== undefined
-      && (typeof payload.payload !== "object" || Array.isArray(payload.payload))
-    ) {
+    if (payload.payload !== undefined && (typeof payload.payload !== "object" || Array.isArray(payload.payload))) {
       return undefined;
     }
     return payload as ConnectorDeliveryWorkflowPayload;
   }
 
-  private parseHookDeliveryWorkflowPayload(run: DurableRunRecord): {
-    version: "hook.delivery.v1";
-    hookRunId: string;
-    hookId: string;
-    workspaceId: string;
-    trigger: HookTrigger;
-    entityType: string;
-    entityId: string;
-  } | undefined {
-    const payload = run.payload as Partial<{
-      version: "hook.delivery.v1";
-      hookRunId: string;
-      hookId: string;
-      workspaceId: string;
-      trigger: HookTrigger;
-      entityType: string;
-      entityId: string;
-    }> | undefined;
+  private parseHookDeliveryWorkflowPayload(run: DurableRunRecord):
+    | {
+        version: "hook.delivery.v1";
+        hookRunId: string;
+        hookId: string;
+        workspaceId: string;
+        trigger: HookTrigger;
+        entityType: string;
+        entityId: string;
+      }
+    | undefined {
+    const payload = run.payload as
+      | Partial<{
+          version: "hook.delivery.v1";
+          hookRunId: string;
+          hookId: string;
+          workspaceId: string;
+          trigger: HookTrigger;
+          entityType: string;
+          entityId: string;
+        }>
+      | undefined;
     if (!payload || payload.version !== "hook.delivery.v1") {
       return undefined;
     }
     if (
-      typeof payload.hookRunId !== "string"
-      || typeof payload.hookId !== "string"
-      || typeof payload.workspaceId !== "string"
-      || typeof payload.trigger !== "string"
-      || typeof payload.entityType !== "string"
-      || typeof payload.entityId !== "string"
+      typeof payload.hookRunId !== "string" ||
+      typeof payload.hookId !== "string" ||
+      typeof payload.workspaceId !== "string" ||
+      typeof payload.trigger !== "string" ||
+      typeof payload.entityType !== "string" ||
+      typeof payload.entityId !== "string"
     ) {
       return undefined;
     }
@@ -7936,7 +5885,7 @@ export class GatewayService {
     return this.memoryMaintenanceService.parseWorkflowPayload(run);
   }
 
-  private resolveDurableRunHookWorkspaceId(run: DurableRunRecord): string {
+  /** @internal */ public resolveDurableRunHookWorkspaceId(run: DurableRunRecord): string {
     if (run.workflowKey === "memory.maintenance") {
       const payload = this.parseMemoryMaintenanceWorkflowPayload(run);
       if (payload?.workspaceId) {
@@ -7953,9 +5902,7 @@ export class GatewayService {
     }
     if (run.workflowKey === "connector.delivery") {
       const payload = this.parseConnectorDeliveryWorkflowPayload(run);
-      const workspaceId = typeof payload?.payload?.workspaceId === "string"
-        ? payload.payload.workspaceId.trim()
-        : "";
+      const workspaceId = typeof payload?.payload?.workspaceId === "string" ? payload.payload.workspaceId.trim() : "";
       if (workspaceId) {
         return this.normalizeWorkspaceId(workspaceId);
       }
@@ -8050,7 +5997,7 @@ export class GatewayService {
     };
   }
 
-  private beginDurableChatRun(
+  /** @internal */ public beginDurableChatRun(
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
@@ -8068,20 +6015,23 @@ export class GatewayService {
         objective: prepared.content,
       },
     });
-    this.persistChatStreamChunk({
-      type: "message_start",
-      sessionId: prepared.session.sessionId,
-      turnId: prepared.turnId,
-      messageId: prepared.assistantMessageId,
-      parentTurnId: prepared.parentTurnId,
-      branchKind: prepared.branchKind,
-      sourceTurnId: prepared.sourceTurnId,
-    }, run.runId);
+    this.persistChatStreamChunk(
+      {
+        type: "message_start",
+        sessionId: prepared.session.sessionId,
+        turnId: prepared.turnId,
+        messageId: prepared.assistantMessageId,
+        parentTurnId: prepared.parentTurnId,
+        branchKind: prepared.branchKind,
+        sourceTurnId: prepared.sourceTurnId,
+      },
+      run.runId,
+    );
     this.durableRunService.requestRunProcessing(run.runId);
     return run;
   }
 
-  private finalizeDurableChatRun(
+  /** @internal */ public finalizeDurableChatRun(
     runId: string,
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     trace: ChatTurnTraceRecord,
@@ -8173,85 +6123,16 @@ export class GatewayService {
       skipMessageStart?: boolean;
     },
   ): Promise<void> {
-    try {
-      for await (const rawChunk of this.streamPreparedAgentChatTurn(
-        sessionId,
-        input,
-        prepared,
-        threadEventType,
-        resolvedOrchestration,
-        options,
-      )) {
-        const chunk = rawChunk.type === "trace_update" && durableRunId
-          ? {
-            ...rawChunk,
-            trace: {
-              ...rawChunk.trace,
-              durable: {
-                runId: durableRunId,
-                status: this.storage.durableRuns.getRun(durableRunId).status,
-                checkpointKind: rawChunk.trace.durable?.checkpointKind ?? "run_started",
-              },
-            },
-          }
-          : rawChunk;
-        if (isPersistableChatStreamChunk(chunk)) {
-          this.persistChatStreamChunk(chunk, durableRunId);
-        }
-      }
-    } catch (error) {
-      let currentTrace: ChatTurnTraceRecord | undefined;
-      try {
-        currentTrace = this.storage.chatTurnTraces.get(prepared.turnId);
-      } catch (lookupError) {
-        if (!(lookupError instanceof NotFoundError)) {
-          throw lookupError;
-        }
-      }
-      if (currentTrace) {
-        const patchedTrace = this.storage.chatTurnTraces.patch(prepared.turnId, {
-          status: "failed",
-          finishedAt: new Date().toISOString(),
-          failure: {
-            failureClass: "unknown",
-            message: error instanceof Error ? error.message : "Chat stream execution failed.",
-            retryable: true,
-            recommendedAction: "retry",
-          },
-          completion: {
-            finishReason: currentTrace.completion?.finishReason,
-            status: "interrupted",
-            repaired: Boolean(currentTrace.completion?.repaired),
-          },
-        });
-        this.persistChatStreamChunk({
-          type: "trace_update",
-          sessionId,
-          turnId: prepared.turnId,
-          trace: this.createHydratedChatTurnTrace(prepared.turnId, patchedTrace),
-        }, durableRunId);
-      }
-      this.persistChatStreamChunk({
-        type: "error",
-        sessionId,
-        turnId: prepared.turnId,
-        error: error instanceof Error ? error.message : "Chat stream execution failed.",
-      }, durableRunId);
-    } finally {
-      let finalTrace: ChatTurnTraceRecord | undefined;
-      try {
-        finalTrace = this.storage.chatTurnTraces.get(prepared.turnId);
-      } catch (error) {
-        if (!(error instanceof NotFoundError)) {
-          throw error;
-        }
-      }
-      if (durableRunId && finalTrace) {
-        this.finalizeDurableChatRun(durableRunId, prepared, finalTrace);
-      }
-      this.completeActiveChatTurnStream(prepared.turnId);
-      setTimeout(() => this.closeActiveChatTurnStream(prepared.turnId), 30_000);
-    }
+    return chatTurnDispatchService.executePreparedAgentChatTurnBackground(
+      this,
+      sessionId,
+      input,
+      prepared,
+      threadEventType,
+      durableRunId,
+      resolvedOrchestration,
+      options,
+    );
   }
 
   private launchPreparedAgentChatTurnStream(
@@ -8261,21 +6142,14 @@ export class GatewayService {
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
     resolvedOrchestration?: PreparedChatExecutionPlanResolution,
   ): void {
-    const durableRun = this.beginDurableChatRun(prepared, input, threadEventType);
-    this.registerActiveChatTurnStream(sessionId, prepared.turnId, durableRun?.runId);
-    if (durableRun) {
-      return;
-    }
-    const task = this.executePreparedAgentChatTurnBackground(
+    chatTurnDispatchService.launchPreparedAgentChatTurnStream(
+      this,
       sessionId,
       input,
       prepared,
       threadEventType,
-      undefined,
       resolvedOrchestration,
     );
-    task.finally(() => this.backgroundTasks.delete(task));
-    this.backgroundTasks.add(task);
   }
 
   private async executeDurableWorkflowRun(run: DurableRunRecord): Promise<void> {
@@ -8372,10 +6246,13 @@ export class GatewayService {
     if (run.workflowKey === "proactive.tick") {
       const payload = this.parseProactiveTickWorkflowPayload(run);
       if (payload) {
-        const proactiveRun = this.listChatSessionProactiveRuns(payload.sessionId, 100)
-          .find((candidate) => candidate.runId === payload.proactiveRunId);
+        const proactiveRun = this.listChatSessionProactiveRuns(payload.sessionId, 100).find(
+          (candidate) => candidate.runId === payload.proactiveRunId,
+        );
         if (proactiveRun) {
-          this.gatewaySql.prepare(`
+          this.gatewaySql
+            .prepare(
+              `
             UPDATE proactive_runs
             SET
               status = 'failed',
@@ -8383,11 +6260,13 @@ export class GatewayService {
               error = @reason,
               finished_at = @finishedAt
             WHERE run_id = @runId
-          `).run({
-            runId: proactiveRun.runId,
-            reason,
-            finishedAt: new Date().toISOString(),
-          });
+          `,
+            )
+            .run({
+              runId: proactiveRun.runId,
+              reason,
+              finishedAt: new Date().toISOString(),
+            });
         }
       }
       this.publishRealtime("system", "durable", {
@@ -8454,12 +6333,15 @@ export class GatewayService {
         },
       });
     }
-    this.persistChatStreamChunk({
-      type: "error",
-      sessionId: payload.sessionId,
-      turnId: payload.turnId,
-      error: reason,
-    }, run.runId);
+    this.persistChatStreamChunk(
+      {
+        type: "error",
+        sessionId: payload.sessionId,
+        turnId: payload.turnId,
+        error: reason,
+      },
+      run.runId,
+    );
   }
 
   private async executeDurableApprovalWaitRun(run: DurableRunRecord): Promise<void> {
@@ -8614,10 +6496,7 @@ export class GatewayService {
     sinceEventId?: string,
     _signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
-    yield* this.streamPersistedChatTurnEvents(sessionId, turnId, {
-      sinceEventId,
-      liveTail: true,
-    });
+    yield* chatTurnEntryService.resumeAgentChatTurnStream(this, sessionId, turnId, sinceEventId);
   }
 
   private async sendPreparedIntegrationChatTurn(
@@ -8626,130 +6505,7 @@ export class GatewayService {
     binding: ChatSessionBindingRecord,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   ): Promise<ChatSendMessageResponse> {
-    const startedAt = new Date().toISOString();
-    this.storage.chatTurnTraces.create({
-      turnId: prepared.turnId,
-      sessionId,
-      userMessageId: prepared.userEventId,
-      parentTurnId: prepared.parentTurnId,
-      branchKind: prepared.branchKind,
-      sourceTurnId: prepared.sourceTurnId,
-      status: "running",
-      mode: prepared.normalized.mode ?? prepared.prefs.mode,
-      webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
-      memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
-      thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
-      effectiveToolAutonomy: prepared.effectiveToolAutonomy,
-      routing: {},
-      startedAt,
-    });
-
-    try {
-      if (!binding.connectionId || !binding.target) {
-        throw new Error("Integration binding is missing connectionId or target");
-      }
-      if (!binding.writable) {
-        throw new Error("Session binding is not writable");
-      }
-      this.ensureSessionInternalToolGrant(sessionId, "channel.send", "system-integration-compose");
-      this.requireExecutedToolResult("channel.send", await this.commsSend({
-        connectionId: binding.connectionId,
-        target: binding.target,
-        message: prepared.content,
-        sessionId,
-        agentId: "operator",
-      }));
-      const assistantContent = `Delivered via integration ${binding.connectionId} to ${binding.target}.`;
-      const assistantMessageId = prepared.assistantMessageId;
-      await this.ingestEvent(randomUUID(), {
-        eventId: assistantMessageId,
-        route: prepared.route,
-        actor: {
-          type: "system",
-          id: "integration",
-        },
-        message: {
-          role: "assistant",
-          content: assistantContent,
-        },
-      });
-      const assistantMessage: ChatMessageRecord = {
-        messageId: assistantMessageId,
-        sessionId,
-        role: "assistant",
-        actorType: "system",
-        actorId: "integration",
-        content: assistantContent,
-        timestamp: new Date().toISOString(),
-      };
-      const trace = this.storage.chatTurnTraces.patch(prepared.turnId, {
-        assistantMessageId,
-        status: "completed",
-        finishedAt: new Date().toISOString(),
-        retrieval: prepared.retrievalTrace,
-        reflection: {
-          attempted: false,
-          attemptCount: 0,
-          outcome: "not_needed",
-        },
-        proactive: {
-          runId: prepared.autonomy.lastProactiveRunId,
-          mode: prepared.autonomy.proactiveMode,
-        },
-        guidance: {
-          workspaceId: prepared.workspaceId,
-          globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
-          workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
-          truncated: prepared.resolvedGuidance.truncated,
-        },
-        citations: [],
-      });
-      const hydratedTrace: ChatTurnTraceRecord = {
-        ...trace,
-        toolRuns: [],
-        citations: [],
-      };
-      this.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, prepared.turnId);
-      this.publishRealtime("chat_thread_updated", "chat", {
-        type: threadEventType,
-        sessionId,
-        turnId: prepared.turnId,
-        activeLeafTurnId: prepared.turnId,
-      });
-      return {
-        sessionId,
-        userMessage: prepared.userMessage,
-        assistantMessage,
-        transport: "integration",
-        turnId: prepared.turnId,
-        trace: hydratedTrace,
-        citations: [],
-        routing: hydratedTrace.routing,
-      };
-    } catch (error) {
-      this.storage.chatTurnTraces.patch(prepared.turnId, {
-        status: "failed",
-        finishedAt: new Date().toISOString(),
-        retrieval: prepared.retrievalTrace,
-        reflection: {
-          attempted: false,
-          attemptCount: 0,
-          outcome: "not_needed",
-        },
-        proactive: {
-          runId: prepared.autonomy.lastProactiveRunId,
-          mode: prepared.autonomy.proactiveMode,
-        },
-        guidance: {
-          workspaceId: prepared.workspaceId,
-          globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
-          workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
-          truncated: prepared.resolvedGuidance.truncated,
-        },
-        citations: [],
-      });
-      throw error;
-    }
+    return chatTurnDispatchService.sendPreparedIntegrationChatTurn(this, sessionId, prepared, binding, threadEventType);
   }
 
   private async *streamPreparedIntegrationChatTurn(
@@ -8758,45 +6514,13 @@ export class GatewayService {
     binding: ChatSessionBindingRecord,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   ): AsyncGenerator<ChatStreamChunkDraft> {
-    yield {
-      type: "message_start",
+    yield* chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+      this,
       sessionId,
-      turnId: prepared.turnId,
-      messageId: prepared.assistantMessageId,
-      parentTurnId: prepared.parentTurnId,
-      branchKind: prepared.branchKind,
-      sourceTurnId: prepared.sourceTurnId,
-    };
-    const response = await this.sendPreparedIntegrationChatTurn(sessionId, prepared, binding, threadEventType);
-    const content = response.assistantMessage?.content ?? "";
-    for (const delta of splitIntoChunks(content, 120)) {
-      yield {
-        type: "delta",
-        sessionId,
-        turnId: prepared.turnId,
-        messageId: prepared.assistantMessageId,
-        delta,
-      };
-    }
-    yield {
-      type: "message_done",
-      sessionId,
-      turnId: prepared.turnId,
-      messageId: prepared.assistantMessageId,
-      content,
-    };
-    yield {
-      type: "trace_update",
-      sessionId,
-      turnId: prepared.turnId,
-      trace: response.trace!,
-    };
-    yield {
-      type: "done",
-      sessionId,
-      turnId: prepared.turnId,
-      messageId: prepared.assistantMessageId,
-    };
+      prepared,
+      binding,
+      threadEventType,
+    );
   }
 
   public async uploadChatAttachment(input: {
@@ -8832,13 +6556,7 @@ export class GatewayService {
     const year = String(stamp.getUTCFullYear());
     const month = String(stamp.getUTCMonth() + 1).padStart(2, "0");
     const attachmentId = randomUUID();
-    const storageRelPath = path.posix.join(
-      rootPath,
-      "attachments",
-      year,
-      month,
-      `${attachmentId}-${fileName}`,
-    );
+    const storageRelPath = path.posix.join(rootPath, "attachments", year, month, `${attachmentId}-${fileName}`);
     const fullPath = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, storageRelPath);
     assertWritePathInJail(fullPath, this.config.toolPolicy.sandbox.writeJailRoots);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
@@ -8866,13 +6584,14 @@ export class GatewayService {
     });
     if (analysisStatus === "queued") {
       this.createMediaJob({
-        type: mediaType === "image"
-          ? "ocr"
-          : mediaType === "audio"
-            ? "audio_transcribe"
-            : mediaType === "video"
-              ? "video_transcribe"
-              : "analyze",
+        type:
+          mediaType === "image"
+            ? "ocr"
+            : mediaType === "audio"
+              ? "audio_transcribe"
+              : mediaType === "video"
+                ? "video_transcribe"
+                : "analyze",
         sessionId: input.sessionId,
         attachmentId,
       });
@@ -8912,197 +6631,34 @@ export class GatewayService {
   }
 
   public async listBackups(limit = 50): Promise<BackupManifestRecord[]> {
-    const backupDir = this.getBackupDirectory();
-    const entries = await listFilesSafe(backupDir);
-    const manifests: BackupManifestRecord[] = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory() || !entry.name.endsWith(".backup")) {
-        continue;
-      }
-      const manifestPath = path.join(backupDir, entry.name, "manifest.json");
-      try {
-        const raw = await fs.readFile(manifestPath, "utf8");
-        const parsed = JSON.parse(raw) as BackupManifestRecord;
-        manifests.push(parsed);
-      } catch {
-        // skip invalid backup folders
-      }
-    }
-    manifests.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-    return manifests.slice(0, Math.max(1, Math.min(limit, 500)));
+    return this.backupRetentionService.listBackups(limit);
   }
 
-  public async createBackup(input?: {
-    name?: string;
-    outputPath?: string;
-  }): Promise<BackupCreateResponse> {
-    const now = new Date();
-    const timestamp = formatBackupTimestamp(now);
-    const backupId = sanitizeBackupName(input?.name) ?? `backup-${timestamp}-${randomUUID().slice(0, 8)}`;
-    const backupDir = path.resolve(this.getBackupDirectory());
-    const outputPath = input?.outputPath
-      ? path.resolve(backupDir, input.outputPath)
-      : path.join(backupDir, `${backupId}.backup`);
-    ensurePathWithinRoot(outputPath, backupDir);
-    const tempDir = `${outputPath}.tmp-${randomUUID().slice(0, 8)}`;
-    ensurePathWithinRoot(tempDir, backupDir);
-    const payloadDir = path.join(tempDir, "payload");
-
-    await fs.mkdir(path.dirname(outputPath), { recursive: true });
-    await fs.rm(tempDir, { recursive: true, force: true });
-    await fs.mkdir(payloadDir, { recursive: true });
-
-    const includePaths = this.buildBackupIncludePaths();
-    for (const includePath of includePaths) {
-      const source = path.resolve(this.config.rootDir, includePath);
-      const target = path.join(payloadDir, includePath);
-      await copyPathIfExists(source, target);
-    }
-
-    const files = await collectBackupFileRecords(payloadDir);
-    const manifest: BackupManifestRecord = {
-      backupId,
-      createdAt: now.toISOString(),
-      appVersion: readAppVersion(),
-      gitRef: readGitRef(this.config.rootDir),
-      rootDir: this.config.rootDir,
-      files,
-    };
-    const manifestPath = path.join(tempDir, "manifest.json");
-    const manifestRaw = `${JSON.stringify(manifest, null, 2)}\n`;
-    await fs.writeFile(manifestPath, manifestRaw, "utf8");
-
-    await fs.rm(outputPath, { recursive: true, force: true });
-    await fs.rename(tempDir, outputPath);
-
-    return {
-      backupId,
-      outputPath,
-      bytes: files.reduce((sum, item) => sum + item.sizeBytes, 0) + Buffer.byteLength(manifestRaw, "utf8"),
-      manifest,
-    };
+  public async createBackup(input?: { name?: string; outputPath?: string }): Promise<BackupCreateResponse> {
+    return this.backupRetentionService.createBackup(input);
   }
 
   public async restoreBackup(input: {
     filePath: string;
     confirm: boolean;
   }): Promise<{ restored: boolean; backupId?: string; filesRestored: number }> {
-    if (!input.confirm) {
-      throw new Error("Backup restore requires explicit confirm=true");
-    }
-
-    const backupDir = path.resolve(this.getBackupDirectory());
-    const backupPath = path.resolve(backupDir, input.filePath);
-    ensurePathWithinRoot(backupPath, backupDir);
-    const verification = await this.verifyBackup({
-      filePath: input.filePath,
-    });
-    if (!verification.verified || !verification.manifest) {
-      throw new Error(formatBackupVerifyFailure(verification));
-    }
-
-    const payloadDir = path.join(backupPath, "payload");
-    const manifest = verification.manifest;
-
-    for (const file of manifest.files) {
-      const source = path.resolve(payloadDir, file.path);
-      ensurePathWithinRoot(source, payloadDir);
-      const target = path.resolve(this.config.rootDir, file.path);
-      ensurePathWithinRoot(target, this.config.rootDir);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.copyFile(source, target);
-    }
-
-    return {
-      restored: true,
-      backupId: manifest.backupId,
-      filesRestored: manifest.files.length,
-    };
+    return this.backupRetentionService.restoreBackup(input);
   }
 
-  public async verifyBackup(input: {
-    filePath: string;
-  }): Promise<BackupVerifyResponse> {
-    const backupDir = path.resolve(this.getBackupDirectory());
-    const backupPath = path.resolve(backupDir, input.filePath);
-    ensurePathWithinRoot(backupPath, backupDir);
-    return verifyBackupAtPath(backupPath);
+  public async verifyBackup(input: { filePath: string }): Promise<BackupVerifyResponse> {
+    return this.backupRetentionService.verifyBackup(input);
   }
 
   public getRetentionPolicy(): RetentionPolicy {
-    const stored = this.storage.systemSettings.get<RetentionPolicy>(RETENTION_SETTINGS_KEY)?.value;
-    return normalizeRetentionPolicy(stored ?? DEFAULT_RETENTION_POLICY);
+    return this.backupRetentionService.getRetentionPolicy();
   }
 
   public updateRetentionPolicy(input: Partial<RetentionPolicy>): RetentionPolicy {
-    const current = this.getRetentionPolicy();
-    const merged = normalizeRetentionPolicy({
-      ...current,
-      ...input,
-    });
-    this.storage.systemSettings.set(RETENTION_SETTINGS_KEY, merged);
-    return merged;
+    return this.backupRetentionService.updateRetentionPolicy(input);
   }
 
   public async pruneRetention(options: { dryRun?: boolean } = {}): Promise<RetentionPruneResult> {
-    const policy = this.getRetentionPolicy();
-    const dryRun = options.dryRun ?? true;
-    const startedAt = new Date().toISOString();
-    let removedRealtimeEvents = 0;
-    let removedBackupFiles = 0;
-    let removedTranscriptFiles = 0;
-    let removedAuditFiles = 0;
-    let reclaimedBytes = 0;
-
-    const realtimeCutoff = new Date(Date.now() - policy.realtimeEventsDays * 24 * 60 * 60 * 1000).toISOString();
-    const realtimeCountRow = this.gatewaySql.prepare(
-      "SELECT COUNT(*) AS count FROM realtime_events WHERE created_at < ?",
-    ).get(realtimeCutoff) as { count: number } | undefined;
-    removedRealtimeEvents = Number(realtimeCountRow?.count ?? 0);
-    if (!dryRun && removedRealtimeEvents > 0) {
-      this.storage.realtimeEvents.pruneOlderThan(realtimeCutoff);
-    }
-
-    const backupDir = this.getBackupDirectory();
-    const backupEntries = await listFilesSafe(backupDir);
-    const sortedBackups = backupEntries
-      .filter((entry) => entry.isFile())
-      .sort((left, right) => right.mtimeMs - left.mtimeMs);
-    const removableBackups = sortedBackups.slice(Math.max(0, policy.backupsKeep));
-    removedBackupFiles = removableBackups.length;
-    reclaimedBytes += removableBackups.reduce((sum, file) => sum + file.size, 0);
-    if (!dryRun) {
-      for (const file of removableBackups) {
-        await fs.rm(path.join(backupDir, file.name), { force: true });
-      }
-    }
-
-    if (policy.transcriptsDays !== undefined) {
-      const transcriptsDir = path.resolve(this.config.rootDir, this.config.assistant.transcriptsDir);
-      const cutoff = Date.now() - policy.transcriptsDays * 24 * 60 * 60 * 1000;
-      const pruned = await pruneFilesOlderThan(transcriptsDir, cutoff, dryRun);
-      removedTranscriptFiles = pruned.files;
-      reclaimedBytes += pruned.bytes;
-    }
-
-    if (policy.auditDays !== undefined) {
-      const auditDir = path.resolve(this.config.rootDir, this.config.assistant.auditDir);
-      const cutoff = Date.now() - policy.auditDays * 24 * 60 * 60 * 1000;
-      const pruned = await pruneFilesOlderThan(auditDir, cutoff, dryRun);
-      removedAuditFiles = pruned.files;
-      reclaimedBytes += pruned.bytes;
-    }
-
-    return {
-      applied: !dryRun,
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      removedRealtimeEvents,
-      removedBackupFiles,
-      removedTranscriptFiles,
-      removedAuditFiles,
-      reclaimedBytes,
-    };
+    return this.backupRetentionService.pruneRetention(options);
   }
 
   public async invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
@@ -9153,10 +6709,10 @@ export class GatewayService {
 
     const hookableRequest = beforeHook.patch
       ? {
-        ...normalizedRequest,
-        ...(beforeHook.patch.toolName ? { toolName: beforeHook.patch.toolName } : {}),
-        ...(beforeHook.patch.args ? { args: beforeHook.patch.args } : {}),
-      }
+          ...normalizedRequest,
+          ...(beforeHook.patch.toolName ? { toolName: beforeHook.patch.toolName } : {}),
+          ...(beforeHook.patch.args ? { args: beforeHook.patch.args } : {}),
+        }
       : normalizedRequest;
 
     let result: ToolInvokeResult;
@@ -9181,33 +6737,41 @@ export class GatewayService {
 
     let approvalForResult: ApprovalRequest | undefined;
     if (result.outcome === "approval_required" && result.approvalId) {
-      approvalForResult = this.primeApprovalLifecycle(result.approvalId, this.buildApprovalLinkage({
-        sessionId: hookableRequest.sessionId,
-        taskId: hookableRequest.taskId,
-        toolName: hookableRequest.toolName,
-        actionType: "tool.invoke",
-      }));
+      approvalForResult = this.primeApprovalLifecycle(
+        result.approvalId,
+        this.buildApprovalLinkage({
+          sessionId: hookableRequest.sessionId,
+          taskId: hookableRequest.taskId,
+          toolName: hookableRequest.toolName,
+          actionType: "tool.invoke",
+        }),
+      );
     }
 
-    this.publishRealtime("tool_invoked", "policy", {
-      toolName: hookableRequest.toolName,
-      sessionId: hookableRequest.sessionId,
-      agentId: hookableRequest.agentId,
-      taskId: hookableRequest.taskId,
-      outcome: result.outcome,
-      policyReason: result.policyReason,
-      approvalId: result.approvalId,
-      auditEventId: result.auditEventId,
-    }, {
-      eventClass: "operational_signal",
-      eventAuthority: "retained_stream",
-      links: {
+    this.publishRealtime(
+      "tool_invoked",
+      "policy",
+      {
+        toolName: hookableRequest.toolName,
         sessionId: hookableRequest.sessionId,
+        agentId: hookableRequest.agentId,
         taskId: hookableRequest.taskId,
+        outcome: result.outcome,
+        policyReason: result.policyReason,
         approvalId: result.approvalId,
-        runId: approvalForResult?.linkage?.durableRunId,
+        auditEventId: result.auditEventId,
       },
-    });
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: {
+          sessionId: hookableRequest.sessionId,
+          taskId: hookableRequest.taskId,
+          approvalId: result.approvalId,
+          runId: approvalForResult?.linkage?.durableRunId,
+        },
+      },
+    );
 
     if (result.outcome === "approval_required" && result.approvalId) {
       this.scheduleApprovalExplanationById(result.approvalId);
@@ -9256,11 +6820,15 @@ export class GatewayService {
     const firecrawl = this.config.assistant.web.firecrawl;
     const args = { ...request.args } as Record<string, unknown>;
     const explicitBackend = typeof args.backend === "string" ? args.backend.trim().toLowerCase() : undefined;
-    const wantsFirecrawl = firecrawl.enabled
-      && (explicitBackend === "firecrawl"
-        || (!explicitBackend && firecrawl.defaultReadBackend === "firecrawl"));
+    const wantsFirecrawl =
+      firecrawl.enabled &&
+      (explicitBackend === "firecrawl" || (!explicitBackend && firecrawl.defaultReadBackend === "firecrawl"));
 
-    if (request.toolName === "browser.search" || request.toolName === "browser.navigate" || request.toolName === "browser.extract") {
+    if (
+      request.toolName === "browser.search" ||
+      request.toolName === "browser.navigate" ||
+      request.toolName === "browser.extract"
+    ) {
       if (!explicitBackend && firecrawl.enabled) {
         args.backend = firecrawl.defaultReadBackend;
       }
@@ -9301,132 +6869,19 @@ export class GatewayService {
     scopeRef?: string,
     limit = 200,
   ): ToolGrantRecord[] {
-    return this.policyEngine.listGrants(scope, scopeRef, limit);
+    return approvalLifecycleService.listToolGrants(this, scope, scopeRef, limit);
   }
 
   public createToolGrant(input: ToolGrantCreateInput): ToolGrantRecord {
-    const grant = this.policyEngine.createGrant(input);
-    this.publishRealtime("system", "tools", {
-      type: "tool_grant_created",
-      grantId: grant.grantId,
-      toolPattern: grant.toolPattern,
-      decision: grant.decision,
-      scope: grant.scope,
-      scopeRef: grant.scopeRef,
-      expiresAt: grant.expiresAt,
-    });
-    return grant;
+    return approvalLifecycleService.createToolGrant(this, input);
   }
 
   public revokeToolGrant(grantId: string): boolean {
-    const revoked = this.policyEngine.revokeGrant(grantId);
-    if (revoked) {
-      this.publishRealtime("system", "tools", {
-        type: "tool_grant_revoked",
-        grantId,
-      });
-    }
-    return revoked;
+    return approvalLifecycleService.revokeToolGrant(this, grantId);
   }
 
   public async createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest> {
-    const approvalHookWorkspaceId = this.resolveApprovalHookWorkspaceId(input.payload);
-    const approvalHookEntityId = randomUUID();
-    const beforeHook = await this.hooksService.runInlineHooks<{
-      riskLevel?: ApprovalCreateInput["riskLevel"];
-      payloadMerge?: Record<string, unknown>;
-      previewMerge?: Record<string, unknown>;
-      expiresAt?: string | null;
-    }>({
-      workspaceId: approvalHookWorkspaceId,
-      trigger: "approval.create.before",
-      entityType: "approval",
-      entityId: approvalHookEntityId,
-      payload: {
-        kind: input.kind,
-        riskLevel: input.riskLevel,
-        payload: input.payload,
-        preview: input.preview,
-        expiresAt: input.expiresAt ?? null,
-      },
-      parsePatch: (value) => this.parseApprovalCreateHookPatch(value),
-      mergePatch: (current, next) => ({
-        ...(current ?? {}),
-        ...next,
-        ...(current?.payloadMerge || next.payloadMerge
-          ? {
-            payloadMerge: {
-              ...(current?.payloadMerge ?? {}),
-              ...(next.payloadMerge ?? {}),
-            },
-          }
-          : {}),
-        ...(current?.previewMerge || next.previewMerge
-          ? {
-            previewMerge: {
-              ...(current?.previewMerge ?? {}),
-              ...(next.previewMerge ?? {}),
-            },
-          }
-          : {}),
-      }),
-    });
-    if (beforeHook.blockedBy) {
-      throw new Error(beforeHook.blockedBy.reason);
-    }
-
-    const hookableInput = beforeHook.patch
-      ? {
-        ...input,
-        ...(beforeHook.patch.riskLevel ? { riskLevel: beforeHook.patch.riskLevel } : {}),
-        payload: {
-          ...input.payload,
-          ...(beforeHook.patch.payloadMerge ?? {}),
-        },
-        preview: {
-          ...input.preview,
-          ...(beforeHook.patch.previewMerge ?? {}),
-        },
-        expiresAt: beforeHook.patch.expiresAt !== undefined ? beforeHook.patch.expiresAt : input.expiresAt,
-      }
-      : input;
-
-    let approval = this.storage.approvals.create(hookableInput);
-    approval = this.primeApprovalLifecycle(approval.approvalId, this.buildApprovalLinkage(hookableInput.linkage));
-
-    this.storage.approvalEvents.append({
-      approvalId: approval.approvalId,
-      eventType: "created",
-      actorId: "system",
-      payload: {
-        kind: approval.kind,
-        riskLevel: approval.riskLevel,
-        status: approval.status,
-      },
-    });
-
-    await this.storage.audit.append("approvals", {
-      event: "approval.create",
-      approvalId: approval.approvalId,
-      kind: approval.kind,
-      riskLevel: approval.riskLevel,
-      status: approval.status,
-    });
-
-    this.publishRealtime("approval_created", "approvals", {
-      approvalId: approval.approvalId,
-      kind: approval.kind,
-      riskLevel: approval.riskLevel,
-      status: approval.status,
-    }, {
-      eventClass: "domain_fact",
-      eventAuthority: "retained_stream",
-      links: this.buildApprovalRealtimeLinks(approval),
-    });
-
-    this.scheduleApprovalExplanation(approval);
-
-    return approval;
+    return approvalLifecycleService.createApproval(this, input);
   }
 
   public createApprovalRemoteActionToken(
@@ -9437,55 +6892,7 @@ export class GatewayService {
       expiresInMs?: number;
     },
   ): RemoteApprovalActionTokenIssueResult {
-    const approval = this.storage.approvals.get(approvalId);
-    if (approval.status !== "pending") {
-      throw new ConflictError({
-        message: `Approval ${approvalId} is already resolved`,
-      });
-    }
-    const connector = this.requireConnectorRecord(input.connectorId);
-    const expiresInMs = clampInt(input.expiresInMs ?? 15 * 60_000, 15 * 60_000, 60_000, 24 * 60 * 60_000);
-    const token = `grat_${randomBytes(32).toString("base64url")}`;
-    const created = this.storage.remoteActionTokens.create({
-      tokenHash: hashSensitiveToken(token),
-      actionType: "approval.resolve",
-      approvalId,
-      connectorId: input.connectorId,
-      mutation: { approvalId },
-      expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
-    });
-    void this.storage.audit.append("approvals", {
-      event: "approval.remote_token.create",
-      approvalId,
-      connectorId: input.connectorId,
-      issuedBy: input.issuedBy ?? "operator",
-      expiresAt: created.expiresAt,
-      tokenId: created.tokenId,
-    });
-    this.publishRealtime("approval_remote_token_created", "approvals", {
-      approvalId,
-      connectorId: input.connectorId,
-      expiresAt: created.expiresAt,
-      tokenId: created.tokenId,
-    }, {
-      eventClass: "operational_signal",
-      eventAuthority: "retained_stream",
-      links: {
-        approvalId,
-        connectorId: input.connectorId,
-        tokenId: created.tokenId,
-      },
-    });
-    this.enqueueApprovalRemoteTokenDelivery(approval, connector, {
-      token,
-      tokenId: created.tokenId,
-      expiresAt: created.expiresAt,
-    });
-    return {
-      ...created,
-      approvalId,
-      token,
-    };
+    return approvalLifecycleService.createApprovalRemoteActionToken(this, approvalId, input);
   }
 
   public async resolveApprovalWithRemoteToken(input: {
@@ -9494,8 +6901,7 @@ export class GatewayService {
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
   }): Promise<ApprovalResolveResult> {
-    const tokenRecord = this.consumeRemoteActionToken(input.token, "approval.resolve");
-    return this.resolveApprovalWithConsumedRemoteToken(tokenRecord, input);
+    return approvalLifecycleService.resolveApprovalWithRemoteToken(this, input);
   }
 
   public async resolveApprovalWithRemoteTokenId(input: {
@@ -9504,11 +6910,10 @@ export class GatewayService {
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
   }): Promise<ApprovalResolveResult> {
-    const tokenRecord = this.consumeRemoteActionTokenById(input.tokenId, "approval.resolve");
-    return this.resolveApprovalWithConsumedRemoteToken(tokenRecord, input);
+    return approvalLifecycleService.resolveApprovalWithRemoteTokenId(this, input);
   }
 
-  private async resolveApprovalWithConsumedRemoteToken(
+  /** @internal */ public async resolveApprovalWithConsumedRemoteToken(
     tokenRecord: RemoteActionTokenRecord,
     input: {
       decision: ApprovalResolveInput["decision"];
@@ -9540,106 +6945,44 @@ export class GatewayService {
   }
 
   public listApprovals(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
-    return this.storage.approvals.list(status, limit);
+    return approvalLifecycleService.listApprovals(this, status, limit);
   }
 
   public async resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult> {
-    const statusFilter = input.status ?? "pending";
-    const items = this.storage.approvals.list(statusFilter, 10_000);
-    const results: ApprovalBulkResolveResult["items"] = [];
-
-    for (const approval of items) {
-      try {
-        const result = await this.resolveApproval(approval.approvalId, {
-          decision: input.decision,
-          resolvedBy: input.resolvedBy,
-          resolutionNote: input.resolutionNote,
-        });
-        results.push({
-          approvalId: approval.approvalId,
-          outcome: "resolved",
-          status: result.approval.status,
-        });
-      } catch (error) {
-        if (error instanceof ConflictError) {
-          let status: ApprovalRequest["status"] | undefined;
-          try {
-            status = this.storage.approvals.get(approval.approvalId).status;
-          } catch {
-            status = undefined;
-          }
-          results.push({
-            approvalId: approval.approvalId,
-            outcome: "skipped",
-            status,
-            error: error.message,
-          });
-          continue;
-        }
-        results.push({
-          approvalId: approval.approvalId,
-          outcome: "failed",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    const resolvedCount = results.filter((item) => item.outcome === "resolved").length;
-    const skippedCount = results.filter((item) => item.outcome === "skipped").length;
-    const failedCount = results.filter((item) => item.outcome === "failed").length;
-
-    return {
-      decision: input.decision,
-      statusFilter,
-      attemptedCount: results.length,
-      resolvedCount,
-      skippedCount,
-      failedCount,
-      items: results,
-    };
+    return approvalLifecycleService.resolveApprovalsBulk(this, input);
   }
 
   public getApprovalReplay(approvalId: string, replayedBy = "operator"): ApprovalReplayResult {
-    const approval = this.storage.approvals.get(approvalId);
-
-    this.storage.approvalEvents.append({
-      approvalId,
-      eventType: "replayed",
-      actorId: replayedBy,
-      payload: {
-        status: approval.status,
-      },
-    });
-
-    return {
-      approval,
-      events: this.storage.approvalEvents.listByApprovalId(approvalId),
-      pendingAction: this.storage.pendingApprovalActions.find(approvalId),
-      durableRunId: this.findApprovalWaitDurableRunId(approvalId),
-    };
+    return approvalLifecycleService.getApprovalReplay(this, approvalId, replayedBy);
   }
 
-  private findApprovalWaitDurableRunId(approvalId: string): string | undefined {
-    const row = this.gatewaySql.prepare(`
+  /** @internal */ public findApprovalWaitDurableRunId(approvalId: string): string | undefined {
+    const row = this.gatewaySql
+      .prepare(
+        `
       SELECT run_id
       FROM approval_wait_runs
       WHERE approval_id = @approvalId
       LIMIT 1
-    `).get({ approvalId }) as { run_id: string } | undefined;
+    `,
+      )
+      .get({ approvalId }) as { run_id: string } | undefined;
     return row?.run_id;
   }
 
-  private findProactiveDurableRunIdsForApproval(approvalId: string): string[] {
-    const rows = this.gatewaySql.prepare(`
+  /** @internal */ public findProactiveDurableRunIdsForApproval(approvalId: string): string[] {
+    const rows = this.gatewaySql
+      .prepare(
+        `
       SELECT DISTINCT linked_durable_run_id AS run_id
       FROM proactive_runs
       WHERE approval_id = @approvalId
         AND linked_durable_run_id IS NOT NULL
       ORDER BY started_at DESC
-    `).all({ approvalId }) as Array<{ run_id: string | null }>;
-    return rows
-      .map((row) => row.run_id?.trim())
-      .filter((value): value is string => Boolean(value));
+    `,
+      )
+      .all({ approvalId }) as Array<{ run_id: string | null }>;
+    return rows.map((row) => row.run_id?.trim()).filter((value): value is string => Boolean(value));
   }
 
   private findDurableRunMaybe(runId: string): DurableRunRecord | undefined {
@@ -9654,122 +6997,23 @@ export class GatewayService {
   }
 
   public async resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<ApprovalResolveResult> {
-    const current = this.storage.approvals.get(approvalId);
-    if (current.kind === DEVICE_ACCESS_APPROVAL_KIND) {
-      return this.resolveDeviceAccessApproval(current, input);
-    }
-
-    let executedAction: ToolInvokeResult | undefined;
-    const pendingAction = this.storage.pendingApprovalActions.find(approvalId);
-
-    if (input.decision === "approve") {
-      executedAction = await this.policyEngine.executeApprovedAction(approvalId);
-      if (pendingAction?.resolutionStatus === "pending" && executedAction?.outcome !== "executed") {
-        this.storage.pendingApprovalActions.upsertPending({
-          approvalId,
-          actionType: pendingAction.actionType,
-          request: pendingAction.request,
-          createdAt: pendingAction.createdAt,
-        });
-        throw new ConflictError({
-          code: "STATE_CONFLICT",
-          message: `Approved action could not execute and remains pending: ${executedAction?.policyReason ?? "unknown execution error"}`,
-        });
-      }
-    }
-
-    let approval!: ApprovalRequest;
-    let wakeRunId: string | undefined;
-
-    this.storage.runImmediateTransaction(() => {
-      approval = this.storage.approvals.resolve(approvalId, input);
-
-      this.storage.approvalEvents.append({
-        approvalId,
-        eventType: "resolved",
-        actorId: input.resolvedBy,
-        payload: {
-          decision: input.decision,
-          status: approval.status,
-          editedPayload: input.editedPayload,
-          executedOutcome: executedAction?.outcome,
-        },
-      });
-
-      if (input.decision !== "approve" && pendingAction && pendingAction.resolutionStatus === "pending") {
-        this.storage.pendingApprovalActions.markResolved(approvalId, "rejected", {
-          decision: input.decision,
-        });
-      }
-      wakeRunId = this.markApprovalWaitDurableRunResolved(approval, input, executedAction);
-    });
-
-    const proactiveRunIds = this.findProactiveDurableRunIdsForApproval(approvalId);
-    if (wakeRunId) {
-      approval = this.storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: wakeRunId });
-      this.durableRunService.requestRunProcessing(wakeRunId);
-    }
-    for (const proactiveRunId of proactiveRunIds) {
-      try {
-        this.wakeDurableRun(proactiveRunId, {
-          eventKey: "approval.resolved",
-          correlationId: approval.approvalId,
-          payload: {
-            approvalId: approval.approvalId,
-            status: approval.status,
-            decision: input.decision,
-            resolvedBy: input.resolvedBy,
-            executedOutcome: executedAction?.outcome,
-          },
-        });
-      } catch (error) {
-        if (!String((error as Error).message ?? "").includes("not waiting/paused")) {
-          throw error;
-        }
-      }
-      this.durableRunService.requestRunProcessing(proactiveRunId);
-    }
-
-    await this.recordApprovalResolutionEffects(approval, input, executedAction);
-
-    this.hooksService.enqueueAfterHooks({
-      workspaceId: this.resolveApprovalHookWorkspaceId({
-        approvalId,
-        ...(approval.payload ?? {}),
-      }),
-      trigger: "approval.resolve.after",
-      entityType: "approval",
-      entityId: approval.approvalId,
-      payload: {
-        approval,
-        decision: input.decision,
-        resolvedBy: input.resolvedBy,
-        executedAction,
-      },
-    });
-
-    return {
-      approval,
-      executedAction,
-      replay: {
-        approval,
-        events: this.storage.approvalEvents.listByApprovalId(approvalId),
-        pendingAction: this.storage.pendingApprovalActions.find(approvalId),
-      },
-      durableRunId: wakeRunId,
-    };
+    return approvalLifecycleService.resolveApproval(this, approvalId, input);
   }
 
-  private ensureApprovalWaitDurableRun(approval: ApprovalRequest): DurableRunRecord | undefined {
+  /** @internal */ public ensureApprovalWaitDurableRun(approval: ApprovalRequest): DurableRunRecord | undefined {
     if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
       return undefined;
     }
-    const existing = this.gatewaySql.prepare(`
+    const existing = this.gatewaySql
+      .prepare(
+        `
       SELECT run_id
       FROM approval_wait_runs
       WHERE approval_id = @approvalId
       LIMIT 1
-    `).get({ approvalId: approval.approvalId }) as { run_id: string } | undefined;
+    `,
+      )
+      .get({ approvalId: approval.approvalId }) as { run_id: string } | undefined;
     if (existing?.run_id) {
       try {
         return this.getDurableRun(existing.run_id);
@@ -9801,43 +7045,55 @@ export class GatewayService {
         correlationId: approval.approvalId,
       },
     });
-    this.gatewaySql.prepare(`
+    this.gatewaySql
+      .prepare(
+        `
       INSERT INTO approval_wait_runs (approval_id, run_id, created_at, resolved_at)
       VALUES (@approvalId, @runId, @createdAt, NULL)
       ON CONFLICT(approval_id) DO UPDATE SET
         run_id = excluded.run_id,
         created_at = excluded.created_at,
         resolved_at = NULL
-    `).run({
-      approvalId: approval.approvalId,
-      runId: run.runId,
-      createdAt: new Date().toISOString(),
-    });
+    `,
+      )
+      .run({
+        approvalId: approval.approvalId,
+        runId: run.runId,
+        createdAt: new Date().toISOString(),
+      });
     return run;
   }
 
-  private async wakeApprovalWaitDurableRun(
+  /** @internal */ public async wakeApprovalWaitDurableRun(
     approval: ApprovalRequest,
     input: ApprovalResolveInput,
     executedAction?: ToolInvokeResult,
   ): Promise<void> {
-    const row = this.gatewaySql.prepare(`
+    const row = this.gatewaySql
+      .prepare(
+        `
       SELECT run_id
       FROM approval_wait_runs
       WHERE approval_id = @approvalId
       LIMIT 1
-    `).get({ approvalId: approval.approvalId }) as { run_id: string } | undefined;
+    `,
+      )
+      .get({ approvalId: approval.approvalId }) as { run_id: string } | undefined;
     if (!row?.run_id) {
       return;
     }
-    this.gatewaySql.prepare(`
+    this.gatewaySql
+      .prepare(
+        `
       UPDATE approval_wait_runs
       SET resolved_at = @resolvedAt
       WHERE approval_id = @approvalId
-    `).run({
-      approvalId: approval.approvalId,
-      resolvedAt: approval.resolvedAt ?? new Date().toISOString(),
-    });
+    `,
+      )
+      .run({
+        approvalId: approval.approvalId,
+        resolvedAt: approval.resolvedAt ?? new Date().toISOString(),
+      });
     try {
       this.wakeDurableRun(row.run_id, {
         eventKey: "approval.resolved",
@@ -9857,28 +7113,36 @@ export class GatewayService {
     }
   }
 
-  private markApprovalWaitDurableRunResolved(
+  /** @internal */ public markApprovalWaitDurableRunResolved(
     approval: ApprovalRequest,
     input: ApprovalResolveInput,
     executedAction?: ToolInvokeResult,
   ): string | undefined {
-    const row = this.gatewaySql.prepare(`
+    const row = this.gatewaySql
+      .prepare(
+        `
       SELECT run_id
       FROM approval_wait_runs
       WHERE approval_id = @approvalId
       LIMIT 1
-    `).get({ approvalId: approval.approvalId }) as { run_id: string } | undefined;
+    `,
+      )
+      .get({ approvalId: approval.approvalId }) as { run_id: string } | undefined;
     if (!row?.run_id) {
       return undefined;
     }
-    this.gatewaySql.prepare(`
+    this.gatewaySql
+      .prepare(
+        `
       UPDATE approval_wait_runs
       SET resolved_at = @resolvedAt
       WHERE approval_id = @approvalId
-    `).run({
-      approvalId: approval.approvalId,
-      resolvedAt: approval.resolvedAt ?? new Date().toISOString(),
-    });
+    `,
+      )
+      .run({
+        approvalId: approval.approvalId,
+        resolvedAt: approval.resolvedAt ?? new Date().toISOString(),
+      });
     try {
       this.wakeDurableRun(row.run_id, {
         eventKey: "approval.resolved",
@@ -9899,7 +7163,7 @@ export class GatewayService {
     return row.run_id;
   }
 
-  private enqueueApprovalRemoteTokenDelivery(
+  /** @internal */ public enqueueApprovalRemoteTokenDelivery(
     approval: ApprovalRequest,
     connector: ConnectorRecord,
     tokenRecord: {
@@ -9924,11 +7188,12 @@ export class GatewayService {
     }
     return this.createDurableRun({
       workflowKey: "connector.delivery",
-      payload: toPlainRecord({
-        ...payload,
-        traceId: requestAttribution.traceId,
-        originSurface: requestAttribution.originSurface,
-      }) ?? {},
+      payload:
+        toPlainRecord({
+          ...payload,
+          traceId: requestAttribution.traceId,
+          originSurface: requestAttribution.originSurface,
+        }) ?? {},
       metadata: {
         approvalId: approval.approvalId,
         connectorId: connector.connectorId,
@@ -9939,7 +7204,7 @@ export class GatewayService {
     });
   }
 
-  private getCurrentRequestAttribution(): {
+  /** @internal */ public getCurrentRequestAttribution(): {
     correlationId?: string;
     traceId?: string;
     originSurface?: string;
@@ -9952,7 +7217,7 @@ export class GatewayService {
     };
   }
 
-  private buildApprovalLinkage(
+  /** @internal */ public buildApprovalLinkage(
     linkage?: ApprovalRequest["linkage"],
   ): ApprovalRequest["linkage"] | undefined {
     const requestAttribution = this.getCurrentRequestAttribution();
@@ -9966,9 +7231,7 @@ export class GatewayService {
     return Object.keys(normalized).length > 0 ? normalized : undefined;
   }
 
-  private buildApprovalRealtimeLinks(
-    approval: ApprovalRequest,
-  ): NonNullable<RealtimeEvent["links"]> {
+  /** @internal */ public buildApprovalRealtimeLinks(approval: ApprovalRequest): NonNullable<RealtimeEvent["links"]> {
     return {
       approvalId: approval.approvalId,
       sessionId: approval.linkage?.sessionId,
@@ -9981,7 +7244,7 @@ export class GatewayService {
     };
   }
 
-  private primeApprovalLifecycle(
+  /** @internal */ public primeApprovalLifecycle(
     approvalId: string,
     linkage?: ApprovalRequest["linkage"],
   ): ApprovalRequest {
@@ -9996,7 +7259,7 @@ export class GatewayService {
     return approval;
   }
 
-  private requireConnectorRecord(connectorId: string): ConnectorRecord {
+  /** @internal */ public requireConnectorRecord(connectorId: string): ConnectorRecord {
     const normalizedConnectorId = connectorId.trim();
     if (!normalizedConnectorId) {
       throw new ValidationError({
@@ -10013,7 +7276,7 @@ export class GatewayService {
     return connector;
   }
 
-  private consumeRemoteActionToken(
+  /** @internal */ public consumeRemoteActionToken(
     token: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
   ): RemoteActionTokenRecord {
@@ -10053,7 +7316,7 @@ export class GatewayService {
     });
   }
 
-  private consumeRemoteActionTokenById(
+  /** @internal */ public consumeRemoteActionTokenById(
     tokenId: string,
     expectedActionType: RemoteActionTokenRecord["actionType"],
   ): RemoteActionTokenRecord {
@@ -10087,11 +7350,7 @@ export class GatewayService {
     });
   }
 
-  public costSummary(
-    scope: "session" | "day" | "agent" | "task",
-    from: string,
-    to: string,
-  ) {
+  public costSummary(scope: "session" | "day" | "agent" | "task", from: string, to: string) {
     return this.storage.costLedger.summary(scope, from, to);
   }
 
@@ -10102,11 +7361,7 @@ export class GatewayService {
   public runCheaper() {
     return {
       mode: "saver",
-      actions: [
-        "trim context",
-        "summarize tool outputs",
-        "reduce fanout",
-      ],
+      actions: ["trim context", "summarize tool outputs", "reduce fanout"],
     };
   }
 
@@ -10135,14 +7390,15 @@ export class GatewayService {
       return { ...DEFAULT_SKILL_ACTIVATION_POLICY };
     }
     return {
-      guardedAutoThreshold: clamp01(stored.guardedAutoThreshold ?? DEFAULT_SKILL_ACTIVATION_POLICY.guardedAutoThreshold),
-      requireFirstUseConfirmation: stored.requireFirstUseConfirmation ?? DEFAULT_SKILL_ACTIVATION_POLICY.requireFirstUseConfirmation,
+      guardedAutoThreshold: clamp01(
+        stored.guardedAutoThreshold ?? DEFAULT_SKILL_ACTIVATION_POLICY.guardedAutoThreshold,
+      ),
+      requireFirstUseConfirmation:
+        stored.requireFirstUseConfirmation ?? DEFAULT_SKILL_ACTIVATION_POLICY.requireFirstUseConfirmation,
     };
   }
 
-  public updateSkillActivationPolicy(
-    input: Partial<SkillActivationPolicy>,
-  ): SkillActivationPolicy {
+  public updateSkillActivationPolicy(input: Partial<SkillActivationPolicy>): SkillActivationPolicy {
     const current = this.getSkillActivationPolicy();
     const next: SkillActivationPolicy = {
       guardedAutoThreshold: clamp01(input.guardedAutoThreshold ?? current.guardedAutoThreshold),
@@ -10176,7 +7432,9 @@ export class GatewayService {
     this.requireBankrBuiltinEnabled();
     const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
     const parsedCursor = parseBankrAuditCursor(cursor);
-    const rows = this.gatewaySql.prepare(`
+    const rows = this.gatewaySql
+      .prepare(
+        `
       SELECT
         action_id AS actionId,
         session_id AS sessionId,
@@ -10198,11 +7456,13 @@ export class GatewayService {
       )
       ORDER BY created_at DESC, action_id DESC
       LIMIT @limit
-    `).all({
-      cursorCreatedAt: parsedCursor?.createdAt ?? null,
-      cursorActionId: parsedCursor?.actionId ?? null,
-      limit: boundedLimit,
-    }) as Array<{
+    `,
+      )
+      .all({
+        cursorCreatedAt: parsedCursor?.createdAt ?? null,
+        cursorActionId: parsedCursor?.actionId ?? null,
+        limit: boundedLimit,
+      }) as Array<{
       actionId: string;
       sessionId: string;
       actorId: string;
@@ -10228,50 +7488,52 @@ export class GatewayService {
       status: row.status,
       approvalId: row.approvalId,
       policyReason: row.policyReason,
-      details: row.detailsJson
-        ? safeJsonParse<Record<string, unknown>>(row.detailsJson, {})
-        : undefined,
+      details: row.detailsJson ? safeJsonParse<Record<string, unknown>>(row.detailsJson, {}) : undefined,
       createdAt: row.createdAt,
     }));
   }
 
-  public setSkillState(
-    skillId: string,
-    state: SkillRuntimeState,
-    note?: string,
-  ): SkillStateRecord {
+  public setSkillState(skillId: string, state: SkillRuntimeState, note?: string): SkillStateRecord {
     const knownSkill = this.skillsService.list().find((skill) => skill.skillId === skillId);
     if (!knownSkill) {
       throw new Error(`Unknown skill: ${skillId}`);
     }
     const now = new Date().toISOString();
-    this.gatewaySql.prepare(`
+    this.gatewaySql
+      .prepare(
+        `
       INSERT INTO skill_state (skill_id, state, note, updated_at, first_auto_approved_at)
       VALUES (@skillId, @state, @note, @updatedAt, NULL)
       ON CONFLICT(skill_id) DO UPDATE SET
         state = excluded.state,
         note = excluded.note,
         updated_at = excluded.updated_at
-    `).run({
-      skillId,
-      state,
-      note: note?.trim() || null,
-      updatedAt: now,
-    });
+    `,
+      )
+      .run({
+        skillId,
+        state,
+        note: note?.trim() || null,
+        updatedAt: now,
+      });
 
-    this.gatewaySql.prepare(`
+    this.gatewaySql
+      .prepare(
+        `
       INSERT INTO skill_activation_events (
         event_id, skill_id, event_type, payload_json, created_at
       ) VALUES (
         @eventId, @skillId, @eventType, @payloadJson, @createdAt
       )
-    `).run({
-      eventId: randomUUID(),
-      skillId,
-      eventType: "state_updated",
-      payloadJson: JSON.stringify({ state, note: note?.trim() || undefined }),
-      createdAt: now,
-    });
+    `,
+      )
+      .run({
+        eventId: randomUUID(),
+        skillId,
+        eventType: "state_updated",
+        payloadJson: JSON.stringify({ state, note: note?.trim() || undefined }),
+        createdAt: now,
+      });
 
     const updated = this.readSkillStates().get(skillId);
     if (!updated) {
@@ -10281,11 +7543,7 @@ export class GatewayService {
     return updated;
   }
 
-  public bulkSetSkillState(
-    skillIds: string[],
-    state: SkillRuntimeState,
-    note?: string,
-  ): SkillStateRecord[] {
+  public bulkSetSkillState(skillIds: string[], state: SkillRuntimeState, note?: string): SkillStateRecord[] {
     const uniqueIds = [...new Set(skillIds)];
     const updated: SkillStateRecord[] = [];
     for (const skillId of uniqueIds) {
@@ -10339,10 +7597,7 @@ export class GatewayService {
       }
 
       const requiresConfirmation =
-        state === "sleep"
-        && policy.requireFirstUseConfirmation
-        && !isExplicit
-        && !stateRecord?.firstAutoApprovedAt;
+        state === "sleep" && policy.requireFirstUseConfirmation && !isExplicit && !stateRecord?.firstAutoApprovedAt;
 
       selected.push({
         ...skill,
@@ -10538,52 +7793,50 @@ export class GatewayService {
   }
 
   public listCronJobs(): CronJobRecord[] {
-    return this.cronAutomationService.listCronJobs();
+    return cronSchedulerService.listCronJobs(this);
   }
 
   public getCronJob(jobId: string): CronJobRecord {
-    return this.cronAutomationService.getCronJob(jobId);
+    return cronSchedulerService.getCronJob(this, jobId);
   }
 
-  public createCronJob(input: {
-    jobId: string;
-    name: string;
-    schedule: string;
-    enabled?: boolean;
-  }): CronJobRecord {
-    return this.cronAutomationService.createCronJob(input);
+  public createCronJob(input: { jobId: string; name: string; schedule: string; enabled?: boolean }): CronJobRecord {
+    return cronSchedulerService.createCronJob(this, input);
   }
 
-  public updateCronJob(jobId: string, input: {
-    name?: string;
-    schedule?: string;
-    enabled?: boolean;
-  }): CronJobRecord {
-    return this.cronAutomationService.updateCronJob(jobId, input);
+  public updateCronJob(
+    jobId: string,
+    input: {
+      name?: string;
+      schedule?: string;
+      enabled?: boolean;
+    },
+  ): CronJobRecord {
+    return cronSchedulerService.updateCronJob(this, jobId, input);
   }
 
   public setCronJobEnabled(jobId: string, enabled: boolean): CronJobRecord {
-    return this.cronAutomationService.setCronJobEnabled(jobId, enabled);
+    return cronSchedulerService.setCronJobEnabled(this, jobId, enabled);
   }
 
   public deleteCronJob(jobId: string): { deleted: boolean; jobId: string } {
-    return this.cronAutomationService.deleteCronJob(jobId);
+    return cronSchedulerService.deleteCronJob(this, jobId);
   }
 
   public async runCronJobNow(jobId: string): Promise<{ jobId: string; status: "ok" }> {
-    return this.cronAutomationService.runCronJobNow(jobId);
+    return cronSchedulerService.runCronJobNow(this, jobId);
   }
 
   public listCronReviewQueue(limit = 200): CronReviewItem[] {
-    return this.cronAutomationService.listCronReviewQueue(limit);
+    return cronSchedulerService.listCronReviewQueue(this, limit);
   }
 
   public retryCronReviewQueueItem(itemId: string): CronReviewItem {
-    return this.cronAutomationService.retryCronReviewQueueItem(itemId);
+    return cronSchedulerService.retryCronReviewQueueItem(this, itemId);
   }
 
   public getCronRunDiff(runId: string): CronRunDiff {
-    return this.cronAutomationService.getCronRunDiff(runId);
+    return cronSchedulerService.getCronRunDiff(this, runId);
   }
 
   public async uploadWorkspaceFile(relativePath: string, content: string): Promise<FileUploadResult> {
@@ -10660,8 +7913,8 @@ export class GatewayService {
         continue;
       }
       if (
-        isCurrentFollowOnParityArtifact(bundle, now, ["draft", "complete"])
-        && isCurrentFollowOnParityArtifact(evidence, now, ["evidence"])
+        isCurrentFollowOnParityArtifact(bundle, now, ["draft", "complete"]) &&
+        isCurrentFollowOnParityArtifact(evidence, now, ["evidence"])
       ) {
         currentProfiles.push(profile);
       } else {
@@ -10726,9 +7979,7 @@ export class GatewayService {
 
     const contentType = detectMimeType(fullPath);
     const isText = isTextContentType(contentType);
-    const content = isText
-      ? await fs.readFile(fullPath, "utf8")
-      : await fs.readFile(fullPath);
+    const content = isText ? await fs.readFile(fullPath, "utf8") : await fs.readFile(fullPath);
 
     return {
       relativePath: normalized,
@@ -10777,9 +8028,10 @@ export class GatewayService {
 
   public async listWorkspaceFiles(relativeDir = ".", maxItems = 1000): Promise<MemoryFileEntry[]> {
     const normalized = relativeDir === "." ? "." : this.normalizeRelativePath(relativeDir);
-    const baseDir = normalized === "."
-      ? path.resolve(this.config.rootDir, this.config.assistant.workspaceDir)
-      : path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, normalized);
+    const baseDir =
+      normalized === "."
+        ? path.resolve(this.config.rootDir, this.config.assistant.workspaceDir)
+        : path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, normalized);
 
     assertWritePathInJail(baseDir, this.config.toolPolicy.sandbox.writeJailRoots);
 
@@ -10863,7 +8115,7 @@ export class GatewayService {
     return this.storage.contextManifests.maybeGetDetailByTurn(normalizedTurnId);
   }
 
-  private persistContextManifestForCompletionRequest(input: {
+  /** @internal */ public persistContextManifestForCompletionRequest(input: {
     request: ChatCompletionRequest;
     memoryContext?: MemoryContextPack;
   }): void {
@@ -10933,12 +8185,14 @@ export class GatewayService {
     });
   }
 
-  public listMemoryItems(input: {
-    namespace?: string;
-    status?: MemoryItemRecord["status"] | "all";
-    query?: string;
-    limit?: number;
-  } = {}): MemoryItemRecord[] {
+  public listMemoryItems(
+    input: {
+      namespace?: string;
+      status?: MemoryItemRecord["status"] | "all";
+      query?: string;
+      limit?: number;
+    } = {},
+  ): MemoryItemRecord[] {
     this.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const namespace = input.namespace?.trim();
     const status = input.status && input.status !== "all" ? input.status : undefined;
@@ -10959,14 +8213,18 @@ export class GatewayService {
       params.query = `%${query}%`;
     }
 
-    const rows = this.gatewaySql.prepare(`
+    const rows = this.gatewaySql
+      .prepare(
+        `
       SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
              created_at, updated_at, forgotten_at
       FROM memory_items
       WHERE ${clauses.join(" AND ")}
       ORDER BY updated_at DESC
       LIMIT @limit
-    `).all(params) as Array<{
+    `,
+      )
+      .all(params) as Array<{
       item_id: string;
       namespace: string;
       title: string;
@@ -10984,11 +8242,7 @@ export class GatewayService {
     return rows.map((row) => this.mapMemoryItemRow(row));
   }
 
-  public patchMemoryItem(
-    itemId: string,
-    patch: MemoryLifecyclePatch,
-    actorId = "operator",
-  ): MemoryItemRecord {
+  public patchMemoryItem(itemId: string, patch: MemoryLifecyclePatch, actorId = "operator"): MemoryItemRecord {
     this.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const current = this.requireMemoryItem(itemId);
     const now = new Date().toISOString();
@@ -10997,13 +8251,16 @@ export class GatewayService {
       content: patch.content !== undefined ? patch.content : current.content,
       metadata: patch.metadata !== undefined ? patch.metadata : current.metadata,
       pinned: patch.pinned !== undefined ? patch.pinned : current.pinned,
-      ttlOverrideSeconds: patch.ttlOverrideSeconds === null
-        ? null
-        : patch.ttlOverrideSeconds !== undefined
-          ? Math.max(1, Math.min(31_536_000, Math.floor(patch.ttlOverrideSeconds)))
-          : current.ttlOverrideSeconds ?? null,
+      ttlOverrideSeconds:
+        patch.ttlOverrideSeconds === null
+          ? null
+          : patch.ttlOverrideSeconds !== undefined
+            ? Math.max(1, Math.min(31_536_000, Math.floor(patch.ttlOverrideSeconds)))
+            : (current.ttlOverrideSeconds ?? null),
     };
-    this.gatewaySql.prepare(`
+    this.gatewaySql
+      .prepare(
+        `
       UPDATE memory_items
       SET title = @title,
           content = @content,
@@ -11012,15 +8269,17 @@ export class GatewayService {
           ttl_override_seconds = @ttlOverrideSeconds,
           updated_at = @updatedAt
       WHERE item_id = @itemId
-    `).run({
-      itemId,
-      title: next.title,
-      content: next.content,
-      metadataJson: JSON.stringify(next.metadata ?? {}),
-      pinned: next.pinned ? 1 : 0,
-      ttlOverrideSeconds: next.ttlOverrideSeconds,
-      updatedAt: now,
-    });
+    `,
+      )
+      .run({
+        itemId,
+        title: next.title,
+        content: next.content,
+        metadataJson: JSON.stringify(next.metadata ?? {}),
+        pinned: next.pinned ? 1 : 0,
+        ttlOverrideSeconds: next.ttlOverrideSeconds,
+        updatedAt: now,
+      });
     if (patch.pinned !== undefined) {
       this.recordMemoryChange(itemId, "pin_changed", actorId, { pinned: next.pinned });
     }
@@ -11047,17 +8306,21 @@ export class GatewayService {
       return current;
     }
     const now = new Date().toISOString();
-    this.gatewaySql.prepare(`
+    this.gatewaySql
+      .prepare(
+        `
       UPDATE memory_items
       SET status = 'forgotten',
           forgotten_at = @forgottenAt,
           updated_at = @updatedAt
       WHERE item_id = @itemId
-    `).run({
-      itemId,
-      forgottenAt: now,
-      updatedAt: now,
-    });
+    `,
+      )
+      .run({
+        itemId,
+        forgottenAt: now,
+        updatedAt: now,
+      });
     this.recordMemoryChange(itemId, "forgotten", actorId, {
       previousStatus: current.status,
     });
@@ -11084,7 +8347,7 @@ export class GatewayService {
       throw new Error("Memory forget requires at least one criterion: itemIds, namespace, or query.");
     }
     const actorId = input.actorId?.trim() || "operator";
-    let targets: string[] = [];
+    let targets: string[];
     if (criteria.hasItemIds) {
       targets = criteria.itemIds;
     } else {
@@ -11107,13 +8370,17 @@ export class GatewayService {
   public listMemoryItemHistory(itemId: string, limit = 200): MemoryChangeEvent[] {
     this.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const safeLimit = Math.max(1, Math.min(2_000, Math.floor(limit)));
-    const rows = this.gatewaySql.prepare(`
+    const rows = this.gatewaySql
+      .prepare(
+        `
       SELECT change_id, item_id, change_type, actor_id, payload_json, created_at
       FROM memory_change_history
       WHERE item_id = ?
       ORDER BY created_at DESC
       LIMIT ?
-    `).all(itemId, safeLimit) as Array<{
+    `,
+      )
+      .all(itemId, safeLimit) as Array<{
       change_id: string;
       item_id: string;
       change_type: MemoryChangeEvent["changeType"];
@@ -11238,63 +8505,7 @@ export class GatewayService {
   }
 
   public getSettings(): RuntimeSettings {
-    const features = this.readFeatureFlags();
-    return {
-      environment: this.config.assistant.environment,
-      deploymentProfile: this.config.assistant.deploymentProfile,
-      defaultToolProfile: this.config.toolPolicy.tools.profile,
-      budgetMode: this.config.budgets.mode,
-      workspaceDir: this.config.assistant.workspaceDir,
-      writeJailRoots: this.config.toolPolicy.sandbox.writeJailRoots,
-      readOnlyRoots: this.config.toolPolicy.sandbox.readOnlyRoots,
-      readAccessMode: this.config.toolPolicy.sandbox.readAccessMode ?? "roots_only",
-      networkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
-      approvalExplainer: this.config.assistant.approvalExplainer,
-      memory: {
-        enabled: this.config.assistant.memory.enabled,
-        qmd: {
-          enabled: this.config.assistant.memory.qmd.enabled,
-          applyToChat: this.config.assistant.memory.qmd.applyToChat,
-          applyToOrchestration: this.config.assistant.memory.qmd.applyToOrchestration,
-          minPromptChars: this.config.assistant.memory.qmd.minPromptChars,
-          maxContextTokens: this.config.assistant.memory.qmd.maxContextTokens,
-          cacheTtlSeconds: this.config.assistant.memory.qmd.cacheTtlSeconds,
-          distillerProviderId: this.config.assistant.memory.qmd.distiller.providerId,
-          distillerModel: this.config.assistant.memory.qmd.distiller.model,
-        },
-      },
-      web: {
-        firecrawl: {
-          enabled: this.config.assistant.web.firecrawl.enabled,
-          baseUrl: this.config.assistant.web.firecrawl.baseUrl,
-          apiKeyEnv: this.config.assistant.web.firecrawl.apiKeyEnv,
-          timeoutMs: this.config.assistant.web.firecrawl.timeoutMs,
-          defaultReadBackend: this.config.assistant.web.firecrawl.defaultReadBackend,
-          fallbackToNative: this.config.assistant.web.firecrawl.fallbackToNative,
-        },
-      },
-      auth: this.getAuthRuntimeSettings(),
-      llm: this.llmService.getRuntimeConfig({
-        includeKeychainForActiveProvider: true,
-        useCache: true,
-      }),
-      mesh: {
-        enabled: this.config.assistant.mesh.enabled,
-        mode: this.config.assistant.mesh.mode,
-        nodeId: this.config.assistant.mesh.nodeId,
-        mdns: this.config.assistant.mesh.discovery.mdns,
-        staticPeers: this.config.assistant.mesh.discovery.staticPeers,
-        requireMtls: this.config.assistant.mesh.security.requireMtls,
-        tailnetEnabled: this.config.assistant.mesh.security.tailnet.enabled,
-      },
-      npu: {
-        enabled: this.config.assistant.npu.enabled,
-        autoStart: this.config.assistant.npu.autoStart,
-        sidecarUrl: this.config.assistant.npu.sidecar.baseUrl,
-        status: this.npuSidecar.getStatus(),
-      },
-      features,
-    };
+    return settingsAuthService.getSettings(this);
   }
 
   public getOnboardingState(): OnboardingState {
@@ -11304,9 +8515,9 @@ export class GatewayService {
     );
     const authReady = this.isAuthConfiguredForMode(settings.auth);
     const llmReady = Boolean(
-      activeProvider
-      && settings.llm.activeModel.trim()
-      && (activeProvider.hasApiKey || this.isProviderLikelyLocal(activeProvider.baseUrl)),
+      activeProvider &&
+      settings.llm.activeModel.trim() &&
+      (activeProvider.hasApiKey || this.isProviderLikelyLocal(activeProvider.baseUrl)),
     );
     const runtimeReady = Boolean(settings.defaultToolProfile.trim()) && Boolean(settings.budgetMode.trim());
     const meshReady = settings.mesh.enabled
@@ -11366,10 +8577,7 @@ export class GatewayService {
             label: provider.label,
             baseUrl: provider.baseUrl,
             apiStyle: provider.apiStyle,
-            resolvedApiStyle: this.llmService.resolveExecutionApiStyle(
-              provider.providerId,
-              provider.defaultModel,
-            ),
+            resolvedApiStyle: this.llmService.resolveExecutionApiStyle(provider.providerId, provider.defaultModel),
             defaultModel: provider.defaultModel,
             hasApiKey: provider.hasApiKey,
             apiKeySource: provider.apiKeySource,
@@ -11416,291 +8624,15 @@ export class GatewayService {
     return this.getOnboardingState();
   }
 
-  public updateSettings(input: {
-    deploymentProfile?: DeploymentProfile;
-    defaultToolProfile?: string;
-    budgetMode?: "saver" | "balanced" | "power";
-    readAccessMode?: FilesystemReadAccessMode;
-    networkAllowlist?: string[];
-    auth?: AuthSettingsUpdateInput;
-    llm?: {
-      activeProviderId?: string;
-      activeModel?: string;
-      upsertProvider?: {
-        providerId: string;
-        label?: string;
-        baseUrl?: string;
-        apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
-        defaultModel?: string;
-        apiKey?: string;
-        apiKeyEnv?: string;
-        persistSecretToSecureStore?: boolean;
-        request?: LlmProviderRequestConfig;
-        headers?: Record<string, string>;
-      };
-    };
-    memory?: {
-      enabled?: boolean;
-      qmdEnabled?: boolean;
-      qmdApplyToChat?: boolean;
-      qmdApplyToOrchestration?: boolean;
-      qmdMaxContextTokens?: number;
-      qmdMinPromptChars?: number;
-      qmdCacheTtlSeconds?: number;
-      qmdDistillerProviderId?: string;
-      qmdDistillerModel?: string;
-    };
-    web?: {
-      firecrawl?: {
-        enabled?: boolean;
-        baseUrl?: string;
-        apiKeyEnv?: string;
-        timeoutMs?: number;
-        defaultReadBackend?: "native" | "firecrawl";
-        fallbackToNative?: boolean;
-      };
-    };
-    mesh?: {
-      enabled?: boolean;
-      mode?: "lan" | "wan" | "tailnet";
-      nodeId?: string;
-      mdns?: boolean;
-      staticPeers?: string[];
-      requireMtls?: boolean;
-      tailnetEnabled?: boolean;
-    };
-    npu?: {
-      enabled?: boolean;
-      autoStart?: boolean;
-      sidecarUrl?: string;
-    };
-    features?: Partial<RuntimeSettings["features"]>;
-  }): RuntimeSettings {
-    this.assertDeploymentProfileUpdate(input);
-    this.assertFirecrawlRuntimeUpdate(input);
-
-    let persistAssistant = false;
-    let persistToolPolicy = false;
-    let persistBudgets = false;
-
-    if (input.deploymentProfile) {
-      this.config.assistant.deploymentProfile = input.deploymentProfile;
-      persistAssistant = true;
-    }
-
-    if (input.defaultToolProfile) {
-      if (!Object.prototype.hasOwnProperty.call(this.config.toolPolicy.profiles, input.defaultToolProfile)) {
-        throw new Error(`Unknown tool profile: ${input.defaultToolProfile}`);
-      }
-      this.config.toolPolicy.tools.profile = input.defaultToolProfile as typeof this.config.toolPolicy.tools.profile;
-      this.config.assistant.defaultToolProfile = input.defaultToolProfile;
-      this.llmService.updateNetworkAllowlist(this.config.toolPolicy.sandbox.networkAllowlist, {
-        enforce: this.config.toolPolicy.tools.profile !== "danger",
-      });
-      persistAssistant = true;
-      persistToolPolicy = true;
-    }
-
-    if (input.budgetMode) {
-      this.config.budgets.mode = input.budgetMode;
-      persistBudgets = true;
-    }
-
-    if (input.readAccessMode) {
-      this.config.toolPolicy.sandbox.readAccessMode = input.readAccessMode;
-      persistToolPolicy = true;
-    }
-
-    if (input.networkAllowlist) {
-      this.config.toolPolicy.sandbox.networkAllowlist = input.networkAllowlist
-        .map((host) => host.trim())
-        .filter(Boolean);
-      this.llmService.updateNetworkAllowlist(this.config.toolPolicy.sandbox.networkAllowlist, {
-        enforce: this.config.toolPolicy.tools.profile !== "danger",
-      });
-      persistToolPolicy = true;
-    }
-
-    if (input.auth) {
-      this.updateAuthSettings(input.auth);
-      persistAssistant = true;
-    }
-
-    if (input.memory) {
-      if (input.memory.enabled !== undefined) {
-        this.config.assistant.memory.enabled = input.memory.enabled;
-      }
-      if (input.memory.qmdEnabled !== undefined) {
-        this.config.assistant.memory.qmd.enabled = input.memory.qmdEnabled;
-      }
-      if (input.memory.qmdApplyToChat !== undefined) {
-        this.config.assistant.memory.qmd.applyToChat = input.memory.qmdApplyToChat;
-      }
-      if (input.memory.qmdApplyToOrchestration !== undefined) {
-        this.config.assistant.memory.qmd.applyToOrchestration = input.memory.qmdApplyToOrchestration;
-      }
-      if (input.memory.qmdMaxContextTokens !== undefined) {
-        this.config.assistant.memory.qmd.maxContextTokens = Math.max(100, input.memory.qmdMaxContextTokens);
-      }
-      if (input.memory.qmdMinPromptChars !== undefined) {
-        this.config.assistant.memory.qmd.minPromptChars = Math.max(0, input.memory.qmdMinPromptChars);
-      }
-      if (input.memory.qmdCacheTtlSeconds !== undefined) {
-        this.config.assistant.memory.qmd.cacheTtlSeconds = Math.max(10, input.memory.qmdCacheTtlSeconds);
-      }
-      if (input.memory.qmdDistillerProviderId !== undefined) {
-        this.config.assistant.memory.qmd.distiller.providerId = input.memory.qmdDistillerProviderId.trim() || undefined;
-      }
-      if (input.memory.qmdDistillerModel !== undefined) {
-        this.config.assistant.memory.qmd.distiller.model = input.memory.qmdDistillerModel.trim() || undefined;
-      }
-      persistAssistant = true;
-    }
-
-    if (input.web?.firecrawl) {
-      const firecrawl = input.web.firecrawl;
-      if (firecrawl.enabled !== undefined) {
-        this.config.assistant.web.firecrawl.enabled = firecrawl.enabled;
-      }
-      if (firecrawl.baseUrl !== undefined) {
-        const trimmed = firecrawl.baseUrl.trim();
-        if (!trimmed) {
-          throw new Error("web.firecrawl.baseUrl cannot be empty");
-        }
-        this.config.assistant.web.firecrawl.baseUrl = trimmed;
-      }
-      if (firecrawl.apiKeyEnv !== undefined) {
-        this.config.assistant.web.firecrawl.apiKeyEnv = firecrawl.apiKeyEnv.trim() || undefined;
-      }
-      if (firecrawl.timeoutMs !== undefined) {
-        this.config.assistant.web.firecrawl.timeoutMs = Math.max(1_000, Math.min(firecrawl.timeoutMs, 120_000));
-      }
-      if (firecrawl.defaultReadBackend !== undefined) {
-        this.config.assistant.web.firecrawl.defaultReadBackend = firecrawl.defaultReadBackend;
-      }
-      if (firecrawl.fallbackToNative !== undefined) {
-        this.config.assistant.web.firecrawl.fallbackToNative = firecrawl.fallbackToNative;
-      }
-      persistAssistant = true;
-    }
-
-    if (input.mesh) {
-      if (input.mesh.enabled !== undefined) {
-        this.config.assistant.mesh.enabled = input.mesh.enabled;
-      }
-      if (input.mesh.mode) {
-        this.config.assistant.mesh.mode = input.mesh.mode;
-      }
-      if (input.mesh.nodeId !== undefined) {
-        const trimmed = input.mesh.nodeId.trim();
-        if (!trimmed) {
-          throw new Error("mesh.nodeId cannot be empty");
-        }
-        this.config.assistant.mesh.nodeId = trimmed;
-      }
-      if (input.mesh.mdns !== undefined) {
-        this.config.assistant.mesh.discovery.mdns = input.mesh.mdns;
-      }
-      if (input.mesh.staticPeers) {
-        this.config.assistant.mesh.discovery.staticPeers = input.mesh.staticPeers
-          .map((peer) => peer.trim())
-          .filter(Boolean);
-      }
-      if (input.mesh.requireMtls !== undefined) {
-        this.config.assistant.mesh.security.requireMtls = input.mesh.requireMtls;
-      }
-      if (input.mesh.tailnetEnabled !== undefined) {
-        this.config.assistant.mesh.security.tailnet.enabled = input.mesh.tailnetEnabled;
-      }
-
-      this.meshService.updateOptions({
-        enabled: this.config.assistant.mesh.enabled,
-        mode: this.config.assistant.mesh.mode,
-        localNodeId: this.config.assistant.mesh.nodeId,
-        localNodeLabel: this.config.assistant.mesh.label,
-        advertiseAddress: this.config.assistant.mesh.advertiseAddress,
-        requireMtls: this.config.assistant.mesh.security.requireMtls,
-        tailnetEnabled: this.config.assistant.mesh.security.tailnet.enabled,
-        joinToken: process.env[this.config.assistant.mesh.security.joinTokenEnv],
-        defaultLeaseTtlSeconds: this.config.assistant.mesh.leases.ttlSeconds,
-      });
-      persistAssistant = true;
-    }
-
-    if (input.npu) {
-      if (input.npu.enabled !== undefined) {
-        this.config.assistant.npu.enabled = input.npu.enabled;
-      }
-      if (input.npu.autoStart !== undefined) {
-        this.config.assistant.npu.autoStart = input.npu.autoStart;
-      }
-      if (input.npu.sidecarUrl !== undefined) {
-        const trimmed = input.npu.sidecarUrl.trim();
-        if (!trimmed) {
-          throw new Error("npu.sidecarUrl cannot be empty");
-        }
-        this.config.assistant.npu.sidecar.baseUrl = trimmed;
-      }
-
-      this.npuSidecar.updateConfig(this.config.assistant.npu);
-      if (!this.config.assistant.npu.enabled) {
-        void this.npuSidecar.stop("disabled").catch((error) => {
-          console.warn("[goatcitadel] npu sidecar stop failed after settings update", error);
-        });
-      } else if (this.config.assistant.npu.autoStart) {
-        void this.npuSidecar.start("config_autostart").catch((error) => {
-          console.error("[goatcitadel] npu sidecar autostart failed after settings update", error);
-        });
-      }
-      persistAssistant = true;
-    }
-
-    if (input.features) {
-      this.updateFeatureFlags(input.features);
-      persistAssistant = true;
-    }
-
-    if (input.llm) {
-      const llmInput = {
-        ...input.llm,
-        upsertProvider: input.llm.upsertProvider
-          ? { ...input.llm.upsertProvider }
-          : undefined,
-      };
-      const submittedApiKey = llmInput.upsertProvider?.apiKey?.trim();
-      if (llmInput.upsertProvider && submittedApiKey) {
-        persistProviderApiKeyWithFallback({
-          providerId: llmInput.upsertProvider.providerId,
-          apiKey: submittedApiKey,
-          preferredEnvVar: llmInput.upsertProvider.apiKeyEnv,
-          persistToEnv: llmInput.upsertProvider.persistSecretToSecureStore === false,
-          rootDir: this.config.rootDir,
-          llmService: this.llmService,
-        });
-        llmInput.upsertProvider.apiKey = undefined;
-      }
-      this.llmService.updateRuntimeConfig(llmInput);
-      this.persistLlmConfig();
-    }
-
-    if (persistToolPolicy) {
-      this.persistToolPolicyConfig();
-    }
-    if (persistBudgets) {
-      this.persistBudgetsConfig();
-    }
-    if (persistAssistant) {
-      this.persistAssistantConfig();
-    }
-
-    return this.getSettings();
+  public updateSettings(input: settingsAuthService.UpdateSettingsInput): RuntimeSettings {
+    return settingsAuthService.updateSettings(this, input);
   }
 
   public getDeploymentProfile(): DeploymentProfile {
     return this.config.assistant.deploymentProfile;
   }
 
-  private assertDeploymentProfileUpdate(input: {
+  /** @internal */ public assertDeploymentProfileUpdate(input: {
     deploymentProfile?: DeploymentProfile;
     auth?: AuthSettingsUpdateInput;
     networkAllowlist?: string[];
@@ -11741,7 +8673,7 @@ export class GatewayService {
     }
   }
 
-  private assertFirecrawlRuntimeUpdate(input: {
+  /** @internal */ public assertFirecrawlRuntimeUpdate(input: {
     networkAllowlist?: string[];
     web?: {
       firecrawl?: {
@@ -11760,45 +8692,18 @@ export class GatewayService {
       return;
     }
     if (!this.isUrlAllowlistedInList(nextBaseUrl, nextAllowlist)) {
-      throw new Error(`web.firecrawl.baseUrl must be present in the outbound allowlist before Firecrawl can be enabled: ${nextBaseUrl}`);
+      throw new Error(
+        `web.firecrawl.baseUrl must be present in the outbound allowlist before Firecrawl can be enabled: ${nextBaseUrl}`,
+      );
     }
   }
 
   public getAuthRuntimeSettings(): AuthRuntimeSettings {
-    const plan = createGatewayAuthCredentialPlan({
-      runtimeConfig: this.config,
-      env: process.env,
-      configAuth: readAssistantAuthConfigSnapshotSync(this.config.rootDir),
-    });
-    return {
-      mode: this.config.assistant.auth.mode,
-      allowLoopbackBypass: this.config.assistant.auth.allowLoopbackBypass,
-      tokenConfigured: Boolean(this.config.assistant.auth.token.value?.trim()),
-      basicConfigured: Boolean(
-        this.config.assistant.auth.basic.username?.trim()
-        && this.config.assistant.auth.basic.password?.trim(),
-      ),
-      plan,
-    };
+    return settingsAuthService.getAuthRuntimeSettings(this);
   }
 
   public updateAuthSettings(input: AuthSettingsUpdateInput): AuthRuntimeSettings {
-    if (input.mode) {
-      this.config.assistant.auth.mode = input.mode;
-    }
-    if (input.allowLoopbackBypass !== undefined) {
-      this.config.assistant.auth.allowLoopbackBypass = input.allowLoopbackBypass;
-    }
-    if (input.token !== undefined) {
-      this.config.assistant.auth.token.value = input.token.trim() || undefined;
-    }
-    if (input.basicUsername !== undefined) {
-      this.config.assistant.auth.basic.username = input.basicUsername.trim() || undefined;
-    }
-    if (input.basicPassword !== undefined) {
-      this.config.assistant.auth.basic.password = input.basicPassword.trim() || undefined;
-    }
-    return this.getAuthRuntimeSettings();
+    return settingsAuthService.updateAuthSettings(this, input);
   }
 
   public getAuthCredentialPlan() {
@@ -11819,7 +8724,7 @@ export class GatewayService {
     });
   }
 
-  public async createDeviceAccessRequest(
+  public createDeviceAccessRequest(
     input: DeviceAccessRequestCreateInput,
     context: {
       requestedOrigin?: string;
@@ -11830,164 +8735,14 @@ export class GatewayService {
       originSurface?: string;
     },
   ): Promise<DeviceAccessRequestCreateResponse> {
-    if (this.config.assistant.auth.mode === "none") {
-      throw new Error("Device approvals are not needed when gateway auth mode is none.");
-    }
-
-    const now = Date.now();
-    const createdAt = new Date(now).toISOString();
-    const expiresAt = new Date(now + DEVICE_ACCESS_REQUEST_TTL_MS).toISOString();
-    const requestId = randomUUID();
-    const requestSecret = randomBytes(DEVICE_ACCESS_SECRET_BYTES).toString("base64url");
-    const deviceType = normalizeDeviceAccessDeviceType(input.deviceType);
-    const platform = normalizeOptionalDeviceAccessText(input.platform, 120) ?? inferPlatformFromUserAgent(context.userAgent);
-    const deviceLabel = normalizeDeviceAccessLabel(input.deviceLabel, {
-      deviceType,
-      platform,
-      userAgent: context.userAgent,
-    });
-    const requestedOrigin = normalizeOptionalDeviceAccessText(context.requestedOrigin, 240);
-    const requestedIp = normalizeOptionalDeviceAccessText(context.requestedIp, 120);
-    const userAgent = normalizeOptionalDeviceAccessText(context.userAgent, 512);
-    const correlationId = normalizeOptionalDeviceAccessText(context.correlationId, 128);
-    const traceId = normalizeOptionalDeviceAccessText(context.traceId, 128);
-    const originSurface = normalizeOptionalDeviceAccessText(context.originSurface, 120);
-
-    const approval = await this.createApproval({
-      kind: DEVICE_ACCESS_APPROVAL_KIND,
-      riskLevel: "danger",
-      payload: {
-        requestId,
-        deviceLabel,
-        deviceType,
-        platform,
-        requestedOrigin,
-        requestedIp,
-        userAgent,
-      },
-      preview: {
-        title: "Allow new device access",
-        requestId,
-        deviceLabel,
-        deviceType,
-        platform,
-        requestedOrigin,
-        requestedIp,
-      },
-    });
-
-    try {
-      this.gatewaySql.prepare(`
-        INSERT INTO auth_device_requests (
-          request_id, approval_id, request_secret_hash, device_label, device_type, platform,
-          requested_origin, requested_ip, user_agent, status, created_at, expires_at
-        ) VALUES (
-          @requestId, @approvalId, @requestSecretHash, @deviceLabel, @deviceType, @platform,
-          @requestedOrigin, @requestedIp, @userAgent, @status, @createdAt, @expiresAt
-        )
-      `).run({
-        requestId,
-        approvalId: approval.approvalId,
-        requestSecretHash: hashSensitiveToken(requestSecret),
-        deviceLabel,
-        deviceType,
-        platform: platform ?? null,
-        requestedOrigin: requestedOrigin ?? null,
-        requestedIp: requestedIp ?? null,
-        userAgent: userAgent ?? null,
-        status: "pending",
-        createdAt,
-        expiresAt,
-      });
-    } catch (error) {
-      try {
-        await this.resolveApproval(approval.approvalId, {
-          decision: "reject",
-          resolvedBy: "system:auth-device-request",
-          resolutionNote: "Device request registration failed.",
-        });
-      } catch {
-        // Best effort cleanup only.
-      }
-      throw error;
-    }
-
-    await this.storage.audit.append("approvals", {
-      event: "auth.device_request.create",
-      requestId,
-      approvalId: approval.approvalId,
-      deviceLabel,
-      deviceType,
-      platform,
-      requestedOrigin,
-      requestedIp,
-      correlationId,
-      traceId,
-      originSurface,
-    });
-
-    this.publishRealtime("auth_device_request_created", "auth", {
-      requestId,
-      approvalId: approval.approvalId,
-      deviceLabel,
-      deviceType,
-      platform,
-      requestedOrigin,
-      requestedIp,
-      correlationId,
-      traceId,
-      originSurface,
-      createdAt,
-      expiresAt,
-    });
-
-    return {
-      requestId,
-      requestSecret,
-      approvalId: approval.approvalId,
-      status: "pending",
-      expiresAt,
-      pollAfterMs: DEVICE_ACCESS_REQUEST_POLL_AFTER_MS,
-      message: "Waiting for approval from another authenticated Mission Control session.",
-    };
+    return settingsAuthService.createDeviceAccessRequest(this, input, context);
   }
 
-  public async getDeviceAccessRequestStatus(
+  public getDeviceAccessRequestStatus(
     requestId: string,
     requestSecret: string,
   ): Promise<DeviceAccessRequestStatusResponse> {
-    const request = this.getAuthDeviceRequestById(requestId);
-    if (!request) {
-      throw new Error("Device access request not found.");
-    }
-    if (!requestSecret.trim() || !timingSafeStringEqual(hashSensitiveToken(requestSecret), request.requestSecretHash)) {
-      throw new Error("Device access request not found.");
-    }
-
-    const current = await this.expireDeviceAccessRequestIfNeeded(request);
-    if (current.status === "approved" && !current.deliveredAt) {
-      const deliveredAt = new Date().toISOString();
-      const result = this.gatewaySql.prepare(`
-        UPDATE auth_device_requests
-        SET delivered_at = @deliveredAt,
-            approved_token_plaintext = NULL
-        WHERE request_id = @requestId
-          AND delivered_at IS NULL
-      `).run({
-        requestId: current.requestId,
-        deliveredAt,
-      });
-      if (result.changes === 0) {
-        // Another concurrent poll already delivered the token — re-read the record
-        // so the response does not leak the plaintext token a second time.
-        const refreshed = this.getAuthDeviceRequestById(requestId);
-        if (refreshed) {
-          return mapDeviceAccessStatusResponse(refreshed);
-        }
-      }
-    }
-
-    return mapDeviceAccessStatusResponse(current);
+    return settingsAuthService.getDeviceAccessRequestStatus(this, requestId, requestSecret);
   }
 
   public getOnboardingStartupState(): OnboardingStartupState {
@@ -11999,235 +8754,25 @@ export class GatewayService {
   }
 
   public listDeviceAccessGrants(): DeviceAccessGrantContractRecord[] {
-    const rows = this.gatewaySql.prepare(`
-      SELECT *
-      FROM auth_device_grants
-      ORDER BY
-        CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END,
-        COALESCE(last_used_at, created_at) DESC,
-        created_at DESC
-    `).all() as Record<string, unknown>[];
-    return rows.map((row) => toDeviceAccessGrantRecord(mapAuthDeviceGrantRow(row)));
+    return settingsAuthService.listDeviceAccessGrants(this);
   }
 
-  public async revokeDeviceAccessGrant(
-    grantId: string,
-    revokedBy: string,
-  ): Promise<DeviceAccessGrantContractRecord> {
-    const existingRow = this.gatewaySql.prepare(`
-      SELECT *
-      FROM auth_device_grants
-      WHERE grant_id = @grantId
-      LIMIT 1
-    `).get({ grantId }) as Record<string, unknown> | undefined;
-    if (!existingRow) {
-      throw new NotFoundError("Device access grant not found.");
-    }
-
-    const revokedAt = new Date().toISOString();
-    this.gatewaySql.prepare(`
-      UPDATE auth_device_grants
-      SET revoked_at = COALESCE(revoked_at, @revokedAt)
-      WHERE grant_id = @grantId
-    `).run({
-      grantId,
-      revokedAt,
-    });
-    this.gatewaySql.prepare(`
-      UPDATE companion_sessions
-      SET revoked_at = COALESCE(revoked_at, @revokedAt)
-      WHERE grant_id = @grantId
-    `).run({
-      grantId,
-      revokedAt,
-    });
-
-    const grant = mapAuthDeviceGrantRow(
-      (this.gatewaySql.prepare(`
-        SELECT *
-        FROM auth_device_grants
-        WHERE grant_id = @grantId
-        LIMIT 1
-      `).get({ grantId }) as Record<string, unknown> | undefined) ?? existingRow,
-    );
-    const result = toDeviceAccessGrantRecord(grant);
-
-    await this.storage.audit.append("approvals", {
-      event: "auth.device_grant.revoke",
-      grantId: result.grantId,
-      requestId: result.requestId,
-      revokedBy,
-      deviceLabel: result.deviceLabel,
-      deviceType: result.deviceType,
-      platform: result.platform,
-      revokedAt: result.revokedAt,
-    });
-
-    this.publishRealtime("auth_device_grant_revoked", "auth", {
-      grantId: result.grantId,
-      requestId: result.requestId,
-      actorId: result.actorId,
-      deviceLabel: result.deviceLabel,
-      deviceType: result.deviceType,
-      platform: result.platform,
-      revokedAt: result.revokedAt,
-      revokedBy,
-    });
-
-    return result;
+  public revokeDeviceAccessGrant(grantId: string, revokedBy: string): Promise<DeviceAccessGrantContractRecord> {
+    return settingsAuthService.revokeDeviceAccessGrant(this, grantId, revokedBy);
   }
 
   public validateDeviceAccessToken(token: string): { actorId: string; deviceId: string; grantId: string } | undefined {
-    const tokenHash = hashSensitiveToken(token);
-    const now = new Date().toISOString();
-    const row = this.gatewaySql.prepare(`
-      SELECT *
-      FROM auth_device_grants
-      WHERE token_hash = @tokenHash
-        AND revoked_at IS NULL
-        AND (expires_at IS NULL OR expires_at > @now)
-      LIMIT 1
-    `).get({
-      tokenHash,
-      now,
-    }) as Record<string, unknown> | undefined;
-
-    if (!row) {
-      return undefined;
-    }
-
-    const grant = mapAuthDeviceGrantRow(row);
-    this.gatewaySql.prepare(`
-      UPDATE auth_device_grants
-      SET last_used_at = @lastUsedAt
-      WHERE grant_id = @grantId
-    `).run({
-      grantId: grant.grantId,
-      lastUsedAt: now,
-    });
-
-    return {
-      actorId: `device:${grant.grantId}`,
-      deviceId: grant.grantId,
-      grantId: grant.grantId,
-    };
+    return settingsAuthService.validateDeviceAccessToken(this, token);
   }
 
-  public async exchangeCompanionSessionFromDeviceGrant(
+  public exchangeCompanionSessionFromDeviceGrant(
     grantId: string,
     input: CompanionSessionExchangeInput,
   ): Promise<CompanionSessionExchangeResponse> {
-    const grant = this.getActiveAuthDeviceGrantById(grantId);
-    if (!grant) {
-      throw new NotFoundError("Device access grant not found.");
-    }
-
-    const signingPublicKeyPem = normalizeCompanionSigningPublicKeyPem(input.signingPublicKeyPem);
-    assertCompanionSigningPublicKeyPem(signingPublicKeyPem);
-
-    const now = Date.now();
-    const issuedAt = new Date(now).toISOString();
-    const accessTokenExpiresAt = new Date(now + COMPANION_ACCESS_TOKEN_TTL_MS).toISOString();
-    const refreshTokenExpiresAt = new Date(now + COMPANION_REFRESH_TOKEN_TTL_MS).toISOString();
-    const accessToken = `gcca_${randomBytes(COMPANION_ACCESS_TOKEN_BYTES).toString("base64url")}`;
-    const refreshToken = `gccr_${randomBytes(COMPANION_REFRESH_TOKEN_BYTES).toString("base64url")}`;
-    const sessionId = randomUUID();
-    const metadata = {
-      ...grant.metadata,
-      clientName: normalizeOptionalDeviceAccessText(input.clientName, 120),
-      appVersion: normalizeOptionalDeviceAccessText(input.appVersion, 80),
-      bootstrapRepo: "GoatCitadel-mobile",
-      contractId: COMPANION_CONTRACT_ID,
-    };
-
-    this.storage.runImmediateTransaction(() => {
-      this.gatewaySql.prepare(`
-        UPDATE companion_sessions
-        SET revoked_at = COALESCE(revoked_at, @revokedAt)
-        WHERE grant_id = @grantId
-          AND revoked_at IS NULL
-      `).run({
-        grantId,
-        revokedAt: issuedAt,
-      });
-
-      this.gatewaySql.prepare(`
-        INSERT INTO companion_sessions (
-          session_id,
-          grant_id,
-          access_token_hash,
-          access_token_expires_at,
-          refresh_token_hash,
-          refresh_token_expires_at,
-          signing_public_key_pem,
-          signature_algorithm,
-          created_at,
-          last_rotated_at,
-          metadata_json
-        ) VALUES (
-          @sessionId,
-          @grantId,
-          @accessTokenHash,
-          @accessTokenExpiresAt,
-          @refreshTokenHash,
-          @refreshTokenExpiresAt,
-          @signingPublicKeyPem,
-          @signatureAlgorithm,
-          @createdAt,
-          @lastRotatedAt,
-          @metadataJson
-        )
-      `).run({
-        sessionId,
-        grantId,
-        accessTokenHash: hashSensitiveToken(accessToken),
-        accessTokenExpiresAt,
-        refreshTokenHash: hashSensitiveToken(refreshToken),
-        refreshTokenExpiresAt,
-        signingPublicKeyPem,
-        signatureAlgorithm: COMPANION_SIGNATURE_ALGORITHM,
-        createdAt: issuedAt,
-        lastRotatedAt: issuedAt,
-        metadataJson: JSON.stringify(metadata),
-      });
-    });
-
-    await this.storage.audit.append("approvals", {
-      event: "auth.companion_session.exchange",
-      actorId: `companion:${sessionId}`,
-      deviceId: grant.grantId,
-      grantId: grant.grantId,
-      companionSessionId: sessionId,
-      contractId: COMPANION_CONTRACT_ID,
-      signatureAlgorithm: COMPANION_SIGNATURE_ALGORITHM,
-      deviceLabel: grant.deviceLabel,
-      deviceType: normalizeDeviceAccessDeviceType(grant.deviceType),
-      platform: grant.platform,
-      accessTokenExpiresAt,
-      refreshTokenExpiresAt,
-      metadata,
-    });
-
-    return {
-      contractId: COMPANION_CONTRACT_ID,
-      sessionId,
-      grantId: grant.grantId,
-      actorId: `companion:${sessionId}`,
-      deviceLabel: grant.deviceLabel,
-      deviceType: normalizeDeviceAccessDeviceType(grant.deviceType),
-      platform: grant.platform,
-      accessToken,
-      accessTokenExpiresAt,
-      refreshToken,
-      refreshTokenExpiresAt,
-      issuedAt,
-      signatureAlgorithm: COMPANION_SIGNATURE_ALGORITHM,
-    };
+    return settingsAuthService.exchangeCompanionSessionFromDeviceGrant(this, grantId, input);
   }
 
-  public async rotateCompanionSession(
-    input: CompanionSessionRefreshInput,
-  ): Promise<CompanionSessionRefreshResponse> {
+  public async rotateCompanionSession(input: CompanionSessionRefreshInput): Promise<CompanionSessionRefreshResponse> {
     const refreshToken = input.refreshToken.trim();
     if (!refreshToken) {
       throw new ValidationError({
@@ -12247,7 +8792,9 @@ export class GatewayService {
     const nextAccessToken = `gcca_${randomBytes(COMPANION_ACCESS_TOKEN_BYTES).toString("base64url")}`;
     const nextRefreshToken = `gccr_${randomBytes(COMPANION_REFRESH_TOKEN_BYTES).toString("base64url")}`;
 
-    const result = this.gatewaySql.prepare(`
+    const result = this.gatewaySql
+      .prepare(
+        `
       UPDATE companion_sessions
       SET access_token_hash = @accessTokenHash,
           access_token_expires_at = @accessTokenExpiresAt,
@@ -12258,16 +8805,18 @@ export class GatewayService {
       WHERE session_id = @sessionId
         AND refresh_token_hash = @currentRefreshTokenHash
         AND revoked_at IS NULL
-    `).run({
-      sessionId: session.sessionId,
-      currentRefreshTokenHash: hashSensitiveToken(refreshToken),
-      accessTokenHash: hashSensitiveToken(nextAccessToken),
-      accessTokenExpiresAt,
-      refreshTokenHash: hashSensitiveToken(nextRefreshToken),
-      refreshTokenExpiresAt,
-      lastRotatedAt: issuedAt,
-      lastSeenAt: issuedAt,
-    });
+    `,
+      )
+      .run({
+        sessionId: session.sessionId,
+        currentRefreshTokenHash: hashSensitiveToken(refreshToken),
+        accessTokenHash: hashSensitiveToken(nextAccessToken),
+        accessTokenExpiresAt,
+        refreshTokenHash: hashSensitiveToken(nextRefreshToken),
+        refreshTokenExpiresAt,
+        lastRotatedAt: issuedAt,
+        lastSeenAt: issuedAt,
+      });
     if (result.changes === 0) {
       throw new ConflictError({
         message: "Companion session refresh token has already been rotated.",
@@ -12346,9 +8895,13 @@ export class GatewayService {
       ORDER BY s.created_at DESC, s.session_id DESC
       LIMIT @limit
     `;
-    const rows = this.gatewaySql.prepare(`
+    const rows = this.gatewaySql
+      .prepare(
+        `
       ${query}
-    `).all(grantId ? { grantId, limit } : { limit }) as Record<string, unknown>[];
+    `,
+      )
+      .all(grantId ? { grantId, limit } : { limit }) as Record<string, unknown>[];
 
     return {
       items: rows
@@ -12366,24 +8919,25 @@ export class GatewayService {
     return toCompanionSessionAdminRecord(session);
   }
 
-  public async revokeCompanionSession(
-    sessionId: string,
-    revokedBy: string,
-  ): Promise<CompanionSessionRevokeResponse> {
+  public async revokeCompanionSession(sessionId: string, revokedBy: string): Promise<CompanionSessionRevokeResponse> {
     const session = this.getCompanionSessionById(sessionId);
     if (!session) {
       throw new NotFoundError("Companion session not found.");
     }
 
     const revokedAt = new Date().toISOString();
-    this.gatewaySql.prepare(`
+    this.gatewaySql
+      .prepare(
+        `
       UPDATE companion_sessions
       SET revoked_at = COALESCE(revoked_at, @revokedAt)
       WHERE session_id = @sessionId
-    `).run({
-      sessionId,
-      revokedAt,
-    });
+    `,
+      )
+      .run({
+        sessionId,
+        revokedAt,
+      });
 
     const updated = this.getCompanionSessionById(sessionId) ?? {
       ...session,
@@ -12465,7 +9019,9 @@ export class GatewayService {
   public validateCompanionAccessToken(token: string): CompanionAccessValidationResult | undefined {
     const tokenHash = hashSensitiveToken(token);
     const now = new Date().toISOString();
-    const row = this.gatewaySql.prepare(`
+    const row = this.gatewaySql
+      .prepare(
+        `
       SELECT
         s.*,
         g.device_label,
@@ -12478,42 +9034,56 @@ export class GatewayService {
         ON g.grant_id = s.grant_id
       WHERE s.access_token_hash = @tokenHash
       LIMIT 1
-    `).get({
-      tokenHash,
-    }) as Record<string, unknown> | undefined;
+    `,
+      )
+      .get({
+        tokenHash,
+      }) as Record<string, unknown> | undefined;
     if (!row) {
       return undefined;
     }
 
     const session = mapCompanionSessionRow(row);
     if (!isCompanionSessionCurrentlyActive(session, now)) {
-      this.gatewaySql.prepare(`
+      this.gatewaySql
+        .prepare(
+          `
         UPDATE companion_sessions
         SET revoked_at = COALESCE(revoked_at, @revokedAt)
         WHERE session_id = @sessionId
-      `).run({
-        sessionId: session.sessionId,
-        revokedAt: now,
-      });
+      `,
+        )
+        .run({
+          sessionId: session.sessionId,
+          revokedAt: now,
+        });
       return undefined;
     }
 
-    this.gatewaySql.prepare(`
+    this.gatewaySql
+      .prepare(
+        `
       UPDATE companion_sessions
       SET last_seen_at = @lastSeenAt
       WHERE session_id = @sessionId
-    `).run({
-      sessionId: session.sessionId,
-      lastSeenAt: now,
-    });
-    this.gatewaySql.prepare(`
+    `,
+      )
+      .run({
+        sessionId: session.sessionId,
+        lastSeenAt: now,
+      });
+    this.gatewaySql
+      .prepare(
+        `
       UPDATE auth_device_grants
       SET last_used_at = @lastUsedAt
       WHERE grant_id = @grantId
-    `).run({
-      grantId: session.grantId,
-      lastUsedAt: now,
-    });
+    `,
+      )
+      .run({
+        grantId: session.grantId,
+        lastUsedAt: now,
+      });
 
     return {
       actorId: `companion:${session.sessionId}`,
@@ -12595,12 +9165,18 @@ export class GatewayService {
 
     const now = new Date().toISOString();
     const expiresAt = new Date(Date.now() + COMPANION_REQUEST_REPLAY_TTL_MS).toISOString();
-    this.gatewaySql.prepare(`
+    this.gatewaySql
+      .prepare(
+        `
       DELETE FROM companion_request_replays
       WHERE expires_at <= @now
-    `).run({ now });
+    `,
+      )
+      .run({ now });
     try {
-      this.gatewaySql.prepare(`
+      this.gatewaySql
+        .prepare(
+          `
         INSERT INTO companion_request_replays (
           session_id,
           nonce,
@@ -12618,15 +9194,17 @@ export class GatewayService {
           @createdAt,
           @expiresAt
         )
-      `).run({
-        sessionId: session.sessionId,
-        nonce,
-        method,
-        path,
-        requestHash,
-        createdAt: now,
-        expiresAt,
-      });
+      `,
+        )
+        .run({
+          sessionId: session.sessionId,
+          nonce,
+          method,
+          path,
+          requestHash,
+          createdAt: now,
+          expiresAt,
+        });
     } catch {
       void this.storage.audit.append("approvals", {
         event: "auth.companion_request.replay_rejected",
@@ -12803,11 +9381,7 @@ export class GatewayService {
     const draft = this.storage.channelSetupDrafts.get(draftId);
     const runtime = requireChannelSetupDefinition(draft.catalogId);
     const issues = runtime.validate(draft);
-    const result = this.buildChannelSetupValidationResult(
-      draft,
-      runtime.definition.validation.levels,
-      issues,
-    );
+    const result = this.buildChannelSetupValidationResult(draft, runtime.definition.validation.levels, issues);
     this.storage.channelSetupDrafts.update(draftId, {
       lastValidatedAt: result.checkedAt,
       lastFailureCategory: firstFailureCategory(result.issues),
@@ -12860,10 +9434,7 @@ export class GatewayService {
       runtime.definition.testing.testVersion,
     );
     const liveChecks = await this.runIntegrationConnectionLiveChecks(connection, { includeSandboxSend: true });
-    const checks = [
-      ...this.buildIntegrationConnectionChecks(connection),
-      ...liveChecks.checks,
-    ];
+    const checks = [...this.buildIntegrationConnectionChecks(connection), ...liveChecks.checks];
     const issues = checks.flatMap((check) => mapDiagnosticCheckToChannelIssues(check));
     const status = issues.some((issue) => issue.level === "error")
       ? "error"
@@ -12876,9 +9447,10 @@ export class GatewayService {
       levels: runtime.definition.testing.levels,
       issues,
       checkedAt: new Date().toISOString(),
-      recommendedNextAction: status === "error"
-        ? "Review the failing checks, correct the draft, then run the test again."
-        : "Finalize the connection and send a sandbox message to confirm destination access.",
+      recommendedNextAction:
+        status === "error"
+          ? "Review the failing checks, correct the draft, then run the test again."
+          : "Finalize the connection and send a sandbox message to confirm destination access.",
       probe: liveChecks.probe,
     };
     this.storage.channelSetupDrafts.update(draftId, {
@@ -12940,7 +9512,7 @@ export class GatewayService {
         },
       });
     }
-    const test = reusableTest ?? await this.testChannelSetupDraft(draftId);
+    const test = reusableTest ?? (await this.testChannelSetupDraft(draftId));
     if (test.status !== "ok") {
       throw new Error(
         test.status === "warn"
@@ -12961,18 +9533,18 @@ export class GatewayService {
     const connection = draft.connectionId
       ? this.updateIntegrationConnection(draft.connectionId, payload)
       : this.updateIntegrationConnection(
-        this.createIntegrationConnection({
-          catalogId: draft.catalogId,
-          label: payload.label,
-          enabled: payload.enabled,
-          status: payload.status,
-          config: payload.config,
-        }).connectionId,
-        {
-          lastSyncAt: payload.lastSyncAt,
-          lastError: payload.lastError,
-        },
-      );
+          this.createIntegrationConnection({
+            catalogId: draft.catalogId,
+            label: payload.label,
+            enabled: payload.enabled,
+            status: payload.status,
+            config: payload.config,
+          }).connectionId,
+          {
+            lastSyncAt: payload.lastSyncAt,
+            lastError: payload.lastError,
+          },
+        );
 
     this.recordDevDiagnostic({
       level: "info",
@@ -13039,247 +9611,53 @@ export class GatewayService {
   }
 
   public listIntegrationConnections(kind?: IntegrationKind, limit = 300): IntegrationConnection[] {
-    return this.storage.integrationConnections.list(kind, limit);
+    return listIntegrationConnectionsImpl(this, kind, limit);
   }
 
   public getIntegrationConnection(connectionId: string): IntegrationConnection {
-    return this.storage.integrationConnections.get(connectionId);
+    return getIntegrationConnectionImpl(this, connectionId);
   }
 
   public getIntegrationConnectionChannelCapabilities(connectionId: string): ChannelCapabilities {
-    const connection = this.storage.integrationConnections.get(connectionId);
-    if (!connection) {
-      throw new Error(`Unknown integration connection: ${connectionId}`);
-    }
-    if (connection.kind !== "channel") {
-      throw new Error(`Integration connection ${connectionId} is not a channel connection.`);
-    }
-    return describeChannelCapabilities(connection.key, connection.config);
+    return getIntegrationConnectionChannelCapabilitiesImpl(this, connectionId);
   }
 
   public getIntegrationConnectionChannelRuntimeStatus(connectionId: string): ChannelRuntimeStatus {
-    const connection = this.storage.integrationConnections.get(connectionId);
-    if (!connection) {
-      throw new Error(`Unknown integration connection: ${connectionId}`);
-    }
-    if (connection.kind !== "channel") {
-      throw new Error(`Integration connection ${connectionId} is not a channel connection.`);
-    }
-    const capabilities = describeChannelCapabilities(connection.key, connection.config);
-    const baseReady = connection.enabled
-      && connection.status === "connected"
-      && capabilities.setupReady
-      && Boolean(connection.lastSyncAt)
-      && !connection.lastError;
-    const runtimeStatus: ChannelRuntimeStatus = {
-      connectionId: connection.connectionId,
-      channelKey: connection.key,
-      enabled: connection.enabled,
-      ready: Boolean(baseReady),
-      inboundModes: capabilities.inboundModes,
-      runtimePolicy: capabilities.runtimePolicy,
-      runtimePosture: capabilities.runtimePosture,
-      lastReadyAt: baseReady ? (connection.lastSyncAt ?? connection.updatedAt) : undefined,
-      lastError: connection.lastError,
-      metadata: {
-        setupReady: capabilities.setupReady,
-        setupDiagnostics: capabilities.setupDiagnostics,
-        supportNotes: capabilities.supportNotes,
-        connectionStatus: connection.status,
-        readinessSource: connection.key === "discord" ? "live_runtime" : "last_live_probe",
-        authoritative: connection.key === "discord" || Boolean(connection.lastSyncAt),
-      },
-    };
-
-    if (connection.key !== "discord") {
-      return runtimeStatus;
-    }
-
-    const discordRuntime = this.getDiscordRuntimeStatus(connectionId);
-    if (!discordRuntime) {
-      return runtimeStatus;
-    }
-
-    return {
-      ...runtimeStatus,
-      ready: discordRuntime.ready,
-      lastReadyAt: discordRuntime.lastReadyAt ?? runtimeStatus.lastReadyAt,
-      lastInboundAt: discordRuntime.lastInboundAt,
-      lastReconnectAt: discordRuntime.lastReconnectAt,
-      lastError: discordRuntime.lastError ?? runtimeStatus.lastError,
-      metadata: {
-        ...runtimeStatus.metadata,
-        connectedBotId: discordRuntime.connectedBotId,
-        connectedBotTag: discordRuntime.connectedBotTag,
-        guildIds: discordRuntime.guildIds,
-        runtimeMode: discordRuntime.runtimeMode,
-      },
-    };
+    return getIntegrationConnectionChannelRuntimeStatusImpl(this, connectionId);
   }
 
   public async runIntegrationConnectionDiagnostics(connectionId: string): Promise<ConnectorDiagnosticReport> {
-    this.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
-    const connection = this.storage.integrationConnections.get(connectionId);
-    if (!connection) {
-      throw new Error(`Unknown integration connection: ${connectionId}`);
-    }
-    const checks: ConnectorDiagnosticReport["checks"] = [];
-    checks.push({
-      key: "enabled",
-      status: connection.enabled ? "pass" : "warn",
-      message: connection.enabled ? "Connection is enabled." : "Connection is disabled.",
-    });
-    checks.push({
-      key: "status",
-      status: connection.status === "connected" ? "pass" : connection.status === "paused" ? "warn" : "fail",
-      message: `Connection status is ${connection.status}.`,
-    });
-    checks.push({
-      key: "last_error",
-      status: connection.lastError ? "warn" : "pass",
-      message: connection.lastError ? `Last error: ${connection.lastError}` : "No recent errors recorded.",
-    });
-    checks.push(...this.buildIntegrationConnectionChecks(connection));
-    const liveChecks = await this.runIntegrationConnectionLiveChecks(connection, { includeSandboxSend: false });
-    checks.push(...liveChecks.checks);
-    const report: ConnectorDiagnosticReport = {
-      connectorType: "integration_connection",
-      connectorId: connection.connectionId,
-      status: checks.some((check) => check.status === "fail")
-        ? "error"
-        : checks.some((check) => check.status === "warn")
-          ? "warn"
-          : "ok",
-      checks,
-      recommendedNextAction: this.pickConnectorDiagnosticAction(checks),
-      checkedAt: new Date().toISOString(),
-      probe: liveChecks.probe,
-    };
-    this.recordConnectorHealthRun(report);
-    return report;
+    return runIntegrationConnectionDiagnosticsImpl(this, connectionId);
   }
 
   public createIntegrationConnection(input: IntegrationConnectionCreateInput): IntegrationConnection {
-    const catalog = INTEGRATION_CATALOG.find((entry) => entry.catalogId === input.catalogId);
-    if (!catalog) {
-      throw new Error(`Unknown integration catalog id: ${input.catalogId}`);
-    }
-
-    const created = this.storage.integrationConnections.create({
-      ...input,
-      catalogId: catalog.catalogId,
-      kind: catalog.kind,
-      key: catalog.key,
-      label: input.label?.trim() || catalog.label,
-      pluginId: input.pluginId ?? catalog.pluginId,
-    });
-
-    this.publishRealtime("system", "integrations", {
-      type: "integration_connection_created",
-      connectionId: created.connectionId,
-      catalogId: created.catalogId,
-      kind: created.kind,
-      key: created.key,
-      enabled: created.enabled,
-      status: created.status,
-    });
-    void this.syncDiscordRuntime();
-
-    return created;
+    return createIntegrationConnectionImpl(this, input);
   }
 
-  public updateIntegrationConnection(connectionId: string, input: IntegrationConnectionUpdateInput): IntegrationConnection {
-    const updated = this.storage.integrationConnections.update(connectionId, input);
-    this.publishRealtime("system", "integrations", {
-      type: "integration_connection_updated",
-      connectionId: updated.connectionId,
-      enabled: updated.enabled,
-      status: updated.status,
-      lastError: updated.lastError,
-    });
-    void this.syncDiscordRuntime();
-    return updated;
+  public updateIntegrationConnection(
+    connectionId: string,
+    input: IntegrationConnectionUpdateInput,
+  ): IntegrationConnection {
+    return updateIntegrationConnectionImpl(this, connectionId, input);
   }
 
   public deleteIntegrationConnection(connectionId: string): boolean {
-    const deleted = this.storage.integrationConnections.delete(connectionId);
-    if (deleted) {
-      this.publishRealtime("system", "integrations", {
-        type: "integration_connection_deleted",
-        connectionId,
-      });
-    }
-    void this.syncDiscordRuntime();
-    return deleted;
+    return deleteIntegrationConnectionImpl(this, connectionId);
   }
 
   public listDiscordPairings(connectionId: string): {
     runtime?: DiscordRuntimeStatus;
     items: DiscordPairingRecord[];
   } {
-    const connection = this.getIntegrationConnection(connectionId);
-    this.assertDiscordConnection(connection);
-    return {
-      runtime: this.getDiscordRuntimeStatus(connectionId),
-      items: this.readDiscordPairings()
-        .filter((item) => item.connectionId === connectionId)
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-    };
+    return listDiscordPairingsImpl(this, connectionId);
   }
 
   public approveDiscordPairing(connectionId: string, pairingId: string): DiscordPairingRecord {
-    const connection = this.getIntegrationConnection(connectionId);
-    this.assertDiscordConnection(connection);
-    const pairings = this.readDiscordPairings();
-    const existing = pairings.find((item) => item.connectionId === connectionId && item.pairingId === pairingId);
-    if (!existing) {
-      throw new Error(`Unknown Discord pairing: ${pairingId}`);
-    }
-    const now = new Date().toISOString();
-    const next = pairings.map((item) => {
-      if (item.connectionId !== connectionId) {
-        return item;
-      }
-      if (item.pairingId === pairingId) {
-        return {
-          ...item,
-          status: "approved" as const,
-          approvedAt: now,
-          revokedAt: undefined,
-          updatedAt: now,
-        };
-      }
-      if (item.userId === existing.userId && item.status === "approved") {
-        return {
-          ...item,
-          status: "revoked" as const,
-          revokedAt: now,
-          updatedAt: now,
-        };
-      }
-      return item;
-    });
-    this.writeDiscordPairings(next);
-    return next.find((item) => item.pairingId === pairingId)!;
+    return approveDiscordPairingImpl(this, connectionId, pairingId);
   }
 
   public revokeDiscordPairing(connectionId: string, pairingId: string): DiscordPairingRecord {
-    const connection = this.getIntegrationConnection(connectionId);
-    this.assertDiscordConnection(connection);
-    const pairings = this.readDiscordPairings();
-    const existing = pairings.find((item) => item.connectionId === connectionId && item.pairingId === pairingId);
-    if (!existing) {
-      throw new Error(`Unknown Discord pairing: ${pairingId}`);
-    }
-    const now = new Date().toISOString();
-    const revoked: DiscordPairingRecord = {
-      ...existing,
-      status: "revoked",
-      revokedAt: now,
-      updatedAt: now,
-    };
-    this.writeDiscordPairings(pairings.map((item) => item.pairingId === pairingId ? revoked : item));
-    return revoked;
+    return revokeDiscordPairingImpl(this, connectionId, pairingId);
   }
 
   public getDiscordRuntimeStatus(connectionId: string): DiscordRuntimeStatus | undefined {
@@ -13287,135 +9665,33 @@ export class GatewayService {
   }
 
   public async reconnectDiscordRuntime(connectionId: string): Promise<DiscordRuntimeStatus | undefined> {
-    const connection = this.getIntegrationConnection(connectionId);
-    this.assertDiscordConnection(connection);
-    return this.discordRuntimeService.reconnectConnection(connectionId);
+    return reconnectDiscordRuntimeImpl(this, connectionId);
   }
 
-  private async emitDiscordTyping(
+  public async emitDiscordTyping(
     connection: IntegrationConnection,
     input: ChannelTypingInput,
   ): Promise<ChannelTypingResult> {
-    return this.discordRuntimeService.sendTyping(
-      connection.connectionId,
-      input.target,
-      input.durationMs,
-    );
+    return this.discordRuntimeService.sendTyping(connection.connectionId, input.target, input.durationMs);
   }
 
-  private async emitTelegramTyping(
+  public async emitTelegramTyping(
     connection: IntegrationConnection,
     input: ChannelTypingInput,
   ): Promise<ChannelTypingResult> {
-    const token = this.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv")
-      ?? this.resolveConnectionSecret(connection.config, "token", "tokenEnv");
-    const chatId = input.target.trim() || this.readConnectionConfigValue(connection.config, "defaultChatId");
-    if (!token) {
-      return {
-        channelKey: "telegram",
-        connectionId: connection.connectionId,
-        target: input.target,
-        supported: false,
-        status: "unsupported",
-        reason: `${connection.label} is missing a Telegram bot token.`,
-      };
-    }
-    if (!chatId) {
-      return {
-        channelKey: "telegram",
-        connectionId: connection.connectionId,
-        target: input.target,
-        supported: false,
-        status: "unsupported",
-        reason: `${connection.label} is missing a Telegram chat target.`,
-      };
-    }
-    const telegramApiUrl = `https://api.telegram.org/bot${token}/sendChatAction`;
-    if (!this.isConnectionUrlAllowlisted(telegramApiUrl)) {
-      return {
-        channelKey: "telegram",
-        connectionId: connection.connectionId,
-        target: input.target,
-        supported: false,
-        status: "unsupported",
-        reason: "Telegram API host is not in the current outbound allowlist.",
-      };
-    }
-    try {
-      return await sendTelegramTypingIndicator({
-        connectionId: connection.connectionId,
-        target: input.target,
-        token,
-        chatId,
-        threadId: input.threadId,
-        durationMs: input.durationMs,
-        fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-      });
-    } catch (error) {
-      return {
-        channelKey: "telegram",
-        connectionId: connection.connectionId,
-        target: input.target,
-        supported: false,
-        status: "unsupported",
-        reason: error instanceof Error ? error.message : String(error),
-      };
-    }
+    return emitTelegramTypingImpl(this, connection, input);
   }
 
   public listIntegrationPlugins(): IntegrationPluginRecord[] {
-    return this.readIntegrationPlugins();
+    return listIntegrationPluginsImpl(this);
   }
 
   public installIntegrationPlugin(input: IntegrationPluginInstallInput): IntegrationPluginRecord {
-    const now = new Date().toISOString();
-    const plugins = this.readIntegrationPlugins();
-    const installMetadata = resolveIntegrationPluginInstallMetadata(input.source);
-    const nextId = sanitizePluginId(input.pluginId ?? installMetadata.manifest?.pluginId ?? input.source);
-    const existing = plugins.find((item) => item.pluginId === nextId);
-    if (existing) {
-      const updated = buildInstalledIntegrationPluginRecord({
-        now,
-        pluginId: nextId,
-        source: input.source,
-        existing,
-      });
-      this.writeIntegrationPlugins(plugins.map((item) => item.pluginId === nextId ? updated : item));
-      return updated;
-    }
-
-    const created = buildInstalledIntegrationPluginRecord({
-      now,
-      pluginId: nextId,
-      source: input.source,
-    });
-    this.writeIntegrationPlugins([created, ...plugins]);
-    this.publishRealtime("system", "integrations", {
-      type: "integration_plugin_installed",
-      pluginId: created.pluginId,
-      source: input.source,
-    });
-    return created;
+    return installIntegrationPluginImpl(this, input);
   }
 
   public setIntegrationPluginEnabled(pluginId: string, enabled: boolean): IntegrationPluginRecord {
-    const now = new Date().toISOString();
-    const plugins = this.readIntegrationPlugins();
-    const current = plugins.find((item) => item.pluginId === pluginId);
-    if (!current) {
-      throw new Error(`Unknown integration plugin: ${pluginId}`);
-    }
-    const updated: IntegrationPluginRecord = {
-      ...current,
-      enabled,
-      updatedAt: now,
-    };
-    this.writeIntegrationPlugins(plugins.map((item) => item.pluginId === pluginId ? updated : item));
-    this.publishRealtime("system", "integrations", {
-      type: enabled ? "integration_plugin_enabled" : "integration_plugin_disabled",
-      pluginId,
-    });
-    return updated;
+    return setIntegrationPluginEnabledImpl(this, pluginId, enabled);
   }
 
   public async getObsidianIntegrationStatus(): Promise<ObsidianIntegrationStatus> {
@@ -13603,15 +9879,11 @@ export class GatewayService {
   }> {
     const installed = await this.skillImportService.installImport(input);
     const skills = await this.reloadSkills();
-    const installedSkill = skills.find((skill) =>
-      skill.source === "extra"
-      && path.resolve(skill.dir) === path.resolve(installed.installedPath));
+    const installedSkill = skills.find(
+      (skill) => skill.source === "extra" && path.resolve(skill.dir) === path.resolve(installed.installedPath),
+    );
     if (installedSkill) {
-      this.setSkillState(
-        installedSkill.skillId,
-        "disabled",
-        "Imported skill starts disabled by default.",
-      );
+      this.setSkillState(installedSkill.skillId, "disabled", "Imported skill starts disabled by default.");
     }
     this.recordSkillImportEvent(installed.validation, "import_installed");
     this.publishRealtime("system", "skills", {
@@ -13721,10 +9993,12 @@ export class GatewayService {
     }
     checks.push({
       key: "policy",
-      status: server.policy.blockedToolPatterns.length > 0 || server.policy.allowedToolPatterns.length > 0 ? "pass" : "warn",
-      message: server.policy.blockedToolPatterns.length > 0 || server.policy.allowedToolPatterns.length > 0
-        ? "Tool policy constraints are configured."
-        : "Consider setting allow/block patterns for safer operation.",
+      status:
+        server.policy.blockedToolPatterns.length > 0 || server.policy.allowedToolPatterns.length > 0 ? "pass" : "warn",
+      message:
+        server.policy.blockedToolPatterns.length > 0 || server.policy.allowedToolPatterns.length > 0
+          ? "Tool policy constraints are configured."
+          : "Consider setting allow/block patterns for safer operation.",
     });
     const report: ConnectorDiagnosticReport = {
       connectorType: "mcp_server",
@@ -13782,9 +10056,9 @@ export class GatewayService {
       updated = {
         ...item,
         label: input.label?.trim() || item.label,
-        command: input.command === undefined ? item.command : (input.command.trim() || undefined),
+        command: input.command === undefined ? item.command : input.command.trim() || undefined,
         args: input.args === undefined ? item.args : input.args.map((entry) => entry.trim()).filter(Boolean),
-        url: input.url === undefined ? item.url : (input.url.trim() || undefined),
+        url: input.url === undefined ? item.url : input.url.trim() || undefined,
         authType: input.authType ?? item.authType,
         enabled: input.enabled ?? item.enabled,
         category: input.category ?? item.category,
@@ -13833,10 +10107,7 @@ export class GatewayService {
       const existing = tools.filter((item) => item.serverId === serverId);
       const resolvedTools = await this.resolveConnectedMcpTools(connecting, existing);
       if (resolvedTools.length > 0) {
-        this.writeMcpTools([
-          ...tools.filter((item) => item.serverId !== serverId),
-          ...resolvedTools,
-        ]);
+        this.writeMcpTools([...tools.filter((item) => item.serverId !== serverId), ...resolvedTools]);
       }
       return this.patchMcpServerState(serverId, {
         status: "connected",
@@ -13902,10 +10173,8 @@ export class GatewayService {
   }
 
   public listMcpBrowserFallbackTargets(): ReturnType<typeof collectMcpBrowserFallbackTargets> {
-    return collectMcpBrowserFallbackTargets(
-      this.readMcpServers(),
-      this.readMcpTools(),
-      (serverId, toolName) => this.isMcpToolApproved(serverId, toolName),
+    return collectMcpBrowserFallbackTargets(this.readMcpServers(), this.readMcpTools(), (serverId, toolName) =>
+      this.isMcpToolApproved(serverId, toolName),
     );
   }
 
@@ -13937,8 +10206,10 @@ export class GatewayService {
         error: `MCP policy blocked tool ${input.toolName} on server ${server.serverId}.`,
       };
     }
-    if (server.policy.allowedToolPatterns.length > 0
-      && !server.policy.allowedToolPatterns.some((pattern) => wildcardMatch(input.toolName, pattern))) {
+    if (
+      server.policy.allowedToolPatterns.length > 0 &&
+      !server.policy.allowedToolPatterns.some((pattern) => wildcardMatch(input.toolName, pattern))
+    ) {
       return {
         ok: false,
         error: `MCP policy does not allow tool ${input.toolName} on server ${server.serverId}.`,
@@ -14050,67 +10321,19 @@ export class GatewayService {
   }
 
   public createMediaJob(input: MediaCreateJobRequest): MediaJobRecord {
-    const now = new Date().toISOString();
-    const jobId = randomUUID();
-    this.gatewaySql.prepare(`
-      INSERT INTO media_jobs (
-        job_id, session_id, attachment_id, job_type, status, input_json, output_json, error, created_at, updated_at, completed_at
-      ) VALUES (
-        @jobId, @sessionId, @attachmentId, @jobType, @status, @inputJson, NULL, NULL, @createdAt, @updatedAt, NULL
-      )
-    `).run({
-      jobId,
-      sessionId: input.sessionId ?? null,
-      attachmentId: input.attachmentId ?? null,
-      jobType: input.type,
-      status: "queued",
-      inputJson: input.input ? JSON.stringify(input.input) : null,
-      createdAt: now,
-      updatedAt: now,
-    });
-    const created = this.getMediaJob(jobId);
-    this.processMediaJob(jobId);
-    return created;
+    return this.mediaVoiceService.createMediaJob(input);
   }
 
   public getMediaJob(jobId: string): MediaJobRecord {
-    const row = this.gatewaySql.prepare(`
-      SELECT * FROM media_jobs
-      WHERE job_id = ?
-    `).get(jobId) as MediaJobRow | undefined;
-    if (!row) {
-      throw new Error(`Unknown media job: ${jobId}`);
-    }
-    return mapMediaJobRow(row);
+    return this.mediaVoiceService.getMediaJob(jobId);
   }
 
   public listMediaJobs(sessionId?: string): MediaJobRecord[] {
-    const rows = toMediaJobRows(this.gatewaySql.prepare(`
-      SELECT * FROM media_jobs
-      WHERE (@sessionId IS NULL OR session_id = @sessionId)
-      ORDER BY created_at DESC
-      LIMIT 500
-    `).all({
-      sessionId: sessionId ?? null,
-    }));
-    return rows.map(mapMediaJobRow);
+    return this.mediaVoiceService.listMediaJobs(sessionId);
   }
 
   public getChatAttachmentPreview(attachmentId: string): ChatAttachmentPreviewResponse {
-    const record = this.getChatAttachment(attachmentId);
-    return {
-      attachmentId: record.attachmentId,
-      fileName: record.fileName,
-      mimeType: record.mimeType,
-      mediaType: record.mediaType ?? detectAttachmentMediaType(record.mimeType),
-      thumbnailRelPath: record.thumbnailRelPath,
-      extractPreview: record.extractPreview,
-      ocrText: record.ocrText,
-      transcriptText: record.transcriptText,
-      analysisStatus: record.analysisStatus === "pending"
-        ? "queued"
-        : (record.analysisStatus ?? "queued"),
-    };
+    return this.mediaVoiceService.getChatAttachmentPreview(attachmentId);
   }
 
   public async transcribeVoice(input: {
@@ -14118,316 +10341,50 @@ export class GatewayService {
     mimeType?: string;
     language?: string;
   }): Promise<VoiceTranscribeResponse> {
-    const bytes = Buffer.from(input.bytesBase64, "base64");
-    if (bytes.length === 0) {
-      throw new Error("Audio payload is empty.");
-    }
-    this.recordDevDiagnostic({
-      level: "info",
-      category: "voice",
-      event: "voice.transcribe.start",
-      message: "Starting voice transcription",
-      context: {
-        bytes: bytes.length,
-        mimeType: input.mimeType,
-        language: input.language,
-      },
-    });
-    return this.transcribeAudioBytes(bytes, input.mimeType, input.language);
+    return this.mediaVoiceService.transcribeVoice(input);
   }
 
   public async getVoiceStatus(): Promise<VoiceStatus> {
-    const now = new Date().toISOString();
-    const runtime = await getManagedVoiceRuntimeStatus(this.storage.systemSettings);
-    const stt = this.storage.systemSettings.get<VoiceStatus["stt"]>(VOICE_STATUS_SETTING_KEY)?.value ?? {
-      state: "stopped",
-      provider: DEFAULT_VOICE_PROVIDER,
-      runtimeReady: runtime.readiness === "ready",
-      modelId: runtime.selectedModelId,
-      updatedAt: now,
-    };
-    const wake = this.storage.systemSettings.get<VoiceStatus["wake"]>(VOICE_WAKE_STATUS_SETTING_KEY)?.value ?? {
-      enabled: false,
-      state: "stopped",
-      model: "openwakeword",
-      updatedAt: now,
-    };
-    const talkRecord = this.storage.systemSettings.get<{
-      activeSessionId?: string;
-      state: "stopped" | "running" | "error";
-      mode?: "push_to_talk" | "wake";
-      updatedAt: string;
-    }>("voice_talk_status_v1")?.value ?? {
-      activeSessionId: undefined,
-      state: "stopped",
-      mode: undefined,
-      updatedAt: now,
-    };
-    return {
-      stt: {
-        ...stt,
-        runtimeReady: runtime.readiness === "ready",
-        modelId: runtime.selectedModelId,
-      },
-      talk: talkRecord,
-      wake,
-    };
+    return this.mediaVoiceService.getVoiceStatus();
   }
 
   public async getVoiceRuntimeStatus(): Promise<VoiceRuntimeStatus> {
-    return getManagedVoiceRuntimeStatus(this.storage.systemSettings);
+    return this.mediaVoiceService.getVoiceRuntimeStatus();
   }
 
   public async installVoiceRuntime(input: VoiceRuntimeInstallRequest = {}): Promise<VoiceRuntimeStatus> {
-    this.recordDevDiagnostic({
-      level: "info",
-      category: "voice",
-      event: "voice.runtime.install.start",
-      message: "Installing managed voice runtime",
-      context: {
-        modelId: input.modelId,
-        activate: input.activate,
-        repair: input.repair,
-      },
-    });
-    const status = await installManagedVoiceRuntime(this.storage.systemSettings, input);
-    this.recordDevDiagnostic({
-      level: status.readiness === "ready" ? "info" : "warn",
-      category: "voice",
-      event: "voice.runtime.install.complete",
-      message: "Managed voice runtime install finished",
-      context: {
-        readiness: status.readiness,
-        selectedModelId: status.selectedModelId,
-        lastError: status.lastError,
-      },
-    });
-    this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
-      ...(this.storage.systemSettings.get<VoiceStatus["stt"]>(VOICE_STATUS_SETTING_KEY)?.value ?? {
-        state: "stopped" as const,
-        provider: DEFAULT_VOICE_PROVIDER,
-        updatedAt: new Date().toISOString(),
-      }),
-      provider: DEFAULT_VOICE_PROVIDER,
-      runtimeReady: status.readiness === "ready",
-      modelId: status.selectedModelId,
-      lastError: status.lastError,
-      updatedAt: new Date().toISOString(),
-    });
-    return status;
+    return this.mediaVoiceService.installVoiceRuntime(input);
   }
 
   public async selectVoiceRuntimeModel(modelId: string): Promise<VoiceRuntimeStatus> {
-    const status = await selectManagedVoiceModel(this.storage.systemSettings, modelId);
-    this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
-      ...(this.storage.systemSettings.get<VoiceStatus["stt"]>(VOICE_STATUS_SETTING_KEY)?.value ?? {
-        state: "stopped" as const,
-        provider: DEFAULT_VOICE_PROVIDER,
-        updatedAt: new Date().toISOString(),
-      }),
-      provider: DEFAULT_VOICE_PROVIDER,
-      runtimeReady: status.readiness === "ready",
-      modelId: status.selectedModelId,
-      lastError: status.lastError,
-      updatedAt: new Date().toISOString(),
-    });
-    return status;
+    return this.mediaVoiceService.selectVoiceRuntimeModel(modelId);
   }
 
   public async removeVoiceRuntimeModel(modelId: string): Promise<VoiceRuntimeStatus> {
-    const status = await removeManagedVoiceModel(this.storage.systemSettings, modelId);
-    this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
-      ...(this.storage.systemSettings.get<VoiceStatus["stt"]>(VOICE_STATUS_SETTING_KEY)?.value ?? {
-        state: "stopped" as const,
-        provider: DEFAULT_VOICE_PROVIDER,
-        updatedAt: new Date().toISOString(),
-      }),
-      provider: DEFAULT_VOICE_PROVIDER,
-      runtimeReady: status.readiness === "ready",
-      modelId: status.selectedModelId,
-      lastError: status.lastError,
-      updatedAt: new Date().toISOString(),
-    });
-    return status;
+    return this.mediaVoiceService.removeVoiceRuntimeModel(modelId);
   }
 
-  public async startTalkSession(input?: { mode?: "push_to_talk" | "wake"; sessionId?: string }): Promise<VoiceTalkSessionRecord> {
-    const now = new Date().toISOString();
-    const [runtime, voiceStatus] = await Promise.all([
-      getManagedVoiceRuntimeStatus(this.storage.systemSettings),
-      this.getVoiceStatus(),
-    ]);
-    const failure = buildVoiceControlStartFailure({
-      action: "talk",
-      now,
-      runtime,
-      status: voiceStatus,
-    });
-    if (failure) {
-      this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, failure.stt);
-      if (failure.talk) {
-        this.storage.systemSettings.set("voice_talk_status_v1", failure.talk);
-      }
-      throw new Error(failure.message);
-    }
-    const record: VoiceTalkSessionRecord = {
-      talkSessionId: randomUUID(),
-      mode: input?.mode ?? "push_to_talk",
-      state: "running",
-      createdAt: now,
-      startedAt: now,
-      sessionId: input?.sessionId,
-    };
-    this.gatewaySql.prepare(`
-      INSERT INTO voice_sessions (
-        voice_session_id, talk_session_id, mode, state, session_id, payload_json, created_at, updated_at
-      ) VALUES (
-        @voiceSessionId, @talkSessionId, @mode, @state, @sessionId, @payloadJson, @createdAt, @updatedAt
-      )
-    `).run({
-      voiceSessionId: record.talkSessionId,
-      talkSessionId: record.talkSessionId,
-      mode: record.mode,
-      state: record.state,
-      sessionId: record.sessionId ?? null,
-      payloadJson: JSON.stringify(record),
-      createdAt: now,
-      updatedAt: now,
-    });
-    this.storage.systemSettings.set("voice_talk_status_v1", {
-      activeSessionId: record.talkSessionId,
-      state: "running",
-      mode: record.mode,
-      updatedAt: now,
-    });
-    this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
-      ...voiceStatus.stt,
-      state: "stopped",
-      provider: runtime.provider,
-      modelId: runtime.selectedModelId,
-      runtimeReady: runtime.readiness === "ready",
-      lastError: undefined,
-      updatedAt: now,
-    });
-    this.publishRealtime("system", "voice", {
-      type: "voice_talk_started",
-      talkSessionId: record.talkSessionId,
-      mode: record.mode,
-    });
-    return record;
+  public async startTalkSession(input?: {
+    mode?: "push_to_talk" | "wake";
+    sessionId?: string;
+  }): Promise<VoiceTalkSessionRecord> {
+    return this.mediaVoiceService.startTalkSession(input);
   }
 
   public listVoiceTalkSessions(limit = 20): VoiceTalkSessionRecord[] {
-    const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit) || 20));
-    const rows = this.gatewaySql.prepare(`
-      SELECT payload_json
-      FROM voice_sessions
-      ORDER BY COALESCE(updated_at, created_at) DESC, rowid DESC
-      LIMIT ?
-    `).all(safeLimit) as Array<{ payload_json: string }>;
-    return rows.map((row) =>
-      safeJsonParse<VoiceTalkSessionRecord>(row.payload_json, {
-        talkSessionId: randomUUID(),
-        mode: "push_to_talk",
-        state: "stopped",
-        createdAt: new Date().toISOString(),
-      }));
+    return this.mediaVoiceService.listVoiceTalkSessions(limit);
   }
 
   public stopTalkSession(talkSessionId: string): VoiceTalkSessionRecord {
-    const now = new Date().toISOString();
-    const row = this.gatewaySql.prepare(`
-      SELECT payload_json FROM voice_sessions WHERE talk_session_id = ?
-    `).get(talkSessionId) as { payload_json: string } | undefined;
-    if (!row) {
-      throw new Error(`Unknown talk session: ${talkSessionId}`);
-    }
-    const payload = safeJsonParse<VoiceTalkSessionRecord>(row.payload_json, {
-      talkSessionId,
-      mode: "push_to_talk",
-      state: "running",
-      createdAt: now,
-    });
-    const stopped: VoiceTalkSessionRecord = {
-      ...payload,
-      state: "stopped",
-      stoppedAt: now,
-    };
-    this.gatewaySql.prepare(`
-      UPDATE voice_sessions
-      SET state = 'stopped', payload_json = @payloadJson, updated_at = @updatedAt
-      WHERE talk_session_id = @talkSessionId
-    `).run({
-      payloadJson: JSON.stringify(stopped),
-      updatedAt: now,
-      talkSessionId,
-    });
-    this.storage.systemSettings.set("voice_talk_status_v1", {
-      activeSessionId: undefined,
-      state: "stopped",
-      mode: stopped.mode,
-      updatedAt: now,
-    });
-    this.publishRealtime("system", "voice", {
-      type: "voice_talk_stopped",
-      talkSessionId,
-    });
-    return stopped;
+    return this.mediaVoiceService.stopTalkSession(talkSessionId);
   }
 
   public async startVoiceWake(): Promise<VoiceStatus["wake"]> {
-    const now = new Date().toISOString();
-    const [runtime, voiceStatus] = await Promise.all([
-      getManagedVoiceRuntimeStatus(this.storage.systemSettings),
-      this.getVoiceStatus(),
-    ]);
-    const failure = buildVoiceControlStartFailure({
-      action: "wake",
-      now,
-      runtime,
-      status: voiceStatus,
-    });
-    if (failure) {
-      this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, failure.stt);
-      if (failure.wake) {
-        this.storage.systemSettings.set(VOICE_WAKE_STATUS_SETTING_KEY, failure.wake);
-      }
-      throw new Error(failure.message);
-    }
-    const status: VoiceStatus["wake"] = {
-      enabled: true,
-      state: "running",
-      model: "openwakeword",
-      updatedAt: now,
-    };
-    this.storage.systemSettings.set(VOICE_WAKE_STATUS_SETTING_KEY, status);
-    this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
-      ...voiceStatus.stt,
-      state: "stopped",
-      provider: runtime.provider,
-      modelId: runtime.selectedModelId,
-      runtimeReady: runtime.readiness === "ready",
-      lastError: undefined,
-      updatedAt: now,
-    });
-    this.publishRealtime("system", "voice", {
-      type: "voice_wake_started",
-    });
-    return status;
+    return this.mediaVoiceService.startVoiceWake();
   }
 
   public stopVoiceWake(): VoiceStatus["wake"] {
-    const status: VoiceStatus["wake"] = {
-      enabled: false,
-      state: "stopped",
-      model: "openwakeword",
-      updatedAt: new Date().toISOString(),
-    };
-    this.storage.systemSettings.set(VOICE_WAKE_STATUS_SETTING_KEY, status);
-    this.publishRealtime("system", "voice", {
-      type: "voice_wake_stopped",
-    });
-    return status;
+    return this.mediaVoiceService.stopVoiceWake();
   }
 
   public getDaemonStatus(): {
@@ -14442,7 +10399,9 @@ export class GatewayService {
     controllable: boolean;
     controlMessage: string;
   } {
-    const state = this.storage.systemSettings.get<{ state: "running" | "stopped"; lastCommandAt?: string }>("daemon_state_v1")?.value;
+    const state = this.storage.systemSettings.get<{ state: "running" | "stopped"; lastCommandAt?: string }>(
+      "daemon_state_v1",
+    )?.value;
     return {
       running: true,
       pid: process.pid,
@@ -14453,7 +10412,8 @@ export class GatewayService {
       requestedState: state?.state,
       supported: false,
       controllable: false,
-      controlMessage: "This surface reports the current gateway process only. Start/stop/restart requires an external service manager and is not supported from Mission Control.",
+      controlMessage:
+        "This surface reports the current gateway process only. Start/stop/restart requires an external service manager and is not supported from Mission Control.",
     };
   }
 
@@ -14497,291 +10457,74 @@ export class GatewayService {
   }
 
   public listDaemonLogs(tail = 200): Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }> {
-    const rows = this.storage.systemSettings.get<Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }>>(
-      DAEMON_LOG_TAIL_SETTING_KEY,
-    )?.value ?? [];
+    const rows =
+      this.storage.systemSettings.get<Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }>>(
+        DAEMON_LOG_TAIL_SETTING_KEY,
+      )?.value ?? [];
     const bounded = Math.max(1, Math.min(2000, Math.floor(tail)));
     return rows.slice(-bounded);
   }
 
   public async commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    const attachments = await resolveChannelSendAttachments({
-      attachments: input.attachments,
-      attachmentIds: input.attachmentIds,
-    }, {
-      readChatAttachmentContent: (attachmentId) => this.readChatAttachmentContent(attachmentId),
-    });
-    return this.invokeAndUnwrap(
-      {
-        toolName: "channel.send",
-        args: {
-          connectionId: input.connectionId,
-          target: input.target,
-          message: input.message,
-          attachments,
-          replyTo: input.replyToMessageId,
-          replyToMessageId: input.replyToMessageId,
-          replyToMessageGuid: input.replyToMessageId,
-          replyToPartIndex: input.replyToPartIndex,
-          effectId: input.effectId,
-          subject: input.subject,
-        },
-        sessionId: input.sessionId ?? "session:operator:comms",
-        agentId: input.agentId ?? "operator",
-        taskId: input.taskId,
-      },
-      "comms_send",
-    );
+    return commsSendImpl(this, input);
   }
 
   public async commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    if (!input.replyToMessageId?.trim()) {
-      throw new Error("replyToMessageId is required for channel replies.");
-    }
-    return this.commsSend(input);
+    return commsReplyImpl(this, input);
   }
 
   public async commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return this.invokeAndUnwrap(
-      {
-        toolName: "channel.react",
-        args: {
-          connectionId: input.connectionId,
-          target: input.target,
-          messageId: input.messageId,
-          reaction: input.reaction,
-          partIndex: input.partIndex,
-          messageText: input.messageText,
-        },
-        sessionId: input.sessionId ?? "session:operator:comms",
-        agentId: input.agentId ?? "operator",
-        taskId: input.taskId,
-      },
-      "comms_react",
-    );
+    return commsReactImpl(this, input);
   }
 
   public async commsUnsend(input: ChannelUnsendInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return this.invokeAndUnwrap(
-      {
-        toolName: "channel.unsend",
-        args: {
-          connectionId: input.connectionId,
-          target: input.target,
-          messageId: input.messageId,
-          partIndex: input.partIndex,
-        },
-        sessionId: input.sessionId ?? "session:operator:comms",
-        agentId: input.agentId ?? "operator",
-        taskId: input.taskId,
-      },
-      "comms_unsend",
-    );
+    return commsUnsendImpl(this, input);
   }
 
   public async commsTyping(input: ChannelTypingInput): Promise<ChannelTypingResult> {
-    const connection = this.getIntegrationConnection(input.connectionId);
-    if (connection.kind !== "channel") {
-      throw new Error(`Integration connection ${input.connectionId} is not a channel connection.`);
-    }
-    const capabilities = describeChannelCapabilities(connection.key, connection.config);
-    if (!capabilities.supportedActions.includes("channel.typing")) {
-      return {
-        channelKey: connection.key,
-        connectionId: input.connectionId,
-        target: input.target,
-        supported: false,
-        status: "unsupported",
-        reason: `${connection.label} does not advertise typing support in the current runtime mode.`,
-      };
-    }
-
-    if (connection.key === "discord") {
-      return this.emitDiscordTyping(connection, input);
-    }
-    if (connection.key === "telegram") {
-      return this.emitTelegramTyping(connection, input);
-    }
-
-    return {
-      channelKey: connection.key,
-      connectionId: input.connectionId,
-      target: input.target,
-      supported: false,
-      status: "unsupported",
-      reason: `${connection.label} has not wired a typing adapter yet.`,
-    };
+    return commsTypingImpl(this, input);
   }
 
   public async commsGmailRead(input: GmailReadQuery): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return this.invokeAndUnwrap(
-      {
-        toolName: "gmail.read",
-        args: {
-          connectionId: input.connectionId,
-          query: input.query,
-          maxResults: input.maxResults,
-        },
-        sessionId: input.sessionId ?? "session:operator:comms",
-        agentId: input.agentId ?? "operator",
-        taskId: input.taskId,
-      },
-      "comms_gmail_read",
-    );
+    return commsGmailReadImpl(this, input);
   }
 
   public async commsGmailSend(input: GmailSendInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return this.invokeAndUnwrap(
-      {
-        toolName: "gmail.send",
-        args: {
-          connectionId: input.connectionId,
-          to: input.to,
-          cc: input.cc,
-          bcc: input.bcc,
-          subject: input.subject,
-          bodyText: input.bodyText,
-          bodyHtml: input.bodyHtml,
-        },
-        sessionId: input.sessionId ?? "session:operator:comms",
-        agentId: input.agentId ?? "operator",
-        taskId: input.taskId,
-      },
-      "comms_gmail_send",
-    );
+    return commsGmailSendImpl(this, input);
   }
 
   public async commsCalendarList(input: CalendarListQuery): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return this.invokeAndUnwrap(
-      {
-        toolName: "calendar.list",
-        args: {
-          connectionId: input.connectionId,
-          calendarId: input.calendarId,
-          fromIso: input.fromIso,
-          toIso: input.toIso,
-          maxResults: input.maxResults,
-        },
-        sessionId: input.sessionId ?? "session:operator:comms",
-        agentId: input.agentId ?? "operator",
-        taskId: input.taskId,
-      },
-      "comms_calendar_list",
-    );
+    return commsCalendarListImpl(this, input);
   }
 
-  public async commsCalendarCreate(input: CalendarCreateEventInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return this.invokeAndUnwrap(
-      {
-        toolName: "calendar.create_event",
-        args: {
-          connectionId: input.connectionId,
-          calendarId: input.calendarId,
-          title: input.title,
-          description: input.description,
-          startIso: input.startIso,
-          endIso: input.endIso,
-          attendees: input.attendees,
-          timeZone: input.timeZone,
-        },
-        sessionId: input.sessionId ?? "session:operator:comms",
-        agentId: input.agentId ?? "operator",
-        taskId: input.taskId,
-      },
-      "comms_calendar_create",
-    );
+  public async commsCalendarCreate(
+    input: CalendarCreateEventInput,
+  ): Promise<ToolInvokeResult | Record<string, unknown>> {
+    return commsCalendarCreateImpl(this, input);
   }
 
   public async knowledgeMemoryWrite(input: MemoryWriteInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return this.invokeAndUnwrap(
-      {
-        toolName: "memory.write",
-        args: {
-          namespace: input.namespace,
-          title: input.title,
-          content: input.content,
-          tags: input.tags,
-          metadata: input.metadata,
-          source: input.source,
-        },
-        sessionId: input.sessionId ?? "session:operator:knowledge",
-        agentId: input.agentId ?? "operator",
-        taskId: input.taskId,
-      },
-      "knowledge_memory_write",
-    );
+    return knowledgeMemoryWriteImpl(this, input);
   }
 
   public async knowledgeMemorySearch(input: MemorySearchQuery): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return this.invokeAndUnwrap(
-      {
-        toolName: "memory.search",
-        args: {
-          namespace: input.namespace,
-          query: input.query,
-          limit: input.limit,
-          filters: input.filters,
-        },
-        sessionId: input.sessionId ?? "session:operator:knowledge",
-        agentId: input.agentId ?? "operator",
-        taskId: input.taskId,
-      },
-      "knowledge_memory_search",
-    );
+    return knowledgeMemorySearchImpl(this, input);
   }
 
   public async knowledgeDocsIngest(input: DocsIngestInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return this.invokeAndUnwrap(
-      {
-        toolName: "docs.ingest",
-        args: {
-          sourceType: input.sourceType,
-          source: input.source,
-          namespace: input.namespace,
-          title: input.title,
-          chunking: input.chunking,
-          metadata: input.metadata,
-        },
-        sessionId: input.sessionId ?? "session:operator:knowledge",
-        agentId: input.agentId ?? "operator",
-        taskId: input.taskId,
-      },
-      "knowledge_docs_ingest",
-    );
+    return knowledgeDocsIngestImpl(this, input);
   }
 
-  public async knowledgeEmbeddingsIndex(input: EmbeddingIndexInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return this.invokeAndUnwrap(
-      {
-        toolName: "embeddings.index",
-        args: {
-          namespace: input.namespace,
-          documentId: input.documentId,
-          force: input.force,
-        },
-        sessionId: input.sessionId ?? "session:operator:knowledge",
-        agentId: input.agentId ?? "operator",
-        taskId: input.taskId,
-      },
-      "knowledge_embeddings_index",
-    );
+  public async knowledgeEmbeddingsIndex(
+    input: EmbeddingIndexInput,
+  ): Promise<ToolInvokeResult | Record<string, unknown>> {
+    return knowledgeEmbeddingsIndexImpl(this, input);
   }
 
-  public async knowledgeEmbeddingsQuery(input: EmbeddingQueryInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return this.invokeAndUnwrap(
-      {
-        toolName: "embeddings.query",
-        args: {
-          namespace: input.namespace,
-          query: input.query,
-          limit: input.limit,
-        },
-        sessionId: input.sessionId ?? "session:operator:knowledge",
-        agentId: input.agentId ?? "operator",
-        taskId: input.taskId,
-      },
-      "knowledge_embeddings_query",
-    );
+  public async knowledgeEmbeddingsQuery(
+    input: EmbeddingQueryInput,
+  ): Promise<ToolInvokeResult | Record<string, unknown>> {
+    return knowledgeEmbeddingsQueryImpl(this, input);
   }
 
   public getMeshStatus(): MeshStatus {
@@ -14936,7 +10679,10 @@ export class GatewayService {
     };
   }
 
-  public saveProviderSecret(providerId: string, apiKey: string): {
+  public saveProviderSecret(
+    providerId: string,
+    apiKey: string,
+  ): {
     providerId: string;
     hasSecret: boolean;
     source: "none" | "keychain" | "env" | "inline";
@@ -15071,6 +10817,10 @@ export class GatewayService {
   }
 
   public async createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
+    return llmCompletionService.createChatCompletion(this, request);
+  }
+
+  private async _movedCreateChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
     this.recordDevDiagnostic({
       level: "debug",
       category: "chat",
@@ -15087,13 +10837,12 @@ export class GatewayService {
     let response: ChatCompletionResponse | undefined;
     let memoryContext: MemoryContextPack | undefined;
     const memoryInput = request.memory;
-    const useQmd = (
-      this.config.assistant.memory.enabled
-      && this.config.assistant.memory.qmd.enabled
-      && this.config.assistant.memory.qmd.applyToChat
-      && memoryInput?.mode !== "off"
-      && (memoryInput?.enabled ?? true)
-    );
+    const useQmd =
+      this.config.assistant.memory.enabled &&
+      this.config.assistant.memory.qmd.enabled &&
+      this.config.assistant.memory.qmd.applyToChat &&
+      memoryInput?.mode !== "off" &&
+      (memoryInput?.enabled ?? true);
 
     if (useQmd) {
       const prompt = extractPromptFromMessages(request.messages);
@@ -15112,15 +10861,15 @@ export class GatewayService {
 
     const withContext = memoryContext
       ? {
-        ...request,
-        messages: [
-          {
-            role: "system" as const,
-            content: buildMemoryContextSystemMessage(memoryContext),
-          },
-          ...request.messages,
-        ],
-      }
+          ...request,
+          messages: [
+            {
+              role: "system" as const,
+              content: buildMemoryContextSystemMessage(memoryContext),
+            },
+            ...request.messages,
+          ],
+        }
       : request;
 
     const chatHookWorkspaceId = this.resolveChatCompletionHookWorkspaceId(request);
@@ -15197,9 +10946,7 @@ export class GatewayService {
     });
     const primaryProviderId = hookableRequest.providerId ?? runtime.activeProviderId;
     const primaryProvider = runtime.providers.find((item) => item.providerId === primaryProviderId);
-    const primaryModel = hookableRequest.model
-      ?? primaryProvider?.defaultModel
-      ?? runtime.activeModel;
+    const primaryModel = hookableRequest.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
     const primaryApiStyle = this.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
     const allowCrossProviderFallback = shouldAllowCrossProviderFallback(hookableRequest);
     const routing: ChatTurnTraceRecord["routing"] = {
@@ -15222,7 +10969,11 @@ export class GatewayService {
 
     attemptLoop: for (let index = 0; index < retryAttempts.length; index += 1) {
       const attemptRequest = retryAttempts[index]!;
-      for (let transientRetryIndex = 0; transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT; transientRetryIndex += 1) {
+      for (
+        let transientRetryIndex = 0;
+        transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
+        transientRetryIndex += 1
+      ) {
         try {
           const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
           response = await this.llmService.chatCompletions({
@@ -15240,9 +10991,10 @@ export class GatewayService {
             routing.fallbackProviderId = routing.effectiveProviderId;
             routing.fallbackModel = routing.effectiveModel;
             routing.fallbackApiStyle = routing.effectiveApiStyle;
-            routing.fallbackReason = index === 1
-              ? "provider compatibility retry (normalized tool protocol)"
-              : "provider compatibility retry (minimal thinking metadata)";
+            routing.fallbackReason =
+              index === 1
+                ? "provider compatibility retry (normalized tool protocol)"
+                : "provider compatibility retry (minimal thinking metadata)";
           }
           break attemptLoop;
         } catch (error) {
@@ -15263,8 +11015,8 @@ export class GatewayService {
           });
 
           if (
-            transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1
-            && shouldRetryTransientProviderError(lastError)
+            transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
+            shouldRetryTransientProviderError(lastError)
           ) {
             await delayChatCompletionRetry(completionDeadline, hookableRequest.timeoutMs, transientRetryIndex);
             continue;
@@ -15283,7 +11035,11 @@ export class GatewayService {
     if (!response && allowCrossProviderFallback) {
       const fallbacks = this.resolveFallbackTargets(runtime, primaryProviderId, primaryModel);
       for (const fallback of fallbacks) {
-        for (let transientRetryIndex = 0; transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT; transientRetryIndex += 1) {
+        for (
+          let transientRetryIndex = 0;
+          transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
+          transientRetryIndex += 1
+        ) {
           try {
             const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
             response = await this.llmService.chatCompletions({
@@ -15319,8 +11075,8 @@ export class GatewayService {
           } catch (error) {
             lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
             if (
-              transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1
-              && shouldRetryTransientProviderError(lastError)
+              transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
+              shouldRetryTransientProviderError(lastError)
             ) {
               await delayChatCompletionRetry(completionDeadline, hookableRequest.timeoutMs, transientRetryIndex);
               continue;
@@ -15381,10 +11137,7 @@ export class GatewayService {
         cacheHit: memoryContext.quality.status === "cache_hit",
         originalTokenEstimate: memoryContext.originalTokenEstimate,
         distilledTokenEstimate: memoryContext.distilledTokenEstimate,
-        savingsPercent: calculateSavings(
-          memoryContext.originalTokenEstimate,
-          memoryContext.distilledTokenEstimate,
-        ),
+        savingsPercent: calculateSavings(memoryContext.originalTokenEstimate, memoryContext.distilledTokenEstimate),
         citationsCount: memoryContext.citations.length,
       };
     }
@@ -15410,15 +11163,20 @@ export class GatewayService {
   }
 
   public async *createChatCompletionStream(request: ChatCompletionRequest): AsyncGenerator<Record<string, unknown>> {
+    yield* llmCompletionService.createChatCompletionStream(this, request);
+  }
+
+  private async *_movedCreateChatCompletionStream(
+    request: ChatCompletionRequest,
+  ): AsyncGenerator<Record<string, unknown>> {
     let memoryContext: MemoryContextPack | undefined;
     const memoryInput = request.memory;
-    const useQmd = (
-      this.config.assistant.memory.enabled
-      && this.config.assistant.memory.qmd.enabled
-      && this.config.assistant.memory.qmd.applyToChat
-      && memoryInput?.mode !== "off"
-      && (memoryInput?.enabled ?? true)
-    );
+    const useQmd =
+      this.config.assistant.memory.enabled &&
+      this.config.assistant.memory.qmd.enabled &&
+      this.config.assistant.memory.qmd.applyToChat &&
+      memoryInput?.mode !== "off" &&
+      (memoryInput?.enabled ?? true);
 
     if (useQmd) {
       const prompt = extractPromptFromMessages(request.messages);
@@ -15437,15 +11195,15 @@ export class GatewayService {
 
     const withContext = memoryContext
       ? {
-        ...request,
-        messages: [
-          {
-            role: "system" as const,
-            content: buildMemoryContextSystemMessage(memoryContext),
-          },
-          ...request.messages,
-        ],
-      }
+          ...request,
+          messages: [
+            {
+              role: "system" as const,
+              content: buildMemoryContextSystemMessage(memoryContext),
+            },
+            ...request.messages,
+          ],
+        }
       : request;
     this.persistContextManifestForCompletionRequest({
       request: withContext,
@@ -15458,9 +11216,7 @@ export class GatewayService {
     });
     const primaryProviderId = withContext.providerId ?? runtime.activeProviderId;
     const primaryProvider = runtime.providers.find((item) => item.providerId === primaryProviderId);
-    const primaryModel = withContext.model
-      ?? primaryProvider?.defaultModel
-      ?? runtime.activeModel;
+    const primaryModel = withContext.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
     const primaryApiStyle = this.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
     const allowCrossProviderFallback = shouldAllowCrossProviderFallback(withContext);
     const routing: ChatTurnTraceRecord["routing"] = {
@@ -15484,7 +11240,11 @@ export class GatewayService {
 
     attemptLoop: for (let index = 0; index < retryAttempts.length; index += 1) {
       const attemptRequest = retryAttempts[index]!;
-      for (let transientRetryIndex = 0; transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT; transientRetryIndex += 1) {
+      for (
+        let transientRetryIndex = 0;
+        transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
+        transientRetryIndex += 1
+      ) {
         let attemptStreamed = false;
         try {
           const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
@@ -15508,17 +11268,18 @@ export class GatewayService {
             routing.fallbackProviderId = routing.effectiveProviderId;
             routing.fallbackModel = routing.effectiveModel;
             routing.fallbackApiStyle = routing.effectiveApiStyle;
-            routing.fallbackReason = index === 1
-              ? "provider compatibility retry (normalized tool protocol)"
-              : "provider compatibility retry (minimal thinking metadata)";
+            routing.fallbackReason =
+              index === 1
+                ? "provider compatibility retry (normalized tool protocol)"
+                : "provider compatibility retry (minimal thinking metadata)";
           }
           break attemptLoop;
         } catch (error) {
           lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
           if (
-            !attemptStreamed
-            && transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1
-            && shouldRetryTransientProviderError(lastError)
+            !attemptStreamed &&
+            transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
+            shouldRetryTransientProviderError(lastError)
           ) {
             await delayChatCompletionRetry(completionDeadline, withContext.timeoutMs, transientRetryIndex);
             continue;
@@ -15534,7 +11295,11 @@ export class GatewayService {
     if (!streamed && allowCrossProviderFallback) {
       const fallbacks = this.resolveFallbackTargets(runtime, primaryProviderId, primaryModel);
       for (const fallback of fallbacks) {
-        for (let transientRetryIndex = 0; transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT; transientRetryIndex += 1) {
+        for (
+          let transientRetryIndex = 0;
+          transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
+          transientRetryIndex += 1
+        ) {
           let attemptStreamed = false;
           try {
             const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
@@ -15552,10 +11317,7 @@ export class GatewayService {
             routing.fallbackUsed = true;
             routing.fallbackProviderId = fallback.providerId;
             routing.fallbackModel = fallback.model;
-            routing.fallbackApiStyle = this.llmService.resolveExecutionApiStyle(
-              fallback.providerId,
-              fallback.model,
-            );
+            routing.fallbackApiStyle = this.llmService.resolveExecutionApiStyle(fallback.providerId, fallback.model);
             routing.fallbackReason = `primary failed (${lastError?.message ?? "unknown error"})`;
             routing.effectiveProviderId = fallback.providerId;
             routing.effectiveModel = fallback.model;
@@ -15564,9 +11326,9 @@ export class GatewayService {
           } catch (error) {
             lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
             if (
-              !attemptStreamed
-              && transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1
-              && shouldRetryTransientProviderError(lastError)
+              !attemptStreamed &&
+              transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
+              shouldRetryTransientProviderError(lastError)
             ) {
               await delayChatCompletionRetry(completionDeadline, withContext.timeoutMs, transientRetryIndex);
               continue;
@@ -15606,17 +11368,14 @@ export class GatewayService {
         cacheHit: memoryContext.quality.status === "cache_hit",
         originalTokenEstimate: memoryContext.originalTokenEstimate,
         distilledTokenEstimate: memoryContext.distilledTokenEstimate,
-        savingsPercent: calculateSavings(
-          memoryContext.originalTokenEstimate,
-          memoryContext.distilledTokenEstimate,
-        ),
+        savingsPercent: calculateSavings(memoryContext.originalTokenEstimate, memoryContext.distilledTokenEstimate),
         citationsCount: memoryContext.citations.length,
       };
     }
     yield finalChunk;
   }
 
-  private resolveFallbackTargets(
+  /** @internal */ public resolveFallbackTargets(
     runtime: LlmRuntimeConfig,
     primaryProviderId: string,
     primaryModel: string,
@@ -15647,108 +11406,11 @@ export class GatewayService {
   }
 
   public createOrchestrationPlan(plan: OrchestrationPlan): OrchestrationRun {
-    this.storage.orchestration.upsertPlan(plan);
-    const run = this.orchestrationEngine.createRun(plan);
-    const persisted = this.storage.orchestration.createRun(run);
-
-    this.createCheckpoint({
-      runId: persisted.runId,
-      planId: persisted.planId,
-      checkpointKind: "run_created",
-      details: { status: persisted.status },
-    });
-
-    this.storage.orchestration.appendRunEvent(persisted.runId, "run.created", {
-      status: persisted.status,
-    });
-
-    this.publishRealtime("orchestration_event", "orchestration", {
-      runId: persisted.runId,
-      planId: persisted.planId,
-      event: "run_created",
-      status: persisted.status,
-    });
-
-    return persisted;
+    return orchestrationLifecycleService.createOrchestrationPlan(this, plan);
   }
 
   public async runOrchestrationPlan(planId: string): Promise<OrchestrationRun> {
-    let plan = this.storage.orchestration.getPlan(planId);
-    let run = this.storage.orchestration.findLatestRunByPlan(planId);
-
-    if (!run) {
-      run = this.createOrchestrationPlan(plan);
-    }
-
-    const runBeforeHook = await this.hooksService.runInlineHooks<{
-      maxIterations?: number;
-      maxRuntimeMinutes?: number;
-      maxCostUsd?: number;
-    }>({
-      workspaceId: DEFAULT_WORKSPACE_ID,
-      trigger: "orchestration.run.before",
-      entityType: "orchestration_run",
-      entityId: run.runId,
-      payload: {
-        planId: plan.planId,
-        goal: plan.goal,
-        maxIterations: plan.maxIterations,
-        maxRuntimeMinutes: plan.maxRuntimeMinutes,
-        maxCostUsd: plan.maxCostUsd,
-      },
-      parsePatch: (value) => this.parseOrchestrationRunHookPatch(value),
-      mergePatch: (current, next) => ({
-        ...(current ?? {}),
-        ...next,
-      }),
-    });
-    if (runBeforeHook.blockedBy) {
-      throw new Error(runBeforeHook.blockedBy.reason);
-    }
-    if (runBeforeHook.patch) {
-      plan = {
-        ...plan,
-        ...(runBeforeHook.patch.maxIterations !== undefined ? { maxIterations: runBeforeHook.patch.maxIterations } : {}),
-        ...(runBeforeHook.patch.maxRuntimeMinutes !== undefined ? { maxRuntimeMinutes: runBeforeHook.patch.maxRuntimeMinutes } : {}),
-        ...(runBeforeHook.patch.maxCostUsd !== undefined ? { maxCostUsd: runBeforeHook.patch.maxCostUsd } : {}),
-      };
-      this.storage.orchestration.upsertPlan(plan);
-    }
-
-    const started = this.orchestrationEngine.startRun(plan, run);
-    const persisted = this.storage.orchestration.updateRun(started);
-
-    this.createCheckpoint({
-      runId: persisted.runId,
-      planId,
-      waveId: persisted.currentWaveId,
-      phaseId: persisted.currentPhaseId,
-      checkpointKind: "run_started",
-      details: {
-        status: persisted.status,
-      },
-    });
-
-    this.storage.orchestration.appendRunEvent(persisted.runId, "run.started", {
-      status: persisted.status,
-      waveId: persisted.currentWaveId,
-      phaseId: persisted.currentPhaseId,
-    });
-
-    this.publishRealtime("orchestration_event", "orchestration", {
-      runId: persisted.runId,
-      planId,
-      event: "run_started",
-      status: persisted.status,
-      waveId: persisted.currentWaveId,
-      phaseId: persisted.currentPhaseId,
-    });
-
-    if (this.config.assistant.memory.enabled && this.config.assistant.memory.qmd.applyToOrchestration) {
-      this.scheduleOrchestrationMemoryContext(plan, persisted);
-    }
-
-    return persisted;
+    return orchestrationLifecycleService.runOrchestrationPlan(this, planId);
   }
 
   public async approvePhase(
@@ -15757,151 +11419,15 @@ export class GatewayService {
     approvedBy: string,
     costIncrementUsd = 0,
   ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }> {
-    const run = this.storage.orchestration.getRun(runId);
-    let plan = this.storage.orchestration.getPlan(run.planId);
-    const previousWaveId = run.currentWaveId;
-
-    const phaseBeforeHook = await this.hooksService.runInlineHooks<{
-      ownerAgentId?: string;
-      specPath?: string;
-      loopMode?: "fresh-context" | "compaction";
-      requiresApproval?: boolean;
-    }>({
-      workspaceId: DEFAULT_WORKSPACE_ID,
-      trigger: "orchestration.phase.before",
-      entityType: "orchestration_phase",
-      entityId: `${runId}:${phaseId}`,
-      payload: {
-        runId,
-        phaseId,
-        approvedBy,
-        costIncrementUsd,
-      },
-      parsePatch: (value) => this.parseOrchestrationPhaseHookPatch(value),
-      mergePatch: (current, next) => ({
-        ...(current ?? {}),
-        ...next,
-      }),
-    });
-    if (phaseBeforeHook.blockedBy) {
-      throw new Error(phaseBeforeHook.blockedBy.reason);
-    }
-    if (phaseBeforeHook.patch) {
-      plan = this.applyOrchestrationPhaseHookPatch(plan, phaseId, phaseBeforeHook.patch);
-      this.storage.orchestration.upsertPlan(plan);
-    }
-
-    const next = this.orchestrationEngine.approvePhase(plan, run, phaseId, {
-      costIncrementUsd,
-    });
-
-    const persisted = this.storage.orchestration.updateRun(next);
-
-    this.createCheckpoint({
-      runId,
-      planId: plan.planId,
-      waveId: previousWaveId,
-      phaseId,
-      checkpointKind: "phase_approved",
-      details: {
-        approvedBy,
-        status: persisted.status,
-        nextWaveId: persisted.currentWaveId,
-        nextPhaseId: persisted.currentPhaseId,
-      },
-    });
-
-    if (previousWaveId !== persisted.currentWaveId && persisted.currentWaveId) {
-      this.createCheckpoint({
-        runId,
-        planId: plan.planId,
-        waveId: persisted.currentWaveId,
-        phaseId: persisted.currentPhaseId,
-        checkpointKind: "wave_advanced",
-        details: {
-          fromWave: previousWaveId,
-          toWave: persisted.currentWaveId,
-        },
-      });
-    }
-
-    if (persisted.status === "completed") {
-      this.createCheckpoint({
-        runId,
-        planId: plan.planId,
-        checkpointKind: "run_completed",
-        details: {
-          totalIterations: persisted.totalIterations,
-          totalCostUsd: persisted.totalCostUsd,
-        },
-      });
-    }
-
-    if (persisted.status === "stopped_by_limit") {
-      this.createCheckpoint({
-        runId,
-        planId: plan.planId,
-        checkpointKind: "run_stopped",
-        details: {
-          totalIterations: persisted.totalIterations,
-          totalCostUsd: persisted.totalCostUsd,
-        },
-      });
-    }
-
-    this.storage.orchestration.appendRunEvent(runId, "phase.approved", {
-      approvedBy,
-      phaseId,
-      status: persisted.status,
-      currentWaveId: persisted.currentWaveId,
-      currentPhaseId: persisted.currentPhaseId,
-      totalIterations: persisted.totalIterations,
-      totalCostUsd: persisted.totalCostUsd,
-    });
-
-    this.publishRealtime("orchestration_event", "orchestration", {
-      runId,
-      planId: plan.planId,
-      event: "phase_approved",
-      phaseId,
-      approvedBy,
-      status: persisted.status,
-      currentWaveId: persisted.currentWaveId,
-      currentPhaseId: persisted.currentPhaseId,
-    });
-
-    if (this.config.assistant.memory.enabled && this.config.assistant.memory.qmd.applyToOrchestration) {
-      this.scheduleOrchestrationMemoryContext(plan, persisted);
-    }
-
-    this.hooksService.enqueueAfterHooks({
-      workspaceId: DEFAULT_WORKSPACE_ID,
-      trigger: "orchestration.phase.after",
-      entityType: "orchestration_phase",
-      entityId: `${runId}:${phaseId}`,
-      payload: {
-        runId,
-        planId: plan.planId,
-        phaseId,
-        approvedBy,
-        status: persisted.status,
-        currentWaveId: persisted.currentWaveId,
-        currentPhaseId: persisted.currentPhaseId,
-      },
-    });
-
-    return {
-      run: persisted,
-      checkpoints: this.storage.orchestration.listCheckpoints(runId),
-    };
+    return orchestrationLifecycleService.approvePhase(this, runId, phaseId, approvedBy, costIncrementUsd);
   }
 
   public getRun(runId: string): OrchestrationRun {
-    return this.storage.orchestration.getRun(runId);
+    return orchestrationLifecycleService.getRun(this, runId);
   }
 
   public listRunCheckpoints(runId: string): OrchestrationCheckpoint[] {
-    return this.storage.orchestration.listCheckpoints(runId);
+    return orchestrationLifecycleService.listRunCheckpoints(this, runId);
   }
 
   public getBankrOptionalMigrationMessage(): string {
@@ -15946,8 +11472,9 @@ export class GatewayService {
     this.config.assistant.features = this.readFeatureFlags();
   }
 
-  private readFeatureFlags(): RuntimeSettings["features"] {
-    const stored = this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)?.value;
+  /** @internal */ public readFeatureFlags(): RuntimeSettings["features"] {
+    const stored =
+      this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)?.value;
     const fromConfig = this.config.assistant.features;
     return {
       durableKernelV1Enabled: stored?.durableKernelV1Enabled ?? fromConfig.durableKernelV1Enabled,
@@ -15955,7 +11482,8 @@ export class GatewayService {
       memoryLifecycleAdminV1Enabled: stored?.memoryLifecycleAdminV1Enabled ?? fromConfig.memoryLifecycleAdminV1Enabled,
       memoryMaintenanceV1Enabled: stored?.memoryMaintenanceV1Enabled ?? fromConfig.memoryMaintenanceV1Enabled,
       connectorDiagnosticsV1Enabled: stored?.connectorDiagnosticsV1Enabled ?? fromConfig.connectorDiagnosticsV1Enabled,
-      computerUseGuardrailsV1Enabled: stored?.computerUseGuardrailsV1Enabled ?? fromConfig.computerUseGuardrailsV1Enabled,
+      computerUseGuardrailsV1Enabled:
+        stored?.computerUseGuardrailsV1Enabled ?? fromConfig.computerUseGuardrailsV1Enabled,
       bankrBuiltinEnabled: stored?.bankrBuiltinEnabled ?? fromConfig.bankrBuiltinEnabled,
       cronReviewQueueV1Enabled: stored?.cronReviewQueueV1Enabled ?? fromConfig.cronReviewQueueV1Enabled,
       replayRegressionV1Enabled: stored?.replayRegressionV1Enabled ?? fromConfig.replayRegressionV1Enabled,
@@ -15982,25 +11510,31 @@ export class GatewayService {
   // normalizeReplayOverrides, replaceReplayOverrideSteps, computeReplayDiffSummary moved to ImprovementService
 
   private requireMemoryItem(itemId: string): MemoryItemRecord {
-    const row = this.gatewaySql.prepare(`
+    const row = this.gatewaySql
+      .prepare(
+        `
       SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
              created_at, updated_at, forgotten_at
       FROM memory_items
       WHERE item_id = ?
-    `).get(itemId) as {
-      item_id: string;
-      namespace: string;
-      title: string;
-      content: string;
-      metadata_json: string | null;
-      pinned: number;
-      ttl_override_seconds: number | null;
-      expires_at: string | null;
-      status: MemoryItemRecord["status"];
-      created_at: string;
-      updated_at: string;
-      forgotten_at: string | null;
-    } | undefined;
+    `,
+      )
+      .get(itemId) as
+      | {
+          item_id: string;
+          namespace: string;
+          title: string;
+          content: string;
+          metadata_json: string | null;
+          pinned: number;
+          ttl_override_seconds: number | null;
+          expires_at: string | null;
+          status: MemoryItemRecord["status"];
+          created_at: string;
+          updated_at: string;
+          forgotten_at: string | null;
+        }
+      | undefined;
     if (!row) {
       throw new Error(`Memory item not found: ${itemId}`);
     }
@@ -16051,39 +11585,47 @@ export class GatewayService {
       payload,
       createdAt: new Date().toISOString(),
     };
-    this.gatewaySql.prepare(`
+    this.gatewaySql
+      .prepare(
+        `
       INSERT INTO memory_change_history (change_id, item_id, change_type, actor_id, payload_json, created_at)
       VALUES (@changeId, @itemId, @changeType, @actorId, @payloadJson, @createdAt)
-    `).run({
-      changeId: change.changeId,
-      itemId: change.itemId,
-      changeType: change.changeType,
-      actorId: change.actorId ?? null,
-      payloadJson: JSON.stringify(change.payload ?? {}),
-      createdAt: change.createdAt,
-    });
+    `,
+      )
+      .run({
+        changeId: change.changeId,
+        itemId: change.itemId,
+        changeType: change.changeType,
+        actorId: change.actorId ?? null,
+        payloadJson: JSON.stringify(change.payload ?? {}),
+        createdAt: change.createdAt,
+      });
     return change;
   }
 
-  private recordConnectorHealthRun(report: ConnectorDiagnosticReport): void {
-    this.gatewaySql.prepare(`
+  public recordConnectorHealthRun(report: ConnectorDiagnosticReport): void {
+    this.gatewaySql
+      .prepare(
+        `
       INSERT INTO connector_health_runs (
         health_run_id, connector_type, connector_id, status, checks_json, recommendation, checked_at
       ) VALUES (
         @healthRunId, @connectorType, @connectorId, @status, @checksJson, @recommendation, @checkedAt
       )
-    `).run({
-      healthRunId: randomUUID(),
-      connectorType: report.connectorType,
-      connectorId: report.connectorId,
-      status: report.status,
-      checksJson: JSON.stringify(report.checks),
-      recommendation: report.recommendedNextAction ?? null,
-      checkedAt: report.checkedAt,
-    });
+    `,
+      )
+      .run({
+        healthRunId: randomUUID(),
+        connectorType: report.connectorType,
+        connectorId: report.connectorId,
+        status: report.status,
+        checksJson: JSON.stringify(report.checks),
+        recommendation: report.recommendedNextAction ?? null,
+        checkedAt: report.checkedAt,
+      });
   }
 
-  private pickConnectorDiagnosticAction(checks: ConnectorDiagnosticReport["checks"]): string | undefined {
+  public pickConnectorDiagnosticAction(checks: ConnectorDiagnosticReport["checks"]): string | undefined {
     if (checks.some((check) => check.key === "status" && check.status === "fail")) {
       return "Reconnect the connector and resolve the reported status error first.";
     }
@@ -16140,19 +11682,14 @@ export class GatewayService {
     });
   }
 
-  private buildEphemeralChannelConnection(
-    draft: ChannelSetupDraft,
-    secretFieldKeys?: string[],
-  ): IntegrationConnection {
+  private buildEphemeralChannelConnection(draft: ChannelSetupDraft, secretFieldKeys?: string[]): IntegrationConnection {
     const runtime = requireChannelSetupDefinition(draft.catalogId);
     const catalog = INTEGRATION_CATALOG.find((entry) => entry.catalogId === draft.catalogId);
     if (!catalog) {
       throw new Error(`Unknown integration catalog id: ${draft.catalogId}`);
     }
     const nextConfig = runtime.normalize(draft);
-    const currentConfig = draft.connectionId
-      ? this.getIntegrationConnection(draft.connectionId).config
-      : {};
+    const currentConfig = draft.connectionId ? this.getIntegrationConnection(draft.connectionId).config : {};
     const preservedSecrets = Object.fromEntries(
       (secretFieldKeys ?? runtime.definition.adapter.secretFieldKeys)
         .filter((key) => nextConfig[key] === undefined && currentConfig[key] !== undefined)
@@ -16176,32 +11713,22 @@ export class GatewayService {
     };
   }
 
-  private buildIntegrationConnectionChecks(
-    connection: IntegrationConnection,
-  ): ConnectorDiagnosticReport["checks"] {
+  public buildIntegrationConnectionChecks(connection: IntegrationConnection): ConnectorDiagnosticReport["checks"] {
     const checks: ConnectorDiagnosticReport["checks"] = [];
     const config = connection.config;
-    const channelFeatures = connection.kind === "channel"
-      ? describeChannelFeatureMetadata(connection.key, config)
-      : undefined;
-    const channelCapabilities = connection.kind === "channel"
-      ? describeChannelCapabilities(connection.key, config)
-      : undefined;
-    const requireSecretRef = (
-      key: string,
-      label: string,
-      directKey: string,
-      envKey: string,
-    ) => {
+    const channelFeatures =
+      connection.kind === "channel" ? describeChannelFeatureMetadata(connection.key, config) : undefined;
+    const channelCapabilities =
+      connection.kind === "channel" ? describeChannelCapabilities(connection.key, config) : undefined;
+    const requireSecretRef = (key: string, label: string, directKey: string, envKey: string) => {
       const direct = this.readConnectionConfigValue(config, directKey);
       const envName = this.readConnectionConfigValue(config, envKey);
       const envPresent = envName ? Boolean(process.env[envName]) : false;
       checks.push({
         key,
         status: direct || envPresent ? "pass" : "fail",
-        message: direct || envPresent
-          ? `${label} is configured${envName ? ` via ${envName}` : ""}.`
-          : `${label} is missing.`,
+        message:
+          direct || envPresent ? `${label} is configured${envName ? ` via ${envName}` : ""}.` : `${label} is missing.`,
       });
     };
     const requireText = (key: string, label: string, value: string | undefined, status: "warn" | "fail" = "fail") => {
@@ -16219,13 +11746,7 @@ export class GatewayService {
       const allowlisted = !urlValue || this.isConnectionUrlAllowlisted(urlValue);
       checks.push({
         key,
-        status: !urlValue
-          ? "fail"
-          : !safeRemote
-            ? "fail"
-            : allowlisted
-              ? "pass"
-              : "warn",
+        status: !urlValue ? "fail" : !safeRemote ? "fail" : allowlisted ? "pass" : "warn",
         message: !urlValue
           ? `${label} is missing.`
           : !safeRemote
@@ -16245,9 +11766,10 @@ export class GatewayService {
       checks.push({
         key: "attachments",
         status: (channelFeatures?.supportedAttachmentSources.length ?? 0) > 0 ? "pass" : "warn",
-        message: (channelFeatures?.supportedAttachmentSources.length ?? 0) > 0
-          ? `Supported attachment sources: ${channelFeatures?.supportedAttachmentSources.join(", ")}.`
-          : "No rich attachment source is advertised for this connector.",
+        message:
+          (channelFeatures?.supportedAttachmentSources.length ?? 0) > 0
+            ? `Supported attachment sources: ${channelFeatures?.supportedAttachmentSources.join(", ")}.`
+            : "No rich attachment source is advertised for this connector.",
       });
       if (channelCapabilities) {
         checks.push(...buildChannelCapabilityDiagnosticChecks(channelCapabilities));
@@ -16256,16 +11778,18 @@ export class GatewayService {
         case "slack":
           checks.push({
             key: "auth",
-            status: this.readConnectionConfigValue(config, "webhookUrl")
-              || this.readConnectionConfigValue(config, "botToken")
-              || this.hasConnectionEnvValue(config, "botTokenEnv")
-              ? "pass"
-              : "fail",
-            message: this.readConnectionConfigValue(config, "webhookUrl")
-              || this.readConnectionConfigValue(config, "botToken")
-              || this.hasConnectionEnvValue(config, "botTokenEnv")
-              ? "Slack bot token or webhook is configured."
-              : "Slack bot token or webhook is missing.",
+            status:
+              this.readConnectionConfigValue(config, "webhookUrl") ||
+              this.readConnectionConfigValue(config, "botToken") ||
+              this.hasConnectionEnvValue(config, "botTokenEnv")
+                ? "pass"
+                : "fail",
+            message:
+              this.readConnectionConfigValue(config, "webhookUrl") ||
+              this.readConnectionConfigValue(config, "botToken") ||
+              this.hasConnectionEnvValue(config, "botTokenEnv")
+                ? "Slack bot token or webhook is configured."
+                : "Slack bot token or webhook is missing.",
           });
           checkUrl("url", "Slack webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), false);
           requireText("target", "Default Slack channel", resolveChannelConfigTarget(connection.key, config), "warn");
@@ -16273,16 +11797,18 @@ export class GatewayService {
         case "discord":
           checks.push({
             key: "auth",
-            status: this.readConnectionConfigValue(config, "webhookUrl")
-              || this.readConnectionConfigValue(config, "botToken")
-              || this.hasConnectionEnvValue(config, "botTokenEnv")
-              ? "pass"
-              : "fail",
-            message: this.readConnectionConfigValue(config, "webhookUrl")
-              || this.readConnectionConfigValue(config, "botToken")
-              || this.hasConnectionEnvValue(config, "botTokenEnv")
-              ? "Discord bot token or webhook is configured."
-              : "Discord bot token or webhook is missing.",
+            status:
+              this.readConnectionConfigValue(config, "webhookUrl") ||
+              this.readConnectionConfigValue(config, "botToken") ||
+              this.hasConnectionEnvValue(config, "botTokenEnv")
+                ? "pass"
+                : "fail",
+            message:
+              this.readConnectionConfigValue(config, "webhookUrl") ||
+              this.readConnectionConfigValue(config, "botToken") ||
+              this.hasConnectionEnvValue(config, "botTokenEnv")
+                ? "Discord bot token or webhook is configured."
+                : "Discord bot token or webhook is missing.",
           });
           checkUrl("url", "Discord webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), false);
           requireText("target", "Default Discord channel", resolveChannelConfigTarget(connection.key, config), "warn");
@@ -16300,22 +11826,36 @@ export class GatewayService {
           break;
         case "google-chat":
           checkUrl("url", "Google Chat webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), true);
-          requireText("target", "Default Google Chat thread key", resolveChannelConfigTarget(connection.key, config), "warn");
+          requireText(
+            "target",
+            "Default Google Chat thread key",
+            resolveChannelConfigTarget(connection.key, config),
+            "warn",
+          );
           break;
         case "teams":
           checkUrl("url", "Teams webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), true);
           break;
         case "whatsapp":
           requireSecretRef("auth", "WhatsApp access token", "accessToken", "accessTokenEnv");
-          requireText("sender", "WhatsApp phone number id", this.readConnectionConfigValue(config, "phoneNumberId"), "warn");
-          requireText("target", "Default WhatsApp recipient", resolveChannelConfigTarget(connection.key, config), "warn");
+          requireText(
+            "sender",
+            "WhatsApp phone number id",
+            this.readConnectionConfigValue(config, "phoneNumberId"),
+            "warn",
+          );
+          requireText(
+            "target",
+            "Default WhatsApp recipient",
+            resolveChannelConfigTarget(connection.key, config),
+            "warn",
+          );
           break;
         case "signal":
           checkUrl(
             "url",
             "Signal bridge URL",
-            this.readConnectionConfigValue(config, "baseUrl")
-              ?? this.readConnectionConfigValue(config, "bridgeUrl"),
+            this.readConnectionConfigValue(config, "baseUrl") ?? this.readConnectionConfigValue(config, "bridgeUrl"),
             true,
           );
           requireText("target", "Default Signal recipient", resolveChannelConfigTarget(connection.key, config), "warn");
@@ -16323,7 +11863,12 @@ export class GatewayService {
         case "mattermost":
           checkUrl("url", "Mattermost server URL", this.readConnectionConfigValue(config, "serverUrl"), true);
           requireSecretRef("auth", "Mattermost bot token", "botToken", "botTokenEnv");
-          requireText("target", "Default Mattermost channel", resolveChannelConfigTarget(connection.key, config), "warn");
+          requireText(
+            "target",
+            "Default Mattermost channel",
+            resolveChannelConfigTarget(connection.key, config),
+            "warn",
+          );
           break;
         case "imessage":
           checkUrl(
@@ -16338,7 +11883,12 @@ export class GatewayService {
         case "nextcloud-talk":
           checkUrl("url", "Nextcloud base URL", this.readConnectionConfigValue(config, "baseUrl"), true);
           requireSecretRef("auth", "Nextcloud Talk token", "token", "tokenEnv");
-          requireText("target", "Default Nextcloud Talk room", resolveChannelConfigTarget(connection.key, config), "warn");
+          requireText(
+            "target",
+            "Default Nextcloud Talk room",
+            resolveChannelConfigTarget(connection.key, config),
+            "warn",
+          );
           break;
         case "line":
           requireSecretRef("auth", "LINE channel access token", "channelAccessToken", "channelAccessTokenEnv");
@@ -16349,19 +11899,20 @@ export class GatewayService {
           requireText("target", "Default Zalo recipient", resolveChannelConfigTarget(connection.key, config), "warn");
           break;
         case "zalouser": {
-          const baseUrl = this.readConnectionConfigValue(config, "baseUrl")
-            ?? this.readConnectionConfigValue(config, "bridgeUrl")
-            ?? this.readConnectionConfigValue(config, "serverUrl");
+          const baseUrl =
+            this.readConnectionConfigValue(config, "baseUrl") ??
+            this.readConnectionConfigValue(config, "bridgeUrl") ??
+            this.readConnectionConfigValue(config, "serverUrl");
           checkUrl("url", "Zalo User bridge URL", baseUrl, true);
           const hasAuth = Boolean(
-            this.readConnectionConfigValue(config, "authToken")
-              || this.hasConnectionEnvValue(config, "authTokenEnv")
-              || this.readConnectionConfigValue(config, "authorization")
-              || this.hasConnectionEnvValue(config, "authorizationEnv")
-              || this.readConnectionConfigValue(config, "basicAuth")
-              || this.hasConnectionEnvValue(config, "basicAuthEnv")
-              || this.readConnectionConfigValue(config, "accessToken")
-              || this.hasConnectionEnvValue(config, "accessTokenEnv"),
+            this.readConnectionConfigValue(config, "authToken") ||
+            this.hasConnectionEnvValue(config, "authTokenEnv") ||
+            this.readConnectionConfigValue(config, "authorization") ||
+            this.hasConnectionEnvValue(config, "authorizationEnv") ||
+            this.readConnectionConfigValue(config, "basicAuth") ||
+            this.hasConnectionEnvValue(config, "basicAuthEnv") ||
+            this.readConnectionConfigValue(config, "accessToken") ||
+            this.hasConnectionEnvValue(config, "accessTokenEnv"),
           );
           checks.push({
             key: "auth",
@@ -16372,7 +11923,12 @@ export class GatewayService {
                 ? "Zalo User bridge authentication is configured."
                 : "Bridge authentication is not configured.",
           });
-          requireText("target", "Default Zalo User recipient", resolveChannelConfigTarget(connection.key, config), "warn");
+          requireText(
+            "target",
+            "Default Zalo User recipient",
+            resolveChannelConfigTarget(connection.key, config),
+            "warn",
+          );
           break;
         }
         default:
@@ -16386,7 +11942,10 @@ export class GatewayService {
       const isLocal = this.isConnectionValueLocalUrl(this.readConnectionConfigValue(config, "baseUrl"));
       checks.push({
         key: "auth",
-        status: isLocal || this.readConnectionConfigValue(config, "apiKey") || this.hasConnectionEnvValue(config, "apiKeyEnv") ? "pass" : "fail",
+        status:
+          isLocal || this.readConnectionConfigValue(config, "apiKey") || this.hasConnectionEnvValue(config, "apiKeyEnv")
+            ? "pass"
+            : "fail",
         message: isLocal
           ? "Local model endpoint does not require an API key."
           : this.readConnectionConfigValue(config, "apiKey") || this.hasConnectionEnvValue(config, "apiKeyEnv")
@@ -16405,7 +11964,7 @@ export class GatewayService {
     return checks;
   }
 
-  private async runIntegrationConnectionLiveChecks(
+  public async runIntegrationConnectionLiveChecks(
     connection: IntegrationConnection,
     options: {
       includeSandboxSend: boolean;
@@ -16417,17 +11976,20 @@ export class GatewayService {
     const config = connection.config;
     switch (connection.key) {
       case "slack": {
-        const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
-          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+        const token =
+          this.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
+          this.resolveConnectionSecret(config, "token", "tokenEnv");
         if (!token) {
           return {
-            checks: [{
-              key: "auth_live",
-              status: this.readConnectionConfigValue(config, "webhookUrl") ? "warn" : "fail",
-              message: this.readConnectionConfigValue(config, "webhookUrl")
-                ? "Webhook-mode Slack connections cannot be probed non-destructively without a bot token."
-                : "Slack live auth probe skipped because no bot token is configured.",
-            }],
+            checks: [
+              {
+                key: "auth_live",
+                status: this.readConnectionConfigValue(config, "webhookUrl") ? "warn" : "fail",
+                message: this.readConnectionConfigValue(config, "webhookUrl")
+                  ? "Webhook-mode Slack connections cannot be probed non-destructively without a bot token."
+                  : "Slack live auth probe skipped because no bot token is configured.",
+              },
+            ],
           };
         }
         return runSlackBotLiveChecks({
@@ -16441,8 +12003,9 @@ export class GatewayService {
       case "discord":
         return this.runDiscordConnectionLiveChecks(connection, options.includeSandboxSend);
       case "telegram": {
-        const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
-          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+        const token =
+          this.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
+          this.resolveConnectionSecret(config, "token", "tokenEnv");
         if (!token) {
           return { checks: [] };
         }
@@ -16455,10 +12018,11 @@ export class GatewayService {
         });
       }
       case "whatsapp": {
-        const accessToken = this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv")
-          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
-        const phoneNumberId = this.readConnectionConfigValue(config, "phoneNumberId")
-          ?? this.readConnectionConfigValue(config, "senderId");
+        const accessToken =
+          this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
+          this.resolveConnectionSecret(config, "token", "tokenEnv");
+        const phoneNumberId =
+          this.readConnectionConfigValue(config, "phoneNumberId") ?? this.readConnectionConfigValue(config, "senderId");
         if (!accessToken || !phoneNumberId) {
           return { checks: [] };
         }
@@ -16473,15 +12037,15 @@ export class GatewayService {
         });
       }
       case "signal": {
-        const baseUrl = this.readConnectionConfigValue(config, "baseUrl")
-          ?? this.readConnectionConfigValue(config, "bridgeUrl");
+        const baseUrl =
+          this.readConnectionConfigValue(config, "baseUrl") ?? this.readConnectionConfigValue(config, "bridgeUrl");
         if (!baseUrl) {
           return { checks: [] };
         }
         return runSignalBridgeLiveChecks({
           baseUrl,
-          accountId: this.readConnectionConfigValue(config, "accountId")
-            ?? this.readConnectionConfigValue(config, "account"),
+          accountId:
+            this.readConnectionConfigValue(config, "accountId") ?? this.readConnectionConfigValue(config, "account"),
           defaultTarget: resolveChannelConfigTarget(connection.key, config),
           includeSandboxSend: options.includeSandboxSend,
           fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
@@ -16504,10 +12068,11 @@ export class GatewayService {
           fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
         });
       case "mattermost": {
-        const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
-          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
-        const serverUrl = this.readConnectionConfigValue(config, "serverUrl")
-          ?? this.readConnectionConfigValue(config, "baseUrl");
+        const token =
+          this.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
+          this.resolveConnectionSecret(config, "token", "tokenEnv");
+        const serverUrl =
+          this.readConnectionConfigValue(config, "serverUrl") ?? this.readConnectionConfigValue(config, "baseUrl");
         if (!token || !serverUrl) {
           return { checks: [] };
         }
@@ -16521,27 +12086,31 @@ export class GatewayService {
         });
       }
       case "imessage": {
-        const bridgeUrl = this.readConnectionConfigValue(config, "bridgeUrl")
-          ?? this.readConnectionConfigValue(config, "baseUrl")
-          ?? this.readConnectionConfigValue(config, "serverUrl");
-        const password = this.resolveConnectionSecret(config, "password", "passwordEnv")
-          ?? this.resolveConnectionSecret(config, "apiPassword", "apiPasswordEnv");
+        const bridgeUrl =
+          this.readConnectionConfigValue(config, "bridgeUrl") ??
+          this.readConnectionConfigValue(config, "baseUrl") ??
+          this.readConnectionConfigValue(config, "serverUrl");
+        const password =
+          this.resolveConnectionSecret(config, "password", "passwordEnv") ??
+          this.resolveConnectionSecret(config, "apiPassword", "apiPasswordEnv");
         if (!bridgeUrl || !password) {
           return { checks: [] };
         }
         return runIMessageBridgeLiveChecks({
           bridgeUrl,
           password,
-          defaultHandle: this.readConnectionConfigValue(config, "defaultHandle")
-            ?? this.readConnectionConfigValue(config, "defaultTarget"),
+          defaultHandle:
+            this.readConnectionConfigValue(config, "defaultHandle") ??
+            this.readConnectionConfigValue(config, "defaultTarget"),
           includeSandboxSend: options.includeSandboxSend,
           fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
         });
       }
       case "line": {
-        const channelAccessToken = this.resolveConnectionSecret(config, "channelAccessToken", "channelAccessTokenEnv")
-          ?? this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv")
-          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+        const channelAccessToken =
+          this.resolveConnectionSecret(config, "channelAccessToken", "channelAccessTokenEnv") ??
+          this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
+          this.resolveConnectionSecret(config, "token", "tokenEnv");
         if (!channelAccessToken) {
           return { checks: [] };
         }
@@ -16553,8 +12122,9 @@ export class GatewayService {
         });
       }
       case "zalo": {
-        const accessToken = this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv")
-          ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+        const accessToken =
+          this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
+          this.resolveConnectionSecret(config, "token", "tokenEnv");
         if (!accessToken) {
           return { checks: [] };
         }
@@ -16566,9 +12136,10 @@ export class GatewayService {
         });
       }
       case "zalouser": {
-        const baseUrl = this.readConnectionConfigValue(config, "baseUrl")
-          ?? this.readConnectionConfigValue(config, "bridgeUrl")
-          ?? this.readConnectionConfigValue(config, "serverUrl");
+        const baseUrl =
+          this.readConnectionConfigValue(config, "baseUrl") ??
+          this.readConnectionConfigValue(config, "bridgeUrl") ??
+          this.readConnectionConfigValue(config, "serverUrl");
         if (!baseUrl) {
           return { checks: [] };
         }
@@ -16586,7 +12157,7 @@ export class GatewayService {
     }
   }
 
-  private async syncDiscordRuntime(): Promise<void> {
+  public async syncDiscordRuntime(): Promise<void> {
     try {
       await this.discordRuntimeService.sync();
     } catch (error) {
@@ -16607,8 +12178,9 @@ export class GatewayService {
     includeSandboxSend: boolean,
   ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
     const config = connection.config;
-    const token = this.resolveConnectionSecret(config, "botToken", "botTokenEnv")
-      ?? this.resolveConnectionSecret(config, "token", "tokenEnv");
+    const token =
+      this.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
+      this.resolveConnectionSecret(config, "token", "tokenEnv");
     const runtimeMode = this.readConnectionConfigValue(config, "runtimeMode") === "gateway" ? "gateway" : "bridge";
     return runDiscordBotLiveChecks({
       token,
@@ -16616,9 +12188,7 @@ export class GatewayService {
       runtimeMode,
       webhookUrl: this.readConnectionConfigValue(config, "webhookUrl"),
       includeSandboxSend,
-      runtimeStatus: runtimeMode === "gateway"
-        ? this.getDiscordRuntimeStatus(connection.connectionId)
-        : undefined,
+      runtimeStatus: runtimeMode === "gateway" ? this.getDiscordRuntimeStatus(connection.connectionId) : undefined,
       fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
     });
   }
@@ -16644,7 +12214,7 @@ export class GatewayService {
     }
   }
 
-  private async fetchWithDiagnosticsTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  public async fetchWithDiagnosticsTimeout(url: string, init: RequestInit = {}): Promise<Response> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     try {
@@ -16657,7 +12227,7 @@ export class GatewayService {
     }
   }
 
-  private readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined {
+  public readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined {
     const value = config[key];
     if (typeof value !== "string") {
       return undefined;
@@ -16666,7 +12236,11 @@ export class GatewayService {
     return trimmed.length > 0 ? trimmed : undefined;
   }
 
-  private resolveConnectionSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined {
+  public resolveConnectionSecret(
+    config: Record<string, unknown>,
+    directKey: string,
+    envKey: string,
+  ): string | undefined {
     const direct = this.readConnectionConfigValue(config, directKey);
     if (direct) {
       return direct;
@@ -16680,8 +12254,9 @@ export class GatewayService {
     if (explicit) {
       return explicit;
     }
-    const bearer = this.resolveConnectionSecret(config, "authToken", "authTokenEnv")
-      ?? this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv");
+    const bearer =
+      this.resolveConnectionSecret(config, "authToken", "authTokenEnv") ??
+      this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv");
     if (bearer) {
       return `Bearer ${bearer}`;
     }
@@ -16692,11 +12267,11 @@ export class GatewayService {
     return undefined;
   }
 
-  private readDiscordPairings(): DiscordPairingRecord[] {
+  public readDiscordPairings(): DiscordPairingRecord[] {
     return this.storage.systemSettings.get<DiscordPairingRecord[]>(DISCORD_PAIRINGS_SETTING_KEY)?.value ?? [];
   }
 
-  private writeDiscordPairings(records: DiscordPairingRecord[]): void {
+  public writeDiscordPairings(records: DiscordPairingRecord[]): void {
     this.storage.systemSettings.set(DISCORD_PAIRINGS_SETTING_KEY, records);
   }
 
@@ -16705,10 +12280,9 @@ export class GatewayService {
   }
 
   private findApprovedDiscordPairing(connectionId: string, userId: string): DiscordPairingRecord | undefined {
-    return this.readDiscordPairings().find((item) =>
-      item.connectionId === connectionId
-      && item.userId === userId
-      && item.status === "approved");
+    return this.readDiscordPairings().find(
+      (item) => item.connectionId === connectionId && item.userId === userId && item.status === "approved",
+    );
   }
 
   private ensurePendingDiscordPairing(
@@ -16718,17 +12292,16 @@ export class GatewayService {
   ): DiscordPairingRecord {
     const records = this.readDiscordPairings();
     const now = new Date().toISOString();
-    const existing = records.find((item) =>
-      item.connectionId === connectionId
-      && item.userId === userId
-      && item.status === "pending");
+    const existing = records.find(
+      (item) => item.connectionId === connectionId && item.userId === userId && item.status === "pending",
+    );
     if (existing) {
       const updated: DiscordPairingRecord = {
         ...existing,
         displayName: displayName?.trim() || existing.displayName,
         updatedAt: now,
       };
-      this.writeDiscordPairings(records.map((item) => item.pairingId === updated.pairingId ? updated : item));
+      this.writeDiscordPairings(records.map((item) => (item.pairingId === updated.pairingId ? updated : item)));
       return updated;
     }
     const created: DiscordPairingRecord = {
@@ -16747,18 +12320,23 @@ export class GatewayService {
 
   private touchDiscordPairing(pairingId: string): void {
     const now = new Date().toISOString();
-    this.writeDiscordPairings(this.readDiscordPairings().map((item) =>
-      item.pairingId === pairingId
-        ? {
-          ...item,
-          lastInboundAt: now,
-          updatedAt: now,
-        }
-        : item));
+    this.writeDiscordPairings(
+      this.readDiscordPairings().map((item) =>
+        item.pairingId === pairingId
+          ? {
+              ...item,
+              lastInboundAt: now,
+              updatedAt: now,
+            }
+          : item,
+      ),
+    );
   }
 
   private readDiscordRouteSessions(): DiscordRouteSessionRecord[] {
-    return this.storage.systemSettings.get<DiscordRouteSessionRecord[]>(DISCORD_ROUTE_SESSIONS_SETTING_KEY)?.value ?? [];
+    return (
+      this.storage.systemSettings.get<DiscordRouteSessionRecord[]>(DISCORD_ROUTE_SESSIONS_SETTING_KEY)?.value ?? []
+    );
   }
 
   private writeDiscordRouteSessions(records: DiscordRouteSessionRecord[]): void {
@@ -16769,10 +12347,9 @@ export class GatewayService {
     connectionId: string;
     target: string;
   }): DiscordRouteSessionRecord | undefined {
-    return this.readDiscordRouteSessions().find((item) => (
-      item.connectionId === input.connectionId
-      && item.target === input.target
-    ));
+    return this.readDiscordRouteSessions().find(
+      (item) => item.connectionId === input.connectionId && item.target === input.target,
+    );
   }
 
   private resolveDiscordInboundRoute(input: {
@@ -16795,9 +12372,7 @@ export class GatewayService {
       };
     }
     const room = input.room ?? input.target;
-    const threadIdBase = input.threadId?.trim()
-      ? `discord_${input.threadId.trim()}`
-      : "discord";
+    const threadIdBase = input.threadId?.trim() ? `discord_${input.threadId.trim()}` : "discord";
     return {
       room,
       threadId: `${threadIdBase}_${routeSession.logicalSessionKey}`,
@@ -16834,14 +12409,17 @@ export class GatewayService {
     this.storage.chatSessionMeta.ensure(resolution.sessionId, now, DEFAULT_WORKSPACE_ID);
     this.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
     this.ensureChatSessionRuntimeGrants(resolution.sessionId);
-    this.storage.chatSessionBindings.upsert({
-      sessionId: resolution.sessionId,
-      workspaceId: DEFAULT_WORKSPACE_ID,
-      transport: "integration",
-      connectionId: input.connectionId,
-      target: input.target,
-      writable: true,
-    }, now);
+    this.storage.chatSessionBindings.upsert(
+      {
+        sessionId: resolution.sessionId,
+        workspaceId: DEFAULT_WORKSPACE_ID,
+        transport: "integration",
+        connectionId: input.connectionId,
+        target: input.target,
+        writable: true,
+      },
+      now,
+    );
     return this.requireChatSession(resolution.sessionId);
   }
 
@@ -16994,7 +12572,8 @@ export class GatewayService {
               level: "warn",
               category: "channels",
               event: "discord.gateway.reply_conflict",
-              message: "Discord inbound message was ingested, but reply generation conflicted with an active chat turn.",
+              message:
+                "Discord inbound message was ingested, but reply generation conflicted with an active chat turn.",
               context: {
                 connectionId: input.connectionId,
                 sessionId: ingestResult.session.sessionId,
@@ -17011,7 +12590,7 @@ export class GatewayService {
     }
   }
 
-  private assertDiscordConnection(connection: IntegrationConnection): void {
+  public assertDiscordConnection(connection: IntegrationConnection): void {
     if (connection.kind !== "channel" || connection.key !== "discord") {
       throw new Error("Integration connection is not a Discord channel");
     }
@@ -17046,7 +12625,7 @@ export class GatewayService {
     }
   }
 
-  private isConnectionUrlAllowlisted(urlValue: string): boolean {
+  public isConnectionUrlAllowlisted(urlValue: string): boolean {
     try {
       const url = new URL(urlValue);
       return this.isUrlAllowlisted(url.toString());
@@ -17062,7 +12641,7 @@ export class GatewayService {
     return this.isUrlAllowlistedInList(urlValue, this.config.toolPolicy.sandbox.networkAllowlist);
   }
 
-  private isUrlAllowlistedInList(urlValue: string, allowlist: string[]): boolean {
+  /** @internal */ public isUrlAllowlistedInList(urlValue: string, allowlist: string[]): boolean {
     try {
       const url = new URL(urlValue);
       return this.isHostAllowlistedInList(url.host, allowlist) || this.isHostAllowlistedInList(url.hostname, allowlist);
@@ -17084,9 +12663,7 @@ export class GatewayService {
 
   private isHostAllowlistedInList(hostname: string, allowlist: string[]): boolean {
     const normalizedHost = hostname.trim().toLowerCase();
-    const normalizedAllowlist = allowlist
-      .map((host) => host.trim().toLowerCase())
-      .filter(Boolean);
+    const normalizedAllowlist = allowlist.map((host) => host.trim().toLowerCase()).filter(Boolean);
     if (normalizedAllowlist.length === 0) {
       return false;
     }
@@ -17113,7 +12690,7 @@ export class GatewayService {
     }
   }
 
-  private readIntegrationPlugins(): IntegrationPluginRecord[] {
+  public readIntegrationPlugins(): IntegrationPluginRecord[] {
     const stored = this.storage.systemSettings.get<IntegrationPluginRecord[]>(INTEGRATION_PLUGINS_SETTING_KEY)?.value;
     if (!Array.isArray(stored)) {
       return [];
@@ -17121,7 +12698,7 @@ export class GatewayService {
     return stored.filter((item): item is IntegrationPluginRecord => Boolean(item?.pluginId));
   }
 
-  private writeIntegrationPlugins(plugins: IntegrationPluginRecord[]): void {
+  public writeIntegrationPlugins(plugins: IntegrationPluginRecord[]): void {
     this.storage.systemSettings.set(INTEGRATION_PLUGINS_SETTING_KEY, plugins);
   }
 
@@ -17228,10 +12805,16 @@ export class GatewayService {
   }
 
   private readSkillStates(): Map<string, SkillStateRecord> {
-    const rows = toSkillStateRows(this.gatewaySql.prepare(`
+    const rows = toSkillStateRows(
+      this.gatewaySql
+        .prepare(
+          `
       SELECT skill_id AS skillId, state, note, updated_at AS updatedAt, first_auto_approved_at AS firstAutoApprovedAt
       FROM skill_state
-    `).all());
+    `,
+        )
+        .all(),
+    );
 
     return new Map(rows.map((row) => [row.skillId, row]));
   }
@@ -17261,275 +12844,41 @@ export class GatewayService {
     const skillId = validation.inferredSkillId
       ? `import:${validation.inferredSkillId}`
       : `import:${createHash("sha1").update(validation.candidate.canonicalKey).digest("hex").slice(0, 12)}`;
-    this.gatewaySql.prepare(`
+    this.gatewaySql
+      .prepare(
+        `
       INSERT INTO skill_activation_events (
         event_id, skill_id, event_type, payload_json, created_at
       ) VALUES (
         @eventId, @skillId, @eventType, @payloadJson, @createdAt
       )
-    `).run({
-      eventId: randomUUID(),
-      skillId,
-      eventType,
-      payloadJson: JSON.stringify({
-        sourceProvider: validation.candidate.sourceProvider,
-        sourceRef: validation.candidate.sourceRef,
-        canonicalKey: validation.candidate.canonicalKey,
-        valid: validation.valid,
-        riskLevel: validation.riskLevel,
-        skillName: validation.inferredSkillName,
-        skillId: validation.inferredSkillId,
-        warnings: validation.warnings,
-        errors: validation.errors,
-      }),
-      createdAt: now,
-    });
-  }
-
-  private processMediaJob(jobId: string): void {
-    if (typeof jobId !== "string" || !jobId.trim()) {
-      return;
-    }
-    if (this.closing) {
-      return;
-    }
-    const task = this.runMediaJob(jobId)
-      .catch((error) => {
-        const now = new Date().toISOString();
-        const errorMessage = error instanceof Error
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : JSON.stringify(error);
-        this.gatewaySql.prepare(`
-          UPDATE media_jobs
-          SET status = 'failed', error = @error, updated_at = @updatedAt, completed_at = @completedAt
-          WHERE job_id = @jobId
-        `).run({
-          error: errorMessage,
-          updatedAt: now,
-          completedAt: now,
-          jobId,
-        });
-      })
-      .finally(() => {
-        this.backgroundTasks.delete(task);
-      });
-    this.backgroundTasks.add(task);
-    void task;
-  }
-
-  private async runMediaJob(jobId: string): Promise<void> {
-    if (typeof jobId !== "string" || !jobId.trim()) {
-      return;
-    }
-    const now = new Date().toISOString();
-    this.gatewaySql.prepare(`
-      UPDATE media_jobs
-      SET status = 'running', updated_at = @updatedAt
-      WHERE job_id = @jobId
-    `).run({
-      updatedAt: now,
-      jobId,
-    });
-    const job = this.getMediaJob(jobId);
-    const attachmentId = job.attachmentId;
-    if (!attachmentId) {
-      this.gatewaySql.prepare(`
-        UPDATE media_jobs
-        SET status = 'ready', output_json = @outputJson, updated_at = @updatedAt, completed_at = @completedAt
-        WHERE job_id = @jobId
-      `).run({
-        outputJson: JSON.stringify({ message: "No attachment supplied." }),
-        updatedAt: now,
-        completedAt: now,
-        jobId,
-      });
-      return;
-    }
-
-    const attachment = this.storage.chatAttachments.get(attachmentId);
-    if (job.type === "audio_transcribe" || job.type === "video_transcribe") {
-      const content = await this.readChatAttachmentContent(attachmentId);
-      const transcript = await this.transcribeAudioBytes(content.bytes, content.record.mimeType);
-      const completedAt = new Date().toISOString();
-      this.gatewaySql.prepare(`
-        UPDATE media_jobs
-        SET status = 'ready', output_json = @outputJson, updated_at = @updatedAt, completed_at = @completedAt
-        WHERE job_id = @jobId
-      `).run({
-        outputJson: JSON.stringify({ transcriptText: transcript.text, provider: transcript.provider }),
-        updatedAt: completedAt,
-        completedAt,
-        jobId,
-      });
-      this.gatewaySql.prepare(`
-        UPDATE chat_attachments
-        SET transcript_text = @transcriptText, analysis_status = 'ready'
-        WHERE attachment_id = @attachmentId
-      `).run({
-        transcriptText: transcript.text,
-        attachmentId,
-      });
-      return;
-    }
-
-    if (job.type === "ocr" && attachment.mediaType === "image") {
-      const completedAt = new Date().toISOString();
-      this.gatewaySql.prepare(`
-        UPDATE media_jobs
-        SET status = 'unsupported', output_json = @outputJson, updated_at = @updatedAt, completed_at = @completedAt
-        WHERE job_id = @jobId
-      `).run({
-        outputJson: JSON.stringify({
-          message: "OCR worker is not installed. Configure sidecar OCR in a follow-up step.",
+    `,
+      )
+      .run({
+        eventId: randomUUID(),
+        skillId,
+        eventType,
+        payloadJson: JSON.stringify({
+          sourceProvider: validation.candidate.sourceProvider,
+          sourceRef: validation.candidate.sourceRef,
+          canonicalKey: validation.candidate.canonicalKey,
+          valid: validation.valid,
+          riskLevel: validation.riskLevel,
+          skillName: validation.inferredSkillName,
+          skillId: validation.inferredSkillId,
+          warnings: validation.warnings,
+          errors: validation.errors,
         }),
-        updatedAt: completedAt,
-        completedAt,
-        jobId,
+        createdAt: now,
       });
-      this.gatewaySql.prepare(`
-        UPDATE chat_attachments
-        SET analysis_status = 'unsupported'
-        WHERE attachment_id = @attachmentId
-      `).run({
-        attachmentId,
-      });
-      return;
-    }
-
-    const completedAt = new Date().toISOString();
-    this.gatewaySql.prepare(`
-      UPDATE media_jobs
-      SET status = 'ready', output_json = @outputJson, updated_at = @updatedAt, completed_at = @completedAt
-      WHERE job_id = @jobId
-    `).run({
-      outputJson: JSON.stringify({
-        mediaType: attachment.mediaType ?? detectAttachmentMediaType(attachment.mimeType),
-        extractPreview: attachment.extractPreview,
-      }),
-      updatedAt: completedAt,
-      completedAt,
-      jobId,
-    });
-    this.gatewaySql.prepare(`
-      UPDATE chat_attachments
-      SET ocr_text = COALESCE(ocr_text, @ocrText), analysis_status = 'ready'
-      WHERE attachment_id = @attachmentId
-    `).run({
-      ocrText: attachment.extractPreview ?? null,
-      attachmentId,
-    });
-  }
-
-  private async transcribeAudioBytes(
-    bytes: Buffer,
-    mimeType?: string,
-    language?: string,
-  ): Promise<VoiceTranscribeResponse> {
-    const started = Date.now();
-    const runtime = await getManagedVoiceRuntimeStatus(this.storage.systemSettings);
-    const binPath = process.env.GOATCITADEL_WHISPER_CPP_BIN?.trim() || runtime.binaryPath;
-    const modelPath = process.env.GOATCITADEL_WHISPER_CPP_MODEL_PATH?.trim() || runtime.selectedModelPath;
-    const ffmpegPath = process.env.GOATCITADEL_FFMPEG_BIN?.trim() || runtime.ffmpegPath;
-    const extraArgs = parseVoiceCliArgs(process.env.GOATCITADEL_WHISPER_CPP_ARGS);
-    if (!binPath) {
-      const now = new Date().toISOString();
-      this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
-        state: "error",
-        provider: DEFAULT_VOICE_PROVIDER,
-        modelId: runtime.selectedModelId,
-        runtimeReady: false,
-        lastError: "No whisper.cpp runtime is configured.",
-        updatedAt: now,
-      });
-      throw new Error("Local STT is not configured. Install the managed voice runtime or set GOATCITADEL_WHISPER_CPP_BIN.");
-    }
-
-    const tempBase = path.join(os.tmpdir(), `goatcitadel-whisper-${randomUUID()}`);
-    const ext = extFromMimeType(mimeType);
-    const inputPath = `${tempBase}${ext}`;
-    const normalizedInputPath = `${tempBase}-normalized.wav`;
-    const outputBase = `${tempBase}-out`;
-    const outputPath = `${outputBase}.txt`;
-
-    this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
-      state: "running",
-      provider: DEFAULT_VOICE_PROVIDER,
-      modelId: runtime.selectedModelId,
-      runtimeReady: Boolean(binPath && (modelPath || process.env.GOATCITADEL_WHISPER_CPP_BIN?.trim())),
-      updatedAt: new Date().toISOString(),
-    });
-
-    try {
-      await fs.writeFile(inputPath, bytes);
-      const whisperInputPath = await normalizeAudioForWhisper({
-        inputPath,
-        outputPath: normalizedInputPath,
-        mimeType,
-        ffmpegPath,
-      });
-      const args = [
-        ...extraArgs,
-      ];
-      if (modelPath) {
-        args.push("-m", modelPath);
-      }
-      args.push(
-        "-f",
-        whisperInputPath,
-        "-otxt",
-        "-of",
-        outputBase,
-      );
-      if (language?.trim()) {
-        args.push("-l", language.trim());
-      }
-      execFileSync(binPath, args, { stdio: "pipe" });
-      const text = (await fs.readFile(outputPath, "utf8")).trim();
-      const now = new Date().toISOString();
-      this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
-        state: "stopped",
-        provider: DEFAULT_VOICE_PROVIDER,
-        modelId: runtime.selectedModelId,
-        runtimeReady: true,
-        updatedAt: now,
-      });
-      return {
-        text,
-        language: language?.trim() || undefined,
-        provider: DEFAULT_VOICE_PROVIDER,
-        durationMs: Date.now() - started,
-      };
-    } catch (error) {
-      const now = new Date().toISOString();
-      this.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
-        state: "error",
-        provider: DEFAULT_VOICE_PROVIDER,
-        modelId: runtime.selectedModelId,
-        runtimeReady: false,
-        lastError: (error as Error).message,
-        updatedAt: now,
-      });
-      throw new Error(`Local STT failed: ${(error as Error).message}`);
-    } finally {
-      await Promise.allSettled([
-        fs.rm(inputPath, { force: true }),
-        fs.rm(normalizedInputPath, { force: true }),
-        fs.rm(outputPath, { force: true }),
-      ]);
-    }
   }
 
   private appendDaemonLog(eventType: string, payload: Record<string, unknown>): void {
-    const current = this.storage.systemSettings.get<Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }>>(
-      DAEMON_LOG_TAIL_SETTING_KEY,
-    )?.value ?? [];
-    const level: "info" | "warn" | "error" = eventType === "error"
-      ? "error"
-      : eventType === "warn"
-        ? "warn"
-        : "info";
+    const current =
+      this.storage.systemSettings.get<Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }>>(
+        DAEMON_LOG_TAIL_SETTING_KEY,
+      )?.value ?? [];
+    const level: "info" | "warn" | "error" = eventType === "error" ? "error" : eventType === "warn" ? "warn" : "info";
     const next = [
       ...current,
       {
@@ -17560,7 +12909,7 @@ export class GatewayService {
     this.storage.close();
   }
 
-  private async invokeAndUnwrap(
+  public async invokeAndUnwrap(
     request: ToolInvokeRequest,
     realtimeType: string,
   ): Promise<ToolInvokeResult | Record<string, unknown>> {
@@ -17579,15 +12928,10 @@ export class GatewayService {
     return result;
   }
 
-  private ensureSessionInternalToolGrant(
-    sessionId: string,
-    toolName: string,
-    createdBy: string,
-  ): void {
-    const hasActiveAllow = this.listToolGrants("session", sessionId, 1000).some((grant) =>
-      isActiveToolGrant(grant)
-      && grant.decision === "allow"
-      && grantPatternMatches(grant.toolPattern, toolName)
+  /** @internal */ public ensureSessionInternalToolGrant(sessionId: string, toolName: string, createdBy: string): void {
+    const hasActiveAllow = this.listToolGrants("session", sessionId, 1000).some(
+      (grant) =>
+        isActiveToolGrant(grant) && grant.decision === "allow" && grantPatternMatches(grant.toolPattern, toolName),
     );
     if (hasActiveAllow) {
       return;
@@ -17602,20 +12946,18 @@ export class GatewayService {
     });
   }
 
-  private requireExecutedToolResult(
+  /** @internal */ public requireExecutedToolResult(
     toolName: string,
     result: ToolInvokeResult | Record<string, unknown>,
   ): Record<string, unknown> {
     if (this.isToolInvokeResultPayload(result)) {
-      const detail = result.policyReason?.trim()
-        || `tool returned ${result.outcome}`;
+      const detail = result.policyReason?.trim() || `tool returned ${result.outcome}`;
       throw new Error(`${toolName} failed: ${detail}`);
     }
     const deliveryStatus = typeof result.status === "string" ? result.status.trim().toLowerCase() : "";
     if (deliveryStatus === "failed") {
-      const detail = typeof result.error === "string" && result.error.trim().length > 0
-        ? result.error.trim()
-        : "delivery failed";
+      const detail =
+        typeof result.error === "string" && result.error.trim().length > 0 ? result.error.trim() : "delivery failed";
       throw new Error(`${toolName} failed: ${detail}`);
     }
     return result;
@@ -17626,13 +12968,10 @@ export class GatewayService {
       return false;
     }
     const outcome = (value as { outcome?: unknown }).outcome;
-    return outcome === "executed"
-      || outcome === "blocked"
-      || outcome === "approval_required"
-      || outcome === "failed";
+    return outcome === "executed" || outcome === "blocked" || outcome === "approval_required" || outcome === "failed";
   }
 
-  private async resolveDeviceAccessApproval(
+  /** @internal */ public async resolveDeviceAccessApproval(
     currentApproval: ApprovalRequest,
     input: ApprovalResolveInput,
   ): Promise<ApprovalResolveResult> {
@@ -17666,9 +13005,8 @@ export class GatewayService {
 
     const resolvedAt = new Date().toISOString();
     const requestStatus: DeviceAccessRequestStatus = input.decision === "approve" ? "approved" : "rejected";
-    const deviceToken = input.decision === "approve"
-      ? randomBytes(DEVICE_ACCESS_TOKEN_BYTES).toString("base64url")
-      : undefined;
+    const deviceToken =
+      input.decision === "approve" ? randomBytes(DEVICE_ACCESS_TOKEN_BYTES).toString("base64url") : undefined;
     const deviceTokenExpiresAt = deviceToken
       ? new Date(Date.now() + DEVICE_ACCESS_TOKEN_TTL_MS).toISOString()
       : undefined;
@@ -17676,7 +13014,9 @@ export class GatewayService {
 
     this.storage.runImmediateTransaction(() => {
       if (deviceToken) {
-        this.gatewaySql.prepare(`
+        this.gatewaySql
+          .prepare(
+            `
           INSERT INTO auth_device_grants (
             grant_id, request_id, token_hash, device_label, device_type, platform,
             granted_by, created_at, expires_at, metadata_json
@@ -17684,25 +13024,29 @@ export class GatewayService {
             @grantId, @requestId, @tokenHash, @deviceLabel, @deviceType, @platform,
             @grantedBy, @createdAt, @expiresAt, @metadataJson
           )
-        `).run({
-          grantId: randomUUID(),
-          requestId: request.requestId,
-          tokenHash: hashSensitiveToken(deviceToken),
-          deviceLabel: request.deviceLabel,
-          deviceType: request.deviceType,
-          platform: request.platform ?? null,
-          grantedBy: input.resolvedBy,
-          createdAt: resolvedAt,
-          expiresAt: deviceTokenExpiresAt ?? null,
-          metadataJson: JSON.stringify({
-            approvalId: currentApproval.approvalId,
-            requestedOrigin: request.requestedOrigin,
-            requestedIp: request.requestedIp,
-          }),
-        });
+        `,
+          )
+          .run({
+            grantId: randomUUID(),
+            requestId: request.requestId,
+            tokenHash: hashSensitiveToken(deviceToken),
+            deviceLabel: request.deviceLabel,
+            deviceType: request.deviceType,
+            platform: request.platform ?? null,
+            grantedBy: input.resolvedBy,
+            createdAt: resolvedAt,
+            expiresAt: deviceTokenExpiresAt ?? null,
+            metadataJson: JSON.stringify({
+              approvalId: currentApproval.approvalId,
+              requestedOrigin: request.requestedOrigin,
+              requestedIp: request.requestedIp,
+            }),
+          });
       }
 
-      this.gatewaySql.prepare(`
+      this.gatewaySql
+        .prepare(
+          `
         UPDATE auth_device_requests
         SET status = @status,
             resolved_at = @resolvedAt,
@@ -17712,15 +13056,17 @@ export class GatewayService {
             approved_token_expires_at = @approvedTokenExpiresAt
         WHERE request_id = @requestId
           AND status = 'pending'
-      `).run({
-        requestId: request.requestId,
-        status: requestStatus,
-        resolvedAt,
-        resolvedBy: input.resolvedBy,
-        resolutionNote: input.resolutionNote ?? null,
-        approvedTokenPlaintext: deviceToken ?? null,
-        approvedTokenExpiresAt: deviceTokenExpiresAt ?? null,
-      });
+      `,
+        )
+        .run({
+          requestId: request.requestId,
+          status: requestStatus,
+          resolvedAt,
+          resolvedBy: input.resolvedBy,
+          resolutionNote: input.resolutionNote ?? null,
+          approvedTokenPlaintext: deviceToken ?? null,
+          approvedTokenExpiresAt: deviceTokenExpiresAt ?? null,
+        });
 
       approval = this.storage.approvals.resolve(currentApproval.approvalId, input);
       this.storage.approvalEvents.append({
@@ -17771,7 +13117,9 @@ export class GatewayService {
     };
   }
 
-  private async expireDeviceAccessRequestIfNeeded(request: AuthDeviceRequestRecord): Promise<AuthDeviceRequestRecord> {
+  /** @internal */ public async expireDeviceAccessRequestIfNeeded(
+    request: AuthDeviceRequestRecord,
+  ): Promise<AuthDeviceRequestRecord> {
     if (request.status !== "pending") {
       return request;
     }
@@ -17789,7 +13137,9 @@ export class GatewayService {
     let approval: ApprovalRequest | undefined;
 
     this.storage.runImmediateTransaction(() => {
-      this.gatewaySql.prepare(`
+      this.gatewaySql
+        .prepare(
+          `
         UPDATE auth_device_requests
         SET status = 'expired',
             resolved_at = @resolvedAt,
@@ -17797,12 +13147,14 @@ export class GatewayService {
             resolution_note = @resolutionNote
         WHERE request_id = @requestId
           AND status = 'pending'
-      `).run({
-        requestId: request.requestId,
-        resolvedAt,
-        resolvedBy: resolutionInput.resolvedBy,
-        resolutionNote: resolutionInput.resolutionNote ?? null,
-      });
+      `,
+        )
+        .run({
+          requestId: request.requestId,
+          resolvedAt,
+          resolvedBy: resolutionInput.resolvedBy,
+          resolutionNote: resolutionInput.resolutionNote ?? null,
+        });
 
       const currentApproval = this.storage.approvals.get(request.approvalId);
       if (currentApproval.status === "pending") {
@@ -17845,43 +13197,57 @@ export class GatewayService {
       requestedIp: request.requestedIp,
     });
 
-    return this.getAuthDeviceRequestById(request.requestId) ?? {
-      ...request,
-      status: "expired",
-      resolvedAt,
-      resolvedBy: resolutionInput.resolvedBy,
-      resolutionNote: resolutionInput.resolutionNote,
-    };
+    return (
+      this.getAuthDeviceRequestById(request.requestId) ?? {
+        ...request,
+        status: "expired",
+        resolvedAt,
+        resolvedBy: resolutionInput.resolvedBy,
+        resolutionNote: resolutionInput.resolutionNote,
+      }
+    );
   }
 
-  private getAuthDeviceRequestById(requestId: string): AuthDeviceRequestRecord | undefined {
-    const row = this.gatewaySql.prepare(`
+  /** @internal */ public getAuthDeviceRequestById(requestId: string): AuthDeviceRequestRecord | undefined {
+    const row = this.gatewaySql
+      .prepare(
+        `
       SELECT *
       FROM auth_device_requests
       WHERE request_id = @requestId
       LIMIT 1
-    `).get({ requestId }) as Record<string, unknown> | undefined;
+    `,
+      )
+      .get({ requestId }) as Record<string, unknown> | undefined;
     return row ? mapAuthDeviceRequestRow(row) : undefined;
   }
 
   private getAuthDeviceRequestByApprovalId(approvalId: string): AuthDeviceRequestRecord | undefined {
-    const row = this.gatewaySql.prepare(`
+    const row = this.gatewaySql
+      .prepare(
+        `
       SELECT *
       FROM auth_device_requests
       WHERE approval_id = @approvalId
       LIMIT 1
-    `).get({ approvalId }) as Record<string, unknown> | undefined;
+    `,
+      )
+      .get({ approvalId }) as Record<string, unknown> | undefined;
     return row ? mapAuthDeviceRequestRow(row) : undefined;
   }
 
-  private getActiveAuthDeviceGrantById(grantId: string): AuthDeviceGrantRecord | undefined {
+  /** @internal */ public getActiveAuthDeviceGrantById(grantId: string): AuthDeviceGrantRecord | undefined {
     const now = new Date().toISOString();
-    const row = this.gatewaySql.prepare(`
+    const row = this.gatewaySql
+      .prepare(
+        `
       SELECT *
       FROM auth_device_grants
       WHERE grant_id = @grantId
       LIMIT 1
-    `).get({ grantId }) as Record<string, unknown> | undefined;
+    `,
+      )
+      .get({ grantId }) as Record<string, unknown> | undefined;
     if (!row) {
       return undefined;
     }
@@ -17905,21 +13271,27 @@ export class GatewayService {
       return undefined;
     }
     if (!isCompanionSessionCurrentlyActive(session, now)) {
-      this.gatewaySql.prepare(`
+      this.gatewaySql
+        .prepare(
+          `
         UPDATE companion_sessions
         SET revoked_at = COALESCE(revoked_at, @revokedAt)
         WHERE session_id = @sessionId
-      `).run({
-        sessionId,
-        revokedAt: now,
-      });
+      `,
+        )
+        .run({
+          sessionId,
+          revokedAt: now,
+        });
       return undefined;
     }
     return session;
   }
 
   private getCompanionSessionById(sessionId: string): CompanionSessionRecord | undefined {
-    const row = this.gatewaySql.prepare(`
+    const row = this.gatewaySql
+      .prepare(
+        `
       SELECT
         s.*,
         g.device_label,
@@ -17932,9 +13304,11 @@ export class GatewayService {
         ON g.grant_id = s.grant_id
       WHERE s.session_id = @sessionId
       LIMIT 1
-    `).get({
-      sessionId,
-    }) as Record<string, unknown> | undefined;
+    `,
+      )
+      .get({
+        sessionId,
+      }) as Record<string, unknown> | undefined;
     if (!row) {
       return undefined;
     }
@@ -17943,7 +13317,9 @@ export class GatewayService {
 
   private getActiveCompanionSessionByRefreshToken(refreshToken: string): CompanionSessionRecord | undefined {
     const now = new Date().toISOString();
-    const row = this.gatewaySql.prepare(`
+    const row = this.gatewaySql
+      .prepare(
+        `
       SELECT
         s.*,
         g.device_label,
@@ -17956,28 +13332,34 @@ export class GatewayService {
         ON g.grant_id = s.grant_id
       WHERE s.refresh_token_hash = @refreshTokenHash
       LIMIT 1
-    `).get({
-      refreshTokenHash: hashSensitiveToken(refreshToken),
-    }) as Record<string, unknown> | undefined;
+    `,
+      )
+      .get({
+        refreshTokenHash: hashSensitiveToken(refreshToken),
+      }) as Record<string, unknown> | undefined;
     if (!row) {
       return undefined;
     }
     const session = mapCompanionSessionRow(row);
     if (!isCompanionSessionRefreshable(session, now)) {
-      this.gatewaySql.prepare(`
+      this.gatewaySql
+        .prepare(
+          `
         UPDATE companion_sessions
         SET revoked_at = COALESCE(revoked_at, @revokedAt)
         WHERE session_id = @sessionId
-      `).run({
-        sessionId: session.sessionId,
-        revokedAt: now,
-      });
+      `,
+        )
+        .run({
+          sessionId: session.sessionId,
+          revokedAt: now,
+        });
       return undefined;
     }
     return session;
   }
 
-  private async recordApprovalResolutionEffects(
+  /** @internal */ public async recordApprovalResolutionEffects(
     approval: ApprovalRequest,
     input: ApprovalResolveInput,
     executedAction?: ToolInvokeResult,
@@ -17997,20 +13379,25 @@ export class GatewayService {
         : undefined,
     });
 
-    this.publishRealtime("approval_resolved", "approvals", {
-      approvalId: approval.approvalId,
-      status: approval.status,
-      decision: input.decision,
-      resolvedBy: input.resolvedBy,
-      executedOutcome: executedAction?.outcome,
-    }, {
-      eventClass: "domain_fact",
-      eventAuthority: "retained_stream",
-      links: this.buildApprovalRealtimeLinks(approval),
-    });
+    this.publishRealtime(
+      "approval_resolved",
+      "approvals",
+      {
+        approvalId: approval.approvalId,
+        status: approval.status,
+        decision: input.decision,
+        resolvedBy: input.resolvedBy,
+        executedOutcome: executedAction?.outcome,
+      },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: this.buildApprovalRealtimeLinks(approval),
+      },
+    );
   }
 
-  private publishRealtime(
+  public publishRealtime(
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
@@ -18021,32 +13408,45 @@ export class GatewayService {
     return event;
   }
 
-  private createCheckpoint(input: Omit<OrchestrationCheckpoint, "checkpointId" | "createdAt" | "gitRef">): OrchestrationCheckpoint {
+  /** @internal */ public createCheckpoint(
+    input: Omit<OrchestrationCheckpoint, "checkpointId" | "createdAt" | "gitRef">,
+  ): OrchestrationCheckpoint {
     return this.storage.orchestration.createCheckpoint({
       ...input,
       gitRef: this.getGitHead(),
     });
   }
 
-  private scheduleApprovalExplanation(approval: ApprovalRequest): void {
-    if (this.closing || !approval || typeof approval.approvalId !== "string" || approval.approvalId.trim().length === 0) {
+  /** @internal */ public scheduleApprovalExplanation(approval: ApprovalRequest): void {
+    if (
+      this.closing ||
+      !approval ||
+      typeof approval.approvalId !== "string" ||
+      approval.approvalId.trim().length === 0
+    ) {
       return;
     }
 
-    const task = this.approvalExplainer.explainApproval(approval)
+    const task = this.approvalExplainer
+      .explainApproval(approval)
       .catch((error) => {
         if (this.closing) {
           return;
         }
-        this.publishRealtime("system", "approvals", {
-          type: "approval_explainer_error",
-          approvalId: approval.approvalId,
-          error: (error as Error).message,
-        }, {
-          eventClass: "operational_signal",
-          eventAuthority: "retained_stream",
-          links: this.buildApprovalRealtimeLinks(approval),
-        });
+        this.publishRealtime(
+          "system",
+          "approvals",
+          {
+            type: "approval_explainer_error",
+            approvalId: approval.approvalId,
+            error: (error as Error).message,
+          },
+          {
+            eventClass: "operational_signal",
+            eventAuthority: "retained_stream",
+            links: this.buildApprovalRealtimeLinks(approval),
+          },
+        );
       })
       .finally(() => {
         this.backgroundTasks.delete(task);
@@ -18056,7 +13456,7 @@ export class GatewayService {
     void task;
   }
 
-  private scheduleApprovalExplanationById(approvalId: string): void {
+  /** @internal */ public scheduleApprovalExplanationById(approvalId: string): void {
     if (this.closing) {
       return;
     }
@@ -18069,7 +13469,7 @@ export class GatewayService {
     this.scheduleApprovalExplanation(approval);
   }
 
-  private scheduleOrchestrationMemoryContext(plan: OrchestrationPlan, run: OrchestrationRun): void {
+  /** @internal */ public scheduleOrchestrationMemoryContext(plan: OrchestrationPlan, run: OrchestrationRun): void {
     if (this.closing || !run.currentPhaseId) {
       return;
     }
@@ -18078,20 +13478,21 @@ export class GatewayService {
       return;
     }
 
-    const task = this.memoryContextService.compose({
-      scope: "orchestration",
-      prompt: [
-        `Plan goal: ${plan.goal}`,
-        `Wave: ${run.currentWaveId ?? "(none)"}`,
-        `Phase: ${phase.phaseId}`,
-        `Owner: ${phase.ownerAgentId}`,
-        `Spec path: ${phase.specPath}`,
-        `Loop mode: ${phase.loopMode}`,
-      ].join("\n"),
-      runId: run.runId,
-      phaseId: phase.phaseId,
-      workspace: "memory",
-    })
+    const task = this.memoryContextService
+      .compose({
+        scope: "orchestration",
+        prompt: [
+          `Plan goal: ${plan.goal}`,
+          `Wave: ${run.currentWaveId ?? "(none)"}`,
+          `Phase: ${phase.phaseId}`,
+          `Owner: ${phase.ownerAgentId}`,
+          `Spec path: ${phase.specPath}`,
+          `Loop mode: ${phase.loopMode}`,
+        ].join("\n"),
+        runId: run.runId,
+        phaseId: phase.phaseId,
+        workspace: "memory",
+      })
       .then((pack) => {
         this.publishRealtime("memory_qmd_generated", "orchestration", {
           runId: run.runId,
@@ -18165,7 +13566,7 @@ export class GatewayService {
     return messages.slice(-Math.max(1, Math.min(limit, 1000)));
   }
 
-  private normalizeWorkspaceId(workspaceId?: string): string {
+  /** @internal */ public normalizeWorkspaceId(workspaceId?: string): string {
     if (!workspaceId?.trim()) {
       return DEFAULT_WORKSPACE_ID;
     }
@@ -18180,7 +13581,7 @@ export class GatewayService {
     return workspaceId === DEFAULT_WORKSPACE_ID ? "memory" : `workspaces/${workspaceId}/memory`;
   }
 
-  private resolveMemoryWorkspaceRelativeDir(explicitWorkspace?: string, sessionId?: string): string {
+  /** @internal */ public resolveMemoryWorkspaceRelativeDir(explicitWorkspace?: string, sessionId?: string): string {
     const explicit = explicitWorkspace?.trim();
     if (explicit) {
       return explicit;
@@ -18194,7 +13595,7 @@ export class GatewayService {
     return this.getWorkspaceMemoryRelativeDir(workspaceId);
   }
 
-  private resolveChatCompletionHookWorkspaceId(request: ChatCompletionRequest): string {
+  /** @internal */ public resolveChatCompletionHookWorkspaceId(request: ChatCompletionRequest): string {
     const explicitWorkspace = request.memory?.workspace?.trim();
     if (explicitWorkspace) {
       return this.normalizeWorkspaceId(explicitWorkspace);
@@ -18214,7 +13615,7 @@ export class GatewayService {
     return this.normalizeWorkspaceId(meta?.workspaceId ?? DEFAULT_WORKSPACE_ID);
   }
 
-  private resolveApprovalHookWorkspaceId(payload?: Record<string, unknown>): string {
+  /** @internal */ public resolveApprovalHookWorkspaceId(payload?: Record<string, unknown>): string {
     const fromPayload = typeof payload?.workspaceId === "string" ? payload.workspaceId.trim() : "";
     if (fromPayload) {
       return this.normalizeWorkspaceId(fromPayload);
@@ -18229,16 +13630,15 @@ export class GatewayService {
     return DEFAULT_WORKSPACE_ID;
   }
 
-  private parseLlmModelSelectHookPatch(value: Record<string, unknown>): {
-    providerId?: string;
-    model?: string;
-  } | undefined {
-    const providerId = typeof value.providerId === "string" && value.providerId.trim()
-      ? value.providerId.trim()
-      : undefined;
-    const model = typeof value.model === "string" && value.model.trim()
-      ? value.model.trim()
-      : undefined;
+  /** @internal */ public parseLlmModelSelectHookPatch(value: Record<string, unknown>):
+    | {
+        providerId?: string;
+        model?: string;
+      }
+    | undefined {
+    const providerId =
+      typeof value.providerId === "string" && value.providerId.trim() ? value.providerId.trim() : undefined;
+    const model = typeof value.model === "string" && value.model.trim() ? value.model.trim() : undefined;
     if (!providerId && !model) {
       return undefined;
     }
@@ -18248,29 +13648,35 @@ export class GatewayService {
     };
   }
 
-  private parseLlmRequestHookPatch(value: Record<string, unknown>): {
-    providerId?: string;
-    model?: string;
-    prependMessages?: ChatCompletionRequest["messages"];
-    appendMessages?: ChatCompletionRequest["messages"];
-    tools?: Array<Record<string, unknown>>;
-    toolChoice?: string | Record<string, unknown>;
-    metadata?: Record<string, unknown>;
-  } | undefined {
+  /** @internal */ public parseLlmRequestHookPatch(value: Record<string, unknown>):
+    | {
+        providerId?: string;
+        model?: string;
+        prependMessages?: ChatCompletionRequest["messages"];
+        appendMessages?: ChatCompletionRequest["messages"];
+        tools?: Array<Record<string, unknown>>;
+        toolChoice?: string | Record<string, unknown>;
+        metadata?: Record<string, unknown>;
+      }
+    | undefined {
     const base = this.parseLlmModelSelectHookPatch(value);
     const prependMessages = this.parseChatCompletionMessages(value.prependMessages);
     const appendMessages = this.parseChatCompletionMessages(value.appendMessages);
     const tools = Array.isArray(value.tools)
-      ? value.tools.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+      ? value.tools.filter(
+          (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item),
+        )
       : undefined;
-    const toolChoice = typeof value.toolChoice === "string"
-      ? value.toolChoice
-      : (value.toolChoice && typeof value.toolChoice === "object" && !Array.isArray(value.toolChoice)
-          ? value.toolChoice as Record<string, unknown>
-          : undefined);
-    const metadata = value.metadata && typeof value.metadata === "object" && !Array.isArray(value.metadata)
-      ? value.metadata as Record<string, unknown>
-      : undefined;
+    const toolChoice =
+      typeof value.toolChoice === "string"
+        ? value.toolChoice
+        : value.toolChoice && typeof value.toolChoice === "object" && !Array.isArray(value.toolChoice)
+          ? (value.toolChoice as Record<string, unknown>)
+          : undefined;
+    const metadata =
+      value.metadata && typeof value.metadata === "object" && !Array.isArray(value.metadata)
+        ? (value.metadata as Record<string, unknown>)
+        : undefined;
     if (!base && !prependMessages && !appendMessages && !tools && !toolChoice && !metadata) {
       return undefined;
     }
@@ -18284,16 +13690,18 @@ export class GatewayService {
     };
   }
 
-  private mergeLlmRequestHookPatch(
-    current: {
-      providerId?: string;
-      model?: string;
-      prependMessages?: ChatCompletionRequest["messages"];
-      appendMessages?: ChatCompletionRequest["messages"];
-      tools?: Array<Record<string, unknown>>;
-      toolChoice?: string | Record<string, unknown>;
-      metadata?: Record<string, unknown>;
-    } | undefined,
+  /** @internal */ public mergeLlmRequestHookPatch(
+    current:
+      | {
+          providerId?: string;
+          model?: string;
+          prependMessages?: ChatCompletionRequest["messages"];
+          appendMessages?: ChatCompletionRequest["messages"];
+          tools?: Array<Record<string, unknown>>;
+          toolChoice?: string | Record<string, unknown>;
+          metadata?: Record<string, unknown>;
+        }
+      | undefined,
     next: {
       providerId?: string;
       model?: string;
@@ -18319,7 +13727,7 @@ export class GatewayService {
     };
   }
 
-  private applyLlmRequestHookPatch(
+  /** @internal */ public applyLlmRequestHookPatch(
     request: ChatCompletionRequest,
     patch: {
       providerId?: string;
@@ -18335,11 +13743,7 @@ export class GatewayService {
       ...request,
       ...(patch.providerId ? { providerId: patch.providerId } : {}),
       ...(patch.model ? { model: patch.model } : {}),
-      messages: [
-        ...(patch.prependMessages ?? []),
-        ...request.messages,
-        ...(patch.appendMessages ?? []),
-      ],
+      messages: [...(patch.prependMessages ?? []), ...request.messages, ...(patch.appendMessages ?? [])],
       ...(patch.tools ? { tools: patch.tools } : {}),
       ...(patch.toolChoice ? { tool_choice: patch.toolChoice } : {}),
       ...(patch.metadata ? { metadata: { ...(request.metadata ?? {}), ...patch.metadata } } : {}),
@@ -18361,39 +13765,42 @@ export class GatewayService {
         tool_call_id?: unknown;
       };
       if (
-        candidate.role !== "system"
-        && candidate.role !== "developer"
-        && candidate.role !== "user"
-        && candidate.role !== "assistant"
-        && candidate.role !== "tool"
+        candidate.role !== "system" &&
+        candidate.role !== "developer" &&
+        candidate.role !== "user" &&
+        candidate.role !== "assistant" &&
+        candidate.role !== "tool"
       ) {
         return [];
       }
       if (typeof candidate.content !== "string" && !Array.isArray(candidate.content)) {
         return [];
       }
-      return [{
-        role: candidate.role as ChatCompletionRequest["messages"][number]["role"],
-        content: candidate.content,
-        ...(typeof candidate.name === "string" && candidate.name.trim() ? { name: candidate.name.trim() } : {}),
-        ...(typeof candidate.tool_call_id === "string" && candidate.tool_call_id.trim()
-          ? { tool_call_id: candidate.tool_call_id.trim() }
-          : {}),
-      }];
+      return [
+        {
+          role: candidate.role as ChatCompletionRequest["messages"][number]["role"],
+          content: candidate.content,
+          ...(typeof candidate.name === "string" && candidate.name.trim() ? { name: candidate.name.trim() } : {}),
+          ...(typeof candidate.tool_call_id === "string" && candidate.tool_call_id.trim()
+            ? { tool_call_id: candidate.tool_call_id.trim() }
+            : {}),
+        },
+      ];
     });
     return messages.length > 0 ? messages : undefined;
   }
 
-  private parseToolCallHookPatch(value: Record<string, unknown>): {
-    toolName?: string;
-    args?: Record<string, unknown>;
-  } | undefined {
-    const toolName = typeof value.toolName === "string" && value.toolName.trim()
-      ? value.toolName.trim()
-      : undefined;
-    const args = value.args && typeof value.args === "object" && !Array.isArray(value.args)
-      ? value.args as Record<string, unknown>
-      : undefined;
+  private parseToolCallHookPatch(value: Record<string, unknown>):
+    | {
+        toolName?: string;
+        args?: Record<string, unknown>;
+      }
+    | undefined {
+    const toolName = typeof value.toolName === "string" && value.toolName.trim() ? value.toolName.trim() : undefined;
+    const args =
+      value.args && typeof value.args === "object" && !Array.isArray(value.args)
+        ? (value.args as Record<string, unknown>)
+        : undefined;
     if (!toolName && !args) {
       return undefined;
     }
@@ -18403,27 +13810,35 @@ export class GatewayService {
     };
   }
 
-  private parseApprovalCreateHookPatch(value: Record<string, unknown>): {
-    riskLevel?: ApprovalCreateInput["riskLevel"];
-    payloadMerge?: Record<string, unknown>;
-    previewMerge?: Record<string, unknown>;
-    expiresAt?: string | null;
-  } | undefined {
-    const riskLevel = value.riskLevel === "safe"
-      || value.riskLevel === "caution"
-      || value.riskLevel === "danger"
-      || value.riskLevel === "nuclear"
-      ? value.riskLevel
-      : undefined;
-    const payloadMerge = value.payloadMerge && typeof value.payloadMerge === "object" && !Array.isArray(value.payloadMerge)
-      ? value.payloadMerge as Record<string, unknown>
-      : undefined;
-    const previewMerge = value.previewMerge && typeof value.previewMerge === "object" && !Array.isArray(value.previewMerge)
-      ? value.previewMerge as Record<string, unknown>
-      : undefined;
-    const expiresAt = value.expiresAt === null
-      ? null
-      : (typeof value.expiresAt === "string" && value.expiresAt.trim() ? value.expiresAt.trim() : undefined);
+  /** @internal */ public parseApprovalCreateHookPatch(value: Record<string, unknown>):
+    | {
+        riskLevel?: ApprovalCreateInput["riskLevel"];
+        payloadMerge?: Record<string, unknown>;
+        previewMerge?: Record<string, unknown>;
+        expiresAt?: string | null;
+      }
+    | undefined {
+    const riskLevel =
+      value.riskLevel === "safe" ||
+      value.riskLevel === "caution" ||
+      value.riskLevel === "danger" ||
+      value.riskLevel === "nuclear"
+        ? value.riskLevel
+        : undefined;
+    const payloadMerge =
+      value.payloadMerge && typeof value.payloadMerge === "object" && !Array.isArray(value.payloadMerge)
+        ? (value.payloadMerge as Record<string, unknown>)
+        : undefined;
+    const previewMerge =
+      value.previewMerge && typeof value.previewMerge === "object" && !Array.isArray(value.previewMerge)
+        ? (value.previewMerge as Record<string, unknown>)
+        : undefined;
+    const expiresAt =
+      value.expiresAt === null
+        ? null
+        : typeof value.expiresAt === "string" && value.expiresAt.trim()
+          ? value.expiresAt.trim()
+          : undefined;
     if (!riskLevel && !payloadMerge && !previewMerge && expiresAt === undefined) {
       return undefined;
     }
@@ -18435,16 +13850,19 @@ export class GatewayService {
     };
   }
 
-  private parseOrchestrationRunHookPatch(value: Record<string, unknown>): {
-    maxIterations?: number;
-    maxRuntimeMinutes?: number;
-    maxCostUsd?: number;
-  } | undefined {
+  /** @internal */ public parseOrchestrationRunHookPatch(value: Record<string, unknown>):
+    | {
+        maxIterations?: number;
+        maxRuntimeMinutes?: number;
+        maxCostUsd?: number;
+      }
+    | undefined {
     const maxIterations = parseOptionalPositiveInt(value.maxIterations);
     const maxRuntimeMinutes = parseOptionalPositiveInt(value.maxRuntimeMinutes);
-    const maxCostUsd = typeof value.maxCostUsd === "number" && Number.isFinite(value.maxCostUsd) && value.maxCostUsd > 0
-      ? value.maxCostUsd
-      : undefined;
+    const maxCostUsd =
+      typeof value.maxCostUsd === "number" && Number.isFinite(value.maxCostUsd) && value.maxCostUsd > 0
+        ? value.maxCostUsd
+        : undefined;
     if (maxIterations === undefined && maxRuntimeMinutes === undefined && maxCostUsd === undefined) {
       return undefined;
     }
@@ -18455,24 +13873,19 @@ export class GatewayService {
     };
   }
 
-  private parseOrchestrationPhaseHookPatch(value: Record<string, unknown>): {
-    ownerAgentId?: string;
-    specPath?: string;
-    loopMode?: "fresh-context" | "compaction";
-    requiresApproval?: boolean;
-  } | undefined {
-    const ownerAgentId = typeof value.ownerAgentId === "string" && value.ownerAgentId.trim()
-      ? value.ownerAgentId.trim()
-      : undefined;
-    const specPath = typeof value.specPath === "string" && value.specPath.trim()
-      ? value.specPath.trim()
-      : undefined;
-    const loopMode = value.loopMode === "fresh-context" || value.loopMode === "compaction"
-      ? value.loopMode
-      : undefined;
-    const requiresApproval = typeof value.requiresApproval === "boolean"
-      ? value.requiresApproval
-      : undefined;
+  /** @internal */ public parseOrchestrationPhaseHookPatch(value: Record<string, unknown>):
+    | {
+        ownerAgentId?: string;
+        specPath?: string;
+        loopMode?: "fresh-context" | "compaction";
+        requiresApproval?: boolean;
+      }
+    | undefined {
+    const ownerAgentId =
+      typeof value.ownerAgentId === "string" && value.ownerAgentId.trim() ? value.ownerAgentId.trim() : undefined;
+    const specPath = typeof value.specPath === "string" && value.specPath.trim() ? value.specPath.trim() : undefined;
+    const loopMode = value.loopMode === "fresh-context" || value.loopMode === "compaction" ? value.loopMode : undefined;
+    const requiresApproval = typeof value.requiresApproval === "boolean" ? value.requiresApproval : undefined;
     if (!ownerAgentId && !specPath && !loopMode && requiresApproval === undefined) {
       return undefined;
     }
@@ -18484,7 +13897,7 @@ export class GatewayService {
     };
   }
 
-  private applyOrchestrationPhaseHookPatch(
+  /** @internal */ public applyOrchestrationPhaseHookPatch(
     plan: OrchestrationPlan,
     phaseId: string,
     patch: {
@@ -18583,7 +13996,7 @@ export class GatewayService {
     await fs.writeFile(resolved.absolutePath, normalizedContent, "utf8");
   }
 
-  private async resolveRuntimeGuidance(workspaceId: string): Promise<ResolvedRuntimeGuidance> {
+  /** @internal */ public async resolveRuntimeGuidance(workspaceId: string): Promise<ResolvedRuntimeGuidance> {
     const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
     if (isTruthy(process.env[GUIDANCE_DEBUG_KILL_SWITCH_ENV])) {
       return {
@@ -18603,7 +14016,7 @@ export class GatewayService {
         this.readGuidanceDocument(docType, "workspace", normalizedWorkspaceId),
         this.readGuidanceDocument(docType, "global"),
       ]);
-      const selected = workspaceDoc.exists ? workspaceDoc : (globalDoc.exists ? globalDoc : undefined);
+      const selected = workspaceDoc.exists ? workspaceDoc : globalDoc.exists ? globalDoc : undefined;
       if (!selected || !selected.content.trim()) {
         continue;
       }
@@ -18652,7 +14065,6 @@ export class GatewayService {
         blockLines.push(`${rendered.slice(0, remaining)}\n...[truncated]`);
       }
       truncated = true;
-      consumed = budgetForBlocks;
       break;
     }
 
@@ -18666,21 +14078,22 @@ export class GatewayService {
     };
   }
 
-  private requireChatSession(sessionId: string): ChatSessionRecord {
+  /** @internal */ public requireChatSession(sessionId: string): ChatSessionRecord {
     const session = this.getSession(sessionId);
     const projectLink = this.storage.chatSessionProjects.get(sessionId);
     const project = projectLink ? this.storage.chatProjects.find(projectLink.projectId) : undefined;
-    const meta = this.storage.chatSessionMeta.get(sessionId)
-      ?? this.storage.chatSessionMeta.ensure(sessionId, undefined, project?.workspaceId ?? DEFAULT_WORKSPACE_ID);
+    const meta =
+      this.storage.chatSessionMeta.get(sessionId) ??
+      this.storage.chatSessionMeta.ensure(sessionId, undefined, project?.workspaceId ?? DEFAULT_WORKSPACE_ID);
     return toChatSessionRecord(session, meta, project);
   }
 
-  private isReplayScratchSession(sessionId: string): boolean {
+  /** @internal */ public isReplayScratchSession(sessionId: string): boolean {
     const title = this.storage.chatSessionMeta.get(sessionId)?.title?.trim();
     return Boolean(title && title.startsWith(REPLAY_SCRATCH_SESSION_TITLE_PREFIX));
   }
 
-  private routeFromSession(session: SessionMeta): {
+  /** @internal */ public routeFromSession(session: SessionMeta): {
     channel: string;
     account: string;
     peer?: string;
@@ -18726,42 +14139,45 @@ export class GatewayService {
     const model = options?.model ?? providerSummary?.defaultModel ?? runtime.activeModel;
     const supportsVision = Boolean(providerSummary?.capabilities?.vision || inferModelVisionSupport(model));
     const transcript = await this.readTranscriptOrEmpty(sessionId);
-    const mapped = await Promise.all(transcript
-      .filter((event) => event.type === "message.user" || event.type === "message.assistant")
-      .map(async (event) => {
-        const payload = event.payload as {
-          message?: {
-            role?: string;
-            content?: unknown;
-            parts?: unknown;
-            attachments?: unknown;
+    const mapped = await Promise.all(
+      transcript
+        .filter((event) => event.type === "message.user" || event.type === "message.assistant")
+        .map(async (event) => {
+          const payload = event.payload as {
+            message?: {
+              role?: string;
+              content?: unknown;
+              parts?: unknown;
+              attachments?: unknown;
+            };
           };
-        };
-        const baseContent = typeof payload.message?.content === "string"
-          ? payload.message.content
-          : this.extractMessagePreview(event.payload);
-        if (event.type === "message.user") {
-          const userMessage: ChatMessageRecord = {
-            messageId: event.eventId,
-            sessionId,
-            role: "user",
-            actorType: "user",
-            actorId: "operator",
-            content: baseContent,
-            timestamp: event.timestamp,
-            parts: parseMessageParts(payload.message?.parts),
-            attachments: parseMessageAttachments(payload.message?.attachments),
-          };
+          const baseContent =
+            typeof payload.message?.content === "string"
+              ? payload.message.content
+              : this.extractMessagePreview(event.payload);
+          if (event.type === "message.user") {
+            const userMessage: ChatMessageRecord = {
+              messageId: event.eventId,
+              sessionId,
+              role: "user",
+              actorType: "user",
+              actorId: "operator",
+              content: baseContent,
+              timestamp: event.timestamp,
+              parts: parseMessageParts(payload.message?.parts),
+              attachments: parseMessageAttachments(payload.message?.attachments),
+            };
+            return {
+              role: "user" as const,
+              content: await this.buildUserMessageContent(userMessage, supportsVision),
+            };
+          }
           return {
-            role: "user" as const,
-            content: await this.buildUserMessageContent(userMessage, supportsVision),
+            role: "assistant" as const,
+            content: baseContent,
           };
-        }
-        return {
-          role: "assistant" as const,
-          content: baseContent,
-        };
-      }));
+        }),
+    );
     const messages = await this.compactTranscriptMessages(sessionId, transcript, mapped);
     if (options?.guidanceSystemInstruction?.trim()) {
       return [
@@ -18776,80 +14192,18 @@ export class GatewayService {
   }
 
   private listHydratedChatTurnTraces(sessionId: string, limit = 200): ChatTurnTraceRecord[] {
-    const traces = this.storage.chatTurnTraces.listBySession(sessionId, limit);
-    const toolRunsByTurnId = this.storage.chatToolRuns.listByTurnIds(traces.map((trace) => trace.turnId));
-    const executionPlansById = new Map(
-      traces
-        .filter((trace) => trace.executionPlanId)
-        .map((trace) => {
-          try {
-            return [trace.executionPlanId!, this.storage.chatExecutionPlans.get(trace.executionPlanId!)] as const;
-          } catch {
-            return undefined;
-          }
-        })
-        .filter((entry): entry is readonly [string, ReturnType<Storage["chatExecutionPlans"]["get"]>] => Boolean(entry)),
-    );
-    return traces.map((trace) => ({
-      ...trace,
-      toolRuns: toolRunsByTurnId.get(trace.turnId) ?? [],
-      citations: trace.citations ?? [],
-      executionPlan: trace.executionPlanId ? executionPlansById.get(trace.executionPlanId) : undefined,
-      capabilityUpgradeSuggestions: trace.capabilityUpgradeSuggestions,
-    }));
+    return chatTurnTraceHydration.listHydratedChatTurnTraces(this, sessionId, limit);
   }
 
-  private resolveChatActiveLeafTurnId(
-    sessionId: string,
-    traces: ChatTurnTraceRecord[],
-  ): string | undefined {
-    const branchState = this.storage.chatSessionBranchState.get(sessionId);
-    if (branchState && traces.some((trace) => trace.turnId === branchState.activeLeafTurnId)) {
-      return branchState.activeLeafTurnId;
-    }
-    const newest = [...traces]
-      .sort((left, right) => {
-        const leftStarted = Date.parse(left.startedAt) || 0;
-        const rightStarted = Date.parse(right.startedAt) || 0;
-        if (leftStarted !== rightStarted) {
-          return rightStarted - leftStarted;
-        }
-        return right.turnId.localeCompare(left.turnId);
-      })
-      .at(0);
-    if (!newest) {
-      return undefined;
-    }
-    const newestLeafTurnId = resolveNewestLeafTurnId(
-      newest.turnId,
-      new Map(traces.map((trace) => [trace.turnId, {
-        turnId: trace.turnId,
-        startedAtMs: Date.parse(trace.startedAt) || 0,
-      }])),
-      this.buildChatTurnChildrenMap(traces),
-    );
-    this.storage.chatSessionBranchState.setActiveLeaf(
-      sessionId,
-      newestLeafTurnId,
-      newest.finishedAt ?? newest.startedAt,
-    );
-    return newestLeafTurnId;
+  private resolveChatActiveLeafTurnId(sessionId: string, traces: ChatTurnTraceRecord[]): string | undefined {
+    return chatTurnTraceHydration.resolveChatActiveLeafTurnId(this, sessionId, traces);
   }
 
   private buildChatTurnChildrenMap(traces: ChatTurnTraceRecord[]): Map<string, string[]> {
-    const childrenByTurnId = new Map<string, string[]>();
-    for (const trace of traces) {
-      if (!trace.parentTurnId) {
-        continue;
-      }
-      const children = childrenByTurnId.get(trace.parentTurnId) ?? [];
-      children.push(trace.turnId);
-      childrenByTurnId.set(trace.parentTurnId, children);
-    }
-    return childrenByTurnId;
+    return chatTurnTraceHydration.buildChatTurnChildrenMap(traces);
   }
 
-  private async buildLlmMessagesFromBranchPath(
+  /** @internal */ public async buildLlmMessagesFromBranchPath(
     sessionId: string,
     pathTurnIds: string[],
     currentUserMessage: ChatMessageRecord | undefined,
@@ -18860,7 +14214,7 @@ export class GatewayService {
     },
     state?: Awaited<ReturnType<GatewayService["loadChatTurnSessionState"]>>,
   ): Promise<ChatCompletionRequest["messages"]> {
-    const sessionState = state ?? await this.loadChatTurnSessionState(sessionId);
+    const sessionState = state ?? (await this.loadChatTurnSessionState(sessionId));
     const orderedMessages: ChatMessageRecord[] = [];
     for (const turnId of pathTurnIds) {
       const trace = sessionState.tracesById.get(turnId);
@@ -18905,33 +14259,36 @@ export class GatewayService {
     const providerSummary = runtime.providers.find((item) => item.providerId === providerId);
     const model = options?.model ?? providerSummary?.defaultModel ?? runtime.activeModel;
     const supportsVision = Boolean(providerSummary?.capabilities?.vision || inferModelVisionSupport(model));
-    const mapped = await Promise.all(records.map(async (message) => {
-      if (message.role === "assistant") {
+    const mapped = await Promise.all(
+      records.map(async (message) => {
+        if (message.role === "assistant") {
+          return {
+            role: "assistant" as const,
+            content: message.content,
+          };
+        }
+        if (message.role === "system") {
+          return {
+            role: "system" as const,
+            content: message.content,
+          };
+        }
         return {
-          role: "assistant" as const,
-          content: message.content,
+          role: "user" as const,
+          content: await this.buildUserMessageContent(message, supportsVision),
         };
-      }
-      if (message.role === "system") {
-        return {
-          role: "system" as const,
-          content: message.content,
-        };
-      }
-      return {
-        role: "user" as const,
-        content: await this.buildUserMessageContent(message, supportsVision),
-      };
-    }));
-    const messages = options?.sessionId && options.branchTurnIds && options.branchTurnIds.length > 0
-      ? await this.compactBranchMappedMessages({
-        sessionId: options.sessionId,
-        branchHeadTurnId: options.branchHeadTurnId ?? options.branchTurnIds.at(-1) ?? options.sessionId,
-        branchTurnIds: options.branchTurnIds,
-        records,
-        mapped,
-      })
-      : mapped;
+      }),
+    );
+    const messages =
+      options?.sessionId && options.branchTurnIds && options.branchTurnIds.length > 0
+        ? await this.compactBranchMappedMessages({
+            sessionId: options.sessionId,
+            branchHeadTurnId: options.branchHeadTurnId ?? options.branchTurnIds.at(-1) ?? options.sessionId,
+            branchTurnIds: options.branchTurnIds,
+            records,
+            mapped,
+          })
+        : mapped;
     if (!options?.guidanceSystemInstruction?.trim()) {
       return messages;
     }
@@ -18957,17 +14314,22 @@ export class GatewayService {
     }
     const records = transcript
       .filter((event) => event.type === "message.user" || event.type === "message.assistant")
-      .map((event) => ({
-        messageId: event.eventId,
-        sessionId,
-        role: event.type === "message.user" ? "user" : "assistant",
-        actorType: event.type === "message.user" ? "user" : "agent",
-        actorId: event.type === "message.user" ? "operator" : "assistant",
-        content: this.extractMessagePreview(event.payload),
-        timestamp: event.timestamp,
-      } satisfies ChatMessageRecord));
+      .map(
+        (event) =>
+          ({
+            messageId: event.eventId,
+            sessionId,
+            role: event.type === "message.user" ? "user" : "assistant",
+            actorType: event.type === "message.user" ? "user" : "agent",
+            actorId: event.type === "message.user" ? "operator" : "assistant",
+            content: this.extractMessagePreview(event.payload),
+            timestamp: event.timestamp,
+          }) satisfies ChatMessageRecord,
+      );
     const recentRecords = records.slice(-(CHAT_COMPACTION_RECENT_TURN_LIMIT * 2));
-    const summary = buildConversationCompactionSummary(records.slice(0, Math.max(0, records.length - recentRecords.length)));
+    const summary = buildConversationCompactionSummary(
+      records.slice(0, Math.max(0, records.length - recentRecords.length)),
+    );
     const recentMessages = mapped.slice(-(CHAT_COMPACTION_RECENT_TURN_LIMIT * 2));
     if (!summary) {
       return trimNewestContextMessagesForPromptCache(recentMessages, CHAT_COMPACTION_TRIGGER_TOKENS);
@@ -18992,8 +14354,8 @@ export class GatewayService {
   }): Promise<ChatCompletionRequest["messages"]> {
     const totalTokens = estimateTokensFromText(stringifyMessagesForTokenEstimate(input.mapped));
     if (
-      input.branchTurnIds.length <= CHAT_COMPACTION_RECENT_TURN_LIMIT
-      || totalTokens <= CHAT_COMPACTION_TRIGGER_TOKENS
+      input.branchTurnIds.length <= CHAT_COMPACTION_RECENT_TURN_LIMIT ||
+      totalTokens <= CHAT_COMPACTION_TRIGGER_TOKENS
     ) {
       return input.mapped;
     }
@@ -19029,23 +14391,22 @@ export class GatewayService {
 
     const verbatimMessages = recentTurnIds.flatMap((turnId) => grouped.turnMessagesById.get(turnId) ?? []);
     const finalVerbatimRecords = [...verbatimMessages, ...grouped.trailingMessages];
-    const mappedVerbatim = await Promise.all(finalVerbatimRecords.map(async (message) => {
-      const mappedIndex = input.records.findIndex((item) => item.messageId === message.messageId);
-      if (mappedIndex >= 0) {
-        return input.mapped[mappedIndex]!;
-      }
-      return message.role === "assistant"
-        ? { role: "assistant" as const, content: message.content }
-        : { role: "user" as const, content: message.content };
-    }));
+    const mappedVerbatim = await Promise.all(
+      finalVerbatimRecords.map(async (message) => {
+        const mappedIndex = input.records.findIndex((item) => item.messageId === message.messageId);
+        if (mappedIndex >= 0) {
+          return input.mapped[mappedIndex]!;
+        }
+        return message.role === "assistant"
+          ? { role: "assistant" as const, content: message.content }
+          : { role: "user" as const, content: message.content };
+      }),
+    );
 
     const summaryTokenBudget = estimateTokensFromText(stringifyMessagesForTokenEstimate(summaryMessages));
     const verbatimTokenBudget = Math.max(240, CHAT_COMPACTION_TRIGGER_TOKENS - summaryTokenBudget);
 
-    return [
-      ...summaryMessages,
-      ...trimNewestContextMessagesForPromptCache(mappedVerbatim, verbatimTokenBudget),
-    ];
+    return [...summaryMessages, ...trimNewestContextMessagesForPromptCache(mappedVerbatim, verbatimTokenBudget)];
   }
 
   private getOrCreateConversationSummary(input: {
@@ -19067,10 +14428,11 @@ export class GatewayService {
     const sourceHash = createHash("sha256").update(source).digest("hex");
     const existing = this.storage.chatConversationSummaries
       .listByBranch(input.sessionId, input.branchHeadTurnId)
-      .find((summary) =>
-        summary.startTurnId === input.turnIds[0]
-        && summary.endTurnId === input.turnIds.at(-1)
-        && summary.sourceHash === sourceHash
+      .find(
+        (summary) =>
+          summary.startTurnId === input.turnIds[0] &&
+          summary.endTurnId === input.turnIds.at(-1) &&
+          summary.sourceHash === sourceHash,
       );
     if (existing) {
       return existing.summary;
@@ -19092,147 +14454,31 @@ export class GatewayService {
     return persisted.summary;
   }
 
-  private async buildUserMessageContent(
+  private buildUserMessageContent(
     message: ChatMessageRecord,
     supportsVision: boolean,
   ): Promise<string | Array<Record<string, unknown>>> {
-    const prompt = this.buildUserMessagePrompt(message);
-    const attachments = this.resolveMessageAttachments(message);
-    const contentParts = await this.buildAttachmentMessageParts(attachments, prompt, supportsVision);
-    if (contentParts) {
-      return contentParts;
-    }
-    const attachmentContext = this.buildAttachmentPromptContext(attachments, supportsVision);
-    return attachmentContext
-      ? `${prompt}\n\n${attachmentContext}`
-      : prompt;
+    return chatTurnUserMessage.buildUserMessageContent(this, message, supportsVision);
   }
 
   private buildUserMessagePrompt(message: ChatMessageRecord): string {
-    const baseContent = message.content.trim();
-    const textParts = Array.isArray(message.parts)
-      ? message.parts
-        .filter((part): part is Extract<ChatInputPart, { type: "text" }> => part.type === "text")
-        .map((part) => part.text.trim())
-        .filter(Boolean)
-      : [];
-    if (textParts.length === 0) {
-      return baseContent;
-    }
-    if (!baseContent) {
-      return textParts.join("\n\n");
-    }
-    if (textParts[0] === baseContent) {
-      return textParts.join("\n\n");
-    }
-    return [baseContent, ...textParts].join("\n\n");
+    return chatTurnUserMessage.buildUserMessagePrompt(message);
   }
 
   private resolveMessageAttachments(message: ChatMessageRecord): ChatAttachmentRecord[] {
-    const attachmentIds = new Set<string>();
-    if (Array.isArray(message.attachments)) {
-      for (const attachment of message.attachments) {
-        if (attachment?.attachmentId) {
-          attachmentIds.add(attachment.attachmentId);
-        }
-      }
-    }
-    if (Array.isArray(message.parts)) {
-      for (const part of message.parts) {
-        if (part.type !== "text" && part.attachmentId) {
-          attachmentIds.add(part.attachmentId);
-        }
-      }
-    }
-    if (attachmentIds.size === 0) {
-      return [];
-    }
-    return this.storage.chatAttachments.listByIds([...attachmentIds]).slice(0, 6);
+    return chatTurnUserMessage.resolveMessageAttachments(this, message);
   }
 
   private buildAttachmentPromptContext(input: unknown, supportsVision = false): string | undefined {
-    if (!Array.isArray(input) || input.length === 0) {
-      return undefined;
-    }
-
-    const attachmentIds = input
-      .map((item) => (item as Record<string, unknown>).attachmentId)
-      .filter((value): value is string => typeof value === "string" && value.length > 0);
-    if (attachmentIds.length === 0) {
-      return undefined;
-    }
-
-    const attachments = this.storage.chatAttachments.listByIds(attachmentIds).slice(0, 6);
-    if (attachments.length === 0) {
-      return undefined;
-    }
-
-    const lines = attachments.map((attachment) => {
-      const descriptor = `- ${attachment.fileName} (${attachment.mimeType}, ${attachment.sizeBytes} bytes)`;
-      if (supportsVision && isImageMimeType(attachment.mimeType)) {
-        return `${descriptor}\n  Preview: sent directly to a vision-capable model.`;
-      }
-      if (!attachment.extractPreview?.trim()) {
-        return `${descriptor}\n  Preview: unavailable for this file type in current pipeline.`;
-      }
-      const preview = attachment.extractPreview
-        .replace(/\r\n/g, "\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .slice(0, 1600);
-      return `${descriptor}\n  Preview:\n${preview}`;
-    });
-
-    return [
-      "Attached file context (from uploaded attachments):",
-      ...lines,
-    ].join("\n");
+    return chatTurnUserMessage.buildAttachmentPromptContext(this, input, supportsVision);
   }
 
-  private async buildAttachmentMessageParts(
+  private buildAttachmentMessageParts(
     input: unknown,
     prompt: string,
     supportsVision: boolean,
   ): Promise<Array<Record<string, unknown>> | undefined> {
-    if (!supportsVision || !Array.isArray(input) || input.length === 0) {
-      return undefined;
-    }
-    const attachmentIds = input
-      .map((item) => (item as Record<string, unknown>).attachmentId)
-      .filter((value): value is string => typeof value === "string" && value.length > 0);
-    if (attachmentIds.length === 0) {
-      return undefined;
-    }
-
-    const attachments = this.storage.chatAttachments.listByIds(attachmentIds).slice(0, 4);
-    const parts: Array<Record<string, unknown>> = [
-      {
-        type: "text",
-        text: prompt,
-      },
-    ];
-
-    for (const attachment of attachments) {
-      if (!isImageMimeType(attachment.mimeType)) {
-        continue;
-      }
-      try {
-        const content = await this.readChatAttachmentContent(attachment.attachmentId);
-        if (content.bytes.length > 5 * 1024 * 1024) {
-          continue;
-        }
-        const dataUrl = `data:${attachment.mimeType};base64,${content.bytes.toString("base64")}`;
-        parts.push({
-          type: "image_url",
-          image_url: {
-            url: dataUrl,
-          },
-        });
-      } catch {
-        // keep chat flowing even if one image cannot be loaded
-      }
-    }
-
-    return parts.length > 1 ? parts : undefined;
+    return chatTurnUserMessage.buildAttachmentMessageParts(this, input, prompt, supportsVision);
   }
 
   private extractMessagePreview(payload: Record<string, unknown>): string {
@@ -19340,18 +14586,21 @@ export class GatewayService {
   }
 
   private normalizeLookupValue(value: string): string {
-    return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    return value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
   }
 
   private normalizeRelativePath(inputPath: string): string {
     const normalized = path.normalize(inputPath).replaceAll("\\", "/");
     if (
-      !normalized
-      || normalized === "."
-      || normalized === ".."
-      || normalized.startsWith("../")
-      || normalized.endsWith("/..")
-      || normalized.includes("/../")
+      !normalized ||
+      normalized === "." ||
+      normalized === ".." ||
+      normalized.startsWith("../") ||
+      normalized.endsWith("/..") ||
+      normalized.includes("/../")
     ) {
       throw new Error(`Invalid relative path: ${inputPath}`);
     }
@@ -19423,7 +14672,7 @@ export class GatewayService {
     }
 
     const parsed = JSON.parse(raw) as { jobs?: CronJobRecord[] } | CronJobRecord[];
-    const jobs = Array.isArray(parsed) ? parsed : parsed.jobs ?? [];
+    const jobs = Array.isArray(parsed) ? parsed : (parsed.jobs ?? []);
 
     this.storage.runImmediateTransaction(() => {
       for (const job of jobs) {
@@ -19466,63 +14715,75 @@ export class GatewayService {
   private ensurePrivateBetaBackupCronJob(): void {
     const existing = this.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
     const now = new Date().toISOString();
-    this.storage.cronJobs.upsertIfChanged({
-      jobId: PRIVATE_BETA_BACKUP_JOB_ID,
-      name: "Private Beta Daily Backup",
-      schedule: PRIVATE_BETA_BACKUP_SCHEDULE_LABEL,
-      enabled: existing?.enabled ?? true,
-      lastRunAt: existing?.lastRunAt,
-      nextRunAt: existing?.nextRunAt,
-    }, now);
+    this.storage.cronJobs.upsertIfChanged(
+      {
+        jobId: PRIVATE_BETA_BACKUP_JOB_ID,
+        name: "Private Beta Daily Backup",
+        schedule: PRIVATE_BETA_BACKUP_SCHEDULE_LABEL,
+        enabled: existing?.enabled ?? true,
+        lastRunAt: existing?.lastRunAt,
+        nextRunAt: existing?.nextRunAt,
+      },
+      now,
+    );
   }
 
   private ensureMemoryFlushCronJob(): void {
     const existing = this.storage.cronJobs.get(MEMORY_FLUSH_DAILY_JOB_ID);
     const now = new Date().toISOString();
-    this.storage.cronJobs.upsertIfChanged({
-      jobId: MEMORY_FLUSH_DAILY_JOB_ID,
-      name: "Memory Flush Daily",
-      schedule: MEMORY_FLUSH_DAILY_SCHEDULE_LABEL,
-      enabled: existing?.enabled ?? true,
-      lastRunAt: existing?.lastRunAt,
-      nextRunAt: existing?.nextRunAt,
-    }, now);
+    this.storage.cronJobs.upsertIfChanged(
+      {
+        jobId: MEMORY_FLUSH_DAILY_JOB_ID,
+        name: "Memory Flush Daily",
+        schedule: MEMORY_FLUSH_DAILY_SCHEDULE_LABEL,
+        enabled: existing?.enabled ?? true,
+        lastRunAt: existing?.lastRunAt,
+        nextRunAt: existing?.nextRunAt,
+      },
+      now,
+    );
   }
 
   private ensureCostReportCronJob(): void {
     const existing = this.storage.cronJobs.get(COST_REPORT_HOURLY_JOB_ID);
     const now = new Date().toISOString();
-    this.storage.cronJobs.upsertIfChanged({
-      jobId: COST_REPORT_HOURLY_JOB_ID,
-      name: "Cost Report Hourly",
-      schedule: COST_REPORT_HOURLY_SCHEDULE_LABEL,
-      enabled: existing?.enabled ?? true,
-      lastRunAt: existing?.lastRunAt,
-      nextRunAt: existing?.nextRunAt,
-    }, now);
+    this.storage.cronJobs.upsertIfChanged(
+      {
+        jobId: COST_REPORT_HOURLY_JOB_ID,
+        name: "Cost Report Hourly",
+        schedule: COST_REPORT_HOURLY_SCHEDULE_LABEL,
+        enabled: existing?.enabled ?? true,
+        lastRunAt: existing?.lastRunAt,
+        nextRunAt: existing?.nextRunAt,
+      },
+      now,
+    );
   }
 
   private ensureUpdateReviewCronJob(): void {
     const existing = this.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
     const now = new Date().toISOString();
-    this.storage.cronJobs.upsertIfChanged({
-      jobId: UPDATE_REVIEW_DAILY_JOB_ID,
-      name: "Daily Update Review",
-      schedule: UPDATE_REVIEW_DAILY_SCHEDULE_LABEL,
-      enabled: existing?.enabled ?? true,
-      lastRunAt: existing?.lastRunAt,
-      nextRunAt: existing?.nextRunAt,
-    }, now);
+    this.storage.cronJobs.upsertIfChanged(
+      {
+        jobId: UPDATE_REVIEW_DAILY_JOB_ID,
+        name: "Daily Update Review",
+        schedule: UPDATE_REVIEW_DAILY_SCHEDULE_LABEL,
+        enabled: existing?.enabled ?? true,
+        lastRunAt: existing?.lastRunAt,
+        nextRunAt: existing?.nextRunAt,
+      },
+      now,
+    );
   }
 
-  private persistLlmConfig(): void {
+  /** @internal */ public persistLlmConfig(): void {
     const filePath = path.join(this.config.rootDir, "config", "llm-providers.json");
     fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
     fsSync.writeFileSync(filePath, JSON.stringify(this.llmService.exportConfigFile(), null, 2), "utf8");
     this.persistUnifiedConfig();
   }
 
-  private persistToolPolicyConfig(): void {
+  /** @internal */ public persistToolPolicyConfig(): void {
     const filePath = path.join(this.config.rootDir, "config", "tool-policy.json");
     const payload = {
       ...this.config.toolPolicy,
@@ -19537,14 +14798,14 @@ export class GatewayService {
     this.persistUnifiedConfig();
   }
 
-  private persistBudgetsConfig(): void {
+  /** @internal */ public persistBudgetsConfig(): void {
     const filePath = path.join(this.config.rootDir, "config", "budgets.json");
     fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
     fsSync.writeFileSync(filePath, JSON.stringify(this.config.budgets, null, 2), "utf8");
     this.persistUnifiedConfig();
   }
 
-  private persistAssistantConfig(): void {
+  /** @internal */ public persistAssistantConfig(): void {
     const filePath = path.join(this.config.rootDir, "config", "assistant.config.json");
     const payload = {
       environment: this.config.assistant.environment,
@@ -19636,47 +14897,23 @@ export class GatewayService {
     fsSync.writeFileSync(filePath, JSON.stringify(unifiedPayload, null, 2), "utf8");
   }
 
-  private getBackupDirectory(): string {
-    const fromEnv = process.env.GOATCITADEL_BACKUP_DIR?.trim();
-    if (fromEnv) {
-      return path.resolve(fromEnv);
-    }
-    return path.join(os.homedir(), ".GoatCitadel", "backups");
-  }
-
-  private buildBackupIncludePaths(): string[] {
-    const paths = new Set<string>();
-    paths.add(path.relative(this.config.rootDir, this.config.dbPath).replaceAll("\\", "/"));
-    paths.add(`${path.relative(this.config.rootDir, this.config.dbPath).replaceAll("\\", "/")}-wal`);
-    paths.add(`${path.relative(this.config.rootDir, this.config.dbPath).replaceAll("\\", "/")}-shm`);
-    paths.add(this.config.assistant.transcriptsDir.replaceAll("\\", "/"));
-    paths.add(this.config.assistant.auditDir.replaceAll("\\", "/"));
-    paths.add("config");
-    return [...paths];
-  }
-
   private serializeRootPath(fullPath: string): string {
-    return serializePathWithinRoot(
-      this.config.rootDir,
-      fullPath,
-      this.warnedOutsideRootPathFingerprints,
-      (warning) => {
-        this.recordDevDiagnostic({
-          level: "warn",
-          category: "security",
-          event: "filesystem.outside_root_path_redacted",
-          message: "Refused to expose a filesystem path outside the workspace root.",
-          context: {
-            fingerprint: warning.fingerprint,
-            baseName: warning.baseName,
-          },
-        });
-      },
-    );
+    return serializePathWithinRoot(this.config.rootDir, fullPath, this.warnedOutsideRootPathFingerprints, (warning) => {
+      this.recordDevDiagnostic({
+        level: "warn",
+        category: "security",
+        event: "filesystem.outside_root_path_redacted",
+        message: "Refused to expose a filesystem path outside the workspace root.",
+        context: {
+          fingerprint: warning.fingerprint,
+          baseName: warning.baseName,
+        },
+      });
+    });
   }
 }
 
-function extractPromptFromMessages(messages: ChatCompletionRequest["messages"]): string {
+export function extractPromptFromMessages(messages: ChatCompletionRequest["messages"]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (!message || message.role !== "user") {
@@ -19701,7 +14938,7 @@ function extractPromptFromMessages(messages: ChatCompletionRequest["messages"]):
   return "";
 }
 
-function buildMemoryContextSystemMessage(pack: MemoryContextPack): string {
+export function buildMemoryContextSystemMessage(pack: MemoryContextPack): string {
   return [
     "Distilled context from GoatCitadel memory:",
     pack.contextText,
@@ -19711,7 +14948,7 @@ function buildMemoryContextSystemMessage(pack: MemoryContextPack): string {
   ].join("\n");
 }
 
-function calculateSavings(originalTokens: number, distilledTokens: number): number {
+export function calculateSavings(originalTokens: number, distilledTokens: number): number {
   if (originalTokens <= 0) {
     return 0;
   }
@@ -19733,7 +14970,7 @@ function parseOptionalPositiveInt(value: unknown): number | undefined {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function findPlanPhase(plan: OrchestrationPlan, phaseId: string) {
+export function findPlanPhase(plan: OrchestrationPlan, phaseId: string) {
   for (const wave of plan.waves) {
     const phase = wave.phases.find((item) => item.phaseId === phaseId);
     if (phase) {
@@ -19897,12 +15134,7 @@ const FILE_TEMPLATES: FileTemplateRecord[] = [
   },
 ];
 
-async function walkFiles(
-  rootDir: string,
-  currentDir: string,
-  out: MemoryFileEntry[],
-  maxItems: number,
-): Promise<void> {
+async function walkFiles(rootDir: string, currentDir: string, out: MemoryFileEntry[], maxItems: number): Promise<void> {
   if (out.length >= maxItems) {
     return;
   }
@@ -19937,7 +15169,7 @@ async function walkFiles(
   }
 }
 
-function toChatSessionRecord(
+export function toChatSessionRecord(
   session: SessionMeta,
   meta: {
     workspaceId?: string;
@@ -20006,9 +15238,7 @@ function parseMessageParts(input: unknown): ChatMessageRecord["parts"] | undefin
   if (!Array.isArray(input)) {
     return undefined;
   }
-  const parts = input
-    .map((item) => normalizeMessagePart(item))
-    .filter((item): item is ChatInputPart => Boolean(item));
+  const parts = input.map((item) => normalizeMessagePart(item)).filter((item): item is ChatInputPart => Boolean(item));
   return parts.length > 0 ? parts : undefined;
 }
 
@@ -20034,9 +15264,7 @@ function normalizeMessagePart(input: unknown): ChatInputPart | undefined {
       type,
       attachmentId,
       mimeType: typeof value.mimeType === "string" ? value.mimeType : undefined,
-      detail: value.detail === "low" || value.detail === "high" || value.detail === "auto"
-        ? value.detail
-        : undefined,
+      detail: value.detail === "low" || value.detail === "high" || value.detail === "auto" ? value.detail : undefined,
     };
   }
   if (type === "audio_ref" || type === "video_ref" || type === "file_ref") {
@@ -20127,7 +15355,7 @@ function readNumber(value: unknown): number | undefined {
   return undefined;
 }
 
-function splitIntoChunks(input: string, maxChunkLength: number): string[] {
+export function splitIntoChunks(input: string, maxChunkLength: number): string[] {
   if (!input) {
     return [];
   }
@@ -20142,7 +15370,7 @@ function splitIntoChunks(input: string, maxChunkLength: number): string[] {
   return chunks;
 }
 
-function buildEmptyAssistantTurnFallbackText(): string {
+export function buildEmptyAssistantTurnFallbackText(): string {
   return [
     "Summary",
     "- I completed the turn, but the final assistant text was empty after tool/model synthesis.",
@@ -20158,16 +15386,16 @@ function buildEmptyAssistantTurnFallbackText(): string {
   ].join("\n");
 }
 
-function inferDegradedAssistantTurnFailure(content: string): ChatTurnFailureRecord | undefined {
+export function inferDegradedAssistantTurnFailure(content: string): ChatTurnFailureRecord | undefined {
   const normalized = content.trim().toLowerCase();
   if (!normalized) {
     return undefined;
   }
   if (
-    normalized.startsWith("i ran out of time before i could finish")
-    || normalized.startsWith("i couldn't finish that cleanly because")
-    || normalized.includes("recover useful content from")
-    || normalized.includes("strongest leads so far")
+    normalized.startsWith("i ran out of time before i could finish") ||
+    normalized.startsWith("i couldn't finish that cleanly because") ||
+    normalized.includes("recover useful content from") ||
+    normalized.includes("strongest leads so far")
   ) {
     return {
       failureClass: "unknown",
@@ -20185,6 +15413,7 @@ function sanitizeAttachmentFileName(input: string): string {
     .replaceAll("\\", "/")
     .split("/")
     .pop()
+    // eslint-disable-next-line no-control-regex
     ?.replace(/[<>:"|?*\u0000-\u001f]/g, "-")
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-")
@@ -20203,15 +15432,16 @@ function extractAttachmentPreview(
 ): { extractStatus: "ready" | "unsupported" | "failed"; extractPreview?: string } {
   const lowerMime = mimeType.toLowerCase();
   const ext = path.extname(fileName).toLowerCase();
-  const textLike = lowerMime.startsWith("text/")
-    || lowerMime === "application/json"
-    || lowerMime === "application/xml"
-    || ext === ".md"
-    || ext === ".txt"
-    || ext === ".log"
-    || ext === ".json"
-    || ext === ".yaml"
-    || ext === ".yml";
+  const textLike =
+    lowerMime.startsWith("text/") ||
+    lowerMime === "application/json" ||
+    lowerMime === "application/xml" ||
+    ext === ".md" ||
+    ext === ".txt" ||
+    ext === ".log" ||
+    ext === ".json" ||
+    ext === ".yaml" ||
+    ext === ".yml";
   if (textLike) {
     try {
       const preview = bytes.toString("utf8").slice(0, 4000);
@@ -20233,64 +15463,12 @@ interface McpAuthStateRecord {
   lastCodePreview?: string;
 }
 
-interface MediaJobRow {
-  job_id: string;
-  session_id: string | null;
-  attachment_id: string | null;
-  job_type: MediaJobRecord["type"];
-  status: MediaJobRecord["status"];
-  input_json: string | null;
-  output_json: string | null;
-  error: string | null;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
-}
-
-function mapMediaJobRow(row: MediaJobRow): MediaJobRecord {
-  return {
-    jobId: row.job_id,
-    sessionId: row.session_id ?? undefined,
-    attachmentId: row.attachment_id ?? undefined,
-    type: row.job_type,
-    status: row.status,
-    inputJson: row.input_json ? safeJsonParse<Record<string, unknown>>(row.input_json, {}) : undefined,
-    outputJson: row.output_json ? safeJsonParse<Record<string, unknown>>(row.output_json, {}) : undefined,
-    error: row.error ?? undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    completedAt: row.completed_at ?? undefined,
-  };
-}
-
 function safeJsonParse<T>(raw: string, fallback: T): T {
   try {
     return JSON.parse(raw) as T;
   } catch {
     return fallback;
   }
-}
-
-function detectAttachmentMediaType(mimeType: string): ChatAttachmentMediaType {
-  const normalized = mimeType.toLowerCase();
-  if (normalized.startsWith("image/")) {
-    return "image";
-  }
-  if (normalized.startsWith("audio/")) {
-    return "audio";
-  }
-  if (normalized.startsWith("video/")) {
-    return "video";
-  }
-  if (
-    normalized.startsWith("text/")
-    || normalized === "application/json"
-    || normalized === "application/xml"
-    || normalized === "application/javascript"
-  ) {
-    return "text";
-  }
-  return "binary";
 }
 
 function inferAttachmentAnalysisStatus(
@@ -20309,21 +15487,21 @@ function inferAttachmentAnalysisStatus(
 function inferModelVisionSupport(model: string): boolean {
   const normalized = model.toLowerCase();
   return (
-    normalized.includes("vision")
-    || normalized.includes("gpt-4o")
-    || normalized.includes("gpt-4.1")
-    || normalized.includes("gemini")
-    || normalized.includes("claude-3")
-    || normalized.includes("kimi")
-    || normalized.includes("glm")
+    normalized.includes("vision") ||
+    normalized.includes("gpt-4o") ||
+    normalized.includes("gpt-4.1") ||
+    normalized.includes("gemini") ||
+    normalized.includes("claude-3") ||
+    normalized.includes("kimi") ||
+    normalized.includes("glm")
   );
 }
 
-function isImageMimeType(mimeType: string): boolean {
+export function isImageMimeType(mimeType: string): boolean {
   return mimeType.toLowerCase().startsWith("image/");
 }
 
-function normalizeChatInputParts(
+export function normalizeChatInputParts(
   content: string,
   parts: ChatInputPart[] | undefined,
   attachments: ChatAttachmentRecord[],
@@ -20369,33 +15547,20 @@ function normalizeChatInputParts(
   ];
 }
 
-function sanitizePluginId(value: string): string {
-  const sanitized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  if (!sanitized) {
-    return `plugin-${randomUUID().slice(0, 8)}`;
-  }
-  return sanitized.slice(0, 80);
-}
-
-function mapDiagnosticCheckToChannelIssues(
-  check: ConnectorDiagnosticReport["checks"][number],
-): ChannelSetupIssue[] {
+function mapDiagnosticCheckToChannelIssues(check: ConnectorDiagnosticReport["checks"][number]): ChannelSetupIssue[] {
   if (check.status === "pass") {
     return [];
   }
   const failureCategory = inferFailureCategoryFromDiagnosticKey(check.key);
-  return [{
-    key: check.key,
-    level: check.status === "fail" ? "error" : "warn",
-    message: check.message,
-    failureCategory,
-    nextSteps: defaultNextStepsForFailureCategory(failureCategory),
-  }];
+  return [
+    {
+      key: check.key,
+      level: check.status === "fail" ? "error" : "warn",
+      message: check.message,
+      failureCategory,
+      nextSteps: defaultNextStepsForFailureCategory(failureCategory),
+    },
+  ];
 }
 
 function inferFailureCategoryFromDiagnosticKey(key: string): ChannelSetupFailureCategory {
@@ -20438,7 +15603,7 @@ function firstFailureCategory(issues: ChannelSetupIssue[]): ChannelSetupFailureC
   return issues.find((issue) => issue.level === "error" || issue.level === "warn")?.failureCategory;
 }
 
-function toTitleCase(value: string): string {
+export function toTitleCase(value: string): string {
   return value
     .split(/[-_.]/g)
     .filter(Boolean)
@@ -20450,9 +15615,7 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function parseBankrAuditCursor(
-  cursor?: string,
-): { createdAt: string; actionId: string } | undefined {
+function parseBankrAuditCursor(cursor?: string): { createdAt: string; actionId: string } | undefined {
   if (!cursor?.trim()) {
     return undefined;
   }
@@ -20532,68 +15695,6 @@ function applyMcpRedaction(
   return parsed;
 }
 
-function extFromMimeType(mimeType?: string): string {
-  const normalized = mimeType?.toLowerCase() ?? "";
-  if (normalized.includes("wav")) {
-    return ".wav";
-  }
-  if (normalized.includes("mpeg")) {
-    return ".mp3";
-  }
-  if (normalized.includes("ogg")) {
-    return ".ogg";
-  }
-  if (normalized.includes("mp4")) {
-    return ".mp4";
-  }
-  if (normalized.includes("webm")) {
-    return ".webm";
-  }
-  return ".bin";
-}
-
-function parseVoiceCliArgs(rawValue?: string): string[] {
-  if (!rawValue?.trim()) {
-    return [];
-  }
-  return rawValue
-    .split(/\s+/g)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-async function normalizeAudioForWhisper(input: {
-  inputPath: string;
-  outputPath: string;
-  mimeType?: string;
-  ffmpegPath?: string;
-}): Promise<string> {
-  const normalized = input.mimeType?.toLowerCase() ?? "";
-  if (normalized.includes("wav") || input.inputPath.toLowerCase().endsWith(".wav")) {
-    return input.inputPath;
-  }
-  if (!input.ffmpegPath) {
-    throw new Error("Audio normalization helper is not configured for non-WAV input.");
-  }
-  execFileSync(
-    input.ffmpegPath,
-    [
-      "-y",
-      "-i",
-      input.inputPath,
-      "-ac",
-      "1",
-      "-ar",
-      "16000",
-      "-f",
-      "wav",
-      input.outputPath,
-    ],
-    { stdio: "pipe" },
-  );
-  return input.outputPath;
-}
-
 function parseSlashCommand(input: string): string[] | undefined {
   const trimmed = input.trim();
   if (!trimmed.startsWith("/")) {
@@ -20604,14 +15705,22 @@ function parseSlashCommand(input: string): string[] | undefined {
 }
 
 function parseDelegateCommand(input: string): { roles: string[]; objective?: string; error?: string } {
-  const body = input.trim().replace(/^\/delegate/i, "").trim();
+  const body = input
+    .trim()
+    .replace(/^\/delegate/i, "")
+    .trim();
   const delimiterIndex = body.indexOf("::");
   if (delimiterIndex < 0) {
     return { roles: [], error: "missing delimiter" };
   }
   const rolesRaw = body.slice(0, delimiterIndex).trim();
   const objective = body.slice(delimiterIndex + 2).trim();
-  const roles = normalizeDelegationRoles(rolesRaw.split(",").map((item) => item.trim()).filter(Boolean));
+  const roles = normalizeDelegationRoles(
+    rolesRaw
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
   if (roles.length === 0 || !objective) {
     return { roles, objective, error: "invalid delegate payload" };
   }
@@ -20619,7 +15728,10 @@ function parseDelegateCommand(input: string): { roles: string[]; objective?: str
 }
 
 function parsePipelineCommand(input: string): { template: string; roles: string[]; objective: string } | undefined {
-  const body = input.trim().replace(/^\/pipeline/i, "").trim();
+  const body = input
+    .trim()
+    .replace(/^\/pipeline/i, "")
+    .trim();
   const delimiterIndex = body.indexOf("::");
   if (delimiterIndex < 0) {
     return undefined;
@@ -20637,12 +15749,15 @@ function parsePipelineCommand(input: string): { template: string; roles: string[
   };
 }
 
-
 function normalizeDelegationRoles(roles: string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const role of roles) {
-    const normalized = role.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+    const normalized = role
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
     if (!normalized || seen.has(normalized)) {
       continue;
     }
@@ -20655,7 +15770,7 @@ function normalizeDelegationRoles(roles: string[]): string[] {
   return out;
 }
 
-function detectDelegationRoles(objective: string): string[] {
+export function detectDelegationRoles(objective: string): string[] {
   const normalized = objective.toLowerCase();
   const roleHints: Array<{ role: string; patterns: RegExp[] }> = [
     { role: "product", patterns: [/\bproduct\b/, /\bprd\b/, /\brequirements?\b/] },
@@ -20721,7 +15836,7 @@ function scoreChatModelSuggestion(model: string, query: string): number {
   return 0;
 }
 
-function extractSpecialistObjectiveKeywords(content: string): string[] {
+export function extractSpecialistObjectiveKeywords(content: string): string[] {
   const STOP_WORDS = new Set([
     "about",
     "after",
@@ -20747,8 +15862,9 @@ function extractSpecialistObjectiveKeywords(content: string): string[] {
     "would",
   ]);
   const matches = content.toLowerCase().match(/[a-z0-9][a-z0-9._+-]{2,}/g) ?? [];
-  return dedupeStrings(matches.map(normalizeSpecialistToken).filter((token) => token.length >= 3 && !STOP_WORDS.has(token)))
-    .slice(0, 12);
+  return dedupeStrings(
+    matches.map(normalizeSpecialistToken).filter((token) => token.length >= 3 && !STOP_WORDS.has(token)),
+  ).slice(0, 12);
 }
 
 function mergeSpecialistRoutingHints(
@@ -20756,8 +15872,9 @@ function mergeSpecialistRoutingHints(
   right: ChatSpecialistCandidateRecord["routingHints"],
 ): ChatSpecialistCandidateRecord["routingHints"] {
   const maxInvocationsPerRun = (() => {
-    const values = [left.maxInvocationsPerRun, right.maxInvocationsPerRun]
-      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    const values = [left.maxInvocationsPerRun, right.maxInvocationsPerRun].filter(
+      (value): value is number => typeof value === "number" && Number.isFinite(value),
+    );
     if (values.length === 0) {
       return undefined;
     }
@@ -20796,7 +15913,7 @@ function mergeSpecialistEvidence(
   return [...merged.values()].slice(0, 8);
 }
 
-function inferSpecialistBaseRole(role: string): OrchestrationRole {
+export function inferSpecialistBaseRole(role: string): OrchestrationRole {
   const normalized = role.toLowerCase();
   if (/\b(research|analyst|market|source|intel)\b/.test(normalized)) {
     return "researcher";
@@ -20862,7 +15979,9 @@ function buildSpecialistSuggestionFromCapability(input: {
     summary: `Use ${input.capability.title} as a dormant specialist capability for repeat ${input.mode} work of this kind.`,
     reason: input.capability.reason,
     source: "runtime_gap",
-    confidence: clamp01((input.capability.riskLevel === "low" ? 0.76 : input.capability.riskLevel === "high" ? 0.62 : 0.69)),
+    confidence: clamp01(
+      input.capability.riskLevel === "low" ? 0.76 : input.capability.riskLevel === "high" ? 0.62 : 0.69,
+    ),
     suggestedStatus: "suggested",
     suggestedRoutingMode: input.mode === "code" ? "strong_match_only" : "manual_only",
     requiresApproval: true,
@@ -20874,13 +15993,15 @@ function buildSpecialistSuggestionFromCapability(input: {
       requiresProjectBinding: input.mode === "code",
       maxInvocationsPerRun: 1,
     },
-    evidence: [{
-      evidenceId: randomUUID(),
-      kind: input.capability.kind === "mcp_template" ? "tool_gap" : "skill_gap",
-      summary: input.capability.summary,
-      confidence: clamp01(input.capability.riskLevel === "low" ? 0.78 : 0.66),
-      skillRef: input.capability.sourceRef,
-    }],
+    evidence: [
+      {
+        evidenceId: randomUUID(),
+        kind: input.capability.kind === "mcp_template" ? "tool_gap" : "skill_gap",
+        summary: input.capability.summary,
+        confidence: clamp01(input.capability.riskLevel === "low" ? 0.78 : 0.66),
+        skillRef: input.capability.sourceRef,
+      },
+    ],
   };
 }
 
@@ -20894,9 +16015,8 @@ function buildRoleGapSpecialistSuggestion(input: {
   turnId?: string;
 }): ChatSpecialistCandidateSuggestionRecord {
   const title = `${toTitleCase(input.role)} specialist`;
-  const routingMode: ChatSpecialistCandidateSuggestionRecord["suggestedRoutingMode"] = input.confidence >= 0.8
-    ? "strong_match_only"
-    : "manual_only";
+  const routingMode: ChatSpecialistCandidateSuggestionRecord["suggestedRoutingMode"] =
+    input.confidence >= 0.8 ? "strong_match_only" : "manual_only";
   return {
     candidateId: `specialist-${normalizeSpecialistCandidateFingerprint({ title, role: input.role })}`,
     title,
@@ -20911,22 +16031,27 @@ function buildRoleGapSpecialistSuggestion(input: {
     suggestedTools: suggestedToolsForRole(input.role),
     routingHints: {
       preferredModes: input.mode === "code" ? ["code"] : ["cowork"],
-      objectiveKeywords: input.objectiveKeywords.length > 0 ? input.objectiveKeywords : extractSpecialistObjectiveKeywords(input.objective),
+      objectiveKeywords:
+        input.objectiveKeywords.length > 0
+          ? input.objectiveKeywords
+          : extractSpecialistObjectiveKeywords(input.objective),
       requiresProjectBinding: input.mode === "code",
       maxInvocationsPerRun: 1,
     },
-    evidence: [{
-      evidenceId: randomUUID(),
-      kind: "role_gap",
-      summary: `Objective hinted that ${input.role} work would help: ${input.objective.slice(0, 180)}`,
-      turnId: input.turnId,
-      runId: input.runId,
-      confidence: clamp01(input.confidence),
-    }],
+    evidence: [
+      {
+        evidenceId: randomUUID(),
+        kind: "role_gap",
+        summary: `Objective hinted that ${input.role} work would help: ${input.objective.slice(0, 180)}`,
+        turnId: input.turnId,
+        runId: input.runId,
+        confidence: clamp01(input.confidence),
+      },
+    ],
   };
 }
 
-function scoreSpecialistCandidateMatch(
+export function scoreSpecialistCandidateMatch(
   candidate: ChatSpecialistCandidateRecord,
   objectiveKeywords: string[],
   stepRole: OrchestrationRole,
@@ -20941,13 +16066,14 @@ function scoreSpecialistCandidateMatch(
     ...extractSpecialistObjectiveKeywords(candidate.summary),
     ...extractSpecialistObjectiveKeywords(candidate.reason),
   ]);
-  const overlap = candidateKeywords.length > 0
-    ? objectiveKeywords.filter((keyword) => candidateKeywords.includes(keyword)).length / candidateKeywords.length
-    : 0;
-  return clamp01((candidate.confidence * 0.55) + (overlap * 0.35) + 0.1);
+  const overlap =
+    candidateKeywords.length > 0
+      ? objectiveKeywords.filter((keyword) => candidateKeywords.includes(keyword)).length / candidateKeywords.length
+      : 0;
+  return clamp01(candidate.confidence * 0.55 + overlap * 0.35 + 0.1);
 }
 
-function buildSpecialistMatchReason(
+export function buildSpecialistMatchReason(
   candidate: ChatSpecialistCandidateRecord,
   objectiveKeywords: string[],
 ): string {
@@ -20962,9 +16088,7 @@ function buildSpecialistMatchReason(
   return candidate.reason;
 }
 
-function splitChatPrefsPatch(
-  input: ChatSessionPrefsPatch,
-): {
+export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
   basePatch: Pick<
     ChatSessionPrefsPatch,
     | "mode"
@@ -21042,7 +16166,7 @@ function splitChatPrefsPatch(
   };
 }
 
-function buildPlanningModeSystemInstruction(planningMode: ChatPlanningMode | undefined): string | undefined {
+export function buildPlanningModeSystemInstruction(planningMode: ChatPlanningMode | undefined): string | undefined {
   if (planningMode !== "advisory") {
     return undefined;
   }
@@ -21054,17 +16178,15 @@ function buildPlanningModeSystemInstruction(planningMode: ChatPlanningMode | und
   ].join("\n");
 }
 
-function mergeChatSystemInstructions(...parts: Array<string | undefined>): string | undefined {
-  const merged = parts
-    .map((part) => part?.trim())
-    .filter((part): part is string => Boolean(part));
+export function mergeChatSystemInstructions(...parts: Array<string | undefined>): string | undefined {
+  const merged = parts.map((part) => part?.trim()).filter((part): part is string => Boolean(part));
   if (merged.length === 0) {
     return undefined;
   }
   return merged.join("\n\n");
 }
 
-function buildRetrievalTrace(input: {
+export function buildRetrievalTrace(input: {
   content: string;
   retrievalMode: ChatRetrievalMode;
   webMode: ChatWebMode;
@@ -21082,18 +16204,16 @@ function buildRetrievalTrace(input: {
     confidenceL0: l0Base,
     confidenceL1: l1Base,
     confidenceL2: shouldUseL2 ? (input.webMode === "deep" ? 0.82 : 0.71) : undefined,
-    escalationReason: shouldUseL2
-      ? (liveIntent ? "explicit_live_data_intent" : "low_retrieval_confidence")
-      : undefined,
+    escalationReason: shouldUseL2 ? (liveIntent ? "explicit_live_data_intent" : "low_retrieval_confidence") : undefined,
   };
 }
 
 function looksSensitive(value: string): boolean {
   const normalized = value.toLowerCase();
   return (
-    /api[_-]?key|token|secret|password|private[_-]?key|bearer\s+[a-z0-9._-]+/i.test(normalized)
-    || /\bsk-[a-z0-9]{8,}\b/i.test(normalized)
-    || /\bghp_[a-z0-9]{10,}\b/i.test(normalized)
+    /api[_-]?key|token|secret|password|private[_-]?key|bearer\s+[a-z0-9._-]+/i.test(normalized) ||
+    /\bsk-[a-z0-9]{8,}\b/i.test(normalized) ||
+    /\bghp_[a-z0-9]{10,}\b/i.test(normalized)
   );
 }
 
@@ -21168,11 +16288,10 @@ function buildDelegationUserPrompt(input: {
   mode: "sequential" | "parallel";
   sharedContext: Array<{ role: string; output: string }>;
 }): string {
-  const previous = input.sharedContext.length > 0
-    ? input.sharedContext
-      .map((item) => `Role ${item.role} output:\n${item.output}`)
-      .join("\n\n")
-    : "None";
+  const previous =
+    input.sharedContext.length > 0
+      ? input.sharedContext.map((item) => `Role ${item.role} output:\n${item.output}`).join("\n\n")
+      : "None";
   return [
     `Objective: ${input.objective}`,
     `Execution mode: ${input.mode}`,
@@ -21183,17 +16302,13 @@ function buildDelegationUserPrompt(input: {
   ].join("\n\n");
 }
 
-function renderExecutionPlanAsMarkdown(input: {
+export function renderExecutionPlanAsMarkdown(input: {
   mode: ChatMode;
   objective: string;
   summary: string;
   steps: PreparedChatExecutionPlanResolution["executionPlanDraft"]["steps"];
 }): string {
-  const modeLabel = input.mode === "cowork"
-    ? "Cowork plan"
-    : input.mode === "code"
-      ? "Code plan"
-      : "Chat plan";
+  const modeLabel = input.mode === "cowork" ? "Cowork plan" : input.mode === "code" ? "Code plan" : "Chat plan";
   const stepLines = input.steps.map((step) => {
     const parts = [
       `${step.index + 1}. ${step.objective}`,
@@ -21220,15 +16335,13 @@ function renderExecutionPlanAsMarkdown(input: {
 function stringifyMessagesForTokenEstimate(messages: ChatCompletionRequest["messages"]): string {
   return messages
     .map((message) => {
-      const content = typeof message.content === "string"
-        ? message.content
-        : extractStringFromUnknown(message.content);
+      const content = typeof message.content === "string" ? message.content : extractStringFromUnknown(message.content);
       return `${message.role.toUpperCase()}: ${content}`;
     })
     .join("\n\n");
 }
 
-function truncateSummaryLine(content: string, maxLength = 220): string {
+export function truncateSummaryLine(content: string, maxLength = 220): string {
   const normalized = content.replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) {
     return normalized;
@@ -21263,7 +16376,7 @@ function buildBranchRecordGroups(
   };
 }
 
-function buildExecutionPlanDraftFromOrchestrationPlan(
+export function buildExecutionPlanDraftFromOrchestrationPlan(
   templatePlan: ModeOrchestrationPlan,
   input: {
     objective: string;
@@ -21284,15 +16397,14 @@ function buildExecutionPlanDraftFromOrchestrationPlan(
       expectedOutput: step.expectedOutput,
       parallelizable: step.parallelizable,
       dependsOnStepIds: step.dependsOnStepIds,
-      delegatedRole: input.advisoryOnly || templatePlan.routeDecision.modePolicy === "chat"
-        ? undefined
-        : step.delegatedRole,
+      delegatedRole:
+        input.advisoryOnly || templatePlan.routeDecision.modePolicy === "chat" ? undefined : step.delegatedRole,
       status: "pending",
     })),
   };
 }
 
-function coercePlannerExecutionPlanDraft(
+export function coercePlannerExecutionPlanDraft(
   payload: Record<string, unknown>,
   templatePlan: ModeOrchestrationPlan,
   input: {
@@ -21311,39 +16423,41 @@ function coercePlannerExecutionPlanDraft(
   let usedFallback = false;
   const steps = templatePlan.steps.map((templateStep, index) => {
     const raw = rawSteps[index];
-    const objective = typeof raw?.objective === "string" && raw.objective.trim()
-      ? raw.objective.trim()
-      : templateStep.objective;
+    const objective =
+      typeof raw?.objective === "string" && raw.objective.trim() ? raw.objective.trim() : templateStep.objective;
     if (objective === templateStep.objective) {
       usedFallback = true;
     }
-    const successCriteria = typeof raw?.successCriteria === "string" && raw.successCriteria.trim()
-      ? raw.successCriteria.trim()
-      : templateStep.successCriteria;
+    const successCriteria =
+      typeof raw?.successCriteria === "string" && raw.successCriteria.trim()
+        ? raw.successCriteria.trim()
+        : templateStep.successCriteria;
     const suggestedTools = Array.isArray(raw?.suggestedTools)
       ? dedupeStrings(
-        raw.suggestedTools
-          .filter((value): value is string => typeof value === "string")
-          .map((value) => value.trim())
-          .filter(Boolean),
-      )
+          raw.suggestedTools
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim())
+            .filter(Boolean),
+        )
       : templateStep.suggestedTools;
-    const expectedOutput = typeof raw?.expectedOutput === "string" && raw.expectedOutput.trim()
-      ? raw.expectedOutput.trim()
-      : templateStep.expectedOutput;
+    const expectedOutput =
+      typeof raw?.expectedOutput === "string" && raw.expectedOutput.trim()
+        ? raw.expectedOutput.trim()
+        : templateStep.expectedOutput;
     const dependsOnStepIds = Array.isArray(raw?.dependsOnStepIds)
       ? dedupeStrings(
-        raw.dependsOnStepIds
-          .filter((value): value is string => typeof value === "string")
-          .map((value) => value.trim())
-          .filter((value) => templatePlan.steps.some((step) => step.stepId === value)),
-      )
+          raw.dependsOnStepIds
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim())
+            .filter((value) => templatePlan.steps.some((step) => step.stepId === value)),
+        )
       : templateStep.dependsOnStepIds;
-    const delegatedRole = input.mode === "chat" || input.advisoryOnly
-      ? undefined
-      : typeof raw?.delegatedRole === "string" && allowedDelegatedRoles.has(raw.delegatedRole as OrchestrationRole)
-        ? raw.delegatedRole
-        : templateStep.delegatedRole;
+    const delegatedRole =
+      input.mode === "chat" || input.advisoryOnly
+        ? undefined
+        : typeof raw?.delegatedRole === "string" && allowedDelegatedRoles.has(raw.delegatedRole as OrchestrationRole)
+          ? raw.delegatedRole
+          : templateStep.delegatedRole;
     return {
       stepId: templateStep.stepId,
       index,
@@ -21357,9 +16471,8 @@ function coercePlannerExecutionPlanDraft(
       status: "pending" as const,
     };
   });
-  const summary = typeof payload.summary === "string" && payload.summary.trim()
-    ? payload.summary.trim()
-    : templatePlan.summary;
+  const summary =
+    typeof payload.summary === "string" && payload.summary.trim() ? payload.summary.trim() : templatePlan.summary;
   if (summary === templatePlan.summary) {
     usedFallback = true;
   }
@@ -21372,7 +16485,7 @@ function coercePlannerExecutionPlanDraft(
   };
 }
 
-function applyExecutionPlanDraftToOrchestrationPlan(
+export function applyExecutionPlanDraftToOrchestrationPlan(
   templatePlan: ModeOrchestrationPlan,
   draft: PreparedChatExecutionPlanResolution["executionPlanDraft"],
 ): ModeOrchestrationPlan {
@@ -21411,12 +16524,13 @@ function applyExecutionPlanDraftToOrchestrationPlan(
   };
 }
 
-function mergeExecutionPlanStepStatuses(
+export function mergeExecutionPlanStepStatuses(
   planSteps: PreparedChatExecutionPlanResolution["executionPlanDraft"]["steps"],
   results: OrchestrationStepExecutionResult[],
 ): PreparedChatExecutionPlanResolution["executionPlanDraft"]["steps"] {
   return planSteps.map((planStep, index) => {
-    const result = results.find((item) => item.stepId === planStep.stepId) ?? results.find((item) => item.index === index);
+    const result =
+      results.find((item) => item.stepId === planStep.stepId) ?? results.find((item) => item.index === index);
     if (!result) {
       return planStep;
     }
@@ -21434,7 +16548,7 @@ function mergeExecutionPlanStepStatuses(
   });
 }
 
-function buildDelegationFailureGuidance(error: string, role: string): string {
+export function buildDelegationFailureGuidance(error: string, role: string): string {
   const normalized = error.toLowerCase();
   if (/\bauth|login|token|credential|permission\b/.test(normalized)) {
     return `${toTitleCase(role)} hit an auth or permission barrier. Reconnect the required account or switch to another source.`;
@@ -21451,7 +16565,6 @@ function buildDelegationFailureGuidance(error: string, role: string): string {
   return `Retry the ${role} delegate with a narrower brief or a different tool/source strategy.`;
 }
 
-
 function sampleDecisionReplayCandidates(
   candidates: DecisionReplayCandidate[],
   sampleSize: number,
@@ -21459,16 +16572,15 @@ function sampleDecisionReplayCandidates(
   const cap = Math.max(1, Math.min(sampleSize, candidates.length));
   const critical = candidates.filter((candidate) => {
     if (candidate.decisionType === "tool_run") {
-      return candidate.status === "failed" || candidate.status === "blocked" || candidate.status === "approval_required";
+      return (
+        candidate.status === "failed" || candidate.status === "blocked" || candidate.status === "approval_required"
+      );
     }
     return candidate.status === "failed" || candidate.status === "approval_required";
   });
   const normal = candidates.filter((candidate) => !critical.includes(candidate));
   const criticalTarget = Math.min(critical.length, Math.max(1, Math.floor(cap * 0.45)));
-  const selected = [
-    ...critical.slice(0, criticalTarget),
-    ...normal.slice(0, cap - criticalTarget),
-  ];
+  const selected = [...critical.slice(0, criticalTarget), ...normal.slice(0, cap - criticalTarget)];
   if (selected.length < cap) {
     const fallback = [...critical.slice(criticalTarget), ...normal.slice(cap - criticalTarget)];
     for (const candidate of fallback) {
@@ -21527,7 +16639,11 @@ function evaluateDecisionReplayRuleScores(
       toolEvidence = 0.88;
       honesty = Math.max(honesty, 0.82);
       signals.push("tool_execution_evidence");
-    } else if ((candidate.routing?.liveDataIntent ?? false) || candidate.webMode === "quick" || candidate.webMode === "deep") {
+    } else if (
+      (candidate.routing?.liveDataIntent ?? false) ||
+      candidate.webMode === "quick" ||
+      candidate.webMode === "deep"
+    ) {
       toolEvidence = 0.44;
       signals.push("web_intent_without_execution");
     }
@@ -21581,13 +16697,12 @@ function computeDecisionWrongnessProbability(
   ruleScores: DecisionReplayItemRuleScores,
   modelScores?: DecisionReplayItemModelScores,
 ): number {
-  const ruleQuality = (
-    (ruleScores.honesty * 0.28)
-    + (ruleScores.blockerQuality * 0.2)
-    + (ruleScores.retryQuality * 0.2)
-    + (ruleScores.toolEvidence * 0.2)
-    + (ruleScores.actionability * 0.12)
-  );
+  const ruleQuality =
+    ruleScores.honesty * 0.28 +
+    ruleScores.blockerQuality * 0.2 +
+    ruleScores.retryQuality * 0.2 +
+    ruleScores.toolEvidence * 0.2 +
+    ruleScores.actionability * 0.12;
   let ruleWrongness = 1 - ruleQuality;
   if (candidate.status === "failed") {
     ruleWrongness += 0.18;
@@ -21600,12 +16715,11 @@ function computeDecisionWrongnessProbability(
   if (!modelScores) {
     return ruleWrongness;
   }
-  const modelWrongness = (
-    (1 - modelScores.correctnessLikelihood) * 0.55
-    + (modelScores.missedToolProbability * 0.3)
-    + (modelScores.betterResponsePotential * 0.15)
-  );
-  return clampProbability((ruleWrongness * 0.55) + (modelWrongness * 0.45));
+  const modelWrongness =
+    (1 - modelScores.correctnessLikelihood) * 0.55 +
+    modelScores.missedToolProbability * 0.3 +
+    modelScores.betterResponsePotential * 0.15;
+  return clampProbability(ruleWrongness * 0.55 + modelWrongness * 0.45);
 }
 
 function inferDecisionReplayCauseClass(
@@ -21634,7 +16748,10 @@ function inferDecisionReplayCauseClass(
     }
     return "other";
   }
-  if ((candidate.status === "blocked" || candidate.status === "approval_required") && ruleScores.blockerQuality < 0.66) {
+  if (
+    (candidate.status === "blocked" || candidate.status === "approval_required") &&
+    ruleScores.blockerQuality < 0.66
+  ) {
     return "weak_blocker_explanation";
   }
   if (candidate.status === "failed" && ruleScores.retryQuality < 0.5) {
@@ -21710,10 +16827,7 @@ function compareDecisionCauseCounts(
   current: Map<DecisionReplayCauseClass, number>,
   previous: Map<DecisionReplayCauseClass, number>,
 ): WeeklyImprovementReportRecord["weekOverWeek"] {
-  const keys = new Set<DecisionReplayCauseClass>([
-    ...current.keys(),
-    ...previous.keys(),
-  ]);
+  const keys = new Set<DecisionReplayCauseClass>([...current.keys(), ...previous.keys()]);
   const improved: string[] = [];
   const regressed: string[] = [];
   const unchanged: string[] = [];
@@ -21810,7 +16924,10 @@ function mapImprovementReportRow(row: {
   };
 }
 
-function getZonedDateParts(date: Date, timeZone: string): {
+function getZonedDateParts(
+  date: Date,
+  timeZone: string,
+): {
   year: number;
   month: number;
   day: number;
@@ -22003,7 +17120,7 @@ function clampProbability(value: unknown): number {
   return 0.5;
 }
 
-function parseLooseJsonRecord(raw: string): Record<string, unknown> | undefined {
+export function parseLooseJsonRecord(raw: string): Record<string, unknown> | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
     return undefined;
@@ -22048,10 +17165,10 @@ function tryParseJsonRecordCandidate(candidate: string): Record<string, unknown>
 function normalizeJsonRecordCandidate(value: string): string {
   return value
     .replace(/^\uFEFF/, "")
-    .replace(/[“”]/g, "\"")
+    .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
-    .replace(/([{,]\s*)'([^']+)'\s*:/g, "$1\"$2\":")
-    .replace(/:\s*'([^']*)'/g, ": \"$1\"")
+    .replace(/([{,]\s*)'([^']+)'\s*:/g, '$1"$2":')
+    .replace(/:\s*'([^']*)'/g, ': "$1"')
     .replace(/,\s*([}\]])/g, "$1")
     .replace(/\\n/g, "\n")
     .trim();
@@ -22111,9 +17228,8 @@ function extractPromptPlaceholders(prompt: string): string[] {
     if (!inner) {
       continue;
     }
-    const looksLikePlaceholder = /[A-Z]{2,}/.test(inner)
-      || /[_ ]/.test(inner)
-      || /\b(PASTE|LOCAL|URL|TOPIC|PATH|EXAMPLE|YOUR)\b/i.test(inner);
+    const looksLikePlaceholder =
+      /[A-Z]{2,}/.test(inner) || /[_ ]/.test(inner) || /\b(PASTE|LOCAL|URL|TOPIC|PATH|EXAMPLE|YOUR)\b/i.test(inner);
     if (!looksLikePlaceholder) {
       continue;
     }
@@ -22127,9 +17243,7 @@ function normalizePromptPlaceholderKey(value: string): string {
   if (!trimmed) {
     return "";
   }
-  const inner = trimmed.startsWith("<") && trimmed.endsWith(">")
-    ? trimmed.slice(1, -1).trim()
-    : trimmed;
+  const inner = trimmed.startsWith("<") && trimmed.endsWith(">") ? trimmed.slice(1, -1).trim() : trimmed;
   return inner.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
@@ -22176,7 +17290,7 @@ function applyPromptPlaceholderValues(
   };
 }
 
-function extractCompletionText(response: ChatCompletionResponse): string {
+export function extractCompletionText(response: ChatCompletionResponse): string {
   const choice = response.choices?.[0];
   const message = choice?.message as Record<string, unknown> | undefined;
   if (!message) {
@@ -22212,11 +17326,14 @@ function readCompletionCitations(response: ChatCompletionResponse): ChatCitation
     return [];
   }
   return dedupeChatCitations(
-    raw.filter((item): item is ChatCitationRecord => typeof item === "object" && item !== null && typeof (item as ChatCitationRecord).url === "string"),
+    raw.filter(
+      (item): item is ChatCitationRecord =>
+        typeof item === "object" && item !== null && typeof (item as ChatCitationRecord).url === "string",
+    ),
   );
 }
 
-function dedupeChatCitations(citations: ChatCitationRecord[]): ChatCitationRecord[] {
+export function dedupeChatCitations(citations: ChatCitationRecord[]): ChatCitationRecord[] {
   const deduped: ChatCitationRecord[] = [];
   const seen = new Map<string, number>();
   for (const citation of citations) {
@@ -22245,18 +17362,18 @@ function dedupeChatCitations(citations: ChatCitationRecord[]): ChatCitationRecor
   return deduped;
 }
 
-function shouldRetryToolProtocolError(error: Error): boolean {
+export function shouldRetryToolProtocolError(error: Error): boolean {
   const message = error.message.toLowerCase();
   return (
-    message.includes("invalid_request_error")
-    || message.includes("function name is invalid")
-    || message.includes("reasoning_content is missing")
-    || message.includes("tool call")
-    || message.includes("tool_calls")
+    message.includes("invalid_request_error") ||
+    message.includes("function name is invalid") ||
+    message.includes("reasoning_content is missing") ||
+    message.includes("tool call") ||
+    message.includes("tool_calls")
   );
 }
 
-function shouldRetryTransientProviderError(error: Error): boolean {
+export function shouldRetryTransientProviderError(error: Error): boolean {
   const message = error.message.toLowerCase();
   const statusMatch = error.message.match(/\((\d{3})(?:\s|[)])?/);
   const status = statusMatch ? Number(statusMatch[1]) : undefined;
@@ -22265,25 +17382,27 @@ function shouldRetryTransientProviderError(error: Error): boolean {
     return true;
   }
   if (status !== undefined && [401, 403].includes(status)) {
-    return /(tempor|timeout|upstream|gateway|proxy|connect|connection|network|unavailable|overload|retry)/.test(message);
+    return /(tempor|timeout|upstream|gateway|proxy|connect|connection|network|unavailable|overload|retry)/.test(
+      message,
+    );
   }
 
   return (
-    message.includes("fetch failed")
-    || message.includes("network error")
-    || message.includes("socket hang up")
-    || message.includes("econnreset")
-    || message.includes("econnrefused")
-    || message.includes("etimedout")
-    || message.includes("service unavailable")
-    || message.includes("gateway timeout")
-    || message.includes("temporarily unavailable")
-    || message.includes("too many requests")
-    || message.includes("rate limit")
+    message.includes("fetch failed") ||
+    message.includes("network error") ||
+    message.includes("socket hang up") ||
+    message.includes("econnreset") ||
+    message.includes("econnrefused") ||
+    message.includes("etimedout") ||
+    message.includes("service unavailable") ||
+    message.includes("gateway timeout") ||
+    message.includes("temporarily unavailable") ||
+    message.includes("too many requests") ||
+    message.includes("rate limit")
   );
 }
 
-async function delayChatCompletionRetry(
+export async function delayChatCompletionRetry(
   deadline: number | undefined,
   timeoutMs: number | undefined,
   retryIndex: number,
@@ -22297,33 +17416,33 @@ async function delayChatCompletionRetry(
   });
 }
 
-function normalizeToolProtocolRetryRequest(
+export function normalizeToolProtocolRetryRequest(
   request: ChatCompletionRequest,
   attempt: 1 | 2,
 ): ChatCompletionRequest {
   const modelToolNameMap = new Map<string, string>();
   const tools = Array.isArray(request.tools)
     ? request.tools.map((tool) => {
-      const record = tool as Record<string, unknown>;
-      if (record.type !== "function") {
-        return tool;
-      }
-      const fn = (record.function ?? {}) as Record<string, unknown>;
-      const rawName = typeof fn.name === "string" ? fn.name : "tool_fn";
-      const normalizedName = rawName
-        .replace(/[^a-zA-Z0-9_-]/g, "_")
-        .replace(/_+/g, "_")
-        .replace(/^_+|_+$/g, "");
-      const finalName = /^[a-zA-Z]/.test(normalizedName) ? normalizedName : `tool_${normalizedName || "fn"}`;
-      modelToolNameMap.set(rawName, finalName);
-      return {
-        ...record,
-        function: {
-          ...fn,
-          name: finalName,
-        },
-      };
-    })
+        const record = tool as Record<string, unknown>;
+        if (record.type !== "function") {
+          return tool;
+        }
+        const fn = (record.function ?? {}) as Record<string, unknown>;
+        const rawName = typeof fn.name === "string" ? fn.name : "tool_fn";
+        const normalizedName = rawName
+          .replace(/[^a-zA-Z0-9_-]/g, "_")
+          .replace(/_+/g, "_")
+          .replace(/^_+|_+$/g, "");
+        const finalName = /^[a-zA-Z]/.test(normalizedName) ? normalizedName : `tool_${normalizedName || "fn"}`;
+        modelToolNameMap.set(rawName, finalName);
+        return {
+          ...record,
+          function: {
+            ...fn,
+            name: finalName,
+          },
+        };
+      })
     : request.tools;
 
   const messages = request.messages.map((message) => {
@@ -22335,9 +17454,7 @@ function normalizeToolProtocolRetryRequest(
         const rawName = typeof fn.name === "string" ? fn.name : "";
         const normalized = modelToolNameMap.get(rawName) ?? rawName;
         const rawArgs = fn.arguments;
-        const normalizedArgs = typeof rawArgs === "string"
-          ? rawArgs
-          : JSON.stringify(rawArgs ?? {});
+        const normalizedArgs = typeof rawArgs === "string" ? rawArgs : JSON.stringify(rawArgs ?? {});
         return {
           ...tc,
           type: "function",
@@ -22389,157 +17506,6 @@ function grantPatternMatches(pattern: string, toolName: string): boolean {
   return regex.test(toolName);
 }
 
-function hashSensitiveToken(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-/**
- * Timing-safe string comparison. This function must only be called with
- * fixed-length inputs (e.g. SHA-256 hex digests) because it early-returns
- * on length mismatch. For variable-length secrets, hash both sides first.
- */
-function timingSafeStringEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left, "utf8");
-  const rightBuffer = Buffer.from(right, "utf8");
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
-  }
-  return timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function normalizeDeviceAccessDeviceType(
-  value?: string,
-): DeviceAccessGrantContractRecord["deviceType"] {
-  if (
-    value === "mobile"
-    || value === "desktop"
-    || value === "tablet"
-    || value === "browser"
-  ) {
-    return value;
-  }
-  return "unknown";
-}
-
-function normalizeOptionalDeviceAccessText(value: string | undefined, maxLength: number): string | undefined {
-  const normalized = value?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized.slice(0, maxLength);
-}
-
-function normalizeDeviceAccessLabel(
-  value: string | undefined,
-  context: {
-    deviceType: string;
-    platform?: string;
-    userAgent?: string;
-  },
-): string {
-  const provided = normalizeOptionalDeviceAccessText(value, 120);
-  if (provided) {
-    return provided;
-  }
-  const platform = context.platform?.trim();
-  const browser = inferBrowserFromUserAgent(context.userAgent);
-  if (platform && browser) {
-    return `${platform} ${browser}`;
-  }
-  if (platform) {
-    return platform;
-  }
-  return context.deviceType === "unknown"
-    ? "New device"
-    : `${context.deviceType[0]?.toUpperCase() ?? ""}${context.deviceType.slice(1)} device`;
-}
-
-function inferPlatformFromUserAgent(userAgent?: string): string | undefined {
-  const ua = userAgent?.toLowerCase() ?? "";
-  if (!ua) {
-    return undefined;
-  }
-  if (ua.includes("iphone")) {
-    return "iPhone";
-  }
-  if (ua.includes("ipad")) {
-    return "iPad";
-  }
-  if (ua.includes("android")) {
-    return "Android";
-  }
-  if (ua.includes("windows")) {
-    return "Windows";
-  }
-  if (ua.includes("mac os x") || ua.includes("macintosh")) {
-    return "macOS";
-  }
-  if (ua.includes("linux")) {
-    return "Linux";
-  }
-  return undefined;
-}
-
-function inferBrowserFromUserAgent(userAgent?: string): string | undefined {
-  const ua = userAgent?.toLowerCase() ?? "";
-  if (!ua) {
-    return undefined;
-  }
-  if (ua.includes("edg/")) {
-    return "Edge";
-  }
-  if (ua.includes("chrome/") && !ua.includes("edg/")) {
-    return "Chrome";
-  }
-  if (ua.includes("firefox/")) {
-    return "Firefox";
-  }
-  if (ua.includes("safari/") && !ua.includes("chrome/")) {
-    return "Safari";
-  }
-  return undefined;
-}
-
-function mapAuthDeviceRequestRow(row: Record<string, unknown>): AuthDeviceRequestRecord {
-  return {
-    requestId: String(row.request_id ?? ""),
-    approvalId: String(row.approval_id ?? ""),
-    requestSecretHash: String(row.request_secret_hash ?? ""),
-    deviceLabel: String(row.device_label ?? "New device"),
-    deviceType: String(row.device_type ?? "unknown"),
-    platform: typeof row.platform === "string" ? row.platform : undefined,
-    requestedOrigin: typeof row.requested_origin === "string" ? row.requested_origin : undefined,
-    requestedIp: typeof row.requested_ip === "string" ? row.requested_ip : undefined,
-    userAgent: typeof row.user_agent === "string" ? row.user_agent : undefined,
-    status: normalizeDeviceAccessRequestStatus(row.status),
-    createdAt: String(row.created_at ?? new Date().toISOString()),
-    expiresAt: String(row.expires_at ?? new Date().toISOString()),
-    resolvedAt: typeof row.resolved_at === "string" ? row.resolved_at : undefined,
-    resolvedBy: typeof row.resolved_by === "string" ? row.resolved_by : undefined,
-    resolutionNote: typeof row.resolution_note === "string" ? row.resolution_note : undefined,
-    approvedTokenPlaintext: typeof row.approved_token_plaintext === "string" ? row.approved_token_plaintext : undefined,
-    approvedTokenExpiresAt: typeof row.approved_token_expires_at === "string" ? row.approved_token_expires_at : undefined,
-    deliveredAt: typeof row.delivered_at === "string" ? row.delivered_at : undefined,
-  };
-}
-
-function mapAuthDeviceGrantRow(row: Record<string, unknown>): AuthDeviceGrantRecord {
-  return {
-    grantId: String(row.grant_id ?? ""),
-    requestId: String(row.request_id ?? ""),
-    tokenHash: String(row.token_hash ?? ""),
-    deviceLabel: String(row.device_label ?? "New device"),
-    deviceType: String(row.device_type ?? "unknown"),
-    platform: typeof row.platform === "string" ? row.platform : undefined,
-    grantedBy: String(row.granted_by ?? ""),
-    createdAt: String(row.created_at ?? new Date().toISOString()),
-    expiresAt: typeof row.expires_at === "string" ? row.expires_at : undefined,
-    lastUsedAt: typeof row.last_used_at === "string" ? row.last_used_at : undefined,
-    revokedAt: typeof row.revoked_at === "string" ? row.revoked_at : undefined,
-    metadata: safeJsonParse<Record<string, unknown>>(typeof row.metadata_json === "string" ? row.metadata_json : "{}", {}),
-  };
-}
-
 function mapCompanionSessionRow(row: Record<string, unknown>): CompanionSessionRecord {
   return {
     sessionId: String(row.session_id ?? ""),
@@ -22554,75 +17520,15 @@ function mapCompanionSessionRow(row: Record<string, unknown>): CompanionSessionR
     lastRotatedAt: String(row.last_rotated_at ?? new Date().toISOString()),
     lastSeenAt: typeof row.last_seen_at === "string" ? row.last_seen_at : undefined,
     revokedAt: typeof row.revoked_at === "string" ? row.revoked_at : undefined,
-    metadata: safeJsonParse<Record<string, unknown>>(typeof row.metadata_json === "string" ? row.metadata_json : "{}", {}),
+    metadata: safeJsonParse<Record<string, unknown>>(
+      typeof row.metadata_json === "string" ? row.metadata_json : "{}",
+      {},
+    ),
     deviceLabel: String(row.device_label ?? "New device"),
     deviceType: String(row.device_type ?? "unknown"),
     platform: typeof row.platform === "string" ? row.platform : undefined,
     grantExpiresAt: typeof row.grant_expires_at === "string" ? row.grant_expires_at : undefined,
     grantRevokedAt: typeof row.grant_revoked_at === "string" ? row.grant_revoked_at : undefined,
-  };
-}
-
-function toDeviceAccessGrantRecord(grant: AuthDeviceGrantRecord): DeviceAccessGrantContractRecord {
-  return {
-    grantId: grant.grantId,
-    requestId: grant.requestId,
-    actorId: `device:${grant.grantId}`,
-    deviceLabel: grant.deviceLabel,
-    deviceType: normalizeDeviceAccessDeviceType(grant.deviceType),
-    platform: grant.platform,
-    grantedBy: grant.grantedBy,
-    createdAt: grant.createdAt,
-    expiresAt: grant.expiresAt,
-    lastUsedAt: grant.lastUsedAt,
-    revokedAt: grant.revokedAt,
-    metadata: grant.metadata,
-  };
-}
-
-function mapDeviceAccessStatusResponse(record: AuthDeviceRequestRecord): DeviceAccessRequestStatusResponse {
-  if (record.status === "approved") {
-    return {
-      requestId: record.requestId,
-      approvalId: record.approvalId,
-      status: record.status,
-      expiresAt: record.expiresAt,
-      resolvedAt: record.resolvedAt,
-      ...(record.approvedTokenPlaintext
-        ? {
-            deviceToken: record.approvedTokenPlaintext,
-            deviceTokenExpiresAt: record.approvedTokenExpiresAt,
-          }
-        : {}),
-      message: "Access approved. Finishing secure handoff to this device.",
-    };
-  }
-  if (record.status === "rejected") {
-    return {
-      requestId: record.requestId,
-      approvalId: record.approvalId,
-      status: record.status,
-      expiresAt: record.expiresAt,
-      resolvedAt: record.resolvedAt,
-      message: "This device request was rejected from another authenticated session.",
-    };
-  }
-  if (record.status === "expired") {
-    return {
-      requestId: record.requestId,
-      approvalId: record.approvalId,
-      status: record.status,
-      expiresAt: record.expiresAt,
-      resolvedAt: record.resolvedAt,
-      message: "This device request expired before it was approved.",
-    };
-  }
-  return {
-    requestId: record.requestId,
-    approvalId: record.approvalId,
-    status: "pending",
-    expiresAt: record.expiresAt,
-    message: "Waiting for approval from another authenticated Mission Control session.",
   };
 }
 
@@ -22652,13 +17558,6 @@ function toCompanionSessionAdminRecord(session: CompanionSessionRecord): Compani
     grantExpiresAt: session.grantExpiresAt,
     grantRevokedAt: session.grantRevokedAt,
   };
-}
-
-function normalizeDeviceAccessRequestStatus(value: unknown): DeviceAccessRequestStatus {
-  if (value === "approved" || value === "rejected" || value === "expired") {
-    return value;
-  }
-  return "pending";
 }
 
 function isCompanionSessionCurrentlyActive(session: CompanionSessionRecord, nowIso: string): boolean {
@@ -22744,65 +17643,70 @@ function isChatTurnBranchKind(value: unknown): value is ChatTurnBranchKind {
 }
 
 function isChatStreamUsageRecord(value: unknown): value is ChatStreamUsageRecord {
-  return isRecord(value)
-    && (value.inputTokens === undefined || typeof value.inputTokens === "number")
-    && (value.outputTokens === undefined || typeof value.outputTokens === "number")
-    && (value.cachedInputTokens === undefined || typeof value.cachedInputTokens === "number")
-    && (value.costUsd === undefined || typeof value.costUsd === "number");
+  return (
+    isRecord(value) &&
+    (value.inputTokens === undefined || typeof value.inputTokens === "number") &&
+    (value.outputTokens === undefined || typeof value.outputTokens === "number") &&
+    (value.cachedInputTokens === undefined || typeof value.cachedInputTokens === "number") &&
+    (value.costUsd === undefined || typeof value.costUsd === "number")
+  );
 }
 
 function isChatToolRunRecord(value: unknown): value is ChatToolRunRecord {
-  return isRecord(value)
-    && typeof value.toolRunId === "string"
-    && typeof value.turnId === "string"
-    && typeof value.sessionId === "string"
-    && typeof value.toolName === "string"
-    && (
-      value.status === "started"
-      || value.status === "executed"
-      || value.status === "blocked"
-      || value.status === "approval_required"
-      || value.status === "failed"
-    )
-    && typeof value.startedAt === "string"
-    && (value.finishedAt === undefined || typeof value.finishedAt === "string")
-    && (value.approvalId === undefined || typeof value.approvalId === "string")
-    && (value.args === undefined || isRecord(value.args))
-    && (value.result === undefined || isRecord(value.result))
-    && (value.error === undefined || typeof value.error === "string")
-    && (value.failureGuidance === undefined || typeof value.failureGuidance === "string");
+  return (
+    isRecord(value) &&
+    typeof value.toolRunId === "string" &&
+    typeof value.turnId === "string" &&
+    typeof value.sessionId === "string" &&
+    typeof value.toolName === "string" &&
+    (value.status === "started" ||
+      value.status === "executed" ||
+      value.status === "blocked" ||
+      value.status === "approval_required" ||
+      value.status === "failed") &&
+    typeof value.startedAt === "string" &&
+    (value.finishedAt === undefined || typeof value.finishedAt === "string") &&
+    (value.approvalId === undefined || typeof value.approvalId === "string") &&
+    (value.args === undefined || isRecord(value.args)) &&
+    (value.result === undefined || isRecord(value.result)) &&
+    (value.error === undefined || typeof value.error === "string") &&
+    (value.failureGuidance === undefined || typeof value.failureGuidance === "string")
+  );
 }
 
 function isChatCitationRecord(value: unknown): value is ChatCitationRecord {
-  return isRecord(value)
-    && typeof value.citationId === "string"
-    && typeof value.url === "string"
-    && (value.title === undefined || typeof value.title === "string")
-    && (value.snippet === undefined || typeof value.snippet === "string")
-    && (value.sourceType === undefined || value.sourceType === "web" || value.sourceType === "file" || value.sourceType === "tool");
+  return (
+    isRecord(value) &&
+    typeof value.citationId === "string" &&
+    typeof value.url === "string" &&
+    (value.title === undefined || typeof value.title === "string") &&
+    (value.snippet === undefined || typeof value.snippet === "string") &&
+    (value.sourceType === undefined ||
+      value.sourceType === "web" ||
+      value.sourceType === "file" ||
+      value.sourceType === "tool")
+  );
 }
 
 function isChatTurnTraceRecord(value: unknown): value is ChatTurnTraceRecord {
-  return isRecord(value)
-    && typeof value.turnId === "string"
-    && typeof value.sessionId === "string"
-    && typeof value.userMessageId === "string"
-    && (
-      value.branchKind === "append"
-      || value.branchKind === "retry"
-      || value.branchKind === "edit"
-    )
-    && typeof value.status === "string"
-    && typeof value.mode === "string"
-    && typeof value.webMode === "string"
-    && typeof value.memoryMode === "string"
-    && typeof value.thinkingLevel === "string"
-    && typeof value.startedAt === "string"
-    && Array.isArray(value.toolRuns)
-    && value.toolRuns.every(isChatToolRunRecord)
-    && Array.isArray(value.citations)
-    && value.citations.every(isChatCitationRecord)
-    && isRecord(value.routing);
+  return (
+    isRecord(value) &&
+    typeof value.turnId === "string" &&
+    typeof value.sessionId === "string" &&
+    typeof value.userMessageId === "string" &&
+    (value.branchKind === "append" || value.branchKind === "retry" || value.branchKind === "edit") &&
+    typeof value.status === "string" &&
+    typeof value.mode === "string" &&
+    typeof value.webMode === "string" &&
+    typeof value.memoryMode === "string" &&
+    typeof value.thinkingLevel === "string" &&
+    typeof value.startedAt === "string" &&
+    Array.isArray(value.toolRuns) &&
+    value.toolRuns.every(isChatToolRunRecord) &&
+    Array.isArray(value.citations) &&
+    value.citations.every(isChatCitationRecord) &&
+    isRecord(value.routing)
+  );
 }
 
 function chatStreamChunkToRecord(chunk: ChatStreamChunk): Record<string, unknown> {
@@ -22823,9 +17727,9 @@ function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
   switch (value.type) {
     case "message_start":
       if (
-        typeof value.turnId !== "string"
-        || typeof value.messageId !== "string"
-        || !isChatTurnBranchKind(value.branchKind)
+        typeof value.turnId !== "string" ||
+        typeof value.messageId !== "string" ||
+        !isChatTurnBranchKind(value.branchKind)
       ) {
         return undefined;
       }
@@ -22841,101 +17745,105 @@ function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
     case "delta":
       return typeof value.turnId === "string" && typeof value.delta === "string"
         ? {
-          ...common,
-          type: "delta",
-          turnId: value.turnId,
-          delta: value.delta,
-          ...(typeof value.messageId === "string" ? { messageId: value.messageId } : {}),
-        }
+            ...common,
+            type: "delta",
+            turnId: value.turnId,
+            delta: value.delta,
+            ...(typeof value.messageId === "string" ? { messageId: value.messageId } : {}),
+          }
         : undefined;
     case "usage":
       return typeof value.turnId === "string" && isChatStreamUsageRecord(value.usage)
         ? {
-          ...common,
-          type: "usage",
-          turnId: value.turnId,
-          usage: value.usage,
-          ...(typeof value.messageId === "string" ? { messageId: value.messageId } : {}),
-        }
+            ...common,
+            type: "usage",
+            turnId: value.turnId,
+            usage: value.usage,
+            ...(typeof value.messageId === "string" ? { messageId: value.messageId } : {}),
+          }
         : undefined;
     case "message_done":
-      return typeof value.turnId === "string" && typeof value.messageId === "string" && typeof value.content === "string"
+      return typeof value.turnId === "string" &&
+        typeof value.messageId === "string" &&
+        typeof value.content === "string"
         ? {
-          ...common,
-          type: "message_done",
-          turnId: value.turnId,
-          messageId: value.messageId,
-          content: value.content,
-        }
+            ...common,
+            type: "message_done",
+            turnId: value.turnId,
+            messageId: value.messageId,
+            content: value.content,
+          }
         : undefined;
     case "tool_start":
     case "tool_result":
       return typeof value.turnId === "string" && isChatToolRunRecord(value.toolRun)
         ? {
-          ...common,
-          type: value.type,
-          turnId: value.turnId,
-          toolRun: value.toolRun,
-        }
+            ...common,
+            type: value.type,
+            turnId: value.turnId,
+            toolRun: value.toolRun,
+          }
         : undefined;
     case "approval_required":
-      return typeof value.turnId === "string" && isRecord(value.approval) && typeof value.approval.approvalId === "string"
+      return typeof value.turnId === "string" &&
+        isRecord(value.approval) &&
+        typeof value.approval.approvalId === "string"
         ? {
-          ...common,
-          type: "approval_required",
-          turnId: value.turnId,
-          approval: {
-            approvalId: value.approval.approvalId,
-            ...(typeof value.approval.toolName === "string" ? { toolName: value.approval.toolName } : {}),
-            ...(typeof value.approval.reason === "string" ? { reason: value.approval.reason } : {}),
-            ...(typeof value.approval.expiresAt === "string" ? { expiresAt: value.approval.expiresAt } : {}),
-          },
-        }
+            ...common,
+            type: "approval_required",
+            turnId: value.turnId,
+            approval: {
+              approvalId: value.approval.approvalId,
+              ...(typeof value.approval.toolName === "string" ? { toolName: value.approval.toolName } : {}),
+              ...(typeof value.approval.reason === "string" ? { reason: value.approval.reason } : {}),
+              ...(typeof value.approval.expiresAt === "string" ? { expiresAt: value.approval.expiresAt } : {}),
+            },
+          }
         : undefined;
     case "trace_update":
       return typeof value.turnId === "string" && isChatTurnTraceRecord(value.trace)
         ? {
-          ...common,
-          type: "trace_update",
-          turnId: value.turnId,
-          trace: value.trace,
-        }
+            ...common,
+            type: "trace_update",
+            turnId: value.turnId,
+            trace: value.trace,
+          }
         : undefined;
     case "citation":
       return typeof value.turnId === "string" && isChatCitationRecord(value.citation)
         ? {
-          ...common,
-          type: "citation",
-          turnId: value.turnId,
-          citation: value.citation,
-        }
+            ...common,
+            type: "citation",
+            turnId: value.turnId,
+            citation: value.citation,
+          }
         : undefined;
     case "capability_upgrade_suggestion":
       return typeof value.turnId === "string" && Array.isArray(value.capabilityUpgradeSuggestions)
         ? {
-          ...common,
-          type: "capability_upgrade_suggestion",
-          turnId: value.turnId,
-          capabilityUpgradeSuggestions: value.capabilityUpgradeSuggestions as ChatCapabilityUpgradeSuggestion[],
-        }
+            ...common,
+            type: "capability_upgrade_suggestion",
+            turnId: value.turnId,
+            capabilityUpgradeSuggestions: value.capabilityUpgradeSuggestions as ChatCapabilityUpgradeSuggestion[],
+          }
         : undefined;
     case "error":
       return typeof value.error === "string"
         ? {
-          ...common,
-          type: "error",
-          error: value.error,
-          ...(typeof value.turnId === "string" ? { turnId: value.turnId } : {}),
-        }
+            ...common,
+            type: "error",
+            error: value.error,
+            ...(typeof value.turnId === "string" ? { turnId: value.turnId } : {}),
+          }
         : undefined;
     case "done":
       return typeof value.turnId === "string" && typeof value.messageId === "string"
         ? {
-          ...common,
-          type: "done",
-          turnId: value.turnId,
-          messageId: value.messageId,
-        }
+            ...common,
+            type: "done",
+            turnId: value.turnId,
+            messageId: value.messageId,
+          }
         : undefined;
     default:
       return undefined;
@@ -22950,69 +17858,26 @@ function approvalWaitPayloadToRecord(payload: ApprovalWaitWorkflowPayload): Reco
   return { ...payload };
 }
 
-function toMediaJobRows(value: unknown): MediaJobRow[] {
-  return Array.isArray(value) ? value.filter(isMediaJobRow) : [];
-}
-
-function isMediaJobRow(value: unknown): value is MediaJobRow {
-  return isRecord(value)
-    && typeof value.job_id === "string"
-    && (typeof value.session_id === "string" || value.session_id === null)
-    && (typeof value.attachment_id === "string" || value.attachment_id === null)
-    && typeof value.job_type === "string"
-    && typeof value.status === "string"
-    && (typeof value.input_json === "string" || value.input_json === null)
-    && (typeof value.output_json === "string" || value.output_json === null)
-    && (typeof value.error === "string" || value.error === null)
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string"
-    && (typeof value.completed_at === "string" || value.completed_at === null);
-}
-
 function toSkillStateRows(value: unknown): SkillStateRecord[] {
   return Array.isArray(value)
-    ? value.filter((row): row is SkillStateRecord => (
-      isRecord(row)
-      && typeof row.skillId === "string"
-      && typeof row.state === "string"
-      && (typeof row.note === "string" || row.note === null)
-      && typeof row.updatedAt === "string"
-      && (typeof row.firstAutoApprovedAt === "string" || row.firstAutoApprovedAt === null)
-    ))
+    ? value.filter(
+        (row): row is SkillStateRecord =>
+          isRecord(row) &&
+          typeof row.skillId === "string" &&
+          typeof row.state === "string" &&
+          (typeof row.note === "string" || row.note === null) &&
+          typeof row.updatedAt === "string" &&
+          (typeof row.firstAutoApprovedAt === "string" || row.firstAutoApprovedAt === null),
+      )
     : [];
-}
-
-function normalizeCompanionSigningPublicKeyPem(value: string): string {
-  return value.replace(/\r\n/g, "\n").trim();
-}
-
-function assertCompanionSigningPublicKeyPem(value: string): void {
-  if (!value || value.length > COMPANION_MAX_PUBLIC_KEY_PEM_LENGTH) {
-    throw new ValidationError({
-      message: "Signing public key is missing or too large.",
-    });
-  }
-  let publicKey;
-  try {
-    publicKey = createPublicKey(value);
-  } catch {
-    throw new ValidationError({
-      message: "Signing public key must be a valid PEM-encoded Ed25519 public key.",
-    });
-  }
-  if (publicKey.asymmetricKeyType !== "ed25519") {
-    throw new ValidationError({
-      message: "Signing public key must use the Ed25519 algorithm.",
-    });
-  }
 }
 
 function normalizeCompanionNonce(value: string): string {
   const normalized = value.trim();
   if (
-    normalized.length < 8
-    || normalized.length > COMPANION_REQUEST_NONCE_MAX_LENGTH
-    || !/^[A-Za-z0-9._~-]+$/.test(normalized)
+    normalized.length < 8 ||
+    normalized.length > COMPANION_REQUEST_NONCE_MAX_LENGTH ||
+    !/^[A-Za-z0-9._~-]+$/.test(normalized)
   ) {
     throw new Error("Companion request nonce is invalid.");
   }
@@ -23022,9 +17887,9 @@ function normalizeCompanionNonce(value: string): string {
 function normalizeCompanionSignature(value: string): string {
   const normalized = value.trim();
   if (
-    normalized.length < 16
-    || normalized.length > COMPANION_REQUEST_SIGNATURE_MAX_LENGTH
-    || !/^[A-Za-z0-9_-]+$/.test(normalized)
+    normalized.length < 16 ||
+    normalized.length > COMPANION_REQUEST_SIGNATURE_MAX_LENGTH ||
+    !/^[A-Za-z0-9_-]+$/.test(normalized)
   ) {
     throw new Error("Companion request signature is invalid.");
   }
@@ -23096,184 +17961,14 @@ function sortCompanionJsonValue(value: unknown): unknown {
   return value;
 }
 
-function normalizeRetentionPolicy(input: Partial<RetentionPolicy>): RetentionPolicy {
-  return {
-    realtimeEventsDays: clampInt(input.realtimeEventsDays, DEFAULT_RETENTION_POLICY.realtimeEventsDays, 1, 365),
-    backupsKeep: clampInt(input.backupsKeep, DEFAULT_RETENTION_POLICY.backupsKeep, 1, 500),
-    transcriptsDays: normalizeOptionalDays(input.transcriptsDays),
-    auditDays: normalizeOptionalDays(input.auditDays),
-  };
-}
-
-function normalizeOptionalDays(value: number | undefined): number | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  return clampInt(value, 30, 1, 3650);
-}
-
-
-async function listFilesSafe(dir: string): Promise<Array<{
-  name: string;
-  size: number;
-  mtimeMs: number;
-  isFile: () => boolean;
-  isDirectory: () => boolean;
-}>> {
-  try {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    const result: Array<{
-      name: string;
-      size: number;
-      mtimeMs: number;
-      isFile: () => boolean;
-      isDirectory: () => boolean;
-    }> = [];
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      let stats: fsSync.Stats | undefined;
-      try {
-        stats = await fs.stat(fullPath);
-      } catch {
-        continue;
-      }
-      result.push({
-        name: entry.name,
-        size: stats.size,
-        mtimeMs: stats.mtimeMs,
-        isFile: () => entry.isFile(),
-        isDirectory: () => entry.isDirectory(),
-      });
-    }
-    return result;
-  } catch {
-    return [];
-  }
-}
-
-async function pruneFilesOlderThan(
-  dir: string,
-  cutoffEpochMs: number,
-  dryRun: boolean,
-): Promise<{ files: number; bytes: number }> {
-  let files = 0;
-  let bytes = 0;
-  const walk = async (current: string): Promise<void> => {
-    let entries: fsSync.Dirent[];
-    try {
-      entries = await fs.readdir(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        await walk(fullPath);
-        continue;
-      }
-      if (!entry.isFile()) {
-        continue;
-      }
-      let stats: fsSync.Stats;
-      try {
-        stats = await fs.stat(fullPath);
-      } catch {
-        continue;
-      }
-      if (stats.mtimeMs >= cutoffEpochMs) {
-        continue;
-      }
-      files += 1;
-      bytes += stats.size;
-      if (!dryRun) {
-        await fs.rm(fullPath, { force: true });
-      }
-    }
-  };
-  await walk(dir);
-  return { files, bytes };
-}
-
-async function copyPathIfExists(source: string, target: string): Promise<void> {
-  let stats: fsSync.Stats;
-  try {
-    stats = await fs.stat(source);
-  } catch {
-    return;
-  }
-  if (stats.isDirectory()) {
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.cp(source, target, { recursive: true, force: true });
-    return;
-  }
-  if (stats.isFile()) {
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.copyFile(source, target);
-  }
-}
-
-async function collectBackupFileRecords(payloadDir: string): Promise<BackupManifestFileRecord[]> {
-  const files: BackupManifestFileRecord[] = [];
-  const walk = async (current: string): Promise<void> => {
-    const entries = await fs.readdir(current, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        await walk(fullPath);
-        continue;
-      }
-      if (!entry.isFile()) {
-        continue;
-      }
-      const bytes = await fs.readFile(fullPath);
-      const relativePath = path.relative(payloadDir, fullPath).replaceAll("\\", "/");
-      files.push({
-        path: relativePath,
-        sizeBytes: bytes.length,
-        sha256: createHash("sha256").update(bytes).digest("hex"),
-      });
-    }
-  };
-  await walk(payloadDir);
-  files.sort((left, right) => left.path.localeCompare(right.path));
-  return files;
-}
-
-function formatBackupVerifyFailure(result: BackupVerifyResponse): string {
-  if (result.issues.length === 0) {
-    return "Backup verification failed.";
-  }
-  const first = result.issues[0];
-  if (!first) {
-    return "Backup verification failed.";
-  }
-  return first.path
-    ? `Backup verification failed (${first.code}): ${first.message} [${first.path}]`
-    : `Backup verification failed (${first.code}): ${first.message}`;
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => reject(new Error(message)), timeoutMs);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
-}
-
-function createChatCompletionDeadline(timeoutMs: number | undefined): number | undefined {
+export function createChatCompletionDeadline(timeoutMs: number | undefined): number | undefined {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return undefined;
   }
   return Date.now() + Math.floor(timeoutMs);
 }
 
-function getRemainingChatCompletionTimeoutMs(
+export function getRemainingChatCompletionTimeoutMs(
   deadline: number | undefined,
   timeoutMs: number | undefined,
 ): number | undefined {
@@ -23287,7 +17982,7 @@ function getRemainingChatCompletionTimeoutMs(
   return Math.max(1, remaining);
 }
 
-function normalizeChatCompletionAttemptError(error: unknown, timeoutMs: number | undefined): Error {
+export function normalizeChatCompletionAttemptError(error: unknown, timeoutMs: number | undefined): Error {
   const normalized = error instanceof Error ? error : new Error(String(error));
   if (isChatTurnCancelledError(normalized)) {
     return normalized;
@@ -23298,11 +17993,11 @@ function normalizeChatCompletionAttemptError(error: unknown, timeoutMs: number |
     return normalized;
   }
   if (
-    name.includes("timeout")
-    || name.includes("abort")
-    || message.includes("timed out")
-    || message.includes("timeout")
-    || message.includes("aborted")
+    name.includes("timeout") ||
+    name.includes("abort") ||
+    message.includes("timed out") ||
+    message.includes("timeout") ||
+    message.includes("aborted")
   ) {
     return buildChatCompletionTimeoutError(timeoutMs);
   }
@@ -23314,55 +18009,6 @@ function buildChatCompletionTimeoutError(timeoutMs: number | undefined): Error {
     return new Error(`Chat completion timed out after ${Math.floor(timeoutMs)}ms.`);
   }
   return new Error("Chat completion timed out.");
-}
-
-function formatBackupTimestamp(now: Date): string {
-  const parts = [
-    now.getUTCFullYear(),
-    String(now.getUTCMonth() + 1).padStart(2, "0"),
-    String(now.getUTCDate()).padStart(2, "0"),
-    String(now.getUTCHours()).padStart(2, "0"),
-    String(now.getUTCMinutes()).padStart(2, "0"),
-    String(now.getUTCSeconds()).padStart(2, "0"),
-  ];
-  return parts.join("");
-}
-
-function sanitizeBackupName(input?: string): string | undefined {
-  if (!input) {
-    return undefined;
-  }
-  const sanitized = input
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 80);
-  return sanitized || undefined;
-}
-
-function readAppVersion(): string {
-  const packagePath = path.resolve(process.cwd(), "package.json");
-  try {
-    const raw = fsSync.readFileSync(packagePath, "utf8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : "0.1.0";
-  } catch {
-    return "0.1.0";
-  }
-}
-
-function readGitRef(rootDir: string): string | undefined {
-  try {
-    const value = execFileSync("git", ["-C", rootDir, "rev-parse", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return value || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function inferToolArtifactExtension(contentType?: string): string {
@@ -23446,17 +18092,6 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, Math.max(0, ms));
   });
-}
-
-function ensurePathWithinRoot(targetPath: string, rootDir: string): void {
-  const relative = path.relative(rootDir, targetPath);
-  if (
-    relative === ""
-    || (!relative.startsWith("..") && !path.isAbsolute(relative))
-  ) {
-    return;
-  }
-  throw new Error("Path escapes allowed root");
 }
 
 function isTruthy(value: string | undefined): boolean {

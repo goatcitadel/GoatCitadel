@@ -1,40 +1,44 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
+import {
+  asRecord,
+  asString,
+  hashRawBodyDigest,
+  timingSafeStringEqual,
+  type JsonRecord,
+} from "./webhook-json-helpers.js";
 
-const NEXTCLOUD_TALK_WEBHOOK_PATH =
-  /^\/api\/v1\/integrations\/connections\/[^/]+\/nextcloud-talk\/webhook$/i;
-
-type JsonRecord = Record<string, unknown>;
+const NEXTCLOUD_TALK_WEBHOOK_PATH = /^\/api\/v1\/integrations\/connections\/[^/]+\/nextcloud-talk\/webhook$/i;
 
 export type NextcloudTalkWebhookNormalization =
   | {
-    kind: "message";
-    eventType: "Create";
-    eventId: string;
-    account: string;
-    room: string;
-    actorId: string;
-    actorType: "user" | "system";
-    displayName?: string;
-    content: string;
-    replyToMessageId?: string;
-    backendUrl?: string;
-    metadata: Record<string, unknown>;
-  }
+      kind: "message";
+      eventType: "Create";
+      eventId: string;
+      account: string;
+      room: string;
+      actorId: string;
+      actorType: "user" | "system";
+      displayName?: string;
+      content: string;
+      replyToMessageId?: string;
+      backendUrl?: string;
+      metadata: Record<string, unknown>;
+    }
   | {
-    kind: "activity";
-    eventType: "Like" | "Undo" | "Join" | "Leave";
-    account: string;
-    room?: string;
-    actorId?: string;
-    displayName?: string;
-    backendUrl?: string;
-    metadata: Record<string, unknown>;
-  }
+      kind: "activity";
+      eventType: "Like" | "Undo" | "Join" | "Leave";
+      account: string;
+      room?: string;
+      actorId?: string;
+      displayName?: string;
+      backendUrl?: string;
+      metadata: Record<string, unknown>;
+    }
   | {
-    kind: "ignore";
-    eventType?: string;
-    reason: string;
-  };
+      kind: "ignore";
+      eventType?: string;
+      reason: string;
+    };
 
 export function isNextcloudTalkWebhookPath(url: string): boolean {
   const pathname = url.split("?", 1)[0] ?? url;
@@ -62,12 +66,11 @@ export function verifyNextcloudTalkSignature(
   if (!/^[a-f0-9]{64}$/.test(provided)) {
     return false;
   }
-  return timingSafeEqual(Buffer.from(expected, "utf8"), Buffer.from(provided, "utf8"));
+  return timingSafeStringEqual(expected, provided);
 }
 
 export function deriveNextcloudTalkWebhookIdempotencyKey(connectionId: string, rawBody: Buffer): string {
-  const digest = createHash("sha256").update(rawBody).digest("hex");
-  return `nextcloud-talk:${connectionId}:${digest}`;
+  return `nextcloud-talk:${connectionId}:${hashRawBodyDigest(rawBody)}`;
 }
 
 export function normalizeNextcloudTalkWebhookPayload(input: {
@@ -166,14 +169,9 @@ function normalizeActivityEvent(
   const directObject = asRecord(root.object);
   const nestedObject = asRecord(directObject.object);
   const messageObject = eventType === "Undo" ? nestedObject : directObject;
-  const roomId = asString(target.id)
-    ?? asString(directObject.id)
-    ?? asString(asRecord(root.object).id);
-  const reaction = eventType === "Like"
-    ? asString(root.content)
-    : eventType === "Undo"
-      ? asString(directObject.content)
-      : undefined;
+  const roomId = asString(target.id) ?? asString(directObject.id) ?? asString(asRecord(root.object).id);
+  const reaction =
+    eventType === "Like" ? asString(root.content) : eventType === "Undo" ? asString(directObject.content) : undefined;
 
   return {
     kind: "activity",
@@ -207,22 +205,12 @@ function renderNextcloudTalkMessage(content: string | undefined): string {
     return "";
   }
   const parameters = asRecord(parsed.parameters);
-  return template.replace(/\{([^}]+)\}/g, (match, key) => {
-    const parameter = asRecord(parameters[key]);
-    const replacement = asString(parameter.name)
-      ?? asString(parameter.label)
-      ?? asString(parameter.id)
-      ?? asString(parameter.type);
-    return replacement ?? match;
-  }).trim();
-}
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : {};
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return template
+    .replace(/\{([^}]+)\}/g, (match, key) => {
+      const parameter = asRecord(parameters[key]);
+      const replacement =
+        asString(parameter.name) ?? asString(parameter.label) ?? asString(parameter.id) ?? asString(parameter.type);
+      return replacement ?? match;
+    })
+    .trim();
 }

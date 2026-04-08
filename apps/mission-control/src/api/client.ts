@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import type {
   AddonActionResponse,
   AddonCatalogEntry,
@@ -196,6 +197,34 @@ import type {
   ModelReputation,
 } from "@goatcitadel/contracts";
 import type { FollowOnParityReport, OpenclawParityProgramReport } from "@goatcitadel/contracts";
+import type {
+  AgentsResponse,
+  ApprovalReplayResponse,
+  ApprovalResolveResponse,
+  ApprovalsResponse,
+  CostSummaryResponse,
+  CronJobRecordResponse,
+  CronJobsResponse,
+  DashboardStateResponse,
+  IntegrationCatalogEntry,
+  IntegrationConnection,
+  LlmChatCompletionResponse,
+  MeshLeaseRecord,
+  MeshNodeRecord,
+  MeshReplicationOffsetRecord,
+  MeshSessionOwnerRecord,
+  MeshStatusResponse,
+  OnboardingCompleteResponse,
+  OperatorsResponse,
+  RealtimeEvent,
+  RuntimeSettingsResponse,
+  SessionsResponse,
+  SystemVitalsResponse,
+  TaskActivityRecord,
+  TaskDeliverableRecord,
+  TaskRecord,
+  TaskSubagentSession,
+} from "./types.js";
 import {
   createCorrelationId,
   recordClientDiagnostic,
@@ -210,12 +239,31 @@ export type { ObsidianIntegrationConfig, ObsidianIntegrationStatus };
 export type { ExtensionSdkBriefDraft };
 export type { ExtensionStarterPackArtifactRecord, ExtensionStarterPackDraft };
 
-const DEFAULT_GATEWAY_HOST = "127.0.0.1";
-const DEFAULT_GATEWAY_PORT = 8787;
-const DEFAULT_GATEWAY_HOST_ALLOWLIST: string[] = [];
+import {
+  ApiRequestError,
+  BROWSER_MUTATION_INTENT_HEADER,
+  BROWSER_MUTATION_INTENT_VALUE,
+  MAX_SSE_BUFFER_CHARS,
+  MAX_SSE_EVENT_PREVIEW_CHARS,
+  MUTATING_METHODS,
+  SAFE_REQUEST_RETRY_DELAYS_MS,
+  SAFE_RETRY_METHODS,
+  inferDefaultGatewayBaseUrl,
+  inferOriginSurface,
+  isApiRequestError,
+  isTrustedGatewayHost,
+  normalizeAuthMode,
+  normalizeHttpMethod,
+  parseApiError,
+  shouldRetrySafeRequest,
+  sleep,
+  unwrapApiResponse,
+  type ParsedApiError,
+} from "./http-internal";
+
+export { ApiRequestError, isApiRequestError, isTrustedGatewayHost };
+
 const API_BASE = import.meta.env.VITE_GATEWAY_URL ?? inferDefaultGatewayBaseUrl();
-const MAX_SSE_BUFFER_CHARS = 256_000;
-const MAX_SSE_EVENT_PREVIEW_CHARS = 180;
 const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
 const EVENT_CURSOR_STORAGE_KEY = "goatcitadel.events.cursor.v1";
@@ -266,73 +314,16 @@ export interface GatewayStartupTiming {
   phases: GatewayStartupPhaseTiming[];
 }
 
-interface ParsedApiError {
-  body?: unknown;
-  authMode?: GatewayAuthState["mode"];
-}
-
-interface ApiRequestErrorOptions {
-  kind: "http" | "network";
-  method: string;
-  path: string;
-  status?: number;
-  body?: unknown;
-  bodyText?: string;
-  authMode?: GatewayAuthState["mode"];
-  cause?: unknown;
-}
-
-export class ApiRequestError extends Error {
-  public readonly kind: "http" | "network";
-
-  public readonly method: string;
-
-  public readonly path: string;
-
-  public readonly status?: number;
-
-  public readonly body?: unknown;
-
-  public readonly bodyText?: string;
-
-  public readonly authMode?: GatewayAuthState["mode"];
-
-  public constructor(message: string, options: ApiRequestErrorOptions) {
-    super(message);
-    this.name = "ApiRequestError";
-    this.kind = options.kind;
-    this.method = options.method;
-    this.path = options.path;
-    this.status = options.status;
-    this.body = options.body;
-    this.bodyText = options.bodyText;
-    this.authMode = options.authMode;
-    if (options.cause !== undefined) {
-      (this as Error & { cause?: unknown }).cause = options.cause;
-    }
-  }
-}
-
-export function isApiRequestError(error: unknown): error is ApiRequestError {
-  return error instanceof ApiRequestError;
-}
-
 export function getGatewayApiBaseUrl(): string {
   return API_BASE;
 }
 
-const SAFE_RETRY_METHODS = new Set(["GET", "HEAD"]);
-const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-const RETRYABLE_HTTP_STATUS_CODES = new Set([408, 429, 502, 503, 504]);
-const SAFE_REQUEST_RETRY_DELAYS_MS = [250];
-const BROWSER_MUTATION_INTENT_HEADER = "x-goatcitadel-browser-intent";
-const BROWSER_MUTATION_INTENT_VALUE = "mutation";
-
-function normalizeHttpMethod(method?: string): string {
-  return (method ?? "GET").toUpperCase();
-}
-
-function buildGatewayHeaders(path: string, method: string, correlationId: string, extraHeaders?: HeadersInit): HeadersInit {
+function buildGatewayHeaders(
+  path: string,
+  method: string,
+  correlationId: string,
+  extraHeaders?: HeadersInit,
+): HeadersInit {
   return {
     "Content-Type": "application/json",
     ...(method !== "GET" ? { "Idempotency-Key": crypto.randomUUID() } : {}),
@@ -342,101 +333,6 @@ function buildGatewayHeaders(path: string, method: string, correlationId: string
     "x-goatcitadel-origin-surface": inferOriginSurface(path),
     ...(extraHeaders ?? {}),
   };
-}
-
-function shouldRetrySafeRequest(method: string, error?: ApiRequestError): boolean {
-  if (!SAFE_RETRY_METHODS.has(method) || !error) {
-    return false;
-  }
-  if (error.kind === "network") {
-    return true;
-  }
-  return error.status !== undefined && RETRYABLE_HTTP_STATUS_CODES.has(error.status);
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => globalThis.setTimeout(resolve, ms));
-}
-
-function unwrapApiResponse<T>(payload: unknown): T {
-  if (
-    payload
-    && typeof payload === "object"
-    && "data" in payload
-    && ("success" in payload || "meta" in payload)
-  ) {
-    return (payload as { data: T }).data;
-  }
-  return payload as T;
-}
-
-function inferDefaultGatewayBaseUrl(): string {
-  if (typeof window === "undefined") {
-    return `http://${DEFAULT_GATEWAY_HOST}:${DEFAULT_GATEWAY_PORT}`;
-  }
-  const protocol = window.location.protocol === "https:" ? "https:" : "http:";
-  const host = window.location.hostname || DEFAULT_GATEWAY_HOST;
-  if (isTrustedGatewayHost(host, import.meta.env.VITE_GATEWAY_ALLOWED_HOSTS)) {
-    return `${protocol}//${host}:${DEFAULT_GATEWAY_PORT}`;
-  }
-  console.warn(
-    `[goatcitadel] refusing inferred gateway host "${host}" because it is not trusted; `
-    + `falling back to ${DEFAULT_GATEWAY_HOST}:${DEFAULT_GATEWAY_PORT}. Set VITE_GATEWAY_ALLOWED_HOSTS to override.`,
-  );
-  return `${protocol}//${DEFAULT_GATEWAY_HOST}:${DEFAULT_GATEWAY_PORT}`;
-}
-
-export function isTrustedGatewayHost(hostname: string, rawAllowlist?: string): boolean {
-  const host = hostname.trim().toLowerCase();
-  if (!host) {
-    return false;
-  }
-  if (
-    host === "localhost"
-    || host === "127.0.0.1"
-    || host === "::1"
-    || host === "[::1]"
-    || host.endsWith(".ts.net")
-  ) {
-    return true;
-  }
-  if (isPrivateOrCarrierGradeIpv4(host)) {
-    return true;
-  }
-  const allowlist = (rawAllowlist ?? "")
-    .split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
-  const mergedAllowlist = [...DEFAULT_GATEWAY_HOST_ALLOWLIST, ...allowlist];
-  return mergedAllowlist.some((entry) => {
-    if (entry.startsWith(".")) {
-      return host.endsWith(entry);
-    }
-    return host === entry;
-  });
-}
-
-function isPrivateOrCarrierGradeIpv4(host: string): boolean {
-  const parts = host.split(".");
-  if (parts.length !== 4) {
-    return false;
-  }
-  const octets = parts.map((part) => Number.parseInt(part, 10));
-  if (octets.some((octet) => !Number.isFinite(octet) || octet < 0 || octet > 255)) {
-    return false;
-  }
-  const a = octets[0] ?? -1;
-  const b = octets[1] ?? -1;
-  if (a === 10 || a === 127) {
-    return true;
-  }
-  if (a === 192 && b === 168) {
-    return true;
-  }
-  if (a === 172 && b >= 16 && b <= 31) {
-    return true;
-  }
-  return a === 100 && b >= 64 && b <= 127;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -491,7 +387,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
               status: res.status,
             },
           });
-          await sleep(SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ?? SAFE_REQUEST_RETRY_DELAYS_MS[SAFE_REQUEST_RETRY_DELAYS_MS.length - 1] ?? 250);
+          await sleep(
+            SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ??
+              SAFE_REQUEST_RETRY_DELAYS_MS[SAFE_REQUEST_RETRY_DELAYS_MS.length - 1] ??
+              250,
+          );
           continue;
         }
         setDevDiagnosticsLastRequestError(`${method} ${path}: ${res.status}`);
@@ -524,14 +424,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       });
       return unwrapApiResponse<T>(await res.json());
     } catch (error) {
-      lastError = error instanceof ApiRequestError
-        ? error
-        : new ApiRequestError(`Network error ${method} ${path}: ${(error as Error).message}`, {
-          kind: "network",
-          method,
-          path,
-          cause: error,
-        });
+      lastError =
+        error instanceof ApiRequestError
+          ? error
+          : new ApiRequestError(`Network error ${method} ${path}: ${(error as Error).message}`, {
+              kind: "network",
+              method,
+              path,
+              cause: error,
+            });
       if (shouldRetrySafeRequest(method, lastError) && attempt < maxAttempts - 1) {
         recordClientDiagnostic({
           level: "warn",
@@ -545,7 +446,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
             error: lastError.message,
           },
         });
-        await sleep(SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ?? SAFE_REQUEST_RETRY_DELAYS_MS[SAFE_REQUEST_RETRY_DELAYS_MS.length - 1] ?? 250);
+        await sleep(
+          SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ??
+            SAFE_REQUEST_RETRY_DELAYS_MS[SAFE_REQUEST_RETRY_DELAYS_MS.length - 1] ??
+            250,
+        );
         continue;
       }
       if (lastError.kind === "network") {
@@ -668,10 +573,7 @@ export function setGatewayAuthStorageMode(mode: GatewayAuthStorageMode): void {
   window.localStorage.removeItem(AUTH_STORAGE_KEY);
 }
 
-export function persistGatewayAuthState(
-  state: GatewayAuthState,
-  mode: GatewayAuthStorageMode = "session",
-): void {
+export function persistGatewayAuthState(state: GatewayAuthState, mode: GatewayAuthStorageMode = "session"): void {
   if (typeof window === "undefined") {
     return;
   }
@@ -709,9 +611,7 @@ export function consumeGatewayAccessBootstrapFromLocation(): GatewayBootstrapRes
     return { consumed: false };
   }
 
-  const rawHash = window.location.hash.startsWith("#")
-    ? window.location.hash.slice(1)
-    : window.location.hash;
+  const rawHash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
   if (!rawHash || !rawHash.includes("=")) {
     return { consumed: false };
   }
@@ -722,11 +622,14 @@ export function consumeGatewayAccessBootstrapFromLocation(): GatewayBootstrapRes
     return { consumed: false };
   }
 
-  persistGatewayAuthState({
-    mode: "token",
-    token,
-    tokenQueryParam: "access_token",
-  }, "session");
+  persistGatewayAuthState(
+    {
+      mode: "token",
+      token,
+      tokenQueryParam: "access_token",
+    },
+    "session",
+  );
 
   hashParams.delete("access_token");
   const nextHash = hashParams.toString();
@@ -933,33 +836,6 @@ function migrateLegacyGatewayAuthStorage(): void {
   }
 }
 
-function parseApiError(text: string): ParsedApiError {
-  if (!text) {
-    return {};
-  }
-  try {
-    const body = JSON.parse(text) as unknown;
-    return {
-      body,
-      authMode: normalizeAuthMode(body),
-    };
-  } catch {
-    return {
-      body: text,
-    };
-  }
-}
-
-function normalizeAuthMode(value: unknown): GatewayAuthState["mode"] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const authMode = (value as { authMode?: unknown }).authMode;
-  return authMode === "none" || authMode === "token" || authMode === "basic"
-    ? authMode
-    : undefined;
-}
-
 function readApiErrorMessage(body: unknown): string | undefined {
   if (typeof body === "string") {
     return body;
@@ -968,402 +844,10 @@ function readApiErrorMessage(body: unknown): string | undefined {
     return undefined;
   }
   const candidate = (body as { error?: unknown }).error;
-  return typeof candidate === "string" && candidate.trim()
-    ? candidate.trim()
-    : undefined;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : undefined;
 }
 
-export interface SessionsResponse {
-  items: SessionMeta[];
-  nextCursor?: string;
-}
-
-export interface ApprovalsResponse {
-  items: ApprovalRequest[];
-}
-
-export type ApprovalReplayResponse = ApprovalReplaySnapshot;
-
-export interface ApprovalResolveResponse {
-  approval: ApprovalRequest;
-  executedAction?: ToolInvokeResult;
-  replay: ApprovalReplayResponse;
-  durableRunId?: string;
-}
-
-export interface CostSummaryResponse {
-  scope: string;
-  from: string;
-  to: string;
-  usageAvailability?: {
-    trackedEvents: number;
-    unknownEvents: number;
-    totalAgentEvents: number;
-  };
-  items: Array<{
-    key: string;
-    tokenInput: number;
-    tokenOutput: number;
-    tokenCachedInput: number;
-    tokenTotal: number;
-    costUsd: number;
-  }>;
-}
-
-export interface TaskRecord {
-  taskId: string;
-  title: string;
-  description?: string;
-  status: "planning" | "inbox" | "assigned" | "in_progress" | "testing" | "review" | "done" | "blocked";
-  priority: "low" | "normal" | "high" | "urgent";
-  assignedAgentId?: string;
-  createdBy?: string;
-  dueAt?: string;
-  deletedAt?: string;
-  deletedBy?: string;
-  deleteReason?: string;
-  createdAt: string;
-  updatedAt: string;
-  proactiveContext?: {
-    sessionId: string;
-    originSurface: "chat" | "cowork" | "code";
-    proactiveRunId?: string;
-    durableRunId?: string;
-    approvalId?: string;
-    nextWakeAt?: string;
-    stopReason?: string;
-    externalReferenceRoots?: Array<{
-      label: string;
-      rootPath: string;
-      access: "read_only";
-    }>;
-  };
-}
-
-export interface TaskActivityRecord {
-  activityId: string;
-  taskId: string;
-  agentId?: string;
-  activityType: "spawned" | "updated" | "completed" | "file_created" | "status_changed" | "comment";
-  message: string;
-  metadata?: Record<string, unknown>;
-  createdAt: string;
-}
-
-export interface TaskDeliverableRecord {
-  deliverableId: string;
-  taskId: string;
-  deliverableType: "file" | "url" | "artifact";
-  title: string;
-  path?: string;
-  description?: string;
-  createdAt: string;
-}
-
-export interface TaskSubagentSession {
-  subagentSessionId: string;
-  taskId: string;
-  agentSessionId: string;
-  agentName?: string;
-  status: "active" | "completed" | "failed" | "killed";
-  createdAt: string;
-  updatedAt: string;
-  endedAt?: string;
-}
-
-export interface RealtimeEvent {
-  eventId: string;
-  sequence: number;
-  eventType: string;
-  source: string;
-  timestamp: string;
-  eventClass?: "domain_fact" | "operational_signal" | "ui_notification";
-  eventAuthority?: "retained_stream" | "durable_history" | "derived_projection";
-  links?: {
-    sessionId?: string;
-    turnId?: string;
-    runId?: string;
-    proactiveRunId?: string;
-    approvalId?: string;
-    taskId?: string;
-    workspaceId?: string;
-    connectorId?: string;
-    tokenId?: string;
-    messageId?: string;
-  };
-  correlationId?: string;
-  traceId?: string;
-  originSurface?: string;
-  payload: Record<string, unknown>;
-}
-
-export interface DashboardStateResponse {
-  timestamp: string;
-  sessions: SessionsResponse["items"];
-  pendingApprovals: number;
-  activeSubagents: number;
-  taskStatusCounts: Array<{ status: string; count: number }>;
-  recentEvents: RealtimeEvent[];
-  dailyCostUsd: number;
-}
-
-export interface SystemVitalsResponse {
-  hostname: string;
-  platform: string;
-  release: string;
-  uptimeSeconds: number;
-  loadAverage: number[];
-  cpuCount: number;
-  memoryTotalBytes: number;
-  memoryFreeBytes: number;
-  memoryUsedBytes: number;
-  processRssBytes: number;
-  processHeapUsedBytes: number;
-}
-
-export type {
-  A2UIProofLaneDraft,
-  BrowserProofLaneDraft,
-  FollowOnParityReport,
-  FollowOnProofLaneArtifactRecord,
-  OpenclawParityProgramReport,
-  PackagingProofLaneDraft,
-  VoiceProofLaneDraft,
-};
-
-export interface CronJobsResponse {
-  items: Array<{
-    jobId: string;
-    name: string;
-    schedule: string;
-    enabled: boolean;
-    lastRunAt?: string;
-    nextRunAt?: string;
-    updatedAt?: string;
-  }>;
-}
-
-export interface CronJobRecordResponse {
-  jobId: string;
-  name: string;
-  schedule: string;
-  enabled: boolean;
-  lastRunAt?: string;
-  nextRunAt?: string;
-  updatedAt?: string;
-}
-
-export interface OperatorsResponse {
-  items: Array<{
-    operatorId: string;
-    sessionCount: number;
-    activeSessions: number;
-    lastActivityAt?: string;
-  }>;
-}
-
-export interface AgentsResponse {
-  items: AgentProfileRecord[];
-  view?: "active" | "archived" | "all";
-}
-
-export interface RuntimeSettingsResponse {
-  environment: string;
-  deploymentProfile: "local_dev" | "trusted_local" | "remote_hardened";
-  defaultToolProfile: string;
-  budgetMode: "saver" | "balanced" | "power";
-  workspaceDir: string;
-  writeJailRoots: string[];
-  readOnlyRoots: string[];
-  readAccessMode?: "roots_only" | "approval_required" | "full_disk";
-  networkAllowlist: string[];
-  approvalExplainer: {
-    enabled: boolean;
-    mode: "async";
-    minRiskLevel: "caution" | "danger" | "nuclear";
-    providerId?: string;
-    model?: string;
-    timeoutMs: number;
-    maxPayloadChars: number;
-  };
-  memory: {
-    enabled: boolean;
-    qmd: {
-      enabled: boolean;
-      applyToChat: boolean;
-      applyToOrchestration: boolean;
-      minPromptChars: number;
-      maxContextTokens: number;
-      cacheTtlSeconds: number;
-      distillerProviderId?: string;
-      distillerModel?: string;
-    };
-  };
-  web?: {
-    firecrawl: {
-      enabled: boolean;
-      baseUrl: string;
-      apiKeyEnv?: string;
-      timeoutMs: number;
-      defaultReadBackend: "native" | "firecrawl";
-      fallbackToNative: boolean;
-    };
-  };
-  auth: {
-    mode: "none" | "token" | "basic";
-    allowLoopbackBypass: boolean;
-    tokenConfigured: boolean;
-    basicConfigured: boolean;
-  };
-  llm: {
-    activeProviderId: string;
-    activeModel: string;
-    providers: Array<{
-      providerId: string;
-      label: string;
-      baseUrl: string;
-      apiStyle: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
-      resolvedApiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
-      defaultModel: string;
-      hasApiKey: boolean;
-      apiKeySource: "inline" | "env" | "keychain" | "none";
-      hasKeychainSecret?: boolean;
-      apiKeyRef?: string;
-      capabilities?: {
-        vision: boolean;
-        audio: boolean;
-        video: boolean;
-        toolCalling: boolean;
-        jsonMode: boolean;
-      };
-    }>;
-  };
-  mesh: {
-    enabled: boolean;
-    mode: "lan" | "wan" | "tailnet";
-    nodeId: string;
-    mdns: boolean;
-    staticPeers: string[];
-    requireMtls: boolean;
-    tailnetEnabled: boolean;
-  };
-  npu: {
-    enabled: boolean;
-    autoStart: boolean;
-    sidecarUrl: string;
-    status: NpuRuntimeStatus;
-  };
-  features: {
-    durableKernelV1Enabled: boolean;
-    memoryMaintenanceV1Enabled: boolean;
-    replayOverridesV1Enabled: boolean;
-    memoryLifecycleAdminV1Enabled: boolean;
-    connectorDiagnosticsV1Enabled: boolean;
-    computerUseGuardrailsV1Enabled: boolean;
-    bankrBuiltinEnabled: boolean;
-    cronReviewQueueV1Enabled: boolean;
-    replayRegressionV1Enabled: boolean;
-  };
-}
-
-export interface OnboardingCompleteResponse {
-  state: OnboardingState;
-}
-
-export interface IntegrationCatalogEntry {
-  catalogId: string;
-  kind: "channel" | "model_provider" | "productivity" | "automation" | "platform";
-  key: string;
-  label: string;
-  description: string;
-  maturity: "native" | "plugin" | "disabled" | "beta" | "planned";
-  runtimeAvailability?: "runnable" | "blocked";
-  authMethods: string[];
-  capabilities: string[];
-  docsUrl?: string;
-  formSchema?: IntegrationFormSchema;
-  pluginId?: string;
-}
-
-export interface IntegrationConnection {
-  connectionId: string;
-  catalogId: string;
-  kind: "channel" | "model_provider" | "productivity" | "automation" | "platform";
-  key: string;
-  label: string;
-  enabled: boolean;
-  status: "connected" | "disconnected" | "error" | "paused";
-  config: Record<string, unknown>;
-  pluginId?: string;
-  pluginVersion?: string;
-  pluginEnabled?: boolean;
-  createdAt: string;
-  updatedAt: string;
-  lastSyncAt?: string;
-  lastError?: string;
-}
-
-export interface LlmChatCompletionResponse {
-  id?: string;
-  model?: string;
-  choices?: Array<{
-    index: number;
-    finish_reason?: string | null;
-    message?: {
-      role?: string;
-      content?: string | null;
-      [key: string]: unknown;
-    };
-  }>;
-  usage?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
-export interface MeshStatusResponse {
-  enabled: boolean;
-  mode: "lan" | "wan" | "tailnet";
-  localNodeId: string;
-  tailnetEnabled: boolean;
-  nodesOnline: number;
-  activeLeases: number;
-  ownedSessions: number;
-}
-
-export interface MeshNodeRecord {
-  nodeId: string;
-  label?: string;
-  advertiseAddress?: string;
-  transport: "lan" | "wan" | "tailnet";
-  status: "online" | "suspect" | "offline";
-  capabilities: string[];
-  tlsFingerprint?: string;
-  joinedAt: string;
-  lastSeenAt: string;
-}
-
-export interface MeshLeaseRecord {
-  leaseKey: string;
-  holderNodeId: string;
-  fencingToken: number;
-  expiresAt: string;
-  updatedAt: string;
-}
-
-export interface MeshSessionOwnerRecord {
-  sessionId: string;
-  ownerNodeId: string;
-  epoch: number;
-  claimedAt: string;
-  updatedAt: string;
-}
-
-export interface MeshReplicationOffsetRecord {
-  consumerNodeId: string;
-  sourceNodeId: string;
-  lastReplicationId?: string;
-  updatedAt: string;
-}
-
+export * from "./types.js";
 export async function fetchSessions(): Promise<SessionsResponse> {
   return request<SessionsResponse>("/api/v1/sessions?limit=50");
 }
@@ -1460,10 +944,7 @@ export async function fetchGlobalGuidance(): Promise<{ items: GuidanceDocumentRe
   return request<{ items: GuidanceDocumentRecord[] }>("/api/v1/guidance/global");
 }
 
-export async function updateGlobalGuidance(
-  docType: GuidanceDocType,
-  content: string,
-): Promise<GuidanceDocumentRecord> {
+export async function updateGlobalGuidance(docType: GuidanceDocType, content: string): Promise<GuidanceDocumentRecord> {
   return request<GuidanceDocumentRecord>(`/api/v1/guidance/global/${encodeURIComponent(docType)}`, {
     method: "PUT",
     body: JSON.stringify({ content }),
@@ -1515,13 +996,16 @@ export async function createChatProject(input: {
   });
 }
 
-export async function updateChatProject(projectId: string, input: {
-  workspaceId?: string;
-  name?: string;
-  description?: string;
-  workspacePath?: string;
-  color?: string;
-}): Promise<ChatProjectRecord> {
+export async function updateChatProject(
+  projectId: string,
+  input: {
+    workspaceId?: string;
+    name?: string;
+    description?: string;
+    workspacePath?: string;
+    color?: string;
+  },
+): Promise<ChatProjectRecord> {
   return request<ChatProjectRecord>(`/api/v1/chat/projects/${encodeURIComponent(projectId)}`, {
     method: "PATCH",
     body: JSON.stringify(input),
@@ -1542,7 +1026,9 @@ export async function restoreChatProject(projectId: string): Promise<ChatProject
   });
 }
 
-export async function hardDeleteChatProject(projectId: string): Promise<{ deleted: boolean; projectId: string; mode: "hard" }> {
+export async function hardDeleteChatProject(
+  projectId: string,
+): Promise<{ deleted: boolean; projectId: string; mode: "hard" }> {
   return request<{ deleted: boolean; projectId: string; mode: "hard" }>(
     `/api/v1/chat/projects/${encodeURIComponent(projectId)}?mode=hard`,
     {
@@ -1647,12 +1133,15 @@ export async function assignChatSessionProject(sessionId: string, projectId?: st
   });
 }
 
-export async function setChatSessionBinding(sessionId: string, input: {
-  transport: "llm" | "integration";
-  connectionId?: string;
-  target?: string;
-  writable?: boolean;
-}): Promise<ChatSessionBindingRecord> {
+export async function setChatSessionBinding(
+  sessionId: string,
+  input: {
+    transport: "llm" | "integration";
+    connectionId?: string;
+    target?: string;
+    writable?: boolean;
+  },
+): Promise<ChatSessionBindingRecord> {
   return request<ChatSessionBindingRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/binding`, {
     method: "POST",
     body: JSON.stringify(input),
@@ -1660,10 +1149,16 @@ export async function setChatSessionBinding(sessionId: string, input: {
 }
 
 export async function fetchChatSessionBinding(sessionId: string): Promise<{ item: ChatSessionBindingRecord | null }> {
-  return request<{ item: ChatSessionBindingRecord | null }>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/binding`);
+  return request<{ item: ChatSessionBindingRecord | null }>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/binding`,
+  );
 }
 
-export async function fetchChatMessages(sessionId: string, limit = 200, cursor?: string): Promise<ChatMessagesResponse> {
+export async function fetchChatMessages(
+  sessionId: string,
+  limit = 200,
+  cursor?: string,
+): Promise<ChatMessagesResponse> {
   const query = new URLSearchParams();
   query.set("limit", String(Math.max(1, Math.min(limit, 1000))));
   if (cursor) {
@@ -1678,7 +1173,10 @@ export async function fetchChatThread(sessionId: string): Promise<ChatThreadResp
   return request<ChatThreadResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`);
 }
 
-export async function sendAgentChatMessage(sessionId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse> {
+export async function sendAgentChatMessage(
+  sessionId: string,
+  input: ChatSendMessageRequest,
+): Promise<ChatSendMessageResponse> {
   return request<ChatSendMessageResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/agent-send`, {
     method: "POST",
     body: JSON.stringify(input),
@@ -1724,21 +1222,25 @@ export async function streamAgentChatMessage(
     });
     throw new Error(`API error ${response.status}: ${text}`);
   }
-  await consumeSseResponse(response.body, (chunk) => {
-    if (chunk.type === "error") {
-      recordClientDiagnostic({
-        level: "error",
-        category: "chat",
-        event: "stream.chunk_error",
-        message: "Agent chat stream emitted an error chunk",
-        correlationId,
-        sessionId,
-        route: path,
-        turnId: chunk.turnId,
-      });
-    }
-    onChunk(chunk);
-  }, options.signal);
+  await consumeSseResponse(
+    response.body,
+    (chunk) => {
+      if (chunk.type === "error") {
+        recordClientDiagnostic({
+          level: "error",
+          category: "chat",
+          event: "stream.chunk_error",
+          message: "Agent chat stream emitted an error chunk",
+          correlationId,
+          sessionId,
+          route: path,
+          turnId: chunk.turnId,
+        });
+      }
+      onChunk(chunk);
+    },
+    options.signal,
+  );
   recordClientDiagnostic({
     level: "info",
     category: "chat",
@@ -1971,9 +1473,7 @@ export async function updateChatLearnedMemoryItem(
   );
 }
 
-export async function rebuildChatLearnedMemory(
-  sessionId: string,
-): Promise<{
+export async function rebuildChatLearnedMemory(sessionId: string): Promise<{
   rebuiltAt: string;
   items: LearnedMemoryItemRecord[];
   conflicts: LearnedMemoryConflictRecord[];
@@ -2031,10 +1531,13 @@ export async function suggestChatDelegation(
   sessionId: string,
   input: ChatDelegateSuggestRequest = {},
 ): Promise<ChatDelegateSuggestResponse> {
-  return request<ChatDelegateSuggestResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate/suggest`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+  return request<ChatDelegateSuggestResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate/suggest`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function acceptChatDelegation(
@@ -2050,7 +1553,9 @@ export async function acceptChatDelegation(
 export async function fetchChatCommandCatalog(): Promise<{
   items: Array<{ command: string; usage: string; description: string }>;
 }> {
-  return request<{ items: Array<{ command: string; usage: string; description: string }> }>("/api/v1/chat/catalog/commands");
+  return request<{ items: Array<{ command: string; usage: string; description: string }> }>(
+    "/api/v1/chat/catalog/commands",
+  );
 }
 
 export async function parseChatCommand(
@@ -2098,10 +1603,7 @@ export async function fetchChatResearchRun(
   );
 }
 
-export async function runChatDelegation(
-  sessionId: string,
-  input: ChatDelegateRequest,
-): Promise<ChatDelegateResponse> {
+export async function runChatDelegation(sessionId: string, input: ChatDelegateRequest): Promise<ChatDelegateResponse> {
   return request<ChatDelegateResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate`, {
     method: "POST",
     body: JSON.stringify(input),
@@ -2205,10 +1707,13 @@ export async function runPromptPackTest(
     placeholderValues?: Record<string, string>;
   },
 ): Promise<PromptPackRunRecord> {
-  return request<PromptPackRunRecord>(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId)}/run`, {
-    method: "POST",
-    body: JSON.stringify(input ?? {}),
-  });
+  return request<PromptPackRunRecord>(
+    `/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId)}/run`,
+    {
+      method: "POST",
+      body: JSON.stringify(input ?? {}),
+    },
+  );
 }
 
 export async function scorePromptPackTest(
@@ -2224,10 +1729,13 @@ export async function scorePromptPackTest(
     notes?: string;
   },
 ): Promise<PromptPackScoreRecord> {
-  return request<PromptPackScoreRecord>(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId)}/score`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+  return request<PromptPackScoreRecord>(
+    `/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId)}/score`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function autoScorePromptPackTest(
@@ -2259,13 +1767,10 @@ export async function autoScorePromptPackBatch(
     force?: boolean;
   },
 ): Promise<PromptPackAutoScoreBatchResult> {
-  return request<PromptPackAutoScoreBatchResult>(
-    `/api/v1/prompt-packs/${encodeURIComponent(packId)}/auto-score`,
-    {
-      method: "POST",
-      body: JSON.stringify(input ?? {}),
-    },
-  );
+  return request<PromptPackAutoScoreBatchResult>(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/auto-score`, {
+    method: "POST",
+    body: JSON.stringify(input ?? {}),
+  });
 }
 
 export async function fetchPromptPackReport(packId: string): Promise<PromptPackReportRecord> {
@@ -2282,18 +1787,13 @@ export async function runPromptPackBenchmark(
     }>;
   },
 ): Promise<{ benchmarkRunId: string }> {
-  return request<{ benchmarkRunId: string }>(
-    `/api/v1/prompt-packs/${encodeURIComponent(packId)}/benchmark/run`,
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    },
-  );
+  return request<{ benchmarkRunId: string }>(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/benchmark/run`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
-export async function fetchPromptPackBenchmark(
-  benchmarkRunId: string,
-): Promise<PromptPackBenchmarkStatusRecord> {
+export async function fetchPromptPackBenchmark(benchmarkRunId: string): Promise<PromptPackBenchmarkStatusRecord> {
   return request<PromptPackBenchmarkStatusRecord>(
     `/api/v1/prompt-packs/benchmark/${encodeURIComponent(benchmarkRunId)}`,
   );
@@ -2324,9 +1824,7 @@ export async function fetchPromptPackReplayRegressionStatus(
 }
 
 export async function fetchPromptPackTrends(packId: string): Promise<{ items: CapabilityTrendSeries[] }> {
-  return request<{ items: CapabilityTrendSeries[] }>(
-    `/api/v1/prompt-packs/${encodeURIComponent(packId)}/trends`,
-  );
+  return request<{ items: CapabilityTrendSeries[] }>(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/trends`);
 }
 
 export async function fetchPromptPackExport(packId: string): Promise<PromptPackExportRecord> {
@@ -2376,9 +1874,7 @@ export async function fetchImprovementReport(reportId: string): Promise<WeeklyIm
   return request<WeeklyImprovementReportRecord>(`/api/v1/improvement/reports/${encodeURIComponent(reportId)}`);
 }
 
-export async function runImprovementReplay(input?: {
-  sampleSize?: number;
-}): Promise<{
+export async function runImprovementReplay(input?: { sampleSize?: number }): Promise<{
   run: DecisionReplayRunRecord;
   report?: WeeklyImprovementReportRecord;
 }> {
@@ -2416,10 +1912,13 @@ export async function updateRepairCandidateValidation(
     summary?: string;
   },
 ): Promise<RepairCandidateRecord> {
-  return request<RepairCandidateRecord>(`/api/v1/improvement/repair-candidates/${encodeURIComponent(candidateId)}/validation`, {
-    method: "PATCH",
-    body: JSON.stringify(input),
-  });
+  return request<RepairCandidateRecord>(
+    `/api/v1/improvement/repair-candidates/${encodeURIComponent(candidateId)}/validation`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function fetchImprovementReplayRun(runId: string): Promise<{
@@ -2484,14 +1983,20 @@ export async function revertImprovementAutoTune(tuneId: string): Promise<Decisio
   });
 }
 
-export async function approveChatTool(sessionId: string, approvalId: string): Promise<{ ok: boolean; approvalId: string }> {
+export async function approveChatTool(
+  sessionId: string,
+  approvalId: string,
+): Promise<{ ok: boolean; approvalId: string }> {
   return request<{ ok: boolean; approvalId: string }>("/api/v1/chat/tools/approve", {
     method: "POST",
     body: JSON.stringify({ sessionId, approvalId }),
   });
 }
 
-export async function denyChatTool(sessionId: string, approvalId: string): Promise<{ ok: boolean; approvalId: string }> {
+export async function denyChatTool(
+  sessionId: string,
+  approvalId: string,
+): Promise<{ ok: boolean; approvalId: string }> {
   return request<{ ok: boolean; approvalId: string }>("/api/v1/chat/tools/deny", {
     method: "POST",
     body: JSON.stringify({ sessionId, approvalId }),
@@ -2546,12 +2051,17 @@ async function encodeFileBase64(file: File): Promise<string> {
   return btoa(binary);
 }
 
-export async function downloadChatAttachment(attachmentId: string): Promise<{ blob: Blob; fileName: string; mimeType: string }> {
+export async function downloadChatAttachment(
+  attachmentId: string,
+): Promise<{ blob: Blob; fileName: string; mimeType: string }> {
   const meta = await fetchChatAttachment(attachmentId);
   const authHeaders = readGatewayAuthHeaders(`/api/v1/chat/attachments/${encodeURIComponent(attachmentId)}/content`);
-  const response = await fetch(`${API_BASE}/api/v1/chat/attachments/${encodeURIComponent(attachmentId)}/content?disposition=attachment`, {
-    headers: authHeaders,
-  });
+  const response = await fetch(
+    `${API_BASE}/api/v1/chat/attachments/${encodeURIComponent(attachmentId)}/content?disposition=attachment`,
+    {
+      headers: authHeaders,
+    },
+  );
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`API error ${response.status}: ${text}`);
@@ -2613,7 +2123,10 @@ export async function createBackup(input?: { name?: string; outputPath?: string 
   });
 }
 
-export async function restoreBackup(filePath: string, confirm = false): Promise<{ restored: boolean; backupId?: string; filesRestored: number }> {
+export async function restoreBackup(
+  filePath: string,
+  confirm = false,
+): Promise<{ restored: boolean; backupId?: string; filesRestored: number }> {
   return request<{ restored: boolean; backupId?: string; filesRestored: number }>("/api/v1/admin/backups/restore", {
     method: "POST",
     body: JSON.stringify({ filePath, confirm }),
@@ -2638,10 +2151,7 @@ async function consumeSseResponse(
   }
 }
 
-async function* iterateSsePayloads(
-  body: ReadableStream<Uint8Array>,
-  signal?: AbortSignal,
-): AsyncGenerator<string> {
+async function* iterateSsePayloads(body: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -2736,10 +2246,10 @@ function createAbortError(): Error {
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException
     ? error.name === "AbortError"
-    : typeof error === "object"
-      && error !== null
-      && "name" in error
-      && (error as { name?: string }).name === "AbortError";
+    : typeof error === "object" &&
+        error !== null &&
+        "name" in error &&
+        (error as { name?: string }).name === "AbortError";
 }
 
 export async function fetchApprovals(status = "pending"): Promise<ApprovalsResponse> {
@@ -2932,21 +2442,27 @@ export async function commsCalendarList(input: CalendarListQuery): Promise<ToolI
   });
 }
 
-export async function commsCalendarCreate(input: CalendarCreateEventInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+export async function commsCalendarCreate(
+  input: CalendarCreateEventInput,
+): Promise<ToolInvokeResult | Record<string, unknown>> {
   return request<ToolInvokeResult | Record<string, unknown>>("/api/v1/comms/calendar/create", {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
-export async function knowledgeMemoryWrite(input: MemoryWriteInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+export async function knowledgeMemoryWrite(
+  input: MemoryWriteInput,
+): Promise<ToolInvokeResult | Record<string, unknown>> {
   return request<ToolInvokeResult | Record<string, unknown>>("/api/v1/knowledge/memory/write", {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
-export async function knowledgeMemorySearch(input: MemorySearchQuery): Promise<ToolInvokeResult | Record<string, unknown>> {
+export async function knowledgeMemorySearch(
+  input: MemorySearchQuery,
+): Promise<ToolInvokeResult | Record<string, unknown>> {
   return request<ToolInvokeResult | Record<string, unknown>>("/api/v1/knowledge/memory/search", {
     method: "POST",
     body: JSON.stringify(input),
@@ -2960,14 +2476,18 @@ export async function knowledgeDocsIngest(input: DocsIngestInput): Promise<ToolI
   });
 }
 
-export async function knowledgeEmbeddingsIndex(input: EmbeddingIndexInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+export async function knowledgeEmbeddingsIndex(
+  input: EmbeddingIndexInput,
+): Promise<ToolInvokeResult | Record<string, unknown>> {
   return request<ToolInvokeResult | Record<string, unknown>>("/api/v1/knowledge/embeddings/index", {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
-export async function knowledgeEmbeddingsQuery(input: EmbeddingQueryInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+export async function knowledgeEmbeddingsQuery(
+  input: EmbeddingQueryInput,
+): Promise<ToolInvokeResult | Record<string, unknown>> {
   return request<ToolInvokeResult | Record<string, unknown>>("/api/v1/knowledge/embeddings/query", {
     method: "POST",
     body: JSON.stringify(input),
@@ -3283,9 +2803,7 @@ export async function runCronJobNow(jobId: string): Promise<{ jobId: string; sta
 }
 
 export async function fetchCronReviewQueue(limit = 200): Promise<{ items: CronReviewItem[] }> {
-  return request<{ items: CronReviewItem[] }>(
-    `/api/v1/cron/review-queue?limit=${Math.max(1, Math.min(limit, 1000))}`,
-  );
+  return request<{ items: CronReviewItem[] }>(`/api/v1/cron/review-queue?limit=${Math.max(1, Math.min(limit, 1000))}`);
 }
 
 export async function retryCronReviewQueueItem(itemId: string): Promise<CronReviewItem> {
@@ -3316,7 +2834,10 @@ export async function fetchDurableRun(runId: string): Promise<DurableRunRecord> 
   return request<DurableRunRecord>(`/api/v1/durable/runs/${encodeURIComponent(runId)}`);
 }
 
-export async function fetchDurableRunTimeline(runId: string, limit = 300): Promise<{ items: DurableRunTimelineEvent[] }> {
+export async function fetchDurableRunTimeline(
+  runId: string,
+  limit = 300,
+): Promise<{ items: DurableRunTimelineEvent[] }> {
   return request<{ items: DurableRunTimelineEvent[] }>(
     `/api/v1/durable/runs/${encodeURIComponent(runId)}/timeline?limit=${Math.max(1, Math.min(limit, 2000))}`,
   );
@@ -3343,7 +2864,10 @@ export async function cancelDurableRun(runId: string, actorId?: string): Promise
   });
 }
 
-export async function retryDurableRun(runId: string, input?: { reason?: string; actorId?: string }): Promise<DurableRunRecord> {
+export async function retryDurableRun(
+  runId: string,
+  input?: { reason?: string; actorId?: string },
+): Promise<DurableRunRecord> {
   return request<DurableRunRecord>(`/api/v1/durable/runs/${encodeURIComponent(runId)}/retry`, {
     method: "POST",
     body: JSON.stringify(input ?? {}),
@@ -3371,7 +2895,9 @@ export async function fetchOperators(): Promise<OperatorsResponse> {
   return request<OperatorsResponse>("/api/v1/operators");
 }
 
-export async function fetchMemoryFiles(dir = "memory"): Promise<{ items: Array<{ relativePath: string; size: number; modifiedAt: string }> }> {
+export async function fetchMemoryFiles(
+  dir = "memory",
+): Promise<{ items: Array<{ relativePath: string; size: number; modifiedAt: string }> }> {
   return request<{ items: Array<{ relativePath: string; size: number; modifiedAt: string }> }>(
     `/api/v1/memory/files?dir=${encodeURIComponent(dir)}`,
   );
@@ -3395,10 +2921,7 @@ export async function createAgentProfile(input: AgentProfileCreateInput): Promis
   });
 }
 
-export async function updateAgentProfile(
-  agentId: string,
-  input: AgentProfileUpdateInput,
-): Promise<AgentProfileRecord> {
+export async function updateAgentProfile(agentId: string, input: AgentProfileUpdateInput): Promise<AgentProfileRecord> {
   return request<AgentProfileRecord>(`/api/v1/agents/${encodeURIComponent(agentId)}`, {
     method: "PATCH",
     body: JSON.stringify(input),
@@ -3422,7 +2945,9 @@ export async function restoreAgentProfile(agentId: string): Promise<AgentProfile
   });
 }
 
-export async function hardDeleteAgentProfile(agentId: string): Promise<{ deleted: boolean; agentId: string; mode: "hard" }> {
+export async function hardDeleteAgentProfile(
+  agentId: string,
+): Promise<{ deleted: boolean; agentId: string; mode: "hard" }> {
   return request<{ deleted: boolean; agentId: string; mode: "hard" }>(
     `/api/v1/agents/${encodeURIComponent(agentId)}?mode=hard`,
     {
@@ -3441,10 +2966,7 @@ export async function fetchFilesList(
   );
 }
 
-export async function fetchPathSuggestions(
-  root = ".",
-  limit = 150,
-): Promise<{ items: string[] }> {
+export async function fetchPathSuggestions(root = ".", limit = 150): Promise<{ items: string[] }> {
   return request<{ items: string[] }>(
     `/api/v1/files/path-suggestions?root=${encodeURIComponent(root)}&limit=${Math.max(1, Math.min(limit, 500))}`,
   );
@@ -3475,7 +2997,10 @@ export async function createFileFromTemplate(
   );
 }
 
-export async function uploadFile(relativePath: string, content: string): Promise<{ relativePath: string; fullPath: string; bytes: number }> {
+export async function uploadFile(
+  relativePath: string,
+  content: string,
+): Promise<{ relativePath: string; fullPath: string; bytes: number }> {
   return request<{ relativePath: string; fullPath: string; bytes: number }>("/api/v1/files/upload", {
     method: "POST",
     body: JSON.stringify({ relativePath, content }),
@@ -3505,10 +3030,7 @@ export async function reloadSkills(): Promise<{ items: SkillListItem[] }> {
   });
 }
 
-export async function fetchSkillSources(query?: {
-  q?: string;
-  limit?: number;
-}): Promise<SkillSourceListResponse> {
+export async function fetchSkillSources(query?: { q?: string; limit?: number }): Promise<SkillSourceListResponse> {
   const params = new URLSearchParams();
   if (query?.q?.trim()) {
     params.set("q", query.q.trim());
@@ -3520,10 +3042,7 @@ export async function fetchSkillSources(query?: {
   return request<SkillSourceListResponse>(`/api/v1/skills/sources${suffix}`);
 }
 
-export async function fetchSkillLookup(query: {
-  q: string;
-  limit?: number;
-}): Promise<SkillSourceLookupResponse> {
+export async function fetchSkillLookup(query: { q: string; limit?: number }): Promise<SkillSourceLookupResponse> {
   const params = new URLSearchParams();
   params.set("q", query.q.trim());
   if (query.limit) {
@@ -3568,9 +3087,7 @@ export async function installSkillImport(input: {
 
 export async function fetchSkillImportHistory(limit = 100): Promise<{ items: SkillImportHistoryRecord[] }> {
   const boundedLimit = Math.max(1, Math.min(limit, 300));
-  return request<{ items: SkillImportHistoryRecord[] }>(
-    `/api/v1/skills/import/history?limit=${boundedLimit}`,
-  );
+  return request<{ items: SkillImportHistoryRecord[] }>(`/api/v1/skills/import/history?limit=${boundedLimit}`);
 }
 
 export async function updateSkillState(
@@ -3787,7 +3304,11 @@ export async function fetchMemoryContext(contextId: string): Promise<MemoryConte
   return request<MemoryContextPack>(`/api/v1/memory/context/${encodeURIComponent(contextId)}`);
 }
 
-export async function fetchMemoryQmdStats(from?: string, to?: string, limit = 60): Promise<MemoryQmdStatsResponse & { recent: MemoryContextPack[] }> {
+export async function fetchMemoryQmdStats(
+  from?: string,
+  to?: string,
+  limit = 60,
+): Promise<MemoryQmdStatsResponse & { recent: MemoryContextPack[] }> {
   const search = new URLSearchParams();
   if (from) search.set("from", from);
   if (to) search.set("to", to);
@@ -3867,7 +3388,9 @@ export async function fetchMemoryMaintenanceRuns(
   return request<{ items: MemoryMaintenanceRunRecord[] }>(`/api/v1/memory/maintenance/runs?${search.toString()}`);
 }
 
-export async function runMemoryMaintenanceNow(input: MemoryMaintenanceRunNowInput): Promise<MemoryMaintenanceRunRecord> {
+export async function runMemoryMaintenanceNow(
+  input: MemoryMaintenanceRunNowInput,
+): Promise<MemoryMaintenanceRunRecord> {
   return request<MemoryMaintenanceRunRecord>("/api/v1/memory/maintenance/run-now", {
     method: "POST",
     body: JSON.stringify(input),
@@ -3894,14 +3417,18 @@ export async function fetchMemoryMaintenanceRecommendations(
   );
 }
 
-export async function acceptMemoryMaintenanceRecommendation(recommendationId: string): Promise<MemoryMaintenanceRecommendationRecord> {
+export async function acceptMemoryMaintenanceRecommendation(
+  recommendationId: string,
+): Promise<MemoryMaintenanceRecommendationRecord> {
   return request<MemoryMaintenanceRecommendationRecord>(
     `/api/v1/memory/maintenance/recommendations/${encodeURIComponent(recommendationId)}/accept`,
     { method: "POST" },
   );
 }
 
-export async function rejectMemoryMaintenanceRecommendation(recommendationId: string): Promise<MemoryMaintenanceRecommendationRecord> {
+export async function rejectMemoryMaintenanceRecommendation(
+  recommendationId: string,
+): Promise<MemoryMaintenanceRecommendationRecord> {
   return request<MemoryMaintenanceRecommendationRecord>(
     `/api/v1/memory/maintenance/recommendations/${encodeURIComponent(recommendationId)}/reject`,
     { method: "POST" },
@@ -3921,9 +3448,7 @@ export async function forgetMemory(input: {
 }
 
 export async function fetchOrchestrationRunContext(runId: string): Promise<{ items: MemoryContextPack[] }> {
-  return request<{ items: MemoryContextPack[] }>(
-    `/api/v1/orchestration/runs/${encodeURIComponent(runId)}/context`,
-  );
+  return request<{ items: MemoryContextPack[] }>(`/api/v1/orchestration/runs/${encodeURIComponent(runId)}/context`);
 }
 
 export async function fetchIntegrationCatalog(
@@ -3938,9 +3463,7 @@ export async function fetchChannelSetupDefinitions(): Promise<{ items: ChannelSe
 }
 
 export async function fetchChannelSetupDefinition(catalogId: string): Promise<ChannelSetupDefinition> {
-  return request<ChannelSetupDefinition>(
-    `/api/v1/channels/catalog/${encodeURIComponent(catalogId)}/setup-definition`,
-  );
+  return request<ChannelSetupDefinition>(`/api/v1/channels/catalog/${encodeURIComponent(catalogId)}/setup-definition`);
 }
 
 export async function fetchChannelSetupDrafts(query?: {
@@ -3962,9 +3485,7 @@ export async function fetchChannelSetupDrafts(query?: {
   return request<{ items: ChannelSetupDraft[] }>(`/api/v1/channels/drafts${suffix}`);
 }
 
-export async function createChannelSetupDraft(
-  input: ChannelSetupDraftCreateInput,
-): Promise<ChannelSetupDraft> {
+export async function createChannelSetupDraft(input: ChannelSetupDraftCreateInput): Promise<ChannelSetupDraft> {
   return request<ChannelSetupDraft>("/api/v1/channels/drafts", {
     method: "POST",
     body: JSON.stringify(input),
@@ -4003,13 +3524,10 @@ export async function finalizeChannelSetupDraft(draftId: string): Promise<Channe
 }
 
 export async function createChannelRepairDraft(connectionId: string): Promise<ChannelSetupDraft> {
-  return request<ChannelSetupDraft>(
-    `/api/v1/channels/connections/${encodeURIComponent(connectionId)}/repair-draft`,
-    {
-      method: "POST",
-      body: JSON.stringify({}),
-    },
-  );
+  return request<ChannelSetupDraft>(`/api/v1/channels/connections/${encodeURIComponent(connectionId)}/repair-draft`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function createChannelRotateSecretDraft(connectionId: string): Promise<ChannelSetupDraft> {
@@ -4023,19 +3541,14 @@ export async function createChannelRotateSecretDraft(connectionId: string): Prom
 }
 
 export async function retestChannelConnection(connectionId: string): Promise<ChannelSetupTestResult> {
-  return request<ChannelSetupTestResult>(
-    `/api/v1/channels/connections/${encodeURIComponent(connectionId)}/retest`,
-    {
-      method: "POST",
-      body: JSON.stringify({}),
-    },
-  );
+  return request<ChannelSetupTestResult>(`/api/v1/channels/connections/${encodeURIComponent(connectionId)}/retest`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function fetchIntegrationFormSchema(catalogId: string): Promise<IntegrationFormSchema> {
-  return request<IntegrationFormSchema>(
-    `/api/v1/integrations/catalog/${encodeURIComponent(catalogId)}/form-schema`,
-  );
+  return request<IntegrationFormSchema>(`/api/v1/integrations/catalog/${encodeURIComponent(catalogId)}/form-schema`);
 }
 
 export async function fetchIntegrationConnections(
@@ -4183,9 +3696,10 @@ export async function testObsidianIntegration(): Promise<ObsidianIntegrationStat
   });
 }
 
-export async function searchObsidianNotes(
-  input: { query: string; limit?: number },
-): Promise<{ items: Array<{ relativePath: string; title: string; snippet: string; score: number }> }> {
+export async function searchObsidianNotes(input: {
+  query: string;
+  limit?: number;
+}): Promise<{ items: Array<{ relativePath: string; title: string; snippet: string; score: number }> }> {
   return request<{ items: Array<{ relativePath: string; title: string; snippet: string; score: number }> }>(
     "/api/v1/integrations/obsidian/search",
     {
@@ -4236,7 +3750,9 @@ export async function fetchLlmConfig(): Promise<LlmRuntimeConfigResponse> {
   return request<LlmRuntimeConfigResponse>("/api/v1/llm/config");
 }
 
-export async function fetchLlmModels(providerId?: string): Promise<{ items: Array<{ id: string; ownedBy?: string; created?: number }> }> {
+export async function fetchLlmModels(
+  providerId?: string,
+): Promise<{ items: Array<{ id: string; ownedBy?: string; created?: number }> }> {
   const query = providerId ? `?providerId=${encodeURIComponent(providerId)}` : "";
   return request(`/api/v1/llm/models${query}`);
 }
@@ -4260,15 +3776,18 @@ export async function fetchAssemblyReputations(limit = 50): Promise<{ items: Mod
   return request(`/api/v1/assembly/reputation?limit=${limit}`);
 }
 
-export async function previewLlmModels(input: {
-  providerId: string;
-  baseUrl: string;
-  apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
-  apiKey?: string;
-  apiKeyEnv?: string;
-  request?: LlmProviderRequestConfig;
-  headers?: Record<string, string>;
-}, options?: { signal?: AbortSignal }): Promise<{
+export async function previewLlmModels(
+  input: {
+    providerId: string;
+    baseUrl: string;
+    apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
+    apiKey?: string;
+    apiKeyEnv?: string;
+    request?: LlmProviderRequestConfig;
+    headers?: Record<string, string>;
+  },
+  options?: { signal?: AbortSignal },
+): Promise<{
   items: Array<{ id: string; ownedBy?: string; created?: number }>;
   source: "remote" | "fallback";
   warning?: string;
@@ -4312,10 +3831,9 @@ export async function fetchProviderSecretStatus(
   providerId: string,
   options?: { signal?: AbortSignal },
 ): Promise<ProviderSecretStatus> {
-  return request<ProviderSecretStatus>(
-    `/api/v1/secrets/providers/${encodeURIComponent(providerId)}/status`,
-    { signal: options?.signal },
-  );
+  return request<ProviderSecretStatus>(`/api/v1/secrets/providers/${encodeURIComponent(providerId)}/status`, {
+    signal: options?.signal,
+  });
 }
 
 export async function saveProviderSecret(providerId: string, apiKey: string): Promise<ProviderSecretStatus> {
@@ -4473,7 +3991,10 @@ export async function startMcpOAuth(serverId: string): Promise<McpOAuthStartResp
   });
 }
 
-export async function completeMcpOAuth(serverId: string, input: { code: string; state?: string }): Promise<McpServerRecord> {
+export async function completeMcpOAuth(
+  serverId: string,
+  input: { code: string; state?: string },
+): Promise<McpServerRecord> {
   return request<McpServerRecord>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/oauth/complete`, {
     method: "POST",
     body: JSON.stringify(input),
@@ -4526,7 +4047,9 @@ export async function fetchVoiceRuntimeStatus(): Promise<VoiceRuntimeStatus> {
 
 export async function fetchVoiceTalkSessions(limit = 10): Promise<VoiceTalkSessionRecord[]> {
   const query = new URLSearchParams({ limit: String(limit) });
-  const response = await request<{ items: VoiceTalkSessionRecord[] }>(`/api/v1/voice/talk/sessions?${query.toString()}`);
+  const response = await request<{ items: VoiceTalkSessionRecord[] }>(
+    `/api/v1/voice/talk/sessions?${query.toString()}`,
+  );
   return response.items;
 }
 
@@ -4661,10 +4184,13 @@ export async function fetchDaemonLogs(tail = 200): Promise<{
   }>(`/api/v1/daemon/logs?tail=${Math.max(1, Math.min(2000, tail))}`);
 }
 
-export async function evaluateUiChangeRisk(input: {
-  pageId: string;
-  changes: Array<{ field: string; from: unknown; to: unknown }>;
-}, options?: { signal?: AbortSignal }): Promise<ChangeRiskEvaluationResponse> {
+export async function evaluateUiChangeRisk(
+  input: {
+    pageId: string;
+    changes: Array<{ field: string; from: unknown; to: unknown }>;
+  },
+  options?: { signal?: AbortSignal },
+): Promise<ChangeRiskEvaluationResponse> {
   return request<ChangeRiskEvaluationResponse>("/api/v1/ui/change-risk/evaluate", {
     method: "POST",
     body: JSON.stringify(input),
@@ -4749,10 +4275,10 @@ async function buildEventStreamUrl(): Promise<string> {
   }
 
   if (
-    auth.mode === "token"
-    || auth.mode === "basic"
-    || Boolean(auth.token?.trim())
-    || Boolean(auth.username && auth.password)
+    auth.mode === "token" ||
+    auth.mode === "basic" ||
+    Boolean(auth.token?.trim()) ||
+    Boolean(auth.username && auth.password)
   ) {
     try {
       const issued = await issueSseBridgeToken("events:stream");
@@ -4790,7 +4316,7 @@ async function ensureEventStreamConnected(): Promise<void> {
     message: "Connecting to realtime events",
   });
 
-  let streamUrl = "";
+  let streamUrl: string;
   try {
     streamUrl = await buildEventStreamUrl();
   } catch {
@@ -4881,12 +4407,8 @@ async function ensureEventStreamConnected(): Promise<void> {
         gatewayNodeId?: string;
       };
       activeEventStreamLeaseId = typeof payload.leaseId === "string" ? payload.leaseId : undefined;
-      activeEventStreamClientId = typeof payload.clientId === "string"
-        ? payload.clientId
-        : activeEventStreamClientId;
-      activeEventStreamGatewayNodeId = typeof payload.gatewayNodeId === "string"
-        ? payload.gatewayNodeId
-        : undefined;
+      activeEventStreamClientId = typeof payload.clientId === "string" ? payload.clientId : activeEventStreamClientId;
+      activeEventStreamGatewayNodeId = typeof payload.gatewayNodeId === "string" ? payload.gatewayNodeId : undefined;
       notifyEventStreamStatusToAll();
     } catch {
       // ignore malformed readiness payloads
@@ -4953,12 +4475,14 @@ function closeSharedEventSource(): void {
   sharedEventSource = null;
 }
 
-export async function fetchDevDiagnostics(params: {
-  level?: DevDiagnosticsLevel;
-  category?: string;
-  correlationId?: string;
-  limit?: number;
-} = {}): Promise<DevDiagnosticsListResponse> {
+export async function fetchDevDiagnostics(
+  params: {
+    level?: DevDiagnosticsLevel;
+    category?: string;
+    correlationId?: string;
+    limit?: number;
+  } = {},
+): Promise<DevDiagnosticsListResponse> {
   const query = new URLSearchParams();
   if (params.level) {
     query.set("level", params.level);
@@ -5012,10 +4536,10 @@ export function connectDevDiagnosticsStream(onEvent: (event: DevDiagnosticsEvent
       return url.toString();
     }
     if (
-      auth.mode === "token"
-      || auth.mode === "basic"
-      || Boolean(auth.token?.trim())
-      || Boolean(auth.username && auth.password)
+      auth.mode === "token" ||
+      auth.mode === "basic" ||
+      Boolean(auth.token?.trim()) ||
+      Boolean(auth.username && auth.password)
     ) {
       try {
         const issued = await issueSseBridgeToken("dev:diagnostics:stream");
@@ -5073,25 +4597,6 @@ export function connectDevDiagnosticsStream(onEvent: (event: DevDiagnosticsEvent
   };
 }
 
-function inferOriginSurface(path: string): string {
-  if (path.startsWith("/api/v1/chat")) {
-    return "chat";
-  }
-  if (path.startsWith("/api/v1/addons")) {
-    return "addons";
-  }
-  if (path.startsWith("/api/v1/voice")) {
-    return "voice";
-  }
-  if (path.startsWith("/api/v1/mcp")) {
-    return "mcp";
-  }
-  if (path.startsWith("/api/v1/integrations")) {
-    return "integrations";
-  }
-  return "app";
-}
-
 function clearReconnectTimer(): void {
   if (eventReconnectTimer === null || typeof window === "undefined") {
     return;
@@ -5114,7 +4619,7 @@ function notifyEventStreamState(subscriber: EventStreamSubscriber, state: EventS
 
 function computeReconnectDelay(attempt: number): number {
   const clampedAttempt = Math.max(1, attempt);
-  const base = Math.min(30_000, 1000 * (2 ** (clampedAttempt - 1)));
+  const base = Math.min(30_000, 1000 * 2 ** (clampedAttempt - 1));
   const jitter = Math.floor(Math.random() * 500);
   return Math.min(30_000, base + jitter);
 }
@@ -5182,7 +4687,7 @@ function getOrCreateRealtimeClientId(): string {
 }
 
 function buildReplayGapRealtimeEvent(rawPayload: string): RealtimeEvent {
-  let payload: Record<string, unknown> = {};
+  let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(rawPayload) as Record<string, unknown>;
   } catch {
@@ -5205,4 +4710,3 @@ function buildReplayGapRealtimeEvent(rawPayload: string): RealtimeEvent {
     },
   };
 }
-

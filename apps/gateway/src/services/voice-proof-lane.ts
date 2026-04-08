@@ -1,5 +1,11 @@
 import type { FollowOnParityReport, FollowOnProofLaneStepRecord, VoiceProofLaneDraft } from "@goatcitadel/contracts";
 import { GATEWAY_FOLLOW_ON_PROOF_LANE_SPECS } from "./follow-on-proof-lane-metadata.js";
+import {
+  buildProofLaneArtifactPath,
+  formatProofLaneMarkdownHeader,
+  formatProofLaneStepsSection,
+  mergeProofLaneBlockingIssues,
+} from "./proof-lane-helpers.js";
 
 const VOICE_PROOF_LANE = GATEWAY_FOLLOW_ON_PROOF_LANE_SPECS.voice;
 
@@ -17,22 +23,25 @@ export function buildVoiceProofLaneDraft(report: FollowOnParityReport): VoicePro
       instructions: voiceReady
         ? `Confirm the managed voice runtime is ${report.voice.runtimeReadiness}, the selected model is ${report.voice.selectedModelId}, and current talk/wake state is visible before starting the proof run.`
         : "Install or repair the managed voice runtime and select an active local model before attempting the voice proof lane.",
-      evidenceHint: "Capture the live runtime readiness, selected model, and current talk/wake state from System or Settings.",
+      evidenceHint:
+        "Capture the live runtime readiness, selected model, and current talk/wake state from System or Settings.",
     },
     {
       stepId: "transcription",
       title: "Run a one-shot transcription pass",
       status: voiceReady ? "ready" : "blocked",
-      instructions: "Transcribe one local audio sample and confirm the transcript returns without falling back to a missing-runtime or missing-model error.",
+      instructions:
+        "Transcribe one local audio sample and confirm the transcript returns without falling back to a missing-runtime or missing-model error.",
       evidenceHint: "Record the input sample, transcript output, and any runtime warnings.",
     },
     {
       stepId: "talk-cycle",
       title: "Run a Talk Mode start/stop cycle",
       status: voiceReady ? "ready" : "blocked",
-      instructions: report.voice.talkState === "running"
-        ? "Stop the current talk session first, then start a fresh session and stop it cleanly to prove state transitions."
-        : "Start a fresh talk session, verify the running state becomes visible, then stop it cleanly.",
+      instructions:
+        report.voice.talkState === "running"
+          ? "Stop the current talk session first, then start a fresh session and stop it cleanly to prove state transitions."
+          : "Start a fresh talk session, verify the running state becomes visible, then stop it cleanly.",
       evidenceHint: "Capture session ids, visible state transitions, and any operator-facing failure text.",
     },
     {
@@ -49,14 +58,12 @@ export function buildVoiceProofLaneDraft(report: FollowOnParityReport): VoicePro
       title: "Complete the voice proof bundle",
       status: voiceReady ? "ready" : "blocked",
       instructions: `Fill ${VOICE_PROOF_LANE.templatePath} using ${VOICE_PROOF_LANE.checklistPath}.`,
-      evidenceHint: "Attach transcript output, talk/wake state transitions, runtime notes, and recovery steps for any failures.",
+      evidenceHint:
+        "Attach transcript output, talk/wake state transitions, runtime notes, and recovery steps for any failures.",
     },
   ];
 
-  const blockingIssues = [
-    ...report.voice.blockingIssues,
-    ...steps.filter((step) => step.status === "blocked").map((step) => `${step.title} is blocked.`),
-  ];
+  const blockingIssues = mergeProofLaneBlockingIssues(report.voice.blockingIssues, steps);
   const summary = voiceReady
     ? `Voice proof lane is ready with runtime ${report.voice.runtimeReadiness}, model ${report.voice.selectedModelId}, talk ${report.voice.talkState}, and wake ${report.voice.wakeEnabled ? report.voice.wakeState : "disabled"}.`
     : "Voice proof lane is blocked until the managed runtime is ready and a local model is selected.";
@@ -68,7 +75,7 @@ export function buildVoiceProofLaneDraft(report: FollowOnParityReport): VoicePro
     summary,
     checklistPath: VOICE_PROOF_LANE.checklistPath,
     templatePath: VOICE_PROOF_LANE.templatePath,
-    blockingIssues: Array.from(new Set(blockingIssues)),
+    blockingIssues,
     recoveryActions,
     steps,
     markdown: buildVoiceProofLaneMarkdown(report, generatedAt, summary, recoveryActions, steps),
@@ -76,11 +83,12 @@ export function buildVoiceProofLaneDraft(report: FollowOnParityReport): VoicePro
 }
 
 export function buildVoiceProofLaneArtifactPath(draft: VoiceProofLaneDraft): string {
-  const day = draft.generatedAt.slice(0, 10);
-  const timestamp = draft.generatedAt
-    .replaceAll(":", "-")
-    .replaceAll(".", "-");
-  return `${VOICE_PROOF_LANE.artifactRoot}/${day}/voice-proof-bundle-${draft.deploymentProfile}-${timestamp}.md`;
+  return buildProofLaneArtifactPath({
+    spec: VOICE_PROOF_LANE,
+    generatedAt: draft.generatedAt,
+    deploymentProfile: draft.deploymentProfile,
+    slug: "voice-proof-bundle",
+  });
 }
 
 function buildVoiceProofLaneMarkdown(
@@ -91,17 +99,14 @@ function buildVoiceProofLaneMarkdown(
   steps: FollowOnProofLaneStepRecord[],
 ): string {
   return [
-    "# Voice Wake And Talk Proof Bundle Draft",
-    "",
-    `Generated: ${generatedAt}`,
-    `Deployment profile: ${report.deploymentProfile}`,
-    `Auth mode: ${report.authMode}`,
-    `Checklist: ${VOICE_PROOF_LANE.checklistPath}`,
-    `Template: ${VOICE_PROOF_LANE.templatePath}`,
-    "",
-    "## Summary",
-    summary,
-    "",
+    ...formatProofLaneMarkdownHeader({
+      title: "Voice Wake And Talk Proof Bundle Draft",
+      generatedAt,
+      deploymentProfile: report.deploymentProfile,
+      authMode: report.authMode,
+      spec: VOICE_PROOF_LANE,
+      summary,
+    }),
     "## Live Runtime Snapshot",
     `- Runtime readiness: ${report.voice.runtimeReadiness}`,
     `- Selected model: ${report.voice.selectedModelId ?? "none"}`,
@@ -114,13 +119,7 @@ function buildVoiceProofLaneMarkdown(
       ? recoveryActions.map((action, index) => `${index + 1}. ${action}`)
       : ["1. No recovery actions are currently active. Voice is ready for the next proof-lane run."]),
     "",
-    "## Lane Steps",
-    ...steps.flatMap((step, index) => [
-      `${index + 1}. ${step.title} [${step.status}]`,
-      `Instructions: ${step.instructions}`,
-      `Evidence: ${step.evidenceHint}`,
-      "",
-    ]),
+    ...formatProofLaneStepsSection(steps),
   ].join("\n");
 }
 

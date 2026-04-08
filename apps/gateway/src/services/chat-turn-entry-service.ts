@@ -1,0 +1,707 @@
+/**
+ * Chat turn public-entry helpers.
+ *
+ * Step 8d/8e of the gateway-service decomposition plan: extracts the public
+ * agent chat-turn entry points (`agentSendChatMessage`, the stream variants,
+ * retry/edit/cancel/resume) and the big inline LLM execution body from
+ * `agentSendChatMessage`. Pure functions over a `GatewayService` host.
+ */
+
+import { randomUUID } from "node:crypto";
+import type {
+  ChatCancelTurnResponse,
+  ChatMessageRecord,
+  ChatSendMessageRequest,
+  ChatSendMessageResponse,
+  ChatStreamChunk,
+  ChatTurnTraceRecord,
+} from "@goatcitadel/contracts";
+import { looksLowConfidenceResponse } from "./learned-memory-utils.js";
+import {
+  buildEmptyAssistantTurnFallbackText,
+  ChatTurnCancelledError,
+  dedupeChatCitations,
+  detectDelegationRoles,
+  inferDegradedAssistantTurnFailure,
+} from "./gateway-service.js";
+import type { GatewayService } from "./gateway-service.js";
+import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
+
+export type ChatTurnEntryHost = GatewayService;
+
+export async function agentSendChatMessage(
+  host: ChatTurnEntryHost,
+  sessionId: string,
+  input: ChatSendMessageRequest,
+): Promise<ChatSendMessageResponse> {
+  return host.withChatTurnWriteLease(sessionId, "agent-send", async () => {
+    host.recordDevDiagnostic({
+      level: "info",
+      category: "chat",
+      event: "chat.turn.start",
+      message: "Starting mission chat turn",
+      sessionId,
+      providerId: input.providerId,
+      modelId: input.model,
+      context: {
+        mode: input.mode,
+        webMode: input.webMode,
+        thinkingLevel: input.thinkingLevel,
+      },
+    });
+    const prepared = await host.prepareAgentChatTurn(sessionId, input, {
+      branchKind: "append",
+    });
+    const binding =
+      host.storage.chatSessionBindings.get(sessionId) ??
+      host.storage.chatSessionBindings.upsert({
+        sessionId,
+        workspaceId: prepared.workspaceId,
+        transport: "llm",
+        writable: true,
+      });
+    if (binding.transport !== "llm") {
+      return chatTurnDispatchService.sendPreparedIntegrationChatTurn(
+        host,
+        sessionId,
+        prepared,
+        binding,
+        "chat_thread_turn_appended",
+      );
+    }
+    const modeOrchestration = await host.resolvePreparedTurnOrchestration(prepared);
+    if (modeOrchestration) {
+      host.recordDevDiagnostic({
+        level: "info",
+        category: "orchestration",
+        event: "chat.orchestration.selected",
+        message: "Routing mission chat turn through orchestration",
+        sessionId,
+        turnId: prepared.turnId,
+      });
+      return chatTurnDispatchService.consumePreparedAgentChatTurn(
+        host,
+        sessionId,
+        input,
+        prepared,
+        "chat_thread_turn_appended",
+        modeOrchestration,
+      );
+    }
+    if (chatTurnDispatchService.shouldUseDurableExecution(host, prepared, input)) {
+      return chatTurnDispatchService.consumePreparedAgentChatTurn(
+        host,
+        sessionId,
+        input,
+        prepared,
+        "chat_thread_turn_appended",
+      );
+    }
+    return runAgentSendChatMessageLlmPath(host, sessionId, input, prepared);
+  });
+}
+
+async function runAgentSendChatMessageLlmPath(
+  host: ChatTurnEntryHost,
+  sessionId: string,
+  input: ChatSendMessageRequest,
+  prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
+): Promise<ChatSendMessageResponse> {
+  const controller = host.beginActiveChatTurnExecution(sessionId, prepared.turnId, "agent-send");
+  try {
+    let turnId = prepared.turnId;
+    let turnResult = await host.turnRuntime.run({
+      sessionId,
+      turnId,
+      userMessageId: prepared.userEventId,
+      parentTurnId: prepared.parentTurnId,
+      branchKind: prepared.branchKind,
+      sourceTurnId: prepared.sourceTurnId,
+      content: prepared.content,
+      mode: prepared.normalized.mode ?? prepared.prefs.mode,
+      providerId: input.providerId ?? prepared.prefs.providerId,
+      model: input.model ?? prepared.prefs.model,
+      webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
+      memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
+      thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
+      toolAutonomy: prepared.effectiveToolAutonomy,
+      historyMessages: prepared.history,
+      outputMessageId: prepared.assistantMessageId,
+      signal: controller.signal,
+    });
+    let reflectionTrace: ChatTurnTraceRecord["reflection"] = {
+      attempted: false,
+      attemptCount: 0,
+      outcome: "not_needed",
+    };
+
+    const shouldAttemptReflection =
+      prepared.autonomy.reflectionMode === "on" &&
+      prepared.prefs.planningMode !== "advisory" &&
+      !controller.signal.aborted &&
+      !turnResult.requiresApproval &&
+      (turnResult.turnTrace.status === "failed" || looksLowConfidenceResponse(turnResult.assistantContent));
+
+    if (shouldAttemptReflection) {
+      const retryTurnId = randomUUID();
+      const retryReason =
+        turnResult.turnTrace.status === "failed" ? "tool failure or completion failure" : "low confidence response";
+      reflectionTrace = {
+        attempted: true,
+        attemptCount: 1,
+        reason: retryReason,
+        outcome: "still_failed",
+      };
+      host.gatewaySql
+        .prepare(
+          `
+    INSERT INTO chat_reflection_attempts (
+      attempt_id, turn_id, session_id, reason, outcome, attempt_count, strategy, error, created_at
+    ) VALUES (
+      @attemptId, @turnId, @sessionId, @reason, @outcome, @attemptCount, @strategy, @error, @createdAt
+    )
+      `,
+        )
+        .run({
+          attemptId: randomUUID(),
+          turnId: retryTurnId,
+          sessionId,
+          reason: retryReason,
+          outcome: "still_failed",
+          attemptCount: 1,
+          strategy: "single retry with alternate tool/query strategy",
+          error: turnResult.turnTrace.status === "failed" ? turnResult.assistantContent.slice(0, 500) : null,
+          createdAt: new Date().toISOString(),
+        });
+
+      const retryHistory = prepared.history;
+      const retryPrompt = `${prepared.content}\n\nRetry guidance: last attempt was incomplete. Use a different approach or tool and be explicit about limits.`;
+      const retryResult = await host.turnRuntime.run({
+        sessionId,
+        turnId: retryTurnId,
+        userMessageId: prepared.userEventId,
+        parentTurnId: prepared.parentTurnId,
+        branchKind: "retry",
+        sourceTurnId: turnId,
+        content: retryPrompt,
+        mode: prepared.normalized.mode ?? prepared.prefs.mode,
+        providerId: input.providerId ?? prepared.prefs.providerId,
+        model: input.model ?? prepared.prefs.model,
+        webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
+        memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
+        thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
+        toolAutonomy: prepared.effectiveToolAutonomy,
+        historyMessages: retryHistory,
+        outputMessageId: prepared.assistantMessageId,
+        signal: controller.signal,
+      });
+      if (retryResult.turnTrace.status === "completed" && retryResult.assistantContent.trim().length > 0) {
+        turnId = retryTurnId;
+        turnResult = retryResult;
+        reflectionTrace = {
+          attempted: true,
+          attemptCount: 1,
+          reason: retryReason,
+          outcome: "recovered",
+        };
+      }
+    }
+
+    const dedupedTurnCitations = dedupeChatCitations(turnResult.turnTrace.citations ?? []);
+    const persistedTurnFailure =
+      turnResult.turnTrace.failure ?? inferDegradedAssistantTurnFailure(turnResult.assistantContent);
+    if (turnResult.requiresApproval || turnResult.turnTrace.status === "cancelled") {
+      let traceWithMeta: ChatTurnTraceRecord = host.storage.chatTurnTraces.patch(turnId, {
+        retrieval: prepared.retrievalTrace,
+        reflection: reflectionTrace,
+        proactive: {
+          runId: prepared.autonomy.lastProactiveRunId,
+          mode: prepared.autonomy.proactiveMode,
+        },
+        guidance: {
+          workspaceId: prepared.workspaceId,
+          globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
+          workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
+          truncated: prepared.resolvedGuidance.truncated,
+        },
+        citations: dedupedTurnCitations,
+        failure: persistedTurnFailure,
+      });
+      const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
+        sessionId,
+        content: prepared.content,
+        assistantText: turnResult.assistantContent,
+        trace: {
+          ...traceWithMeta,
+          toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+        },
+      });
+      if (capabilityUpgradeSuggestions.length > 0) {
+        traceWithMeta = host.storage.chatTurnTraces.patch(turnId, {
+          capabilityUpgradeSuggestions,
+        });
+      }
+      host.recordCapabilityGapFromTrace({
+        sessionId,
+        turnId,
+        content: prepared.content,
+        trace: {
+          ...traceWithMeta,
+          citations: dedupedTurnCitations,
+          toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+        },
+      });
+      if (turnResult.turnTrace.status !== "cancelled") {
+        host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+        host.publishRealtime("chat_thread_updated", "chat", {
+          type: "chat_thread_turn_appended",
+          sessionId,
+          turnId,
+          activeLeafTurnId: turnId,
+        });
+      }
+      return {
+        sessionId,
+        userMessage: prepared.userMessage,
+        assistantMessage: undefined,
+        transport: "llm",
+        model: turnResult.assistantModel,
+        turnId,
+        trace: {
+          ...traceWithMeta,
+          citations: dedupedTurnCitations,
+          toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+        },
+        citations: dedupedTurnCitations,
+        routing: turnResult.turnTrace.routing,
+      };
+    }
+
+    const assistantText =
+      turnResult.assistantContent.trim().length > 0
+        ? turnResult.assistantContent
+        : buildEmptyAssistantTurnFallbackText();
+    const assistantUsage = turnResult.usage;
+    const assistantEventId = prepared.assistantMessageId;
+    await host.ingestEvent(randomUUID(), {
+      eventId: assistantEventId,
+      route: prepared.route,
+      actor: {
+        type: "agent",
+        id: "assistant",
+      },
+      message: {
+        role: "assistant",
+        content: assistantText,
+      },
+      usage: assistantUsage,
+    });
+    const assistantMessage: ChatMessageRecord = {
+      messageId: assistantEventId,
+      sessionId,
+      role: "assistant",
+      actorType: "agent",
+      actorId: "assistant",
+      content: assistantText,
+      timestamp: new Date().toISOString(),
+    };
+    const finalTraceStatus = turnResult.turnTrace.status === "failed" ? "failed" : "completed";
+    const trace = host.storage.chatTurnTraces.patch(turnId, {
+      assistantMessageId: assistantEventId,
+      status: finalTraceStatus,
+      finishedAt: new Date().toISOString(),
+      retrieval: prepared.retrievalTrace,
+      reflection: reflectionTrace,
+      proactive: {
+        runId: prepared.autonomy.lastProactiveRunId,
+        mode: prepared.autonomy.proactiveMode,
+      },
+      guidance: {
+        workspaceId: prepared.workspaceId,
+        globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
+        workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
+        truncated: prepared.resolvedGuidance.truncated,
+      },
+      citations: dedupedTurnCitations,
+      failure: persistedTurnFailure,
+    });
+    let hydratedTrace: ChatTurnTraceRecord = {
+      ...trace,
+      citations: dedupedTurnCitations,
+      toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+    };
+    const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
+      sessionId,
+      content: prepared.content,
+      assistantText,
+      trace: hydratedTrace,
+    });
+    const specialistCandidateSuggestions = host.collectSpecialistCandidateSuggestions({
+      sessionId,
+      mode: prepared.normalized.mode ?? prepared.prefs.mode,
+      content: prepared.content,
+      capabilitySuggestions: capabilityUpgradeSuggestions,
+      trace: hydratedTrace,
+    });
+    if (capabilityUpgradeSuggestions.length > 0 || specialistCandidateSuggestions.length > 0) {
+      hydratedTrace = host.storage.chatTurnTraces.patch(turnId, {
+        capabilityUpgradeSuggestions: capabilityUpgradeSuggestions.length > 0 ? capabilityUpgradeSuggestions : [],
+        specialistCandidateSuggestions: specialistCandidateSuggestions.length > 0 ? specialistCandidateSuggestions : [],
+      });
+      hydratedTrace = {
+        ...hydratedTrace,
+        toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+      };
+    }
+    host.recordCapabilityGapFromTrace({
+      sessionId,
+      turnId,
+      content: prepared.content,
+      trace: hydratedTrace,
+    });
+
+    host.extractAndPersistLearnedMemory(sessionId, prepared.content, {
+      role: "user",
+      sourceRef: prepared.userEventId,
+      trace: hydratedTrace,
+    });
+    host.extractAndPersistLearnedMemory(sessionId, assistantText, {
+      role: "assistant",
+      sourceRef: assistantEventId,
+      trace: hydratedTrace,
+    });
+    host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+    host.publishRealtime("chat_thread_updated", "chat", {
+      type: "chat_thread_turn_appended",
+      sessionId,
+      turnId,
+      activeLeafTurnId: turnId,
+    });
+    const delegationDetection = detectDelegationRoles(prepared.content);
+    if (
+      !host.isReplayScratchSession(sessionId) &&
+      prepared.prefs.planningMode !== "advisory" &&
+      delegationDetection.length > 1
+    ) {
+      await host.triggerChatSessionProactive(sessionId, {
+        source: "chat",
+        reason: "Detected multi-role phrasing; generated delegation suggestion.",
+      });
+    }
+
+    return {
+      sessionId,
+      userMessage: prepared.userMessage,
+      assistantMessage,
+      transport: "llm",
+      model: turnResult.assistantModel,
+      turnId,
+      trace: hydratedTrace,
+      citations: hydratedTrace.citations,
+      routing: hydratedTrace.routing,
+    };
+  } finally {
+    host.endActiveChatTurnExecution(prepared.turnId, controller);
+  }
+}
+
+export async function* agentSendChatMessageStream(
+  host: ChatTurnEntryHost,
+  sessionId: string,
+  input: ChatSendMessageRequest,
+): AsyncGenerator<ChatStreamChunk> {
+  yield* host.withChatTurnWriteLeaseStream(sessionId, "agent-send/stream", () => {
+    return (async function* (): AsyncGenerator<ChatStreamChunk> {
+      host.recordDevDiagnostic({
+        level: "info",
+        category: "chat",
+        event: "chat.stream.start",
+        message: "Starting streamed mission chat turn",
+        sessionId,
+        providerId: input.providerId,
+        modelId: input.model,
+        context: {
+          mode: input.mode,
+          webMode: input.webMode,
+          thinkingLevel: input.thinkingLevel,
+        },
+      });
+      const prepared = await host.prepareAgentChatTurn(sessionId, input, {
+        branchKind: "append",
+      });
+      const binding =
+        host.storage.chatSessionBindings.get(sessionId) ??
+        host.storage.chatSessionBindings.upsert({
+          sessionId,
+          workspaceId: prepared.workspaceId,
+          transport: "llm",
+          writable: true,
+        });
+      if (binding.transport !== "llm") {
+        yield* host.withEphemeralStreamEnvelope(
+          chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+            host,
+            sessionId,
+            prepared,
+            binding,
+            "chat_thread_turn_appended",
+          ),
+        );
+        return;
+      }
+      chatTurnDispatchService.launchPreparedAgentChatTurnStream(
+        host,
+        sessionId,
+        input,
+        prepared,
+        "chat_thread_turn_appended",
+      );
+      yield* host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true });
+    })();
+  });
+}
+
+export async function retryChatTurn(
+  host: ChatTurnEntryHost,
+  sessionId: string,
+  turnId: string,
+  overrides: Partial<ChatSendMessageRequest> = {},
+): Promise<ChatSendMessageResponse> {
+  return host.withChatTurnWriteLease(sessionId, "retry-turn", async () => {
+    const current = await host.requireChatTurnContext(sessionId, turnId);
+    const request: ChatSendMessageRequest = {
+      content: current.userMessage.content,
+      attachments: current.userMessage.attachments?.map((item) => item.attachmentId),
+      providerId: overrides.providerId,
+      model: overrides.model,
+      useMemory: overrides.useMemory,
+      mode: overrides.mode,
+      webMode: overrides.webMode,
+      memoryMode: overrides.memoryMode,
+      thinkingLevel: overrides.thinkingLevel,
+      commandText: overrides.commandText,
+      prefsOverride: overrides.prefsOverride,
+    };
+    const prepared = await host.prepareAgentChatTurn(sessionId, request, {
+      branchKind: "retry",
+      sourceTurnId: turnId,
+      parentTurnId: current.trace.parentTurnId,
+      existingUserMessage: current.userMessage,
+      ingestUserMessage: false,
+    });
+    const binding =
+      host.storage.chatSessionBindings.get(sessionId) ??
+      host.storage.chatSessionBindings.upsert({
+        sessionId,
+        workspaceId: prepared.workspaceId,
+        transport: "llm",
+        writable: true,
+      });
+    if (binding.transport !== "llm") {
+      return chatTurnDispatchService.sendPreparedIntegrationChatTurn(
+        host,
+        sessionId,
+        prepared,
+        binding,
+        "chat_thread_turn_retried",
+      );
+    }
+    return chatTurnDispatchService.consumePreparedAgentChatTurn(
+      host,
+      sessionId,
+      request,
+      prepared,
+      "chat_thread_turn_retried",
+    );
+  });
+}
+
+export async function* retryChatTurnStream(
+  host: ChatTurnEntryHost,
+  sessionId: string,
+  turnId: string,
+  overrides: Partial<ChatSendMessageRequest> = {},
+): AsyncGenerator<ChatStreamChunk> {
+  yield* host.withChatTurnWriteLeaseStream(sessionId, "retry-turn/stream", () => {
+    return (async function* (): AsyncGenerator<ChatStreamChunk> {
+      const current = await host.requireChatTurnContext(sessionId, turnId);
+      const request: ChatSendMessageRequest = {
+        content: current.userMessage.content,
+        attachments: current.userMessage.attachments?.map((item) => item.attachmentId),
+        providerId: overrides.providerId,
+        model: overrides.model,
+        useMemory: overrides.useMemory,
+        mode: overrides.mode,
+        webMode: overrides.webMode,
+        memoryMode: overrides.memoryMode,
+        thinkingLevel: overrides.thinkingLevel,
+        commandText: overrides.commandText,
+        prefsOverride: overrides.prefsOverride,
+      };
+      const prepared = await host.prepareAgentChatTurn(sessionId, request, {
+        branchKind: "retry",
+        sourceTurnId: turnId,
+        parentTurnId: current.trace.parentTurnId,
+        existingUserMessage: current.userMessage,
+        ingestUserMessage: false,
+      });
+      const binding =
+        host.storage.chatSessionBindings.get(sessionId) ??
+        host.storage.chatSessionBindings.upsert({
+          sessionId,
+          workspaceId: prepared.workspaceId,
+          transport: "llm",
+          writable: true,
+        });
+      if (binding.transport !== "llm") {
+        yield* host.withEphemeralStreamEnvelope(
+          chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+            host,
+            sessionId,
+            prepared,
+            binding,
+            "chat_thread_turn_retried",
+          ),
+        );
+        return;
+      }
+      chatTurnDispatchService.launchPreparedAgentChatTurnStream(
+        host,
+        sessionId,
+        request,
+        prepared,
+        "chat_thread_turn_retried",
+      );
+      yield* host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true });
+    })();
+  });
+}
+
+export async function editChatTurn(
+  host: ChatTurnEntryHost,
+  sessionId: string,
+  turnId: string,
+  input: ChatSendMessageRequest,
+): Promise<ChatSendMessageResponse> {
+  return host.withChatTurnWriteLease(sessionId, "edit-turn", async () => {
+    const current = await host.requireChatTurnContext(sessionId, turnId);
+    const request: ChatSendMessageRequest = {
+      ...input,
+      attachments: input.attachments ?? current.userMessage.attachments?.map((item) => item.attachmentId),
+    };
+    const prepared = await host.prepareAgentChatTurn(sessionId, request, {
+      branchKind: "edit",
+      sourceTurnId: turnId,
+      parentTurnId: current.trace.parentTurnId,
+    });
+    const binding =
+      host.storage.chatSessionBindings.get(sessionId) ??
+      host.storage.chatSessionBindings.upsert({
+        sessionId,
+        workspaceId: prepared.workspaceId,
+        transport: "llm",
+        writable: true,
+      });
+    if (binding.transport !== "llm") {
+      return chatTurnDispatchService.sendPreparedIntegrationChatTurn(
+        host,
+        sessionId,
+        prepared,
+        binding,
+        "chat_thread_turn_edited",
+      );
+    }
+    return chatTurnDispatchService.consumePreparedAgentChatTurn(
+      host,
+      sessionId,
+      request,
+      prepared,
+      "chat_thread_turn_edited",
+    );
+  });
+}
+
+export async function* editChatTurnStream(
+  host: ChatTurnEntryHost,
+  sessionId: string,
+  turnId: string,
+  input: ChatSendMessageRequest,
+): AsyncGenerator<ChatStreamChunk> {
+  yield* host.withChatTurnWriteLeaseStream(sessionId, "edit-turn/stream", () => {
+    return (async function* (): AsyncGenerator<ChatStreamChunk> {
+      const current = await host.requireChatTurnContext(sessionId, turnId);
+      const request: ChatSendMessageRequest = {
+        ...input,
+        attachments: input.attachments ?? current.userMessage.attachments?.map((item) => item.attachmentId),
+      };
+      const prepared = await host.prepareAgentChatTurn(sessionId, request, {
+        branchKind: "edit",
+        sourceTurnId: turnId,
+        parentTurnId: current.trace.parentTurnId,
+      });
+      const binding =
+        host.storage.chatSessionBindings.get(sessionId) ??
+        host.storage.chatSessionBindings.upsert({
+          sessionId,
+          workspaceId: prepared.workspaceId,
+          transport: "llm",
+          writable: true,
+        });
+      if (binding.transport !== "llm") {
+        yield* host.withEphemeralStreamEnvelope(
+          chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+            host,
+            sessionId,
+            prepared,
+            binding,
+            "chat_thread_turn_edited",
+          ),
+        );
+        return;
+      }
+      chatTurnDispatchService.launchPreparedAgentChatTurnStream(
+        host,
+        sessionId,
+        request,
+        prepared,
+        "chat_thread_turn_edited",
+      );
+      yield* host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true });
+    })();
+  });
+}
+
+export async function cancelChatTurn(
+  host: ChatTurnEntryHost,
+  sessionId: string,
+  turnId: string,
+  cancelledBy?: string,
+): Promise<ChatCancelTurnResponse> {
+  const current = host.storage.chatTurnTraces.get(turnId);
+  if (current.sessionId !== sessionId) {
+    throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
+  }
+  const active = host.activeChatTurns.get(turnId);
+  if (active?.sessionId === sessionId && !active.controller.signal.aborted) {
+    active.controller.abort(new ChatTurnCancelledError(turnId));
+  }
+  const trace = host.markChatTurnCancelled(sessionId, turnId, cancelledBy);
+  return {
+    sessionId,
+    turnId,
+    cancelled: trace.status === "cancelled",
+    trace,
+  };
+}
+
+export async function* resumeAgentChatTurnStream(
+  host: ChatTurnEntryHost,
+  sessionId: string,
+  turnId: string,
+  sinceEventId?: string,
+): AsyncGenerator<ChatStreamChunk> {
+  yield* host.streamPersistedChatTurnEvents(sessionId, turnId, {
+    sinceEventId,
+    liveTail: true,
+  });
+}

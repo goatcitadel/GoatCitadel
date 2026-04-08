@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { useCallback, useEffect, useState } from "react";
 import {
   fetchApprovalReplay,
@@ -25,6 +26,12 @@ import { useEmbeddedPageChrome } from "../components/EmbeddedPageChrome";
 import { useAction } from "../hooks/useAction";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { pageCopy } from "../content/copy";
+import {
+  buildApprovalEvidenceModel,
+  findTraceMetadata,
+  type ApprovalEvidenceBlock,
+  type ApprovalEvidenceModel,
+} from "./approvals/approvals-page-helpers";
 
 interface ApprovalDurableStatus {
   runId: string;
@@ -32,18 +39,6 @@ interface ApprovalDurableStatus {
   blockedStep?: string;
   blockedReason?: string;
   updatedAt: string;
-}
-
-interface ApprovalEvidenceBlock {
-  label: string;
-  content: string;
-}
-
-interface ApprovalEvidenceModel {
-  targets: string[];
-  commands: string[];
-  changes: ApprovalEvidenceBlock[];
-  supporting: string[];
 }
 
 export function ApprovalsPage() {
@@ -54,7 +49,9 @@ export function ApprovalsPage() {
   const [durableByApprovalId, setDurableByApprovalId] = useState<Record<string, ApprovalDurableStatus | null>>({});
   const [durableBusyByApprovalId, setDurableBusyByApprovalId] = useState<Record<string, boolean>>({});
   const [tracePreviewByApprovalId, setTracePreviewByApprovalId] = useState<Record<string, string[]>>({});
-  const [pendingDecision, setPendingDecision] = useState<{ approvalId: string; decision: "approve" | "reject" } | null>(null);
+  const [pendingDecision, setPendingDecision] = useState<{ approvalId: string; decision: "approve" | "reject" } | null>(
+    null,
+  );
   const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
   const [pendingResumeApprovalId, setPendingResumeApprovalId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -108,25 +105,27 @@ export function ApprovalsPage() {
   const onRejectAllPending = async () => {
     try {
       setError(null);
-      const result = await bulkResolveAction.run(async () => resolveApprovalsBulk({
-        decision: "reject",
-        status: "pending",
-        resolutionNote: "Bulk rejected from the approvals queue.",
-      }));
+      const result = await bulkResolveAction.run(async () =>
+        resolveApprovalsBulk({
+          decision: "reject",
+          status: "pending",
+          resolutionNote: "Bulk rejected from the approvals queue.",
+        }),
+      );
       const message = `Rejected ${result.resolvedCount} pending approvals. Skipped ${result.skippedCount}. Failed ${result.failedCount}.`;
       setSummary(message);
       setError(null);
       const resolvedApprovalIds = new Set(
-        result.items
-          .filter((item) => item.outcome === "resolved")
-          .map((item) => item.approvalId),
+        result.items.filter((item) => item.outcome === "resolved").map((item) => item.approvalId),
       );
-      setData((current) => current
-        ? {
-          ...current,
-          items: current.items.filter((item) => !resolvedApprovalIds.has(item.approvalId)),
-        }
-        : current);
+      setData((current) =>
+        current
+          ? {
+              ...current,
+              items: current.items.filter((item) => !resolvedApprovalIds.has(item.approvalId)),
+            }
+          : current,
+      );
     } catch (err) {
       setSummary(null);
       setError((err as Error).message);
@@ -144,12 +143,14 @@ export function ApprovalsPage() {
 
   const applyResolvedApprovalResult = (result: ApprovalResolveResponse) => {
     setReplayById((prev) => ({ ...prev, [result.approval.approvalId]: result.replay }));
-    setData((current) => current
-      ? {
-        ...current,
-        items: current.items.filter((item) => item.approvalId !== result.approval.approvalId),
-      }
-      : current);
+    setData((current) =>
+      current
+        ? {
+            ...current,
+            items: current.items.filter((item) => item.approvalId !== result.approval.approvalId),
+          }
+        : current,
+    );
     setDurableByApprovalId((prev) => {
       if (!result.durableRunId) {
         return prev;
@@ -176,7 +177,11 @@ export function ApprovalsPage() {
         linked: {
           sessionIds: result.approval.linkage?.sessionId ? [result.approval.linkage.sessionId] : [],
           turnIds: result.approval.linkage?.turnId ? [result.approval.linkage.turnId] : [],
-          runIds: result.durableRunId ? [result.durableRunId] : result.approval.linkage?.durableRunId ? [result.approval.linkage.durableRunId] : [],
+          runIds: result.durableRunId
+            ? [result.durableRunId]
+            : result.approval.linkage?.durableRunId
+              ? [result.approval.linkage.durableRunId]
+              : [],
           proactiveRunIds: result.approval.linkage?.proactiveRunId ? [result.approval.linkage.proactiveRunId] : [],
           approvalIds: [result.approval.approvalId],
           taskIds: result.approval.linkage?.taskId ? [result.approval.linkage.taskId] : [],
@@ -200,7 +205,7 @@ export function ApprovalsPage() {
         setError("No durable run is linked to this approval yet.");
         return;
       }
-      const run = lifecycle.durableRun ?? await fetchDurableRun(runId);
+      const run = lifecycle.durableRun ?? (await fetchDurableRun(runId));
       const timeline = await fetchDurableRunTimeline(runId, 120);
       const blockingEvent = [...timeline.items]
         .reverse()
@@ -253,7 +258,9 @@ export function ApprovalsPage() {
       });
       setTracePreviewByApprovalId((prev) => ({
         ...prev,
-        [approvalId]: response.items.map((item) => `${new Date(item.timestamp).toLocaleTimeString()} ${item.event}: ${item.message}`),
+        [approvalId]: response.items.map(
+          (item) => `${new Date(item.timestamp).toLocaleTimeString()} ${item.event}: ${item.message}`,
+        ),
       }));
       setError(null);
     } catch (err) {
@@ -300,12 +307,15 @@ export function ApprovalsPage() {
         actions={pageCopy.approvals.guide?.actions ?? []}
         terms={pageCopy.approvals.guide?.terms}
       />
-      {embedded && approvalsHeaderActions ? <DataToolbar primary={approvalsHeaderActions} className="approvals-toolbar" /> : null}
+      {embedded && approvalsHeaderActions ? (
+        <DataToolbar primary={approvalsHeaderActions} className="approvals-toolbar" />
+      ) : null}
       <div className="workflow-status-stack">
         {error ? <p className="error">{error}</p> : null}
         {summary ? <p className="office-subtitle">{summary}</p> : null}
         <p className="office-subtitle">
-          This queue shows backend approval records. The shell decision badge can also include active Mission Control prompts that are not yet persisted here.
+          This queue shows backend approval records. The shell decision badge can also include active Mission Control
+          prompts that are not yet persisted here.
         </p>
       </div>
       {!hasPendingApprovals ? (
@@ -326,26 +336,28 @@ export function ApprovalsPage() {
         const durableBusy = Boolean(durableBusyByApprovalId[approval.approvalId]);
         const tracePreview = tracePreviewByApprovalId[approval.approvalId];
         const evidence = buildApprovalEvidenceModel(approval.preview, replay?.pendingAction?.request);
-        const explanationSummary = approval.explanation?.summary ?? `Review the ${approval.kind} request before GoatCitadel continues.`;
+        const explanationSummary =
+          approval.explanation?.summary ?? `Review the ${approval.kind} request before GoatCitadel continues.`;
         const consequenceSummary = approval.explanation?.saferAlternative
           ? `Approve to continue this action now. Reject to stop it here. Safer alternative: ${approval.explanation.saferAlternative}`
           : "Approve to continue this action now. Reject to keep the system paused at this checkpoint.";
         const explanationTimestamp = approval.explanation
           ? `Generated ${new Date(approval.explanation.generatedAt).toLocaleString()}`
           : null;
-        const traceMetadata = approval.linkage?.correlationId || approval.linkage?.traceId
-          ? {
-            correlationId: approval.linkage?.correlationId,
-            traceId: approval.linkage?.traceId,
-          }
-          : replay?.approval.linkage?.correlationId || replay?.approval.linkage?.traceId
+        const traceMetadata =
+          approval.linkage?.correlationId || approval.linkage?.traceId
             ? {
-              correlationId: replay.approval.linkage?.correlationId,
-              traceId: replay.approval.linkage?.traceId,
-            }
-            : findTraceMetadata(replay?.pendingAction?.request)
-              ?? findTraceMetadata(approval.payload)
-              ?? findTraceMetadata(approval.preview);
+                correlationId: approval.linkage?.correlationId,
+                traceId: approval.linkage?.traceId,
+              }
+            : replay?.approval.linkage?.correlationId || replay?.approval.linkage?.traceId
+              ? {
+                  correlationId: replay.approval.linkage?.correlationId,
+                  traceId: replay.approval.linkage?.traceId,
+                }
+              : (findTraceMetadata(replay?.pendingAction?.request) ??
+                findTraceMetadata(approval.payload) ??
+                findTraceMetadata(approval.preview));
         const explanationLabel =
           approval.explanationStatus === "pending"
             ? "Pending explanation"
@@ -360,24 +372,35 @@ export function ApprovalsPage() {
             key={approval.approvalId}
             title={approval.kind}
             className={`approval-card approval-card-${approval.riskLevel}`}
-            subtitle={(
+            subtitle={
               <div className="workflow-summary-strip">
-                <StatusChip tone={approval.riskLevel === "nuclear" ? "critical" : approval.riskLevel === "danger" ? "warning" : "muted"}>
+                <StatusChip
+                  tone={
+                    approval.riskLevel === "nuclear"
+                      ? "critical"
+                      : approval.riskLevel === "danger"
+                        ? "warning"
+                        : "muted"
+                  }
+                >
                   {approval.riskLevel} risk
                 </StatusChip>
-                <StatusChip className="approvals-explanation-chip" tone={
-                  approval.explanationStatus === "pending"
-                    ? "warning"
-                    : approval.explanationStatus === "completed"
-                      ? "success"
-                      : approval.explanationStatus === "failed"
-                        ? "critical"
-                        : "muted"
-                }>
+                <StatusChip
+                  className="approvals-explanation-chip"
+                  tone={
+                    approval.explanationStatus === "pending"
+                      ? "warning"
+                      : approval.explanationStatus === "completed"
+                        ? "success"
+                        : approval.explanationStatus === "failed"
+                          ? "critical"
+                          : "muted"
+                  }
+                >
                   {explanationLabel}
                 </StatusChip>
               </div>
-            )}
+            }
           >
             <section className="approval-decision-shell" aria-label={`Decision framing for ${approval.kind}`}>
               <div className="approval-decision-copy">
@@ -399,21 +422,31 @@ export function ApprovalsPage() {
                 ) : null}
               </div>
               <div className="approval-action-row">
-                <button type="button" className="approval-action-primary" onClick={() => setPendingDecision({ approvalId: approval.approvalId, decision: "approve" })}>
+                <button
+                  type="button"
+                  className="approval-action-primary"
+                  onClick={() => setPendingDecision({ approvalId: approval.approvalId, decision: "approve" })}
+                >
                   Approve now
                 </button>
-                <button type="button" className="danger approval-action-secondary" onClick={() => setPendingDecision({ approvalId: approval.approvalId, decision: "reject" })}>
+                <button
+                  type="button"
+                  className="danger approval-action-secondary"
+                  onClick={() => setPendingDecision({ approvalId: approval.approvalId, decision: "reject" })}
+                >
                   Reject
                 </button>
-                <button type="button" className="approval-action-tertiary" onClick={() => onReplay(approval.approvalId)}>
+                <button
+                  type="button"
+                  className="approval-action-tertiary"
+                  onClick={() => onReplay(approval.approvalId)}
+                >
                   Load replay trail
                 </button>
               </div>
             </section>
 
-            {approval.explanationError ? (
-              <p className="error">Explainer error: {approval.explanationError}</p>
-            ) : null}
+            {approval.explanationError ? <p className="error">Explainer error: {approval.explanationError}</p> : null}
 
             <div className="approval-evidence-grid">
               {evidence ? (
@@ -461,7 +494,10 @@ export function ApprovalsPage() {
                   {traceMetadata?.correlationId ? <p>correlation: {traceMetadata.correlationId}</p> : null}
                   {traceMetadata?.correlationId ? (
                     <div className="actions">
-                      <button type="button" onClick={() => void loadTracePreview(approval.approvalId, traceMetadata.correlationId)}>
+                      <button
+                        type="button"
+                        onClick={() => void loadTracePreview(approval.approvalId, traceMetadata.correlationId)}
+                      >
                         {tracePreview ? "Refresh trace detail" : "Load trace detail"}
                       </button>
                     </div>
@@ -471,12 +507,15 @@ export function ApprovalsPage() {
               <div className="replay-box approval-support-box">
                 <h4>Checkpoint resume</h4>
                 <p>
-                  Load durable status to see the exact blocked step. Resume continues from the last checkpoint instead of restarting.
+                  Load durable status to see the exact blocked step. Resume continues from the last checkpoint instead
+                  of restarting.
                 </p>
                 <div className="actions">
                   <button
                     type="button"
-                    onClick={() => { void loadDurableStatus(approval.approvalId); }}
+                    onClick={() => {
+                      void loadDurableStatus(approval.approvalId);
+                    }}
                     disabled={durableBusy}
                   >
                     {durableBusy ? "Loading..." : "Load durable status"}
@@ -533,12 +572,14 @@ export function ApprovalsPage() {
                   <p className="office-subtitle">
                     Proactive run: {approval.linkage?.proactiveRunId ?? lifecycle.proactiveRuns?.[0]?.runId ?? "none"}
                     {" | "}
-                    Surface: {approval.linkage?.originSurface ?? lifecycle.proactiveRuns?.[0]?.originSurface ?? "unknown"}
+                    Surface:{" "}
+                    {approval.linkage?.originSurface ?? lifecycle.proactiveRuns?.[0]?.originSurface ?? "unknown"}
                   </p>
                 ) : null}
                 {approval.linkage?.externalReferenceRoots?.length ? (
                   <p className="office-subtitle">
-                    Reference roots: {approval.linkage.externalReferenceRoots.map((root) => `${root.label} (${root.access})`).join(", ")}
+                    Reference roots:{" "}
+                    {approval.linkage.externalReferenceRoots.map((root) => `${root.label} (${root.access})`).join(", ")}
                   </p>
                 ) : null}
                 {lifecycle.proactiveRuns?.length ? (
@@ -565,13 +606,12 @@ export function ApprovalsPage() {
                   <ul>
                     {replay.events.map((event) => (
                       <li key={event.eventId}>
-                        <strong>{event.eventType}</strong> by {event.actorId} at {new Date(event.timestamp).toLocaleString()}
+                        <strong>{event.eventType}</strong> by {event.actorId} at{" "}
+                        {new Date(event.timestamp).toLocaleString()}
                       </li>
                     ))}
                   </ul>
-                  {replay.pendingAction ? (
-                    <pre>{JSON.stringify(replay.pendingAction, null, 2)}</pre>
-                  ) : null}
+                  {replay.pendingAction ? <pre>{JSON.stringify(replay.pendingAction, null, 2)}</pre> : null}
                 </div>
               </details>
             ) : null}
@@ -595,7 +635,9 @@ export function ApprovalsPage() {
             ? "Approve this action and execute it now?"
             : "Reject this approval request?"
         }
-        confirmLabel={resolveAction.pending ? "Applying..." : (pendingDecision?.decision === "approve" ? "Approve" : "Reject")}
+        confirmLabel={
+          resolveAction.pending ? "Applying..." : pendingDecision?.decision === "approve" ? "Approve" : "Reject"
+        }
         danger={pendingDecision?.decision === "reject"}
         pending={resolveAction.pending}
         cancelDisabled={resolveAction.pending}
@@ -647,178 +689,3 @@ export function ApprovalsPage() {
     </section>
   );
 }
-
-function findTraceMetadata(payload: unknown): { correlationId?: string; traceId?: string } | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const stack: unknown[] = [payload];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current || typeof current !== "object") {
-      continue;
-    }
-    const record = current as Record<string, unknown>;
-    const correlationId = typeof record.correlationId === "string" ? record.correlationId : undefined;
-    const traceId = typeof record.traceId === "string" ? record.traceId : undefined;
-    if (correlationId || traceId) {
-      return { correlationId, traceId };
-    }
-    for (const value of Object.values(record)) {
-      if (value && typeof value === "object") {
-        stack.push(value);
-      }
-    }
-  }
-  return null;
-}
-
-function buildApprovalEvidenceModel(...sources: Array<unknown>): ApprovalEvidenceModel | null {
-  const targets = new Set<string>();
-  const commands = new Set<string>();
-  const supporting = new Set<string>();
-  const changes: ApprovalEvidenceBlock[] = [];
-  const seenBlocks = new Set<string>();
-
-  for (const source of sources) {
-    collectApprovalEvidence(source, {
-      targets,
-      commands,
-      supporting,
-      changes,
-      seenBlocks,
-    });
-  }
-
-  if (targets.size === 0 && commands.size === 0 && supporting.size === 0 && changes.length === 0) {
-    return null;
-  }
-
-  return {
-    targets: [...targets].slice(0, 6),
-    commands: [...commands].slice(0, 4),
-    supporting: [...supporting].slice(0, 4),
-    changes: changes.slice(0, 4),
-  };
-}
-
-function collectApprovalEvidence(
-  source: unknown,
-  collector: {
-    targets: Set<string>;
-    commands: Set<string>;
-    supporting: Set<string>;
-    changes: ApprovalEvidenceBlock[];
-    seenBlocks: Set<string>;
-  },
-): void {
-  if (!source || typeof source !== "object") {
-    return;
-  }
-
-  const visited = new Set<unknown>();
-  const stack: unknown[] = [source];
-
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current || typeof current !== "object" || visited.has(current)) {
-      continue;
-    }
-    visited.add(current);
-
-    if (Array.isArray(current)) {
-      current.forEach((item) => stack.push(item));
-      continue;
-    }
-
-    const record = current as Record<string, unknown>;
-    for (const [key, value] of Object.entries(record)) {
-      if (typeof value === "string") {
-        if (isFilesystemKey(key)) {
-          collector.targets.add(`${humanizeKey(key)}: ${value}`);
-        } else if (isLikelyCommandKey(key) && value.trim()) {
-          collector.commands.add(`${humanizeKey(key)}: ${truncateEvidence(value, 140)}`);
-        } else if (isLikelyCodeKey(key) && value.includes("\n")) {
-          pushEvidenceBlock(collector.changes, collector.seenBlocks, humanizeKey(key), value);
-        } else if (isLikelySupportKey(key)) {
-          collector.supporting.add(`${humanizeKey(key)}: ${truncateEvidence(value, 180)}`);
-        }
-      } else if (Array.isArray(value)) {
-        if (value.every((item) => typeof item === "string")) {
-          const strings = value.filter((item): item is string => typeof item === "string");
-          if (isFilesystemKey(key)) {
-            collector.targets.add(`${humanizeKey(key)}: ${strings.slice(0, 4).join(", ")}${strings.length > 4 ? "…" : ""}`);
-          } else if (isLikelyCommandKey(key)) {
-            collector.commands.add(`${humanizeKey(key)}: ${strings.slice(0, 3).join(" | ")}${strings.length > 3 ? "…" : ""}`);
-          } else if (isLikelyCodeCollectionKey(key)) {
-            for (const item of strings.slice(0, 2)) {
-              if (item.includes("\n")) {
-                pushEvidenceBlock(collector.changes, collector.seenBlocks, humanizeKey(key), item);
-              }
-            }
-          } else if (isLikelySupportKey(key)) {
-            collector.supporting.add(`${humanizeKey(key)}: ${strings.slice(0, 3).join(", ")}${strings.length > 3 ? "…" : ""}`);
-          }
-        }
-        value.forEach((item) => stack.push(item));
-      } else if (value && typeof value === "object") {
-        stack.push(value);
-      }
-    }
-  }
-}
-
-function pushEvidenceBlock(
-  codeBlocks: Array<{ label: string; content: string }>,
-  seenBlocks: Set<string>,
-  label: string,
-  content: string,
-): void {
-  const normalized = content.trim();
-  if (!normalized) {
-    return;
-  }
-  const key = `${label}:${normalized}`;
-  if (seenBlocks.has(key)) {
-    return;
-  }
-  seenBlocks.add(key);
-  codeBlocks.push({
-    label,
-    content: truncateEvidence(normalized, 1200),
-  });
-}
-
-function isFilesystemKey(key: string): boolean {
-  return /path|paths|file|files|root|roots|target|targets/i.test(key);
-}
-
-function isLikelyCommandKey(key: string): boolean {
-  return /command|cmd|script|shell/i.test(key);
-}
-
-function isLikelyCodeKey(key: string): boolean {
-  return /diff|patch|before|after|code|content|snippet/i.test(key);
-}
-
-function isLikelyCodeCollectionKey(key: string): boolean {
-  return /diffs|patches|snippets|files/i.test(key);
-}
-
-function isLikelySupportKey(key: string): boolean {
-  return /url|uri|reason|summary|description|title|selector|field|input|prompt/i.test(key);
-}
-
-function humanizeKey(key: string): string {
-  return key
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/^./, (char) => char.toUpperCase());
-}
-
-function truncateEvidence(value: string, limit: number): string {
-  return value.length > limit ? `${value.slice(0, limit).trimEnd()}\n...` : value;
-}
-

@@ -22,6 +22,7 @@ import { dashboardRoutes } from "./routes/dashboard.js";
 import { filesRoutes } from "./routes/files.js";
 import { llmRoutes } from "./routes/llm.js";
 import { integrationsRoutes } from "./routes/integrations.js";
+import { integrationWebhookRoutes } from "./routes/integration-webhooks.js";
 import { meshRoutes } from "./routes/mesh.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { memoryRoutes } from "./routes/memory.js";
@@ -34,6 +35,7 @@ import { knowledgeRoutes } from "./routes/knowledge.js";
 import { authRoutes } from "./routes/auth.js";
 import { secretsRoutes } from "./routes/secrets.js";
 import { chatRoutes } from "./routes/chat.js";
+import { promptPackRoutes } from "./routes/prompt-packs.js";
 import { adminRoutes } from "./routes/admin.js";
 import { docsRoutes } from "./routes/docs.js";
 import { devDiagnosticsRoutes } from "./routes/dev-diagnostics.js";
@@ -71,6 +73,24 @@ export async function buildApp() {
   const tailnetShortHostAllowlist = resolveTailnetShortHostAllowlist();
   const rateLimitConfig = resolveRateLimitConfig();
 
+  /**
+   * CORS origin validation — three-tier allowlist:
+   *
+   * 1. **Explicit origins** (`GOATCITADEL_ALLOWED_ORIGINS` env var or defaults):
+   *    Always accepted. Defaults include localhost:5173 (dev), localhost:4173 (preview),
+   *    and 127.0.0.1:8787 (gateway self-reference).
+   *
+   * 2. **Loopback dev origins** (non-production only):
+   *    Any origin resolving to 127.0.0.1/::1 on any port is accepted in
+   *    non-production environments, enabling local dev tooling on arbitrary ports.
+   *
+   * 3. **Tailnet dev origins** (opt-in via `GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS`):
+   *    Origins matching Tailscale `.ts.net` patterns are accepted when enabled,
+   *    allowing access from other devices on the same tailnet. Enabled by default
+   *    in non-production environments.
+   *
+   * Requests with no `Origin` header (e.g., server-to-server, curl) are always accepted.
+   */
   await app.register(cors, {
     origin: (origin, cb) => {
       if (!origin) {
@@ -93,10 +113,21 @@ export async function buildApp() {
     },
   });
 
+  const isNonLoopbackBind = !["127.0.0.1", "::1", "localhost"].includes(process.env.GATEWAY_HOST ?? "127.0.0.1");
+
   app.addHook("onSend", async (_request, reply) => {
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("X-Frame-Options", "DENY");
     reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
+    reply.header("X-XSS-Protection", "0");
+    reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    reply.header(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    );
+    if (isNonLoopbackBind) {
+      reply.header("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
+    }
   });
 
   app.addHook("onRequest", async (request, reply) => {
@@ -106,10 +137,38 @@ export async function buildApp() {
     const sessionId = readRequestHeader(request.headers["x-goatcitadel-session-id"]);
     const browserOrigin = readRequestHeader(request.headers.origin);
     const browserIntent = readRequestHeader(request.headers[BROWSER_MUTATION_INTENT_HEADER]);
-    (request as typeof request & { correlationId?: string; traceId?: string; originSurface?: string; requestSessionId?: string }).correlationId = correlationId;
-    (request as typeof request & { correlationId?: string; traceId?: string; originSurface?: string; requestSessionId?: string }).traceId = traceId;
-    (request as typeof request & { correlationId?: string; traceId?: string; originSurface?: string; requestSessionId?: string }).originSurface = originSurface;
-    (request as typeof request & { correlationId?: string; traceId?: string; originSurface?: string; requestSessionId?: string }).requestSessionId = sessionId;
+    (
+      request as typeof request & {
+        correlationId?: string;
+        traceId?: string;
+        originSurface?: string;
+        requestSessionId?: string;
+      }
+    ).correlationId = correlationId;
+    (
+      request as typeof request & {
+        correlationId?: string;
+        traceId?: string;
+        originSurface?: string;
+        requestSessionId?: string;
+      }
+    ).traceId = traceId;
+    (
+      request as typeof request & {
+        correlationId?: string;
+        traceId?: string;
+        originSurface?: string;
+        requestSessionId?: string;
+      }
+    ).originSurface = originSurface;
+    (
+      request as typeof request & {
+        correlationId?: string;
+        traceId?: string;
+        originSurface?: string;
+        requestSessionId?: string;
+      }
+    ).requestSessionId = sessionId;
     reply.header("x-goatcitadel-correlation-id", correlationId);
     enterRequestAttribution({
       correlationId,
@@ -141,9 +200,9 @@ export async function buildApp() {
       });
     }
     if (
-      MUTATING_HTTP_METHODS.has(request.method.toUpperCase())
-      && browserOrigin
-      && browserIntent !== BROWSER_MUTATION_INTENT_VALUE
+      MUTATING_HTTP_METHODS.has(request.method.toUpperCase()) &&
+      browserOrigin &&
+      browserIntent !== BROWSER_MUTATION_INTENT_VALUE
     ) {
       return reply.code(400).send({
         error: `Missing ${BROWSER_MUTATION_INTENT_HEADER}: ${BROWSER_MUTATION_INTENT_VALUE} for browser-origin mutating request.`,
@@ -198,13 +257,14 @@ export async function buildApp() {
 
     app.addHook("onRoute", (routeOptions) => {
       const bucket = classifyRateLimitBucket(routeOptions.url, routeOptions.method);
-      const max = bucket === "auth"
-        ? rateLimitConfig.maxAuth
-        : bucket === "mutation"
-          ? rateLimitConfig.maxMutation
-          : bucket === "sse"
-            ? rateLimitConfig.maxSseConnect
-            : rateLimitConfig.maxGeneral;
+      const max =
+        bucket === "auth"
+          ? rateLimitConfig.maxAuth
+          : bucket === "mutation"
+            ? rateLimitConfig.maxMutation
+            : bucket === "sse"
+              ? rateLimitConfig.maxSseConnect
+              : rateLimitConfig.maxGeneral;
       const currentConfig = (routeOptions.config ?? {}) as Record<string, unknown>;
       const currentRateLimit = isRecord(currentConfig.rateLimit) ? currentConfig.rateLimit : {};
       const existingMax = typeof currentRateLimit.max === "number" ? currentRateLimit.max : undefined;
@@ -240,6 +300,7 @@ export async function buildApp() {
   await app.register(filesRoutes);
   await app.register(llmRoutes);
   await app.register(integrationsRoutes);
+  await app.register(integrationWebhookRoutes);
   await app.register(meshRoutes);
   await app.register(onboardingRoutes);
   await app.register(memoryRoutes);
@@ -250,6 +311,7 @@ export async function buildApp() {
   await app.register(commsRoutes);
   await app.register(knowledgeRoutes);
   await app.register(chatRoutes);
+  await app.register(promptPackRoutes);
   await app.register(mcpRoutes);
   await app.register(voiceRoutes);
   await app.register(mediaRoutes);
@@ -332,19 +394,13 @@ function resolveRateLimitConfig(): {
   };
 }
 
-function classifyRateLimitBucket(
-  url: string,
-  method: string | string[],
-): "general" | "mutation" | "auth" | "sse" {
+function classifyRateLimitBucket(url: string, method: string | string[]): "general" | "mutation" | "auth" | "sse" {
   const normalizedUrl = url.toLowerCase();
-  const normalizedMethod = Array.isArray(method) ? method[0]?.toUpperCase() ?? "GET" : method.toUpperCase();
+  const normalizedMethod = Array.isArray(method) ? (method[0]?.toUpperCase() ?? "GET") : method.toUpperCase();
   if (normalizedUrl.includes("/events/stream")) {
     return "sse";
   }
-  if (
-    normalizedUrl.startsWith("/api/v1/auth")
-    || normalizedUrl.startsWith("/api/v1/secrets")
-  ) {
+  if (normalizedUrl.startsWith("/api/v1/auth") || normalizedUrl.startsWith("/api/v1/secrets")) {
     return "auth";
   }
   if (normalizedMethod === "GET" || normalizedMethod === "HEAD" || normalizedMethod === "OPTIONS") {

@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/exhaustive-deps, max-lines */
 import { useEffect, useMemo, useState } from "react";
 import type { ToolAccessEvaluateResponse, ToolCatalogEntry, ToolGrantRecord } from "@goatcitadel/contracts";
 import {
@@ -23,11 +24,13 @@ import { GCCombobox, GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { useUiPreferences } from "../state/ui-preferences";
-
-interface IdOption {
-  value: string;
-  label: string;
-}
+import {
+  dedupeOptions,
+  ensureCurrentOption,
+  formatSessionOption,
+  toDatetimeLocalValue,
+  type IdOption,
+} from "./tools/tools-page-helpers";
 
 type GrantScope = "global" | "session" | "agent" | "task";
 type GrantType = "one_time" | "ttl" | "persistent";
@@ -69,11 +72,7 @@ const TOOL_PROFILE_PRESETS: ToolProfilePreset[] = [
 ];
 
 export function ToolsPage() {
-  const {
-    mode: uiMode,
-    showTechnicalDetails,
-    setShowTechnicalDetails,
-  } = useUiPreferences();
+  const { mode: uiMode, showTechnicalDetails, setShowTechnicalDetails } = useUiPreferences();
   const [catalog, setCatalog] = useState<ToolCatalogEntry[]>([]);
   const [grants, setGrants] = useState<ToolGrantRecord[]>([]);
   const [agentOptions, setAgentOptions] = useState<IdOption[]>([{ value: "operator", label: "operator (you)" }]);
@@ -124,11 +123,10 @@ export function ToolsPage() {
 
   const catalogByPack = useMemo(() => {
     const q = catalogFilter.trim().toLowerCase();
-    const source = q.length > 0
-      ? catalog.filter((item) => (
-        `${item.toolName} ${item.category} ${item.description}`.toLowerCase().includes(q)
-      ))
-      : catalog;
+    const source =
+      q.length > 0
+        ? catalog.filter((item) => `${item.toolName} ${item.category} ${item.description}`.toLowerCase().includes(q))
+        : catalog;
     return {
       core: source.filter((item) => item.pack === "core"),
       devops: source.filter((item) => item.pack === "devops"),
@@ -142,11 +140,11 @@ export function ToolsPage() {
     if (!q) {
       return grants;
     }
-    return grants.filter((grant) => (
+    return grants.filter((grant) =>
       `${grant.toolPattern} ${grant.decision} ${grant.scope}:${grant.scopeRef} ${grant.grantType} ${grant.createdBy}`
         .toLowerCase()
-        .includes(q)
-    ));
+        .includes(q),
+    );
   }, [grantFilter, grants]);
 
   const selectedTool = useMemo(() => catalog.find((entry) => entry.toolName === toolPattern), [catalog, toolPattern]);
@@ -154,13 +152,14 @@ export function ToolsPage() {
     () => catalog.find((entry) => entry.toolName === dryRunForm.toolName),
     [catalog, dryRunForm.toolName],
   );
-  const scopeRefHint = scope === "global"
-    ? "Global grants apply everywhere. Scope ref is not needed."
-    : scope === "session"
-      ? "Pick a session from the dropdown (scoped to one conversation)."
-      : scope === "agent"
-        ? "Pick an agent from the dropdown."
-        : "Task ID example: task_abc123... (most specific scope).";
+  const scopeRefHint =
+    scope === "global"
+      ? "Global grants apply everywhere. Scope ref is not needed."
+      : scope === "session"
+        ? "Pick a session from the dropdown (scoped to one conversation)."
+        : scope === "agent"
+          ? "Pick an agent from the dropdown."
+          : "Task ID example: task_abc123... (most specific scope).";
   const recommendedScope: GrantScope = "session";
   const isRecommendedScope = scope === recommendedScope;
   const grantSummary = `${decision.toUpperCase()} ${toolPattern}${scope === "global" ? " globally" : ` for ${scope} ${scopeRef || "(missing scope ref)"}`}`;
@@ -251,9 +250,10 @@ export function ToolsPage() {
         setSessionOptions(nextSessionOptions);
         setAgentOptions(nextAgentOptions);
         const defaultSession = nextSessionOptions[0]?.value;
-        const defaultAgent = nextAgentOptions.find((option) => option.value === "operator")?.value
-          ?? nextAgentOptions[0]?.value
-          ?? "operator";
+        const defaultAgent =
+          nextAgentOptions.find((option) => option.value === "operator")?.value ??
+          nextAgentOptions[0]?.value ??
+          "operator";
         setScopeRef((current) => {
           if (scope === "session" && (current === "demo-session" || !current.trim()) && defaultSession) {
             return defaultSession;
@@ -266,16 +266,18 @@ export function ToolsPage() {
         setEvaluateForm((current) => ({
           ...current,
           agentId: current.agentId === "operator" || !current.agentId.trim() ? defaultAgent : current.agentId,
-          sessionId: (current.sessionId === "demo-session" || !current.sessionId.trim()) && defaultSession
-            ? defaultSession
-            : current.sessionId,
+          sessionId:
+            (current.sessionId === "demo-session" || !current.sessionId.trim()) && defaultSession
+              ? defaultSession
+              : current.sessionId,
         }));
         setDryRunForm((current) => ({
           ...current,
           agentId: current.agentId === "operator" || !current.agentId.trim() ? defaultAgent : current.agentId,
-          sessionId: (current.sessionId === "demo-session" || !current.sessionId.trim()) && defaultSession
-            ? defaultSession
-            : current.sessionId,
+          sessionId:
+            (current.sessionId === "demo-session" || !current.sessionId.trim()) && defaultSession
+              ? defaultSession
+              : current.sessionId,
         }));
       }
       if (catalogRes.items.length > 0) {
@@ -551,13 +553,12 @@ export function ToolsPage() {
 
       <Panel
         title="Access Modes"
-        subtitle={(
+        subtitle={
           <>
-            One-click profile switching for safe days versus power days.
-            {" "}
-            Current profile: <strong>{currentToolProfile}</strong>.
+            One-click profile switching for safe days versus power days. Current profile:{" "}
+            <strong>{currentToolProfile}</strong>.
           </>
-        )}
+        }
       >
         <div className="tool-profile-grid">
           {TOOL_PROFILE_PRESETS.map((preset) => (
@@ -596,9 +597,15 @@ export function ToolsPage() {
           subtitle="Use this wizard for most cases. Turn on advanced settings only when you need wildcard patterns or custom duration."
         >
           <div className="tools-wizard-steps">
-            <button type="button" className={grantWizardStep === 1 ? "active" : ""} onClick={() => onWizardJump(1)}>1. Who</button>
-            <button type="button" className={grantWizardStep === 2 ? "active" : ""} onClick={() => onWizardJump(2)}>2. What</button>
-            <button type="button" className={grantWizardStep === 3 ? "active" : ""} onClick={() => onWizardJump(3)}>3. How Long</button>
+            <button type="button" className={grantWizardStep === 1 ? "active" : ""} onClick={() => onWizardJump(1)}>
+              1. Who
+            </button>
+            <button type="button" className={grantWizardStep === 2 ? "active" : ""} onClick={() => onWizardJump(2)}>
+              2. What
+            </button>
+            <button type="button" className={grantWizardStep === 3 ? "active" : ""} onClick={() => onWizardJump(3)}>
+              3. How Long
+            </button>
           </div>
 
           {showTechnicalDetails ? (
@@ -611,7 +618,9 @@ export function ToolsPage() {
               Advanced settings
             </label>
           ) : (
-            <p className="tools-helper">Advanced settings are hidden. Turn on technical controls above to customize more.</p>
+            <p className="tools-helper">
+              Advanced settings are hidden. Turn on technical controls above to customize more.
+            </p>
           )}
 
           {grantWizardStep === 1 ? (
@@ -619,7 +628,10 @@ export function ToolsPage() {
               <div className="controls-row">
                 <label>
                   Scope
-                  <HelpHint label="Scope help" text="More specific scopes win. Order is task > agent > session > global." />
+                  <HelpHint
+                    label="Scope help"
+                    text="More specific scopes win. Order is task > agent > session > global."
+                  />
                 </label>
                 <GCSelect
                   value={scope}
@@ -634,11 +646,13 @@ export function ToolsPage() {
               </div>
               <div className={`tools-recommend ${isRecommendedScope ? "ok" : "warn"}`}>
                 <p>
-                  Recommended for most new grants: <strong>Session</strong> scope.
-                  It limits access to one conversation while you test safely.
+                  Recommended for most new grants: <strong>Session</strong> scope. It limits access to one conversation
+                  while you test safely.
                 </p>
                 {!isRecommendedScope ? (
-                  <button type="button" onClick={onApplyRecommendedScope}>Use recommended scope</button>
+                  <button type="button" onClick={onApplyRecommendedScope}>
+                    Use recommended scope
+                  </button>
                 ) : (
                   <span className="token-chip">Using recommended scope</span>
                 )}
@@ -646,16 +660,21 @@ export function ToolsPage() {
               <div className="controls-row">
                 <label>
                   Scope ref
-                  <HelpHint label="Scope reference help" text="Choose exactly where this grant applies. Session and agent options are loaded for you." />
+                  <HelpHint
+                    label="Scope reference help"
+                    text="Choose exactly where this grant applies. Session and agent options are loaded for you."
+                  />
                 </label>
                 {scope === "session" || scope === "agent" ? (
                   <GCCombobox
                     value={scopeRef}
                     onChange={setScopeRef}
                     disabled={selectedScopeRefOptions.length === 0}
-                    options={selectedScopeRefOptions.length === 0
-                      ? [{ value: "", label: `No ${scope} options found` }]
-                      : selectedScopeRefOptions}
+                    options={
+                      selectedScopeRefOptions.length === 0
+                        ? [{ value: "", label: `No ${scope} options found` }]
+                        : selectedScopeRefOptions
+                    }
                     placeholder={`Choose ${scope}`}
                   />
                 ) : (
@@ -677,17 +696,28 @@ export function ToolsPage() {
                 <button type="button" disabled={workingPreset !== null} onClick={() => void onApplyQuickPreset("web")}>
                   {workingPreset === "web" ? "Applying..." : "Quick: Web Assistant"}
                 </button>
-                <button type="button" disabled={workingPreset !== null} onClick={() => void onApplyQuickPreset("files-read")}>
+                <button
+                  type="button"
+                  disabled={workingPreset !== null}
+                  onClick={() => void onApplyQuickPreset("files-read")}
+                >
                   {workingPreset === "files-read" ? "Applying..." : "Quick: File Read"}
                 </button>
-                <button type="button" disabled={workingPreset !== null} onClick={() => void onApplyQuickPreset("devops")}>
+                <button
+                  type="button"
+                  disabled={workingPreset !== null}
+                  onClick={() => void onApplyQuickPreset("devops")}
+                >
                   {workingPreset === "devops" ? "Applying..." : "Quick: DevOps Read"}
                 </button>
               </div>
               <div className="controls-row">
                 <label>
                   Tool
-                  <HelpHint label="Tool help" text="Pick the exact tool to allow or deny. Use * only for advanced wildcard rules." />
+                  <HelpHint
+                    label="Tool help"
+                    text="Pick the exact tool to allow or deny. Use * only for advanced wildcard rules."
+                  />
                 </label>
                 <GCCombobox
                   value={toolPattern}
@@ -704,14 +734,18 @@ export function ToolsPage() {
               </div>
               {selectedTool ? (
                 <p className="tools-helper">
-                  Risk: <strong>{selectedTool.riskLevel}</strong> | Category: {selectedTool.category} | {selectedTool.description}
+                  Risk: <strong>{selectedTool.riskLevel}</strong> | Category: {selectedTool.category} |{" "}
+                  {selectedTool.description}
                 </p>
               ) : null}
               {grantAdvanced ? (
                 <div className="controls-row">
                   <label>
                     Decision
-                    <HelpHint label="Decision help" text="Allow lets the tool run in this scope. Deny blocks it, even if broader scopes allow it." />
+                    <HelpHint
+                      label="Decision help"
+                      text="Allow lets the tool run in this scope. Deny blocks it, even if broader scopes allow it."
+                    />
                   </label>
                   <GCSelect
                     value={decision}
@@ -723,7 +757,9 @@ export function ToolsPage() {
                   />
                 </div>
               ) : (
-                <p className="tools-helper">Decision: <strong>Allow</strong> (basic mode)</p>
+                <p className="tools-helper">
+                  Decision: <strong>Allow</strong> (basic mode)
+                </p>
               )}
             </div>
           ) : null}
@@ -733,7 +769,10 @@ export function ToolsPage() {
               <div className="controls-row">
                 <label>
                   Duration
-                  <HelpHint label="Grant type help" text="One-time expires after one use. Persistent remains until revoked. TTL is available in advanced settings." />
+                  <HelpHint
+                    label="Grant type help"
+                    text="One-time expires after one use. Persistent remains until revoked. TTL is available in advanced settings."
+                  />
                 </label>
                 <GCSelect
                   value={grantType}
@@ -754,7 +793,9 @@ export function ToolsPage() {
                   <input
                     type="datetime-local"
                     value={toDatetimeLocalValue(expiresAt)}
-                    onChange={(event) => setExpiresAt(event.target.value ? new Date(event.target.value).toISOString() : "")}
+                    onChange={(event) =>
+                      setExpiresAt(event.target.value ? new Date(event.target.value).toISOString() : "")
+                    }
                   />
                 </div>
               ) : null}
@@ -762,7 +803,10 @@ export function ToolsPage() {
                 <div className="controls-row">
                   <label>
                     Created by
-                    <HelpHint label="Created by help" text="Audit label for who made the grant. Use your operator name." />
+                    <HelpHint
+                      label="Created by help"
+                      text="Audit label for who made the grant. Use your operator name."
+                    />
                   </label>
                   <input value={createdBy} onChange={(event) => setCreatedBy(event.target.value)} />
                 </div>
@@ -772,9 +816,13 @@ export function ToolsPage() {
           ) : null}
 
           <div className="actions tools-wizard-actions">
-            <button type="button" onClick={onWizardBack} disabled={grantWizardStep === 1}>Back</button>
+            <button type="button" onClick={onWizardBack} disabled={grantWizardStep === 1}>
+              Back
+            </button>
             {grantWizardStep < 3 ? (
-              <button type="button" onClick={onWizardNext}>Next</button>
+              <button type="button" onClick={onWizardNext}>
+                Next
+              </button>
             ) : (
               <button type="button" disabled={creatingGrant || !canCreateGrant} onClick={() => void onCreateGrant()}>
                 {creatingGrant ? "Creating..." : "Create Grant"}
@@ -783,14 +831,14 @@ export function ToolsPage() {
           </div>
         </Panel>
 
-        <Panel
-          title="Check Access"
-          subtitle="Confirm whether a tool call would be allowed before you run it."
-        >
+        <Panel title="Check Access" subtitle="Confirm whether a tool call would be allowed before you run it.">
           <div className="controls-row">
             <label>
               Tool
-              <HelpHint label="Evaluate tool help" text="Choose the tool you want to test against current policy and grants." />
+              <HelpHint
+                label="Evaluate tool help"
+                text="Choose the tool you want to test against current policy and grants."
+              />
             </label>
             <GCSelect
               value={evaluateForm.toolName}
@@ -803,9 +851,9 @@ export function ToolsPage() {
             <GCCombobox
               value={evaluateForm.agentId}
               onChange={(value) => setEvaluateForm((current) => ({ ...current, agentId: value }))}
-              options={evaluateAgentOptions.length === 0
-                ? [{ value: "", label: "No agents found" }]
-                : evaluateAgentOptions}
+              options={
+                evaluateAgentOptions.length === 0 ? [{ value: "", label: "No agents found" }] : evaluateAgentOptions
+              }
               placeholder="Pick agent"
             />
           </div>
@@ -814,9 +862,11 @@ export function ToolsPage() {
             <GCCombobox
               value={evaluateForm.sessionId}
               onChange={(value) => setEvaluateForm((current) => ({ ...current, sessionId: value }))}
-              options={evaluateSessionOptions.length === 0
-                ? [{ value: "", label: "No sessions found" }]
-                : evaluateSessionOptions}
+              options={
+                evaluateSessionOptions.length === 0
+                  ? [{ value: "", label: "No sessions found" }]
+                  : evaluateSessionOptions
+              }
               placeholder="Pick session"
             />
           </div>
@@ -831,7 +881,9 @@ export function ToolsPage() {
             </div>
           </details>
           <div className="actions">
-            <button type="button" onClick={() => void onEvaluate()}>Check Access</button>
+            <button type="button" onClick={() => void onEvaluate()}>
+              Check Access
+            </button>
           </div>
           {evaluateResult ? (
             <div className="replay-box">
@@ -861,7 +913,10 @@ export function ToolsPage() {
           <div className="controls-row">
             <label>
               Tool
-              <HelpHint label="Dry-run tool help" text="Dry-run calls the tool with validation/safety checks so you can confirm behavior before live use." />
+              <HelpHint
+                label="Dry-run tool help"
+                text="Dry-run calls the tool with validation/safety checks so you can confirm behavior before live use."
+              />
             </label>
             <GCSelect
               value={dryRunForm.toolName}
@@ -875,9 +930,7 @@ export function ToolsPage() {
             <GCCombobox
               value={dryRunForm.agentId}
               onChange={(value) => setDryRunForm((current) => ({ ...current, agentId: value }))}
-              options={dryRunAgentOptions.length === 0
-                ? [{ value: "", label: "No agents found" }]
-                : dryRunAgentOptions}
+              options={dryRunAgentOptions.length === 0 ? [{ value: "", label: "No agents found" }] : dryRunAgentOptions}
               placeholder="Pick agent"
             />
           </div>
@@ -886,9 +939,9 @@ export function ToolsPage() {
             <GCCombobox
               value={dryRunForm.sessionId}
               onChange={(value) => setDryRunForm((current) => ({ ...current, sessionId: value }))}
-              options={dryRunSessionOptions.length === 0
-                ? [{ value: "", label: "No sessions found" }]
-                : dryRunSessionOptions}
+              options={
+                dryRunSessionOptions.length === 0 ? [{ value: "", label: "No sessions found" }] : dryRunSessionOptions
+              }
               placeholder="Pick session"
             />
           </div>
@@ -903,11 +956,16 @@ export function ToolsPage() {
             </div>
           </details>
           <div className="actions">
-            <button type="button" onClick={onUseDryRunExample}>Load Example Args</button>
+            <button type="button" onClick={onUseDryRunExample}>
+              Load Example Args
+            </button>
           </div>
           <label>
             Args JSON
-            <HelpHint label="Args help" text="Use valid JSON object syntax. Example args are available with the button above." />
+            <HelpHint
+              label="Args help"
+              text="Use valid JSON object syntax. Example args are available with the button above."
+            />
           </label>
           <textarea
             className="full-textarea"
@@ -916,7 +974,9 @@ export function ToolsPage() {
             onChange={(event) => setDryRunForm((current) => ({ ...current, argsJson: event.target.value }))}
           />
           <div className="actions">
-            <button type="button" onClick={() => void onDryRun()}>Run Dry-Run</button>
+            <button type="button" onClick={() => void onDryRun()}>
+              Run Dry-Run
+            </button>
           </div>
           {dryRunResult ? (
             <div className="replay-box">
@@ -925,17 +985,18 @@ export function ToolsPage() {
           ) : null}
         </Panel>
 
-        <Panel
-          title="Active Grants"
-          subtitle="Review, filter, and revoke scoped permissions."
-        >
+        <Panel title="Active Grants" subtitle="Review, filter, and revoke scoped permissions.">
           <DataToolbar
-            primary={(
+            primary={
               <div className="controls-row">
                 <label>Filter</label>
-                <input value={grantFilter} onChange={(event) => setGrantFilter(event.target.value)} placeholder="Search tool, scope, decision, created by..." />
+                <input
+                  value={grantFilter}
+                  onChange={(event) => setGrantFilter(event.target.value)}
+                  placeholder="Search tool, scope, decision, created by..."
+                />
               </div>
-            )}
+            }
             secondary={<StatusChip>{visibleGrants.length} visible</StatusChip>}
           />
           <table>
@@ -954,14 +1015,18 @@ export function ToolsPage() {
                 <tr key={grant.grantId}>
                   <td>{grant.toolPattern}</td>
                   <td>{grant.decision}</td>
-                  <td>{grant.scope}:{grant.scopeRef}</td>
+                  <td>
+                    {grant.scope}:{grant.scopeRef}
+                  </td>
                   <td>{grant.grantType}</td>
                   <td>{grant.expiresAt ?? "-"}</td>
                   <td>
                     {grant.revokedAt ? (
                       <span>revoked</span>
                     ) : (
-                      <button type="button" className="danger" onClick={() => void onRevoke(grant.grantId)}>Revoke</button>
+                      <button type="button" className="danger" onClick={() => void onRevoke(grant.grantId)}>
+                        Revoke
+                      </button>
                     )}
                   </td>
                 </tr>
@@ -970,7 +1035,7 @@ export function ToolsPage() {
                 <tr>
                   <td colSpan={6}>No grants match your filter.</td>
                 </tr>
-                ) : null}
+              ) : null}
             </tbody>
           </table>
         </Panel>
@@ -982,12 +1047,16 @@ export function ToolsPage() {
         className={showTechnicalDetails ? "" : "expert-only"}
       >
         <DataToolbar
-          primary={(
+          primary={
             <div className="controls-row">
               <label>Filter</label>
-              <input value={catalogFilter} onChange={(event) => setCatalogFilter(event.target.value)} placeholder="Search by tool name, category, or description..." />
+              <input
+                value={catalogFilter}
+                onChange={(event) => setCatalogFilter(event.target.value)}
+                placeholder="Search by tool name, category, or description..."
+              />
             </div>
-          )}
+          }
           secondary={<StatusChip>{catalog.length} total</StatusChip>}
         />
         {(["core", "devops", "knowledge", "comms"] as const).map((pack) => (
@@ -1026,54 +1095,3 @@ export function ToolsPage() {
     </section>
   );
 }
-
-function toDatetimeLocalValue(isoUtc?: string): string {
-  if (!isoUtc) {
-    return "";
-  }
-  const date = new Date(isoUtc);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const local = new Date(date.getTime() - (date.getTimezoneOffset() * 60000));
-  return local.toISOString().slice(0, 16);
-}
-
-function formatSessionOption(session: {
-  sessionId: string;
-  title?: string;
-  scope: string;
-  updatedAt: string;
-  channel: string;
-  account: string;
-}): string {
-  const title = session.title?.trim() || `${session.channel}:${session.account}`;
-  const timestamp = new Date(session.updatedAt).toLocaleString();
-  return `${title} (${session.scope}) • ${session.sessionId} • ${timestamp}`;
-}
-
-function dedupeOptions(options: IdOption[]): IdOption[] {
-  const seen = new Set<string>();
-  const deduped: IdOption[] = [];
-  for (const option of options) {
-    const key = option.value.trim();
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(option);
-  }
-  return deduped;
-}
-
-function ensureCurrentOption(options: IdOption[], currentValue: string, fallbackPrefix: string): IdOption[] {
-  const list = dedupeOptions(options);
-  if (!currentValue.trim()) {
-    return list;
-  }
-  if (list.some((option) => option.value === currentValue)) {
-    return list;
-  }
-  return [{ value: currentValue, label: `${fallbackPrefix}: ${currentValue}` }, ...list];
-}
-

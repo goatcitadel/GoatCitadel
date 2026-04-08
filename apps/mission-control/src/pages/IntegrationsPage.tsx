@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars, max-lines, react-hooks/exhaustive-deps */
 import { useEffect, useMemo, useRef, useState } from "react";
 import "../styles/integrations.css";
 import {
@@ -58,44 +59,57 @@ import { GCSelect, GCSwitch } from "../components/ui";
 import { useAction } from "../hooks/useAction";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { pageCopy } from "../content/copy";
+import {
+  type ChannelSetupPath,
+  type UiRiskItem,
+  type UiRiskLevel,
+  connectorSetupReady,
+  connectorSupportsDeliveryAction,
+  dedupeUploadedAttachments,
+  deriveOverallRisk,
+  describeChannelSetupPath,
+  describeMaturity,
+  evaluateLocalRisk,
+  extractUrlCandidates,
+  formatChannelSetupPath,
+  formatConnectorList,
+  formatKind,
+  formatMaturity,
+  formatRuntimeAvailability,
+  formatStatus,
+  getChannelSetupPathTone,
+  getConnectorMetadataStringList,
+  getConnectorRuntimePostureSummary,
+  getConnectorSetupDiagnostics,
+  getConnectorSupportNotes,
+  getConnectorSupportedAttachmentSources,
+  getConnectorSupportedDeliveryActions,
+  guessDefaultChannelTarget,
+  isDiscordGatewayConnection,
+  maxRisk,
+  mergeRiskItems,
+  parseAttachmentIdInputs,
+  parseAttachmentUrlInputs,
+  renderConnectorApprovalDeliverySummary,
+  requiresExplicitChannelTarget,
+  resolveChannelSetupPath,
+  sanitizeGuidedConfig,
+} from "./integrations-page-utils";
+import { IntegrationsCatalogPicker } from "./integrations/IntegrationsCatalogPicker";
+import { IntegrationsChannelTestBench } from "./integrations/IntegrationsChannelTestBench";
+import { IntegrationsConnectionsTable } from "./integrations/IntegrationsConnectionsTable";
+import { IntegrationsCreateConnectionPanel } from "./integrations/IntegrationsCreateConnectionPanel";
+import { IntegrationsObsidianPanel } from "./integrations/IntegrationsObsidianPanel";
+import { IntegrationsPluginsPanel } from "./integrations/IntegrationsPluginsPanel";
 
-type IntegrationKind = IntegrationCatalogEntry["kind"] | "all";
-type UiRiskLevel = "safe" | "warning" | "critical";
-type UiRiskItem = { field: string; level: UiRiskLevel; hint?: string };
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
-}
-
-const KIND_OPTIONS: Array<{ value: IntegrationKind; label: string }> = [
-  { value: "all", label: "All scopes" },
-  { value: "channel", label: "Channels" },
-  { value: "model_provider", label: "Model providers" },
-  { value: "productivity", label: "Productivity apps" },
-  { value: "automation", label: "Automation" },
-  { value: "platform", label: "Platform integrations" },
-];
-
-const STATUS_OPTIONS: Array<{
-  value: IntegrationConnection["status"];
-  label: string;
-  description: string;
-}> = [
-  { value: "connected", label: "Connected (ready)", description: "Live and expected to work." },
-  { value: "paused", label: "Paused", description: "Kept for later, not used right now." },
-  { value: "disconnected", label: "Disconnected", description: "Configured but intentionally offline." },
-  { value: "error", label: "Error", description: "Needs fix before use." },
-];
-
-const KIND_DESCRIPTIONS: Record<Exclude<IntegrationKind, "all">, string> = {
-  channel: "Routes messages to and from chat channels.",
-  model_provider: "Adds an LLM provider endpoint and credentials.",
-  productivity: "Connects docs, files, or office workflows.",
-  automation: "Connects external automation systems.",
-  platform: "Connects platform-level services and APIs.",
-};
-
-const INTEGRATIONS_UPLOAD_SESSION_ID = "session:operator:integrations";
+import {
+  INTEGRATIONS_UPLOAD_SESSION_ID,
+  isAbortError,
+  KIND_DESCRIPTIONS,
+  KIND_OPTIONS,
+  STATUS_OPTIONS,
+  type IntegrationKind,
+} from "./integrations/integrations-page-constants";
 
 interface IntegrationsPageProps {
   view?: "overview" | "channels";
@@ -127,12 +141,14 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
   const [obsidianMode, setObsidianMode] = useState<"read_append" | "read_only">("read_append");
   const [obsidianAllowedSubpaths, setObsidianAllowedSubpaths] = useState("");
   const [obsidianQuery, setObsidianQuery] = useState("");
-  const [obsidianSearchResults, setObsidianSearchResults] = useState<Array<{
-    relativePath: string;
-    title: string;
-    snippet: string;
-    score: number;
-  }>>([]);
+  const [obsidianSearchResults, setObsidianSearchResults] = useState<
+    Array<{
+      relativePath: string;
+      title: string;
+      snippet: string;
+      score: number;
+    }>
+  >([]);
   const [obsidianInboxRequest, setObsidianInboxRequest] = useState("");
   const [obsidianBusy, setObsidianBusy] = useState<null | "save" | "test" | "search" | "capture">(null);
   const [criticalConfirmed, setCriticalConfirmed] = useState(false);
@@ -145,17 +161,28 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connectorDiagnosticsEnabled, setConnectorDiagnosticsEnabled] = useState(false);
-  const [diagnosticsByConnectionId, setDiagnosticsByConnectionId] = useState<Record<string, Awaited<ReturnType<typeof fetchIntegrationConnectionDiagnostics>>>>({});
+  const [diagnosticsByConnectionId, setDiagnosticsByConnectionId] = useState<
+    Record<string, Awaited<ReturnType<typeof fetchIntegrationConnectionDiagnostics>>>
+  >({});
   const [selectedDiagnosticConnectionId, setSelectedDiagnosticConnectionId] = useState<string | null>(null);
-  const [discordPairingsByConnectionId, setDiscordPairingsByConnectionId] = useState<Record<string, {
-    runtime?: DiscordRuntimeStatus;
-    items: DiscordPairingRecord[];
-  }>>({});
-  const [channelRuntimeStatusByConnectionId, setChannelRuntimeStatusByConnectionId] = useState<Record<string, ChannelRuntimeStatus>>({});
+  const [discordPairingsByConnectionId, setDiscordPairingsByConnectionId] = useState<
+    Record<
+      string,
+      {
+        runtime?: DiscordRuntimeStatus;
+        items: DiscordPairingRecord[];
+      }
+    >
+  >({});
+  const [channelRuntimeStatusByConnectionId, setChannelRuntimeStatusByConnectionId] = useState<
+    Record<string, ChannelRuntimeStatus>
+  >({});
   const [discordPairingBusyId, setDiscordPairingBusyId] = useState<string | null>(null);
   const [selectedChannelConnectionId, setSelectedChannelConnectionId] = useState("");
   const [channelTestTarget, setChannelTestTarget] = useState("");
-  const [channelTestMessage, setChannelTestMessage] = useState("Operator test message from GoatCitadel Mission Control.");
+  const [channelTestMessage, setChannelTestMessage] = useState(
+    "Operator test message from GoatCitadel Mission Control.",
+  );
   const [channelAttachmentUrls, setChannelAttachmentUrls] = useState("");
   const [channelAttachmentIdsText, setChannelAttachmentIdsText] = useState("");
   const [uploadedChannelAttachments, setUploadedChannelAttachments] = useState<ChatAttachmentRecord[]>([]);
@@ -180,9 +207,7 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
   const load = (options?: { background?: boolean }): Promise<void> => {
     const background = options?.background ?? false;
     const requestedKind = isChannelsView ? "channel" : kindFilter;
-    const kind: Exclude<IntegrationKind, "all"> | undefined = requestedKind === "all"
-      ? undefined
-      : requestedKind;
+    const kind: Exclude<IntegrationKind, "all"> | undefined = requestedKind === "all" ? undefined : requestedKind;
     const requestId = ++requestSeq.current;
     const pluginsPromise = isChannelsView
       ? Promise.resolve<{ items: Awaited<ReturnType<typeof fetchIntegrationPlugins>>["items"] } | null>(null)
@@ -208,44 +233,42 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
       obsidianPromise,
       channelSetupDefinitionsPromise,
     ])
-      .then(([catalogRes, connectionRes, connectorRes, settings, pluginRes, obsidianRes, channelSetupDefinitionsRes]) => {
-        if (requestId !== requestSeq.current) {
-          return;
-        }
-        const nextCatalog = catalogRes.items;
-        setCatalog(nextCatalog);
-        setGuidedChannelCatalogIdList(
-          channelSetupDefinitionsRes?.items.map((item) => item.catalog.catalogId) ?? [],
-        );
-        setConnections(connectionRes.items);
-        setConnectorRecords(connectorRes.items);
-        if (settings) {
-          setConnectorDiagnosticsEnabled(settings.features.connectorDiagnosticsV1Enabled);
-        }
-        if (isChannelsView) {
-          setPlugins([]);
-          setObsidianStatus(null);
-        } else {
-          setPlugins(pluginRes?.items ?? []);
-          if (obsidianRes) {
-            setObsidianStatus(obsidianRes);
-            setObsidianEnabled(obsidianRes.enabled);
-            setObsidianVaultPath(obsidianRes.vaultPath);
-            setObsidianMode(obsidianRes.mode);
-            setObsidianAllowedSubpaths(obsidianRes.allowedSubpaths.join(", "));
+      .then(
+        ([catalogRes, connectionRes, connectorRes, settings, pluginRes, obsidianRes, channelSetupDefinitionsRes]) => {
+          if (requestId !== requestSeq.current) {
+            return;
           }
-        }
+          const nextCatalog = catalogRes.items;
+          setCatalog(nextCatalog);
+          setGuidedChannelCatalogIdList(channelSetupDefinitionsRes?.items.map((item) => item.catalog.catalogId) ?? []);
+          setConnections(connectionRes.items);
+          setConnectorRecords(connectorRes.items);
+          if (settings) {
+            setConnectorDiagnosticsEnabled(settings.features.connectorDiagnosticsV1Enabled);
+          }
+          if (isChannelsView) {
+            setPlugins([]);
+            setObsidianStatus(null);
+          } else {
+            setPlugins(pluginRes?.items ?? []);
+            if (obsidianRes) {
+              setObsidianStatus(obsidianRes);
+              setObsidianEnabled(obsidianRes.enabled);
+              setObsidianVaultPath(obsidianRes.vaultPath);
+              setObsidianMode(obsidianRes.mode);
+              setObsidianAllowedSubpaths(obsidianRes.allowedSubpaths.join(", "));
+            }
+          }
 
-        const hasCurrentSelection = selectedCatalogId
-          ? nextCatalog.some((entry) => entry.catalogId === selectedCatalogId)
-          : false;
-        const nextSelection = hasCurrentSelection
-          ? selectedCatalogId
-          : (nextCatalog[0]?.catalogId ?? "");
+          const hasCurrentSelection = selectedCatalogId
+            ? nextCatalog.some((entry) => entry.catalogId === selectedCatalogId)
+            : false;
+          const nextSelection = hasCurrentSelection ? selectedCatalogId : (nextCatalog[0]?.catalogId ?? "");
 
-        setSelectedCatalogId(nextSelection);
-        setError(null);
-      })
+          setSelectedCatalogId(nextSelection);
+          setError(null);
+        },
+      )
       .catch((err: Error) => {
         if (requestId === requestSeq.current) {
           setError(err.message);
@@ -328,10 +351,7 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     () => catalog.find((entry) => entry.catalogId === selectedCatalogId),
     [catalog, selectedCatalogId],
   );
-  const guidedChannelCatalogIds = useMemo(
-    () => new Set(guidedChannelCatalogIdList),
-    [guidedChannelCatalogIdList],
-  );
+  const guidedChannelCatalogIds = useMemo(() => new Set(guidedChannelCatalogIdList), [guidedChannelCatalogIdList]);
   const selectedCatalogIsRunnable = selectedCatalog
     ? selectedCatalog.runtimeAvailability
       ? selectedCatalog.runtimeAvailability === "runnable"
@@ -342,17 +362,15 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     : "not_channel";
 
   const catalogOptions = useMemo(
-    () => catalog.map((entry) => ({
-      value: entry.catalogId,
-      label: `${entry.label} (${entry.kind})`,
-    })),
+    () =>
+      catalog.map((entry) => ({
+        value: entry.catalogId,
+        label: `${entry.label} (${entry.kind})`,
+      })),
     [catalog],
   );
 
-  const catalogLabelById = useMemo(
-    () => new Map(catalog.map((entry) => [entry.catalogId, entry.label])),
-    [catalog],
-  );
+  const catalogLabelById = useMemo(() => new Map(catalog.map((entry) => [entry.catalogId, entry.label])), [catalog]);
 
   const connectionSummary = useMemo(() => {
     const total = connections.length;
@@ -385,12 +403,14 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     return connections.filter((connection) => {
       const catalogLabel = (catalogLabelById.get(connection.catalogId) ?? "").toLowerCase();
       const lastError = (connection.lastError ?? "").toLowerCase();
-      return connection.label.toLowerCase().includes(query)
-        || connection.catalogId.toLowerCase().includes(query)
-        || catalogLabel.includes(query)
-        || connection.kind.toLowerCase().includes(query)
-        || connection.status.toLowerCase().includes(query)
-        || lastError.includes(query);
+      return (
+        connection.label.toLowerCase().includes(query) ||
+        connection.catalogId.toLowerCase().includes(query) ||
+        catalogLabel.includes(query) ||
+        connection.kind.toLowerCase().includes(query) ||
+        connection.status.toLowerCase().includes(query) ||
+        lastError.includes(query)
+      );
     });
   }, [catalogLabelById, connectionSearch, connections]);
 
@@ -415,7 +435,7 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     ? discordPairingsByConnectionId[selectedChannelConnection.connectionId]?.runtime
     : undefined;
   const selectedDiscordPairings = selectedChannelConnection
-    ? discordPairingsByConnectionId[selectedChannelConnection.connectionId]?.items ?? []
+    ? (discordPairingsByConnectionId[selectedChannelConnection.connectionId]?.items ?? [])
     : [];
   const selectedChannelRuntimeStatus = selectedChannelConnection
     ? channelRuntimeStatusByConnectionId[selectedChannelConnection.connectionId]
@@ -448,16 +468,19 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
       riskAbortRef.current?.abort();
       const controller = new AbortController();
       riskAbortRef.current = controller;
-      void evaluateUiChangeRisk({
-        pageId: "integrations",
-        changes: [
-          { field: "integration.kindFilter", from: "all", to: kindFilter },
-          { field: "integration.catalogId", from: "", to: selectedCatalogId },
-          { field: "integration.status", from: "connected", to: status },
-          { field: "integration.enabled", from: true, to: enabled },
-          { field: "integration.configJson", from: "{}", to: JSON.stringify(effectiveConfig) },
-        ],
-      }, { signal: controller.signal })
+      void evaluateUiChangeRisk(
+        {
+          pageId: "integrations",
+          changes: [
+            { field: "integration.kindFilter", from: "all", to: kindFilter },
+            { field: "integration.catalogId", from: "", to: selectedCatalogId },
+            { field: "integration.status", from: "connected", to: status },
+            { field: "integration.enabled", from: true, to: enabled },
+            { field: "integration.configJson", from: "{}", to: JSON.stringify(effectiveConfig) },
+          ],
+        },
+        { signal: controller.signal },
+      )
         .then((remoteReview) => {
           const merged = mergeRiskItems(
             localReview.items,
@@ -560,7 +583,9 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
       return;
     }
     if (!selectedCatalogIsRunnable) {
-      setError("This catalog entry is not runnable in the current runtime. Pick a runnable integration before creating a connection.");
+      setError(
+        "This catalog entry is not runnable in the current runtime. Pick a runnable integration before creating a connection.",
+      );
       return;
     }
     let parsedConfig: Record<string, unknown>;
@@ -778,12 +803,14 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
         effectId: channelEffectId.trim() || undefined,
         subject: channelSubject.trim() || undefined,
       });
-      const statusText = typeof result === "object" && result && "status" in result
-        ? String((result as { status?: unknown }).status ?? "sent")
-        : "sent";
-      const providerMessageId = typeof result === "object" && result && "providerMessageId" in result
-        ? String((result as { providerMessageId?: unknown }).providerMessageId ?? "")
-        : "";
+      const statusText =
+        typeof result === "object" && result && "status" in result
+          ? String((result as { status?: unknown }).status ?? "sent")
+          : "sent";
+      const providerMessageId =
+        typeof result === "object" && result && "providerMessageId" in result
+          ? String((result as { providerMessageId?: unknown }).providerMessageId ?? "")
+          : "";
       setChannelTestResult(
         providerMessageId
           ? `Delivered with status ${statusText}. Provider message id: ${providerMessageId}.`
@@ -830,9 +857,10 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
         messageId,
         reaction: emoji,
       });
-      const statusText = typeof result === "object" && result && "status" in result
-        ? String((result as { status?: unknown }).status ?? "reacted")
-        : "reacted";
+      const statusText =
+        typeof result === "object" && result && "status" in result
+          ? String((result as { status?: unknown }).status ?? "reacted")
+          : "reacted";
       setChannelActionResult(`Reaction request completed with status ${statusText}.`);
       setError(null);
     } catch (err) {
@@ -850,10 +878,12 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     try {
       const uploaded: ChatAttachmentRecord[] = [];
       for (const file of Array.from(fileList)) {
-        uploaded.push(await uploadChatAttachment({
-          sessionId: INTEGRATIONS_UPLOAD_SESSION_ID,
-          file,
-        }));
+        uploaded.push(
+          await uploadChatAttachment({
+            sessionId: INTEGRATIONS_UPLOAD_SESSION_ID,
+            file,
+          }),
+        );
       }
       setUploadedChannelAttachments((current) => dedupeUploadedAttachments([...current, ...uploaded]));
       setError(null);
@@ -895,9 +925,10 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
         target,
         messageId,
       });
-      const statusText = typeof result === "object" && result && "status" in result
-        ? String((result as { status?: unknown }).status ?? "unsent")
-        : "unsent";
+      const statusText =
+        typeof result === "object" && result && "status" in result
+          ? String((result as { status?: unknown }).status ?? "unsent")
+          : "unsent";
       setChannelActionResult(`Unsend request completed with status ${statusText}.`);
       setError(null);
     } catch (err) {
@@ -1061,9 +1092,21 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
         subtitle="Catalog entries define the shape. Connections hold config and activate only when a page or workflow needs them."
       >
         <ol>
-          <li>{isChannelsView ? "Pick a channel adapter from the catalog." : "Pick a catalog entry to define what you are connecting."}</li>
-          <li>{isChannelsView ? "Use guided fields first so default targets and auth expectations stay visible." : "Fill guided fields (recommended), then save the connection."}</li>
-          <li>{isChannelsView ? "Validate delivery in Channel Test Bench before you trust the adapter live." : "Leave it connected for live use, or pause it until needed."}</li>
+          <li>
+            {isChannelsView
+              ? "Pick a channel adapter from the catalog."
+              : "Pick a catalog entry to define what you are connecting."}
+          </li>
+          <li>
+            {isChannelsView
+              ? "Use guided fields first so default targets and auth expectations stay visible."
+              : "Fill guided fields (recommended), then save the connection."}
+          </li>
+          <li>
+            {isChannelsView
+              ? "Validate delivery in Channel Test Bench before you trust the adapter live."
+              : "Leave it connected for live use, or pause it until needed."}
+          </li>
         </ol>
         <div className="token-row">
           <span className="token-chip">Configured: {connectionSummary.total}</span>
@@ -1075,210 +1118,46 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
       </Panel>
 
       {!isChannelsView ? (
-        <Panel
-          title="Obsidian (Preferred Local Notes Path)"
-          subtitle="Use this when you want GoatCitadel to read and optionally append markdown in a local Obsidian vault."
-        >
-        <p className="office-subtitle">
-          Use this for a local vault. Leave it disabled if you do not use Obsidian.
-        </p>
-        <ol>
-          <li>Set the local vault path and save config.</li>
-          <li>Run Test connection to confirm the vault is reachable.</li>
-          <li>Optionally capture quick inbox requests into your Obsidian workflow.</li>
-        </ol>
-        <div className="controls-row">
-          <GCSwitch
-            checked={obsidianEnabled}
-            onCheckedChange={setObsidianEnabled}
-            label="Enable Obsidian integration"
-          />
-          <label htmlFor="obsidianVaultPath">Vault path</label>
-          <input
-            id="obsidianVaultPath"
-            value={obsidianVaultPath}
-            onChange={(event) => setObsidianVaultPath(event.target.value)}
-            placeholder="F:\\AI Obsidian\\AI Info"
-          />
-        </div>
-        <div className="controls-row">
-          <label htmlFor="obsidianMode">Access mode</label>
-          <GCSelect
-            id="obsidianMode"
-            value={obsidianMode}
-            onChange={(value) => setObsidianMode(value as "read_append" | "read_only")}
-            options={[
-              { value: "read_append", label: "read_append (recommended)" },
-              { value: "read_only", label: "read_only" },
-            ]}
-          />
-          <label htmlFor="obsidianAllowedSubpaths">Allowed subpaths (comma-separated)</label>
-          <input
-            id="obsidianAllowedSubpaths"
-            value={obsidianAllowedSubpaths}
-            onChange={(event) => setObsidianAllowedSubpaths(event.target.value)}
-            placeholder="GoatCitadel, GoatCitadel/Inbox"
-          />
-          <button type="button" disabled={obsidianBusy === "save"} onClick={() => void onSaveObsidianConfig()}>
-            {obsidianBusy === "save" ? "Saving..." : "Save Obsidian config"}
-          </button>
-          <button type="button" disabled={obsidianBusy === "test"} onClick={() => void onTestObsidian()}>
-            {obsidianBusy === "test" ? "Testing..." : "Test connection"}
-          </button>
-        </div>
-        {obsidianStatus ? (
-          <div className="token-row">
-            <span className={`token-chip ${obsidianStatus.vaultReachable ? "token-chip-active" : ""}`}>
-              {obsidianStatus.vaultReachable ? "Vault reachable" : "Vault unreachable"}
-            </span>
-            <span className="token-chip">Mode: {obsidianStatus.mode}</span>
-            <span className="token-chip">Last check: {new Date(obsidianStatus.checkedAt).toLocaleString()}</span>
-            {obsidianStatus.lastOperationAt ? (
-              <span className="token-chip">Last operation: {new Date(obsidianStatus.lastOperationAt).toLocaleString()}</span>
-            ) : null}
-          </div>
-        ) : null}
-        {!obsidianStatus?.enabled ? (
-          <p className="table-subtext">
-            Obsidian is currently disabled. This is safe default behavior.
-          </p>
-        ) : null}
-        {obsidianStatus?.enabled && !obsidianStatus.vaultReachable ? (
-          <p className="error">
-            Obsidian is enabled but vault is not reachable. Check your local path and permissions.
-          </p>
-        ) : null}
-        {obsidianStatus?.lastError ? (
-          <p className="error">Last Obsidian error: {obsidianStatus.lastError}</p>
-        ) : null}
-        <details className="advanced-panel">
-          <summary>Quick Obsidian operations</summary>
-          <div className="controls-row">
-            <label htmlFor="obsidianQuery">Search notes</label>
-            <input
-              id="obsidianQuery"
-              value={obsidianQuery}
-              onChange={(event) => setObsidianQuery(event.target.value)}
-              placeholder="Prompt Lab"
-            />
-            <button type="button" disabled={obsidianBusy === "search"} onClick={() => void onSearchObsidian()}>
-              {obsidianBusy === "search" ? "Searching..." : "Search"}
-            </button>
-          </div>
-          {obsidianSearchResults.length > 0 ? (
-            <table>
-              <thead>
-                <tr>
-                  <th>Note</th>
-                  <th>Snippet</th>
-                </tr>
-              </thead>
-              <tbody>
-                {obsidianSearchResults.map((item) => (
-                  <tr key={item.relativePath}>
-                    <td>{item.relativePath}</td>
-                    <td>{item.snippet}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <p className="table-subtext">No search results yet.</p>
-          )}
-          <div className="controls-row">
-            <label htmlFor="obsidianInboxRequest">Capture inbox request</label>
-            <input
-              id="obsidianInboxRequest"
-              value={obsidianInboxRequest}
-              onChange={(event) => setObsidianInboxRequest(event.target.value)}
-              placeholder="Investigate score failures in Prompt Lab"
-            />
-            <button type="button" disabled={obsidianBusy === "capture"} onClick={() => void onCaptureObsidianInbox()}>
-              {obsidianBusy === "capture" ? "Capturing..." : "Capture to Obsidian inbox"}
-            </button>
-          </div>
-        </details>
-        </Panel>
+        <IntegrationsObsidianPanel
+          obsidianEnabled={obsidianEnabled}
+          onObsidianEnabledChange={setObsidianEnabled}
+          obsidianVaultPath={obsidianVaultPath}
+          onObsidianVaultPathChange={setObsidianVaultPath}
+          obsidianMode={obsidianMode}
+          onObsidianModeChange={setObsidianMode}
+          obsidianAllowedSubpaths={obsidianAllowedSubpaths}
+          onObsidianAllowedSubpathsChange={setObsidianAllowedSubpaths}
+          obsidianBusy={obsidianBusy}
+          onSaveObsidianConfig={() => void onSaveObsidianConfig()}
+          onTestObsidian={() => void onTestObsidian()}
+          obsidianStatus={obsidianStatus}
+          obsidianQuery={obsidianQuery}
+          onObsidianQueryChange={setObsidianQuery}
+          onSearchObsidian={() => void onSearchObsidian()}
+          obsidianSearchResults={obsidianSearchResults}
+          obsidianInboxRequest={obsidianInboxRequest}
+          onObsidianInboxRequestChange={setObsidianInboxRequest}
+          onCaptureObsidianInbox={() => void onCaptureObsidianInbox()}
+        />
       ) : null}
 
-      {!isChannelsView ? (
-        <Panel
-          title="Catalog Scope"
-          subtitle={kindFilter === "all" ? "Showing all available catalog entries." : KIND_DESCRIPTIONS[kindFilter]}
-        >
-        <DataToolbar
-          primary={(
-            <div className="controls-row">
-              <label htmlFor="integrationKind">
-                Connection type
-                <HelpHint
-                  label="Connection type help"
-                  text="Filter catalog entries by integration category. This does not remove existing connections."
-                />
-              </label>
-              <GCSelect
-                id="integrationKind"
-                value={kindFilter}
-                onChange={(value) => {
-                  setKindFilter(value as IntegrationKind);
-                  setSelectedCatalogId("");
-                  setFormSchema(undefined);
-                }}
-                options={KIND_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: option.label,
-                }))}
-              />
-            </div>
-          )}
-          secondary={<StatusChip>{catalog.length} entries</StatusChip>}
-        />
-        </Panel>
-      ) : (
-        <Panel
-          title="Channel Catalog"
-          subtitle="Showing only channel adapters in this view."
-        >
-          <div className="workflow-summary-strip">
-            <StatusChip>Kind locked to channels</StatusChip>
-            <StatusChip>{catalog.length} channel entries</StatusChip>
-            <StatusChip tone="success">{channelCatalogTruthSummary.guided} guided</StatusChip>
-            <StatusChip tone="warning">{channelCatalogTruthSummary.manual} manual only</StatusChip>
-            {channelCatalogTruthSummary.blocked > 0 ? (
-              <StatusChip tone="critical">{channelCatalogTruthSummary.blocked} blocked</StatusChip>
-            ) : null}
-          </div>
-          {!isInitialLoading ? (
-            <div className="channel-setup-catalog">
-              {catalog.map((entry) => {
-                const selected = entry.catalogId === selectedCatalogId;
-                const setupPath = resolveChannelSetupPath(entry, guidedChannelCatalogIds);
-                return (
-                  <button
-                    key={entry.catalogId}
-                    type="button"
-                    className={`channel-setup-catalog-item${selected ? " selected" : ""}`}
-                    onClick={() => setSelectedCatalogId(entry.catalogId)}
-                  >
-                    <div className="channel-setup-catalog-top">
-                      <strong>{entry.label}</strong>
-                      <StatusChip tone={getChannelSetupPathTone(setupPath)}>
-                        {formatChannelSetupPath(setupPath)}
-                      </StatusChip>
-                    </div>
-                    <FieldHelp>{entry.description}</FieldHelp>
-                    <FieldHelp>
-                      Runtime: {formatRuntimeAvailability(entry.runtimeAvailability)}
-                      {" · "}
-                      Parity: {formatMaturity(entry.maturity)}
-                    </FieldHelp>
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-        </Panel>
-      )}
+      <IntegrationsCatalogPicker<IntegrationKind>
+        isChannelsView={isChannelsView}
+        catalog={catalog}
+        selectedCatalogId={selectedCatalogId}
+        onSelectCatalogId={setSelectedCatalogId}
+        guidedChannelCatalogIds={guidedChannelCatalogIds}
+        channelCatalogTruthSummary={channelCatalogTruthSummary}
+        isInitialLoading={isInitialLoading}
+        kindFilter={kindFilter}
+        onKindFilterChange={(value) => {
+          setKindFilter(value);
+          setSelectedCatalogId("");
+          setFormSchema(undefined);
+        }}
+        kindOptions={KIND_OPTIONS}
+        scopeSubtitle={kindFilter === "all" ? "Showing all available catalog entries." : KIND_DESCRIPTIONS[kindFilter]}
+      />
 
       <ChangeReviewPanel
         title="Pre-Save Safety Check"
@@ -1289,691 +1168,117 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
         onCriticalConfirmChange={setCriticalConfirmed}
       />
 
-      <Panel
-        title={createConnectionTitle}
-        subtitle={createConnectionSubtitle}
-      >
-        {isInitialLoading ? <CardSkeleton lines={5} /> : null}
-        {!isInitialLoading ? (
-          <>
-            <div className="controls-row">
-              <label>
-                Catalog entry
-                <HelpHint
-                  label="Catalog entry help"
-                  text="Catalog entries define expected auth methods, fields, and capabilities for a service."
-                />
-              </label>
-              <SelectOrCustom
-                value={selectedCatalogId}
-                onChange={setSelectedCatalogId}
-                options={catalogOptions}
-                customPlaceholder="Select a catalog entry"
-                customLabel="Catalog id"
-                customOptionLabel="Use custom catalog id"
-              />
-            </div>
-            <div className="controls-row">
-              <label>
-                Display name (optional)
-                <HelpHint
-                  label="Connection label help"
-                  text="Friendly name shown in lists. If left blank, GoatCitadel uses the catalog name."
-                />
-              </label>
-              <input
-                value={label}
-                onChange={(event) => setLabel(event.target.value)}
-                placeholder={selectedCatalog?.label ?? "Connection label"}
-              />
-              <label>
-                Initial status
-                <HelpHint
-                  label="Initial status help"
-                  text="Connected means ready now. Paused/disconnected keeps config saved without active use."
-                />
-              </label>
-              <GCSelect
-                value={status}
-                onChange={(value) => setStatus(value as IntegrationConnection["status"])}
-                options={STATUS_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: option.label,
-                }))}
-              />
-              <GCSwitch
-                checked={enabled}
-                onCheckedChange={setEnabled}
-                label="Enable right away"
-              />
-            </div>
-            <p className="office-subtitle">
-              {STATUS_OPTIONS.find((option) => option.value === status)?.description}
-            </p>
-            {selectedCatalog ? (
-              <div className="card">
-                <p><strong>{selectedCatalog.label}</strong> [{formatMaturity(selectedCatalog.maturity)}]</p>
-                <p>{selectedCatalog.description}</p>
-                <p className="office-subtitle">
-                  Auth: {selectedCatalog.authMethods.join(", ") || "-"}
-                  {" | "}
-                  Kind: {formatKind(selectedCatalog.kind)}
-                </p>
-                <p className="office-subtitle">{describeMaturity(selectedCatalog.maturity)}</p>
-                <p className="office-subtitle">
-                  Runtime: {formatRuntimeAvailability(selectedCatalog.runtimeAvailability)}
-                </p>
-                {selectedCatalog.kind === "channel" ? (
-                  <p className="office-subtitle">
-                    Setup path: {formatChannelSetupPath(selectedCatalogSetupPath)}
-                  </p>
-                ) : null}
-                {selectedCatalog.runtimeAvailability === "blocked" ? (
-                  <FieldHelp>
-                    This catalog entry stays visible for planning, but GoatCitadel cannot create a runnable connection from it in the current runtime yet.
-                  </FieldHelp>
-                ) : selectedCatalog.maturity === "planned" ? (
-                  <FieldHelp>
-                    This catalog entry is runnable through the current runtime, but the parity program still classifies it as unfinished. Expect manual setup and follow-on proof work.
-                  </FieldHelp>
-                ) : null}
-                {selectedCatalog.kind === "channel" ? (
-                  <FieldHelp>{describeChannelSetupPath(selectedCatalogSetupPath)}</FieldHelp>
-                ) : null}
-                {selectedCatalog.docsUrl ? (
-                  <p className="office-subtitle">
-                    <a href={selectedCatalog.docsUrl} target="_blank" rel="noreferrer">Open integration docs</a>
-                  </p>
-                ) : null}
-                <div className="token-row">
-                  {selectedCatalog.capabilities.map((capability) => (
-                    <span key={capability} className="token-chip">{capability}</span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
+      <IntegrationsCreateConnectionPanel
+        createConnectionTitle={createConnectionTitle}
+        createConnectionSubtitle={createConnectionSubtitle}
+        isInitialLoading={isInitialLoading}
+        selectedCatalogId={selectedCatalogId}
+        onSelectedCatalogIdChange={setSelectedCatalogId}
+        catalogOptions={catalogOptions}
+        label={label}
+        onLabelChange={setLabel}
+        selectedCatalog={selectedCatalog}
+        selectedCatalogSetupPath={selectedCatalogSetupPath}
+        selectedCatalogIsRunnable={selectedCatalogIsRunnable}
+        status={status}
+        onStatusChange={setStatus}
+        statusOptions={STATUS_OPTIONS}
+        enabled={enabled}
+        onEnabledChange={setEnabled}
+        showAdvancedJson={showAdvancedJson}
+        onShowAdvancedJsonChange={setShowAdvancedJson}
+        simpleFormLabel={simpleFormLabel}
+        simpleFormSelectionLabel={simpleFormSelectionLabel}
+        guidedModeSummary={guidedModeSummary}
+        advancedModeSummary={advancedModeSummary}
+        selectedModeCallout={selectedModeCallout}
+        isFormSchemaLoading={isFormSchemaLoading}
+        formSchema={formSchema}
+        guidedConfig={guidedConfig}
+        onGuidedConfigChange={setGuidedConfig}
+        configJson={configJson}
+        onConfigJsonChange={setConfigJson}
+        blockCreate={blockCreate}
+        createPending={createAction.pending}
+        onCreate={() => void onCreate()}
+      />
 
-            <div className="integrations-setup-mode-panel">
-              <div className="integrations-setup-mode-header">
-                <strong>Setup mode</strong>
-                <p className="office-subtitle">
-                  Choose the simple form or the raw config editor before you fill anything in.
-                </p>
-              </div>
-              <div className="integrations-setup-mode-toggle" role="group" aria-label="Setup mode">
-              <button
-                type="button"
-                aria-pressed={!showAdvancedJson}
-                className={`integrations-setup-mode-button${!showAdvancedJson ? " active" : ""}`}
-                onClick={() => setShowAdvancedJson(false)}
-              >
-                <span className="integrations-setup-mode-label">{simpleFormLabel}</span>
-                <span className="integrations-setup-mode-note">Recommended for most people</span>
-              </button>
-              <button
-                type="button"
-                aria-pressed={showAdvancedJson}
-                className={`integrations-setup-mode-button${showAdvancedJson ? " active" : ""}`}
-                onClick={() => setShowAdvancedJson(true)}
-              >
-                <span className="integrations-setup-mode-label">Advanced JSON</span>
-                <span className="integrations-setup-mode-note">Raw config for edge cases</span>
-              </button>
-              </div>
-              <div className="integrations-setup-mode-guidance">
-                <article className={`integrations-setup-mode-card${!showAdvancedJson ? " selected" : ""}`}>
-                  <h4>{simpleFormLabel}</h4>
-                  <p>{guidedModeSummary}</p>
-                  <span>Use this when you want the easiest path.</span>
-                </article>
-                <article className={`integrations-setup-mode-card${showAdvancedJson ? " selected" : ""}`}>
-                  <h4>Advanced JSON</h4>
-                  <p>{advancedModeSummary}</p>
-                  <span>Use this only when docs or support tell you to.</span>
-                </article>
-              </div>
-            </div>
-            <p className="integrations-setup-mode-status">
-              {!showAdvancedJson
-                ? (isFormSchemaLoading ? "Loading form fields..." : simpleFormSelectionLabel)
-                : "Advanced JSON mode is selected."}
-            </p>
-            <p className="office-subtitle">{selectedModeCallout}</p>
-            {!showAdvancedJson ? (
-              isFormSchemaLoading ? (
-                <CardSkeleton lines={4} />
-              ) : (
-              <ConfigFormBuilder
-                schema={formSchema}
-                value={guidedConfig}
-                onChange={setGuidedConfig}
-              />
-              )
-            ) : (
-              <>
-                <label htmlFor="connectionConfig">Connection config (JSON)</label>
-                <textarea
-                  id="connectionConfig"
-                  rows={8}
-                  className="full-textarea"
-                  value={configJson}
-                  onChange={(event) => setConfigJson(event.target.value)}
-                />
-              </>
-            )}
-            <button
-              type="button"
-              onClick={() => void onCreate()}
-              disabled={blockCreate || createAction.pending || !selectedCatalogIsRunnable}
-            >
-              {createAction.pending ? "Saving..." : "Save Connection"}
-            </button>
-          </>
-        ) : null}
-      </Panel>
+      <IntegrationsConnectionsTable
+        connectionsTitle={connectionsTitle}
+        connectionsSubtitle={connectionsSubtitle}
+        connectionSearch={connectionSearch}
+        onConnectionSearchChange={setConnectionSearch}
+        connections={connections}
+        filteredConnections={filteredConnections}
+        catalogLabelById={catalogLabelById}
+        connectorBySourceId={connectorBySourceId}
+        connectorDiagnosticsEnabled={connectorDiagnosticsEnabled}
+        pluginBusyId={pluginBusyId}
+        deleteActionPending={deleteAction.pending}
+        onToggle={(connection) => void onToggle(connection)}
+        onRunDiagnostics={(connectionId) => void onRunDiagnostics(connectionId)}
+        onSetDeleteTarget={setDeleteTarget}
+        selectedDiagnosticConnectionId={selectedDiagnosticConnectionId}
+        selectedDiagnostics={selectedDiagnostics}
+      />
 
-      <Panel
-        title={connectionsTitle}
-        subtitle={connectionsSubtitle}
-      >
-        <DataToolbar
-          primary={(
-            <div className="controls-row">
-              <label htmlFor="connectionSearch">Filter</label>
-              <input
-                id="connectionSearch"
-                value={connectionSearch}
-                onChange={(event) => setConnectionSearch(event.target.value)}
-                placeholder="Search label, catalog, status, error..."
-              />
-            </div>
-          )}
-          secondary={<StatusChip>{filteredConnections.length} visible</StatusChip>}
-        />
-        <table>
-          <thead>
-            <tr>
-              <th>Label</th>
-              <th>Catalog</th>
-              <th>Kind</th>
-              <th>Status</th>
-              <th>Approval delivery</th>
-              <th>Enabled</th>
-              <th>Updated</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredConnections.length === 0 ? (
-              <tr>
-                <td colSpan={8}>
-                  {connections.length === 0
-                    ? "No configured connections yet. Create one above to get started."
-                    : "No connections match this filter."}
-                </td>
-              </tr>
-            ) : filteredConnections.map((connection) => (
-              <tr key={connection.connectionId}>
-                <td>{connection.label}</td>
-                <td>
-                  {catalogLabelById.get(connection.catalogId) ?? connection.catalogId}
-                  <div className="table-subtext">{connection.catalogId}</div>
-                </td>
-                <td>{formatKind(connection.kind)}</td>
-                <td>
-                  {formatStatus(connection.status)}
-                  {connection.lastError ? <div className="table-subtext">{connection.lastError}</div> : null}
-                </td>
-                <td>
-                  {renderConnectorApprovalDeliverySummary(connectorBySourceId.get(connection.connectionId), connection)}
-                </td>
-                <td>{connection.enabled ? "yes" : "no"}</td>
-                <td>{new Date(connection.updatedAt).toLocaleString()}</td>
-                <td className="actions">
-                  <button type="button" onClick={() => void onToggle(connection)}>
-                    {connection.enabled ? "Pause" : "Enable"}
-                  </button>
-                  {connectorDiagnosticsEnabled ? (
-                    <button
-                      type="button"
-                      onClick={() => void onRunDiagnostics(connection.connectionId)}
-                      disabled={pluginBusyId === `diag:${connection.connectionId}`}
-                    >
-                      {pluginBusyId === `diag:${connection.connectionId}` ? "Running..." : "Diagnose"}
-                    </button>
-                  ) : (
-                    <span className="table-subtext">Diagnostics disabled</span>
-                  )}
-                  <button type="button"
-                    className="danger"
-                    onClick={() => setDeleteTarget(connection)}
-                    disabled={deleteAction.pending}
-                  >
-                    Remove
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {connectorDiagnosticsEnabled && selectedDiagnosticConnectionId && selectedDiagnostics ? (
-          <details open style={{ marginTop: 12 }}>
-            <summary>
-              Diagnostics for {connections.find((item) => item.connectionId === selectedDiagnosticConnectionId)?.label ?? selectedDiagnosticConnectionId}
-              {" • "}
-              {selectedDiagnostics.status}
-              {" • "}
-              {new Date(selectedDiagnostics.checkedAt).toLocaleString()}
-            </summary>
-            <ul className="improvement-simple-list">
-              {selectedDiagnostics.checks.map((check: {
-                key: string;
-                status: "pass" | "warn" | "fail";
-                message: string;
-              }) => (
-                <li key={`${check.key}:${check.message}`}>
-                  <strong>{check.key}</strong> [{check.status}] - {check.message}
-                </li>
-            ))}
-          </ul>
-            {selectedDiagnostics.probe?.steps?.length ? (
-              <>
-                <p className="office-subtitle"><strong>Probe truth</strong></p>
-                <ul className="improvement-simple-list">
-                  {selectedDiagnostics.probe.steps.map((step) => (
-                    <li key={`${step.key}:${step.message}`}>
-                      <strong>{step.label}</strong> [{step.status}] - {step.message}
-                    </li>
-                  ))}
-                </ul>
-              </>
-            ) : null}
-            {selectedDiagnostics.recommendedNextAction ? (
-              <p className="office-subtitle">
-                Next step: {selectedDiagnostics.recommendedNextAction}
-              </p>
-            ) : null}
-          </details>
-        ) : null}
-        {!connectorDiagnosticsEnabled ? (
-          <FieldHelp>
-            Connector diagnostics are disabled in this runtime. Status and configuration still render, but active diagnosis runs are intentionally hidden until the feature is enabled.
-          </FieldHelp>
-        ) : null}
-      </Panel>
-
-      <Panel
-        title="Channel Test Bench"
-        subtitle="Send operator test messages through each channel adapter with the exact delivery semantics that connection uses."
-      >
-        {channelConnections.length === 0 ? (
-          <p className="table-subtext">No channel connections configured yet. Create one above, then validate it here.</p>
-        ) : (
-          <>
-            <div className="controls-row">
-              <label htmlFor="channelTestConnection">Channel connection</label>
-              <GCSelect
-                id="channelTestConnection"
-                value={selectedChannelConnectionId}
-                onChange={(value) => setSelectedChannelConnectionId(value)}
-                options={channelConnections.map((connection) => ({
-                  value: connection.connectionId,
-                  label: `${connection.label} (${connection.key})`,
-                }))}
-              />
-              <label htmlFor="channelTestTarget">Target</label>
-              <input
-                id="channelTestTarget"
-                value={channelTestTarget}
-                onChange={(event) => setChannelTestTarget(event.target.value)}
-                placeholder="channel / room / chat id / thread key"
-              />
-              <button type="button" onClick={() => void onSendChannelTest()} disabled={channelTestBusy}>
-                {channelTestBusy ? "Sending..." : "Send test"}
-              </button>
-            </div>
-            {selectedChannelConnection ? (
-              <>
-                <p className="office-subtitle">
-                  Adapter: {selectedChannelConnection.key}
-                  {" · "}
-                  Status: {selectedChannelConnection.status}
-                  {" · "}
-                  Suggested default target: {guessDefaultChannelTarget(selectedChannelConnection) || "none configured"}
-                </p>
-                {selectedChannelConnector ? (
-                  <div className="card" style={{ marginBottom: 12 }}>
-                    <p>
-                      <strong>Connector readiness</strong>
-                      {" · "}
-                      {connectorSetupReady(selectedChannelConnector) ? "ready" : "needs attention"}
-                    </p>
-                    <p className="office-subtitle">
-                      Supported actions: {formatConnectorList(getConnectorSupportedDeliveryActions(selectedChannelConnector))}
-                      {" | "}
-                      Attachment sources: {formatConnectorList(getConnectorSupportedAttachmentSources(selectedChannelConnector))}
-                    </p>
-                    <p className="office-subtitle">
-                      Runtime posture: {selectedChannelRuntimeStatus?.runtimePosture?.operatorSummary ?? getConnectorRuntimePostureSummary(selectedChannelConnector) ?? "not reported"}
-                      {" | "}
-                      Runtime ready: {selectedChannelRuntimeStatus ? (selectedChannelRuntimeStatus.ready ? "yes" : "no") : "unknown"}
-                    </p>
-                    {selectedChannelRuntimeStatus ? (
-                      <p className="office-subtitle">
-                        Last ready: {selectedChannelRuntimeStatus.lastReadyAt ? new Date(selectedChannelRuntimeStatus.lastReadyAt).toLocaleString() : "never"}
-                        {" | "}
-                        Last inbound: {selectedChannelRuntimeStatus.lastInboundAt ? new Date(selectedChannelRuntimeStatus.lastInboundAt).toLocaleString() : "never"}
-                        {selectedChannelRuntimeStatus.lastError ? ` | Runtime error: ${selectedChannelRuntimeStatus.lastError}` : ""}
-                      </p>
-                    ) : null}
-                    {getConnectorSupportNotes(selectedChannelConnector).length > 0 ? (
-                      <>
-                        <p className="office-subtitle"><strong>Support notes</strong></p>
-                        <ul className="improvement-simple-list">
-                          {getConnectorSupportNotes(selectedChannelConnector).map((note) => (
-                            <li key={note}>{note}</li>
-                          ))}
-                        </ul>
-                      </>
-                    ) : null}
-                    {getConnectorSetupDiagnostics(selectedChannelConnector).length > 0 ? (
-                      <>
-                        <p className="office-subtitle"><strong>Setup diagnostics</strong></p>
-                        <ul className="improvement-simple-list">
-                          {getConnectorSetupDiagnostics(selectedChannelConnector).map((diagnostic) => (
-                            <li key={diagnostic}>{diagnostic}</li>
-                          ))}
-                        </ul>
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
-                {isDiscordGatewayConnection(selectedChannelConnection) ? (
-                  <div className="card" style={{ marginBottom: 12 }}>
-                    <p>
-                      <strong>Discord gateway runtime</strong>
-                      {" · "}
-                      {selectedDiscordRuntime?.ready ? "logged in" : "not ready"}
-                    </p>
-                    <p className="office-subtitle">
-                      Bot: {selectedDiscordRuntime?.connectedBotTag ?? "unknown"}
-                      {" | "}
-                      Last inbound: {selectedDiscordRuntime?.lastInboundAt ? new Date(selectedDiscordRuntime.lastInboundAt).toLocaleString() : "never"}
-                      {" | "}
-                      Last reconnect: {selectedDiscordRuntime?.lastReconnectAt ? new Date(selectedDiscordRuntime.lastReconnectAt).toLocaleString() : "never"}
-                    </p>
-                    <p className="office-subtitle">
-                      Guilds connected: {selectedDiscordRuntime?.guildIds?.length ? selectedDiscordRuntime.guildIds.join(", ") : "none reported"}
-                    </p>
-                    {selectedDiscordRuntime?.lastError ? (
-                      <FieldHelp>Runtime error: {selectedDiscordRuntime.lastError}</FieldHelp>
-                    ) : null}
-                    <div className="controls-row" style={{ marginTop: 8 }}>
-                      <button
-                        type="button"
-                        onClick={() => void onReconnectDiscordRuntime(selectedChannelConnection.connectionId)}
-                        disabled={discordPairingBusyId === `reconnect:${selectedChannelConnection.connectionId}`}
-                      >
-                        {discordPairingBusyId === `reconnect:${selectedChannelConnection.connectionId}` ? "Reconnecting..." : "Reconnect Discord runtime"}
-                      </button>
-                    </div>
-                    <p className="office-subtitle" style={{ marginTop: 12 }}><strong>Pairings</strong></p>
-                    {selectedDiscordPairings.length === 0 ? (
-                      <FieldHelp>No pending or approved Discord peers yet.</FieldHelp>
-                    ) : (
-                      <ul className="improvement-simple-list">
-                        {selectedDiscordPairings.map((pairing) => (
-                          <li key={pairing.pairingId}>
-                            <strong>{pairing.displayName ?? pairing.userId}</strong>
-                            {" · "}
-                            {pairing.status}
-                            {" · "}
-                            code {pairing.code}
-                            {pairing.lastInboundAt ? ` · last inbound ${new Date(pairing.lastInboundAt).toLocaleString()}` : ""}
-                            {" "}
-                            {pairing.status !== "approved" ? (
-                              <button
-                                type="button"
-                                onClick={() => void onApproveDiscordPairing(selectedChannelConnection.connectionId, pairing.pairingId)}
-                                disabled={discordPairingBusyId === `approve:${pairing.pairingId}`}
-                              >
-                                {discordPairingBusyId === `approve:${pairing.pairingId}` ? "Approving..." : "Approve"}
-                              </button>
-                            ) : null}
-                            {" "}
-                            {pairing.status !== "revoked" ? (
-                              <button
-                                type="button"
-                                onClick={() => void onRevokeDiscordPairing(selectedChannelConnection.connectionId, pairing.pairingId)}
-                                disabled={discordPairingBusyId === `revoke:${pairing.pairingId}`}
-                              >
-                                {discordPairingBusyId === `revoke:${pairing.pairingId}` ? "Revoking..." : "Revoke"}
-                              </button>
-                            ) : null}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                ) : null}
-              </>
-            ) : null}
-            <label htmlFor="channelTestMessage">Message</label>
-            <textarea
-              id="channelTestMessage"
-              rows={5}
-              className="full-textarea"
-              value={channelTestMessage}
-              onChange={(event) => setChannelTestMessage(event.target.value)}
-            />
-            <div className="controls-row" style={{ marginTop: 12 }}>
-              <label htmlFor="channelSubject">Subject</label>
-              <input
-                id="channelSubject"
-                value={channelSubject}
-                onChange={(event) => setChannelSubject(event.target.value)}
-                placeholder="Optional subject (provider-specific)"
-              />
-              <label htmlFor="channelEffectId">Effect</label>
-              <input
-                id="channelEffectId"
-                value={channelEffectId}
-                onChange={(event) => setChannelEffectId(event.target.value)}
-                placeholder="Optional effect id"
-              />
-            </div>
-            <div className="controls-row">
-              <label htmlFor="channelReplyToMessageId">Reply to message id</label>
-              <input
-                id="channelReplyToMessageId"
-                value={channelReplyToMessageId}
-                onChange={(event) => setChannelReplyToMessageId(event.target.value)}
-                placeholder="Optional provider message id"
-              />
-              <label htmlFor="channelReplyToPartIndex">Reply part index</label>
-              <input
-                id="channelReplyToPartIndex"
-                value={channelReplyToPartIndex}
-                onChange={(event) => setChannelReplyToPartIndex(event.target.value)}
-                placeholder="0"
-              />
-            </div>
-            <label htmlFor="channelAttachmentUrls">Attachment URLs</label>
-            <textarea
-              id="channelAttachmentUrls"
-              rows={3}
-              className="full-textarea"
-              value={channelAttachmentUrls}
-              onChange={(event) => setChannelAttachmentUrls(event.target.value)}
-              placeholder="One attachment URL per line"
-            />
-            <label htmlFor="channelAttachmentIdsText">Uploaded attachment ids</label>
-            <textarea
-              id="channelAttachmentIdsText"
-              rows={2}
-              className="full-textarea"
-              value={channelAttachmentIdsText}
-              onChange={(event) => setChannelAttachmentIdsText(event.target.value)}
-              placeholder="Optional attachment ids, one per line"
-            />
-            <div className="controls-row">
-              <label htmlFor="channelAttachmentUpload">Upload attachment</label>
-              <input
-                id="channelAttachmentUpload"
-                type="file"
-                multiple
-                onChange={(event) => {
-                  void onUploadChannelAttachments(event.target.files);
-                  event.currentTarget.value = "";
-                }}
-                disabled={channelUploadBusy}
-              />
-              <span className="table-subtext">
-                {channelUploadBusy ? "Uploading..." : "Uploads are stored as chat attachments and forwarded by id."}
-              </span>
-            </div>
-            {uploadedChannelAttachments.length > 0 ? (
-              <ul className="improvement-simple-list">
-                {uploadedChannelAttachments.map((attachment) => (
-                  <li key={attachment.attachmentId}>
-                    <strong>{attachment.fileName}</strong>
-                    {" · "}
-                    <code>{attachment.attachmentId}</code>
-                    {" · "}
-                    {attachment.mimeType}
-                    {" "}
-                    <button type="button" onClick={() => onRemoveUploadedChannelAttachment(attachment.attachmentId)}>
-                      Remove
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            {channelTestResult ? <p className="office-subtitle">{channelTestResult}</p> : null}
-            {selectedChannelConnector ? (
-              <div className="card" style={{ marginTop: 12 }}>
-                <p><strong>Interactive action bench</strong></p>
-                <p className="office-subtitle">
-                  Use provider message ids from a successful send or channel logs. Controls stay disabled unless the selected connector advertises that action.
-                </p>
-                <p className="table-subtext">
-                  Reaction format varies by provider: Slack and Mattermost expect emoji names, Discord accepts raw emoji, and iMessage uses BlueBubbles reaction keywords such as `love`.
-                </p>
-                <div className="controls-row">
-                  <label htmlFor="channelReactionMessageId">React message id</label>
-                  <input
-                    id="channelReactionMessageId"
-                    value={channelReactionMessageId}
-                    onChange={(event) => setChannelReactionMessageId(event.target.value)}
-                    placeholder="provider message id"
-                  />
-                  <label htmlFor="channelReactionEmoji">Reaction</label>
-                  <input
-                    id="channelReactionEmoji"
-                    value={channelReactionEmoji}
-                    onChange={(event) => setChannelReactionEmoji(event.target.value)}
-                    placeholder="emoji"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void onReactChannelTest()}
-                    disabled={channelActionBusy !== null || !connectorSupportsDeliveryAction(selectedChannelConnector, "channel.react")}
-                  >
-                    {channelActionBusy === "react" ? "Reacting..." : "Send reaction"}
-                  </button>
-                </div>
-                <div className="controls-row">
-                  <label htmlFor="channelUnsendMessageId">Unsend message id</label>
-                  <input
-                    id="channelUnsendMessageId"
-                    value={channelUnsendMessageId}
-                    onChange={(event) => setChannelUnsendMessageId(event.target.value)}
-                    placeholder="provider message id"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void onUnsendChannelTest()}
-                    disabled={channelActionBusy !== null || !connectorSupportsDeliveryAction(selectedChannelConnector, "channel.unsend")}
-                  >
-                    {channelActionBusy === "unsend" ? "Unsending..." : "Unsend message"}
-                  </button>
-                </div>
-                {!connectorSupportsDeliveryAction(selectedChannelConnector, "channel.react")
-                  && !connectorSupportsDeliveryAction(selectedChannelConnector, "channel.unsend") ? (
-                  <p className="table-subtext">
-                    This connector is send-only right now. The backend will keep rejecting interactive actions until the underlying provider bridge supports them.
-                  </p>
-                ) : null}
-                {channelActionResult ? <p className="office-subtitle">{channelActionResult}</p> : null}
-              </div>
-            ) : null}
-          </>
-        )}
-      </Panel>
+      <IntegrationsChannelTestBench
+        channelConnections={channelConnections}
+        selectedChannelConnectionId={selectedChannelConnectionId}
+        onSelectedChannelConnectionIdChange={setSelectedChannelConnectionId}
+        selectedChannelConnection={selectedChannelConnection}
+        selectedChannelConnector={selectedChannelConnector}
+        selectedChannelRuntimeStatus={selectedChannelRuntimeStatus}
+        selectedDiscordRuntime={selectedDiscordRuntime}
+        selectedDiscordPairings={selectedDiscordPairings}
+        channelTestTarget={channelTestTarget}
+        onChannelTestTargetChange={setChannelTestTarget}
+        channelTestMessage={channelTestMessage}
+        onChannelTestMessageChange={setChannelTestMessage}
+        channelSubject={channelSubject}
+        onChannelSubjectChange={setChannelSubject}
+        channelEffectId={channelEffectId}
+        onChannelEffectIdChange={setChannelEffectId}
+        channelReplyToMessageId={channelReplyToMessageId}
+        onChannelReplyToMessageIdChange={setChannelReplyToMessageId}
+        channelReplyToPartIndex={channelReplyToPartIndex}
+        onChannelReplyToPartIndexChange={setChannelReplyToPartIndex}
+        channelAttachmentUrls={channelAttachmentUrls}
+        onChannelAttachmentUrlsChange={setChannelAttachmentUrls}
+        channelAttachmentIdsText={channelAttachmentIdsText}
+        onChannelAttachmentIdsTextChange={setChannelAttachmentIdsText}
+        uploadedChannelAttachments={uploadedChannelAttachments}
+        onRemoveUploadedChannelAttachment={onRemoveUploadedChannelAttachment}
+        onUploadChannelAttachments={(files) => void onUploadChannelAttachments(files)}
+        channelUploadBusy={channelUploadBusy}
+        channelTestBusy={channelTestBusy}
+        channelTestResult={channelTestResult}
+        onSendChannelTest={() => void onSendChannelTest()}
+        onReconnectDiscordRuntime={(connectionId) => void onReconnectDiscordRuntime(connectionId)}
+        onApproveDiscordPairing={(connectionId, pairingId) => void onApproveDiscordPairing(connectionId, pairingId)}
+        onRevokeDiscordPairing={(connectionId, pairingId) => void onRevokeDiscordPairing(connectionId, pairingId)}
+        discordPairingBusyId={discordPairingBusyId}
+        channelReactionMessageId={channelReactionMessageId}
+        onChannelReactionMessageIdChange={setChannelReactionMessageId}
+        channelReactionEmoji={channelReactionEmoji}
+        onChannelReactionEmojiChange={setChannelReactionEmoji}
+        channelUnsendMessageId={channelUnsendMessageId}
+        onChannelUnsendMessageIdChange={setChannelUnsendMessageId}
+        channelActionBusy={channelActionBusy}
+        channelActionResult={channelActionResult}
+        onReactChannelTest={() => void onReactChannelTest()}
+        onUnsendChannelTest={() => void onUnsendChannelTest()}
+      />
 
       {!isChannelsView ? (
-        <Panel
-          title="Plugin Adapters"
-          subtitle="Optional adapters for services that are not built in yet. Most users can skip this section."
-        >
-        <details className="advanced-panel">
-          <summary>Install new plugin adapter (advanced)</summary>
-          <FieldHelp>
-            Reference install path: <code>templates/integration-plugins/reference-integration-plugin/</code>
-          </FieldHelp>
-          <div className="controls-row" style={{ marginTop: 10 }}>
-            <input
-              value={pluginSource}
-              onChange={(event) => setPluginSource(event.target.value)}
-              placeholder="Plugin source (file path, URL, or package id)"
-            />
-            <button type="button" onClick={() => void onInstallPlugin()} disabled={pluginBusyId === "install"}>
-              {pluginBusyId === "install" ? "Installing..." : "Install Plugin"}
-            </button>
-          </div>
-        </details>
-        <table>
-          <thead>
-            <tr>
-              <th>Plugin</th>
-              <th>Version</th>
-              <th>Capabilities</th>
-              <th>Status</th>
-              <th>Updated</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {plugins.length === 0 ? (
-              <tr>
-                <td colSpan={6}>No plugins installed.</td>
-              </tr>
-            ) : plugins.map((plugin) => (
-              <tr key={plugin.pluginId}>
-                <td>
-                  <strong>{plugin.label}</strong>
-                  <div className="office-subtitle">{plugin.pluginId}</div>
-                  {plugin.source ? <div className="office-subtitle">{plugin.source}</div> : null}
-                </td>
-                <td>{plugin.version}</td>
-                <td>{plugin.capabilities.join(", ") || "-"}</td>
-                <td>{plugin.enabled ? "enabled" : "disabled"}</td>
-                <td>{new Date(plugin.updatedAt).toLocaleString()}</td>
-                <td>
-                  <button type="button"
-                    onClick={() => void onTogglePlugin(plugin.pluginId, plugin.enabled)}
-                    disabled={pluginBusyId === plugin.pluginId}
-                  >
-                    {pluginBusyId === plugin.pluginId
-                      ? (plugin.enabled ? "Disabling..." : "Enabling...")
-                      : (plugin.enabled ? "Disable" : "Enable")}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        </Panel>
+        <IntegrationsPluginsPanel
+          plugins={plugins}
+          pluginSource={pluginSource}
+          onPluginSourceChange={setPluginSource}
+          onInstallPlugin={() => void onInstallPlugin()}
+          onTogglePlugin={(pluginId, currentlyEnabled) => void onTogglePlugin(pluginId, currentlyEnabled)}
+          pluginBusyId={pluginBusyId}
+        />
       ) : null}
 
       <ConfirmModal
@@ -1988,474 +1293,3 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     </section>
   );
 }
-
-function sanitizeGuidedConfig(input: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(input).filter(([, value]) => {
-      if (value === null || value === undefined) {
-        return false;
-      }
-      if (typeof value === "string") {
-        return value.trim().length > 0;
-      }
-      return true;
-    }),
-  );
-}
-
-function evaluateLocalRisk(input: {
-  selectedCatalog?: IntegrationCatalogEntry;
-  selectedCatalogId: string;
-  configJson: string;
-  status: IntegrationConnection["status"];
-  enabled: boolean;
-}): { items: UiRiskItem[] } {
-  const items: UiRiskItem[] = [];
-
-  if (!input.selectedCatalogId.trim()) {
-    items.push({
-      field: "integration.catalogId",
-      level: "warning",
-      hint: "Choose a catalog entry before creating a connection.",
-    });
-  }
-
-  if (input.status === "connected" && !input.enabled) {
-    items.push({
-      field: "integration.enabled",
-      level: "warning",
-      hint: "Status says connected while enabled is off.",
-    });
-  }
-
-  if (input.selectedCatalog?.runtimeAvailability === "blocked") {
-    items.push({
-      field: "integration.runtimeAvailability",
-      level: "critical",
-      hint: "This integration is cataloged for planning, but it is not runnable in the current runtime.",
-    });
-  } else if (input.selectedCatalog?.maturity === "planned") {
-    items.push({
-      field: "integration.maturity",
-      level: "warning",
-      hint: "This integration is still parity-incomplete. Expect manual setup and follow-on proof before claiming it as finished.",
-    });
-  }
-
-  try {
-    const parsed = JSON.parse(input.configJson) as Record<string, unknown>;
-    const flattened = JSON.stringify(parsed).toLowerCase();
-    if (flattened.includes("password") || flattened.includes("apikey") || flattened.includes("secret") || flattened.includes("token")) {
-      items.push({
-        field: "integration.configJson",
-        level: "warning",
-        hint: "Config includes secret-like keys. Prefer env-backed references when possible.",
-      });
-    }
-    const urls = extractUrlCandidates(parsed);
-    if (urls.some((url) => url.startsWith("http://") && !url.includes("127.0.0.1") && !url.includes("localhost"))) {
-      items.push({
-        field: "integration.configJson",
-        level: "critical",
-        hint: "Non-local plain HTTP URL detected in config. Use HTTPS for remote endpoints.",
-      });
-    }
-  } catch {
-    items.push({
-      field: "integration.configJson",
-      level: "critical",
-      hint: "Config JSON is invalid and cannot be saved safely.",
-    });
-  }
-
-  return { items };
-}
-
-function extractUrlCandidates(value: unknown, out: string[] = []): string[] {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-      out.push(trimmed.toLowerCase());
-    }
-    return out;
-  }
-  if (!value || typeof value !== "object") {
-    return out;
-  }
-  for (const child of Object.values(value as Record<string, unknown>)) {
-    extractUrlCandidates(child, out);
-  }
-  return out;
-}
-
-function mergeRiskItems(localItems: UiRiskItem[], remoteItems: UiRiskItem[]): UiRiskItem[] {
-  const merged = new Map<string, UiRiskItem>();
-
-  for (const item of [...localItems, ...remoteItems]) {
-    const existing = merged.get(item.field);
-    if (!existing) {
-      merged.set(item.field, item);
-      continue;
-    }
-    const stronger = maxRisk(existing.level, item.level);
-    const hint = [existing.hint, item.hint].filter(Boolean).join(" ");
-    merged.set(item.field, {
-      field: item.field,
-      level: stronger,
-      hint: hint || undefined,
-    });
-  }
-
-  return [...merged.values()];
-}
-
-function maxRisk(a: UiRiskLevel, b: UiRiskLevel): UiRiskLevel {
-  if (a === "critical" || b === "critical") {
-    return "critical";
-  }
-  if (a === "warning" || b === "warning") {
-    return "warning";
-  }
-  return "safe";
-}
-
-function deriveOverallRisk(items: UiRiskItem[]): UiRiskLevel {
-  if (items.some((item) => item.level === "critical")) {
-    return "critical";
-  }
-  if (items.some((item) => item.level === "warning")) {
-    return "warning";
-  }
-  return "safe";
-}
-
-function formatKind(kind: IntegrationCatalogEntry["kind"]): string {
-  switch (kind) {
-    case "channel":
-      return "Channel";
-    case "model_provider":
-      return "Model provider";
-    case "productivity":
-      return "Productivity";
-    case "automation":
-      return "Automation";
-    case "platform":
-      return "Platform";
-    default:
-      return kind;
-  }
-}
-
-function formatStatus(status: IntegrationConnection["status"]): string {
-  switch (status) {
-    case "connected":
-      return "Connected";
-    case "disconnected":
-      return "Disconnected";
-    case "paused":
-      return "Paused";
-    case "error":
-      return "Error";
-    default:
-      return status;
-  }
-}
-
-function isDiscordGatewayConnection(connection: IntegrationConnection): boolean {
-  if (connection.key !== "discord") {
-    return false;
-  }
-  return (connection.config as Record<string, unknown>).runtimeMode === "gateway";
-}
-
-function guessDefaultChannelTarget(connection: IntegrationConnection): string {
-  const config = connection.config as Record<string, unknown>;
-  const candidates = [
-    config.defaultChannel,
-    config.defaultChannelId,
-    config.defaultChatId,
-    config.defaultRoomId,
-    config.defaultConversationId,
-    config.defaultThreadKey,
-    config.defaultRecipient,
-    config.defaultHandle,
-    config.defaultRecipientId,
-    config.defaultUserId,
-    config.defaultGroupId,
-    config.defaultTarget,
-    config.target,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  return "";
-}
-
-function requiresExplicitChannelTarget(connection: IntegrationConnection): boolean {
-  return !["teams", "google-chat"].includes(connection.key);
-}
-
-export function getConnectorMetadataStringList(connector: ConnectorRecord | undefined, key: string): string[] {
-  const rawValue = connector?.metadata?.[key];
-  if (!Array.isArray(rawValue)) {
-    return [];
-  }
-  return rawValue.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
-}
-
-export function getConnectorSupportedDeliveryActions(connector: ConnectorRecord | undefined): string[] {
-  const channelCapabilities = connector?.metadata?.channelCapabilities;
-  if (channelCapabilities && typeof channelCapabilities === "object") {
-    const supportedActions = (channelCapabilities as { supportedActions?: unknown }).supportedActions;
-    if (Array.isArray(supportedActions)) {
-      return supportedActions.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
-    }
-  }
-  return getConnectorMetadataStringList(connector, "supportedDeliveryActions");
-}
-
-export function getConnectorSupportedAttachmentSources(connector: ConnectorRecord | undefined): string[] {
-  const channelCapabilities = connector?.metadata?.channelCapabilities;
-  if (channelCapabilities && typeof channelCapabilities === "object") {
-    const sources = (channelCapabilities as { supportedAttachmentSources?: unknown }).supportedAttachmentSources;
-    if (Array.isArray(sources)) {
-      return sources.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
-    }
-  }
-  return getConnectorMetadataStringList(connector, "supportedAttachmentSources");
-}
-
-export function getConnectorSupportNotes(connector: ConnectorRecord | undefined): string[] {
-  const channelCapabilities = connector?.metadata?.channelCapabilities;
-  if (channelCapabilities && typeof channelCapabilities === "object") {
-    const notes = (channelCapabilities as { supportNotes?: unknown }).supportNotes;
-    if (Array.isArray(notes)) {
-      return notes.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
-    }
-  }
-  return getConnectorMetadataStringList(connector, "channelSupportNotes");
-}
-
-export function getConnectorRuntimePostureSummary(connector: ConnectorRecord | undefined): string | undefined {
-  const channelCapabilities = connector?.metadata?.channelCapabilities;
-  if (channelCapabilities && typeof channelCapabilities === "object") {
-    const runtimePosture = (channelCapabilities as {
-      runtimePosture?: { operatorSummary?: unknown };
-    }).runtimePosture;
-    if (runtimePosture && typeof runtimePosture === "object" && typeof runtimePosture.operatorSummary === "string" && runtimePosture.operatorSummary.trim().length > 0) {
-      return runtimePosture.operatorSummary;
-    }
-  }
-  const metadata = connector?.metadata as { runtimePosture?: { operatorSummary?: unknown } } | undefined;
-  if (metadata?.runtimePosture && typeof metadata.runtimePosture === "object" && typeof metadata.runtimePosture.operatorSummary === "string" && metadata.runtimePosture.operatorSummary.trim().length > 0) {
-    return metadata.runtimePosture.operatorSummary;
-  }
-  return undefined;
-}
-
-export function getConnectorSetupDiagnostics(connector: ConnectorRecord | undefined): string[] {
-  const channelCapabilities = connector?.metadata?.channelCapabilities;
-  if (channelCapabilities && typeof channelCapabilities === "object") {
-    const diagnostics = (channelCapabilities as { setupDiagnostics?: unknown }).setupDiagnostics;
-    if (Array.isArray(diagnostics)) {
-      return diagnostics.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
-    }
-  }
-  return getConnectorMetadataStringList(connector, "setupDiagnostics");
-}
-
-export function connectorSupportsDeliveryAction(connector: ConnectorRecord | undefined, action: string): boolean {
-  return getConnectorSupportedDeliveryActions(connector).includes(action);
-}
-
-export function connectorSetupReady(connector: ConnectorRecord | undefined): boolean {
-  const channelCapabilities = connector?.metadata?.channelCapabilities;
-  if (channelCapabilities && typeof channelCapabilities === "object") {
-    const setupReady = (channelCapabilities as { setupReady?: unknown }).setupReady;
-    if (typeof setupReady === "boolean") {
-      return setupReady;
-    }
-  }
-  const explicit = connector?.metadata?.setupReady;
-  if (typeof explicit === "boolean") {
-    return explicit;
-  }
-  return getConnectorSetupDiagnostics(connector).length === 0;
-}
-
-function formatConnectorList(values: string[]): string {
-  return values.length > 0 ? values.join(", ") : "none advertised";
-}
-
-export function parseAttachmentUrlInputs(value: string): ChannelAttachmentInput[] {
-  return value
-    .split(/\r?\n/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((url) => ({ url }));
-}
-
-export function parseAttachmentIdInputs(value: string): string[] {
-  const seen = new Set<string>();
-  const ordered: string[] = [];
-  for (const item of value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean)) {
-    if (!seen.has(item)) {
-      seen.add(item);
-      ordered.push(item);
-    }
-  }
-  return ordered;
-}
-
-function dedupeUploadedAttachments(items: ChatAttachmentRecord[]): ChatAttachmentRecord[] {
-  const seen = new Set<string>();
-  const ordered: ChatAttachmentRecord[] = [];
-  for (const item of items) {
-    if (seen.has(item.attachmentId)) {
-      continue;
-    }
-    seen.add(item.attachmentId);
-    ordered.push(item);
-  }
-  return ordered;
-}
-
-function renderConnectorApprovalDeliverySummary(
-  connector: ConnectorRecord | undefined,
-  connection: IntegrationConnection,
-) {
-  const mode = typeof connector?.metadata?.approvalDeliveryMode === "string"
-    ? connector.metadata.approvalDeliveryMode
-    : undefined;
-  const target = typeof connector?.metadata?.approvalDeliveryTarget === "string"
-    ? connector.metadata.approvalDeliveryTarget
-    : guessDefaultChannelTarget(connection);
-  const reason = typeof connector?.metadata?.approvalDeliveryReason === "string"
-    ? connector.metadata.approvalDeliveryReason
-    : undefined;
-  const ready = connector?.capabilities.some((item) => item.id === "approvals" && item.enabled) ?? false;
-  const supportedActions = getConnectorSupportedDeliveryActions(connector);
-  const setupState = connectorSetupReady(connector) ? "setup ready" : "setup attention";
-
-  return (
-    <>
-      {ready ? "ready" : "not ready"}
-      <div className="table-subtext">
-        {mode ? `${mode}${target ? ` -> ${target}` : ""}` : "no delivery mode"}
-      </div>
-      <div className="table-subtext">
-        {supportedActions.length > 0 ? `actions: ${supportedActions.join(", ")}` : "actions: channel.send"}
-        {" · "}
-        {setupState}
-      </div>
-      <div className="table-subtext">
-        {reason ?? "No approval delivery reason available."}
-      </div>
-    </>
-  );
-}
-
-function formatMaturity(maturity: IntegrationCatalogEntry["maturity"]): string {
-  switch (maturity) {
-    case "native":
-      return "Native";
-    case "plugin":
-      return "Plugin";
-    case "disabled":
-      return "Disabled";
-    case "beta":
-      return "Beta";
-    case "planned":
-      return "Planned";
-    default:
-      return maturity;
-  }
-}
-
-function formatRuntimeAvailability(availability: IntegrationCatalogEntry["runtimeAvailability"]): string {
-  switch (availability) {
-    case "runnable":
-      return "Runnable now";
-    case "blocked":
-      return "Blocked";
-    default:
-      return "Depends on catalog maturity";
-  }
-}
-
-type ChannelSetupPath = "guided" | "manual" | "blocked" | "not_channel";
-
-function resolveChannelSetupPath(
-  entry: IntegrationCatalogEntry,
-  guidedChannelCatalogIds: Set<string>,
-): ChannelSetupPath {
-  if (entry.kind !== "channel") {
-    return "not_channel";
-  }
-  if (entry.runtimeAvailability === "blocked") {
-    return "blocked";
-  }
-  if (guidedChannelCatalogIds.has(entry.catalogId)) {
-    return "guided";
-  }
-  return "manual";
-}
-
-function formatChannelSetupPath(path: ChannelSetupPath): string {
-  switch (path) {
-    case "guided":
-      return "Guided setup available";
-    case "manual":
-      return "Manual path only for now";
-    case "blocked":
-      return "Unavailable in current runtime";
-    default:
-      return "Not a channel";
-  }
-}
-
-function describeChannelSetupPath(path: ChannelSetupPath): string {
-  switch (path) {
-    case "guided":
-      return "This channel already has guided setup coverage in the dedicated Channel Setup workflow. Use the simple form here for straightforward connection records or edge-case edits.";
-    case "manual":
-      return "This channel is runnable, but the guided channel wizard does not cover it yet. Expect a more manual, proof-heavy setup path until the rollout catches up.";
-    case "blocked":
-      return "This channel is still visible for planning, but GoatCitadel does not expose a runnable guided or manual path for it in the current runtime.";
-    default:
-      return "";
-  }
-}
-
-function getChannelSetupPathTone(path: ChannelSetupPath): "success" | "warning" | "critical" | "muted" {
-  switch (path) {
-    case "guided":
-      return "success";
-    case "manual":
-      return "warning";
-    case "blocked":
-      return "critical";
-    default:
-      return "muted";
-  }
-}
-
-function describeMaturity(maturity: IntegrationCatalogEntry["maturity"]): string {
-  switch (maturity) {
-    case "native":
-      return "Built-in and supported in this runtime.";
-    case "plugin":
-      return "Supported through a plugin adapter.";
-    case "disabled":
-      return "Known integration, currently disabled in this runtime.";
-    case "beta":
-      return "Available, but still stabilizing.";
-    case "planned":
-      return "Roadmapped. May need plugin or manual setup before use.";
-    default:
-      return "";
-  }
-}
-

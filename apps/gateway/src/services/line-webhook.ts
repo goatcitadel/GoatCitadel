@@ -1,29 +1,33 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
+import {
+  asRecord,
+  asString,
+  hashRawBodyDigest,
+  timingSafeStringEqual,
+  type JsonRecord,
+} from "./webhook-json-helpers.js";
 
-const LINE_WEBHOOK_PATH =
-  /^\/api\/v1\/integrations\/connections\/[^/]+\/line\/webhook$/i;
-
-type JsonRecord = Record<string, unknown>;
+const LINE_WEBHOOK_PATH = /^\/api\/v1\/integrations\/connections\/[^/]+\/line\/webhook$/i;
 
 export type LineWebhookNormalization =
   | {
-    kind: "message";
-    eventType: "message";
-    eventId: string;
-    account: string;
-    actorId: string;
-    actorType: "user";
-    content: string;
-    room?: string;
-    peer?: string;
-    deliveryReplyToMessageId: string;
-    metadata: Record<string, unknown>;
-  }
+      kind: "message";
+      eventType: "message";
+      eventId: string;
+      account: string;
+      actorId: string;
+      actorType: "user";
+      content: string;
+      room?: string;
+      peer?: string;
+      deliveryReplyToMessageId: string;
+      metadata: Record<string, unknown>;
+    }
   | {
-    kind: "ignore";
-    eventType?: string;
-    reason: string;
-  };
+      kind: "ignore";
+      eventType?: string;
+      reason: string;
+    };
 
 export function isLineWebhookPath(url: string): boolean {
   const pathname = url.split("?", 1)[0] ?? url;
@@ -45,19 +49,10 @@ export function verifyLineWebhookSignature(
     return false;
   }
   const expected = buildLineWebhookSignature(rawBody, channelSecret);
-  const expectedBuffer = Buffer.from(expected, "utf8");
-  const providedBuffer = Buffer.from(signature, "utf8");
-  if (expectedBuffer.length !== providedBuffer.length) {
-    return false;
-  }
-  return timingSafeEqual(expectedBuffer, providedBuffer);
+  return timingSafeStringEqual(expected, signature);
 }
 
-export function deriveLineWebhookIdempotencyKey(
-  connectionId: string,
-  payload: unknown,
-  rawBody: Buffer,
-): string {
+export function deriveLineWebhookIdempotencyKey(connectionId: string, payload: unknown, rawBody: Buffer): string {
   const root = asRecord(payload);
   const event = firstRecord(asArray(root.events));
   const webhookEventId = asString(event?.webhookEventId);
@@ -68,8 +63,7 @@ export function deriveLineWebhookIdempotencyKey(
   if (messageId) {
     return `line:${connectionId}:${messageId}`;
   }
-  const digest = createHash("sha256").update(rawBody).digest("hex");
-  return `line:${connectionId}:${digest}`;
+  return `line:${connectionId}:${hashRawBodyDigest(rawBody)}`;
 }
 
 export function normalizeLineWebhookPayload(input: {
@@ -97,11 +91,8 @@ export function normalizeLineWebhookPayload(input: {
   const source = asRecord(event.source);
   const message = asRecord(event.message);
   const sourceType = asString(source.type);
-  const room = sourceType === "group"
-    ? asString(source.groupId)
-    : sourceType === "room"
-      ? asString(source.roomId)
-      : undefined;
+  const room =
+    sourceType === "group" ? asString(source.groupId) : sourceType === "room" ? asString(source.roomId) : undefined;
   const peer = sourceType === "user" ? asString(source.userId) : undefined;
   const actorId = asString(source.userId) ?? room ?? peer;
   const eventId = asString(message.id);
@@ -155,15 +146,7 @@ function renderLineMessageContent(message: JsonRecord): string | undefined {
 }
 
 function compactRecord(record: JsonRecord): JsonRecord {
-  return Object.fromEntries(
-    Object.entries(record).filter(([, value]) => value !== undefined),
-  );
-}
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : {};
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
 }
 
 function asArray(value: unknown): unknown[] {
@@ -172,13 +155,9 @@ function asArray(value: unknown): unknown[] {
 
 function firstRecord(value: unknown[]): JsonRecord | undefined {
   const first = value.find((item) => item && typeof item === "object" && !Array.isArray(item));
-  return first ? first as JsonRecord : undefined;
+  return first ? (first as JsonRecord) : undefined;
 }
 
 function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }

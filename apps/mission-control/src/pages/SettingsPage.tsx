@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars, max-lines, react-hooks/exhaustive-deps */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   buildVoiceOperatorGuidance,
@@ -36,6 +37,22 @@ import {
   type RuntimeSettingsResponse,
 } from "../api/client";
 import type { VoiceRuntimeStatus, VoiceStatus, VoiceTalkSessionRecord } from "@goatcitadel/contracts";
+import { SettingsAccessSection } from "./settings/SettingsAccessSection";
+import { SettingsOverviewSection } from "./settings/SettingsOverviewSection";
+import { SettingsRuntimeSection } from "./settings/SettingsRuntimeSection";
+import { SettingsModelsSection } from "./settings/SettingsModelsSection";
+import { SettingsTestsSection } from "./settings/SettingsTestsSection";
+import { SettingsVoiceSection } from "./settings/SettingsVoiceSection";
+import { SettingsSectionNav } from "./settings/SettingsSectionNav";
+import {
+  describeVoiceState,
+  describeVoiceRuntimeReadiness,
+  formatVoiceLanguageScope,
+  formatTalkModeLabel,
+  formatVoiceDate,
+  formatDeploymentProfileLabel,
+  fileToBase64,
+} from "./settings-page-utils";
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { FieldHelp } from "../components/FieldHelp";
 import { HelpHint } from "../components/HelpHint";
@@ -55,193 +72,45 @@ import { pageCopy } from "../content/copy";
 import { dedupeProviderModels, previewProviderModels, useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import type { SettingsTab } from "../content/page-registry";
+import {
+  CHAT_PROMPT_PRESETS,
+  FIRECRAWL_DEFAULT_READ_BACKEND_OPTIONS,
+  PROVIDER_API_STYLE_OPTIONS,
+  READ_ACCESS_MODE_OPTIONS,
+  SETTINGS_SECTIONS,
+  TOOL_PROFILE_OPTIONS,
+  isAbortError,
+  type NormalizedRuntimeSettingsResponse,
+  type ProviderApiStyle,
+  type SettingsSectionId,
+} from "./settings/settings-page-constants";
+import {
+  ALLOWLIST_PRESETS,
+  buildProviderScopedModelOptions,
+  getModelPreviewFallbackModel,
+  matchAllowlistPreset,
+  normalizeRuntimeSettingsResponse,
+  resolveAuthStorageMode,
+  resolveModelDraftHydration,
+  resolveProviderModelSelection,
+  resolveSettingsTabSection,
+  resolveSettingsTabSections,
+  scrollToSettingsSection,
+} from "./settings/settings-page-helpers";
+
+export { resolveSettingsTabSection, resolveSettingsTabSections } from "./settings/settings-page-helpers";
 import "../styles/settings.css";
-
-const TOOL_PROFILE_OPTIONS: SelectOption[] = [
-  { value: "minimal", label: "minimal (safest)" },
-  { value: "standard", label: "standard" },
-  { value: "coding", label: "coding" },
-  { value: "ops", label: "ops" },
-  { value: "research", label: "research" },
-  { value: "danger", label: "danger (high risk)" },
-];
-
-const READ_ACCESS_MODE_OPTIONS: SelectOption[] = [
-  { value: "roots_only", label: "trusted roots only" },
-  { value: "approval_required", label: "ask before outside-root reads" },
-  { value: "full_disk", label: "full disk read access" },
-];
-
-const FIRECRAWL_DEFAULT_READ_BACKEND_OPTIONS: SelectOption[] = [
-  { value: "native", label: "Native browser tools" },
-  { value: "firecrawl", label: "Firecrawl for read tools" },
-];
-
-const ALLOWLIST_PRESETS: Array<{ id: string; label: string; hosts: string[] }> = [
-  { id: "strict", label: "Strict (no outbound hosts)", hosts: [] },
-  { id: "local", label: "Local models only", hosts: ["127.0.0.1", "localhost"] },
-  {
-    id: "web-research",
-    label: "Web research (browser tools + local)",
-    hosts: [
-      "127.0.0.1",
-      "localhost",
-      "*.duckduckgo.com",
-      "*.google.com",
-      "*.bing.com",
-      "*.wikipedia.org",
-      "*.github.com",
-      "*.developer.mozilla.org",
-    ],
-  },
-  {
-    id: "common-llm",
-    label: "Common providers + local",
-    hosts: ["127.0.0.1", "localhost", "api.openai.com", "openrouter.ai"],
-  },
-  {
-    id: "tailnet-genie",
-    label: "Tailnet + Genie IR20",
-    hosts: ["127.0.0.1", "localhost", "100.64.0.4", "ir20"],
-  },
-];
-
-const CHAT_PROMPT_PRESETS: Array<{ id: string; label: string; prompt: string }> = [
-  { id: "hello", label: "Hello smoke test", prompt: "Say hello from GoatCitadel's native-first provider routing." },
-  {
-    id: "plan",
-    label: "Planning response",
-    prompt: "In 5 bullets, propose a safe implementation plan for a new feature.",
-  },
-  {
-    id: "safety",
-    label: "Safety check",
-    prompt: "Summarize one policy risk and one mitigation for executing a risky shell command.",
-  },
-];
-
-const SETTINGS_SECTIONS = [
-  {
-    id: "settings-overview",
-    label: "Overview",
-    description: "Environment and general defaults.",
-  },
-  {
-    id: "settings-access",
-    label: "Access",
-    description: "Auth mode, loopback behavior, and credential storage.",
-  },
-  {
-    id: "settings-voice",
-    label: "Voice",
-    description: "Talk mode, wake runtime, and local transcription.",
-  },
-  {
-    id: "settings-runtime",
-    label: "Runtime",
-    description: "Tool profile, budgets, and outbound allowlist.",
-  },
-  {
-    id: "settings-models",
-    label: "Models",
-    description: "Providers, active model selection, and secure keys.",
-  },
-  {
-    id: "settings-tests",
-    label: "Test",
-    description: "Run a direct provider smoke test before wider use.",
-  },
-] as const;
-
-export type SettingsSectionId = typeof SETTINGS_SECTIONS[number]["id"];
-
-type ProviderApiStyle = RuntimeSettingsResponse["llm"]["providers"][number]["apiStyle"];
-type NormalizedRuntimeSettingsResponse = RuntimeSettingsResponse & {
-  web: {
-    firecrawl: {
-      enabled: boolean;
-      baseUrl: string;
-      apiKeyEnv?: string;
-      timeoutMs: number;
-      defaultReadBackend: "native" | "firecrawl";
-      fallbackToNative: boolean;
-    };
-  };
-};
-
-const PROVIDER_API_STYLE_OPTIONS: Array<{ value: ProviderApiStyle; label: string }> = [
-  { value: "openai-responses", label: "OpenAI Responses" },
-  { value: "anthropic-messages", label: "Anthropic Messages" },
-  { value: "openai-chat-completions", label: "OpenAI Chat Completions" },
-];
-
-function isAbortError(error: unknown): boolean {
-  return (error as { name?: string } | null)?.name === "AbortError";
-}
-
-function scrollToSettingsSection(sectionId: string, behavior: ScrollBehavior = "smooth"): void {
-  if (typeof document === "undefined") {
-    return;
-  }
-  document.getElementById(sectionId)?.scrollIntoView({ behavior, block: "start" });
-}
 
 export interface SettingsPageProps {
   activeTab?: SettingsTab;
   focusSectionId?: SettingsSectionId;
 }
 
-export function resolveSettingsTabSection(tab: SettingsTab): SettingsSectionId {
-  switch (tab) {
-    case "providers":
-      return "settings-models";
-    case "access":
-      return "settings-access";
-    case "runtime":
-      return "settings-voice";
-    case "budget":
-      return "settings-runtime";
-    case "general":
-    default:
-      return "settings-overview";
-  }
-}
-
-export function resolveSettingsTabSections(tab: SettingsTab): SettingsSectionId[] {
-  switch (tab) {
-    case "providers":
-      return ["settings-models", "settings-tests"];
-    case "access":
-      return ["settings-access"];
-    case "runtime":
-      return ["settings-voice", "settings-runtime"];
-    case "budget":
-      return ["settings-runtime"];
-    case "general":
-    default:
-      return ["settings-overview"];
-  }
-}
-
-function normalizeRuntimeSettingsResponse(settings: RuntimeSettingsResponse): NormalizedRuntimeSettingsResponse {
-  return {
-    ...settings,
-    web: {
-      firecrawl: {
-        enabled: settings.web?.firecrawl?.enabled ?? false,
-        baseUrl: settings.web?.firecrawl?.baseUrl ?? "http://127.0.0.1:3002",
-        apiKeyEnv: settings.web?.firecrawl?.apiKeyEnv ?? "FIRECRAWL_API_KEY",
-        timeoutMs: settings.web?.firecrawl?.timeoutMs ?? 20000,
-        defaultReadBackend: settings.web?.firecrawl?.defaultReadBackend ?? "native",
-        fallbackToNative: settings.web?.firecrawl?.fallbackToNative ?? true,
-      },
-    },
-  };
-}
-
 export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = {}) {
   const [settings, setSettings] = useState<NormalizedRuntimeSettingsResponse | null>(null);
-  const [deploymentProfile, setDeploymentProfile] = useState<"local_dev" | "trusted_local" | "remote_hardened">("local_dev");
+  const [deploymentProfile, setDeploymentProfile] = useState<"local_dev" | "trusted_local" | "remote_hardened">(
+    "local_dev",
+  );
   const [profile, setProfile] = useState("");
   const [budgetMode, setBudgetMode] = useState<"saver" | "balanced" | "power">("balanced");
   const [readAccessMode, setReadAccessMode] = useState<"roots_only" | "approval_required" | "full_disk">("roots_only");
@@ -313,16 +182,20 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     reload: reloadProviderCatalog,
   } = useProviderModelCatalog("system");
 
-  const providerOptions = useMemo(() => runtimeProviderCatalog.map((provider) => ({
-    providerId: provider.providerId,
-    label: provider.label,
-    baseUrl: provider.baseUrl,
-    apiStyle: provider.apiStyle,
-    resolvedApiStyle: provider.resolvedApiStyle,
-    defaultModel: provider.defaultModel,
-    apiKeySource: provider.apiKeySource as "none" | "keychain" | "env" | "inline" | undefined,
-    apiKeyRef: provider.apiKeyRef,
-  })), [runtimeProviderCatalog]);
+  const providerOptions = useMemo(
+    () =>
+      runtimeProviderCatalog.map((provider) => ({
+        providerId: provider.providerId,
+        label: provider.label,
+        baseUrl: provider.baseUrl,
+        apiStyle: provider.apiStyle,
+        resolvedApiStyle: provider.resolvedApiStyle,
+        defaultModel: provider.defaultModel,
+        apiKeySource: provider.apiKeySource as "none" | "keychain" | "env" | "inline" | undefined,
+        apiKeyRef: provider.apiKeyRef,
+      })),
+    [runtimeProviderCatalog],
+  );
   const knownProviderIds = useMemo(() => {
     return new Set(providerOptions.map((provider) => provider.providerId.toLowerCase()));
   }, [providerOptions]);
@@ -345,7 +218,8 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     [effectiveProviderId, runtimeProviderCatalog],
   );
   const providerConfigMap = useMemo(
-    () => new Map((runtimeLlmConfig?.providerConfigs ?? []).map((provider) => [provider.providerId, provider] as const)),
+    () =>
+      new Map((runtimeLlmConfig?.providerConfigs ?? []).map((provider) => [provider.providerId, provider] as const)),
     [runtimeLlmConfig?.providerConfigs],
   );
   const providerRequestValidation = useMemo(() => {
@@ -460,7 +334,9 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
             setProviderBaseUrl(activeProvider.baseUrl);
             setProviderApiStyle(activeProvider.apiStyle);
             setProviderDefaultModel(activeProvider.defaultModel);
-            setProviderApiKeyEnv(activeProvider.apiKeySource === "env" && activeProvider.apiKeyRef ? activeProvider.apiKeyRef : "");
+            setProviderApiKeyEnv(
+              activeProvider.apiKeySource === "env" && activeProvider.apiKeyRef ? activeProvider.apiKeyRef : "",
+            );
           }
           setProviderRequestDraft(createEmptyLlmTransportDraft());
         }
@@ -487,7 +363,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     if (!runtimeLlmConfig) {
       return;
     }
-    setSettings((current) => current ? { ...current, llm: runtimeLlmConfig } : current);
+    setSettings((current) => (current ? { ...current, llm: runtimeLlmConfig } : current));
   }, [runtimeLlmConfig]);
 
   useEffect(() => {
@@ -503,9 +379,9 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     async (signal) => {
       const haystack = `${signal.reason} ${signal.eventType ?? ""} ${signal.source ?? ""}`.toLowerCase();
       if (
-        !/\b(onboarding|settings|auth|device)\b/.test(haystack)
-        && signal.eventType !== "fallback_poll"
-        && signal.reason !== "replay_gap"
+        !/\b(onboarding|settings|auth|device)\b/.test(haystack) &&
+        signal.eventType !== "fallback_poll" &&
+        signal.reason !== "replay_gap"
       ) {
         return;
       }
@@ -540,9 +416,9 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     setDeviceGrantBusyId(grantId);
     try {
       const response = await revokeDeviceAccessGrant(grantId);
-      setDeviceGrants((current) => current.map((item) => (
-        item.grantId === response.grant.grantId ? response.grant : item
-      )));
+      setDeviceGrants((current) =>
+        current.map((item) => (item.grantId === response.grant.grantId ? response.grant : item)),
+      );
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -568,7 +444,11 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       { field: "firecrawlEnabled", from: String(settings.web.firecrawl.enabled), to: String(firecrawlEnabled) },
       { field: "firecrawlBaseUrl", from: settings.web.firecrawl.baseUrl, to: firecrawlBaseUrl },
       { field: "authMode", from: settings.auth.mode, to: authMode },
-      { field: "providerBaseUrl", from: settings.llm.providers.find((p) => p.providerId === providerId)?.baseUrl ?? "", to: providerBaseUrl },
+      {
+        field: "providerBaseUrl",
+        from: settings.llm.providers.find((p) => p.providerId === providerId)?.baseUrl ?? "",
+        to: providerBaseUrl,
+      },
     ];
     riskDebounceRef.current = setTimeout(() => {
       riskAbortRef.current?.abort();
@@ -597,11 +477,13 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
           }
           setChangeReview({
             overall: "warning",
-            items: [{
-              field: "settings",
-              level: "warning",
-              hint: "Unable to load server risk hints.",
-            }],
+            items: [
+              {
+                field: "settings",
+                level: "warning",
+                hint: "Unable to load server risk hints.",
+              },
+            ],
           });
         });
     }, 400);
@@ -612,7 +494,19 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       }
       riskAbortRef.current?.abort();
     };
-  }, [settings, deploymentProfile, profile, budgetMode, readAccessMode, networkAllowlistText, firecrawlEnabled, firecrawlBaseUrl, authMode, providerId, providerBaseUrl]);
+  }, [
+    settings,
+    deploymentProfile,
+    profile,
+    budgetMode,
+    readAccessMode,
+    networkAllowlistText,
+    firecrawlEnabled,
+    firecrawlBaseUrl,
+    authMode,
+    providerId,
+    providerBaseUrl,
+  ]);
 
   useEffect(() => {
     providerSecretAbortRef.current?.abort();
@@ -785,20 +679,23 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       }
       setLoadingModels(true);
       setPreviewedProviderId(targetProviderId);
-      const res = await previewProviderModels({
-        providerId: targetProviderId,
-        baseUrl: targetBaseUrl,
-        apiStyle: providerApiStyle,
-        apiKey: providerApiKey.trim() || undefined,
-        apiKeyEnv: providerApiKeyEnv.trim() || undefined,
-        request: providerRequestValidation.request,
-        fallbackModel: getModelPreviewFallbackModel(
-          targetProviderId === effectiveActiveProviderId ? activeModel : "",
-          providerDefaultModel,
-        ),
-      }, {
-        signal: options.signal,
-      });
+      const res = await previewProviderModels(
+        {
+          providerId: targetProviderId,
+          baseUrl: targetBaseUrl,
+          apiStyle: providerApiStyle,
+          apiKey: providerApiKey.trim() || undefined,
+          apiKeyEnv: providerApiKeyEnv.trim() || undefined,
+          request: providerRequestValidation.request,
+          fallbackModel: getModelPreviewFallbackModel(
+            targetProviderId === effectiveActiveProviderId ? activeModel : "",
+            providerDefaultModel,
+          ),
+        },
+        {
+          signal: options.signal,
+        },
+      );
       setModels(res.items.map((id) => ({ id })));
       setModelDiscoverySource(res.source);
       setModelDiscoveryWarning(res.warning ?? null);
@@ -1093,12 +990,15 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       }
       setGatewayAuthStorageMode(nextStorageMode);
       setAuthStorageMode(nextStorageMode);
-      persistGatewayAuthState({
-        mode: authMode,
-        token: authToken,
-        username: basicUsername,
-        password: basicPassword,
-      }, nextStorageMode);
+      persistGatewayAuthState(
+        {
+          mode: authMode,
+          token: authToken,
+          username: basicUsername,
+          password: basicPassword,
+        },
+        nextStorageMode,
+      );
     } catch (err) {
       setError((err as Error).message);
     }
@@ -1155,7 +1055,10 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     setShowAdvanced(true);
   };
 
-  const voiceRecoveryActions = useMemo(() => buildVoiceRecoveryActions(voiceStatus, voiceRuntime), [voiceStatus, voiceRuntime]);
+  const voiceRecoveryActions = useMemo(
+    () => buildVoiceRecoveryActions(voiceStatus, voiceRuntime),
+    [voiceStatus, voiceRuntime],
+  );
   const voiceOperatorGuidance = useMemo(
     () => buildVoiceOperatorGuidance(voiceStatus, voiceRuntime),
     [voiceStatus, voiceRuntime],
@@ -1195,1070 +1098,230 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
 
       <div className={`settings-v2-layout${showSectionRail ? "" : " settings-v2-layout-single"}`}>
         {showSectionRail ? (
-        <aside className="panel panel-soft panel-pad-default settings-v2-nav">
-          <div className="settings-v2-nav-head">
-            <h3>Forge Sections</h3>
-            <FieldHelp>Jump straight to the section you need instead of working through one long scroll.</FieldHelp>
-          </div>
-          <div className="settings-v2-nav-list">
-            {SETTINGS_SECTIONS.map((section) => (
-              <button key={section.id} type="button" className="settings-v2-nav-item" onClick={() => scrollToSettingsSection(section.id)}>
-                <strong>{section.label}</strong>
-                <span>{section.description}</span>
-              </button>
-            ))}
-          </div>
-        </aside>
+          <SettingsSectionNav sections={SETTINGS_SECTIONS} onNavigate={scrollToSettingsSection} />
         ) : null}
 
         <div className="settings-v2-content">
           {shouldRenderSection("settings-overview") ? (
-          <section id="settings-overview" className="settings-v2-section">
-            <Panel
-              title="Current Forge Posture"
-              subtitle="Current environment, defaults, and safety posture."
-              tone="soft"
-            >
-              <div className="settings-v2-summary">
-                <StatusChip tone="muted">{settings.environment}</StatusChip>
-                <StatusChip tone={deploymentProfile === "remote_hardened" ? "warning" : deploymentProfile === "trusted_local" ? "success" : "muted"}>
-                  {formatDeploymentProfileLabel(deploymentProfile)}
-                </StatusChip>
-                <StatusChip tone={authMode === "none" ? "warning" : "success"}>{authMode === "none" ? "Local-trusted auth" : `${authMode} auth`}</StatusChip>
-                <StatusChip tone="live">{activeProviderId || settings.llm.activeProviderId || "No active provider"}</StatusChip>
-                <StatusChip tone={allowLoopbackBypass ? "warning" : "success"}>{allowLoopbackBypass ? "Loopback bypass on" : "Loopback bypass off"}</StatusChip>
-              </div>
-              <FieldHelp>Environment and workspace values come from the running gateway. Use the section rail to jump directly to access, runtime, providers, or local voice tools.</FieldHelp>
-              <div className="settings-v2-overview-grid">
-                <div>
-                  <strong>Environment</strong>
-                  <p className="office-subtitle">{settings.environment}</p>
-                </div>
-                <div>
-                  <strong>Deployment profile</strong>
-                  <p className="office-subtitle">{formatDeploymentProfileLabel(deploymentProfile)}</p>
-                </div>
-                <div>
-                  <strong>Workspace</strong>
-                  <p className="office-subtitle">{settings.workspaceDir}</p>
-                </div>
-                <div>
-                  <strong>Active provider</strong>
-                  <p className="office-subtitle">{activeProviderId || settings.llm.activeProviderId || "not set"}</p>
-                </div>
-                <div>
-                  <strong>Active model</strong>
-                  <p className="office-subtitle">{activeModel || settings.llm.activeModel || "not set"}</p>
-                </div>
-              </div>
-            </Panel>
-          </section>
+            <SettingsOverviewSection
+              environment={settings.environment}
+              workspaceDir={settings.workspaceDir}
+              deploymentProfile={deploymentProfile}
+              authMode={authMode}
+              activeProviderId={activeProviderId}
+              fallbackProviderId={settings.llm.activeProviderId}
+              activeModel={activeModel}
+              fallbackModel={settings.llm.activeModel}
+              allowLoopbackBypass={allowLoopbackBypass}
+            />
           ) : null}
 
           {shouldRenderSection("settings-access") ? (
-          <section id="settings-access" className="settings-v2-section">
-            <Panel
-              className="settings-v2-panel"
-              title="Gateway Access"
-              subtitle="Set auth and storage defaults for local or remote use."
-            >
-              <FieldHelp>Keep this section conservative for public or remote installs. Session-only storage is the safer default; persistent storage is a convenience tradeoff.</FieldHelp>
-              <div className="controls-row">
-                <label htmlFor="authMode">Auth Mode</label>
-                <GCSelect
-                  id="authMode"
-                  value={authMode}
-                  onChange={(value) => setAuthMode(value as "none" | "token" | "basic")}
-                  options={[
-                    { value: "none", label: "none (local trusted)" },
-                    { value: "token", label: "token" },
-                    { value: "basic", label: "basic" },
-                  ]}
-                />
-              </div>
-              <div className="controls-row">
-                <GCSwitch
-                  id="allowLoopbackBypass"
-                  checked={allowLoopbackBypass}
-                  onCheckedChange={setAllowLoopbackBypass}
-                  label="Allow loopback bypass"
-                />
-              </div>
-              {authMode !== "none" ? (
-                <div className="controls-row">
-                  <GCSwitch
-                    id="authRememberMe"
-                    checked={authStorageMode === "persistent"}
-                    onCheckedChange={(checked) => setAuthStorageMode(checked ? "persistent" : "session")}
-                    label="Remember credentials on this browser (less secure)"
-                  />
-                </div>
-              ) : null}
-              {authMode === "token" ? (
-                <div className="controls-row">
-                  <label htmlFor="authToken">Gateway token</label>
-                  <input
-                    id="authToken"
-                    type="password"
-                    value={authToken}
-                    onChange={(event) => setAuthToken(event.target.value)}
-                  />
-                </div>
-              ) : null}
-              {authMode === "basic" ? (
-                <>
-                  <div className="controls-row">
-                    <label htmlFor="basicUsername">Username</label>
-                    <input
-                      id="basicUsername"
-                      value={basicUsername}
-                      onChange={(event) => setBasicUsername(event.target.value)}
-                    />
-                  </div>
-                  <div className="controls-row">
-                    <label htmlFor="basicPassword">Password</label>
-                    <input
-                      id="basicPassword"
-                      type="password"
-                      value={basicPassword}
-                      onChange={(event) => setBasicPassword(event.target.value)}
-                    />
-                  </div>
-                </>
-              ) : null}
-              <p className="office-subtitle">
-                Server status: token configured: {settings.auth.tokenConfigured ? "yes" : "no"} | basic configured: {settings.auth.basicConfigured ? "yes" : "no"}
-              </p>
-              <button type="button" onClick={onSaveAuth} disabled={blockSaves}>Save Access Control</button>
-              <div className="replay-box">
-                <h4>Approved device grants</h4>
-                <p className="office-subtitle">
-                  Active grants stay visible here with last-seen and expiry data so operators can revoke stale devices without guessing.
-                </p>
-                {deviceGrants.length === 0 ? (
-                  <p className="office-subtitle">No approved device grants yet.</p>
-                ) : (
-                  <ul className="compact-list">
-                    {deviceGrants.map((grant) => (
-                      <li key={grant.grantId}>
-                        <div>
-                          <strong>{grant.deviceLabel}</strong> ({grant.deviceType})
-                          {grant.platform ? ` on ${grant.platform}` : ""}
-                        </div>
-                        <div className="office-subtitle">
-                          actor: {grant.actorId} | granted by {grant.grantedBy}
-                        </div>
-                        <div className="office-subtitle">
-                          created: {new Date(grant.createdAt).toLocaleString()}
-                          {grant.lastUsedAt ? ` | last seen: ${new Date(grant.lastUsedAt).toLocaleString()}` : " | last seen: never"}
-                          {grant.expiresAt ? ` | expires: ${new Date(grant.expiresAt).toLocaleString()}` : " | expires: no TTL"}
-                          {grant.revokedAt ? ` | revoked: ${new Date(grant.revokedAt).toLocaleString()}` : ""}
-                        </div>
-                        <div className="actions">
-                          <button
-                            type="button"
-                            className="danger"
-                            disabled={Boolean(grant.revokedAt) || deviceGrantBusyId === grant.grantId}
-                            onClick={() => { void onRevokeDeviceGrant(grant.grantId); }}
-                          >
-                            {grant.revokedAt ? "Revoked" : deviceGrantBusyId === grant.grantId ? "Revoking..." : "Revoke device"}
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </Panel>
-          </section>
+            <SettingsAccessSection
+              authMode={authMode}
+              onAuthModeChange={setAuthMode}
+              allowLoopbackBypass={allowLoopbackBypass}
+              onAllowLoopbackBypassChange={setAllowLoopbackBypass}
+              authStorageMode={authStorageMode}
+              onAuthStorageModeChange={setAuthStorageMode}
+              authToken={authToken}
+              onAuthTokenChange={setAuthToken}
+              basicUsername={basicUsername}
+              onBasicUsernameChange={setBasicUsername}
+              basicPassword={basicPassword}
+              onBasicPasswordChange={setBasicPassword}
+              tokenConfigured={settings.auth.tokenConfigured}
+              basicConfigured={settings.auth.basicConfigured}
+              onSaveAuth={onSaveAuth}
+              blockSaves={blockSaves}
+              deviceGrants={deviceGrants}
+              deviceGrantBusyId={deviceGrantBusyId}
+              onRevokeDeviceGrant={onRevokeDeviceGrant}
+            />
           ) : null}
 
           {shouldRenderSection("settings-voice") ? (
-          <section id="settings-voice" className="settings-v2-section">
-            <Panel
-              className="settings-v2-panel"
-              title="Voice Runtime"
-              subtitle={(
-                <>
-                  Local-first voice controls with no required cloud API key.
-                  {" "}
-                  <HelpHint label="Voice runtime help" text="Talk Mode and Wake use your local voice runtime. Whisper.cpp is the default offline transcription provider." />
-                </>
-              )}
-            >
-        <FieldHelp>Voice tools are local-first and best treated like a hardware/runtime surface: inspect state first, then run talk, wake, or transcription tests intentionally.</FieldHelp>
-        <div className="voice-status-grid">
-          <article className="voice-status-card">
-            <h4>Speech To Text</h4>
-            <p><strong>Provider:</strong> {voiceStatus?.stt.provider ?? "unknown"}</p>
-            <p><strong>State:</strong> {voiceStatus?.stt.state ?? "unknown"}</p>
-            <p><strong>Managed runtime:</strong> {voiceStatus?.stt.runtimeReady ? "ready" : "not ready"}</p>
-            <p><strong>Active model:</strong> {voiceStatus?.stt.modelId ?? "none"}</p>
-            <p className="table-subtext">{describeVoiceState(voiceStatus?.stt.state)}</p>
-            <p className="table-subtext">Updated: {formatVoiceDate(voiceStatus?.stt.updatedAt)}</p>
-          </article>
-          <article className="voice-status-card">
-            <h4>Talk Mode</h4>
-            <p><strong>State:</strong> {voiceStatus?.talk.state ?? "unknown"}</p>
-            <p><strong>Mode:</strong> {formatTalkModeLabel(voiceStatus?.talk.mode)}</p>
-            <p><strong>Active session:</strong> {voiceStatus?.talk.activeSessionId ?? "none"}</p>
-            <p className="table-subtext">{describeVoiceState(voiceStatus?.talk.state)}</p>
-            <p className="table-subtext">Updated: {formatVoiceDate(voiceStatus?.talk.updatedAt)}</p>
-          </article>
-          <article className="voice-status-card">
-            <h4>Wake Listener</h4>
-            <p><strong>Enabled:</strong> {voiceStatus?.wake.enabled ? "yes" : "no"}</p>
-            <p><strong>State:</strong> {voiceStatus?.wake.state ?? "unknown"}</p>
-            <p><strong>Model:</strong> {voiceStatus?.wake.model ?? "unknown"}</p>
-            <p className="table-subtext">{describeVoiceState(voiceStatus?.wake.state)}</p>
-            <p className="table-subtext">Updated: {formatVoiceDate(voiceStatus?.wake.updatedAt)}</p>
-          </article>
-          <article className="voice-status-card">
-            <h4>Managed Runtime</h4>
-            <p><strong>Readiness:</strong> {describeVoiceRuntimeReadiness(voiceRuntime?.readiness)}</p>
-            <p><strong>Source:</strong> {voiceRuntime?.source ?? "unknown"}</p>
-            <p><strong>Binary:</strong> {voiceRuntime?.binaryReady ? "ready" : "missing"}</p>
-            <p><strong>Audio helper:</strong> {voiceRuntime?.ffmpegReady ? "ready" : "missing"}</p>
-            <p className="table-subtext">
-              {voiceRuntime?.selectedModelId
-                ? `Selected model: ${voiceRuntime.selectedModelId}`
-                : "No managed model selected yet."}
-            </p>
-            {voiceRuntime?.binaryPath ? (
-              <p className="table-subtext">Binary path: {voiceRuntime.binaryPath}</p>
-            ) : null}
-          </article>
-          <article className="voice-status-card">
-            <h4>Recent Talk Sessions</h4>
-            {voiceTalkSessions.length === 0 ? (
-              <p className="table-subtext">No talk sessions recorded yet.</p>
-            ) : (
-              <ul className="compact-list">
-                {voiceTalkSessions.slice(0, 5).map((session) => (
-                  <li key={session.talkSessionId}>
-                    <strong>{formatTalkModeLabel(session.mode)}</strong> · {session.state}
-                    <div className="table-subtext">
-                      started {formatVoiceDate(session.startedAt ?? session.createdAt)}
-                      {session.stoppedAt ? ` · stopped ${formatVoiceDate(session.stoppedAt)}` : ""}
-                    </div>
-                    <div className="table-subtext">
-                      session {session.talkSessionId}
-                      {session.sessionId ? ` · chat ${session.sessionId}` : ""}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </article>
-        </div>
-        {voiceStatus?.stt.lastError ? (
-          <p className="error">Last STT error: {voiceStatus.stt.lastError}</p>
-        ) : null}
-        {voiceRuntime?.lastError ? (
-          <p className="error">Last runtime error: {voiceRuntime.lastError}</p>
-        ) : null}
-        {voiceActionInfo ? <p className="status-banner">{voiceActionInfo}</p> : null}
-        <article className="voice-help-card">
-          <h4>Operator posture</h4>
-          <FieldHelp>{voiceOperatorGuidance.postureSummary}</FieldHelp>
-          {voiceOperatorGuidance.recommendedActions.length > 0 ? (
-            <ul className="voice-help-list">
-              {voiceOperatorGuidance.recommendedActions.map((action) => (
-                <li key={action}>{action}</li>
-              ))}
-            </ul>
-          ) : null}
-        </article>
-        <article className="voice-help-card">
-          <h4>Recovery Next Steps</h4>
-          {voiceRecoveryActions.length > 0 ? (
-            <div className="workflow-status-stack">
-              {voiceRecoveryActions.map((action) => (
-                <div key={action.id}>
-                  <p className="office-subtitle">
-                    <strong>{action.title}</strong>{" "}
-                    <StatusChip tone={action.tone}>{action.tone}</StatusChip>
-                  </p>
-                  <FieldHelp>{action.description}</FieldHelp>
-                  <div className="controls-row">
-                    {action.id === "repair-runtime" ? (
-                      <button
-                        type="button"
-                        onClick={() => void onInstallManagedVoiceRuntime(voiceRuntime?.selectedModelId ?? "base.en", true)}
-                        disabled={voiceBusy}
-                      >
-                        Repair Voice Runtime
-                      </button>
-                    ) : null}
-                    {action.id === "install-starter-model" ? (
-                      <button
-                        type="button"
-                        onClick={() => void onInstallManagedVoiceRuntime("base.en", true)}
-                        disabled={voiceBusy}
-                      >
-                        Install Starter Model
-                      </button>
-                    ) : null}
-                    {action.id === "activate-installed-model" && action.modelId ? (
-                      <button
-                        type="button"
-                        onClick={() => void onSelectManagedVoiceModel(action.modelId!)}
-                        disabled={voiceBusy}
-                      >
-                        Activate {action.modelId}
-                      </button>
-                    ) : null}
-                    {action.id === "stop-talk-session" ? (
-                      <button type="button" onClick={onStopVoiceTalk} disabled={voiceBusy || voiceStatus?.talk.state !== "running"}>
-                        Stop Talk Mode
-                      </button>
-                    ) : null}
-                    {action.id === "stop-wake-listener" ? (
-                      <button type="button" onClick={onStopWake} disabled={voiceBusy || !voiceStatus?.wake.enabled}>
-                        Disable Wake
-                      </button>
-                    ) : null}
-                    {action.id === "refresh-runtime-state" ? (
-                      <button type="button" onClick={() => void refreshVoiceRuntime()} disabled={voiceBusy}>
-                        Refresh Voice Status
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <>
-              <FieldHelp>No operator recovery steps are active. Voice looks ready for the proof-lane run.</FieldHelp>
-              <FieldHelp>Use the System page voice proof draft to record the next transcription, talk, and wake validation pass.</FieldHelp>
-            </>
-          )}
-        </article>
-        <article className="voice-help-card">
-          <h4>Managed Voice Runtime</h4>
-          <ul className="voice-help-list">
-            <li><strong>Install / Repair Voice Runtime:</strong> Downloads or repairs the managed whisper.cpp runtime, the audio normalization helper, and a selected starter model.</li>
-            <li><strong>Download model:</strong> Adds another local whisper model without changing the active one.</li>
-            <li><strong>Activate model:</strong> Switches GoatCitadel to use that installed model for local transcription.</li>
-            <li><strong>Remove model:</strong> Deletes an inactive installed model from your local GoatCitadel home.</li>
-            <li><strong>Start Talk Mode:</strong> Creates a talk session and begins live listening flow using the selected mode.</li>
-            <li><strong>Stop Talk Mode:</strong> Stops the current talk session and clears active session state.</li>
-            <li><strong>Enable Wake:</strong> Turns on wake-word listener mode (for hands-free trigger workflows).</li>
-            <li><strong>Disable Wake:</strong> Turns wake-word listener off immediately.</li>
-            <li><strong>Refresh Voice Status:</strong> Re-reads current runtime status from gateway without changing state.</li>
-            <li><strong>Run Local Transcription:</strong> Uploads your selected audio file for one-shot local STT test.</li>
-          </ul>
-          <p className="office-subtitle">
-            GoatCitadel now manages whisper.cpp locally by default. Advanced overrides like <code>GOATCITADEL_WHISPER_CPP_BIN</code> and <code>GOATCITADEL_WHISPER_CPP_MODEL_PATH</code> are still available for custom setups.
-          </p>
-        </article>
-        <div className="controls-row">
-          <button
-            type="button"
-            onClick={() => void onInstallManagedVoiceRuntime(voiceRuntime?.selectedModelId ?? "base.en", true)}
-            disabled={voiceBusy}
-          >
-            {voiceRuntime?.readiness === "ready" ? "Repair Voice Runtime" : "Install Voice Runtime"}
-          </button>
-          <button type="button" onClick={() => void refreshVoiceRuntime()} disabled={voiceBusy}>
-            Refresh Voice Status
-          </button>
-        </div>
-        <div className="voice-model-catalog">
-          {(voiceRuntime?.catalog ?? []).map((model) => {
-            const installed = installedVoiceModelIds.has(model.id);
-            const active = voiceRuntime?.selectedModelId === model.id;
-            return (
-              <article key={model.id} className="voice-model-card">
-                <div className="voice-model-card__head">
-                  <div>
-                    <h4>{model.label}</h4>
-                    <p className="table-subtext">
-                      {formatVoiceLanguageScope(model.languageScope)} | {model.approxSizeLabel}
-                    </p>
-                  </div>
-                  <div className="voice-model-card__badges">
-                    {model.recommended ? <StatusChip tone="live">Recommended</StatusChip> : null}
-                    {model.defaultInstall ? <StatusChip tone="muted">Starter</StatusChip> : null}
-                    {installed ? <StatusChip tone="success">Installed</StatusChip> : <StatusChip tone="warning">Available</StatusChip>}
-                    {active ? <StatusChip tone="live">Active</StatusChip> : null}
-                  </div>
-                </div>
-                <div className="voice-model-card__actions">
-                  {!installed ? (
-                    <button
-                      type="button"
-                      onClick={() => void onInstallManagedVoiceRuntime(model.id, false)}
-                      disabled={voiceBusy}
-                    >
-                      Download model
-                    </button>
-                  ) : null}
-                  {installed && !active ? (
-                    <button
-                      type="button"
-                      onClick={() => void onSelectManagedVoiceModel(model.id)}
-                      disabled={voiceBusy}
-                    >
-                      Activate model
-                    </button>
-                  ) : null}
-                  {installed && !active ? (
-                    <button
-                      type="button"
-                      onClick={() => void onRemoveManagedVoiceModel(model.id)}
-                      disabled={voiceBusy}
-                    >
-                      Remove model
-                    </button>
-                  ) : null}
-                </div>
-              </article>
-            );
-          })}
-        </div>
-        <div className="controls-row">
-          <label htmlFor="voiceTalkMode">Talk mode</label>
-          <GCSelect
-            id="voiceTalkMode"
-            value={voiceTalkMode}
-            onChange={(value) => setVoiceTalkMode(value as "push_to_talk" | "wake")}
-            options={[
-              { value: "push_to_talk", label: "Push to talk" },
-              { value: "wake", label: "Wake triggered" },
-            ]}
-          />
-          <button type="button" onClick={onStartVoiceTalk} disabled={voiceBusy || voiceStatus?.talk.state === "running"}>
-            Start Talk Mode
-          </button>
-          <button type="button" onClick={onStopVoiceTalk} disabled={voiceBusy || voiceStatus?.talk.state !== "running"}>
-            Stop Talk Mode
-          </button>
-        </div>
-        <div className="controls-row">
-          <button type="button" onClick={onStartWake} disabled={voiceBusy || voiceStatus?.wake.enabled}>
-            Enable Wake
-          </button>
-          <button type="button" onClick={onStopWake} disabled={voiceBusy || !voiceStatus?.wake.enabled}>
-            Disable Wake
-          </button>
-        </div>
-        <div className="controls-row">
-          <label htmlFor="voiceTestFile">Transcription test file</label>
-          <input
-            id="voiceTestFile"
-            type="file"
-            accept="audio/*"
-            onChange={(event) => setVoiceFile(event.target.files?.[0] ?? null)}
-          />
-          <button type="button" onClick={onRunVoiceTranscribeTest} disabled={voiceBusy || !voiceFile}>
-            Run Local Transcription
-          </button>
-        </div>
-        {voiceTranscriptResult ? (
-          <pre>{voiceTranscriptResult}</pre>
-        ) : null}
-            </Panel>
-          </section>
+            <SettingsVoiceSection
+              voiceStatus={voiceStatus}
+              voiceRuntime={voiceRuntime}
+              voiceTalkSessions={voiceTalkSessions}
+              voiceActionInfo={voiceActionInfo}
+              voiceOperatorGuidance={voiceOperatorGuidance}
+              voiceRecoveryActions={voiceRecoveryActions}
+              voiceBusy={voiceBusy}
+              installedVoiceModelIds={installedVoiceModelIds}
+              voiceTalkMode={voiceTalkMode}
+              onVoiceTalkModeChange={setVoiceTalkMode}
+              voiceFile={voiceFile}
+              onVoiceFileChange={setVoiceFile}
+              voiceTranscriptResult={voiceTranscriptResult}
+              onInstallManagedVoiceRuntime={onInstallManagedVoiceRuntime}
+              onSelectManagedVoiceModel={onSelectManagedVoiceModel}
+              onRemoveManagedVoiceModel={onRemoveManagedVoiceModel}
+              onStartVoiceTalk={onStartVoiceTalk}
+              onStopVoiceTalk={onStopVoiceTalk}
+              onStartWake={onStartWake}
+              onStopWake={onStopWake}
+              onRunVoiceTranscribeTest={onRunVoiceTranscribeTest}
+              refreshVoiceRuntime={refreshVoiceRuntime}
+            />
           ) : null}
 
           {shouldRenderSection("settings-runtime") ? (
-          <section id="settings-runtime" className="settings-v2-section">
-            <Panel
-              className="settings-v2-panel"
-              title="Runtime Controls"
-              subtitle="Tune how boldly GoatCitadel acts by default before you change providers, tools, or outbound access."
-            >
-        <FieldHelp>Runtime controls shape how boldly GoatCitadel acts by default. Use the allowlist preset first, then drop into custom mode only when your network or model layout needs it.</FieldHelp>
-        <div className="controls-row">
-          <label htmlFor="deploymentProfile">
-            Deployment Profile
-            <HelpHint label="Deployment profile help" text="local_dev is loose for iteration, trusted_local enables browser state tools on a trusted machine, and remote_hardened requires explicit auth and tighter confirmation flows." />
-          </label>
-          <GCSelect
-            id="deploymentProfile"
-            value={deploymentProfile}
-            onChange={(value) => setDeploymentProfile(value as "local_dev" | "trusted_local" | "remote_hardened")}
-            options={[
-              { value: "local_dev", label: "local_dev" },
-              { value: "trusted_local", label: "trusted_local" },
-              { value: "remote_hardened", label: "remote_hardened" },
-            ]}
-          />
-        </div>
-        {deploymentProfile === "remote_hardened" ? (
-          <FieldHelp>
-            Hardened mode fails closed unless auth is enabled, loopback bypass stays off, outbound hosts are explicitly allowlisted, and browser submit flows include verification plus confirm-before-submit.
-          </FieldHelp>
-        ) : null}
-        <div className="controls-row">
-          <label htmlFor="profile">Tool Profile</label>
-          <SelectOrCustom
-            id="profile"
-            value={profile}
-            onChange={setProfile}
-            options={TOOL_PROFILE_OPTIONS}
-            customPlaceholder="Custom tool profile"
-            customLabel="Custom profile"
-          />
-        </div>
-        <div className="controls-row">
-          <label htmlFor="budgetMode">Budget Mode</label>
-          <GCSelect
-            id="budgetMode"
-            value={budgetMode}
-            onChange={(value) => setBudgetMode(value as "saver" | "balanced" | "power")}
-            options={[
-              { value: "saver", label: "saver" },
-              { value: "balanced", label: "balanced" },
-              { value: "power", label: "power" },
-            ]}
-          />
-        </div>
-        <details className="advanced-panel">
-          <summary>Advanced runtime options</summary>
-          <div className="controls-row">
-            <label htmlFor="readAccessMode">Filesystem Read Access</label>
-            <GCSelect
-              id="readAccessMode"
-              value={readAccessMode}
-              onChange={(value) => setReadAccessMode(value as "roots_only" | "approval_required" | "full_disk")}
-              options={READ_ACCESS_MODE_OPTIONS}
-            />
-          </div>
-          <FieldHelp>
-            `trusted roots only` keeps reads inside the configured workspace and skills roots. `ask before outside-root reads` turns out-of-root local file reads into approval prompts in chat. `full disk read access` skips those prompts. Prompt Lab still bootstraps its own read grants for evaluation runs.
-          </FieldHelp>
-          <div className="controls-row">
-            <label htmlFor="allowlistPreset">Allowlist Preset <HelpHint label="Network allowlist help" text="This controls outbound hosts GoatCitadel is allowed to contact. It is not your machine's LAN IP. Use local hosts for local models, and provider domains such as api.z.ai for cloud models." /></label>
-            <GCSelect
-              id="allowlistPreset"
-              value={allowlistPreset}
-              onChange={(nextPreset) => {
+            <SettingsRuntimeSection
+              deploymentProfile={deploymentProfile}
+              onDeploymentProfileChange={setDeploymentProfile}
+              profile={profile}
+              onProfileChange={setProfile}
+              toolProfileOptions={TOOL_PROFILE_OPTIONS}
+              budgetMode={budgetMode}
+              onBudgetModeChange={setBudgetMode}
+              readAccessMode={readAccessMode}
+              onReadAccessModeChange={setReadAccessMode}
+              readAccessModeOptions={READ_ACCESS_MODE_OPTIONS}
+              allowlistPreset={allowlistPreset}
+              onAllowlistPresetChange={(nextPreset) => {
                 setAllowlistPreset(nextPreset);
                 const preset = ALLOWLIST_PRESETS.find((item) => item.id === nextPreset);
                 if (preset) {
                   setNetworkAllowlistText(preset.hosts.join("\n"));
                 }
               }}
-              options={[
-                ...ALLOWLIST_PRESETS.map((preset) => ({
-                  value: preset.id,
-                  label: preset.label,
-                })),
-                { value: "custom", label: "custom" },
-              ]}
+              allowlistPresets={ALLOWLIST_PRESETS}
+              networkAllowlistText={networkAllowlistText}
+              onNetworkAllowlistTextChange={(value) => {
+                setAllowlistPreset("custom");
+                setNetworkAllowlistText(value);
+              }}
+              firecrawlEnabled={firecrawlEnabled}
+              onFirecrawlEnabledChange={setFirecrawlEnabled}
+              firecrawlDefaultReadBackend={firecrawlDefaultReadBackend}
+              onFirecrawlDefaultReadBackendChange={setFirecrawlDefaultReadBackend}
+              firecrawlDefaultReadBackendOptions={FIRECRAWL_DEFAULT_READ_BACKEND_OPTIONS}
+              firecrawlBaseUrl={firecrawlBaseUrl}
+              onFirecrawlBaseUrlChange={setFirecrawlBaseUrl}
+              firecrawlApiKeyEnv={firecrawlApiKeyEnv}
+              onFirecrawlApiKeyEnvChange={setFirecrawlApiKeyEnv}
+              firecrawlTimeoutMs={firecrawlTimeoutMs}
+              onFirecrawlTimeoutMsChange={setFirecrawlTimeoutMs}
+              firecrawlFallbackToNative={firecrawlFallbackToNative}
+              onFirecrawlFallbackToNativeChange={setFirecrawlFallbackToNative}
+              onSaveRuntime={onSaveRuntime}
+              blockSaves={blockSaves}
             />
-          </div>
-          <div className="controls-row">
-            <label htmlFor="firecrawlEnabled">Firecrawl Read Backend</label>
-            <GCSwitch
-              id="firecrawlEnabled"
-              checked={firecrawlEnabled}
-              onCheckedChange={(checked: boolean) => setFirecrawlEnabled(Boolean(checked))}
-            />
-          </div>
-          <FieldHelp>
-            Firecrawl only powers read-heavy browser work here: `browser.search`, `browser.navigate`, `browser.extract`, and URL-based `docs.ingest`. Interactive browser state stays native.
-          </FieldHelp>
-          <div className="controls-row">
-            <label htmlFor="firecrawlDefaultReadBackend">Default Read Backend</label>
-            <GCSelect
-              id="firecrawlDefaultReadBackend"
-              value={firecrawlDefaultReadBackend}
-              onChange={(value) => setFirecrawlDefaultReadBackend(value as "native" | "firecrawl")}
-              options={FIRECRAWL_DEFAULT_READ_BACKEND_OPTIONS}
-            />
-          </div>
-          <div className="controls-row">
-            <label htmlFor="firecrawlBaseUrl">Firecrawl Base URL</label>
-            <input
-              id="firecrawlBaseUrl"
-              type="url"
-              value={firecrawlBaseUrl}
-              onChange={(event) => setFirecrawlBaseUrl(event.target.value)}
-              placeholder="http://127.0.0.1:3002"
-            />
-          </div>
-          <div className="controls-row">
-            <label htmlFor="firecrawlApiKeyEnv">Firecrawl API Key Env</label>
-            <input
-              id="firecrawlApiKeyEnv"
-              value={firecrawlApiKeyEnv}
-              onChange={(event) => setFirecrawlApiKeyEnv(event.target.value)}
-              placeholder="FIRECRAWL_API_KEY"
-            />
-          </div>
-          <div className="controls-row">
-            <label htmlFor="firecrawlTimeoutMs">Firecrawl Timeout (ms)</label>
-            <input
-              id="firecrawlTimeoutMs"
-              type="number"
-              min={1000}
-              step={1000}
-              value={firecrawlTimeoutMs}
-              onChange={(event) => setFirecrawlTimeoutMs(Math.max(1000, Number.parseInt(event.target.value || "0", 10) || 20000))}
-            />
-          </div>
-          <div className="controls-row">
-            <label htmlFor="firecrawlFallbackToNative">Fallback To Native</label>
-            <GCSwitch
-              id="firecrawlFallbackToNative"
-              checked={firecrawlFallbackToNative}
-              onCheckedChange={(checked: boolean) => setFirecrawlFallbackToNative(Boolean(checked))}
-            />
-          </div>
-          <label htmlFor="allowlist">Network Allowlist (one host/pattern per line)</label>
-          <textarea
-            id="allowlist"
-            rows={6}
-            className="full-textarea"
-            value={networkAllowlistText}
-            onChange={(event) => {
-              setAllowlistPreset("custom");
-              setNetworkAllowlistText(event.target.value);
-            }}
-          />
-        </details>
-        <button type="button" onClick={onSaveRuntime} disabled={blockSaves}>Save Runtime Controls</button>
-            </Panel>
-          </section>
           ) : null}
 
           {shouldRenderSection("settings-models") ? (
-          <section id="settings-models" className="settings-v2-section">
-            <Panel
-              className="settings-v2-panel"
-              title="LLM Providers & Models"
-              subtitle="Direct OpenAI and Anthropic providers use native upstream APIs by default; compatibility gateways stay on chat-completions unless you explicitly change them."
-            >
-        <FieldHelp>Pick an active provider and model first, then use the advanced block only when you need to add or override provider details. Known values should stay in selects; custom entry is the fallback.</FieldHelp>
-        <details className="advanced-panel">
-          <summary>Local runtime quick setup: LM Studio + Ollama</summary>
-          <p className="office-subtitle"><strong>LM Studio:</strong> load at least one model, then start its local server.</p>
-          <p className="office-subtitle">Base URL: <code>http://127.0.0.1:1234/v1</code> | model id: the loaded model name in LM Studio.</p>
-          <p className="office-subtitle"><strong>Ollama:</strong> run <code>ollama pull llama3.2</code> and keep Ollama running.</p>
-          <p className="office-subtitle">Base URL: <code>http://127.0.0.1:11434/v1</code> | model id: installed tag, for example <code>llama3.2</code>.</p>
-          <p className="office-subtitle">If GoatCitadel is remote, replace <code>127.0.0.1</code> with the host IP/tailnet name and include that host in your outbound allowlist.</p>
-          <div className="controls-row">
-            <button type="button" onClick={() => applyLocalProviderPreset("lmstudio")}>Use LM Studio Preset</button>
-            <button type="button" onClick={() => applyLocalProviderPreset("ollama")}>Use Ollama Preset</button>
-          </div>
-        </details>
-
-        <div className="controls-row">
-          <label htmlFor="activeProvider">Active Provider <HelpHint label="Active provider help" text="The active provider is the company or endpoint GoatCitadel will use for new chats and tests by default." /></label>
-          <SelectOrCustom
-            id="activeProvider"
-            value={activeProviderId}
-            onChange={(nextProviderId) => {
-              setHasUnsavedActiveLlmDraft(true);
-              setHasUnsavedProviderDraft(true);
-              setActiveProviderId(nextProviderId);
-              setProviderId(nextProviderId);
-              applyProviderTemplate(nextProviderId);
-              selectPreferredProviderModel(nextProviderId);
-            }}
-            options={providerSelectOptions}
-            customPlaceholder="Custom provider id"
-            customLabel="Custom active provider"
-          />
-        </div>
-
-        <div className="controls-row">
-          <label htmlFor="activeModel">Active Model <HelpHint label="Active model help" text="This is the actual model GoatCitadel will send prompts to for the active provider. The list below is discovered live when possible so you can pick a working model instead of guessing." /></label>
-          <SelectOrCustom
-            id="activeModel"
-            value={activeModel}
-            onChange={(nextModel) => {
-              setHasUnsavedActiveLlmDraft(true);
-              setActiveModel(nextModel);
-            }}
-            options={activeModelOptions}
-            customPlaceholder="Custom model id"
-            customLabel="Custom active model"
-          />
-          <button type="button" onClick={() => { void onLoadModels({ clearError: true }); }}>{loadingModels ? "Loading..." : "Refresh Models"}</button>
-        </div>
-        {modelDiscoverySource ? (
-          <p className="office-subtitle">
-            Model discovery: {modelDiscoverySource === "remote" ? "live provider list" : "fallback/default list"}
-            {modelDiscoveryWarning ? ` · ${modelDiscoveryWarning}` : ""}
-          </p>
-        ) : null}
-        {models.length > 0 ? (
-          <ul className="compact-list">
-            {models.map((model) => (
-              <li key={model.id}>{model.id}</li>
-            ))}
-          </ul>
-        ) : null}
-        <button type="button" onClick={onSaveActiveLlm} disabled={blockSaves}>Save Active Provider/Model</button>
-
-        <button type="button" onClick={() => setShowAdvanced((current) => !current)}>
-          {showAdvanced ? "Hide advanced provider settings" : "Show advanced provider settings"}
-        </button>
-        {showAdvanced ? (
-          <div className="advanced-block">
-            <h4>Add / Update Provider</h4>
-            <div className="controls-row">
-              <label htmlFor="providerId">Provider ID <HelpHint label="Provider ID help" text="Provider ID is GoatCitadel's stable machine name for this endpoint, such as glm or moonshot. It is how runtime settings and chats refer to the provider internally." /></label>
-              <SelectOrCustom
-                id="providerId"
-                value={providerId}
-                onChange={(nextProviderId) => {
-                  setHasUnsavedProviderDraft(true);
-                  setProviderId(nextProviderId);
-                  applyProviderTemplate(nextProviderId);
-                }}
-                options={providerSelectOptions}
-                customPlaceholder="e.g. corp-gateway"
-                customLabel="Custom provider id"
-              />
-            </div>
-            <div className="controls-row">
-              <label htmlFor="providerLabel">Label <HelpHint label="Provider label help" text="Label is the human-readable display name shown in the UI. It does not have to match the provider ID exactly." /></label>
-              <SelectOrCustom
-                id="providerLabel"
-                value={providerLabel}
-                onChange={(nextLabel) => {
-                  setHasUnsavedProviderDraft(true);
-                  setProviderLabel(nextLabel);
-                }}
-                options={providerLabelOptions}
-                customPlaceholder="Provider display label"
-                customLabel="Custom label"
-              />
-            </div>
-            <div className="controls-row">
-              <label htmlFor="providerBaseUrl">Base URL</label>
-              <SelectOrCustom
-                id="providerBaseUrl"
-                value={providerBaseUrl}
-                onChange={(nextBaseUrl) => {
-                  setHasUnsavedProviderDraft(true);
-                  setProviderBaseUrl(nextBaseUrl);
-                }}
-                options={providerTemplates.map((template) => ({
-                  value: template.baseUrl,
-                  label: template.baseUrl,
-                }))}
-                customPlaceholder="https://host/v1"
-                customLabel="Custom base URL"
-              />
-            </div>
-            <div className="controls-row">
-              <label htmlFor="providerApiStyle">Provider API Style <HelpHint label="Provider API style help" text="Configured API style is the upstream protocol GoatCitadel should target for this provider. Direct OpenAI defaults to Responses, direct Anthropic defaults to Messages, and compatibility gateways stay on chat-completions unless you explicitly change them." /></label>
-              <GCSelect
-                id="providerApiStyle"
-                value={providerApiStyle}
-                onChange={(nextApiStyle) => {
-                  setHasUnsavedProviderDraft(true);
-                  setProviderApiStyle(nextApiStyle as ProviderApiStyle);
-                }}
-                options={PROVIDER_API_STYLE_OPTIONS}
-              />
-            </div>
-            <p className="office-subtitle">
-              Configured API style: {providerApiStyle}
-              {currentProviderRuntime?.resolvedApiStyle ? ` · Resolved execution style: ${currentProviderRuntime.resolvedApiStyle}` : ""}
-            </p>
-            <div className="controls-row">
-              <label htmlFor="providerDefaultModel">Default Model <HelpHint label="Default model help" text="Default model is the model GoatCitadel should choose first for this provider when a chat or page has not pinned a different model yet." /></label>
-              <SelectOrCustom
-                id="providerDefaultModel"
-                value={providerDefaultModel}
-                onChange={(nextDefaultModel) => {
-                  setHasUnsavedProviderDraft(true);
-                  setProviderDefaultModel(nextDefaultModel);
-                }}
-                options={providerDefaultModelOptions}
-                customPlaceholder="Default model id"
-                customLabel="Custom default model"
-              />
-            </div>
-            <div className="controls-row">
-              <label htmlFor="providerApiKey">API Key (optional)</label>
-              <input
-                id="providerApiKey"
-                type="password"
-                value={providerApiKey}
-                onChange={(event) => {
-                  setHasUnsavedProviderDraft(true);
-                  setProviderApiKey(event.target.value);
-                }}
-              />
-            </div>
-            <p className="office-subtitle">
-              Key source: {providerSecretStatus?.source ?? providerOptions.find((provider) => provider.providerId === providerId)?.apiKeySource ?? "none"}
-            </p>
-            <div className="controls-row">
-              <button type="button" onClick={onSaveProviderKeyToSecureStore} disabled={!providerApiKey.trim()}>
-                Save Key to Secure Store
-              </button>
-              <button type="button" onClick={onDeleteProviderKeyFromSecureStore}>
-                Remove Secure Key
-              </button>
-            </div>
-            <div className="controls-row">
-              <label htmlFor="providerApiKeyEnv">API Key Env (optional) <HelpHint label="Provider API key env help" text="This is the environment variable name GoatCitadel should look for at runtime, for example GLM_API_KEY. It names the variable; it is not the secret value itself." /></label>
-              <SelectOrCustom
-                id="providerApiKeyEnv"
-                value={providerApiKeyEnv}
-                onChange={(nextApiKeyEnv) => {
-                  setHasUnsavedProviderDraft(true);
-                  setProviderApiKeyEnv(nextApiKeyEnv);
-                }}
-                options={[
-                  { value: "OPENAI_API_KEY", label: "OPENAI_API_KEY" },
-                  { value: "ANTHROPIC_API_KEY", label: "ANTHROPIC_API_KEY" },
-                  { value: "GOOGLE_API_KEY", label: "GOOGLE_API_KEY" },
-                  { value: "GLM_API_KEY", label: "GLM_API_KEY" },
-                  { value: "MOONSHOT_API_KEY", label: "MOONSHOT_API_KEY" },
-                  { value: "OPENROUTER_API_KEY", label: "OPENROUTER_API_KEY" },
-                  { value: "OLLAMA_API_KEY", label: "OLLAMA_API_KEY (optional/proxy only)" },
-                  { value: "LMSTUDIO_API_KEY", label: "LMSTUDIO_API_KEY (optional/proxy only)" },
-                ]}
-                customPlaceholder="Custom env var name"
-                customLabel="Custom env var"
-              />
-            </div>
-            <LlmTransportFields
-              idPrefix="settings-provider-transport"
-              draft={providerRequestDraft}
-              onChange={(nextDraft) => {
+            <SettingsModelsSection
+              applyLocalProviderPreset={applyLocalProviderPreset}
+              activeProviderId={activeProviderId}
+              onActiveProviderIdChange={(nextProviderId) => {
+                setHasUnsavedActiveLlmDraft(true);
+                setHasUnsavedProviderDraft(true);
+                setActiveProviderId(nextProviderId);
+                setProviderId(nextProviderId);
+                applyProviderTemplate(nextProviderId);
+                selectPreferredProviderModel(nextProviderId);
+              }}
+              providerSelectOptions={providerSelectOptions}
+              activeModel={activeModel}
+              onActiveModelChange={(nextModel) => {
+                setHasUnsavedActiveLlmDraft(true);
+                setActiveModel(nextModel);
+              }}
+              activeModelOptions={activeModelOptions}
+              loadingModels={loadingModels}
+              onLoadModels={() => {
+                void onLoadModels({ clearError: true });
+              }}
+              modelDiscoverySource={modelDiscoverySource}
+              modelDiscoveryWarning={modelDiscoveryWarning}
+              models={models}
+              onSaveActiveLlm={onSaveActiveLlm}
+              blockSaves={blockSaves}
+              showAdvanced={showAdvanced}
+              onToggleAdvanced={() => setShowAdvanced((current) => !current)}
+              providerId={providerId}
+              onProviderIdChange={(nextProviderId) => {
+                setHasUnsavedProviderDraft(true);
+                setProviderId(nextProviderId);
+                applyProviderTemplate(nextProviderId);
+              }}
+              providerLabel={providerLabel}
+              onProviderLabelChange={(nextLabel) => {
+                setHasUnsavedProviderDraft(true);
+                setProviderLabel(nextLabel);
+              }}
+              providerLabelOptions={providerLabelOptions}
+              providerBaseUrl={providerBaseUrl}
+              onProviderBaseUrlChange={(nextBaseUrl) => {
+                setHasUnsavedProviderDraft(true);
+                setProviderBaseUrl(nextBaseUrl);
+              }}
+              providerTemplates={providerTemplates}
+              providerApiStyle={providerApiStyle}
+              onProviderApiStyleChange={(nextApiStyle) => {
+                setHasUnsavedProviderDraft(true);
+                setProviderApiStyle(nextApiStyle);
+              }}
+              providerApiStyleOptions={PROVIDER_API_STYLE_OPTIONS}
+              currentProviderRuntime={currentProviderRuntime}
+              providerDefaultModel={providerDefaultModel}
+              onProviderDefaultModelChange={(nextDefaultModel) => {
+                setHasUnsavedProviderDraft(true);
+                setProviderDefaultModel(nextDefaultModel);
+              }}
+              providerDefaultModelOptions={providerDefaultModelOptions}
+              providerApiKey={providerApiKey}
+              onProviderApiKeyChange={(nextApiKey) => {
+                setHasUnsavedProviderDraft(true);
+                setProviderApiKey(nextApiKey);
+              }}
+              providerSecretStatus={providerSecretStatus}
+              providerOptions={providerOptions}
+              onSaveProviderKeyToSecureStore={onSaveProviderKeyToSecureStore}
+              onDeleteProviderKeyFromSecureStore={onDeleteProviderKeyFromSecureStore}
+              providerApiKeyEnv={providerApiKeyEnv}
+              onProviderApiKeyEnvChange={(nextApiKeyEnv) => {
+                setHasUnsavedProviderDraft(true);
+                setProviderApiKeyEnv(nextApiKeyEnv);
+              }}
+              providerRequestDraft={providerRequestDraft}
+              onProviderRequestDraftChange={(nextDraft) => {
                 setHasUnsavedProviderDraft(true);
                 setProviderRequestDraft(nextDraft);
               }}
-              error={providerRequestValidation.error}
+              providerRequestValidationError={providerRequestValidation.error}
+              onSaveProvider={onSaveProvider}
             />
-            <button type="button" onClick={onSaveProvider} disabled={blockSaves}>Save Provider Settings</button>
-          </div>
-        ) : null}
-            </Panel>
-          </section>
           ) : null}
 
           {shouldRenderSection("settings-tests") ? (
-          <section id="settings-tests" className="settings-v2-section">
-            <Panel
-              className="settings-v2-panel"
-              title="LLM Test (Unified Routing)"
-              subtitle="Test prompts run through GoatCitadel's unified LLM entrypoint without QMD memory context, so the response path reflects the provider's actual upstream API style."
-            >
-        <FieldHelp>Use test prompts to prove the active provider/model path before you rely on it elsewhere. This is the fastest way to confirm a provider is responding correctly.</FieldHelp>
-        <div className="controls-row">
-          <label htmlFor="chatPromptPreset">Prompt Preset</label>
-          <GCSelect
-            id="chatPromptPreset"
-            value={chatPromptPresetId}
-            onChange={(nextPreset) => {
-              setChatPromptPresetId(nextPreset);
-              const preset = CHAT_PROMPT_PRESETS.find((item) => item.id === nextPreset);
-              if (preset) {
-                setChatPrompt(preset.prompt);
-              }
-            }}
-            options={[
-              ...CHAT_PROMPT_PRESETS.map((preset) => ({
-                value: preset.id,
-                label: preset.label,
-              })),
-              { value: "custom", label: "custom" },
-            ]}
-          />
-        </div>
-        <textarea
-          rows={4}
-          className="full-textarea"
-          value={chatPrompt}
-          onChange={(event) => setChatPrompt(event.target.value)}
-        />
-        <div className="controls-row">
-          <GCSwitch
-            id="chatUseMemory"
-            checked={chatUseMemory}
-            onCheckedChange={setChatUseMemory}
-            label="Include memory context (QMD)"
-          />
-        </div>
-        <div className="controls-row">
-          <button type="button" onClick={onTestChat}>Run Test Prompt</button>
-        </div>
-        {chatResponse ? <pre>{chatResponse}</pre> : null}
-            </Panel>
-          </section>
+            <SettingsTestsSection
+              chatPromptPresetId={chatPromptPresetId}
+              onChatPromptPresetIdChange={setChatPromptPresetId}
+              chatPromptPresets={CHAT_PROMPT_PRESETS}
+              chatPrompt={chatPrompt}
+              onChatPromptChange={setChatPrompt}
+              chatUseMemory={chatUseMemory}
+              onChatUseMemoryChange={setChatUseMemory}
+              chatResponse={chatResponse}
+              onTestChat={onTestChat}
+            />
           ) : null}
         </div>
       </div>
-      </section>
+    </section>
   );
 }
 
-function describeVoiceState(state?: VoiceStatus["stt"]["state"]): string {
-  if (state === "running") {
-    return "Runtime is currently active.";
-  }
-  if (state === "error") {
-    return "Runtime hit an error and needs attention.";
-  }
-  if (state === "stopped") {
-    return "Runtime is idle.";
-  }
-  return "State unknown.";
-}
-
-function describeVoiceRuntimeReadiness(readiness?: VoiceRuntimeStatus["readiness"]): string {
-  if (readiness === "ready") {
-    return "Ready";
-  }
-  if (readiness === "broken") {
-    return "Installed but incomplete";
-  }
-  if (readiness === "missing") {
-    return "Missing";
-  }
-  return "Unknown";
-}
-
-function formatVoiceLanguageScope(scope: VoiceRuntimeStatus["catalog"][number]["languageScope"]): string {
-  return scope === "english" ? "English" : "Multilingual";
-}
-
-function formatTalkModeLabel(mode?: VoiceStatus["talk"]["mode"]): string {
-  if (mode === "push_to_talk") {
-    return "Push to talk";
-  }
-  if (mode === "wake") {
-    return "Wake triggered";
-  }
-  return "Not set";
-}
-
-function formatVoiceDate(value?: string): string {
-  if (!value) {
-    return "-";
-  }
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
-    return value;
-  }
-  return new Date(parsed).toLocaleString();
-}
-
-function matchAllowlistPreset(allowlist: string[]): string {
-  for (const preset of ALLOWLIST_PRESETS) {
-    if (preset.hosts.length !== allowlist.length) {
-      continue;
-    }
-    const left = [...preset.hosts].sort().join("|");
-    const right = [...allowlist].sort().join("|");
-    if (left === right) {
-      return preset.id;
-    }
-  }
-  return "custom";
-}
-
-interface ProviderScopedModelOptionSource {
-  providerId: string;
-  defaultModel: string;
-  models: string[];
-}
 export { buildVoiceRecoveryActions };
-
-export function buildProviderScopedModelOptions(input: {
-  providerId: string;
-  providers: ProviderScopedModelOptionSource[];
-  previewedProviderId?: string;
-  previewedModels?: string[];
-  currentModel?: string;
-  fallbackModel?: string;
-}): SelectOption[] {
-  const provider = input.providers.find((item) => item.providerId === input.providerId);
-  const previewModels = input.previewedProviderId === input.providerId ? (input.previewedModels ?? []) : [];
-  const items = dedupeProviderModels([
-    provider?.defaultModel,
-    ...(provider?.models ?? []),
-    ...previewModels,
-    input.fallbackModel,
-    input.currentModel,
-  ]);
-  return items.map((item) => ({ value: item, label: item }));
-}
-
-export function getModelPreviewFallbackModel(currentModel: string, providerDefaultModel: string): string | undefined {
-  return currentModel.trim() || providerDefaultModel.trim() || undefined;
-}
-
-export function resolveModelDraftHydration(
-  preserveModelDrafts: boolean,
-  hasUnsavedActiveLlmDraft: boolean,
-  hasUnsavedProviderDraft: boolean,
-): { activeSelection: boolean; providerEditor: boolean } {
-  if (!preserveModelDrafts) {
-    return {
-      activeSelection: true,
-      providerEditor: true,
-    };
-  }
-  return {
-    activeSelection: !hasUnsavedActiveLlmDraft,
-    providerEditor: !hasUnsavedActiveLlmDraft && !hasUnsavedProviderDraft,
-  };
-}
-
-export function resolveProviderModelSelection(
-  providerId: string,
-  providers: ProviderScopedModelOptionSource[],
-  currentModel: string,
-): string {
-  const provider = providers.find((item) => item.providerId === providerId);
-  const options = dedupeProviderModels([
-    provider?.defaultModel,
-    ...(provider?.models ?? []),
-  ]);
-  const normalizedCurrent = currentModel.trim();
-  if (normalizedCurrent && options.includes(normalizedCurrent)) {
-    return normalizedCurrent;
-  }
-  return options[0] ?? "";
-}
-
-export function resolveAuthStorageMode(
-  authMode: "none" | "token" | "basic",
-  rememberCredentials: boolean,
-): GatewayAuthStorageMode {
-  if (authMode === "none") {
-    return "session";
-  }
-  return rememberCredentials ? "persistent" : "session";
-}
-
-function formatDeploymentProfileLabel(value: "local_dev" | "trusted_local" | "remote_hardened"): string {
-  if (value === "trusted_local") {
-    return "trusted_local";
-  }
-  if (value === "remote_hardened") {
-    return "remote_hardened";
-  }
-  return "local_dev";
-}
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result !== "string") {
-        reject(new Error("Unable to read audio file."));
-        return;
-      }
-      const comma = result.indexOf(",");
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.onerror = () => reject(new Error("Unable to read audio file."));
-    reader.readAsDataURL(file);
-  });
-}
-
+export {
+  buildProviderScopedModelOptions,
+  getModelPreviewFallbackModel,
+  matchAllowlistPreset,
+  resolveAuthStorageMode,
+  resolveModelDraftHydration,
+  resolveProviderModelSelection,
+  type ProviderScopedModelOptionSource,
+} from "./settings/settings-page-helpers";

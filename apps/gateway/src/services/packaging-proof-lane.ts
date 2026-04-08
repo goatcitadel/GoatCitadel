@@ -1,13 +1,22 @@
-import type { FollowOnParityReport, FollowOnProofLaneStepRecord, PackagingProofLaneDraft } from "@goatcitadel/contracts";
+import type {
+  FollowOnParityReport,
+  FollowOnProofLaneStepRecord,
+  PackagingProofLaneDraft,
+} from "@goatcitadel/contracts";
 import { GATEWAY_FOLLOW_ON_PROOF_LANE_SPECS } from "./follow-on-proof-lane-metadata.js";
+import {
+  buildProofLaneArtifactPath,
+  formatProofLaneMarkdownHeader,
+  formatProofLaneStepsSection,
+  mergeProofLaneBlockingIssues,
+} from "./proof-lane-helpers.js";
 
 const PACKAGING_PROOF_LANE = GATEWAY_FOLLOW_ON_PROOF_LANE_SPECS.packaging;
 
 export function buildPackagingProofLaneDraft(report: FollowOnParityReport): PackagingProofLaneDraft {
   const generatedAt = new Date().toISOString();
-  const hardenedPostureConfigured = report.packaging.networkAllowlistCount > 0
-    && !report.packaging.allowLoopbackBypass
-    && report.authMode !== "none";
+  const hardenedPostureConfigured =
+    report.packaging.networkAllowlistCount > 0 && !report.packaging.allowLoopbackBypass && report.authMode !== "none";
   const hardenedReady = report.deploymentProfile === "remote_hardened" && hardenedPostureConfigured;
   const proofStatus = report.packaging.proofStatus ?? {
     hasArtifact: false,
@@ -33,7 +42,8 @@ export function buildPackagingProofLaneDraft(report: FollowOnParityReport): Pack
       stepId: "trusted-local",
       title: "Run a trusted-local install/startup pass",
       status: report.deploymentProfile === "local_dev" ? "ready" : "ready",
-      instructions: "Run a clean installer or startup smoke path in the current environment and record the first successful operator path.",
+      instructions:
+        "Run a clean installer or startup smoke path in the current environment and record the first successful operator path.",
       evidenceHint: "Capture startup notes, auth behavior, and the first usable operator screen.",
     },
     {
@@ -51,7 +61,8 @@ export function buildPackagingProofLaneDraft(report: FollowOnParityReport): Pack
       stepId: "rollback",
       title: "Record rollback or recovery behavior",
       status: "ready",
-      instructions: "Document the operator recovery path for a failed startup, broken auth posture, or misconfigured policy change.",
+      instructions:
+        "Document the operator recovery path for a failed startup, broken auth posture, or misconfigured policy change.",
       evidenceHint: "Capture the exact rollback or recovery step and the operator-visible result.",
     },
     {
@@ -63,10 +74,7 @@ export function buildPackagingProofLaneDraft(report: FollowOnParityReport): Pack
     },
   ];
 
-  const blockingIssues = [
-    ...report.packaging.blockingIssues,
-    ...steps.filter((step) => step.status === "blocked").map((step) => `${step.title} is blocked.`),
-  ];
+  const blockingIssues = mergeProofLaneBlockingIssues(report.packaging.blockingIssues, steps);
   const summary = hardenedReady
     ? `Packaging proof lane is ready with ${report.deploymentProfile}, ${report.authMode} auth, and ${report.packaging.networkAllowlistCount} allowlisted host(s).`
     : "Packaging proof lane is partially blocked until the runtime is operating in remote_hardened and the hardened posture is fully configured.";
@@ -78,18 +86,19 @@ export function buildPackagingProofLaneDraft(report: FollowOnParityReport): Pack
     summary,
     checklistPath: PACKAGING_PROOF_LANE.checklistPath,
     templatePath: PACKAGING_PROOF_LANE.templatePath,
-    blockingIssues: Array.from(new Set(blockingIssues)),
+    blockingIssues,
     steps,
     markdown: buildPackagingProofLaneMarkdown(report, generatedAt, summary, steps),
   };
 }
 
 export function buildPackagingProofLaneArtifactPath(draft: PackagingProofLaneDraft): string {
-  const day = draft.generatedAt.slice(0, 10);
-  const timestamp = draft.generatedAt
-    .replaceAll(":", "-")
-    .replaceAll(".", "-");
-  return `${PACKAGING_PROOF_LANE.artifactRoot}/${day}/packaging-deployment-proof-bundle-${draft.deploymentProfile}-${timestamp}.md`;
+  return buildProofLaneArtifactPath({
+    spec: PACKAGING_PROOF_LANE,
+    generatedAt: draft.generatedAt,
+    deploymentProfile: draft.deploymentProfile,
+    slug: "packaging-deployment-proof-bundle",
+  });
 }
 
 function buildPackagingProofLaneMarkdown(
@@ -104,17 +113,14 @@ function buildPackagingProofLaneMarkdown(
     matchedCurrentProfile: false,
   };
   return [
-    "# Packaging And Deployment Proof Bundle Draft",
-    "",
-    `Generated: ${generatedAt}`,
-    `Deployment profile: ${report.deploymentProfile}`,
-    `Auth mode: ${report.authMode}`,
-    `Checklist: ${PACKAGING_PROOF_LANE.checklistPath}`,
-    `Template: ${PACKAGING_PROOF_LANE.templatePath}`,
-    "",
-    "## Summary",
-    summary,
-    "",
+    ...formatProofLaneMarkdownHeader({
+      title: "Packaging And Deployment Proof Bundle Draft",
+      generatedAt,
+      deploymentProfile: report.deploymentProfile,
+      authMode: report.authMode,
+      spec: PACKAGING_PROOF_LANE,
+      summary,
+    }),
     "## Live Runtime Snapshot",
     `- Loopback bypass: ${report.packaging.allowLoopbackBypass ? "enabled" : "disabled"}`,
     `- Network allowlist count: ${report.packaging.networkAllowlistCount}`,
@@ -122,12 +128,6 @@ function buildPackagingProofLaneMarkdown(
     `- Latest proof artifact: ${proofStatus.hasArtifact ? `${proofStatus.freshness}${typeof proofStatus.ageDays === "number" ? ` (${proofStatus.ageDays} day(s) old)` : ""}` : "missing"}`,
     `- Latest proof profile match: ${proofStatus.hasArtifact ? (proofStatus.matchedCurrentProfile ? "matches current profile" : `mismatch (${proofStatus.latestArtifactDeploymentProfile ?? "unknown"})`) : "not recorded"}`,
     "",
-    "## Lane Steps",
-    ...steps.flatMap((step, index) => [
-      `${index + 1}. ${step.title} [${step.status}]`,
-      `Instructions: ${step.instructions}`,
-      `Evidence: ${step.evidenceHint}`,
-      "",
-    ]),
+    ...formatProofLaneStepsSection(steps),
   ].join("\n");
 }

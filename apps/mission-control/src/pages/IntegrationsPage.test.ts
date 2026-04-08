@@ -10,7 +10,7 @@ import {
   getConnectorSupportNotes,
   parseAttachmentIdInputs,
   parseAttachmentUrlInputs,
-} from "./IntegrationsPage";
+} from "./integrations-page-utils";
 
 function makeConnector(metadata: Record<string, unknown>): ConnectorRecord {
   return {
@@ -40,9 +40,7 @@ describe("integration connector metadata helpers", () => {
       "channel.unsend",
     ]);
     expect(getConnectorSupportedAttachmentSources(connector)).toEqual(["url", "inline"]);
-    expect(getConnectorSupportNotes(connector)).toEqual([
-      "BlueBubbles chat/new must be enabled for new handles.",
-    ]);
+    expect(getConnectorSupportNotes(connector)).toEqual(["BlueBubbles chat/new must be enabled for new handles."]);
     expect(getConnectorSetupDiagnostics(connector)).toEqual(["Missing config.passwordEnv."]);
     expect(connectorSupportsDeliveryAction(connector, "channel.react")).toBe(true);
     expect(connectorSupportsDeliveryAction(connector, "channel.unsend")).toBe(true);
@@ -89,7 +87,9 @@ describe("integration connector metadata helpers", () => {
     ]);
     expect(getConnectorSupportedAttachmentSources(connector)).toEqual(["inline"]);
     expect(getConnectorSupportNotes(connector)).toEqual(["Gateway mode enables typing and presence."]);
-    expect(getConnectorRuntimePostureSummary(connector)).toBe("Persistent gateway runtime keeps inbound channel state synchronized.");
+    expect(getConnectorRuntimePostureSummary(connector)).toBe(
+      "Persistent gateway runtime keeps inbound channel state synchronized.",
+    );
     expect(getConnectorSetupDiagnostics(connector)).toEqual([]);
     expect(connectorSetupReady(connector)).toBe(true);
   });

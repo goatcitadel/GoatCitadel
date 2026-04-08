@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import { useEffect, useState } from "react";
 import {
   exportBrowserProofLaneDraft,
@@ -54,6 +55,14 @@ import {
   normalizeSystemVitals,
   normalizeVoiceProofLaneDraft,
 } from "./system-page-normalizers";
+import {
+  formatArtifactStatus,
+  formatBytes,
+  formatProgramBlockerKind,
+  formatProofArtifactStatus,
+  mapParityTone,
+  mapProgramParityTone,
+} from "./system/system-page-helpers";
 
 export function SystemPage() {
   const [vitals, setVitals] = useState<SystemVitalsResponse | null>(null);
@@ -91,19 +100,19 @@ export function SystemPage() {
   const [extensionStarterPack, setExtensionStarterPack] = useState<ExtensionStarterPackDraft | null>(null);
   const [extensionStarterPackError, setExtensionStarterPackError] = useState<string | null>(null);
   const [extensionStarterPackBusy, setExtensionStarterPackBusy] = useState(false);
-  const [extensionStarterPackArtifact, setExtensionStarterPackArtifact] = useState<ExtensionStarterPackArtifactRecord | null>(null);
+  const [extensionStarterPackArtifact, setExtensionStarterPackArtifact] =
+    useState<ExtensionStarterPackArtifactRecord | null>(null);
   const [extensionStarterPackArtifactError, setExtensionStarterPackArtifactError] = useState<string | null>(null);
   const [extensionStarterPackArtifactBusy, setExtensionStarterPackArtifactBusy] = useState(false);
   const [daemonStatus, setDaemonStatus] = useState<Awaited<ReturnType<typeof fetchDaemonStatus>> | null>(null);
-  const [daemonLogs, setDaemonLogs] = useState<Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }>>([]);
+  const [daemonLogs, setDaemonLogs] = useState<
+    Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }>
+  >([]);
   const [daemonBusy, setDaemonBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refreshDaemon = async () => {
-    const [status, logs] = await Promise.all([
-      fetchDaemonStatus(),
-      fetchDaemonLogs(100),
-    ]);
+    const [status, logs] = await Promise.all([fetchDaemonStatus(), fetchDaemonLogs(100)]);
     setDaemonStatus(status);
     setDaemonLogs(logs.items);
   };
@@ -344,11 +353,7 @@ export function SystemPage() {
   };
 
   useEffect(() => {
-    void Promise.all([
-      fetchSystemVitals(),
-      fetchDaemonStatus(),
-      fetchDaemonLogs(100),
-    ])
+    void Promise.all([fetchSystemVitals(), fetchDaemonStatus(), fetchDaemonLogs(100)])
       .then(([nextVitals, nextDaemonStatus, nextDaemonLogs]) => {
         setVitals(normalizeSystemVitals(nextVitals));
         setDaemonStatus(nextDaemonStatus);
@@ -452,13 +457,17 @@ export function SystemPage() {
         title={pageCopy.system.title}
         subtitle={pageCopy.system.subtitle}
         hint="Use this surface when you need to confirm local runtime health, inspect the current gateway process, or review recent service events."
-        actions={(
+        actions={
           <div className="workflow-summary-strip">
-            <StatusChip tone="muted">{vitals.platform} {vitals.release}</StatusChip>
+            <StatusChip tone="muted">
+              {vitals.platform} {vitals.release}
+            </StatusChip>
             <StatusChip tone={daemonStateTone}>{daemonStatus?.state ?? "unknown"}</StatusChip>
-            <StatusChip tone={daemonStateTone}>{daemonStatus?.running ? "Gateway process running" : "Gateway process unavailable"}</StatusChip>
+            <StatusChip tone={daemonStateTone}>
+              {daemonStatus?.running ? "Gateway process running" : "Gateway process unavailable"}
+            </StatusChip>
           </div>
-        )}
+        }
       />
       <PageGuideCard
         pageId="system"
@@ -468,14 +477,17 @@ export function SystemPage() {
       />
       <div className="workflow-status-stack">
         <FieldHelp>
-          This page reports the live gateway process. Process lifecycle control must happen in your external service manager; Mission Control cannot start or stop the process directly.
+          This page reports the live gateway process. Process lifecycle control must happen in your external service
+          manager; Mission Control cannot start or stop the process directly.
         </FieldHelp>
       </div>
       <div className="metric-grid">
         <Panel title="Host Vitals" subtitle="Local machine and process health at a glance." className="stat-card">
           <p className="stat-card-value">{Math.round(vitals.uptimeSeconds)}s</p>
           <p className="stat-card-note">Uptime</p>
-          <p className="stat-card-note">Hostname {vitals.hostname} · {vitals.cpuCount} cores</p>
+          <p className="stat-card-note">
+            Hostname {vitals.hostname} · {vitals.cpuCount} cores
+          </p>
         </Panel>
         <Panel title="Load Average" subtitle="Three-sample host load average." className="stat-card">
           <p className="stat-card-value system-stat-mono">{vitals.loadAverage.map((n) => n.toFixed(2)).join(" / ")}</p>
@@ -489,30 +501,35 @@ export function SystemPage() {
       </div>
       <Panel
         title="OpenClaw Parity"
-        subtitle={(
+        subtitle={
           <>
-            Track the full parity closeout program while keeping browser, canvas, deployment, companion, plugin, and voice follow-on work grounded in live runtime truth.
+            Track the full parity closeout program while keeping browser, canvas, deployment, companion, plugin, and
+            voice follow-on work grounded in live runtime truth.
             <HelpHint
               label="OpenClaw parity help"
               text="This surface is intentionally conservative. It shows the full parity program plus the live follow-on foundations without pretending external proof or publication work is already done."
             />
           </>
-        )}
-        actions={openclawParity ? (
-          <div className="workflow-summary-strip">
-            <StatusChip tone="success">{openclawParity.completedEpicIds.length}/{openclawParity.epics.length} complete</StatusChip>
-            <StatusChip tone="warning">{openclawParity.openEpicIds.length} open</StatusChip>
-            <StatusChip tone="muted">next {openclawParity.nextEpicId ?? "none"}</StatusChip>
-          </div>
-        ) : followOnParity ? (
-          <div className="workflow-summary-strip">
-            <StatusChip tone="muted">{followOnParity.deploymentProfile}</StatusChip>
-            <StatusChip tone="muted">auth {followOnParity.authMode}</StatusChip>
-            <StatusChip tone={followOnParity.voice.runtimeReadiness === "ready" ? "success" : "warning"}>
-              voice {followOnParity.voice.runtimeReadiness}
-            </StatusChip>
-          </div>
-        ) : undefined}
+        }
+        actions={
+          openclawParity ? (
+            <div className="workflow-summary-strip">
+              <StatusChip tone="success">
+                {openclawParity.completedEpicIds.length}/{openclawParity.epics.length} complete
+              </StatusChip>
+              <StatusChip tone="warning">{openclawParity.openEpicIds.length} open</StatusChip>
+              <StatusChip tone="muted">next {openclawParity.nextEpicId ?? "none"}</StatusChip>
+            </div>
+          ) : followOnParity ? (
+            <div className="workflow-summary-strip">
+              <StatusChip tone="muted">{followOnParity.deploymentProfile}</StatusChip>
+              <StatusChip tone="muted">auth {followOnParity.authMode}</StatusChip>
+              <StatusChip tone={followOnParity.voice.runtimeReadiness === "ready" ? "success" : "warning"}>
+                voice {followOnParity.voice.runtimeReadiness}
+              </StatusChip>
+            </div>
+          ) : undefined
+        }
       >
         {followOnParityError ? (
           <>
@@ -529,16 +546,16 @@ export function SystemPage() {
               ) : openclawParity ? (
                 <>
                   <FieldHelp>
-                    Full-program status: {openclawParity.completedEpicIds.length} complete · {openclawParity.openEpicIds.length} open · next {openclawParity.nextEpicId ?? "none"}.
+                    Full-program status: {openclawParity.completedEpicIds.length} complete ·{" "}
+                    {openclawParity.openEpicIds.length} open · next {openclawParity.nextEpicId ?? "none"}.
                   </FieldHelp>
+                  <FieldHelp>Completion order: {openclawParity.completionOrder.join(" -> ")}</FieldHelp>
+                  <FieldHelp>Next program slice: {openclawParity.nextSlice}</FieldHelp>
                   <FieldHelp>
-                    Completion order: {openclawParity.completionOrder.join(" -> ")}
-                  </FieldHelp>
-                  <FieldHelp>
-                    Next program slice: {openclawParity.nextSlice}
-                  </FieldHelp>
-                  <FieldHelp>
-                    Blockers: repo runtime {openclawParity.blockerCounts.repo_runtime} · manual/operator {openclawParity.blockerCounts.manual_operator} · external repo {openclawParity.blockerCounts.external_repo} · publication {openclawParity.blockerCounts.publication}.
+                    Blockers: repo runtime {openclawParity.blockerCounts.repo_runtime} · manual/operator{" "}
+                    {openclawParity.blockerCounts.manual_operator} · external repo{" "}
+                    {openclawParity.blockerCounts.external_repo} · publication{" "}
+                    {openclawParity.blockerCounts.publication}.
                   </FieldHelp>
                   {openclawParity.unsafeClaims.map((claim) => (
                     <FieldHelp key={`openclaw-unsafe-${claim}`}>Unsafe to claim yet: {claim}</FieldHelp>
@@ -546,42 +563,62 @@ export function SystemPage() {
                 </>
               ) : null}
               <FieldHelp>
-                Follow-on runtime posture: {followOnParity.deploymentProfile} · auth {followOnParity.authMode} · voice {followOnParity.voice.runtimeReadiness} · browser {followOnParity.browser.controlToolCount} control tool(s).
+                Follow-on runtime posture: {followOnParity.deploymentProfile} · auth {followOnParity.authMode} · voice{" "}
+                {followOnParity.voice.runtimeReadiness} · browser {followOnParity.browser.controlToolCount} control
+                tool(s).
               </FieldHelp>
             </div>
             <div className="metric-grid">
               <Panel title="Browser" subtitle="Registered browser tools and catalog maturity." className="stat-card">
                 <p className="stat-card-value">{followOnParity.browser.totalToolCount}</p>
-                <p className="stat-card-note">{followOnParity.browser.readToolCount} read · {followOnParity.browser.controlToolCount} control</p>
-                <p className="stat-card-note">Catalog {followOnParity.browser.automationCatalog?.maturity ?? "missing"}</p>
+                <p className="stat-card-note">
+                  {followOnParity.browser.readToolCount} read · {followOnParity.browser.controlToolCount} control
+                </p>
+                <p className="stat-card-note">
+                  Catalog {followOnParity.browser.automationCatalog?.maturity ?? "missing"}
+                </p>
               </Panel>
               <Panel title="Voice" subtitle="Wake/talk runtime readiness and current state." className="stat-card">
                 <p className="stat-card-value">{followOnParity.voice.runtimeReadiness}</p>
-                <p className="stat-card-note">Talk {followOnParity.voice.talkState} · Wake {followOnParity.voice.wakeEnabled ? followOnParity.voice.wakeState : "disabled"}</p>
+                <p className="stat-card-note">
+                  Talk {followOnParity.voice.talkState} · Wake{" "}
+                  {followOnParity.voice.wakeEnabled ? followOnParity.voice.wakeState : "disabled"}
+                </p>
                 <p className="stat-card-note">Model {followOnParity.voice.selectedModelId ?? "none selected"}</p>
               </Panel>
               <Panel title="Extensions" subtitle="Add-ons and integration plugin breadth." className="stat-card">
-                <p className="stat-card-value">{followOnParity.addons.catalogCount + followOnParity.plugins.totalCount}</p>
-                <p className="stat-card-note">{followOnParity.addons.installedCount} add-ons installed · {followOnParity.addons.runningCount} running</p>
-                <p className="stat-card-note">{followOnParity.plugins.enabledCount}/{followOnParity.plugins.totalCount} plugins enabled</p>
+                <p className="stat-card-value">
+                  {followOnParity.addons.catalogCount + followOnParity.plugins.totalCount}
+                </p>
+                <p className="stat-card-note">
+                  {followOnParity.addons.installedCount} add-ons installed · {followOnParity.addons.runningCount}{" "}
+                  running
+                </p>
+                <p className="stat-card-note">
+                  {followOnParity.plugins.enabledCount}/{followOnParity.plugins.totalCount} plugins enabled
+                </p>
               </Panel>
             </div>
             <div className="workflow-status-stack">
+              <FieldHelp>Browser posture: {followOnParity.browser.guardrailSummary}</FieldHelp>
               <FieldHelp>
-                Browser posture: {followOnParity.browser.guardrailSummary}
-              </FieldHelp>
-              <FieldHelp>
-                Browser state tools in {followOnParity.deploymentProfile}: {followOnParity.browser.stateToolRuntime.allowedTools.length > 0
+                Browser state tools in {followOnParity.deploymentProfile}:{" "}
+                {followOnParity.browser.stateToolRuntime.allowedTools.length > 0
                   ? `allowed ${followOnParity.browser.stateToolRuntime.allowedTools.join(", ")}`
-                  : "allowed none"} · {followOnParity.browser.stateToolRuntime.blockedTools.length > 0
+                  : "allowed none"}{" "}
+                ·{" "}
+                {followOnParity.browser.stateToolRuntime.blockedTools.length > 0
                   ? `blocked ${followOnParity.browser.stateToolRuntime.blockedTools.join(", ")}`
-                  : "blocked none"}.
+                  : "blocked none"}
+                .
               </FieldHelp>
               <FieldHelp>
                 Browser proof status: {formatProofArtifactStatus(followOnParity.browser.artifactStatus)}
               </FieldHelp>
               {followOnParity.browser.blockingIssues.map((issue) => (
-                <p key={`browser-issue-${issue}`} className="error">{issue}</p>
+                <p key={`browser-issue-${issue}`} className="error">
+                  {issue}
+                </p>
               ))}
               {followOnParity.browser.recommendedActions.map((action) => (
                 <FieldHelp key={`browser-action-${action}`}>Browser next action: {action}</FieldHelp>
@@ -593,23 +630,29 @@ export function SystemPage() {
                   disabled={browserProofLaneBusy}
                 />
                 <ActionButton
-                  label={browserProofArtifactBusy ? "Exporting browser proof artifact..." : "Export browser proof artifact"}
+                  label={
+                    browserProofArtifactBusy ? "Exporting browser proof artifact..." : "Export browser proof artifact"
+                  }
                   onClick={() => void saveBrowserProofLane()}
                   disabled={browserProofArtifactBusy}
                 />
               </div>
-              {browserProofLaneError ? <p className="error">Browser proof lane unavailable: {browserProofLaneError}</p> : null}
-              {browserProofArtifactError ? <p className="error">Browser proof artifact export failed: {browserProofArtifactError}</p> : null}
+              {browserProofLaneError ? (
+                <p className="error">Browser proof lane unavailable: {browserProofLaneError}</p>
+              ) : null}
+              {browserProofArtifactError ? (
+                <p className="error">Browser proof artifact export failed: {browserProofArtifactError}</p>
+              ) : null}
               {browserProofLane ? (
                 <>
-                  <FieldHelp>
-                    Browser proof lane: {browserProofLane.summary}
-                  </FieldHelp>
+                  <FieldHelp>Browser proof lane: {browserProofLane.summary}</FieldHelp>
                   <FieldHelp>
                     Checklist {browserProofLane.checklistPath} · Template {browserProofLane.templatePath}
                   </FieldHelp>
                   {browserProofLane.blockingIssues.map((issue) => (
-                    <p key={`browser-proof-issue-${issue}`} className="error">{issue}</p>
+                    <p key={`browser-proof-issue-${issue}`} className="error">
+                      {issue}
+                    </p>
                   ))}
                   {browserProofLane.steps.map((step) => (
                     <FieldHelp key={`browser-proof-step-${step.stepId}`}>
@@ -625,53 +668,68 @@ export function SystemPage() {
                     Saved browser proof artifact: {followOnParity.browser.latestArtifact.relativePath}
                   </FieldHelp>
                   <FieldHelp>
-                    Artifact bytes {followOnParity.browser.latestArtifact.bytes} · generated {followOnParity.browser.latestArtifact.generatedAt}
+                    Artifact bytes {followOnParity.browser.latestArtifact.bytes} · generated{" "}
+                    {followOnParity.browser.latestArtifact.generatedAt}
                   </FieldHelp>
                 </>
               ) : null}
             </div>
             <div className="workflow-status-stack">
               <FieldHelp>
-                Packaging posture is {followOnParity.deploymentProfile} with auth mode {followOnParity.authMode}, loopback bypass {followOnParity.packaging.allowLoopbackBypass ? "enabled" : "disabled"}, and {followOnParity.packaging.networkAllowlistCount} allowlisted hosts.
+                Packaging posture is {followOnParity.deploymentProfile} with auth mode {followOnParity.authMode},
+                loopback bypass {followOnParity.packaging.allowLoopbackBypass ? "enabled" : "disabled"}, and{" "}
+                {followOnParity.packaging.networkAllowlistCount} allowlisted hosts.
               </FieldHelp>
+              <FieldHelp>Packaging summary: {followOnParity.packaging.postureSummary}</FieldHelp>
               <FieldHelp>
-                Packaging summary: {followOnParity.packaging.postureSummary}
-              </FieldHelp>
-              <FieldHelp>
-                Packaging proof status: {followOnParity.packaging.proofStatus.freshness}{followOnParity.packaging.proofStatus.hasArtifact
+                Packaging proof status: {followOnParity.packaging.proofStatus.freshness}
+                {followOnParity.packaging.proofStatus.hasArtifact
                   ? ` · latest profile ${followOnParity.packaging.proofStatus.latestArtifactDeploymentProfile ?? "unknown"} · ${followOnParity.packaging.proofStatus.matchedCurrentProfile ? "matches current profile" : "does not match current profile"}${typeof followOnParity.packaging.proofStatus.ageDays === "number" ? ` · ${followOnParity.packaging.proofStatus.ageDays} day(s) old` : ""}`
-                  : " · no artifact recorded yet"}.
+                  : " · no artifact recorded yet"}
+                .
               </FieldHelp>
               {followOnParity.packaging.blockingIssues.map((issue) => (
-                <p key={`packaging-issue-${issue}`} className="error">{issue}</p>
+                <p key={`packaging-issue-${issue}`} className="error">
+                  {issue}
+                </p>
               ))}
               {followOnParity.packaging.recommendedActions.map((action) => (
                 <FieldHelp key={`packaging-action-${action}`}>Packaging next action: {action}</FieldHelp>
               ))}
               <div className="row-actions">
                 <ActionButton
-                  label={packagingProofLaneBusy ? "Generating packaging proof draft..." : "Generate packaging proof draft"}
+                  label={
+                    packagingProofLaneBusy ? "Generating packaging proof draft..." : "Generate packaging proof draft"
+                  }
                   onClick={() => void loadPackagingProofLane()}
                   disabled={packagingProofLaneBusy}
                 />
                 <ActionButton
-                  label={packagingProofArtifactBusy ? "Exporting packaging proof artifact..." : "Export packaging proof artifact"}
+                  label={
+                    packagingProofArtifactBusy
+                      ? "Exporting packaging proof artifact..."
+                      : "Export packaging proof artifact"
+                  }
                   onClick={() => void savePackagingProofLane()}
                   disabled={packagingProofArtifactBusy}
                 />
               </div>
-              {packagingProofLaneError ? <p className="error">Packaging proof lane unavailable: {packagingProofLaneError}</p> : null}
-              {packagingProofArtifactError ? <p className="error">Packaging proof artifact export failed: {packagingProofArtifactError}</p> : null}
+              {packagingProofLaneError ? (
+                <p className="error">Packaging proof lane unavailable: {packagingProofLaneError}</p>
+              ) : null}
+              {packagingProofArtifactError ? (
+                <p className="error">Packaging proof artifact export failed: {packagingProofArtifactError}</p>
+              ) : null}
               {packagingProofLane ? (
                 <>
-                  <FieldHelp>
-                    Packaging proof lane: {packagingProofLane.summary}
-                  </FieldHelp>
+                  <FieldHelp>Packaging proof lane: {packagingProofLane.summary}</FieldHelp>
                   <FieldHelp>
                     Checklist {packagingProofLane.checklistPath} · Template {packagingProofLane.templatePath}
                   </FieldHelp>
                   {packagingProofLane.blockingIssues.map((issue) => (
-                    <p key={`packaging-proof-issue-${issue}`} className="error">{issue}</p>
+                    <p key={`packaging-proof-issue-${issue}`} className="error">
+                      {issue}
+                    </p>
                   ))}
                   {packagingProofLane.steps.map((step) => (
                     <FieldHelp key={`packaging-proof-step-${step.stepId}`}>
@@ -687,30 +745,37 @@ export function SystemPage() {
                     Saved packaging proof artifact: {followOnParity.packaging.latestArtifact.relativePath}
                   </FieldHelp>
                   <FieldHelp>
-                    Artifact bytes {followOnParity.packaging.latestArtifact.bytes} · generated {followOnParity.packaging.latestArtifact.generatedAt}
+                    Artifact bytes {followOnParity.packaging.latestArtifact.bytes} · generated{" "}
+                    {followOnParity.packaging.latestArtifact.generatedAt}
                   </FieldHelp>
                 </>
               ) : null}
               {followOnParity.companion.platformTargets.length > 0 ? (
                 <FieldHelp>
-                  Companion and canvas targets: {followOnParity.companion.platformTargets.map((target) => `${target.label} (${target.maturity})`).join(", ")}.
+                  Companion and canvas targets:{" "}
+                  {followOnParity.companion.platformTargets
+                    .map((target) => `${target.label} (${target.maturity})`)
+                    .join(", ")}
+                  .
                 </FieldHelp>
               ) : null}
             </div>
             <div className="workflow-status-stack">
-              <FieldHelp>
-                Canvas summary: {followOnParity.canvas.paritySummary}
-              </FieldHelp>
+              <FieldHelp>Canvas summary: {followOnParity.canvas.paritySummary}</FieldHelp>
               <FieldHelp>
                 A2UI proof status: {formatProofArtifactStatus(followOnParity.canvas.artifactStatus)}
               </FieldHelp>
               {followOnParity.canvas.contract ? (
                 <FieldHelp>
-                  Canvas contract: {followOnParity.canvas.contract.contractId} · scopes {followOnParity.canvas.contract.scopes.join(", ")} · transports {followOnParity.canvas.contract.transports.join(", ")}.
+                  Canvas contract: {followOnParity.canvas.contract.contractId} · scopes{" "}
+                  {followOnParity.canvas.contract.scopes.join(", ")} · transports{" "}
+                  {followOnParity.canvas.contract.transports.join(", ")}.
                 </FieldHelp>
               ) : null}
               {followOnParity.canvas.blockingIssues.map((issue) => (
-                <p key={`canvas-issue-${issue}`} className="error">{issue}</p>
+                <p key={`canvas-issue-${issue}`} className="error">
+                  {issue}
+                </p>
               ))}
               {followOnParity.canvas.recommendedActions.map((action) => (
                 <FieldHelp key={`canvas-action-${action}`}>Canvas next action: {action}</FieldHelp>
@@ -728,17 +793,19 @@ export function SystemPage() {
                 />
               </div>
               {a2uiProofLaneError ? <p className="error">A2UI proof lane unavailable: {a2uiProofLaneError}</p> : null}
-              {a2uiProofArtifactError ? <p className="error">A2UI proof artifact export failed: {a2uiProofArtifactError}</p> : null}
+              {a2uiProofArtifactError ? (
+                <p className="error">A2UI proof artifact export failed: {a2uiProofArtifactError}</p>
+              ) : null}
               {a2uiProofLane ? (
                 <>
-                  <FieldHelp>
-                    A2UI proof lane: {a2uiProofLane.summary}
-                  </FieldHelp>
+                  <FieldHelp>A2UI proof lane: {a2uiProofLane.summary}</FieldHelp>
                   <FieldHelp>
                     Checklist {a2uiProofLane.checklistPath} · Template {a2uiProofLane.templatePath}
                   </FieldHelp>
                   {a2uiProofLane.blockingIssues.map((issue) => (
-                    <p key={`a2ui-proof-issue-${issue}`} className="error">{issue}</p>
+                    <p key={`a2ui-proof-issue-${issue}`} className="error">
+                      {issue}
+                    </p>
                   ))}
                   {a2uiProofLane.steps.map((step) => (
                     <FieldHelp key={`a2ui-proof-step-${step.stepId}`}>
@@ -750,29 +817,30 @@ export function SystemPage() {
               ) : null}
               {followOnParity.canvas.latestArtifact ? (
                 <>
+                  <FieldHelp>Saved A2UI proof artifact: {followOnParity.canvas.latestArtifact.relativePath}</FieldHelp>
                   <FieldHelp>
-                    Saved A2UI proof artifact: {followOnParity.canvas.latestArtifact.relativePath}
-                  </FieldHelp>
-                  <FieldHelp>
-                    Artifact bytes {followOnParity.canvas.latestArtifact.bytes} · generated {followOnParity.canvas.latestArtifact.generatedAt}
+                    Artifact bytes {followOnParity.canvas.latestArtifact.bytes} · generated{" "}
+                    {followOnParity.canvas.latestArtifact.generatedAt}
                   </FieldHelp>
                 </>
               ) : null}
             </div>
             <div className="workflow-status-stack">
-              <FieldHelp>
-                Companion summary: {followOnParity.companion.paritySummary}
-              </FieldHelp>
+              <FieldHelp>Companion summary: {followOnParity.companion.paritySummary}</FieldHelp>
               <FieldHelp>
                 Companion brief status: {formatArtifactStatus(followOnParity.companion.artifactStatus)}
               </FieldHelp>
               {followOnParity.companion.contract ? (
                 <>
                   <FieldHelp>
-                    Companion contract: {followOnParity.companion.contract.contractId} · target {followOnParity.companion.contract.primaryTarget} · repo {followOnParity.companion.contract.bootstrapRepo} · status {followOnParity.companion.contract.bootstrapStatus}.
+                    Companion contract: {followOnParity.companion.contract.contractId} · target{" "}
+                    {followOnParity.companion.contract.primaryTarget} · repo{" "}
+                    {followOnParity.companion.contract.bootstrapRepo} · status{" "}
+                    {followOnParity.companion.contract.bootstrapStatus}.
                   </FieldHelp>
                   <FieldHelp>
-                    Companion bootstrap: {followOnParity.companion.contract.bootstrapFeatures.join(", ")} · transports {followOnParity.companion.contract.transportLanes.join(", ")}.
+                    Companion bootstrap: {followOnParity.companion.contract.bootstrapFeatures.join(", ")} · transports{" "}
+                    {followOnParity.companion.contract.transportLanes.join(", ")}.
                   </FieldHelp>
                   <FieldHelp>
                     Companion prerequisites: {followOnParity.companion.contract.serverPrerequisites.join(", ")}.
@@ -781,53 +849,66 @@ export function SystemPage() {
               ) : null}
               {followOnParity.companion.authReadiness.map((item) => (
                 <FieldHelp key={`companion-auth-${item.key}`}>
-                  Companion auth readiness: {item.label} <StatusChip tone={mapParityTone(item.state)}>{item.state.replaceAll("_", " ")}</StatusChip> · {item.note}
+                  Companion auth readiness: {item.label}{" "}
+                  <StatusChip tone={mapParityTone(item.state)}>{item.state.replaceAll("_", " ")}</StatusChip> ·{" "}
+                  {item.note}
                 </FieldHelp>
               ))}
               {followOnParity.companion.prerequisiteReadiness.map((item) => (
                 <FieldHelp key={`companion-prereq-${item.key}`}>
-                  Companion prerequisite: {item.label} <StatusChip tone={mapParityTone(item.state)}>{item.state.replaceAll("_", " ")}</StatusChip> · {item.note}
+                  Companion prerequisite: {item.label}{" "}
+                  <StatusChip tone={mapParityTone(item.state)}>{item.state.replaceAll("_", " ")}</StatusChip> ·{" "}
+                  {item.note}
                 </FieldHelp>
               ))}
               {followOnParity.companion.blockingIssues.map((issue) => (
-                <p key={`companion-issue-${issue}`} className="error">{issue}</p>
+                <p key={`companion-issue-${issue}`} className="error">
+                  {issue}
+                </p>
               ))}
               {followOnParity.companion.recommendedActions.map((action) => (
                 <FieldHelp key={`companion-action-${action}`}>Companion next action: {action}</FieldHelp>
               ))}
               <div className="row-actions">
                 <ActionButton
-                  label={companionBriefArtifactBusy ? "Exporting companion bootstrap brief..." : "Export companion bootstrap brief"}
+                  label={
+                    companionBriefArtifactBusy
+                      ? "Exporting companion bootstrap brief..."
+                      : "Export companion bootstrap brief"
+                  }
                   onClick={() => void saveCompanionBootstrapBrief()}
                   disabled={companionBriefArtifactBusy}
                 />
               </div>
-              {companionBriefArtifactError ? <p className="error">Companion bootstrap brief export failed: {companionBriefArtifactError}</p> : null}
+              {companionBriefArtifactError ? (
+                <p className="error">Companion bootstrap brief export failed: {companionBriefArtifactError}</p>
+              ) : null}
               {followOnParity.companion.latestArtifact ? (
                 <>
                   <FieldHelp>
                     Saved companion bootstrap brief: {followOnParity.companion.latestArtifact.relativePath}
                   </FieldHelp>
                   <FieldHelp>
-                    Artifact bytes {followOnParity.companion.latestArtifact.bytes} · generated {followOnParity.companion.latestArtifact.generatedAt}
+                    Artifact bytes {followOnParity.companion.latestArtifact.bytes} · generated{" "}
+                    {followOnParity.companion.latestArtifact.generatedAt}
                   </FieldHelp>
                 </>
               ) : null}
             </div>
             <div className="workflow-status-stack">
-              <FieldHelp>
-                Extension summary: {followOnParity.plugins.sdkSummary}
-              </FieldHelp>
+              <FieldHelp>Extension summary: {followOnParity.plugins.sdkSummary}</FieldHelp>
               <FieldHelp>
                 Extension brief status: {formatArtifactStatus(followOnParity.plugins.artifactStatus)}
               </FieldHelp>
               <FieldHelp>
-                Reference plugin lifecycle: {followOnParity.plugins.referenceLifecycle.referencePluginId} · {followOnParity.plugins.referenceLifecycle.present ? "installed" : "missing"} · {followOnParity.plugins.referenceLifecycle.enabled ? "enabled" : "disabled"} · {followOnParity.plugins.referenceLifecycle.matchesReferenceSource ? "source aligned" : "source drifted"}.
+                Reference plugin lifecycle: {followOnParity.plugins.referenceLifecycle.referencePluginId} ·{" "}
+                {followOnParity.plugins.referenceLifecycle.present ? "installed" : "missing"} ·{" "}
+                {followOnParity.plugins.referenceLifecycle.enabled ? "enabled" : "disabled"} ·{" "}
+                {followOnParity.plugins.referenceLifecycle.matchesReferenceSource ? "source aligned" : "source drifted"}
+                .
               </FieldHelp>
               {followOnParity.plugins.referenceLifecycle.source ? (
-                <FieldHelp>
-                  Reference plugin source: {followOnParity.plugins.referenceLifecycle.source}
-                </FieldHelp>
+                <FieldHelp>Reference plugin source: {followOnParity.plugins.referenceLifecycle.source}</FieldHelp>
               ) : null}
               {followOnParity.plugins.referenceLifecycle.capabilities.length > 0 ? (
                 <FieldHelp>
@@ -835,7 +916,9 @@ export function SystemPage() {
                 </FieldHelp>
               ) : null}
               {followOnParity.plugins.blockingIssues.map((issue) => (
-                <p key={`plugin-issue-${issue}`} className="error">{issue}</p>
+                <p key={`plugin-issue-${issue}`} className="error">
+                  {issue}
+                </p>
               ))}
               {followOnParity.plugins.recommendedActions.map((action) => (
                 <FieldHelp key={`plugin-action-${action}`}>Extension next action: {action}</FieldHelp>
@@ -852,59 +935,65 @@ export function SystemPage() {
                   disabled={extensionBriefArtifactBusy}
                 />
                 <ActionButton
-                  label={extensionStarterPackBusy ? "Generating extension starter pack..." : "Generate extension starter pack"}
+                  label={
+                    extensionStarterPackBusy
+                      ? "Generating extension starter pack..."
+                      : "Generate extension starter pack"
+                  }
                   onClick={() => void loadExtensionStarterPack()}
                   disabled={extensionStarterPackBusy}
                 />
                 <ActionButton
-                  label={extensionStarterPackArtifactBusy ? "Exporting extension starter pack..." : "Export extension starter pack"}
+                  label={
+                    extensionStarterPackArtifactBusy
+                      ? "Exporting extension starter pack..."
+                      : "Export extension starter pack"
+                  }
                   onClick={() => void saveExtensionStarterPack()}
                   disabled={extensionStarterPackArtifactBusy}
                 />
               </div>
-              {extensionBriefError ? <p className="error">Extension SDK brief unavailable: {extensionBriefError}</p> : null}
-              {extensionBriefArtifactError ? <p className="error">Extension SDK brief export failed: {extensionBriefArtifactError}</p> : null}
-              {extensionStarterPackError ? <p className="error">Extension starter pack unavailable: {extensionStarterPackError}</p> : null}
-              {extensionStarterPackArtifactError ? <p className="error">Extension starter pack export failed: {extensionStarterPackArtifactError}</p> : null}
+              {extensionBriefError ? (
+                <p className="error">Extension SDK brief unavailable: {extensionBriefError}</p>
+              ) : null}
+              {extensionBriefArtifactError ? (
+                <p className="error">Extension SDK brief export failed: {extensionBriefArtifactError}</p>
+              ) : null}
+              {extensionStarterPackError ? (
+                <p className="error">Extension starter pack unavailable: {extensionStarterPackError}</p>
+              ) : null}
+              {extensionStarterPackArtifactError ? (
+                <p className="error">Extension starter pack export failed: {extensionStarterPackArtifactError}</p>
+              ) : null}
               {extensionBrief ? (
                 <>
-                  <FieldHelp>
-                    Extension SDK brief: {extensionBrief.summary}
-                  </FieldHelp>
+                  <FieldHelp>Extension SDK brief: {extensionBrief.summary}</FieldHelp>
                   <pre>{extensionBrief.markdown}</pre>
                 </>
               ) : null}
               {extensionStarterPack ? (
                 <>
-                  <FieldHelp>
-                    Extension starter pack: {extensionStarterPack.summary}
-                  </FieldHelp>
-                  <FieldHelp>
-                    Starter root: {extensionStarterPack.starterRoot}
-                  </FieldHelp>
-                  <FieldHelp>
-                    Starter files: {extensionStarterPack.files.join(", ")}
-                  </FieldHelp>
+                  <FieldHelp>Extension starter pack: {extensionStarterPack.summary}</FieldHelp>
+                  <FieldHelp>Starter root: {extensionStarterPack.starterRoot}</FieldHelp>
+                  <FieldHelp>Starter files: {extensionStarterPack.files.join(", ")}</FieldHelp>
                   <pre>{extensionStarterPack.markdown}</pre>
                 </>
               ) : null}
               {followOnParity.plugins.latestArtifact ? (
                 <>
+                  <FieldHelp>Saved extension SDK brief: {followOnParity.plugins.latestArtifact.relativePath}</FieldHelp>
                   <FieldHelp>
-                    Saved extension SDK brief: {followOnParity.plugins.latestArtifact.relativePath}
-                  </FieldHelp>
-                  <FieldHelp>
-                    Artifact bytes {followOnParity.plugins.latestArtifact.bytes} · generated {followOnParity.plugins.latestArtifact.generatedAt}
+                    Artifact bytes {followOnParity.plugins.latestArtifact.bytes} · generated{" "}
+                    {followOnParity.plugins.latestArtifact.generatedAt}
                   </FieldHelp>
                 </>
               ) : null}
               {extensionStarterPackArtifact ? (
                 <>
+                  <FieldHelp>Saved extension starter pack: {extensionStarterPackArtifact.starterRoot}</FieldHelp>
                   <FieldHelp>
-                    Saved extension starter pack: {extensionStarterPackArtifact.starterRoot}
-                  </FieldHelp>
-                  <FieldHelp>
-                    Starter pack files {extensionStarterPackArtifact.fileCount} · total bytes {extensionStarterPackArtifact.totalBytes}
+                    Starter pack files {extensionStarterPackArtifact.fileCount} · total bytes{" "}
+                    {extensionStarterPackArtifact.totalBytes}
                   </FieldHelp>
                 </>
               ) : null}
@@ -914,7 +1003,9 @@ export function SystemPage() {
                 Voice proof status: {formatProofArtifactStatus(followOnParity.voice.artifactStatus)}
               </FieldHelp>
               {followOnParity.voice.blockingIssues.map((issue) => (
-                <p key={`voice-issue-${issue}`} className="error">{issue}</p>
+                <p key={`voice-issue-${issue}`} className="error">
+                  {issue}
+                </p>
               ))}
               {followOnParity.voice.recoveryActions.map((action) => (
                 <FieldHelp key={`voice-recovery-${action}`}>Voice recovery action: {action}</FieldHelp>
@@ -934,18 +1025,22 @@ export function SystemPage() {
                   disabled={voiceProofArtifactBusy}
                 />
               </div>
-              {voiceProofLaneError ? <p className="error">Voice proof lane unavailable: {voiceProofLaneError}</p> : null}
-              {voiceProofArtifactError ? <p className="error">Voice proof artifact export failed: {voiceProofArtifactError}</p> : null}
+              {voiceProofLaneError ? (
+                <p className="error">Voice proof lane unavailable: {voiceProofLaneError}</p>
+              ) : null}
+              {voiceProofArtifactError ? (
+                <p className="error">Voice proof artifact export failed: {voiceProofArtifactError}</p>
+              ) : null}
               {voiceProofLane ? (
                 <>
-                  <FieldHelp>
-                    Voice proof lane: {voiceProofLane.summary}
-                  </FieldHelp>
+                  <FieldHelp>Voice proof lane: {voiceProofLane.summary}</FieldHelp>
                   <FieldHelp>
                     Checklist {voiceProofLane.checklistPath} · Template {voiceProofLane.templatePath}
                   </FieldHelp>
                   {voiceProofLane.blockingIssues.map((issue) => (
-                    <p key={`voice-proof-issue-${issue}`} className="error">{issue}</p>
+                    <p key={`voice-proof-issue-${issue}`} className="error">
+                      {issue}
+                    </p>
                   ))}
                   {voiceProofLane.recoveryActions.map((action) => (
                     <FieldHelp key={`voice-proof-recovery-${action}`}>Voice recovery action: {action}</FieldHelp>
@@ -960,22 +1055,25 @@ export function SystemPage() {
               ) : null}
               {followOnParity.voice.latestArtifact ? (
                 <>
+                  <FieldHelp>Saved voice proof artifact: {followOnParity.voice.latestArtifact.relativePath}</FieldHelp>
                   <FieldHelp>
-                    Saved voice proof artifact: {followOnParity.voice.latestArtifact.relativePath}
-                  </FieldHelp>
-                  <FieldHelp>
-                    Artifact bytes {followOnParity.voice.latestArtifact.bytes} · generated {followOnParity.voice.latestArtifact.generatedAt}
+                    Artifact bytes {followOnParity.voice.latestArtifact.bytes} · generated{" "}
+                    {followOnParity.voice.latestArtifact.generatedAt}
                   </FieldHelp>
                 </>
               ) : null}
             </div>
             <div className="workflow-status-stack">
-              {(openclawParity?.epics ?? followOnParity.epics).map((epic) => (
+              {(openclawParity?.epics ?? followOnParity.epics).map((epic) =>
                 "status" in epic ? (
                   <div key={epic.epicId}>
                     <p className="office-subtitle">
-                      <strong>{epic.epicId} · {epic.label}</strong>{" "}
-                      <StatusChip tone={mapProgramParityTone(epic.status)}>{epic.status.replaceAll("_", " ")}</StatusChip>
+                      <strong>
+                        {epic.epicId} · {epic.label}
+                      </strong>{" "}
+                      <StatusChip tone={mapProgramParityTone(epic.status)}>
+                        {epic.status.replaceAll("_", " ")}
+                      </StatusChip>
                     </p>
                     <p className="office-subtitle">{epic.summary}</p>
                     <p className="office-subtitle">Next slice: {epic.nextSlice}</p>
@@ -988,14 +1086,16 @@ export function SystemPage() {
                 ) : (
                   <div key={epic.epicId}>
                     <p className="office-subtitle">
-                      <strong>{epic.epicId} · {epic.label}</strong>{" "}
+                      <strong>
+                        {epic.epicId} · {epic.label}
+                      </strong>{" "}
                       <StatusChip tone={mapParityTone(epic.state)}>{epic.state.replaceAll("_", " ")}</StatusChip>
                     </p>
                     <p className="office-subtitle">{epic.summary}</p>
                     <p className="office-subtitle">Next slice: {epic.nextSlice}</p>
                   </div>
-                )
-              ))}
+                ),
+              )}
             </div>
           </>
         ) : (
@@ -1004,30 +1104,43 @@ export function SystemPage() {
       </Panel>
       <Panel
         title="Service Manager"
-        subtitle={(
+        subtitle={
           <>
             Manage the local GoatCitadel daemon lifecycle and inspect recent service events.
-            <HelpHint label="Service manager help" text="Use Start, Stop, Restart, and Refresh to control the local daemon process. Refresh only reloads status and recent logs." />
+            <HelpHint
+              label="Service manager help"
+              text="Use Start, Stop, Restart, and Refresh to control the local daemon process. Refresh only reloads status and recent logs."
+            />
           </>
-        )}
-        actions={(
+        }
+        actions={
           <div className="workflow-summary-strip">
             <StatusChip tone={daemonStateTone}>{daemonStatus?.state ?? "unknown"}</StatusChip>
             <StatusChip tone="muted">PID {daemonStatus?.pid ?? 0}</StatusChip>
             <StatusChip tone="muted">{Math.round(daemonStatus?.uptimeSeconds ?? 0)}s uptime</StatusChip>
           </div>
-        )}
+        }
       >
         <div className="row-actions">
-          <ActionButton label="Start" onClick={onDaemonStart} disabled={daemonBusy || !daemonControlSupported || daemonStatus?.running} />
-          <ActionButton label="Stop" onClick={onDaemonStop} disabled={daemonBusy || !daemonControlSupported || !daemonStatus?.running} />
+          <ActionButton
+            label="Start"
+            onClick={onDaemonStart}
+            disabled={daemonBusy || !daemonControlSupported || daemonStatus?.running}
+          />
+          <ActionButton
+            label="Stop"
+            onClick={onDaemonStop}
+            disabled={daemonBusy || !daemonControlSupported || !daemonStatus?.running}
+          />
           <ActionButton label="Restart" onClick={onDaemonRestart} disabled={daemonBusy || !daemonControlSupported} />
           <ActionButton label="Refresh" onClick={() => void refreshDaemon()} disabled={daemonBusy} />
         </div>
         {daemonStatus?.controlMessage ? <p className="office-subtitle">{daemonStatus.controlMessage}</p> : null}
         {daemonLogs.length > 0 ? (
           <pre>
-            {daemonLogs.map((entry) => `[${entry.timestamp}] ${entry.level.toUpperCase()}: ${entry.message}`).join("\n")}
+            {daemonLogs
+              .map((entry) => `[${entry.timestamp}] ${entry.level.toUpperCase()}: ${entry.message}`)
+              .join("\n")}
           </pre>
         ) : (
           <p className="office-subtitle">No daemon log events yet.</p>
@@ -1036,76 +1149,3 @@ export function SystemPage() {
     </section>
   );
 }
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) {
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  }
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${(bytes / 1024).toFixed(2)} KB`;
-  }
-  return `${bytes} B`;
-}
-
-function formatArtifactStatus(
-  status: FollowOnParityReport["companion"]["artifactStatus"],
-): string {
-  if (!status.hasArtifact) {
-    return "missing";
-  }
-  return `${status.freshness}${typeof status.ageDays === "number" ? ` · ${status.ageDays} day(s) old` : ""}`;
-}
-
-function formatProofArtifactStatus(
-  status: FollowOnParityReport["browser"]["artifactStatus"],
-): string {
-  if (!status.hasArtifact) {
-    return "missing · no artifact recorded yet";
-  }
-  const ageNote = typeof status.ageDays === "number" ? ` · ${status.ageDays} day(s) old` : "";
-  const profileNote = status.latestArtifactDeploymentProfile
-    ? ` · latest profile ${status.latestArtifactDeploymentProfile} · ${status.matchedCurrentProfile ? "matches current profile" : "does not match current profile"}`
-    : "";
-  return `${status.freshness}${profileNote}${ageNote}`;
-}
-
-function mapParityTone(state: FollowOnParityReport["epics"][number]["state"]): "success" | "warning" | "critical" {
-  if (state === "have_foundation") {
-    return "success";
-  }
-  if (state === "partial") {
-    return "warning";
-  }
-  return "critical";
-}
-
-function mapProgramParityTone(status: OpenclawParityProgramReport["epics"][number]["status"]): "success" | "warning" | "critical" {
-  if (status === "complete") {
-    return "success";
-  }
-  if (status === "in_progress") {
-    return "warning";
-  }
-  return "critical";
-}
-
-function formatProgramBlockerKind(
-  kind: OpenclawParityProgramReport["epics"][number]["blockers"][number]["kind"],
-): string {
-  switch (kind) {
-    case "repo_runtime":
-      return "repo runtime";
-    case "manual_operator":
-      return "manual/operator";
-    case "external_repo":
-      return "external repo";
-    case "publication":
-      return "publication";
-    default:
-      return kind;
-  }
-}
-

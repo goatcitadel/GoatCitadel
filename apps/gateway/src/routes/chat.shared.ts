@@ -1,0 +1,134 @@
+import { randomUUID } from "node:crypto";
+import type { FastifyReply } from "fastify";
+import { z } from "zod";
+import { isGoatError } from "@goatcitadel/contracts";
+import { sendRouteError } from "./_error-handler.js";
+
+export const sessionParamsSchema = z.object({
+  sessionId: z.string().min(1),
+});
+
+export const turnParamsSchema = z.object({
+  sessionId: z.string().min(1),
+  turnId: z.string().min(1),
+});
+
+export const streamResumeQuerySchema = z.object({
+  sinceEventId: z.string().min(1).optional(),
+});
+
+export function isChatTurnWriteConflictError(error: unknown): boolean {
+  return error instanceof Error && error.name === "ChatTurnWriteConflictError";
+}
+
+export function getPublicChatSseErrorMessage(error: unknown): string {
+  if (isChatTurnWriteConflictError(error) && error instanceof Error) {
+    return error.message;
+  }
+  if (isGoatError(error)) {
+    return error.message;
+  }
+  return "Chat stream failed before completion. Check gateway diagnostics and retry.";
+}
+
+export function sendChatWriteError(reply: FastifyReply, error: unknown) {
+  if (isChatTurnWriteConflictError(error) && error instanceof Error) {
+    return reply.code(409).send({ error: error.message });
+  }
+  if (isGoatError(error)) {
+    return sendRouteError(reply, error, reply.log);
+  }
+  reply.log.error({ err: error }, "chat write failed");
+  return reply.code(400).send({ error: "Chat write failed. Check gateway diagnostics and retry." });
+}
+
+export async function streamSseReply(
+  reply: FastifyReply,
+  request: {
+    raw: { on: (event: string, listener: () => void) => void; off?: (event: string, listener: () => void) => void };
+  },
+  sessionId: string,
+  source: (signal: AbortSignal) => AsyncGenerator<unknown>,
+): Promise<void> {
+  const raw = reply.raw;
+  const controller = new AbortController();
+  let closed = false;
+  let finished = false;
+  const cleanup = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    if (!controller.signal.aborted) {
+      controller.abort(new Error("chat_sse_client_disconnected"));
+    }
+  };
+  const detach = () => {
+    raw.off?.("close", cleanup);
+    request.raw.off?.("aborted", cleanup);
+  };
+
+  reply.hijack();
+  const corsOrigin = reply.getHeader("Access-Control-Allow-Origin");
+  const corsCredentials = reply.getHeader("Access-Control-Allow-Credentials");
+  const corsVary = reply.getHeader("Vary");
+  raw.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+    ...(typeof corsOrigin === "string" ? { "Access-Control-Allow-Origin": corsOrigin } : {}),
+    ...(typeof corsCredentials === "string" ? { "Access-Control-Allow-Credentials": corsCredentials } : {}),
+    ...(typeof corsVary === "string" ? { Vary: corsVary } : {}),
+  });
+  raw.flushHeaders?.();
+  raw.write(": connected\n\n");
+  raw.on("close", cleanup);
+  request.raw.on("aborted", cleanup);
+
+  const send = (payload: unknown) => {
+    if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
+      return;
+    }
+    const eventId =
+      typeof payload === "object" &&
+      payload &&
+      "eventId" in payload &&
+      typeof (payload as { eventId?: unknown }).eventId === "string"
+        ? (payload as { eventId: string }).eventId
+        : undefined;
+    if (eventId) {
+      raw.write(`id: ${eventId}\n`);
+    }
+    raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  try {
+    for await (const chunk of source(controller.signal)) {
+      if (controller.signal.aborted) {
+        break;
+      }
+      send(chunk);
+    }
+    finished = !controller.signal.aborted;
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      reply.log.error({ err: error, sessionId }, "chat SSE stream failed");
+      send({
+        type: "error",
+        sessionId,
+        eventId: randomUUID(),
+        sequence: 0,
+        error: getPublicChatSseErrorMessage(error),
+      });
+    }
+  } finally {
+    if (!finished) {
+      cleanup();
+    }
+    detach();
+    if (!raw.destroyed && !raw.writableEnded) {
+      raw.end();
+    }
+  }
+}

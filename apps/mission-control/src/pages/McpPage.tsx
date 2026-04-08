@@ -1,3 +1,4 @@
+/* eslint-disable max-lines, react-hooks/exhaustive-deps */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import {
@@ -29,9 +30,25 @@ import { StatusChip } from "../components/StatusChip";
 import { GCSelect, GCSwitch } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
+import {
+  describeConnectorApprovalDelivery,
+  describeMcpBlockReason,
+  formatMcpError,
+  parseApprovalInboxItems,
+  readConnectorApprovalReady,
+  summarizeApprovalPreview,
+} from "./mcp/mcp-page-helpers";
 
 type Transport = "stdio" | "http" | "sse";
-type McpCategory = "development" | "browser" | "automation" | "research" | "data" | "creative" | "orchestration" | "other";
+type McpCategory =
+  | "development"
+  | "browser"
+  | "automation"
+  | "research"
+  | "data"
+  | "creative"
+  | "orchestration"
+  | "other";
 type McpTrustTier = "trusted" | "restricted" | "quarantined";
 type McpCostTier = "free" | "mixed" | "paid" | "unknown";
 type McpTemplateRecord = Awaited<ReturnType<typeof fetchMcpTemplates>>["items"][number];
@@ -43,21 +60,27 @@ const APPROVAL_INBOX_LIST_TOOL_NAME = "goatcitadel.approval.remote_action_inbox.
 const APPROVAL_INBOX_RESOLVE_TOOL_NAME = "goatcitadel.approval.remote_action_inbox.resolve";
 const FEATURED_MCP_TEMPLATE_IDS = ["github", "approval-inbox", "stripe"] as const;
 
-const FEATURED_MCP_NOTES: Record<(typeof FEATURED_MCP_TEMPLATE_IDS)[number], {
-  why: string;
-  setup: string;
-}> = {
+const FEATURED_MCP_NOTES: Record<
+  (typeof FEATURED_MCP_TEMPLATE_IDS)[number],
+  {
+    why: string;
+    setup: string;
+  }
+> = {
   github: {
     why: "Best first MCP for code-heavy work: repos, issues, pull requests, and code navigation.",
-    setup: "Review auth and trust policy before first live use. This is the official GitHub endpoint shape, not the older deprecated local package.",
+    setup:
+      "Review auth and trust policy before first live use. This is the official GitHub endpoint shape, not the older deprecated local package.",
   },
   "approval-inbox": {
     why: "Turns durable remote approvals into a real non-browser MCP inbox with pending actions, retries, and explicit operator resolution.",
-    setup: "Use this when you want approval delivery outside Mission Control realtime. Connect it once, then resolve approvals from the inbox panel below.",
+    setup:
+      "Use this when you want approval delivery outside Mission Control realtime. Connect it once, then resolve approvals from the inbox panel below.",
   },
   stripe: {
     why: "High-value if your site runs on Stripe and you want billing, customer, and subscription workflows inside GoatCitadel.",
-    setup: "Treat this as restricted and keep first-use approval on. Billing data and account actions deserve a tighter policy posture.",
+    setup:
+      "Treat this as restricted and keep first-use approval on. Billing data and account actions deserve a tighter policy posture.",
   },
 };
 
@@ -68,41 +91,45 @@ type FeaturedMcpTemplateCard = {
 };
 
 export function McpPage() {
-  const [servers, setServers] = useState<Array<{
-    serverId: string;
-    label: string;
-    transport: Transport;
-    status: "disconnected" | "connecting" | "connected" | "error";
-    enabled: boolean;
-    category: McpCategory;
-    trustTier: McpTrustTier;
-    costTier: McpCostTier;
-    policy: {
-      requireFirstToolApproval: boolean;
-      redactionMode: "off" | "basic" | "strict";
-      allowedToolPatterns: string[];
-      blockedToolPatterns: string[];
-      notes?: string;
-    };
-    command?: string;
-    url?: string;
-    authType: "none" | "token" | "oauth2";
-    verifiedAt?: string;
-    lastError?: string;
-  }>>([]);
+  const [servers, setServers] = useState<
+    Array<{
+      serverId: string;
+      label: string;
+      transport: Transport;
+      status: "disconnected" | "connecting" | "connected" | "error";
+      enabled: boolean;
+      category: McpCategory;
+      trustTier: McpTrustTier;
+      costTier: McpCostTier;
+      policy: {
+        requireFirstToolApproval: boolean;
+        redactionMode: "off" | "basic" | "strict";
+        allowedToolPatterns: string[];
+        blockedToolPatterns: string[];
+        notes?: string;
+      };
+      command?: string;
+      url?: string;
+      authType: "none" | "token" | "oauth2";
+      verifiedAt?: string;
+      lastError?: string;
+    }>
+  >([]);
   const [templates, setTemplates] = useState<McpTemplateRecord[]>([]);
   const [templateDiscovery, setTemplateDiscovery] = useState<McpTemplateDiscoveryRecord[]>([]);
   const [templateDiscoveryEnabled, setTemplateDiscoveryEnabled] = useState(true);
   const [templateDiscoveryError, setTemplateDiscoveryError] = useState<string | null>(null);
   const [connectorRecords, setConnectorRecords] = useState<ConnectorRecord[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
-  const [tools, setTools] = useState<Array<{
-    serverId: string;
-    toolName: string;
-    description?: string;
-    enabled: boolean;
-    updatedAt: string;
-  }>>([]);
+  const [tools, setTools] = useState<
+    Array<{
+      serverId: string;
+      toolName: string;
+      description?: string;
+      enabled: boolean;
+      updatedAt: string;
+    }>
+  >([]);
   const [toolName, setToolName] = useState("");
   const [toolArgs, setToolArgs] = useState("{}");
   const [transport, setTransport] = useState<Transport>("stdio");
@@ -133,18 +160,23 @@ export function McpPage() {
     serverId: string;
     label: string;
   } | null>(null);
-  const [diagnosticByServerId, setDiagnosticByServerId] = useState<Record<string, {
-    connectorType: "mcp_server" | "integration_connection";
-    connectorId: string;
-    status: "ok" | "warn" | "error";
-    checks: Array<{
-      key: string;
-      status: "pass" | "warn" | "fail";
-      message: string;
-    }>;
-    recommendedNextAction?: string;
-    checkedAt: string;
-  }>>({});
+  const [diagnosticByServerId, setDiagnosticByServerId] = useState<
+    Record<
+      string,
+      {
+        connectorType: "mcp_server" | "integration_connection";
+        connectorId: string;
+        status: "ok" | "warn" | "error";
+        checks: Array<{
+          key: string;
+          status: "pass" | "warn" | "fail";
+          message: string;
+        }>;
+        recommendedNextAction?: string;
+        checkedAt: string;
+      }
+    >
+  >({});
   const templateDiscoveryEnabledRef = useRef(templateDiscoveryEnabled);
 
   useEffect(() => {
@@ -162,8 +194,8 @@ export function McpPage() {
       fetchConnectorRecords("mcp_server"),
       settingsPromise,
     ]);
-    const nextTemplateDiscoveryEnabled = settingsResponse?.features.connectorDiagnosticsV1Enabled
-      ?? templateDiscoveryEnabledRef.current;
+    const nextTemplateDiscoveryEnabled =
+      settingsResponse?.features.connectorDiagnosticsV1Enabled ?? templateDiscoveryEnabledRef.current;
     if (settingsResponse) {
       setTemplateDiscoveryEnabled(nextTemplateDiscoveryEnabled);
     }
@@ -293,8 +325,8 @@ export function McpPage() {
     });
   }, [templates]);
   const featuredTemplates = useMemo(
-    () => FEATURED_MCP_TEMPLATE_IDS
-      .map((templateId) => {
+    () =>
+      FEATURED_MCP_TEMPLATE_IDS.map((templateId) => {
         const template = templatesById.get(templateId);
         if (!template) {
           return null;
@@ -304,22 +336,20 @@ export function McpPage() {
           discovery: templateDiscoveryById.get(templateId),
           note: FEATURED_MCP_NOTES[templateId],
         };
-      })
-      .filter((item): item is FeaturedMcpTemplateCard => item !== null),
+      }).filter((item): item is FeaturedMcpTemplateCard => item !== null),
     [templateDiscoveryById, templatesById],
   );
   const selectedDiagnostic = selected ? diagnosticByServerId[selected.serverId] : undefined;
-  const connectedServerCount = useMemo(
-    () => servers.filter((item) => item.status === "connected").length,
-    [servers],
-  );
+  const connectedServerCount = useMemo(() => servers.filter((item) => item.status === "connected").length, [servers]);
   const mcpHeaderActions = useMemo(
     () => (
       <div className="workflow-summary-strip">
         <StatusChip tone="live">{connectedServerCount} connected</StatusChip>
         <StatusChip>{servers.length} servers</StatusChip>
         <StatusChip>{templates.length} templates</StatusChip>
-        {selected ? <StatusChip tone={selected.status === "connected" ? "success" : "muted"}>{selected.status}</StatusChip> : null}
+        {selected ? (
+          <StatusChip tone={selected.status === "connected" ? "success" : "muted"}>{selected.status}</StatusChip>
+        ) : null}
         {isRefreshing ? <StatusChip tone="warning">Refreshing</StatusChip> : null}
       </div>
     ),
@@ -338,10 +368,7 @@ export function McpPage() {
     setPolicyDirty(false);
   }, [selected?.serverId]);
 
-  const loadApprovalInbox = useCallback(async (
-    serverId: string,
-    state: ApprovalInboxFilterState,
-  ) => {
+  const loadApprovalInbox = useCallback(async (serverId: string, state: ApprovalInboxFilterState) => {
     setInboxBusy(true);
     try {
       const response = await invokeMcpTool({
@@ -371,36 +398,36 @@ export function McpPage() {
     void loadApprovalInbox(selected.serverId, inboxFilterState);
   }, [inboxFilterState, loadApprovalInbox, selected, selectedIsInternalApprovalInbox]);
 
-  const handleResolveInboxItem = useCallback(async (
-    item: ApprovalInboxItemRecord,
-    decision: "approve" | "reject",
-  ) => {
-    if (!selected) {
-      return;
-    }
-    setPendingInboxActionId(item.inboxItemId);
-    try {
-      const response = await invokeMcpTool({
-        serverId: selected.serverId,
-        toolName: APPROVAL_INBOX_RESOLVE_TOOL_NAME,
-        arguments: {
-          inboxItemId: item.inboxItemId,
-          decision,
-          resolvedBy: "mission-control:mcp",
-        },
-      });
-      if (!response.ok) {
-        throw new Error(response.error ?? `Unable to ${decision} approval inbox item.`);
+  const handleResolveInboxItem = useCallback(
+    async (item: ApprovalInboxItemRecord, decision: "approve" | "reject") => {
+      if (!selected) {
+        return;
       }
-      setResult(JSON.stringify(response, null, 2));
-      setInboxError(null);
-      await loadApprovalInbox(selected.serverId, inboxFilterState);
-    } catch (err) {
-      setInboxError(formatMcpError((err as Error).message));
-    } finally {
-      setPendingInboxActionId(null);
-    }
-  }, [inboxFilterState, loadApprovalInbox, selected]);
+      setPendingInboxActionId(item.inboxItemId);
+      try {
+        const response = await invokeMcpTool({
+          serverId: selected.serverId,
+          toolName: APPROVAL_INBOX_RESOLVE_TOOL_NAME,
+          arguments: {
+            inboxItemId: item.inboxItemId,
+            decision,
+            resolvedBy: "mission-control:mcp",
+          },
+        });
+        if (!response.ok) {
+          throw new Error(response.error ?? `Unable to ${decision} approval inbox item.`);
+        }
+        setResult(JSON.stringify(response, null, 2));
+        setInboxError(null);
+        await loadApprovalInbox(selected.serverId, inboxFilterState);
+      } catch (err) {
+        setInboxError(formatMcpError((err as Error).message));
+      } finally {
+        setPendingInboxActionId(null);
+      }
+    },
+    [inboxFilterState, loadApprovalInbox, selected],
+  );
 
   const handleCreateServer = useCallback(async () => {
     if (!label.trim()) {
@@ -428,34 +455,37 @@ export function McpPage() {
     }
   }, [authType, category, command, costTier, label, loadServers, transport, trustTier, url]);
 
-  const handleCreateFromTemplate = useCallback(async (templateId: string) => {
-    const template = templates.find((item) => item.templateId === templateId);
-    if (!template || template.installed) {
-      return;
-    }
-    setBusy(true);
-    try {
-      await createMcpServer({
-        label: template.label,
-        transport: template.transport,
-        command: template.command,
-        args: template.args,
-        url: template.url,
-        authType: template.authType,
-        enabled: template.enabledByDefault,
-        category: template.category,
-        trustTier: template.trustTier,
-        costTier: template.costTier,
-        policy: template.policy,
-      });
-      await loadServers();
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }, [loadServers, templates]);
+  const handleCreateFromTemplate = useCallback(
+    async (templateId: string) => {
+      const template = templates.find((item) => item.templateId === templateId);
+      if (!template || template.installed) {
+        return;
+      }
+      setBusy(true);
+      try {
+        await createMcpServer({
+          label: template.label,
+          transport: template.transport,
+          command: template.command,
+          args: template.args,
+          url: template.url,
+          authType: template.authType,
+          enabled: template.enabledByDefault,
+          category: template.category,
+          trustTier: template.trustTier,
+          costTier: template.costTier,
+          policy: template.policy,
+        });
+        await loadServers();
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [loadServers, templates],
+  );
 
   if (isInitialLoading) {
     return (
@@ -500,11 +530,14 @@ export function McpPage() {
         subtitle="Start with one disabled template, connect it, then validate trust and policy before first live use."
       >
         <p className="office-subtitle">
-          MCP servers are adapters that let GoatCitadel use outside tools safely. Start disabled, test one server, then expand.
+          MCP servers are adapters that let GoatCitadel use outside tools safely. Start disabled, test one server, then
+          expand.
         </p>
         <ol>
           <li>Choose a template in the library below and add it.</li>
-          <li>Connect the server and confirm status is <strong>connected</strong>.</li>
+          <li>
+            Connect the server and confirm status is <strong>connected</strong>.
+          </li>
           <li>Set trust/policy rules before first live invocation.</li>
           <li>Invoke one low-risk tool to validate behavior.</li>
         </ol>
@@ -526,7 +559,10 @@ export function McpPage() {
             <div key={template.templateId} className="prompt-lab-run-summary">
               <p>
                 <strong>{template.label}</strong>
-                <span className={`token-chip ${template.installed ? "token-chip-active" : ""}`} style={{ marginLeft: 8 }}>
+                <span
+                  className={`token-chip ${template.installed ? "token-chip-active" : ""}`}
+                  style={{ marginLeft: 8 }}
+                >
                   {template.installed ? "Installed" : "Not installed"}
                 </span>
                 {discovery ? (
@@ -556,7 +592,9 @@ export function McpPage() {
           <div className="prompt-lab-run-summary">
             <p>
               <strong>Obsidian</strong>
-              <span className="token-chip" style={{ marginLeft: 8 }}>Native connection</span>
+              <span className="token-chip" style={{ marginLeft: 8 }}>
+                Native connection
+              </span>
             </p>
             <p className="office-subtitle">
               GoatCitadel already has a built-in local Obsidian path in <strong>Connections</strong>. That keeps your
@@ -654,11 +692,15 @@ export function McpPage() {
           Before installing a template, check whether required auth, command, or URL settings are ready.
         </p>
         {!templateDiscoveryEnabled ? (
-          <p className="office-subtitle">Template discovery readiness is disabled right now. You can still install templates manually.</p>
+          <p className="office-subtitle">
+            Template discovery readiness is disabled right now. You can still install templates manually.
+          </p>
         ) : templateDiscoveryError ? (
           <p className="error">{templateDiscoveryError}</p>
         ) : templateDiscovery.length === 0 ? (
-          <p className="office-subtitle">Discovery metadata is unavailable right now. You can still install templates manually.</p>
+          <p className="office-subtitle">
+            Discovery metadata is unavailable right now. You can still install templates manually.
+          </p>
         ) : (
           <table>
             <thead>
@@ -693,8 +735,15 @@ export function McpPage() {
           subtitle="Use this for adapters that are not already covered by the template library."
         >
           <div className="controls-row">
-            <label htmlFor="mcpLabel">Label <HelpHint label="Server label help" text="Human-readable name used in server list and logs." /></label>
-            <input id="mcpLabel" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Docs MCP" />
+            <label htmlFor="mcpLabel">
+              Label <HelpHint label="Server label help" text="Human-readable name used in server list and logs." />
+            </label>
+            <input
+              id="mcpLabel"
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              placeholder="Docs MCP"
+            />
           </div>
           <div className="controls-row">
             <label htmlFor="mcpTransport">Transport</label>
@@ -763,22 +812,35 @@ export function McpPage() {
           </div>
           {transport === "stdio" ? (
             <div className="controls-row">
-              <label htmlFor="mcpCommand">Command <HelpHint label="stdio command help" text="Absolute path or command on PATH used to start the local MCP process." /></label>
-              <input id="mcpCommand" value={command} onChange={(event) => setCommand(event.target.value)} placeholder="npx @modelcontextprotocol/server-filesystem" />
+              <label htmlFor="mcpCommand">
+                Command{" "}
+                <HelpHint
+                  label="stdio command help"
+                  text="Absolute path or command on PATH used to start the local MCP process."
+                />
+              </label>
+              <input
+                id="mcpCommand"
+                value={command}
+                onChange={(event) => setCommand(event.target.value)}
+                placeholder="npx @modelcontextprotocol/server-filesystem"
+              />
             </div>
           ) : (
             <div className="controls-row">
               <label htmlFor="mcpUrl">URL</label>
-              <input id="mcpUrl" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://mcp.example.com/stream" />
+              <input
+                id="mcpUrl"
+                value={url}
+                onChange={(event) => setUrl(event.target.value)}
+                placeholder="https://mcp.example.com/stream"
+              />
             </div>
           )}
           <ActionButton label="Add Server" pending={busy} onClick={handleCreateServer} />
         </Panel>
 
-        <Panel
-          title="Servers"
-          subtitle="Select a server to connect it, run health checks, and tune first-use policy."
-        >
+        <Panel title="Servers" subtitle="Select a server to connect it, run health checks, and tune first-use policy.">
           <div className="virtual-list-shell">
             <Virtuoso
               data={servers}
@@ -877,8 +939,10 @@ export function McpPage() {
               {selectedConnector ? (
                 <div className="prompt-lab-run-summary">
                   <p>
-                    <strong>Approval delivery</strong> {" "}
-                    <span className={`token-chip ${readConnectorApprovalReady(selectedConnector) ? "token-chip-active" : ""}`}>
+                    <strong>Approval delivery</strong>{" "}
+                    <span
+                      className={`token-chip ${readConnectorApprovalReady(selectedConnector) ? "token-chip-active" : ""}`}
+                    >
                       {readConnectorApprovalReady(selectedConnector) ? "ready" : "not ready"}
                     </span>
                   </p>
@@ -900,9 +964,7 @@ export function McpPage() {
                     ))}
                   </ul>
                   {selectedDiagnostic.recommendedNextAction ? (
-                    <p className="office-subtitle">
-                      Next step: {selectedDiagnostic.recommendedNextAction}
-                    </p>
+                    <p className="office-subtitle">Next step: {selectedDiagnostic.recommendedNextAction}</p>
                   ) : null}
                 </details>
               ) : null}
@@ -980,8 +1042,14 @@ export function McpPage() {
                       await updateMcpServerPolicy(selected.serverId, {
                         requireFirstToolApproval: policyRequireFirst,
                         redactionMode: policyRedaction,
-                        allowedToolPatterns: policyAllowed.split(",").map((item) => item.trim()).filter(Boolean),
-                        blockedToolPatterns: policyBlocked.split(",").map((item) => item.trim()).filter(Boolean),
+                        allowedToolPatterns: policyAllowed
+                          .split(",")
+                          .map((item) => item.trim())
+                          .filter(Boolean),
+                        blockedToolPatterns: policyBlocked
+                          .split(",")
+                          .map((item) => item.trim())
+                          .filter(Boolean),
                         notes: policyNotes.trim() || undefined,
                       });
                       setPolicyDirty(false);
@@ -1018,13 +1086,17 @@ export function McpPage() {
         </div>
         {selected ? (
           <DataToolbar
-            primary={(
+            primary={
               <div className="controls-row">
                 <input value={toolName} onChange={(event) => setToolName(event.target.value)} placeholder="tool name" />
-                <input value={toolArgs} onChange={(event) => setToolArgs(event.target.value)} placeholder='{"query":"hello"}' />
+                <input
+                  value={toolArgs}
+                  onChange={(event) => setToolArgs(event.target.value)}
+                  placeholder='{"query":"hello"}'
+                />
               </div>
-            )}
-            secondary={(
+            }
+            secondary={
               <ActionButton
                 label="Invoke Tool"
                 pending={busy}
@@ -1034,7 +1106,7 @@ export function McpPage() {
                   }
                   setBusy(true);
                   try {
-                    const parsedArgs = toolArgs.trim() ? JSON.parse(toolArgs) as Record<string, unknown> : {};
+                    const parsedArgs = toolArgs.trim() ? (JSON.parse(toolArgs) as Record<string, unknown>) : {};
                     const response = await invokeMcpTool({
                       serverId: selected.serverId,
                       toolName: toolName.trim(),
@@ -1049,12 +1121,10 @@ export function McpPage() {
                   }
                 }}
               />
-            )}
+            }
           />
         ) : null}
-        {result ? (
-          <pre>{result}</pre>
-        ) : null}
+        {result ? <pre>{result}</pre> : null}
       </Panel>
       {selected && selectedIsInternalApprovalInbox ? (
         <Panel
@@ -1096,17 +1166,22 @@ export function McpPage() {
               <div key={item.inboxItemId} className="prompt-lab-run-summary">
                 <p>
                   <strong>{item.approvalKind}</strong>
-                  <span className="token-chip" style={{ marginLeft: 8 }}>{item.state}</span>
-                  <span className="token-chip" style={{ marginLeft: 8 }}>{item.riskLevel}</span>
-                  <span className="token-chip" style={{ marginLeft: 8 }}>deliveries {item.deliveryCount}</span>
+                  <span className="token-chip" style={{ marginLeft: 8 }}>
+                    {item.state}
+                  </span>
+                  <span className="token-chip" style={{ marginLeft: 8 }}>
+                    {item.riskLevel}
+                  </span>
+                  <span className="token-chip" style={{ marginLeft: 8 }}>
+                    deliveries {item.deliveryCount}
+                  </span>
                 </p>
                 <p className="office-subtitle">{summarizeApprovalPreview(item.preview)}</p>
                 <p className="office-subtitle">
-                  Approval {item.approvalId} | token {item.tokenId} | expires {new Date(item.expiresAt).toLocaleString()}
+                  Approval {item.approvalId} | token {item.tokenId} | expires{" "}
+                  {new Date(item.expiresAt).toLocaleString()}
                 </p>
-                {item.lastError ? (
-                  <p className="office-subtitle">Last error: {item.lastError}</p>
-                ) : null}
+                {item.lastError ? <p className="office-subtitle">Last error: {item.lastError}</p> : null}
                 {item.state === "pending" ? (
                   <div className="actions">
                     <ActionButton
@@ -1166,86 +1241,4 @@ export function McpPage() {
       />
     </section>
   );
-}
-
-function formatMcpError(message: string): string {
-  if (message.includes("Unknown MCP server")) {
-    return "That MCP server no longer exists. Select another server from the list or add one from the template library.";
-  }
-  if (message.startsWith("API error")) {
-    return `MCP request failed: ${message}`;
-  }
-  return message;
-}
-
-function describeMcpBlockReason(server: {
-  status: "disconnected" | "connecting" | "connected" | "error";
-  enabled: boolean;
-  trustTier: "trusted" | "restricted" | "quarantined";
-  policy: {
-    requireFirstToolApproval: boolean;
-    blockedToolPatterns: string[];
-    allowedToolPatterns: string[];
-  };
-}): string {
-  if (!server.enabled) {
-    return "Server is disabled. Enable it before any MCP tools can run.";
-  }
-  if (server.status !== "connected") {
-    return "Server is not connected yet. Connect first, then invoke tools.";
-  }
-  if (server.trustTier === "quarantined") {
-    return "Trust tier is quarantined, so all tool execution is blocked.";
-  }
-  if (server.policy.requireFirstToolApproval) {
-    return "First tool execution requires explicit approval.";
-  }
-  if (server.policy.blockedToolPatterns.length > 0) {
-    return "Some tool names are blocked by policy patterns.";
-  }
-  if (server.policy.allowedToolPatterns.length > 0) {
-    return "Only tool names matching allow patterns can run.";
-  }
-  return "No active policy blocks detected.";
-}
-
-function parseApprovalInboxItems(value: unknown): ApprovalInboxItemRecord[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter((item): item is ApprovalInboxItemRecord => (
-    Boolean(item)
-    && typeof item === "object"
-    && typeof (item as ApprovalInboxItemRecord).inboxItemId === "string"
-    && typeof (item as ApprovalInboxItemRecord).approvalId === "string"
-  ));
-}
-
-function readConnectorApprovalReady(connector: ConnectorRecord): boolean {
-  return connector.metadata?.approvalDeliveryReady === true;
-}
-
-function describeConnectorApprovalDelivery(connector: ConnectorRecord): string {
-  const reason = typeof connector.metadata?.approvalDeliveryReason === "string"
-    ? connector.metadata.approvalDeliveryReason
-    : "No approval delivery details reported.";
-  const mode = typeof connector.metadata?.approvalDeliveryMode === "string"
-    ? connector.metadata.approvalDeliveryMode
-    : undefined;
-  if (!mode) {
-    return reason;
-  }
-  return `${mode}: ${reason}`;
-}
-
-function summarizeApprovalPreview(preview: Record<string, unknown>): string {
-  const summary = preview.summary;
-  if (typeof summary === "string" && summary.trim().length > 0) {
-    return summary.trim();
-  }
-  const serialized = JSON.stringify(preview);
-  if (!serialized || serialized === "{}") {
-    return "No preview summary provided.";
-  }
-  return serialized.length <= 220 ? serialized : `${serialized.slice(0, 217)}...`;
 }
