@@ -102,22 +102,24 @@ describe("dashboard follow-on parity route", () => {
         },
       ]),
       listIntegrationPlugins: vi.fn(() => [
-        { pluginId: "reference-integration-plugin", enabled: true, source: "templates/integration-plugins/reference-integration-plugin" },
+        {
+          pluginId: "reference-integration-plugin",
+          enabled: true,
+          source: "templates/integration-plugins/reference-integration-plugin",
+        },
         { pluginId: "msteams", enabled: false },
       ]),
-      listAddonsCatalog: vi.fn(() => [
-        { addonId: "arena" },
-      ]),
-      listInstalledAddons: vi.fn(async () => [
-        { addonId: "arena", runtimeStatus: "running" },
-      ]),
+      listAddonsCatalog: vi.fn(() => [{ addonId: "arena" }]),
+      listInstalledAddons: vi.fn(async () => [{ addonId: "arena", runtimeStatus: "running" }]),
       getLatestFollowOnParityArtifacts: vi.fn(() => ({
         browser: {
           laneId: "browser",
           generatedAt: "2026-03-28T23:55:00.000Z",
           summary: "Prior browser proof bundle",
-          relativePath: "artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
           bytes: 321,
         },
       })),
@@ -148,9 +150,7 @@ describe("dashboard follow-on parity route", () => {
           matchedCurrentProfile: false,
         },
         blockingIssues: [],
-        recommendedActions: expect.arrayContaining([
-          expect.stringContaining("packaging proof-lane draft"),
-        ]),
+        recommendedActions: expect.arrayContaining([expect.stringContaining("packaging proof-lane draft")]),
       },
       browser: {
         totalToolCount: 5,
@@ -181,7 +181,8 @@ describe("dashboard follow-on parity route", () => {
         latestArtifact: {
           laneId: "browser",
           generatedAt: "2026-03-28T23:55:00.000Z",
-          relativePath: "artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
           bytes: 321,
         },
       },
@@ -226,7 +227,7 @@ describe("dashboard follow-on parity route", () => {
         blockingIssues: [],
         recommendedActions: expect.arrayContaining([
           expect.stringContaining("PLUGIN_SDK_CONTRACT.md"),
-          expect.stringContaining("@goatcitadel/extensions-sdk@0.6.0-beta.2"),
+          expect.stringContaining("@goatcitadel/extensions-sdk@0.9.0-beta.1"),
           expect.stringContaining("reference-integration-plugin"),
           expect.stringContaining("smoke test"),
         ]),
@@ -243,9 +244,7 @@ describe("dashboard follow-on parity route", () => {
           freshness: "missing",
           matchedCurrentProfile: false,
         },
-        blockingIssues: expect.arrayContaining([
-          expect.stringContaining("Android/companion runtime lane"),
-        ]),
+        blockingIssues: expect.arrayContaining([expect.stringContaining("Android/companion runtime lane")]),
         recommendedActions: expect.arrayContaining([
           expect.stringContaining("docs/A2UI_CONTRACT.md"),
           expect.stringContaining("Generate or export"),
@@ -287,9 +286,7 @@ describe("dashboard follow-on parity route", () => {
           }),
         ]),
         paritySummary: expect.stringContaining("companion-capable"),
-        blockingIssues: expect.arrayContaining([
-          expect.stringContaining("Gateway session/signing proof is complete"),
-        ]),
+        blockingIssues: expect.arrayContaining([expect.stringContaining("Gateway session/signing proof is complete")]),
         recommendedActions: expect.arrayContaining([
           expect.stringContaining("COMPANION_CONTRACT.md"),
           expect.stringContaining("GoatCitadel-mobile"),
@@ -312,18 +309,30 @@ describe("dashboard follow-on parity route", () => {
 
     expect(openclawResponse.statusCode).toBe(200);
     expect(openclawResponse.json()).toMatchObject({
-      completedEpicIds: ["GC-P0-01", "GC-P0-02", "GC-P0-03", "GC-P0-05", "GC-P0-06", "GC-P0-07", "GC-P1-04", "GC-P1-08", "GC-P1-10", "GC-P2-11", "GC-P2-12"],
-      openEpicIds: ["GC-P1-09"],
-      completionOrder: [
-        "GC-P1-09",
+      completedEpicIds: [
+        "GC-P0-01",
+        "GC-P0-02",
+        "GC-P0-03",
+        "GC-P0-05",
+        "GC-P0-06",
+        "GC-P0-07",
+        "GC-P1-04",
+        "GC-P1-08",
+        "GC-P1-10",
+        "GC-P2-11",
+        "GC-P2-12",
       ],
+      openEpicIds: ["GC-P1-09"],
+      completionOrder: ["GC-P1-09"],
       nextEpicId: "GC-P1-09",
       nextSlice: expect.stringContaining("repeatable install"),
       unsafeClaims: expect.arrayContaining([
         expect.stringContaining("Discord, Slack, and Telegram"),
         expect.stringContaining("Google Chat and Teams are outbound webhook lanes only"),
         expect.stringContaining("WhatsApp, Signal, iMessage/BlueBubbles, Mattermost, LINE, Zalo OA, and Zalo Personal"),
-        expect.stringContaining("Broader voice parity beyond the current local-first runtime lane still requires deliberate widening"),
+        expect.stringContaining(
+          "Broader voice parity beyond the current local-first runtime lane still requires deliberate widening",
+        ),
       ]),
       epics: expect.arrayContaining([
         expect.objectContaining({
@@ -434,22 +443,24 @@ describe("dashboard follow-on parity route", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.objectContaining({
-      checklistPath: "docs/testing/BROWSER_CONTROL_VALIDATION_CHECKLIST.md",
-      templatePath: "templates/verification/browser-control-proof-bundle.md",
-      summary: expect.stringContaining("Browser proof lane is ready"),
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          stepId: "preflight",
-          status: "ready",
-        }),
-        expect.objectContaining({
-          stepId: "bundle",
-          status: "ready",
-        }),
-      ]),
-      markdown: expect.stringContaining("Browser Control Proof Bundle Draft"),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        checklistPath: "docs/testing/BROWSER_CONTROL_VALIDATION_CHECKLIST.md",
+        templatePath: "templates/verification/browser-control-proof-bundle.md",
+        summary: expect.stringContaining("Browser proof lane is ready"),
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            stepId: "preflight",
+            status: "ready",
+          }),
+          expect.objectContaining({
+            stepId: "bundle",
+            status: "ready",
+          }),
+        ]),
+        markdown: expect.stringContaining("Browser Control Proof Bundle Draft"),
+      }),
+    );
   });
 
   it("blocks the browser proof lane when the browser catalog is not operator-ready", async () => {
@@ -520,19 +531,21 @@ describe("dashboard follow-on parity route", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.objectContaining({
-      summary: expect.stringContaining("blocked"),
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          stepId: "preflight",
-          status: "blocked",
-        }),
-        expect.objectContaining({
-          stepId: "bundle",
-          status: "blocked",
-        }),
-      ]),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        summary: expect.stringContaining("blocked"),
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            stepId: "preflight",
+            status: "blocked",
+          }),
+          expect.objectContaining({
+            stepId: "bundle",
+            status: "blocked",
+          }),
+        ]),
+      }),
+    );
   });
 
   it("blocks the browser proof lane when browser.interact is missing", async () => {
@@ -602,26 +615,26 @@ describe("dashboard follow-on parity route", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.objectContaining({
-      summary: expect.stringContaining("browser.interact"),
-      blockingIssues: expect.arrayContaining([
-        expect.stringContaining("No browser interaction tool"),
-      ]),
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          stepId: "preflight",
-          status: "blocked",
-        }),
-        expect.objectContaining({
-          stepId: "control-path",
-          status: "blocked",
-        }),
-        expect.objectContaining({
-          stepId: "bundle",
-          status: "blocked",
-        }),
-      ]),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        summary: expect.stringContaining("browser.interact"),
+        blockingIssues: expect.arrayContaining([expect.stringContaining("No browser interaction tool")]),
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            stepId: "preflight",
+            status: "blocked",
+          }),
+          expect.objectContaining({
+            stepId: "control-path",
+            status: "blocked",
+          }),
+          expect.objectContaining({
+            stepId: "bundle",
+            status: "blocked",
+          }),
+        ]),
+      }),
+    );
   });
 
   it("does not claim extension operator breadth when no add-ons or plugins are registered", async () => {
@@ -678,28 +691,30 @@ describe("dashboard follow-on parity route", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.objectContaining({
-      addons: {
-        catalogCount: 0,
-        installedCount: 0,
-        runningCount: 0,
-      },
-      plugins: expect.objectContaining({
-        totalCount: 0,
-        enabledCount: 0,
-        sdkSummary: expect.stringContaining("no live operator breadth yet"),
-        referenceLifecycle: expect.objectContaining({
-          referencePluginId: "reference-integration-plugin",
-          present: false,
-          enabled: false,
-          matchesReferenceSource: false,
-          capabilities: [],
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        addons: {
+          catalogCount: 0,
+          installedCount: 0,
+          runningCount: 0,
+        },
+        plugins: expect.objectContaining({
+          totalCount: 0,
+          enabledCount: 0,
+          sdkSummary: expect.stringContaining("no live operator breadth yet"),
+          referenceLifecycle: expect.objectContaining({
+            referencePluginId: "reference-integration-plugin",
+            present: false,
+            enabled: false,
+            matchesReferenceSource: false,
+            capabilities: [],
+          }),
+          blockingIssues: expect.arrayContaining([
+            expect.stringContaining("No add-on catalog entries or integration plugins are currently registered."),
+          ]),
         }),
-        blockingIssues: expect.arrayContaining([
-          expect.stringContaining("No add-on catalog entries or integration plugins are currently registered."),
-        ]),
       }),
-    }));
+    );
   });
 
   it("returns a packaging proof-lane draft derived from live parity state", async () => {
@@ -756,26 +771,28 @@ describe("dashboard follow-on parity route", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.objectContaining({
-      checklistPath: "docs/PACKAGING_DEPLOYMENT_PARITY_CHECKLIST.md",
-      templatePath: "templates/verification/packaging-deployment-proof-bundle.md",
-      summary: expect.stringContaining("partially blocked"),
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          stepId: "preflight",
-          status: "ready",
-        }),
-        expect.objectContaining({
-          stepId: "remote-hardened",
-          status: "blocked",
-        }),
-        expect.objectContaining({
-          stepId: "bundle",
-          status: "blocked",
-        }),
-      ]),
-      markdown: expect.stringContaining("Packaging And Deployment Proof Bundle Draft"),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        checklistPath: "docs/PACKAGING_DEPLOYMENT_PARITY_CHECKLIST.md",
+        templatePath: "templates/verification/packaging-deployment-proof-bundle.md",
+        summary: expect.stringContaining("partially blocked"),
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            stepId: "preflight",
+            status: "ready",
+          }),
+          expect.objectContaining({
+            stepId: "remote-hardened",
+            status: "blocked",
+          }),
+          expect.objectContaining({
+            stepId: "bundle",
+            status: "blocked",
+          }),
+        ]),
+        markdown: expect.stringContaining("Packaging And Deployment Proof Bundle Draft"),
+      }),
+    );
   });
 
   it("returns a voice proof-lane draft derived from live parity state", async () => {
@@ -840,23 +857,25 @@ describe("dashboard follow-on parity route", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.objectContaining({
-      checklistPath: "docs/testing/VOICE_VALIDATION_CHECKLIST.md",
-      templatePath: "templates/verification/voice-proof-bundle.md",
-      summary: expect.stringContaining("Voice proof lane is ready"),
-      recoveryActions: [],
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          stepId: "preflight",
-          status: "ready",
-        }),
-        expect.objectContaining({
-          stepId: "wake-cycle",
-          status: "ready",
-        }),
-      ]),
-      markdown: expect.stringContaining("Voice Wake And Talk Proof Bundle Draft"),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        checklistPath: "docs/testing/VOICE_VALIDATION_CHECKLIST.md",
+        templatePath: "templates/verification/voice-proof-bundle.md",
+        summary: expect.stringContaining("Voice proof lane is ready"),
+        recoveryActions: [],
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            stepId: "preflight",
+            status: "ready",
+          }),
+          expect.objectContaining({
+            stepId: "wake-cycle",
+            status: "ready",
+          }),
+        ]),
+        markdown: expect.stringContaining("Voice Wake And Talk Proof Bundle Draft"),
+      }),
+    );
   });
 
   it("surfaces live voice recovery actions in the parity report when runtime cleanup is needed", async () => {
@@ -916,13 +935,15 @@ describe("dashboard follow-on parity route", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().voice.recoveryActions).toEqual(expect.arrayContaining([
-      expect.stringContaining("managed voice runtime"),
-      expect.stringContaining("local voice model"),
-      expect.stringContaining("stale talk session"),
-      expect.stringContaining("wake listener"),
-      expect.stringContaining("Capture and clear the last runtime error"),
-    ]));
+    expect(response.json().voice.recoveryActions).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("managed voice runtime"),
+        expect.stringContaining("local voice model"),
+        expect.stringContaining("stale talk session"),
+        expect.stringContaining("wake listener"),
+        expect.stringContaining("Capture and clear the last runtime error"),
+      ]),
+    );
   });
 
   it("exports the browser proof lane as a workspace artifact", async () => {
@@ -947,7 +968,13 @@ describe("dashboard follow-on parity route", () => {
         networkAllowlist: ["127.0.0.1"],
       })),
       getVoiceStatus: vi.fn(async () => ({
-        stt: { state: "stopped", provider: "whisper.cpp", runtimeReady: true, modelId: "base.en", updatedAt: "2026-03-29T00:00:00.000Z" },
+        stt: {
+          state: "stopped",
+          provider: "whisper.cpp",
+          runtimeReady: true,
+          modelId: "base.en",
+          updatedAt: "2026-03-29T00:00:00.000Z",
+        },
         talk: { state: "stopped", updatedAt: "2026-03-29T00:00:00.000Z" },
         wake: { enabled: false, state: "stopped", model: "openwakeword", updatedAt: "2026-03-29T00:00:00.000Z" },
       })),
@@ -995,18 +1022,25 @@ describe("dashboard follow-on parity route", () => {
       "artifacts/follow-on-parity/browser/2026-03-30/browser-control-proof-bundle-trusted_local-2026-03-30T10-10-00-000Z.md",
       expect.stringContaining("# Browser Control Proof Bundle Draft"),
     );
-    expect(rememberFollowOnParityArtifact).toHaveBeenCalledWith(expect.objectContaining({
-      laneId: "browser",
-      generatedAt: "2026-03-30T10:10:00.000Z",
-      relativePath: "artifacts/follow-on-parity/browser/2026-03-30/browser-control-proof-bundle-trusted_local-2026-03-30T10-10-00-000Z.md",
-    }));
-    expect(response.json()).toEqual(expect.objectContaining({
-      laneId: "browser",
-      generatedAt: "2026-03-30T10:10:00.000Z",
-      relativePath: "artifacts/follow-on-parity/browser/2026-03-30/browser-control-proof-bundle-trusted_local-2026-03-30T10-10-00-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/browser/2026-03-30/browser-control-proof-bundle-trusted_local-2026-03-30T10-10-00-000Z.md",
-      bytes: expect.any(Number),
-    }));
+    expect(rememberFollowOnParityArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneId: "browser",
+        generatedAt: "2026-03-30T10:10:00.000Z",
+        relativePath:
+          "artifacts/follow-on-parity/browser/2026-03-30/browser-control-proof-bundle-trusted_local-2026-03-30T10-10-00-000Z.md",
+      }),
+    );
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        laneId: "browser",
+        generatedAt: "2026-03-30T10:10:00.000Z",
+        relativePath:
+          "artifacts/follow-on-parity/browser/2026-03-30/browser-control-proof-bundle-trusted_local-2026-03-30T10-10-00-000Z.md",
+        fullPath:
+          "workspace/artifacts/follow-on-parity/browser/2026-03-30/browser-control-proof-bundle-trusted_local-2026-03-30T10-10-00-000Z.md",
+        bytes: expect.any(Number),
+      }),
+    );
   });
 
   it("exports the packaging proof lane as a workspace artifact", async () => {
@@ -1030,7 +1064,13 @@ describe("dashboard follow-on parity route", () => {
         networkAllowlist: ["127.0.0.1", "localhost"],
       })),
       getVoiceStatus: vi.fn(async () => ({
-        stt: { state: "stopped", provider: "whisper.cpp", runtimeReady: true, modelId: "base.en", updatedAt: "2026-03-29T00:00:00.000Z" },
+        stt: {
+          state: "stopped",
+          provider: "whisper.cpp",
+          runtimeReady: true,
+          modelId: "base.en",
+          updatedAt: "2026-03-29T00:00:00.000Z",
+        },
         talk: { state: "stopped", updatedAt: "2026-03-29T00:00:00.000Z" },
         wake: { enabled: false, state: "stopped", model: "openwakeword", updatedAt: "2026-03-29T00:00:00.000Z" },
       })),
@@ -1063,13 +1103,17 @@ describe("dashboard follow-on parity route", () => {
       "artifacts/follow-on-parity/packaging/2026-03-30/packaging-deployment-proof-bundle-trusted_local-2026-03-30T10-12-00-000Z.md",
       expect.stringContaining("# Packaging And Deployment Proof Bundle Draft"),
     );
-    expect(response.json()).toEqual(expect.objectContaining({
-      laneId: "packaging",
-      generatedAt: "2026-03-30T10:12:00.000Z",
-      relativePath: "artifacts/follow-on-parity/packaging/2026-03-30/packaging-deployment-proof-bundle-trusted_local-2026-03-30T10-12-00-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/packaging/2026-03-30/packaging-deployment-proof-bundle-trusted_local-2026-03-30T10-12-00-000Z.md",
-      bytes: expect.any(Number),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        laneId: "packaging",
+        generatedAt: "2026-03-30T10:12:00.000Z",
+        relativePath:
+          "artifacts/follow-on-parity/packaging/2026-03-30/packaging-deployment-proof-bundle-trusted_local-2026-03-30T10-12-00-000Z.md",
+        fullPath:
+          "workspace/artifacts/follow-on-parity/packaging/2026-03-30/packaging-deployment-proof-bundle-trusted_local-2026-03-30T10-12-00-000Z.md",
+        bytes: expect.any(Number),
+      }),
+    );
   });
 
   it("exports the voice proof lane as a workspace artifact", async () => {
@@ -1148,14 +1192,18 @@ describe("dashboard follow-on parity route", () => {
       "artifacts/follow-on-parity/voice/2026-03-30/voice-proof-bundle-trusted_local-2026-03-30T10-20-00-000Z.md",
       expect.stringContaining("# Voice Wake And Talk Proof Bundle Draft"),
     );
-    expect(response.json()).toEqual(expect.objectContaining({
-      laneId: "voice",
-      generatedAt: "2026-03-30T10:20:00.000Z",
-      summary: expect.stringContaining("Voice proof lane is ready"),
-      relativePath: "artifacts/follow-on-parity/voice/2026-03-30/voice-proof-bundle-trusted_local-2026-03-30T10-20-00-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/voice/2026-03-30/voice-proof-bundle-trusted_local-2026-03-30T10-20-00-000Z.md",
-      bytes: expect.any(Number),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        laneId: "voice",
+        generatedAt: "2026-03-30T10:20:00.000Z",
+        summary: expect.stringContaining("Voice proof lane is ready"),
+        relativePath:
+          "artifacts/follow-on-parity/voice/2026-03-30/voice-proof-bundle-trusted_local-2026-03-30T10-20-00-000Z.md",
+        fullPath:
+          "workspace/artifacts/follow-on-parity/voice/2026-03-30/voice-proof-bundle-trusted_local-2026-03-30T10-20-00-000Z.md",
+        bytes: expect.any(Number),
+      }),
+    );
   });
 
   it("returns the companion bootstrap brief draft from live parity state", async () => {
@@ -1167,7 +1215,13 @@ describe("dashboard follow-on parity route", () => {
         networkAllowlist: ["127.0.0.1"],
       })),
       getVoiceStatus: vi.fn(async () => ({
-        stt: { state: "stopped", provider: "whisper.cpp", runtimeReady: true, modelId: "base.en", updatedAt: "2026-03-29T00:00:00.000Z" },
+        stt: {
+          state: "stopped",
+          provider: "whisper.cpp",
+          runtimeReady: true,
+          modelId: "base.en",
+          updatedAt: "2026-03-29T00:00:00.000Z",
+        },
         talk: { state: "stopped", updatedAt: "2026-03-29T00:00:00.000Z" },
         wake: { enabled: false, state: "stopped", model: "openwakeword", updatedAt: "2026-03-29T00:00:00.000Z" },
       })),
@@ -1203,10 +1257,12 @@ describe("dashboard follow-on parity route", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.objectContaining({
-      summary: expect.stringContaining("live gateway session proof is complete"),
-      markdown: expect.stringContaining("Android runtime/UI bundle"),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        summary: expect.stringContaining("live gateway session proof is complete"),
+        markdown: expect.stringContaining("Android runtime/UI bundle"),
+      }),
+    );
   });
 
   it("exports the companion bootstrap brief as a workspace artifact", async () => {
@@ -1227,7 +1283,13 @@ describe("dashboard follow-on parity route", () => {
         networkAllowlist: ["127.0.0.1"],
       })),
       getVoiceStatus: vi.fn(async () => ({
-        stt: { state: "stopped", provider: "whisper.cpp", runtimeReady: true, modelId: "base.en", updatedAt: "2026-03-29T00:00:00.000Z" },
+        stt: {
+          state: "stopped",
+          provider: "whisper.cpp",
+          runtimeReady: true,
+          modelId: "base.en",
+          updatedAt: "2026-03-29T00:00:00.000Z",
+        },
         talk: { state: "stopped", updatedAt: "2026-03-29T00:00:00.000Z" },
         wake: { enabled: false, state: "stopped", model: "openwakeword", updatedAt: "2026-03-29T00:00:00.000Z" },
       })),
@@ -1275,13 +1337,17 @@ describe("dashboard follow-on parity route", () => {
       "artifacts/follow-on-parity/companion/2026-03-30/companion-bootstrap-brief-2026-03-30T10-25-00-000Z.md",
       expect.stringContaining("# Companion Bootstrap Brief"),
     );
-    expect(response.json()).toEqual(expect.objectContaining({
-      laneId: "companion",
-      generatedAt: "2026-03-30T10:25:00.000Z",
-      relativePath: "artifacts/follow-on-parity/companion/2026-03-30/companion-bootstrap-brief-2026-03-30T10-25-00-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/companion/2026-03-30/companion-bootstrap-brief-2026-03-30T10-25-00-000Z.md",
-      bytes: expect.any(Number),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        laneId: "companion",
+        generatedAt: "2026-03-30T10:25:00.000Z",
+        relativePath:
+          "artifacts/follow-on-parity/companion/2026-03-30/companion-bootstrap-brief-2026-03-30T10-25-00-000Z.md",
+        fullPath:
+          "workspace/artifacts/follow-on-parity/companion/2026-03-30/companion-bootstrap-brief-2026-03-30T10-25-00-000Z.md",
+        bytes: expect.any(Number),
+      }),
+    );
   });
 
   it("returns the extension SDK brief draft from live parity state", async () => {
@@ -1293,7 +1359,13 @@ describe("dashboard follow-on parity route", () => {
         networkAllowlist: ["127.0.0.1"],
       })),
       getVoiceStatus: vi.fn(async () => ({
-        stt: { state: "stopped", provider: "whisper.cpp", runtimeReady: true, modelId: "base.en", updatedAt: "2026-03-29T00:00:00.000Z" },
+        stt: {
+          state: "stopped",
+          provider: "whisper.cpp",
+          runtimeReady: true,
+          modelId: "base.en",
+          updatedAt: "2026-03-29T00:00:00.000Z",
+        },
         talk: { state: "stopped", updatedAt: "2026-03-29T00:00:00.000Z" },
         wake: { enabled: false, state: "stopped", model: "openwakeword", updatedAt: "2026-03-29T00:00:00.000Z" },
       })),
@@ -1310,7 +1382,11 @@ describe("dashboard follow-on parity route", () => {
       listToolCatalog: vi.fn(() => []),
       listIntegrationCatalog: vi.fn(() => []),
       listIntegrationPlugins: vi.fn(() => [
-        { pluginId: "reference-integration-plugin", enabled: true, source: "templates/integration-plugins/reference-integration-plugin" },
+        {
+          pluginId: "reference-integration-plugin",
+          enabled: true,
+          source: "templates/integration-plugins/reference-integration-plugin",
+        },
       ]),
       listAddonsCatalog: vi.fn(() => [{ addonId: "arena" }]),
       listInstalledAddons: vi.fn(async () => [{ addonId: "arena", runtimeStatus: "running" }]),
@@ -1324,10 +1400,12 @@ describe("dashboard follow-on parity route", () => {
 
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body).toEqual(expect.objectContaining({
-      summary: expect.stringContaining("public beta package already exists"),
-      markdown: expect.stringContaining("Decision Gate"),
-    }));
+    expect(body).toEqual(
+      expect.objectContaining({
+        summary: expect.stringContaining("public beta package already exists"),
+        markdown: expect.stringContaining("Decision Gate"),
+      }),
+    );
     expect(body.markdown).toContain("Reference plugin present: yes");
     expect(body.markdown).toContain("Reference plugin source aligned: yes");
   });
@@ -1350,7 +1428,13 @@ describe("dashboard follow-on parity route", () => {
         networkAllowlist: ["127.0.0.1"],
       })),
       getVoiceStatus: vi.fn(async () => ({
-        stt: { state: "stopped", provider: "whisper.cpp", runtimeReady: true, modelId: "base.en", updatedAt: "2026-03-29T00:00:00.000Z" },
+        stt: {
+          state: "stopped",
+          provider: "whisper.cpp",
+          runtimeReady: true,
+          modelId: "base.en",
+          updatedAt: "2026-03-29T00:00:00.000Z",
+        },
         talk: { state: "stopped", updatedAt: "2026-03-29T00:00:00.000Z" },
         wake: { enabled: false, state: "stopped", model: "openwakeword", updatedAt: "2026-03-29T00:00:00.000Z" },
       })),
@@ -1367,7 +1451,11 @@ describe("dashboard follow-on parity route", () => {
       listToolCatalog: vi.fn(() => []),
       listIntegrationCatalog: vi.fn(() => []),
       listIntegrationPlugins: vi.fn(() => [
-        { pluginId: "reference-integration-plugin", enabled: true, source: "templates/integration-plugins/reference-integration-plugin" },
+        {
+          pluginId: "reference-integration-plugin",
+          enabled: true,
+          source: "templates/integration-plugins/reference-integration-plugin",
+        },
         { pluginId: "msteams", enabled: false },
       ]),
       listAddonsCatalog: vi.fn(() => [{ addonId: "arena" }]),
@@ -1386,13 +1474,17 @@ describe("dashboard follow-on parity route", () => {
       "artifacts/follow-on-parity/extensions/2026-03-30/extension-sdk-brief-2026-03-30T10-27-00-000Z.md",
       expect.stringContaining("# Extension SDK Brief"),
     );
-    expect(response.json()).toEqual(expect.objectContaining({
-      laneId: "extensions",
-      generatedAt: "2026-03-30T10:27:00.000Z",
-      relativePath: "artifacts/follow-on-parity/extensions/2026-03-30/extension-sdk-brief-2026-03-30T10-27-00-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/extensions/2026-03-30/extension-sdk-brief-2026-03-30T10-27-00-000Z.md",
-      bytes: expect.any(Number),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        laneId: "extensions",
+        generatedAt: "2026-03-30T10:27:00.000Z",
+        relativePath:
+          "artifacts/follow-on-parity/extensions/2026-03-30/extension-sdk-brief-2026-03-30T10-27-00-000Z.md",
+        fullPath:
+          "workspace/artifacts/follow-on-parity/extensions/2026-03-30/extension-sdk-brief-2026-03-30T10-27-00-000Z.md",
+        bytes: expect.any(Number),
+      }),
+    );
   });
 
   it("returns the extension starter-pack draft from live parity state", async () => {
@@ -1404,7 +1496,13 @@ describe("dashboard follow-on parity route", () => {
         networkAllowlist: ["127.0.0.1"],
       })),
       getVoiceStatus: vi.fn(async () => ({
-        stt: { state: "stopped", provider: "whisper.cpp", runtimeReady: true, modelId: "base.en", updatedAt: "2026-03-29T00:00:00.000Z" },
+        stt: {
+          state: "stopped",
+          provider: "whisper.cpp",
+          runtimeReady: true,
+          modelId: "base.en",
+          updatedAt: "2026-03-29T00:00:00.000Z",
+        },
         talk: { state: "stopped", updatedAt: "2026-03-29T00:00:00.000Z" },
         wake: { enabled: false, state: "stopped", model: "openwakeword", updatedAt: "2026-03-29T00:00:00.000Z" },
       })),
@@ -1421,7 +1519,11 @@ describe("dashboard follow-on parity route", () => {
       listToolCatalog: vi.fn(() => []),
       listIntegrationCatalog: vi.fn(() => []),
       listIntegrationPlugins: vi.fn(() => [
-        { pluginId: "reference-integration-plugin", enabled: true, source: "templates/integration-plugins/reference-integration-plugin" },
+        {
+          pluginId: "reference-integration-plugin",
+          enabled: true,
+          source: "templates/integration-plugins/reference-integration-plugin",
+        },
       ]),
       listAddonsCatalog: vi.fn(() => [{ addonId: "arena" }]),
       listInstalledAddons: vi.fn(async () => [{ addonId: "arena", runtimeStatus: "running" }]),
@@ -1434,16 +1536,20 @@ describe("dashboard follow-on parity route", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.objectContaining({
-      summary: expect.stringContaining("repo-native starter pack"),
-      starterRoot: expect.stringContaining("artifacts/follow-on-parity/extensions/starter-pack/"),
-      files: expect.arrayContaining([
-        expect.stringContaining("docs/PLUGIN_SDK_CONTRACT.md"),
-        expect.stringContaining("addons/reference-separate-repo-addon/goatcitadel.addon.json"),
-        expect.stringContaining("integration-plugins/reference-integration-plugin/goatcitadel.integration-plugin.json"),
-      ]),
-      markdown: expect.stringContaining("Included Files"),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        summary: expect.stringContaining("repo-native starter pack"),
+        starterRoot: expect.stringContaining("artifacts/follow-on-parity/extensions/starter-pack/"),
+        files: expect.arrayContaining([
+          expect.stringContaining("docs/PLUGIN_SDK_CONTRACT.md"),
+          expect.stringContaining("addons/reference-separate-repo-addon/goatcitadel.addon.json"),
+          expect.stringContaining(
+            "integration-plugins/reference-integration-plugin/goatcitadel.integration-plugin.json",
+          ),
+        ]),
+        markdown: expect.stringContaining("Included Files"),
+      }),
+    );
   });
 
   it("exports the extension starter pack as workspace files", async () => {
@@ -1464,7 +1570,13 @@ describe("dashboard follow-on parity route", () => {
         networkAllowlist: ["127.0.0.1"],
       })),
       getVoiceStatus: vi.fn(async () => ({
-        stt: { state: "stopped", provider: "whisper.cpp", runtimeReady: true, modelId: "base.en", updatedAt: "2026-03-29T00:00:00.000Z" },
+        stt: {
+          state: "stopped",
+          provider: "whisper.cpp",
+          runtimeReady: true,
+          modelId: "base.en",
+          updatedAt: "2026-03-29T00:00:00.000Z",
+        },
         talk: { state: "stopped", updatedAt: "2026-03-29T00:00:00.000Z" },
         wake: { enabled: false, state: "stopped", model: "openwakeword", updatedAt: "2026-03-29T00:00:00.000Z" },
       })),
@@ -1481,7 +1593,11 @@ describe("dashboard follow-on parity route", () => {
       listToolCatalog: vi.fn(() => []),
       listIntegrationCatalog: vi.fn(() => []),
       listIntegrationPlugins: vi.fn(() => [
-        { pluginId: "reference-integration-plugin", enabled: true, source: "templates/integration-plugins/reference-integration-plugin" },
+        {
+          pluginId: "reference-integration-plugin",
+          enabled: true,
+          source: "templates/integration-plugins/reference-integration-plugin",
+        },
       ]),
       listAddonsCatalog: vi.fn(() => [{ addonId: "arena" }]),
       listInstalledAddons: vi.fn(async () => [{ addonId: "arena", runtimeStatus: "running" }]),
@@ -1504,18 +1620,23 @@ describe("dashboard follow-on parity route", () => {
       "artifacts/follow-on-parity/extensions/starter-pack/2026-03-30/extension-starter-pack-2026-03-30T10-29-00-000Z/docs/PLUGIN_SDK_CONTRACT.md",
       expect.stringContaining("# Plugin And Add-on SDK Contract"),
     );
-    expect(response.json()).toEqual(expect.objectContaining({
-      generatedAt: "2026-03-30T10:29:00.000Z",
-      starterRoot: "artifacts/follow-on-parity/extensions/starter-pack/2026-03-30/extension-starter-pack-2026-03-30T10-29-00-000Z",
-      fileCount: 6,
-      totalBytes: expect.any(Number),
-      files: expect.arrayContaining([
-        expect.objectContaining({
-          relativePath: "artifacts/follow-on-parity/extensions/starter-pack/2026-03-30/extension-starter-pack-2026-03-30T10-29-00-000Z/README.md",
-          fullPath: "workspace/artifacts/follow-on-parity/extensions/starter-pack/2026-03-30/extension-starter-pack-2026-03-30T10-29-00-000Z/README.md",
-        }),
-      ]),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        generatedAt: "2026-03-30T10:29:00.000Z",
+        starterRoot:
+          "artifacts/follow-on-parity/extensions/starter-pack/2026-03-30/extension-starter-pack-2026-03-30T10-29-00-000Z",
+        fileCount: 6,
+        totalBytes: expect.any(Number),
+        files: expect.arrayContaining([
+          expect.objectContaining({
+            relativePath:
+              "artifacts/follow-on-parity/extensions/starter-pack/2026-03-30/extension-starter-pack-2026-03-30T10-29-00-000Z/README.md",
+            fullPath:
+              "workspace/artifacts/follow-on-parity/extensions/starter-pack/2026-03-30/extension-starter-pack-2026-03-30T10-29-00-000Z/README.md",
+          }),
+        ]),
+      }),
+    );
   });
 
   it("returns an A2UI proof-lane draft derived from live parity state", async () => {
@@ -1587,23 +1708,25 @@ describe("dashboard follow-on parity route", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(expect.objectContaining({
-      checklistPath: "docs/testing/A2UI_VALIDATION_CHECKLIST.md",
-      templatePath: "templates/verification/a2ui-proof-bundle.md",
-      summary: expect.stringContaining("blocked"),
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          stepId: "preflight",
-          status: "ready",
-        }),
-        expect.objectContaining({
-          stepId: "mission-control",
-          status: "blocked",
-          title: "Run the Office Lab handoff and directed-move proof",
-        }),
-      ]),
-      markdown: expect.stringContaining("A2UI Proof Bundle Draft"),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        checklistPath: "docs/testing/A2UI_VALIDATION_CHECKLIST.md",
+        templatePath: "templates/verification/a2ui-proof-bundle.md",
+        summary: expect.stringContaining("blocked"),
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            stepId: "preflight",
+            status: "ready",
+          }),
+          expect.objectContaining({
+            stepId: "mission-control",
+            status: "blocked",
+            title: "Run the Office Lab handoff and directed-move proof",
+          }),
+        ]),
+        markdown: expect.stringContaining("A2UI Proof Bundle Draft"),
+      }),
+    );
   });
 
   it("exports the A2UI proof lane as a workspace artifact", async () => {
@@ -1689,13 +1812,17 @@ describe("dashboard follow-on parity route", () => {
       "artifacts/follow-on-parity/a2ui/2026-03-30/a2ui-proof-bundle-trusted_local-2026-03-30T10-15-00-000Z.md",
       expect.stringContaining("# A2UI Proof Bundle Draft"),
     );
-    expect(response.json()).toEqual(expect.objectContaining({
-      laneId: "a2ui",
-      generatedAt: "2026-03-30T10:15:00.000Z",
-      summary: expect.stringContaining("blocked"),
-      relativePath: "artifacts/follow-on-parity/a2ui/2026-03-30/a2ui-proof-bundle-trusted_local-2026-03-30T10-15-00-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/a2ui/2026-03-30/a2ui-proof-bundle-trusted_local-2026-03-30T10-15-00-000Z.md",
-      bytes: expect.any(Number),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        laneId: "a2ui",
+        generatedAt: "2026-03-30T10:15:00.000Z",
+        summary: expect.stringContaining("blocked"),
+        relativePath:
+          "artifacts/follow-on-parity/a2ui/2026-03-30/a2ui-proof-bundle-trusted_local-2026-03-30T10-15-00-000Z.md",
+        fullPath:
+          "workspace/artifacts/follow-on-parity/a2ui/2026-03-30/a2ui-proof-bundle-trusted_local-2026-03-30T10-15-00-000Z.md",
+        bytes: expect.any(Number),
+      }),
+    );
   });
 });

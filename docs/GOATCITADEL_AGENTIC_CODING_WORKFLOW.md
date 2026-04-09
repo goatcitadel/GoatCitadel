@@ -11,7 +11,7 @@ It is intentionally repo-native:
 
 The workflow applies to bug fixes, refactors, feature work, docs-backed UI changes, and release hardening. The level of validation scales with risk, but the workflow itself is always the same.
 
-Verification vocabulary, gate families, corroboration rules, and final decision labels live in `docs/GOATCITADEL_NATIVE_VERIFICATION_LOOP.md`. Use that doc when deciding what proof is strong enough for the change.
+Use the repo's tests, validation scripts, and product-facing docs as the source of truth for what proof is strong enough for a change.
 
 ## 1. Ground
 

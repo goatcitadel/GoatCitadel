@@ -164,18 +164,20 @@ describe("buildFollowOnParityReport", () => {
       capabilities: [],
     });
     expect(report.plugins.blockingIssues).toEqual([]);
-    expect(report.plugins.sdkSummary).toContain("@goatcitadel/extensions-sdk@0.6.0-beta.2");
-    expect(report.epics).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        epicId: "GC-P1-10",
-        state: "have_foundation",
-      }),
-      expect.objectContaining({
-        epicId: "GC-P2-11",
-        state: "have_foundation",
-        summary: expect.stringContaining("@goatcitadel/extensions-sdk@0.6.0-beta.2"),
-      }),
-    ]));
+    expect(report.plugins.sdkSummary).toContain("@goatcitadel/extensions-sdk@0.9.0-beta.1");
+    expect(report.epics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          epicId: "GC-P1-10",
+          state: "have_foundation",
+        }),
+        expect.objectContaining({
+          epicId: "GC-P2-11",
+          state: "have_foundation",
+          summary: expect.stringContaining("@goatcitadel/extensions-sdk@0.9.0-beta.1"),
+        }),
+      ]),
+    );
   });
 
   it("surfaces runtime-state recovery notes directly from live voice posture", () => {
@@ -216,18 +218,22 @@ describe("buildFollowOnParityReport", () => {
       } as any,
     });
 
-    expect(report.packaging.blockingIssues).toEqual(expect.arrayContaining([
-      expect.stringContaining("Auth mode is set to none"),
-      expect.stringContaining("Loopback bypass is enabled"),
-      expect.stringContaining("No network allowlist entries"),
-    ]));
-    expect(report.voice.recoveryActions).toEqual(expect.arrayContaining([
-      expect.stringContaining("Repair or install the managed voice runtime"),
-      expect.stringContaining("Install or activate a local voice model"),
-      expect.stringContaining("Capture and clear the last runtime error after recovery: runtime missing"),
-      expect.stringContaining("Stop the stale talk session"),
-      expect.stringContaining("Disable the current wake listener first"),
-    ]));
+    expect(report.packaging.blockingIssues).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Auth mode is set to none"),
+        expect.stringContaining("Loopback bypass is enabled"),
+        expect.stringContaining("No network allowlist entries"),
+      ]),
+    );
+    expect(report.voice.recoveryActions).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Repair or install the managed voice runtime"),
+        expect.stringContaining("Install or activate a local voice model"),
+        expect.stringContaining("Capture and clear the last runtime error after recovery: runtime missing"),
+        expect.stringContaining("Stop the stale talk session"),
+        expect.stringContaining("Disable the current wake listener first"),
+      ]),
+    );
   });
 
   it("keeps local_dev browser state-tool guidance aligned with the route guard", () => {
@@ -245,14 +251,13 @@ describe("buildFollowOnParityReport", () => {
     });
 
     expect(report.browser.guardrailSummary).toContain("state tools are still restricted to trusted_local");
-    expect(report.browser.stateToolRuntime.blockedTools).toEqual([
-      "browser.cookies.get",
-      "browser.storage.get",
-    ]);
-    expect(report.browser.recommendedActions).toEqual(expect.arrayContaining([
-      expect.stringContaining("switch to trusted_local for cookie/storage validation"),
-      expect.stringContaining("browser.cookies.get, browser.storage.get"),
-    ]));
+    expect(report.browser.stateToolRuntime.blockedTools).toEqual(["browser.cookies.get", "browser.storage.get"]);
+    expect(report.browser.recommendedActions).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("switch to trusted_local for cookie/storage validation"),
+        expect.stringContaining("browser.cookies.get, browser.storage.get"),
+      ]),
+    );
   });
 
   it("marks stale packaging proof and profile mismatch when the last bundle lags behind runtime truth", () => {
@@ -265,8 +270,10 @@ describe("buildFollowOnParityReport", () => {
           laneId: "packaging",
           generatedAt: "2026-03-20T10:00:00.000Z",
           summary: "Old trusted-local bundle",
-          relativePath: "artifacts/follow-on-parity/packaging/2026-03-20/packaging-deployment-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/packaging/2026-03-20/packaging-deployment-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/packaging/2026-03-20/packaging-deployment-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/packaging/2026-03-20/packaging-deployment-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
           bytes: 456,
         },
       } as any,
@@ -279,10 +286,12 @@ describe("buildFollowOnParityReport", () => {
       matchedCurrentProfile: false,
       ageDays: 11,
     });
-    expect(report.packaging.recommendedActions).toEqual(expect.arrayContaining([
-      expect.stringContaining("11 day(s) old"),
-      "Latest packaging proof artifact targets trusted_local; rerun the packaging proof lane under remote_hardened so proof matches current runtime truth.",
-    ]));
+    expect(report.packaging.recommendedActions).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("11 day(s) old"),
+        "Latest packaging proof artifact targets trusted_local; rerun the packaging proof lane under remote_hardened so proof matches current runtime truth.",
+      ]),
+    );
   });
 
   it("marks stale browser, A2UI, voice, companion, and extension artifacts when the last bundle lags behind runtime truth", () => {
@@ -295,40 +304,50 @@ describe("buildFollowOnParityReport", () => {
           laneId: "browser",
           generatedAt: "2026-03-20T10:00:00.000Z",
           summary: "Old browser bundle",
-          relativePath: "artifacts/follow-on-parity/browser/2026-03-20/browser-control-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/browser/2026-03-20/browser-control-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/browser/2026-03-20/browser-control-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/browser/2026-03-20/browser-control-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
           bytes: 300,
         },
         a2ui: {
           laneId: "a2ui",
           generatedAt: "2026-03-20T10:00:00.000Z",
           summary: "Old a2ui bundle",
-          relativePath: "artifacts/follow-on-parity/a2ui/2026-03-20/a2ui-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/a2ui/2026-03-20/a2ui-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/a2ui/2026-03-20/a2ui-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/a2ui/2026-03-20/a2ui-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
           bytes: 301,
         },
         voice: {
           laneId: "voice",
           generatedAt: "2026-03-20T10:00:00.000Z",
           summary: "Old voice bundle",
-          relativePath: "artifacts/follow-on-parity/voice/2026-03-20/voice-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/voice/2026-03-20/voice-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/voice/2026-03-20/voice-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/voice/2026-03-20/voice-proof-bundle-trusted_local-2026-03-20T10-00-00-000Z.md",
           bytes: 302,
         },
         companion: {
           laneId: "companion",
           generatedAt: "2026-03-20T10:00:00.000Z",
           summary: "Old companion brief",
-          relativePath: "artifacts/follow-on-parity/companion/2026-03-20/companion-bootstrap-brief-2026-03-20T10-00-00-000Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/companion/2026-03-20/companion-bootstrap-brief-2026-03-20T10-00-00-000Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/companion/2026-03-20/companion-bootstrap-brief-2026-03-20T10-00-00-000Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/companion/2026-03-20/companion-bootstrap-brief-2026-03-20T10-00-00-000Z.md",
           bytes: 303,
         },
         extensions: {
           laneId: "extensions",
           generatedAt: "2026-03-20T10:00:00.000Z",
           summary: "Old extension brief",
-          relativePath: "artifacts/follow-on-parity/extensions/2026-03-20/extension-sdk-brief-2026-03-20T10-00-00-000Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/extensions/2026-03-20/extension-sdk-brief-2026-03-20T10-00-00-000Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/extensions/2026-03-20/extension-sdk-brief-2026-03-20T10-00-00-000Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/extensions/2026-03-20/extension-sdk-brief-2026-03-20T10-00-00-000Z.md",
           bytes: 304,
         },
       } as any,
@@ -365,24 +384,30 @@ describe("buildFollowOnParityReport", () => {
       freshness: "stale",
       ageDays: 11,
     });
-    expect(report.browser.recommendedActions).toEqual(expect.arrayContaining([
-      "Latest browser proof artifact is 11 day(s) old; refresh it before relying on it.",
-      "Latest browser proof artifact targets trusted_local; rerun the lane under remote_hardened so proof matches current runtime truth.",
-    ]));
-    expect(report.canvas.recommendedActions).toEqual(expect.arrayContaining([
-      "Latest A2UI proof artifact is 11 day(s) old; refresh it before relying on it.",
-      "Latest A2UI proof artifact targets trusted_local; rerun the lane under remote_hardened so proof matches current runtime truth.",
-    ]));
-    expect(report.voice.recommendedActions).toEqual(expect.arrayContaining([
-      "Latest voice proof artifact is 11 day(s) old; refresh it before relying on it.",
-      "Latest voice proof artifact targets trusted_local; rerun the lane under remote_hardened so proof matches current runtime truth.",
-    ]));
-    expect(report.companion.recommendedActions).toEqual(expect.arrayContaining([
-      "Latest companion bootstrap brief is 11 day(s) old; refresh it before relying on it.",
-    ]));
-    expect(report.plugins.recommendedActions).toEqual(expect.arrayContaining([
-      "Latest extension SDK brief is 11 day(s) old; refresh it before relying on it.",
-    ]));
+    expect(report.browser.recommendedActions).toEqual(
+      expect.arrayContaining([
+        "Latest browser proof artifact is 11 day(s) old; refresh it before relying on it.",
+        "Latest browser proof artifact targets trusted_local; rerun the lane under remote_hardened so proof matches current runtime truth.",
+      ]),
+    );
+    expect(report.canvas.recommendedActions).toEqual(
+      expect.arrayContaining([
+        "Latest A2UI proof artifact is 11 day(s) old; refresh it before relying on it.",
+        "Latest A2UI proof artifact targets trusted_local; rerun the lane under remote_hardened so proof matches current runtime truth.",
+      ]),
+    );
+    expect(report.voice.recommendedActions).toEqual(
+      expect.arrayContaining([
+        "Latest voice proof artifact is 11 day(s) old; refresh it before relying on it.",
+        "Latest voice proof artifact targets trusted_local; rerun the lane under remote_hardened so proof matches current runtime truth.",
+      ]),
+    );
+    expect(report.companion.recommendedActions).toEqual(
+      expect.arrayContaining(["Latest companion bootstrap brief is 11 day(s) old; refresh it before relying on it."]),
+    );
+    expect(report.plugins.recommendedActions).toEqual(
+      expect.arrayContaining(["Latest extension SDK brief is 11 day(s) old; refresh it before relying on it."]),
+    );
   });
 
   it("acknowledges a current clean voice proof artifact instead of always asking for another proof run", () => {
@@ -395,8 +420,10 @@ describe("buildFollowOnParityReport", () => {
           laneId: "voice",
           generatedAt: "2026-04-02T04:25:42.216Z",
           summary: "Voice proof lane is ready with runtime ready, model tiny.en, talk stopped, and wake disabled.",
-          relativePath: "artifacts/follow-on-parity/voice/2026-04-02/voice-proof-bundle-local_dev-2026-04-02T04-25-42-216Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/voice/2026-04-02/voice-proof-bundle-local_dev-2026-04-02T04-25-42-216Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/voice/2026-04-02/voice-proof-bundle-local_dev-2026-04-02T04-25-42-216Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/voice/2026-04-02/voice-proof-bundle-local_dev-2026-04-02T04-25-42-216Z.md",
           bytes: 1963,
         },
       } as any,
@@ -455,9 +482,12 @@ describe("buildFollowOnParityReport", () => {
         packaging: {
           laneId: "packaging",
           generatedAt: "2026-04-02T18:35:25.775Z",
-          summary: "Packaging proof lane is partially blocked until the runtime is operating in remote_hardened and the hardened posture is fully configured.",
-          relativePath: "artifacts/follow-on-parity/packaging/2026-04-02/packaging-deployment-proof-bundle-local_dev-2026-04-02T18-35-25-775Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/packaging/2026-04-02/packaging-deployment-proof-bundle-local_dev-2026-04-02T18-35-25-775Z.md",
+          summary:
+            "Packaging proof lane is partially blocked until the runtime is operating in remote_hardened and the hardened posture is fully configured.",
+          relativePath:
+            "artifacts/follow-on-parity/packaging/2026-04-02/packaging-deployment-proof-bundle-local_dev-2026-04-02T18-35-25-775Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/packaging/2026-04-02/packaging-deployment-proof-bundle-local_dev-2026-04-02T18-35-25-775Z.md",
           bytes: 1600,
           proofState: "draft",
         },
@@ -493,8 +523,10 @@ describe("buildFollowOnParityReport", () => {
           laneId: "voice",
           generatedAt: "2026-04-02T18:35:27.041Z",
           summary: "Voice proof lane is ready with runtime ready, model tiny.en, talk stopped, and wake disabled.",
-          relativePath: "artifacts/follow-on-parity/voice/2026-04-02/voice-proof-bundle-remote_hardened-2026-04-02T18-35-27-041Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/voice/2026-04-02/voice-proof-bundle-remote_hardened-2026-04-02T18-35-27-041Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/voice/2026-04-02/voice-proof-bundle-remote_hardened-2026-04-02T18-35-27-041Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/voice/2026-04-02/voice-proof-bundle-remote_hardened-2026-04-02T18-35-27-041Z.md",
           bytes: 1967,
           proofState: "draft",
         },
@@ -536,14 +568,12 @@ describe("buildFollowOnParityReport", () => {
     });
 
     const voiceEpic = report.epics.find((epic) => epic.epicId === "GC-P2-12");
-    expect(report.voice.proofCoverage.currentProfiles).toEqual([
-      "local_dev",
-      "trusted_local",
-      "remote_hardened",
-    ]);
+    expect(report.voice.proofCoverage.currentProfiles).toEqual(["local_dev", "trusted_local", "remote_hardened"]);
     expect(voiceEpic).toMatchObject({
       state: "have_foundation",
-      summary: expect.stringContaining("current operator proof now covers local_dev, trusted_local, and remote_hardened"),
+      summary: expect.stringContaining(
+        "current operator proof now covers local_dev, trusted_local, and remote_hardened",
+      ),
     });
   });
 
@@ -557,8 +587,10 @@ describe("buildFollowOnParityReport", () => {
           laneId: "browser",
           generatedAt: "2026-04-02T04:39:42.799Z",
           summary: "Browser proof lane is ready for trusted_local with 4 read tool(s) and 4 control tool(s).",
-          relativePath: "artifacts/follow-on-parity/browser/2026-04-02/browser-control-proof-bundle-trusted_local-2026-04-02T04-39-42-799Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/browser/2026-04-02/browser-control-proof-bundle-trusted_local-2026-04-02T04-39-42-799Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/browser/2026-04-02/browser-control-proof-bundle-trusted_local-2026-04-02T04-39-42-799Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/browser/2026-04-02/browser-control-proof-bundle-trusted_local-2026-04-02T04-39-42-799Z.md",
           bytes: 2048,
         },
       } as any,
@@ -594,16 +626,20 @@ describe("buildFollowOnParityReport", () => {
           laneId: "a2ui",
           generatedAt: "2026-04-02T15:29:00.000Z",
           summary: "Android A2UI proof bundle recorded from GoatCitadel-mobile.",
-          relativePath: "artifacts/follow-on-parity/a2ui/2026-04-02/a2ui-proof-bundle-local_dev-2026-04-02T15-29-00-000Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/a2ui/2026-04-02/a2ui-proof-bundle-local_dev-2026-04-02T15-29-00-000Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/a2ui/2026-04-02/a2ui-proof-bundle-local_dev-2026-04-02T15-29-00-000Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/a2ui/2026-04-02/a2ui-proof-bundle-local_dev-2026-04-02T15-29-00-000Z.md",
           bytes: 2048,
         },
         companion: {
           laneId: "companion",
           generatedAt: "2026-04-02T15:28:30.000Z",
           summary: "Android companion runtime proof bundle recorded from GoatCitadel-mobile.",
-          relativePath: "artifacts/follow-on-parity/companion/2026-04-02/companion-bootstrap-brief-2026-04-02T15-28-30-000Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/companion/2026-04-02/companion-bootstrap-brief-2026-04-02T15-28-30-000Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/companion/2026-04-02/companion-bootstrap-brief-2026-04-02T15-28-30-000Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/companion/2026-04-02/companion-bootstrap-brief-2026-04-02T15-28-30-000Z.md",
           bytes: 2048,
         },
       } as any,

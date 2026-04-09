@@ -1,13 +1,12 @@
 # GoatCitadel Install, Setup, and Testing
 
 Last updated: 2026-03-05
-Target release: `0.6.0-beta.2`
+Target release: `0.9.0-beta.1`
 
 Related guides:
 
-- [Public Share Checklist](./PUBLIC_SHARE_CHECKLIST.md)
 - [Communication Channel Setup Guide](./COMMUNICATION_CHANNEL_SETUP_GUIDE.md)
-- [Optional Bankr Skill](./OPTIONAL_BANKR_SKILL.md)
+- [Plugin SDK Contract](./PLUGIN_SDK_CONTRACT.md)
 
 ## Install Paths
 
@@ -184,7 +183,7 @@ pnpm config:sync
 
 `pnpm config:sync` materializes local `config/*.json` files from the tracked `config/*.example.json` templates and rebuilds `config/goatcitadel.json` if needed.
 
-The default clone keeps the shipped Office runtime assets in-repo. The full Office source provenance bundle is published separately so code-first contributors do not need to pull heavy source kits. See [docs/office-source-manifest.json](/f:/code/personal-ai/docs/office-source-manifest.json) and the corresponding release bundle when you need the original source assets.
+The default clone keeps the shipped Office runtime assets in-repo. The full Office source provenance bundle is published separately so code-first contributors do not need to pull heavy source kits. See [office-source-manifest.json](./office-source-manifest.json) when you need the original source asset manifest.
 
 ### Manual path commands
 

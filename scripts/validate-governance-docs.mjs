@@ -7,24 +7,16 @@ const root = process.cwd();
 const requiredFiles = [
   "README.md",
   "CHANGELOG.md",
-  "GOATCITADEL.md",
   "AGENTS.md",
-  "CLAUDE.md",
   "CONTRIBUTING.md",
   "SECURITY.md",
-  "VISION.md",
-  "GOATCITADEL_LEARNING_LOG.md",
 ];
 
 const requiredHeadings = {
   "CHANGELOG.md": ["# Changelog", "## [Unreleased]"],
-  "GOATCITADEL.md": ["# GoatCitadel Runtime Guidance", "## Purpose", "## Safety Invariants"],
   "AGENTS.md": ["# GoatCitadel Agent Conventions", "## Agent Roles", "## Safety Boundaries (Non-Overridable)"],
-  "CLAUDE.md": ["# CLAUDE Repository Guidance", "## Required Validation"],
   "CONTRIBUTING.md": ["# Contributing to GoatCitadel", "## Quality Gates", "## Governance Docs Policy"],
   "SECURITY.md": ["# Security Policy", "## Reporting a Vulnerability", "## Security Invariants"],
-  "VISION.md": ["# GoatCitadel Vision", "## Mission", "## Long-Term Goals"],
-  "GOATCITADEL_LEARNING_LOG.md": ["# GoatCitadel Learning Log", "## Policy", "## Entry Template"],
 };
 
 const errors = [];
@@ -58,4 +50,3 @@ if (errors.length > 0) {
 }
 
 console.log("[docs:check] governance docs validation passed.");
-

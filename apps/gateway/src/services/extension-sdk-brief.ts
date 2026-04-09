@@ -4,7 +4,7 @@ const EXTENSION_CONTRACT_PATH = "docs/PLUGIN_SDK_CONTRACT.md";
 const EXTENSION_SDK_PACKAGE_PATH = "packages/extensions-sdk";
 const EXTENSION_TEMPLATE_PATH = "templates/verification/extension-sdk-brief.md";
 const EXTENSION_ARTIFACT_ROOT = "artifacts/follow-on-parity/extensions";
-const PUBLISHED_EXTENSIONS_SDK_PACKAGE = "@goatcitadel/extensions-sdk@0.6.0-beta.2";
+const PUBLISHED_EXTENSIONS_SDK_PACKAGE = "@goatcitadel/extensions-sdk@0.9.0-beta.1";
 
 export function buildExtensionSdkBrief(report: FollowOnParityReport): ExtensionSdkBriefDraft {
   const generatedAt = new Date().toISOString();
@@ -60,8 +60,6 @@ export function buildExtensionSdkBrief(report: FollowOnParityReport): ExtensionS
 
 export function buildExtensionSdkArtifactPath(draft: ExtensionSdkBriefDraft): string {
   const day = draft.generatedAt.slice(0, 10);
-  const timestamp = draft.generatedAt
-    .replaceAll(":", "-")
-    .replaceAll(".", "-");
+  const timestamp = draft.generatedAt.replaceAll(":", "-").replaceAll(".", "-");
   return `${EXTENSION_ARTIFACT_ROOT}/${day}/extension-sdk-brief-${timestamp}.md`;
 }

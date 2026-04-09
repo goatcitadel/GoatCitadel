@@ -95,7 +95,7 @@ export function PromptLabSetupPanel({
         <h3>Import Prompt Pack</h3>
         <textarea
           rows={10}
-          placeholder="Paste goatcitadel_prompt_pack.md content here..."
+          placeholder="Paste prompt-pack markdown here..."
           value={importText}
           onChange={(event) => onImportTextChange(event.target.value)}
         />

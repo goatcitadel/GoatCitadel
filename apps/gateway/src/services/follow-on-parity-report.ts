@@ -47,7 +47,7 @@ interface BuildFollowOnParityReportInput {
 const FOLLOW_ON_ARTIFACT_FRESHNESS_WINDOW_DAYS = 7;
 const REFERENCE_INTEGRATION_PLUGIN_ID = "reference-integration-plugin";
 const REFERENCE_INTEGRATION_PLUGIN_SOURCE = "templates/integration-plugins/reference-integration-plugin";
-const PUBLISHED_EXTENSIONS_SDK_PACKAGE = "@goatcitadel/extensions-sdk@0.6.0-beta.2";
+const PUBLISHED_EXTENSIONS_SDK_PACKAGE = "@goatcitadel/extensions-sdk@0.9.0-beta.1";
 const BROWSER_OPERATOR_RUN_ACTION =
   "Generate the browser proof-lane draft from System, then run the operator pass from Mission Control or the tool surface.";
 const BROWSER_CURRENT_PROOF_ACTION =

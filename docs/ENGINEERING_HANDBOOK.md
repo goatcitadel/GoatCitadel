@@ -8,7 +8,7 @@ This document is the deep technical documentation for GoatCitadel. It is intende
 
 This handbook describes what is currently implemented in `F:\code\personal-ai` as of February 2026.
 
-Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md`. Verification doctrine and verdict language live in `docs/GOATCITADEL_NATIVE_VERIFICATION_LOOP.md`. Use those docs for day-to-day execution and proof; use this handbook for architecture and system truth.
+Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md`. Use this handbook for architecture and system truth.
 
 ## 0. OpenClaw-Informed Hardening Deltas (Current Cycle)
 
@@ -136,15 +136,8 @@ Workspace model (v1):
 
 Guidance resolution model:
 
-- Global docs loaded from repo root:
-  - `GOATCITADEL.md`
-  - `AGENTS.md`
-  - `CLAUDE.md`
-  - `CONTRIBUTING.md`
-  - `SECURITY.md`
-  - `VISION.md`
-- Workspace overrides loaded from `workspaces/<workspaceId>/` for same doc type.
-- Precedence: workspace override > global.
+- Public repo guidance is anchored in `AGENTS.md`, `CONTRIBUTING.md`, and `SECURITY.md`.
+- Workspace-specific guidance may still exist in private or local runtime environments outside the public repository snapshot.
 - Runtime injection is bounded by token budget and can be disabled with:
   - `GOATCITADEL_DISABLE_GUIDANCE_INJECTION=true`
 

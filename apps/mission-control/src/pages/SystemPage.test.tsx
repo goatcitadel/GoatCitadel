@@ -57,15 +57,10 @@ function buildOpenclawParityProgramMock() {
     generatedAt: "2026-03-29T00:00:00.000Z",
     completedEpicIds: ["GC-P0-01", "GC-P0-05", "GC-P0-06", "GC-P0-07", "GC-P1-08", "GC-P1-10", "GC-P2-11"],
     openEpicIds: ["GC-P0-02", "GC-P0-03", "GC-P1-04", "GC-P2-12"],
-    completionOrder: [
-      "GC-P2-12",
-      "GC-P1-09",
-      "GC-P0-02",
-      "GC-P0-03",
-      "GC-P1-04",
-    ],
+    completionOrder: ["GC-P2-12", "GC-P1-09", "GC-P0-02", "GC-P0-03", "GC-P1-04"],
     nextEpicId: "GC-P2-12",
-    nextSlice: "Generate the System-page voice proof lane, run the transcription + talk + wake cycle, and use the first recorded bundle to tighten operator recovery workflows.",
+    nextSlice:
+      "Generate the System-page voice proof lane, run the transcription + talk + wake cycle, and use the first recorded bundle to tighten operator recovery workflows.",
     unsafeClaims: [
       "Slack, Telegram, Google Chat, Teams, and Discord are not yet safe to claim as fully stabilized inbound/outbound channels.",
       "Tier-1 planned channels remain unfinished: WhatsApp, iMessage/BlueBubbles, and Signal.",
@@ -82,24 +77,30 @@ function buildOpenclawParityProgramMock() {
         epicId: "GC-P0-01",
         label: "Shared channel runtime semantics",
         status: "complete",
-        summary: "Shared channel runtime semantics are already routed through the common capability/action contract used by the current shipped channel surfaces.",
-        nextSlice: "Keep the shared channel-core contract as the only truth source while remaining beta and planned channels finish against it.",
+        summary:
+          "Shared channel runtime semantics are already routed through the common capability/action contract used by the current shipped channel surfaces.",
+        nextSlice:
+          "Keep the shared channel-core contract as the only truth source while remaining beta and planned channels finish against it.",
         blockers: [],
       },
       {
         epicId: "GC-P0-02",
         label: "Stabilize core beta channels",
         status: "in_progress",
-        summary: "Core beta channels exist, but Slack, Telegram, Google Chat, Teams, and Discord still need inbound/runtime hardening plus channel-by-channel operator proof before they are safe to claim as fully stabilized.",
-        nextSlice: "Close the remaining inbound/runtime gaps for each beta channel, then rerun channel-specific setup, diagnostics, and smoke proof before promoting the claim.",
+        summary:
+          "Core beta channels exist, but Slack, Telegram, Google Chat, Teams, and Discord still need inbound/runtime hardening plus channel-by-channel operator proof before they are safe to claim as fully stabilized.",
+        nextSlice:
+          "Close the remaining inbound/runtime gaps for each beta channel, then rerun channel-specific setup, diagnostics, and smoke proof before promoting the claim.",
         blockers: [
           {
             kind: "repo_runtime",
-            summary: "Slack, Telegram, Google Chat, Teams, and Discord still need the last inbound/runtime hardening tranche before the full stabilization claim is defensible.",
+            summary:
+              "Slack, Telegram, Google Chat, Teams, and Discord still need the last inbound/runtime hardening tranche before the full stabilization claim is defensible.",
           },
           {
             kind: "manual_operator",
-            summary: "Core beta channels still need a fresh operator proof pass after the final hardening tranche; code-complete alone does not close the claim.",
+            summary:
+              "Core beta channels still need a fresh operator proof pass after the final hardening tranche; code-complete alone does not close the claim.",
           },
         ],
       },
@@ -107,16 +108,20 @@ function buildOpenclawParityProgramMock() {
         epicId: "GC-P0-03",
         label: "Ship Tier-1 planned channels",
         status: "in_progress",
-        summary: "Tier-1 planned channels are still open: WhatsApp, iMessage/BlueBubbles, and Signal need to move from partial bridge seams to full parity support.",
-        nextSlice: "Ship Tier-1 channels one at a time with capability truth, setup UX, diagnostics, tests, and operator proof before marking any of them complete.",
+        summary:
+          "Tier-1 planned channels are still open: WhatsApp, iMessage/BlueBubbles, and Signal need to move from partial bridge seams to full parity support.",
+        nextSlice:
+          "Ship Tier-1 channels one at a time with capability truth, setup UX, diagnostics, tests, and operator proof before marking any of them complete.",
         blockers: [
           {
             kind: "repo_runtime",
-            summary: "WhatsApp, iMessage/BlueBubbles, and Signal still lack the full inbound normalization and action/runtime parity needed to leave planned status.",
+            summary:
+              "WhatsApp, iMessage/BlueBubbles, and Signal still lack the full inbound normalization and action/runtime parity needed to leave planned status.",
           },
           {
             kind: "manual_operator",
-            summary: "Tier-1 channels still need repeatable operator proof before catalog maturity can be promoted truthfully.",
+            summary:
+              "Tier-1 channels still need repeatable operator proof before catalog maturity can be promoted truthfully.",
           },
         ],
       },
@@ -124,12 +129,15 @@ function buildOpenclawParityProgramMock() {
         epicId: "GC-P1-04",
         label: "Ship Tier-2 planned channels",
         status: "in_progress",
-        summary: "Tier-2 planned channels remain open: Mattermost, LINE, Zalo OA, and Zalo Personal are still pending implementation and proof.",
-        nextSlice: "Reuse the Tier-1 completion template for Tier-2 channels so catalog maturity, diagnostics, tests, and operator proof stay aligned.",
+        summary:
+          "Tier-2 planned channels remain open: Mattermost, LINE, Zalo OA, and Zalo Personal are still pending implementation and proof.",
+        nextSlice:
+          "Reuse the Tier-1 completion template for Tier-2 channels so catalog maturity, diagnostics, tests, and operator proof stay aligned.",
         blockers: [
           {
             kind: "repo_runtime",
-            summary: "Mattermost, LINE, Zalo OA, and Zalo Personal still have partial outbound seams but not the full parity bar for inbound/runtime behavior.",
+            summary:
+              "Mattermost, LINE, Zalo OA, and Zalo Personal still have partial outbound seams but not the full parity bar for inbound/runtime behavior.",
           },
           {
             kind: "manual_operator",
@@ -142,7 +150,8 @@ function buildOpenclawParityProgramMock() {
         label: "Browser control parity",
         status: "complete",
         summary: "8 browser tools are registered and current operator proof is on file for trusted_local.",
-        nextSlice: "Keep the browser proof current and rerun the lane only when browser tooling, guardrails, or deployment-profile posture changes.",
+        nextSlice:
+          "Keep the browser proof current and rerun the lane only when browser tooling, guardrails, or deployment-profile posture changes.",
         blockers: [],
       },
       {
@@ -150,19 +159,23 @@ function buildOpenclawParityProgramMock() {
         label: "Long-tail parity register",
         status: "complete",
         summary: "Follow-on parity now resolves to a live runtime report instead of existing only as placeholder rows.",
-        nextSlice: "Keep the parity report, proof-lane contract, and markdown register aligned as each remaining tranche lands.",
+        nextSlice:
+          "Keep the parity report, proof-lane contract, and markdown register aligned as each remaining tranche lands.",
         blockers: [],
       },
       {
         epicId: "GC-P2-12",
         label: "Voice Wake / Talk Mode parity",
         status: "in_progress",
-        summary: "Voice runtime is ready, but the current proof bundle still needs to be refreshed before parity can be called complete.",
-        nextSlice: "Generate the System-page voice proof lane, run the transcription + talk + wake cycle, and use the first recorded bundle to tighten operator recovery workflows.",
+        summary:
+          "Voice runtime is ready, but the current proof bundle still needs to be refreshed before parity can be called complete.",
+        nextSlice:
+          "Generate the System-page voice proof lane, run the transcription + talk + wake cycle, and use the first recorded bundle to tighten operator recovery workflows.",
         blockers: [
           {
             kind: "manual_operator",
-            summary: "Voice proof still depends on a current, reproducible operator run under the active deployment posture before parity can be called complete.",
+            summary:
+              "Voice proof still depends on a current, reproducible operator run under the active deployment posture before parity can be called complete.",
           },
         ],
       },
@@ -202,9 +215,7 @@ async function clickButton(renderer: ReactTestRenderer, label: string): Promise<
     if (node.type !== "button") {
       return false;
     }
-    return instanceText(node)
-      .replace(/\s+/g, " ")
-      .includes(label);
+    return instanceText(node).replace(/\s+/g, " ").includes(label);
   })[0];
   if (!button) {
     throw new Error(`Button not found: ${label}`);
@@ -268,8 +279,10 @@ describe("SystemPage", () => {
           stepId: "preflight",
           title: "Confirm voice runtime posture",
           status: "ready",
-          instructions: "Confirm the managed voice runtime is ready, the selected model is base.en, and current talk/wake state is visible before starting the proof run.",
-          evidenceHint: "Capture the live runtime readiness, selected model, and current talk/wake state from System or Settings.",
+          instructions:
+            "Confirm the managed voice runtime is ready, the selected model is base.en, and current talk/wake state is visible before starting the proof run.",
+          evidenceHint:
+            "Capture the live runtime readiness, selected model, and current talk/wake state from System or Settings.",
         },
       ],
       markdown: "# Voice Wake And Talk Proof Bundle Draft",
@@ -278,65 +291,83 @@ describe("SystemPage", () => {
       laneId: "voice",
       generatedAt: "2026-03-29T00:04:00.000Z",
       summary: "Voice proof lane is ready with runtime ready, model base.en, talk stopped, and wake disabled.",
-      relativePath: "artifacts/follow-on-parity/voice/2026-03-29/voice-proof-bundle-trusted_local-2026-03-29T00-04-00-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/voice/2026-03-29/voice-proof-bundle-trusted_local-2026-03-29T00-04-00-000Z.md",
+      relativePath:
+        "artifacts/follow-on-parity/voice/2026-03-29/voice-proof-bundle-trusted_local-2026-03-29T00-04-00-000Z.md",
+      fullPath:
+        "workspace/artifacts/follow-on-parity/voice/2026-03-29/voice-proof-bundle-trusted_local-2026-03-29T00-04-00-000Z.md",
       bytes: 384,
     });
     apiMocks.exportBrowserProofLaneDraft.mockResolvedValue({
       laneId: "browser",
       generatedAt: "2026-03-29T00:05:00.000Z",
       summary: "Browser proof lane is ready for trusted_local with 4 read tool(s) and 4 control tool(s).",
-      relativePath: "artifacts/follow-on-parity/browser/2026-03-29/browser-control-proof-bundle-trusted_local-2026-03-29T00-05-00-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/browser/2026-03-29/browser-control-proof-bundle-trusted_local-2026-03-29T00-05-00-000Z.md",
+      relativePath:
+        "artifacts/follow-on-parity/browser/2026-03-29/browser-control-proof-bundle-trusted_local-2026-03-29T00-05-00-000Z.md",
+      fullPath:
+        "workspace/artifacts/follow-on-parity/browser/2026-03-29/browser-control-proof-bundle-trusted_local-2026-03-29T00-05-00-000Z.md",
       bytes: 448,
     });
     apiMocks.exportPackagingProofLaneDraft.mockResolvedValue({
       laneId: "packaging",
       generatedAt: "2026-03-29T00:06:00.000Z",
       summary: "Packaging proof lane is ready with trusted_local, token auth, and 2 allowlisted host(s).",
-      relativePath: "artifacts/follow-on-parity/packaging/2026-03-29/packaging-deployment-proof-bundle-trusted_local-2026-03-29T00-06-00-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/packaging/2026-03-29/packaging-deployment-proof-bundle-trusted_local-2026-03-29T00-06-00-000Z.md",
+      relativePath:
+        "artifacts/follow-on-parity/packaging/2026-03-29/packaging-deployment-proof-bundle-trusted_local-2026-03-29T00-06-00-000Z.md",
+      fullPath:
+        "workspace/artifacts/follow-on-parity/packaging/2026-03-29/packaging-deployment-proof-bundle-trusted_local-2026-03-29T00-06-00-000Z.md",
       bytes: 472,
     });
     apiMocks.exportCompanionBootstrapBrief.mockResolvedValue({
       laneId: "companion",
       generatedAt: "2026-03-29T00:07:00.000Z",
-      summary: "companion.android.v1 now has current Android runtime/UI proof recorded for the separate mobile repo, and the gateway/session lane remains aligned to that proof.",
-      relativePath: "artifacts/follow-on-parity/companion/2026-03-29/companion-bootstrap-brief-2026-03-29T00-07-00-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/companion/2026-03-29/companion-bootstrap-brief-2026-03-29T00-07-00-000Z.md",
+      summary:
+        "companion.android.v1 now has current Android runtime/UI proof recorded for the separate mobile repo, and the gateway/session lane remains aligned to that proof.",
+      relativePath:
+        "artifacts/follow-on-parity/companion/2026-03-29/companion-bootstrap-brief-2026-03-29T00-07-00-000Z.md",
+      fullPath:
+        "workspace/artifacts/follow-on-parity/companion/2026-03-29/companion-bootstrap-brief-2026-03-29T00-07-00-000Z.md",
       bytes: 512,
     });
     apiMocks.exportExtensionSdkBrief.mockResolvedValue({
       laneId: "extensions",
       generatedAt: "2026-03-29T00:08:00.000Z",
-      summary: "1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; the author contract is explicit and @goatcitadel/extensions-sdk@0.6.0-beta.2 is published to GitHub Packages as the current public beta SDK boundary. The public beta package already exists; the remaining decision is whether and when to widen the runtime contract beyond the current explicit boundary.",
+      summary:
+        "1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; the author contract is explicit and @goatcitadel/extensions-sdk@0.9.0-beta.1 is published to GitHub Packages as the current public beta SDK boundary. The public beta package already exists; the remaining decision is whether and when to widen the runtime contract beyond the current explicit boundary.",
       relativePath: "artifacts/follow-on-parity/extensions/2026-03-29/extension-sdk-brief-2026-03-29T00-08-00-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/extensions/2026-03-29/extension-sdk-brief-2026-03-29T00-08-00-000Z.md",
+      fullPath:
+        "workspace/artifacts/follow-on-parity/extensions/2026-03-29/extension-sdk-brief-2026-03-29T00-08-00-000Z.md",
       bytes: 540,
     });
     apiMocks.exportExtensionStarterPack.mockResolvedValue({
       generatedAt: "2026-03-29T00:09:00.000Z",
-      summary: "1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; a repo-native starter pack can now be exported with the current contract doc, reference add-on scaffold, and reference integration-plugin scaffold.",
-      starterRoot: "artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z",
+      summary:
+        "1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; a repo-native starter pack can now be exported with the current contract doc, reference add-on scaffold, and reference integration-plugin scaffold.",
+      starterRoot:
+        "artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z",
       fileCount: 6,
       totalBytes: 4096,
       files: [
         {
-          relativePath: "artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z/README.md",
-          fullPath: "workspace/artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z/README.md",
+          relativePath:
+            "artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z/README.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z/README.md",
           bytes: 512,
         },
       ],
     });
     apiMocks.fetchExtensionSdkBrief.mockResolvedValue({
       generatedAt: "2026-03-29T00:08:00.000Z",
-      summary: "1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; the author contract is explicit and @goatcitadel/extensions-sdk@0.6.0-beta.2 is published to GitHub Packages as the current public beta SDK boundary. The public beta package already exists; the remaining decision is whether and when to widen the runtime contract beyond the current explicit boundary.",
+      summary:
+        "1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; the author contract is explicit and @goatcitadel/extensions-sdk@0.9.0-beta.1 is published to GitHub Packages as the current public beta SDK boundary. The public beta package already exists; the remaining decision is whether and when to widen the runtime contract beyond the current explicit boundary.",
       markdown: "# Extension SDK Brief\n\n## Decision Gate",
     });
     apiMocks.fetchExtensionStarterPack.mockResolvedValue({
       generatedAt: "2026-03-29T00:09:00.000Z",
-      summary: "1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; a repo-native starter pack can now be exported with the current contract doc, reference add-on scaffold, and reference integration-plugin scaffold.",
-      starterRoot: "artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z",
+      summary:
+        "1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; a repo-native starter pack can now be exported with the current contract doc, reference add-on scaffold, and reference integration-plugin scaffold.",
+      starterRoot:
+        "artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z",
       files: [
         "artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z/README.md",
         "artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z/docs/PLUGIN_SDK_CONTRACT.md",
@@ -353,7 +384,8 @@ describe("SystemPage", () => {
       packaging: {
         allowLoopbackBypass: false,
         networkAllowlistCount: 2,
-        postureSummary: "Packaging is currently operating in trusted_local posture, which is useful for operator validation but not the full hardened deployment lane.",
+        postureSummary:
+          "Packaging is currently operating in trusted_local posture, which is useful for operator validation but not the full hardened deployment lane.",
         proofStatus: {
           hasArtifact: false,
           freshness: "missing",
@@ -369,7 +401,8 @@ describe("SystemPage", () => {
         totalToolCount: 8,
         readToolCount: 4,
         controlToolCount: 4,
-        guardrailSummary: "Trusted-local posture allows the full browser family, including cookie and storage tools, with normal guardrails.",
+        guardrailSummary:
+          "Trusted-local posture allows the full browser family, including cookie and storage tools, with normal guardrails.",
         stateToolRuntime: {
           restrictedToProfile: "trusted_local",
           registeredTools: ["browser.cookies.get", "browser.storage.get"],
@@ -398,8 +431,10 @@ describe("SystemPage", () => {
           laneId: "browser",
           generatedAt: "2026-03-28T23:55:00.000Z",
           summary: "Prior browser proof bundle",
-          relativePath: "artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
-          fullPath: "workspace/artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
+          relativePath:
+            "artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
+          fullPath:
+            "workspace/artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
           bytes: 321,
         },
       },
@@ -435,7 +470,8 @@ describe("SystemPage", () => {
       plugins: {
         totalCount: 2,
         enabledCount: 1,
-        sdkSummary: "1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; the author contract is explicit and @goatcitadel/extensions-sdk@0.6.0-beta.2 is published to GitHub Packages as the current public beta SDK boundary.",
+        sdkSummary:
+          "1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; the author contract is explicit and @goatcitadel/extensions-sdk@0.9.0-beta.1 is published to GitHub Packages as the current public beta SDK boundary.",
         referenceLifecycle: {
           referencePluginId: "reference-integration-plugin",
           present: true,
@@ -452,7 +488,7 @@ describe("SystemPage", () => {
         recommendedActions: [
           "Use docs/PLUGIN_SDK_CONTRACT.md as the current author-contract baseline for extension work.",
           "Use packages/extensions-sdk/ as the local author SDK baseline for manifest validation and file helpers.",
-          "Use @goatcitadel/extensions-sdk@0.6.0-beta.2 from GitHub Packages when validating the external author-install flow.",
+          "Use @goatcitadel/extensions-sdk@0.9.0-beta.1 from GitHub Packages when validating the external author-install flow.",
           "Use templates/integration-plugins/reference-integration-plugin/ as the local installable plugin reference path.",
           "Use the generated or exported extension starter pack when the current contract doc and reference scaffolds need to be handed off outside the repo.",
           "Keep a smoke test around discovery, install metadata, enable/disable, and runtime reporting for the reference plugin lifecycle.",
@@ -486,7 +522,8 @@ describe("SystemPage", () => {
             "Platform canvas targets inherit a2ui.v1 through companion_session, and Android proof is now on file for the current signed-session runtime.",
           ],
         },
-        paritySummary: "A2UI contract a2ui.v1 now defines ui_canvas + platform_canvas scope for Canvas + A2UI via mission_control, with 1 declared canvas-capable platform target(s).",
+        paritySummary:
+          "A2UI contract a2ui.v1 now defines ui_canvas + platform_canvas scope for Canvas + A2UI via mission_control, with 1 declared canvas-capable platform target(s).",
         artifactStatus: {
           hasArtifact: true,
           freshness: "current",
@@ -524,10 +561,7 @@ describe("SystemPage", () => {
           bootstrapStatus: "server_foundation",
           repoStrategy: "separate_repo",
           bootstrapRepo: "GoatCitadel-mobile",
-          targetCatalogIds: [
-            "platform.android-canvas-camera-screen",
-            "platform.ios-canvas-camera-voice",
-          ],
+          targetCatalogIds: ["platform.android-canvas-camera-screen", "platform.ios-canvas-camera-voice"],
           deviceCapabilities: ["scene_view", "camera_input", "screen_input"],
           transportLanes: ["foreground_sse", "push_refresh", "manual_refresh"],
           authRequirements: [
@@ -615,7 +649,8 @@ describe("SystemPage", () => {
             note: "Device grants already record device label, type, actor, grant source, and last-used metadata, but there is no companion-specific signed audit chain yet.",
           },
         ],
-        paritySummary: "companion.android.v1 defines an Android-first separate_repo bootstrap lane for 2 declared companion-capable platform target(s), and the gateway/session lane now has current Android runtime/UI proof recorded against the existing GoatCitadel-mobile repo.",
+        paritySummary:
+          "companion.android.v1 defines an Android-first separate_repo bootstrap lane for 2 declared companion-capable platform target(s), and the gateway/session lane now has current Android runtime/UI proof recorded against the existing GoatCitadel-mobile repo.",
         artifactStatus: {
           hasArtifact: true,
           freshness: "current",
@@ -634,14 +669,16 @@ describe("SystemPage", () => {
           label: "Browser control parity",
           state: "have_foundation",
           summary: "8 browser tools are registered and current operator proof is on file for trusted_local.",
-          nextSlice: "Keep the browser proof current and rerun the lane only when browser tooling, guardrails, or deployment-profile posture changes.",
+          nextSlice:
+            "Keep the browser proof current and rerun the lane only when browser tooling, guardrails, or deployment-profile posture changes.",
         },
         {
           epicId: "GC-P2-12",
           label: "Voice Wake / Talk Mode parity",
           state: "partial",
           summary: "Voice runtime is ready.",
-          nextSlice: "Generate the System-page voice proof lane, run the transcription + talk + wake cycle, and use the first recorded bundle to tighten operator recovery workflows.",
+          nextSlice:
+            "Generate the System-page voice proof lane, run the transcription + talk + wake cycle, and use the first recorded bundle to tighten operator recovery workflows.",
         },
       ],
     });
@@ -668,7 +705,8 @@ describe("SystemPage", () => {
       generatedAt: "2026-03-29T00:05:30.000Z",
       deploymentProfile: "trusted_local",
       authMode: "token",
-      summary: "A2UI proof lane is aligned to the current Android-signed-session runtime; rerun the Office Lab handoff and directed-move pass only when the contract, deployment profile, or operator flow changes.",
+      summary:
+        "A2UI proof lane is aligned to the current Android-signed-session runtime; rerun the Office Lab handoff and directed-move pass only when the contract, deployment profile, or operator flow changes.",
       checklistPath: "docs/testing/A2UI_VALIDATION_CHECKLIST.md",
       templatePath: "templates/verification/a2ui-proof-bundle.md",
       blockingIssues: [],
@@ -677,7 +715,8 @@ describe("SystemPage", () => {
           stepId: "preflight",
           title: "Capture live A2UI contract state",
           status: "ready",
-          instructions: "Confirm a2ui.v1, scopes (ui_canvas, platform_canvas), transports (local_session, companion_session), and the current canvas summary from System before starting operator proof.",
+          instructions:
+            "Confirm a2ui.v1, scopes (ui_canvas, platform_canvas), transports (local_session, companion_session), and the current canvas summary from System before starting operator proof.",
           evidenceHint: "Capture the System-page contract summary.",
         },
       ],
@@ -686,9 +725,12 @@ describe("SystemPage", () => {
     apiMocks.exportA2UIProofLaneDraft.mockResolvedValue({
       laneId: "a2ui",
       generatedAt: "2026-03-29T00:05:30.000Z",
-      summary: "A2UI proof lane is aligned to the current Android-signed-session runtime; rerun the Office Lab handoff and directed-move pass only when the contract, deployment profile, or operator flow changes.",
-      relativePath: "artifacts/follow-on-parity/a2ui/2026-03-29/a2ui-proof-bundle-trusted_local-2026-03-29T00-05-30-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/a2ui/2026-03-29/a2ui-proof-bundle-trusted_local-2026-03-29T00-05-30-000Z.md",
+      summary:
+        "A2UI proof lane is aligned to the current Android-signed-session runtime; rerun the Office Lab handoff and directed-move pass only when the contract, deployment profile, or operator flow changes.",
+      relativePath:
+        "artifacts/follow-on-parity/a2ui/2026-03-29/a2ui-proof-bundle-trusted_local-2026-03-29T00-05-30-000Z.md",
+      fullPath:
+        "workspace/artifacts/follow-on-parity/a2ui/2026-03-29/a2ui-proof-bundle-trusted_local-2026-03-29T00-05-30-000Z.md",
       bytes: 512,
     });
     apiMocks.fetchPackagingProofLaneDraft.mockResolvedValue({
@@ -718,7 +760,9 @@ describe("SystemPage", () => {
       });
       await flush();
       const initialText = rendererText(renderer);
-      expect(initialText).toContain("Saved browser proof artifact: artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md");
+      expect(initialText).toContain(
+        "Saved browser proof artifact: artifacts/follow-on-parity/browser/2026-03-28/browser-control-proof-bundle-trusted_local-2026-03-28T23-55-00-000Z.md",
+      );
       expect(initialText).toContain("Artifact bytes 321 · generated 2026-03-28T23:55:00.000Z");
       await clickButton(renderer, "Export browser proof artifact");
       await flush();
@@ -743,100 +787,200 @@ describe("SystemPage", () => {
       expect(text).toContain("Full-program status: 7 complete · 4 open · next GC-P2-12");
       expect(text).toContain("Completion order: GC-P2-12 -> GC-P1-09 -> GC-P0-02 -> GC-P0-03 -> GC-P1-04");
       expect(text).toContain("Blockers: repo runtime 3 · manual/operator 4 · external repo 0 · publication 0");
-      expect(text).toContain("Unsafe to claim yet: Slack, Telegram, Google Chat, Teams, and Discord are not yet safe to claim as fully stabilized inbound/outbound channels.");
-      expect(text).toContain("Unsafe to claim yet: Tier-1 planned channels remain unfinished: WhatsApp, iMessage/BlueBubbles, and Signal.");
-      expect(text).toContain("Follow-on runtime posture: trusted_local · auth token · voice ready · browser 4 control tool(s).");
-      expect(text).toContain("Voice next action: Generate the voice proof-lane draft from System, then run the transcription, Talk Mode, and Wake Mode operator cycle.");
-      expect(text).toContain("Voice proof status: current · latest profile trusted_local · matches current profile · 0 day(s) old");
+      expect(text).toContain(
+        "Unsafe to claim yet: Slack, Telegram, Google Chat, Teams, and Discord are not yet safe to claim as fully stabilized inbound/outbound channels.",
+      );
+      expect(text).toContain(
+        "Unsafe to claim yet: Tier-1 planned channels remain unfinished: WhatsApp, iMessage/BlueBubbles, and Signal.",
+      );
+      expect(text).toContain(
+        "Follow-on runtime posture: trusted_local · auth token · voice ready · browser 4 control tool(s).",
+      );
+      expect(text).toContain(
+        "Voice next action: Generate the voice proof-lane draft from System, then run the transcription, Talk Mode, and Wake Mode operator cycle.",
+      );
+      expect(text).toContain(
+        "Voice proof status: current · latest profile trusted_local · matches current profile · 0 day(s) old",
+      );
       expect(text).toContain("Generate voice proof draft");
       expect(text).toContain("Export voice proof artifact");
-      expect(text).toContain("Voice proof lane: Voice proof lane is ready with runtime ready, model base.en, talk stopped, and wake disabled.");
-      expect(text).toContain("Checklist docs/testing/VOICE_VALIDATION_CHECKLIST.md · Template templates/verification/voice-proof-bundle.md");
+      expect(text).toContain(
+        "Voice proof lane: Voice proof lane is ready with runtime ready, model base.en, talk stopped, and wake disabled.",
+      );
+      expect(text).toContain(
+        "Checklist docs/testing/VOICE_VALIDATION_CHECKLIST.md · Template templates/verification/voice-proof-bundle.md",
+      );
       expect(text).toContain("Voice proof step: Confirm voice runtime posture");
-      expect(text).toContain("Saved voice proof artifact: artifacts/follow-on-parity/voice/2026-03-29/voice-proof-bundle-trusted_local-2026-03-29T00-04-00-000Z.md");
+      expect(text).toContain(
+        "Saved voice proof artifact: artifacts/follow-on-parity/voice/2026-03-29/voice-proof-bundle-trusted_local-2026-03-29T00-04-00-000Z.md",
+      );
       expect(text).toContain("Artifact bytes 384 · generated 2026-03-29T00:04:00.000Z");
-      expect(text).toContain("Browser posture: Trusted-local posture allows the full browser family, including cookie and storage tools, with normal guardrails.");
+      expect(text).toContain(
+        "Browser posture: Trusted-local posture allows the full browser family, including cookie and storage tools, with normal guardrails.",
+      );
       expect(text).toContain("Browser state tools in trusted_local");
       expect(text).toContain("allowed browser.cookies.get, browser.storage.get");
       expect(text).toContain("blocked none");
-      expect(text).toContain("Browser next action: Current browser proof artifact matches the active deployment profile; rerun the lane only after browser tooling, guardrails, or deployment-profile posture changes.");
-      expect(text).toContain("Browser proof status: current · latest profile trusted_local · matches current profile · 0 day(s) old");
+      expect(text).toContain(
+        "Browser next action: Current browser proof artifact matches the active deployment profile; rerun the lane only after browser tooling, guardrails, or deployment-profile posture changes.",
+      );
+      expect(text).toContain(
+        "Browser proof status: current · latest profile trusted_local · matches current profile · 0 day(s) old",
+      );
       expect(text).toContain("Generate browser proof draft");
       expect(text).toContain("Export browser proof artifact");
-      expect(text).toContain("Browser proof lane: Browser proof lane is ready for trusted_local with 4 read tool(s) and 4 control tool(s).");
-      expect(text).toContain("Checklist docs/testing/BROWSER_CONTROL_VALIDATION_CHECKLIST.md · Template templates/verification/browser-control-proof-bundle.md");
+      expect(text).toContain(
+        "Browser proof lane: Browser proof lane is ready for trusted_local with 4 read tool(s) and 4 control tool(s).",
+      );
+      expect(text).toContain(
+        "Checklist docs/testing/BROWSER_CONTROL_VALIDATION_CHECKLIST.md · Template templates/verification/browser-control-proof-bundle.md",
+      );
       expect(text).toContain("Browser proof step: Confirm live browser surface");
       expect(text).toContain("Confirm the current browser tool counts before starting the operator pass.");
-      expect(text).toContain("Saved browser proof artifact: artifacts/follow-on-parity/browser/2026-03-29/browser-control-proof-bundle-trusted_local-2026-03-29T00-05-00-000Z.md");
+      expect(text).toContain(
+        "Saved browser proof artifact: artifacts/follow-on-parity/browser/2026-03-29/browser-control-proof-bundle-trusted_local-2026-03-29T00-05-00-000Z.md",
+      );
       expect(text).toContain("Artifact bytes 448 · generated 2026-03-29T00:05:00.000Z");
       expect(text).toContain("Packaging posture is trusted_local with auth mode token");
-      expect(text).toContain("Packaging summary: Packaging is currently operating in trusted_local posture, which is useful for operator validation but not the full hardened deployment lane.");
-      expect(text).toContain("Packaging proof status: current · latest profile trusted_local · matches current profile · 0 day(s) old");
+      expect(text).toContain(
+        "Packaging summary: Packaging is currently operating in trusted_local posture, which is useful for operator validation but not the full hardened deployment lane.",
+      );
+      expect(text).toContain(
+        "Packaging proof status: current · latest profile trusted_local · matches current profile · 0 day(s) old",
+      );
       expect(text).toContain("Generate packaging proof draft");
       expect(text).toContain("Export packaging proof artifact");
-      expect(text).toContain("Packaging proof lane: Packaging proof lane is ready with trusted_local, token auth, and 2 allowlisted host(s).");
-      expect(text).toContain("Checklist docs/PACKAGING_DEPLOYMENT_PARITY_CHECKLIST.md · Template templates/verification/packaging-deployment-proof-bundle.md");
+      expect(text).toContain(
+        "Packaging proof lane: Packaging proof lane is ready with trusted_local, token auth, and 2 allowlisted host(s).",
+      );
+      expect(text).toContain(
+        "Checklist docs/PACKAGING_DEPLOYMENT_PARITY_CHECKLIST.md · Template templates/verification/packaging-deployment-proof-bundle.md",
+      );
       expect(text).toContain("Packaging proof step: Capture deployment posture");
       expect(text).toContain("Confirm the current deployment profile before running install proof.");
-      expect(text).toContain("Packaging next action: Record each packaging parity run with templates/verification/packaging-deployment-proof-bundle.md.");
-      expect(text).toContain("Saved packaging proof artifact: artifacts/follow-on-parity/packaging/2026-03-29/packaging-deployment-proof-bundle-trusted_local-2026-03-29T00-06-00-000Z.md");
+      expect(text).toContain(
+        "Packaging next action: Record each packaging parity run with templates/verification/packaging-deployment-proof-bundle.md.",
+      );
+      expect(text).toContain(
+        "Saved packaging proof artifact: artifacts/follow-on-parity/packaging/2026-03-29/packaging-deployment-proof-bundle-trusted_local-2026-03-29T00-06-00-000Z.md",
+      );
       expect(text).toContain("Artifact bytes 472 · generated 2026-03-29T00:06:00.000Z");
-      expect(text).toContain("Canvas summary: A2UI contract a2ui.v1 now defines ui_canvas + platform_canvas scope for Canvas + A2UI via mission_control, with 1 declared canvas-capable platform target(s).");
-      expect(text).toContain("A2UI proof status: current · latest profile trusted_local · matches current profile · 0 day(s) old");
-      expect(text).toContain("Canvas contract: a2ui.v1 · scopes ui_canvas, platform_canvas · transports local_session, companion_session");
+      expect(text).toContain(
+        "Canvas summary: A2UI contract a2ui.v1 now defines ui_canvas + platform_canvas scope for Canvas + A2UI via mission_control, with 1 declared canvas-capable platform target(s).",
+      );
+      expect(text).toContain(
+        "A2UI proof status: current · latest profile trusted_local · matches current profile · 0 day(s) old",
+      );
+      expect(text).toContain(
+        "Canvas contract: a2ui.v1 · scopes ui_canvas, platform_canvas · transports local_session, companion_session",
+      );
       expect(text).toContain("Generate A2UI proof draft");
       expect(text).toContain("Export A2UI proof artifact");
-      expect(text).toContain("A2UI proof lane: A2UI proof lane is aligned to the current Android-signed-session runtime; rerun the Office Lab handoff and directed-move pass only when the contract, deployment profile, or operator flow changes.");
-      expect(text).toContain("Checklist docs/testing/A2UI_VALIDATION_CHECKLIST.md · Template templates/verification/a2ui-proof-bundle.md");
+      expect(text).toContain(
+        "A2UI proof lane: A2UI proof lane is aligned to the current Android-signed-session runtime; rerun the Office Lab handoff and directed-move pass only when the contract, deployment profile, or operator flow changes.",
+      );
+      expect(text).toContain(
+        "Checklist docs/testing/A2UI_VALIDATION_CHECKLIST.md · Template templates/verification/a2ui-proof-bundle.md",
+      );
       expect(text).toContain("A2UI proof step: Capture live A2UI contract state");
-      expect(text).toContain("Saved A2UI proof artifact: artifacts/follow-on-parity/a2ui/2026-03-29/a2ui-proof-bundle-trusted_local-2026-03-29T00-05-30-000Z.md");
+      expect(text).toContain(
+        "Saved A2UI proof artifact: artifacts/follow-on-parity/a2ui/2026-03-29/a2ui-proof-bundle-trusted_local-2026-03-29T00-05-30-000Z.md",
+      );
       expect(text).toContain("Artifact bytes 512 · generated 2026-03-29T00:05:30.000Z");
-      expect(text).toContain("Companion summary: companion.android.v1 defines an Android-first separate_repo bootstrap lane for 2 declared companion-capable platform target(s), and the gateway/session lane now has current Android runtime/UI proof recorded against the existing GoatCitadel-mobile repo.");
+      expect(text).toContain(
+        "Companion summary: companion.android.v1 defines an Android-first separate_repo bootstrap lane for 2 declared companion-capable platform target(s), and the gateway/session lane now has current Android runtime/UI proof recorded against the existing GoatCitadel-mobile repo.",
+      );
       expect(text).toContain("Companion brief status: current · 0 day(s) old");
-      expect(text).toContain("Companion contract: companion.android.v1 · target android · repo GoatCitadel-mobile · status server_foundation");
-      expect(text).toContain("Companion bootstrap: dashboard, chat, approvals, tasks, settings, event_feed · transports foreground_sse, push_refresh, manual_refresh");
-      expect(text).toContain("Companion prerequisites: device_pairing, token_rotation, request_signing, sse_resume, per_device_audit");
+      expect(text).toContain(
+        "Companion contract: companion.android.v1 · target android · repo GoatCitadel-mobile · status server_foundation",
+      );
+      expect(text).toContain(
+        "Companion bootstrap: dashboard, chat, approvals, tasks, settings, event_feed · transports foreground_sse, push_refresh, manual_refresh",
+      );
+      expect(text).toContain(
+        "Companion prerequisites: device_pairing, token_rotation, request_signing, sse_resume, per_device_audit",
+      );
       expect(text).toContain("Companion auth readiness: Device identity");
-      expect(text).toContain("Gateway auth already supports device access requests, approvals, grants, and revocation for named devices.");
+      expect(text).toContain(
+        "Gateway auth already supports device access requests, approvals, grants, and revocation for named devices.",
+      );
       expect(text).toContain("Companion auth readiness: Short-lived access tokens");
-      expect(text).toContain("the gateway now issues dedicated short-lived companion access tokens through the companion session exchange route.");
+      expect(text).toContain(
+        "the gateway now issues dedicated short-lived companion access tokens through the companion session exchange route.",
+      );
       expect(text).toContain("Companion prerequisite: SSE resume");
       expect(text).toContain("Last-Event-ID resume");
       expect(text).toContain("Companion prerequisite: Request signing");
-      expect(text).toContain("The auth pipeline now verifies companion Ed25519 request signatures and records replay-cache state on signed mutations.");
+      expect(text).toContain(
+        "The auth pipeline now verifies companion Ed25519 request signatures and records replay-cache state on signed mutations.",
+      );
       expect(text).toContain("Export companion bootstrap brief");
-      expect(text).toContain("Saved companion bootstrap brief: artifacts/follow-on-parity/companion/2026-03-29/companion-bootstrap-brief-2026-03-29T00-07-00-000Z.md");
+      expect(text).toContain(
+        "Saved companion bootstrap brief: artifacts/follow-on-parity/companion/2026-03-29/companion-bootstrap-brief-2026-03-29T00-07-00-000Z.md",
+      );
       expect(text).toContain("Artifact bytes 512 · generated 2026-03-29T00:07:00.000Z");
-      expect(text).toContain("Extension summary: 1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; the author contract is explicit and @goatcitadel/extensions-sdk@0.6.0-beta.2 is published to GitHub Packages as the current public beta SDK boundary.");
+      expect(text).toContain(
+        "Extension summary: 1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; the author contract is explicit and @goatcitadel/extensions-sdk@0.9.0-beta.1 is published to GitHub Packages as the current public beta SDK boundary.",
+      );
       expect(text).toContain("Extension brief status: current · 0 day(s) old");
       expect(text).toContain("Reference plugin lifecycle: reference-integration-plugin");
       expect(text).toContain("installed · enabled · source aligned");
       expect(text).toContain("Reference plugin source: templates/integration-plugins/reference-integration-plugin");
       expect(text).toContain("Reference plugin capabilities: reference.install, lifecycle.smoke");
-      expect(text).toContain("Extension next action: Use docs/PLUGIN_SDK_CONTRACT.md as the current author-contract baseline for extension work.");
-      expect(text).toContain("Extension next action: Use packages/extensions-sdk/ as the local author SDK baseline for manifest validation and file helpers.");
-      expect(text).toContain("Extension next action: Use @goatcitadel/extensions-sdk@0.6.0-beta.2 from GitHub Packages when validating the external author-install flow.");
-      expect(text).toContain("Extension next action: Use templates/integration-plugins/reference-integration-plugin/ as the local installable plugin reference path.");
-      expect(text).toContain("Extension next action: Use the generated or exported extension starter pack when the current contract doc and reference scaffolds need to be handed off outside the repo.");
-      expect(text).toContain("Extension next action: Keep a smoke test around discovery, install metadata, enable/disable, and runtime reporting for the reference plugin lifecycle.");
+      expect(text).toContain(
+        "Extension next action: Use docs/PLUGIN_SDK_CONTRACT.md as the current author-contract baseline for extension work.",
+      );
+      expect(text).toContain(
+        "Extension next action: Use packages/extensions-sdk/ as the local author SDK baseline for manifest validation and file helpers.",
+      );
+      expect(text).toContain(
+        "Extension next action: Use @goatcitadel/extensions-sdk@0.9.0-beta.1 from GitHub Packages when validating the external author-install flow.",
+      );
+      expect(text).toContain(
+        "Extension next action: Use templates/integration-plugins/reference-integration-plugin/ as the local installable plugin reference path.",
+      );
+      expect(text).toContain(
+        "Extension next action: Use the generated or exported extension starter pack when the current contract doc and reference scaffolds need to be handed off outside the repo.",
+      );
+      expect(text).toContain(
+        "Extension next action: Keep a smoke test around discovery, install metadata, enable/disable, and runtime reporting for the reference plugin lifecycle.",
+      );
       expect(text).toContain("Generate extension SDK brief");
-      expect(text).toContain("Extension SDK brief: 1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; the author contract is explicit and @goatcitadel/extensions-sdk@0.6.0-beta.2 is published to GitHub Packages as the current public beta SDK boundary. The public beta package already exists; the remaining decision is whether and when to widen the runtime contract beyond the current explicit boundary.");
+      expect(text).toContain(
+        "Extension SDK brief: 1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; the author contract is explicit and @goatcitadel/extensions-sdk@0.9.0-beta.1 is published to GitHub Packages as the current public beta SDK boundary. The public beta package already exists; the remaining decision is whether and when to widen the runtime contract beyond the current explicit boundary.",
+      );
       expect(text).toContain("Export extension SDK brief");
-      expect(text).toContain("Saved extension SDK brief: artifacts/follow-on-parity/extensions/2026-03-29/extension-sdk-brief-2026-03-29T00-08-00-000Z.md");
+      expect(text).toContain(
+        "Saved extension SDK brief: artifacts/follow-on-parity/extensions/2026-03-29/extension-sdk-brief-2026-03-29T00-08-00-000Z.md",
+      );
       expect(text).toContain("Artifact bytes 540 · generated 2026-03-29T00:08:00.000Z");
       expect(text).toContain("Generate extension starter pack");
-      expect(text).toContain("Extension starter pack: 1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; a repo-native starter pack can now be exported with the current contract doc, reference add-on scaffold, and reference integration-plugin scaffold.");
-      expect(text).toContain("Starter root: artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z");
+      expect(text).toContain(
+        "Extension starter pack: 1 cataloged add-on(s), 1 installed (1 running), and 2 integration plugin(s) (1 enabled) show operator breadth; a repo-native starter pack can now be exported with the current contract doc, reference add-on scaffold, and reference integration-plugin scaffold.",
+      );
+      expect(text).toContain(
+        "Starter root: artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z",
+      );
       expect(text).toContain("Export extension starter pack");
-      expect(text).toContain("Saved extension starter pack: artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z");
+      expect(text).toContain(
+        "Saved extension starter pack: artifacts/follow-on-parity/extensions/starter-pack/2026-03-29/extension-starter-pack-2026-03-29T00-09-00-000Z",
+      );
       expect(text).toContain("Starter pack files 6 · total bytes 4096");
       expect(text).toContain("GC-P0-02 · Stabilize core beta channels");
-      expect(text).toContain("Blocker [ repo runtime ]: Slack, Telegram, Google Chat, Teams, and Discord still need the last inbound/runtime hardening tranche before the full stabilization claim is defensible.");
+      expect(text).toContain(
+        "Blocker [ repo runtime ]: Slack, Telegram, Google Chat, Teams, and Discord still need the last inbound/runtime hardening tranche before the full stabilization claim is defensible.",
+      );
       expect(text).toContain("GC-P0-03 · Ship Tier-1 planned channels");
-      expect(text).toContain("Blocker [ manual/operator ]: Tier-1 channels still need repeatable operator proof before catalog maturity can be promoted truthfully.");
+      expect(text).toContain(
+        "Blocker [ manual/operator ]: Tier-1 channels still need repeatable operator proof before catalog maturity can be promoted truthfully.",
+      );
       expect(text).toContain("GC-P0-06 · Browser control parity");
-      expect(text).toContain("Keep the browser proof current and rerun the lane only when browser tooling, guardrails, or deployment-profile posture changes.");
-      expect(text).toContain("Next slice: Generate the System-page voice proof lane, run the transcription + talk + wake cycle, and use the first recorded bundle to tighten operator recovery workflows.");
+      expect(text).toContain(
+        "Keep the browser proof current and rerun the lane only when browser tooling, guardrails, or deployment-profile posture changes.",
+      );
+      expect(text).toContain(
+        "Next slice: Generate the System-page voice proof lane, run the transcription + talk + wake cycle, and use the first recorded bundle to tighten operator recovery workflows.",
+      );
       expect(text).toContain("Android Canvas/Camera/Screen (beta), iOS Canvas/Camera/Voice (planned)");
     } finally {
       renderer.unmount();
@@ -861,8 +1005,10 @@ describe("SystemPage", () => {
       laneId: "a2ui",
       generatedAt: "2026-03-29T00:05:30.000Z",
       summary: "A2UI proof lane is ready.",
-      relativePath: "artifacts/follow-on-parity/a2ui/2026-03-29/a2ui-proof-bundle-trusted_local-2026-03-29T00-05-30-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/a2ui/2026-03-29/a2ui-proof-bundle-trusted_local-2026-03-29T00-05-30-000Z.md",
+      relativePath:
+        "artifacts/follow-on-parity/a2ui/2026-03-29/a2ui-proof-bundle-trusted_local-2026-03-29T00-05-30-000Z.md",
+      fullPath:
+        "workspace/artifacts/follow-on-parity/a2ui/2026-03-29/a2ui-proof-bundle-trusted_local-2026-03-29T00-05-30-000Z.md",
       bytes: 512,
     });
     apiMocks.fetchBrowserProofLaneDraft.mockResolvedValue({
@@ -903,8 +1049,10 @@ describe("SystemPage", () => {
       laneId: "voice",
       generatedAt: "2026-03-29T00:04:00.000Z",
       summary: "Voice proof lane is ready.",
-      relativePath: "artifacts/follow-on-parity/voice/2026-03-29/voice-proof-bundle-trusted_local-2026-03-29T00-04-00-000Z.md",
-      fullPath: "workspace/artifacts/follow-on-parity/voice/2026-03-29/voice-proof-bundle-trusted_local-2026-03-29T00-04-00-000Z.md",
+      relativePath:
+        "artifacts/follow-on-parity/voice/2026-03-29/voice-proof-bundle-trusted_local-2026-03-29T00-04-00-000Z.md",
+      fullPath:
+        "workspace/artifacts/follow-on-parity/voice/2026-03-29/voice-proof-bundle-trusted_local-2026-03-29T00-04-00-000Z.md",
       bytes: 384,
     });
 

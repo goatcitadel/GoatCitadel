@@ -1,6 +1,6 @@
 {
   "name": "@goatcitadel/skills",
-  "version": "0.6.0-beta.2",
+  "version": "0.9.0-beta.1",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -22,5 +22,3 @@
     "lint": "tsc -b tsconfig.json"
   }
 }
-
-

@@ -50,14 +50,10 @@ pnpm coverage:gate
 These files are required in root:
 
 - `README.md`
-- `GOATCITADEL.md`
 - `AGENTS.md`
-- `CLAUDE.md`
 - `CONTRIBUTING.md`
 - `SECURITY.md`
-- `VISION.md`
 - `CHANGELOG.md`
-- `GOATCITADEL_LEARNING_LOG.md`
 
 Validate presence with:
 
@@ -68,6 +64,4 @@ pnpm docs:check
 ## Versioning and Changelogs
 
 - Product releases are tracked in `CHANGELOG.md`.
-- AI self-improvement evidence is tracked in `GOATCITADEL_LEARNING_LOG.md`.
-- Log only validated improvements with before/after evidence.
 - Keep release notes understandable for first-time external users (public-facing wording).
