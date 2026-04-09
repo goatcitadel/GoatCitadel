@@ -19,6 +19,7 @@ import { assemblyRoutes } from "./routes/assembly.js";
 import { tasksRoutes } from "./routes/tasks.js";
 import { eventsRoutes } from "./routes/events.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
+import { capabilitiesRoutes } from "./routes/capabilities.js";
 import { filesRoutes } from "./routes/files.js";
 import { llmRoutes } from "./routes/llm.js";
 import { llamaCppRoutes } from "./routes/llamacpp.js";
@@ -298,6 +299,7 @@ export async function buildApp() {
   await app.register(tasksRoutes);
   await app.register(eventsRoutes);
   await app.register(dashboardRoutes);
+  await app.register(capabilitiesRoutes);
   await app.register(filesRoutes);
   await app.register(llmRoutes);
   await app.register(llamaCppRoutes);

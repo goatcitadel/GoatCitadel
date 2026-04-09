@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import type { ToolCatalogEntry, ToolCategory, ToolPack, ToolRiskLevel } from "@goatcitadel/contracts";
 
 export interface ToolDefinition {
@@ -12,6 +13,9 @@ export interface ToolDefinition {
   recommendedContexts?: string[];
   preferredForIntents?: string[];
   usageHints?: string[];
+  readOnly?: boolean;
+  deterministic?: boolean;
+  codeModeAllowed?: boolean;
 }
 
 const BUILTIN_TOOLS: ToolDefinition[] = [
@@ -124,6 +128,9 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       },
     ],
     pack: "core",
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
     recommendedContexts: ["chat", "cowork", "code", "project_bound"],
     preferredForIntents: ["local_file", "read_file"],
     usageHints: [
@@ -157,11 +164,12 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       },
     ],
     pack: "devops",
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["local_file", "inspect_code", "targeted_read"],
-    usageHints: [
-      "Prefer this over fs.read when you only need a local slice of a file.",
-    ],
+    usageHints: ["Prefer this over fs.read when you only need a local slice of a file."],
   },
   {
     name: "file.find",
@@ -186,11 +194,12 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       },
     ],
     pack: "devops",
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["local_file", "search_text", "inspect_code"],
-    usageHints: [
-      "Use for recursive text search when you know the directory root.",
-    ],
+    usageHints: ["Use for recursive text search when you know the directory root."],
   },
   {
     name: "code.search",
@@ -215,11 +224,12 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       },
     ],
     pack: "devops",
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["local_file", "inspect_code", "search_code"],
-    usageHints: [
-      "Prefer this over file.find for code-oriented symbol or helper lookup.",
-    ],
+    usageHints: ["Prefer this over file.find for code-oriented symbol or helper lookup."],
   },
   {
     name: "code.search_files",
@@ -244,11 +254,12 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       },
     ],
     pack: "devops",
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["local_file", "search_files", "inspect_code"],
-    usageHints: [
-      "Use when you need candidate file paths before reading contents.",
-    ],
+    usageHints: ["Use when you need candidate file paths before reading contents."],
   },
   {
     name: "fs.write",
@@ -265,6 +276,9 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     requiresApproval: false,
     description: "List files and directories under an allowed path.",
     pack: "devops",
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
   },
   {
     name: "fs.stat",
@@ -273,6 +287,9 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     requiresApproval: false,
     description: "Read file or directory metadata.",
     pack: "devops",
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
   },
   {
     name: "fs.copy",
@@ -307,9 +324,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["live_data", "fetch_url", "api_lookup"],
-    usageHints: [
-      "Prefer for direct URL/API fetches when full browser automation is unnecessary.",
-    ],
+    usageHints: ["Prefer for direct URL/API fetches when full browser automation is unnecessary."],
     argSchema: {
       type: "object",
       properties: {
@@ -369,9 +384,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["run_command", "verify_change", "project_task"],
-    usageHints: [
-      "Use for foreground commands where captured stdout/stderr matters.",
-    ],
+    usageHints: ["Use for foreground commands where captured stdout/stderr matters."],
   },
   {
     name: "shell.exec_background",
@@ -396,9 +409,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "devops",
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["background_process", "long_running_command", "project_task"],
-    usageHints: [
-      "Use for long-running dev servers or watchers that should not block the turn.",
-    ],
+    usageHints: ["Use for long-running dev servers or watchers that should not block the turn."],
   },
   {
     name: "git.exec",
@@ -481,9 +492,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "devops",
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["verify_change", "run_tests"],
-    usageHints: [
-      "Prefer this over shell.exec when you specifically want a test run.",
-    ],
+    usageHints: ["Prefer this over shell.exec when you specifically want a test run."],
   },
   {
     name: "lint.run",
@@ -494,9 +503,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "devops",
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["verify_change", "lint"],
-    usageHints: [
-      "Prefer this over shell.exec for lint-only validation.",
-    ],
+    usageHints: ["Prefer this over shell.exec for lint-only validation."],
   },
   {
     name: "build.run",
@@ -507,9 +514,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "devops",
     recommendedContexts: ["cowork", "code", "project_bound"],
     preferredForIntents: ["verify_change", "build"],
-    usageHints: [
-      "Prefer this over shell.exec for build verification.",
-    ],
+    usageHints: ["Prefer this over shell.exec for build verification."],
   },
   {
     name: "browser.search",
@@ -520,9 +525,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["live_data", "web_lookup", "research"],
-    usageHints: [
-      "Use to discover candidate sources before navigating to a page.",
-    ],
+    usageHints: ["Use to discover candidate sources before navigating to a page."],
     argSchema: {
       type: "object",
       properties: {
@@ -548,9 +551,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["web_lookup", "fetch_url", "research"],
-    usageHints: [
-      "Use when you already have a specific page URL to inspect.",
-    ],
+    usageHints: ["Use when you already have a specific page URL to inspect."],
     argSchema: {
       type: "object",
       properties: {
@@ -576,9 +577,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
     recommendedContexts: ["cowork", "code"],
     preferredForIntents: ["web_extract", "research"],
-    usageHints: [
-      "Use for targeted extraction when a generic page read is too noisy.",
-    ],
+    usageHints: ["Use for targeted extraction when a generic page read is too noisy."],
     argSchema: {
       type: "object",
       properties: {
@@ -665,7 +664,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "research",
     riskLevel: "danger",
     requiresApproval: true,
-    description: "Configure locale, timezone, headers, credentials, and geolocation for the active in-memory browser session.",
+    description:
+      "Configure locale, timezone, headers, credentials, and geolocation for the active in-memory browser session.",
     pack: "core",
   },
   {
@@ -702,9 +702,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "knowledge",
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["memory_persist"],
-    usageHints: [
-      "Use only when the user explicitly asks to save or remember something.",
-    ],
+    usageHints: ["Use only when the user explicitly asks to save or remember something."],
   },
   {
     name: "memory.upsert",
@@ -725,9 +723,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "knowledge",
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["memory_lookup", "project_context"],
-    usageHints: [
-      "Use before re-asking the same project or user-context question.",
-    ],
+    usageHints: ["Use before re-asking the same project or user-context question."],
   },
   {
     name: "docs.ingest",
@@ -812,7 +808,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "comms",
     riskLevel: "caution",
     requiresApproval: false,
-    description: "Unsend a previously sent message via a configured integration connection when the provider supports it.",
+    description:
+      "Unsend a previously sent message via a configured integration connection when the provider supports it.",
     pack: "comms",
   },
   {
@@ -1087,6 +1084,9 @@ export class ToolRegistry {
       recommendedContexts: tool.recommendedContexts,
       preferredForIntents: tool.preferredForIntents,
       usageHints: tool.usageHints,
+      readOnly: tool.readOnly,
+      deterministic: tool.deterministic,
+      codeModeAllowed: tool.codeModeAllowed,
     }));
   }
 }

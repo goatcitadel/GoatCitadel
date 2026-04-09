@@ -166,7 +166,12 @@ import type {
   ChatStreamUsageRecord,
   ChatThreadResponse,
   ChatThinkingLevel,
+  CapabilityCatalogScope,
+  CapabilityCatalogSnapshotRecord,
   CapabilityGapEventRecord,
+  CapabilityProposalRecord,
+  CodeModeRunRecord,
+  CodeModeRunRequest,
   ChatToolRunRecord,
   ChatTurnBranchKind,
   ChatTurnFailureRecord,
@@ -497,6 +502,8 @@ import { PromptPackService, normalizePromptTestCode, clampPromptScore } from "./
 import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
+import { CapabilitySystemService } from "./capability-system-service.js";
+import type { CodeModeApprovalQueueItem } from "./capability-system-service.js";
 import { ReplayExecutionSkippedError } from "./replay-execution.js";
 import { evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
@@ -709,6 +716,7 @@ export interface RuntimeSettings {
     bankrBuiltinEnabled: boolean;
     cronReviewQueueV1Enabled: boolean;
     replayRegressionV1Enabled: boolean;
+    codeModeV1Enabled: boolean;
   };
 }
 
@@ -1359,6 +1367,7 @@ export class GatewayService {
   /** @internal */ public readonly chatProactiveService: ChatProactiveService;
   private readonly improvementService: ImprovementService;
   /** @internal */ public readonly memoryMaintenanceService: MemoryMaintenanceService;
+  private readonly capabilitySystemService: CapabilitySystemService;
   private readonly backupRetentionService: BackupRetentionService;
   private readonly mediaVoiceService: MediaVoiceService;
   private readonly realtime = new EventEmitter();
@@ -1427,6 +1436,22 @@ export class GatewayService {
       { source: "managed", dir: path.join(config.rootDir, ".assistant", "skills") },
       { source: "workspace", dir: path.join(config.rootDir, "skills", "workspace") },
     ]);
+    this.capabilitySystemService = new CapabilitySystemService({
+      rootDir: config.rootDir,
+      runtimeConfig: config.assistant.capabilities,
+      storage: this.storage,
+      readFeatureFlags: () => this.readFeatureFlags(),
+      listToolCatalog: () => this.listToolCatalog(),
+      listLoadedSkills: () => this.skillsService.list(),
+      readSkillStates: () => this.readSkillStates(),
+      invokeTool: (request) => this.invokeTool(request),
+      createApproval: (input) => this.createApproval(input),
+      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+      readPolicySnapshot: () => ({
+        toolPolicy: this.config.toolPolicy,
+        features: this.readFeatureFlags(),
+      }),
+    });
     this.orchestrationEngine = new OrchestrationEngine();
     this.llmService = new LlmService(config.llm, process.env, {
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
@@ -6326,22 +6351,58 @@ export class GatewayService {
   }
 
   public listSkills(): SkillListItem[] {
-    const stateMap = this.readSkillStates();
-    return this.skillsService.list().map((skill) => {
-      const state = stateMap.get(skill.skillId);
-      return {
-        ...skill,
-        state: state?.state ?? "enabled",
-        note: state?.note,
-        stateUpdatedAt: state?.updatedAt,
-      };
-    });
+    this.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
+    return this.capabilitySystemService.listSkills();
   }
 
   public async reloadSkills(): Promise<SkillListItem[]> {
     const loaded = await this.skillsService.reload();
     this.ensureSkillStates(loaded.map((skill) => skill.skillId));
+    this.capabilitySystemService.ensureSkillLifecycleBackfill();
     return this.listSkills();
+  }
+
+  public listCapabilityCatalog(scope: CapabilityCatalogScope = "inspectable") {
+    return this.capabilitySystemService.listCatalog(scope);
+  }
+
+  public getCapabilityCatalogSnapshot(snapshotId: string): CapabilityCatalogSnapshotRecord {
+    return this.capabilitySystemService.getCatalogSnapshot(snapshotId);
+  }
+
+  public listCapabilityProposals(limit = 100): CapabilityProposalRecord[] {
+    return this.capabilitySystemService.listProposals(limit);
+  }
+
+  public createCapabilityProposal(input: {
+    proposalKind: "skill" | "tool";
+    title: string;
+    summary: string;
+    payload: Record<string, unknown>;
+    candidateId?: string;
+    activationTargetId?: string;
+  }): CapabilityProposalRecord {
+    return this.capabilitySystemService.createProposal(input);
+  }
+
+  public listCodeModeRuns(limit = 100): CodeModeRunRecord[] {
+    return this.capabilitySystemService.listCodeModeRuns(limit);
+  }
+
+  public getCodeModeRun(runId: string): CodeModeRunRecord {
+    return this.capabilitySystemService.getCodeModeRun(runId);
+  }
+
+  public async createCodeModeRun(input: CodeModeRunRequest): Promise<CodeModeRunRecord> {
+    return this.capabilitySystemService.createCodeModeRun(input);
+  }
+
+  public async executeCodeModePendingApproval(approvalId: string): Promise<ToolInvokeResult | undefined> {
+    return this.capabilitySystemService.executeApprovedCodeModeRun(approvalId);
+  }
+
+  public listChatPendingApprovals(sessionId: string): CodeModeApprovalQueueItem[] {
+    return this.capabilitySystemService.listChatPendingApprovals(sessionId);
   }
 
   public getSkillActivationPolicy(): SkillActivationPolicy {
@@ -8994,6 +9055,7 @@ export class GatewayService {
       bankrBuiltinEnabled: patch.bankrBuiltinEnabled ?? current.bankrBuiltinEnabled,
       cronReviewQueueV1Enabled: patch.cronReviewQueueV1Enabled ?? current.cronReviewQueueV1Enabled,
       replayRegressionV1Enabled: patch.replayRegressionV1Enabled ?? current.replayRegressionV1Enabled,
+      codeModeV1Enabled: patch.codeModeV1Enabled ?? current.codeModeV1Enabled,
     };
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
     this.config.assistant.features = { ...next };
@@ -9019,6 +9081,7 @@ export class GatewayService {
       bankrBuiltinEnabled: stored?.bankrBuiltinEnabled ?? fromConfig.bankrBuiltinEnabled,
       cronReviewQueueV1Enabled: stored?.cronReviewQueueV1Enabled ?? fromConfig.cronReviewQueueV1Enabled,
       replayRegressionV1Enabled: stored?.replayRegressionV1Enabled ?? fromConfig.replayRegressionV1Enabled,
+      codeModeV1Enabled: stored?.codeModeV1Enabled ?? fromConfig.codeModeV1Enabled,
     };
   }
 

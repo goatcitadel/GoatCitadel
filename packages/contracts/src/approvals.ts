@@ -104,7 +104,7 @@ export interface ApprovalReplayEvent {
 
 export interface PendingApprovalAction {
   approvalId: string;
-  actionType: "tool.invoke";
+  actionType: "tool.invoke" | "code_mode.run";
   request: Record<string, unknown>;
   linkage?: ApprovalLinkage;
   createdAt: string;
@@ -122,13 +122,7 @@ export interface ApprovalReplaySnapshot {
 
 export type RemoteActionTokenState = "pending" | "consumed" | "expired";
 export type RemoteActionType = "approval.resolve" | "connector.mutation";
-export type ApprovalInboxItemState =
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "edited"
-  | "expired"
-  | "failed";
+export type ApprovalInboxItemState = "pending" | "approved" | "rejected" | "edited" | "expired" | "failed";
 
 export interface RemoteActionTokenRecord {
   tokenId: string;

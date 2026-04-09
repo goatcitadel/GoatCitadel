@@ -288,6 +288,7 @@ export {
   fetchChatDelegationRun,
   fetchChatLearnedMemory,
   fetchChatMessages,
+  fetchChatPendingApprovals,
   fetchChatProactiveRuns,
   fetchChatProactiveStatus,
   fetchChatProjects,
@@ -384,6 +385,15 @@ export {
   updateWorkspace,
   updateWorkspaceGuidance,
 } from "./workspaces.js";
+export {
+  createCapabilityProposal,
+  createCodeModeRun,
+  fetchCapabilityCatalog,
+  fetchCapabilityCatalogSnapshot,
+  fetchCapabilityProposals,
+  fetchCodeModeRun,
+  fetchCodeModeRuns,
+} from "./capabilities.js";
 export {
   archiveAgentProfile,
   createAgentProfile,

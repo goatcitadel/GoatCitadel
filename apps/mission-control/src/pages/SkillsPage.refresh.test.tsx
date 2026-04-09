@@ -7,6 +7,8 @@ const refreshState = vi.hoisted(() => ({
 }));
 
 const apiMocks = vi.hoisted(() => ({
+  fetchCapabilityCatalog: vi.fn(),
+  fetchCapabilityProposals: vi.fn(),
   fetchSkillActivationPolicies: vi.fn(),
   fetchSkillImportHistory: vi.fn(),
   fetchSkillLookup: vi.fn(),
@@ -20,6 +22,8 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/client", () => ({
+  fetchCapabilityCatalog: apiMocks.fetchCapabilityCatalog,
+  fetchCapabilityProposals: apiMocks.fetchCapabilityProposals,
   fetchSkillActivationPolicies: apiMocks.fetchSkillActivationPolicies,
   fetchSkillImportHistory: apiMocks.fetchSkillImportHistory,
   fetchSkillLookup: apiMocks.fetchSkillLookup,
@@ -33,10 +37,7 @@ vi.mock("../api/client", () => ({
 }));
 
 vi.mock("../hooks/useRefreshSubscription", () => ({
-  useRefreshSubscription: (
-    _topic: string,
-    callback: (signal: unknown) => Promise<void> | void,
-  ) => {
+  useRefreshSubscription: (_topic: string, callback: (signal: unknown) => Promise<void> | void) => {
     refreshState.callback = callback;
   },
 }));
@@ -49,7 +50,10 @@ vi.mock("../state/ui-preferences", () => ({
 
 vi.mock("../components/DataToolbar", () => ({
   DataToolbar: ({ primary, secondary }: { primary?: React.ReactNode; secondary?: React.ReactNode }) => (
-    <div>{primary}{secondary}</div>
+    <div>
+      {primary}
+      {secondary}
+    </div>
   ),
 }));
 
@@ -88,11 +92,7 @@ vi.mock("../components/ui", () => ({
       ))}
     </select>
   ),
-  GCSwitch: (props: {
-    checked: boolean;
-    onCheckedChange: (checked: boolean) => void;
-    label?: string;
-  }) => (
+  GCSwitch: (props: { checked: boolean; onCheckedChange: (checked: boolean) => void; label?: string }) => (
     <label>
       <input
         type="checkbox"
@@ -123,7 +123,7 @@ describe("SkillsPage refresh discipline", () => {
         {
           skillId: "skill-1",
           name: "Browser Helper",
-          source: "local",
+          source: "workspace",
           declaredTools: [],
           requires: [],
           tags: [],
@@ -132,6 +132,13 @@ describe("SkillsPage refresh discipline", () => {
           note: "",
         },
       ],
+    });
+    apiMocks.fetchCapabilityCatalog.mockResolvedValue({
+      scope: "inspectable",
+      items: [],
+    });
+    apiMocks.fetchCapabilityProposals.mockResolvedValue({
+      items: [],
     });
     apiMocks.fetchSkillActivationPolicies.mockResolvedValue({
       guardedAutoThreshold: 0.72,

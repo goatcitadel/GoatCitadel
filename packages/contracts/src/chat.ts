@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import type { DurableRunStatus } from "./durable.js";
 import type { SkillSourceProvider } from "./skills.js";
 
@@ -30,30 +31,30 @@ export type ChatDelegationRunStatus = "running" | "completed" | "failed" | "part
 
 export type ChatInputPart =
   | {
-    type: "text";
-    text: string;
-  }
+      type: "text";
+      text: string;
+    }
   | {
-    type: "image_ref";
-    attachmentId: string;
-    mimeType?: string;
-    detail?: "low" | "high" | "auto";
-  }
+      type: "image_ref";
+      attachmentId: string;
+      mimeType?: string;
+      detail?: "low" | "high" | "auto";
+    }
   | {
-    type: "audio_ref";
-    attachmentId: string;
-    mimeType?: string;
-  }
+      type: "audio_ref";
+      attachmentId: string;
+      mimeType?: string;
+    }
   | {
-    type: "video_ref";
-    attachmentId: string;
-    mimeType?: string;
-  }
+      type: "video_ref";
+      attachmentId: string;
+      mimeType?: string;
+    }
   | {
-    type: "file_ref";
-    attachmentId: string;
-    mimeType?: string;
-  };
+      type: "file_ref";
+      attachmentId: string;
+      mimeType?: string;
+    };
 
 export interface ChatProjectRecord {
   projectId: string;
@@ -276,7 +277,8 @@ export const CHAT_MODE_PRESETS = {
     teamBehaviorLabel: "Single lead",
     teamBehaviorSummary: "Chat stays single-assistant by default and keeps orchestration low-friction.",
     growthPolicyLabel: "No silent team growth",
-    growthPolicySummary: "Chat may suggest delegation or escalation, but it does not silently add specialists on its own.",
+    growthPolicySummary:
+      "Chat may suggest delegation or escalation, but it does not silently add specialists on its own.",
     allowsDynamicTeamGrowth: false,
     defaultPrefs: {
       planningMode: "off",
@@ -306,9 +308,11 @@ export const CHAT_MODE_PRESETS = {
     summary: "Guided multi-step execution with visible orchestration, checkpoints, and collaboration controls.",
     teamBehavior: "guided_swarm",
     teamBehaviorLabel: "Guided swarm",
-    teamBehaviorSummary: "Cowork keeps one visible lead agent and adds specialists only through explicit, traceable workflow rules.",
+    teamBehaviorSummary:
+      "Cowork keeps one visible lead agent and adds specialists only through explicit, traceable workflow rules.",
     growthPolicyLabel: "Visible capped growth",
-    growthPolicySummary: "Specialist expansion is allowed here, but every growth step must stay attributable, capped, and legible in the run trace.",
+    growthPolicySummary:
+      "Specialist expansion is allowed here, but every growth step must stay attributable, capped, and legible in the run trace.",
     allowsDynamicTeamGrowth: true,
     defaultPrefs: {
       planningMode: "off",
@@ -335,10 +339,12 @@ export const CHAT_MODE_PRESETS = {
   code: {
     mode: "code",
     label: "Code",
-    summary: "Project-bound implementation and review with stricter defaults for quality, visibility, and apply posture.",
+    summary:
+      "Project-bound implementation and review with stricter defaults for quality, visibility, and apply posture.",
     teamBehavior: "constrained_squad",
     teamBehaviorLabel: "Constrained squad",
-    teamBehaviorSummary: "Code stays project-bound and favors tight specialist splits such as implement, review, and test.",
+    teamBehaviorSummary:
+      "Code stays project-bound and favors tight specialist splits such as implement, review, and test.",
     growthPolicyLabel: "Project-bound specialist growth",
     growthPolicySummary: "Specialist expansion is allowed only inside tighter project and execution rules than Cowork.",
     allowsDynamicTeamGrowth: true,
@@ -551,7 +557,12 @@ export interface ChatCapabilityUpgradeSuggestion {
   sourceProvider?: SkillSourceProvider | "mcp_template";
   sourceRef?: string;
   riskLevel?: "low" | "medium" | "high";
-  recommendedAction: "enable_skill" | "install_skill_disabled" | "install_skill_enable" | "add_mcp_template" | "switch_tool_profile";
+  recommendedAction:
+    | "enable_skill"
+    | "install_skill_disabled"
+    | "install_skill_enable"
+    | "add_mcp_template"
+    | "switch_tool_profile";
   candidateId?: string;
   requiresUserApproval: true;
 }
@@ -616,25 +627,11 @@ export interface ChatOrchestrationSummary {
   steps: ChatOrchestrationStepSummary[];
 }
 
-export type ChatExecutionPlanStatus =
-  | "drafted"
-  | "ready"
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled";
+export type ChatExecutionPlanStatus = "drafted" | "ready" | "running" | "completed" | "failed" | "cancelled";
 
-export type ChatExecutionPlanStepStatus =
-  | "pending"
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled";
+export type ChatExecutionPlanStepStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
-export type ChatExecutionPlanSource =
-  | "planner"
-  | "workflow_template"
-  | "planner_with_template_fallback";
+export type ChatExecutionPlanSource = "planner" | "workflow_template" | "planner_with_template_fallback";
 
 export interface ChatExecutionPlanStepRecord {
   stepId: string;
@@ -707,6 +704,9 @@ export interface ChatTurnTraceRecord {
   effectiveToolAutonomy?: "safe_auto" | "manual";
   startedAt: string;
   finishedAt?: string;
+  capabilitySnapshotId?: string;
+  codeModeRunId?: string;
+  pendingApprovalSummary?: ChatStreamApprovalRecord;
   toolRuns: ChatToolRunRecord[];
   citations: ChatCitationRecord[];
   routing: {
@@ -834,29 +834,13 @@ export interface ChatDelegationSuggestionRecord {
   createdAt: string;
 }
 
-export type ChatSpecialistCandidateStatus =
-  | "suggested"
-  | "drafted"
-  | "disabled"
-  | "approved"
-  | "active"
-  | "retired";
+export type ChatSpecialistCandidateStatus = "suggested" | "drafted" | "disabled" | "approved" | "active" | "retired";
 
-export type ChatSpecialistCandidateRoutingMode =
-  | "disabled"
-  | "manual_only"
-  | "strong_match_only";
+export type ChatSpecialistCandidateRoutingMode = "disabled" | "manual_only" | "strong_match_only";
 
-export type ChatSpecialistCandidateSource =
-  | "manual"
-  | "runtime_gap"
-  | "replay";
+export type ChatSpecialistCandidateSource = "manual" | "runtime_gap" | "replay";
 
-export type ChatSpecialistCandidateEvidenceKind =
-  | "role_gap"
-  | "tool_gap"
-  | "skill_gap"
-  | "successful_workaround";
+export type ChatSpecialistCandidateEvidenceKind = "role_gap" | "tool_gap" | "skill_gap" | "successful_workaround";
 
 export interface ChatSpecialistCandidateEvidenceRecord {
   evidenceId: string;
@@ -1043,8 +1027,21 @@ export interface ChatStreamUsageRecord {
 
 export interface ChatStreamApprovalRecord {
   approvalId: string;
+  kind?: string;
   toolName?: string;
+  description?: string;
   reason?: string;
+  riskLevel?: "safe" | "caution" | "danger" | "nuclear";
+  affectedResources?: string[];
+  taskId?: string;
+  codeModeRunId?: string;
+  codeHash?: string;
+  wrapperManifestHash?: string;
+  capabilitySnapshotId?: string;
+  inspectPath?: string;
+  requestedOutputIntent?: string;
+  saveCandidateOnSuccess?: boolean;
+  remainingCount?: number;
   expiresAt?: string;
 }
 

@@ -7,6 +7,7 @@ import { useChatOutboundExecution, type ActiveChatStreamState } from "./useChatO
 const approveChatToolMock = vi.fn();
 const denyChatToolMock = vi.fn();
 const editChatTurnMock = vi.fn();
+const fetchChatPendingApprovalsMock = vi.fn();
 const resumeChatTurnStreamMock = vi.fn();
 const retryChatTurnMock = vi.fn();
 const selectChatBranchTurnMock = vi.fn();
@@ -19,6 +20,7 @@ vi.mock("../../api/client", () => ({
   approveChatTool: (...args: unknown[]) => approveChatToolMock(...args),
   denyChatTool: (...args: unknown[]) => denyChatToolMock(...args),
   editChatTurn: (...args: unknown[]) => editChatTurnMock(...args),
+  fetchChatPendingApprovals: (...args: unknown[]) => fetchChatPendingApprovalsMock(...args),
   resumeChatTurnStream: (...args: unknown[]) => resumeChatTurnStreamMock(...args),
   retryChatTurn: (...args: unknown[]) => retryChatTurnMock(...args),
   selectChatBranchTurn: (...args: unknown[]) => selectChatBranchTurnMock(...args),
@@ -179,6 +181,7 @@ describe("useChatOutboundExecution", () => {
     approveChatToolMock.mockReset();
     denyChatToolMock.mockReset();
     editChatTurnMock.mockReset();
+    fetchChatPendingApprovalsMock.mockReset();
     resumeChatTurnStreamMock.mockReset();
     retryChatTurnMock.mockReset();
     selectChatBranchTurnMock.mockReset();
@@ -186,6 +189,11 @@ describe("useChatOutboundExecution", () => {
     streamAgentChatMessageMock.mockReset();
     streamEditChatTurnMock.mockReset();
     streamRetryChatTurnMock.mockReset();
+    fetchChatPendingApprovalsMock.mockResolvedValue({
+      items: [],
+      activeApprovalId: null,
+      remainingCount: 0,
+    });
   });
 
   it("short-circuits slash commands through the local command executor", async () => {
@@ -286,6 +294,21 @@ describe("useChatOutboundExecution", () => {
   });
 
   it("merges backend-delivered approval prompts into the local pending approval state", async () => {
+    fetchChatPendingApprovalsMock.mockResolvedValue({
+      items: [
+        {
+          approvalId: "approval-merge-1",
+          kind: "tool.invoke",
+          toolName: "shell_command",
+          reason: "Operator confirmation required.",
+          stale: false,
+          details: {},
+        },
+      ],
+      activeApprovalId: "approval-merge-1",
+      remainingCount: 0,
+    });
+
     create(<Harness />);
 
     await act(async () => {
@@ -324,12 +347,15 @@ describe("useChatOutboundExecution", () => {
         selectedTurnId: "turn-approval",
         activeLeafTurnId: "turn-approval",
       } as any);
+      await Promise.resolve();
     });
 
     expect(latest?.pendingApproval).toEqual({
       approvalId: "approval-merge-1",
+      kind: "tool.invoke",
       toolName: "shell_command",
       reason: "Operator confirmation required.",
+      remainingCount: 0,
     });
   });
 });

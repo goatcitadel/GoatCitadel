@@ -267,6 +267,11 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
         executionEnabled: false,
         chatAutoPromoteEnabled: false,
       },
+      capabilities: {
+        candidateRoot: "./data/capability-candidates",
+        codeModeArtifactRoot: "./data/code-mode-artifacts",
+        tempRoot: "./data/code-mode-temp",
+      },
       features: {
         durableKernelV1Enabled: false,
         memoryMaintenanceV1Enabled: false,
@@ -277,6 +282,7 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
         bankrBuiltinEnabled: false,
         cronReviewQueueV1Enabled: false,
         replayRegressionV1Enabled: false,
+        codeModeV1Enabled: false,
       },
       budgets: {
         dailyUsdWarning: 10,

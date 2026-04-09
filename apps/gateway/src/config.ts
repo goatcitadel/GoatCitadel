@@ -22,6 +22,7 @@ export interface AssistantConfig {
   dataDir: string;
   transcriptsDir: string;
   auditDir: string;
+  capabilities: CapabilityRuntimeConfig;
   workspaceDir: string;
   worktreesDir: string;
   auth: AuthConfig;
@@ -51,6 +52,13 @@ export interface FeatureFlagsConfig {
   bankrBuiltinEnabled: boolean;
   cronReviewQueueV1Enabled: boolean;
   replayRegressionV1Enabled: boolean;
+  codeModeV1Enabled: boolean;
+}
+
+export interface CapabilityRuntimeConfig {
+  candidateRoot: string;
+  codeModeArtifactRoot: string;
+  tempRoot: string;
 }
 
 export interface MemoryConfig {
@@ -426,6 +434,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["bankrBuiltinEnabled", process.env.GOATCITADEL_FEATURE_BANKR_BUILTIN_ENABLED],
     ["cronReviewQueueV1Enabled", process.env.GOATCITADEL_FEATURE_CRON_REVIEW_QUEUE_V1_ENABLED],
     ["replayRegressionV1Enabled", process.env.GOATCITADEL_FEATURE_REPLAY_REGRESSION_V1_ENABLED],
+    ["codeModeV1Enabled", process.env.GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED],
   ];
   for (const [flag, raw] of featureFlagMap) {
     if (!raw) {
@@ -475,6 +484,19 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   if (firecrawlDefaultReadBackend === "native" || firecrawlDefaultReadBackend === "firecrawl") {
     assistant.web.firecrawl.defaultReadBackend = firecrawlDefaultReadBackend;
   }
+
+  const capabilityCandidateRoot = process.env.GOATCITADEL_CAPABILITY_CANDIDATE_ROOT?.trim();
+  if (capabilityCandidateRoot) {
+    assistant.capabilities.candidateRoot = capabilityCandidateRoot;
+  }
+  const codeModeArtifactRoot = process.env.GOATCITADEL_CODE_MODE_ARTIFACT_ROOT?.trim();
+  if (codeModeArtifactRoot) {
+    assistant.capabilities.codeModeArtifactRoot = codeModeArtifactRoot;
+  }
+  const codeModeTempRoot = process.env.GOATCITADEL_CODE_MODE_TEMP_ROOT?.trim();
+  if (codeModeTempRoot) {
+    assistant.capabilities.tempRoot = codeModeTempRoot;
+  }
 }
 
 function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig {
@@ -504,6 +526,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
   const llamaCppLaunch = (llamaCppInput.launch ?? {}) as Partial<LlamaCppConfig["launch"]>;
   const sqliteInput = (input.sqlite ?? {}) as Partial<SqliteTuningConfig>;
   const durableInput = (input.durable ?? {}) as Partial<DurableConfig>;
+  const capabilitiesInput = (input.capabilities ?? {}) as Partial<CapabilityRuntimeConfig>;
   const featuresInput = (input.features ?? {}) as Partial<FeatureFlagsConfig>;
   const memoryInput = (input.memory ?? {}) as Partial<MemoryConfig>;
   const qmdInput = (memoryInput.qmd ?? {}) as Partial<MemoryConfig["qmd"]>;
@@ -518,6 +541,11 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
     dataDir: input.dataDir ?? "./data",
     transcriptsDir: input.transcriptsDir ?? "./data/transcripts",
     auditDir: input.auditDir ?? "./data/audit",
+    capabilities: {
+      candidateRoot: capabilitiesInput.candidateRoot ?? "./data/capability-candidates",
+      codeModeArtifactRoot: capabilitiesInput.codeModeArtifactRoot ?? "./data/code-mode-artifacts",
+      tempRoot: capabilitiesInput.tempRoot ?? "./data/code-mode-temp",
+    },
     workspaceDir: input.workspaceDir ?? "./workspace",
     worktreesDir: input.worktreesDir ?? "./.worktrees",
     auth: {
@@ -673,6 +701,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       bankrBuiltinEnabled: featuresInput.bankrBuiltinEnabled ?? false,
       cronReviewQueueV1Enabled: featuresInput.cronReviewQueueV1Enabled ?? false,
       replayRegressionV1Enabled: featuresInput.replayRegressionV1Enabled ?? false,
+      codeModeV1Enabled: featuresInput.codeModeV1Enabled ?? false,
     },
     budgets: {
       dailyUsdWarning: input.budgets?.dailyUsdWarning ?? 10,

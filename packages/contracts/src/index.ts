@@ -1,4 +1,5 @@
 export * from "./provider-templates.js";
+export * from "./capabilities.js";
 export * from "./addons.js";
 export * from "./session.js";
 export * from "./runtime-lifecycle.js";

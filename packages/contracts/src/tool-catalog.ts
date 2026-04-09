@@ -15,6 +15,9 @@ export interface ToolCatalogEntry {
   argSchema: Record<string, unknown>;
   examples: ToolCatalogExample[];
   pack: ToolPack;
+  readOnly?: boolean;
+  deterministic?: boolean;
+  codeModeAllowed?: boolean;
   recommendedContexts?: string[];
   preferredForIntents?: string[];
   usageHints?: string[];

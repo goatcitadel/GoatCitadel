@@ -814,7 +814,9 @@ export function ChatPage({
     [latestOrchestration, localNotices, messages],
   );
   const canSend =
-    Boolean(resolveOutboundDraftContent(draft, pendingAttachments.length, editingTurnId ? "edit" : "send")) && !sending;
+    Boolean(resolveOutboundDraftContent(draft, pendingAttachments.length, editingTurnId ? "edit" : "send")) &&
+    !sending &&
+    !pendingApproval;
 
   useEffect(() => {
     if (!lockSurface || !surface || !selectedSessionId) {

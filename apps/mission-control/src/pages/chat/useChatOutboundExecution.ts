@@ -13,6 +13,7 @@ import {
   approveChatTool,
   denyChatTool,
   editChatTurn,
+  fetchChatPendingApprovals,
   resumeChatTurnStream,
   retryChatTurn,
   selectChatBranchTurn,
@@ -148,6 +149,46 @@ export function useChatOutboundExecution(input: {
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
   }, [selectedSessionId]);
+
+  const refreshPendingApprovalQueue = useCallback(
+    async (sessionId: string) => {
+      const response = await fetchChatPendingApprovals(sessionId);
+      const active =
+        response.items.find((item) => !item.stale && item.approvalId === response.activeApprovalId) ??
+        response.items.find((item) => !item.stale) ??
+        null;
+      if (!active) {
+        setPendingApproval(null);
+        return;
+      }
+      setPendingApproval({
+        approvalId: active.approvalId,
+        kind: active.kind,
+        toolName: active.toolName,
+        reason: active.reason,
+        riskLevel: active.riskLevel,
+        expiresAt: active.expiresAt,
+        codeHash: typeof active.details?.codeHash === "string" ? active.details.codeHash : undefined,
+        wrapperManifestHash:
+          typeof active.details?.wrapperManifestHash === "string" ? active.details.wrapperManifestHash : undefined,
+        capabilitySnapshotId:
+          typeof active.details?.capabilitySnapshotId === "string" ? active.details.capabilitySnapshotId : undefined,
+        inspectPath: typeof active.details?.inspectPath === "string" ? active.details.inspectPath : undefined,
+        requestedOutputIntent:
+          typeof active.details?.requestedOutputIntent === "string" ? active.details.requestedOutputIntent : undefined,
+        saveCandidateOnSuccess:
+          typeof active.details?.saveCandidateOnSuccess === "boolean"
+            ? active.details.saveCandidateOnSuccess
+            : undefined,
+        remainingCount: response.remainingCount,
+        affectedResources: Array.isArray(active.details?.affectedResources)
+          ? active.details.affectedResources.filter((value): value is string => typeof value === "string")
+          : undefined,
+        codePreview: typeof active.details?.codePreview === "string" ? active.details.codePreview : undefined,
+      });
+    },
+    [setPendingApproval],
+  );
 
   useEffect(() => {
     latestMessagesRef.current = messages;
@@ -334,6 +375,13 @@ export function useChatOutboundExecution(input: {
       return merged;
     });
   }, [selectedSessionId, thread]);
+
+  useEffect(() => {
+    if (!selectedSession?.sessionId) {
+      return;
+    }
+    void refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
+  }, [refreshPendingApprovalQueue, selectedSession?.sessionId]);
 
   const scheduleStreamMessageReconciliation = useCallback(
     (sessionId: string) => {
@@ -546,8 +594,19 @@ export function useChatOutboundExecution(input: {
             if (chunk.type === "approval_required") {
               const approval = {
                 approvalId: chunk.approval.approvalId,
+                kind: chunk.approval.kind,
                 toolName: chunk.approval.toolName,
                 reason: chunk.approval.reason,
+                riskLevel: chunk.approval.riskLevel,
+                expiresAt: chunk.approval.expiresAt,
+                codeHash: chunk.approval.codeHash,
+                wrapperManifestHash: chunk.approval.wrapperManifestHash,
+                capabilitySnapshotId: chunk.approval.capabilitySnapshotId,
+                inspectPath: chunk.approval.inspectPath,
+                requestedOutputIntent: chunk.approval.requestedOutputIntent,
+                saveCandidateOnSuccess: chunk.approval.saveCandidateOnSuccess,
+                remainingCount: chunk.approval.remainingCount,
+                affectedResources: chunk.approval.affectedResources,
               };
               setPendingApproval(approval);
               recordChatApprovalPhase({
@@ -845,23 +904,20 @@ export function useChatOutboundExecution(input: {
         source: "operator",
       });
       await approveChatTool(selectedSession.sessionId, pendingApproval.approvalId);
-      pushLocalNotice(
-        `Approved request ${pendingApproval.approvalId}. Send your message again and I will continue.`,
-        "success",
-      );
+      await refreshPendingApprovalQueue(selectedSession.sessionId);
+      pushLocalNotice(`Approved request ${pendingApproval.approvalId}. The runtime resumed immediately.`, "success");
       recordChatApprovalPhase({
         phase: "resolved",
         sessionId: selectedSession.sessionId,
         approval: pendingApproval,
         source: "operator",
       });
-      setPendingApproval(null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setApprovalPending(false);
     }
-  }, [pendingApproval, pushLocalNotice, selectedSession, setError]);
+  }, [pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError]);
 
   const handleDenyPending = useCallback(async () => {
     if (!selectedSession || !pendingApproval) return;
@@ -874,6 +930,7 @@ export function useChatOutboundExecution(input: {
         source: "operator",
       });
       await denyChatTool(selectedSession.sessionId, pendingApproval.approvalId);
+      await refreshPendingApprovalQueue(selectedSession.sessionId);
       pushLocalNotice(`Denied request ${pendingApproval.approvalId}. No action was taken.`, "warning");
       recordChatApprovalPhase({
         phase: "dismissed",
@@ -881,13 +938,12 @@ export function useChatOutboundExecution(input: {
         approval: pendingApproval,
         source: "operator",
       });
-      setPendingApproval(null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setApprovalPending(false);
     }
-  }, [pendingApproval, pushLocalNotice, selectedSession, setError]);
+  }, [pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError]);
 
   const streamStatus: ChatStreamStatus = useMemo(() => {
     if (error) return "error";

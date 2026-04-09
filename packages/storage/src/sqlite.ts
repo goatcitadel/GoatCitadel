@@ -405,6 +405,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "prompt_pack_scoring_v2_schema",
     up: createPromptPackScoringV2Schema,
   },
+  {
+    version: 54,
+    name: "capability_system_v1_schema",
+    up: createCapabilitySystemV1Schema,
+  },
 ];
 
 function createBaseSchema(db: DatabaseSync): void {
@@ -1851,6 +1856,123 @@ function createSkillRuntimeStateSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_skill_activation_events_skill
       ON skill_activation_events(skill_id, created_at DESC);
   `);
+}
+
+function createCapabilitySystemV1Schema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS capability_catalog_snapshots (
+      snapshot_id TEXT PRIMARY KEY,
+      inspectable_json TEXT NOT NULL,
+      callable_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS skill_lifecycle (
+      skill_id TEXT PRIMARY KEY,
+      capability_category TEXT NOT NULL,
+      lifecycle_state TEXT NOT NULL,
+      trust_label TEXT NOT NULL,
+      review_warning TEXT,
+      provenance_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_skill_lifecycle_category
+      ON skill_lifecycle(capability_category, lifecycle_state, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS candidate_skill_versions (
+      version_id TEXT PRIMARY KEY,
+      candidate_id TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT,
+      bundle_root TEXT NOT NULL,
+      originating_run_id TEXT,
+      wrapper_manifest_hash TEXT,
+      lifecycle_state TEXT NOT NULL,
+      manifest_artifact_json TEXT NOT NULL,
+      instruction_artifact_json TEXT NOT NULL,
+      proof_artifact_json TEXT NOT NULL,
+      program_artifact_json TEXT,
+      schema_artifact_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_successful_execution_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_candidate_skill_versions_candidate
+      ON candidate_skill_versions(candidate_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS capability_proposals (
+      proposal_id TEXT PRIMARY KEY,
+      proposal_kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      candidate_id TEXT,
+      activation_target_id TEXT,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_capability_proposals_status_updated
+      ON capability_proposals(status, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS capability_proposal_events (
+      event_id TEXT PRIMARY KEY,
+      proposal_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(proposal_id) REFERENCES capability_proposals(proposal_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_capability_proposal_events_proposal
+      ON capability_proposal_events(proposal_id, created_at ASC);
+
+    CREATE TABLE IF NOT EXISTS code_mode_runs (
+      run_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      language TEXT NOT NULL,
+      requested_output_intent TEXT,
+      save_candidate_on_success INTEGER NOT NULL DEFAULT 0,
+      capability_snapshot_id TEXT NOT NULL,
+      wrapper_manifest_hash TEXT NOT NULL,
+      policy_snapshot_hash TEXT NOT NULL,
+      code_hash TEXT NOT NULL,
+      approval_id TEXT,
+      session_id TEXT,
+      turn_id TEXT,
+      code_artifact_json TEXT NOT NULL,
+      wrapper_manifest_artifact_json TEXT NOT NULL,
+      policy_snapshot_artifact_json TEXT NOT NULL,
+      stdout_artifact_json TEXT,
+      stderr_artifact_json TEXT,
+      stdout_preview TEXT,
+      stderr_preview TEXT,
+      stdout_truncated INTEGER NOT NULL DEFAULT 0,
+      stderr_truncated INTEGER NOT NULL DEFAULT 0,
+      result_json TEXT,
+      error_text TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_code_mode_runs_status_created
+      ON code_mode_runs(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_code_mode_runs_session_created
+      ON code_mode_runs(session_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_code_mode_runs_approval
+      ON code_mode_runs(approval_id, created_at DESC);
+  `);
+
+  addColumnIfMissingIfTableExists(db, "chat_inline_approvals", "kind", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_inline_approvals", "risk_level", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_inline_approvals", "details_json", "TEXT");
 }
 
 function createBankrSafetySchema(db: DatabaseSync): void {

@@ -1,5 +1,8 @@
 import type { ChatMode, ChatThreadResponse } from "@goatcitadel/contracts";
-import { ChatPendingApprovalPanel, type ChatPendingApprovalState } from "../../components/chat/ChatPendingApprovalPanel";
+import {
+  ChatPendingApprovalPanel,
+  type ChatPendingApprovalState,
+} from "../../components/chat/ChatPendingApprovalPanel";
 import { SurfaceReconnectBanner } from "../../components/chat/SurfaceReconnectBanner";
 import { ChatThreadView, type ChatThreadNotice } from "../../components/chat/ChatThreadView";
 import type { ChatStreamStatus } from "../../components/chat/ChatStreamStatusBar";
@@ -54,13 +57,6 @@ export function ChatThreadShell(props: {
     <div className={`chat-v11-thread-shell mode-${mode}`}>
       <div className="chat-v11-thread-status-lane">
         <SurfaceReconnectBanner status={eventStreamStatus} onRefresh={onRefresh} />
-
-        <ChatPendingApprovalPanel
-          pendingApproval={pendingApproval}
-          pending={approvalPending}
-          onApprove={onApprovePending}
-          onDeny={onDenyPending}
-        />
       </div>
 
       <div className="chat-v11-thread-scroll">
@@ -80,6 +76,13 @@ export function ChatThreadShell(props: {
           onEditTurn={onEditTurn}
         />
       </div>
+
+      <ChatPendingApprovalPanel
+        pendingApproval={pendingApproval}
+        pending={approvalPending}
+        onApprove={onApprovePending}
+        onDeny={onDenyPending}
+      />
     </div>
   );
 }

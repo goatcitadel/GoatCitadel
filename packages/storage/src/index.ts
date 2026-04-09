@@ -65,6 +65,11 @@ import { HookRunRepository } from "./hook-run-repo.js";
 import { MemoryMaintenanceRepository } from "./memory-maintenance-repo.js";
 import { TranscriptOutboxRepository } from "./transcript-outbox-repo.js";
 import { RealtimeStreamLeaseRepository } from "./realtime-stream-lease-repo.js";
+import { CapabilityCatalogSnapshotRepository } from "./capability-catalog-snapshot-repo.js";
+import { SkillLifecycleRepository } from "./skill-lifecycle-repo.js";
+import { CandidateSkillVersionRepository } from "./candidate-skill-version-repo.js";
+import { CapabilityProposalEventRepository, CapabilityProposalRepository } from "./capability-proposal-repo.js";
+import { CodeModeRunRepository } from "./code-mode-run-repo.js";
 
 export interface StorageOptions extends SqliteOptions {
   transcriptsDir: string;
@@ -144,6 +149,12 @@ export class Storage {
   public readonly assembly: AssemblyRepository;
   public readonly transcriptOutbox: TranscriptOutboxRepository;
   public readonly realtimeStreamLeases: RealtimeStreamLeaseRepository;
+  public readonly capabilityCatalogSnapshots: CapabilityCatalogSnapshotRepository;
+  public readonly skillLifecycle: SkillLifecycleRepository;
+  public readonly candidateSkillVersions: CandidateSkillVersionRepository;
+  public readonly capabilityProposals: CapabilityProposalRepository;
+  public readonly capabilityProposalEvents: CapabilityProposalEventRepository;
+  public readonly codeModeRuns: CodeModeRunRepository;
 
   public constructor(options: StorageOptions) {
     this.db = createDatabase({
@@ -214,6 +225,12 @@ export class Storage {
     this.assembly = new AssemblyRepository(this.db);
     this.transcriptOutbox = new TranscriptOutboxRepository(this.db);
     this.realtimeStreamLeases = new RealtimeStreamLeaseRepository(this.db);
+    this.capabilityCatalogSnapshots = new CapabilityCatalogSnapshotRepository(this.db);
+    this.skillLifecycle = new SkillLifecycleRepository(this.db);
+    this.candidateSkillVersions = new CandidateSkillVersionRepository(this.db);
+    this.capabilityProposals = new CapabilityProposalRepository(this.db);
+    this.capabilityProposalEvents = new CapabilityProposalEventRepository(this.db);
+    this.codeModeRuns = new CodeModeRunRepository(this.db);
   }
 
   public close(): void {

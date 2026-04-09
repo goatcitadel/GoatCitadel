@@ -401,6 +401,14 @@ export const AssistantConfigInputSchema = z
       })
       .passthrough()
       .optional(),
+    capabilities: z
+      .object({
+        candidateRoot: z.string().optional(),
+        codeModeArtifactRoot: z.string().optional(),
+        tempRoot: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
     features: z
       .object({
         durableKernelV1Enabled: z.boolean().optional(),
@@ -412,6 +420,7 @@ export const AssistantConfigInputSchema = z
         bankrBuiltinEnabled: z.boolean().optional(),
         cronReviewQueueV1Enabled: z.boolean().optional(),
         replayRegressionV1Enabled: z.boolean().optional(),
+        codeModeV1Enabled: z.boolean().optional(),
       })
       .passthrough()
       .optional(),

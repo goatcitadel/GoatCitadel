@@ -378,18 +378,22 @@ export async function resolveApproval(
   const pendingAction = host.storage.pendingApprovalActions.find(approvalId);
 
   if (input.decision === "approve") {
-    executedAction = await host.policyEngine.executeApprovedAction(approvalId);
-    if (pendingAction?.resolutionStatus === "pending" && executedAction?.outcome !== "executed") {
-      host.storage.pendingApprovalActions.upsertPending({
-        approvalId,
-        actionType: pendingAction.actionType,
-        request: pendingAction.request,
-        createdAt: pendingAction.createdAt,
-      });
-      throw new ConflictError({
-        code: "STATE_CONFLICT",
-        message: `Approved action could not execute and remains pending: ${executedAction?.policyReason ?? "unknown execution error"}`,
-      });
+    if (pendingAction?.actionType === "code_mode.run") {
+      executedAction = await host.executeCodeModePendingApproval(approvalId);
+    } else {
+      executedAction = await host.policyEngine.executeApprovedAction(approvalId);
+      if (pendingAction?.resolutionStatus === "pending" && executedAction?.outcome !== "executed") {
+        host.storage.pendingApprovalActions.upsertPending({
+          approvalId,
+          actionType: pendingAction.actionType,
+          request: pendingAction.request,
+          createdAt: pendingAction.createdAt,
+        });
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: `Approved action could not execute and remains pending: ${executedAction?.policyReason ?? "unknown execution error"}`,
+        });
+      }
     }
   }
 

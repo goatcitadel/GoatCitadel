@@ -1,3 +1,5 @@
+import type { CapabilityCategory, SkillLifecycleRecord, SkillLifecycleState } from "./capabilities.js";
+
 export interface SkillFrontmatter {
   name: string;
   description: string;
@@ -42,6 +44,12 @@ export interface SkillListItem extends LoadedSkill {
   state: SkillRuntimeState;
   note?: string;
   stateUpdatedAt?: string;
+  capabilityCategory?: CapabilityCategory;
+  lifecycleState?: SkillLifecycleState;
+  lifecycle?: SkillLifecycleRecord;
+  callable?: boolean;
+  trustLabel?: string;
+  reviewWarning?: string;
 }
 
 export interface SkillActivationDecision {
@@ -68,21 +76,9 @@ export interface SkillResolveInput {
 }
 
 export type BankrSafetyMode = "read_only" | "read_write";
-export type BankrActionType =
-  | "read"
-  | "trade"
-  | "transfer"
-  | "sign"
-  | "submit"
-  | "deploy";
+export type BankrActionType = "read" | "trade" | "transfer" | "sign" | "submit" | "deploy";
 
-export type BankrActionStatus =
-  | "preview_allowed"
-  | "preview_blocked"
-  | "executed"
-  | "blocked"
-  | "denied"
-  | "failed";
+export type BankrActionStatus = "preview_allowed" | "preview_blocked" | "executed" | "blocked" | "denied" | "failed";
 
 export interface BankrSafetyPolicy {
   enabled: boolean;

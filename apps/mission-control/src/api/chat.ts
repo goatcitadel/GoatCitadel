@@ -257,6 +257,25 @@ export async function fetchChatThread(sessionId: string): Promise<ChatThreadResp
   return request<ChatThreadResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`);
 }
 
+export async function fetchChatPendingApprovals(sessionId: string): Promise<{
+  items: Array<{
+    approvalId: string;
+    kind?: string;
+    toolName?: string;
+    reason?: string;
+    riskLevel?: "safe" | "caution" | "danger" | "nuclear";
+    expiresAt?: string;
+    createdAt: string;
+    stale: boolean;
+    staleReason?: string;
+    details?: Record<string, unknown>;
+  }>;
+  activeApprovalId: string | null;
+  remainingCount: number;
+}> {
+  return request(`/api/v1/chat/tools/approvals?sessionId=${encodeURIComponent(sessionId)}`);
+}
+
 export async function sendAgentChatMessage(
   sessionId: string,
   input: ChatSendMessageRequest,

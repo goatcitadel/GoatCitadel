@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  CapabilityCatalogEntry,
+  CapabilityProposalRecord,
   SkillMergedSourceResult,
   SkillListItem,
   SkillRuntimeState,
@@ -9,6 +11,8 @@ import type {
   SkillSourceSearchRecord,
 } from "@goatcitadel/contracts";
 import {
+  fetchCapabilityCatalog,
+  fetchCapabilityProposals,
   fetchSkillLookup,
   fetchSkillImportHistory,
   fetchSkillSources,
@@ -65,6 +69,8 @@ export function SkillsPage() {
   const dirtyStateDraftSkillIdsRef = useRef<Set<string>>(new Set());
   const dirtyNoteDraftSkillIdsRef = useRef<Set<string>>(new Set());
   const [skills, setSkills] = useState<SkillListItem[]>([]);
+  const [capabilityCatalog, setCapabilityCatalog] = useState<CapabilityCatalogEntry[]>([]);
+  const [capabilityProposals, setCapabilityProposals] = useState<CapabilityProposalRecord[]>([]);
   const [policy, setPolicy] = useState<SkillActivationPolicyState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -102,12 +108,17 @@ export function SkillsPage() {
       setIsInitialLoading(true);
     }
     try {
-      const [skillsResponse, policyResponse, importHistoryResponse] = await Promise.all([
-        fetchSkills(),
-        includeStatic ? fetchSkillActivationPolicies() : Promise.resolve(null),
-        includeStatic ? fetchSkillImportHistory(30) : Promise.resolve(null),
-      ]);
+      const [skillsResponse, policyResponse, importHistoryResponse, catalogResponse, proposalsResponse] =
+        await Promise.all([
+          fetchSkills(),
+          includeStatic ? fetchSkillActivationPolicies() : Promise.resolve(null),
+          includeStatic ? fetchSkillImportHistory(30) : Promise.resolve(null),
+          fetchCapabilityCatalog("inspectable"),
+          fetchCapabilityProposals(100),
+        ]);
       setSkills(skillsResponse.items);
+      setCapabilityCatalog(catalogResponse.items);
+      setCapabilityProposals(proposalsResponse.items);
       if (policyResponse) {
         setPolicy({
           guardedAutoThreshold: policyResponse.guardedAutoThreshold,
@@ -169,6 +180,14 @@ export function SkillsPage() {
   const filteredSkills = useMemo(
     () => skills.filter((skill) => (stateFilter === "all" ? true : skill.state === stateFilter)),
     [skills, stateFilter],
+  );
+  const candidateEntries = useMemo(
+    () => capabilityCatalog.filter((entry) => entry.kind === "candidate_skill"),
+    [capabilityCatalog],
+  );
+  const proposalEntries = useMemo(
+    () => capabilityCatalog.filter((entry) => entry.kind === "proposal"),
+    [capabilityCatalog],
   );
   const groupedSkills = useMemo(() => groupByCategory(filteredSkills, deriveSkillCategoryLabel), [filteredSkills]);
   const groupedSourceItems = useMemo(() => groupByCategory(sourceItems, deriveSourceCategoryLabel), [sourceItems]);
@@ -350,6 +369,8 @@ export function SkillsPage() {
             <StatusChip tone="default">{sourceItems.length} sources</StatusChip>
             <StatusChip tone="success">{skills.filter((skill) => skill.state === "enabled").length} enabled</StatusChip>
             <StatusChip tone="warning">{skills.filter((skill) => skill.state === "sleep").length} sleeping</StatusChip>
+            <StatusChip tone="default">{candidateEntries.length} candidates</StatusChip>
+            <StatusChip tone="default">{proposalEntries.length} proposals</StatusChip>
             {isRefreshing ? <StatusChip tone="live">Refreshing</StatusChip> : null}
           </>
         }
@@ -770,6 +791,76 @@ export function SkillsPage() {
       </Panel>
 
       <Panel
+        title="Capability Review Queue"
+        subtitle="Inspectable candidates and proposals stay visible here without becoming callable."
+      >
+        <div className="token-row">
+          <span className="token-chip">Candidates: {candidateEntries.length}</span>
+          <span className="token-chip">Proposals: {proposalEntries.length}</span>
+        </div>
+        <div className="stack-md">
+          <div className="stack-sm">
+            <p>
+              <strong>Candidate skills</strong>
+            </p>
+            {candidateEntries.length === 0 ? (
+              <p className="table-subtext">No generated candidates are staged yet.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Lifecycle</th>
+                    <th>Trust</th>
+                    <th>Capability ID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {candidateEntries.map((entry) => (
+                    <tr key={entry.capabilityId}>
+                      <td>{entry.title}</td>
+                      <td>{entry.lifecycleState ?? "candidate"}</td>
+                      <td>{entry.trustLabel ?? "Candidate"}</td>
+                      <td>{entry.capabilityId}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div className="stack-sm">
+            <p>
+              <strong>Governed proposals</strong>
+            </p>
+            {capabilityProposals.length === 0 ? (
+              <p className="table-subtext">No capability proposals recorded yet.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Kind</th>
+                    <th>Status</th>
+                    <th>Summary</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {capabilityProposals.map((proposal) => (
+                    <tr key={proposal.proposalId}>
+                      <td>{proposal.title}</td>
+                      <td>{proposal.proposalKind}</td>
+                      <td>{proposal.status}</td>
+                      <td>{proposal.summary}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      </Panel>
+
+      <Panel
         title="Skills"
         subtitle="Review installed skills, change runtime state, and attach operator notes without leaving the page."
       >
@@ -838,7 +929,17 @@ export function SkillsPage() {
                           <div className="table-subtext">{skill.skillId}</div>
                           <div className="table-subtext">{(skill.tags ?? []).join(", ") || "no tags"}</div>
                         </td>
-                        <td>{skill.source}</td>
+                        <td>
+                          {skill.source}
+                          <div className="table-subtext">
+                            {skill.capabilityCategory ?? "project_local"} · {skill.lifecycleState ?? "approved"}
+                          </div>
+                          <div className="table-subtext">
+                            {skill.trustLabel ?? "Unlabeled"}
+                            {skill.callable === false ? " · inspect only" : ""}
+                          </div>
+                          {skill.reviewWarning ? <div className="table-subtext">{skill.reviewWarning}</div> : null}
+                        </td>
                         <td>{skill.declaredTools.join(", ") || "-"}</td>
                         <td>{skill.requires.join(", ") || "-"}</td>
                         <td>

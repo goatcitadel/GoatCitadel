@@ -21,6 +21,12 @@ GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflo
 - Multi-provider model routing with local-friendly runtime support
 - Add-on and integration-plugin scaffolds for extending the system
 
+## What's new on `main`
+
+- **Capability system foundations**: tools, runtime skills, candidate bundles, proposals, and Code Mode runs now live on one GoatCitadel-native capability model with inspectable vs callable catalogs.
+- **Governed Code Mode v1**: trusted, operator-approved code can run through a child-process harness with immutable snapshots, persisted artifacts, bounded IPC, and an explicit read-only wrapper allowlist.
+- **Sharper Skills Hub and approvals**: Mission Control now surfaces lifecycle/trust metadata, candidate/proposal review queues, and a composer-adjacent approval footer with richer Code Mode inspection details.
+
 ## What ships in this repo
 
 ### Apps
@@ -70,6 +76,17 @@ More setup details live in [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_
 GoatCitadel is in late beta. The repo contains a real Mission Control shell, a working gateway, shared policy/orchestration packages, and extension scaffolding. It is already useful for local operator workflows, but the public surface is still being tightened and some contracts may continue to evolve before `1.0`.
 
 This repository intentionally favors truthful product claims over aspirational parity language. If something is still experimental, optional, or only partially proven, the docs should say so plainly.
+
+Safe claims today:
+
+- the capability system now governs tools, runtime skills, generated candidates, proposals, and Code Mode runs on one native path
+- Code Mode v1 exists as a governed trusted-code surface with immutable run artifacts and explicit operator approval
+- Skills Hub and inline approvals now expose lifecycle, trust, provenance, and richer Code Mode inspection details
+
+Not safe to over-claim yet:
+
+- hostile-code sandboxing for Code Mode
+- autonomous tool activation without governance
 
 ## Screenshots
 
