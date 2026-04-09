@@ -208,6 +208,7 @@ const refreshTopicRules: Array<{ topic: RefreshTopic; keywords: string[] }> = [
   { topic: "improvement", keywords: ["improvement", "replay", "autotune", "self_improvement"] },
   { topic: "integrations", keywords: ["integration", "plugin", "connection"] },
   { topic: "npu", keywords: ["npu", "runtime", "sidecar", "model", "voice", "llm", "provider"] },
+  { topic: "llamaCpp", keywords: ["llamacpp", "llama.cpp"] },
 ];
 
 type GatewayAccessViewState =

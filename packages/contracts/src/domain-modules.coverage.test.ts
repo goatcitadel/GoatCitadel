@@ -13,6 +13,7 @@ const moduleLoaders = {
   integrations: () => import("./integrations.js"),
   knowledge: () => import("./knowledge.js"),
   "learned-memory": () => import("./learned-memory.js"),
+  "llama-cpp": () => import("./llama-cpp.js"),
   llm: () => import("./llm.js"),
   mcp: () => import("./mcp.js"),
   media: () => import("./media.js"),

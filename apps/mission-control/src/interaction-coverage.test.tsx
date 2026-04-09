@@ -37,26 +37,31 @@ vi.mock("react-virtuoso", () => {
     if (typeof itemContent !== "function") {
       return null;
     }
-    const source = data.length > 0
-      ? data.slice(0, 5)
-      : Array.from({ length: Math.min(totalCount ?? 0, 5) }, () => undefined);
-    return source.map((item, index) => (
-      <div key={index}>
-        {itemContent(index, item)}
-      </div>
-    ));
+    const source =
+      data.length > 0 ? data.slice(0, 5) : Array.from({ length: Math.min(totalCount ?? 0, 5) }, () => undefined);
+    return source.map((item, index) => <div key={index}>{itemContent(index, item)}</div>);
   };
 
   return {
-    Virtuoso: (props: { data?: unknown[]; itemContent?: (index: number, item: unknown) => React.ReactNode; totalCount?: number }) => (
-      <div>{renderItems(props.data ?? [], props.itemContent, props.totalCount)}</div>
+    Virtuoso: (props: {
+      data?: unknown[];
+      itemContent?: (index: number, item: unknown) => React.ReactNode;
+      totalCount?: number;
+    }) => <div>{renderItems(props.data ?? [], props.itemContent, props.totalCount)}</div>,
+    TableVirtuoso: (props: {
+      data?: unknown[];
+      itemContent?: (index: number, item: unknown) => React.ReactNode;
+      totalCount?: number;
+    }) => (
+      <table>
+        <tbody>{renderItems(props.data ?? [], props.itemContent, props.totalCount)}</tbody>
+      </table>
     ),
-    TableVirtuoso: (props: { data?: unknown[]; itemContent?: (index: number, item: unknown) => React.ReactNode; totalCount?: number }) => (
-      <table><tbody>{renderItems(props.data ?? [], props.itemContent, props.totalCount)}</tbody></table>
-    ),
-    VirtuosoGrid: (props: { data?: unknown[]; itemContent?: (index: number, item: unknown) => React.ReactNode; totalCount?: number }) => (
-      <div>{renderItems(props.data ?? [], props.itemContent, props.totalCount)}</div>
-    ),
+    VirtuosoGrid: (props: {
+      data?: unknown[];
+      itemContent?: (index: number, item: unknown) => React.ReactNode;
+      totalCount?: number;
+    }) => <div>{renderItems(props.data ?? [], props.itemContent, props.totalCount)}</div>,
   };
 });
 
@@ -297,7 +302,12 @@ function buildPayload(pathname: string, method: string): unknown {
       ownedSessions: 0,
     };
   }
-  if (pathname.includes("/mesh/nodes") || pathname.includes("/mesh/leases") || pathname.includes("/mesh/sessions/owners") || pathname.includes("/mesh/replication/offsets")) {
+  if (
+    pathname.includes("/mesh/nodes") ||
+    pathname.includes("/mesh/leases") ||
+    pathname.includes("/mesh/sessions/owners") ||
+    pathname.includes("/mesh/replication/offsets")
+  ) {
     return { items: [] };
   }
   if (pathname.includes("/ui/change-risk/evaluate")) {
@@ -373,15 +383,31 @@ function buildPayload(pathname: string, method: string): unknown {
     return {
       runs: [],
       scores: [],
+      autoScoresV2: [],
+      humanReviewsV2: [],
+      latestAssessments: [],
       summary: {
         totalTests: 0,
         completedRuns: 0,
         failedRuns: 0,
         runFailureCount: 0,
+        invalidLatestRuns: 0,
         scoreFailureCount: 0,
         needsScoreCount: 0,
-        passThreshold: 7,
+        judgeFallbackCount: 0,
+        judgeErrorCount: 0,
+        autoScoredRuns: 0,
+        humanReviewedRuns: 0,
+        degradedScoreCount: 0,
+        passCount: 0,
+        failCount: 0,
+        reviewCount: 0,
+        effectivePassRate: 0,
+        reviewRate: 0,
+        activeScoringSchemaVersion: "v2",
+        passThreshold: 75,
         averageTotalScore: 0,
+        averageWeightedScore: 0,
         passRate: 0,
         failingCodes: [],
       },
@@ -518,7 +544,23 @@ function buildPayload(pathname: string, method: string): unknown {
   if (pathname.includes("/chat/sessions") && method === "POST") {
     return { sessionId: "session-1" };
   }
-  if (pathname.includes("/sessions") || pathname.includes("/tasks") || pathname.includes("/approvals") || pathname.includes("/tools") || pathname.includes("/integrations") || pathname.includes("/workspaces") || pathname.includes("/prompt-packs") || pathname.includes("/cron") || pathname.includes("/files") || pathname.includes("/memory") || pathname.includes("/mcp") || pathname.includes("/agents") || pathname.includes("/mesh") || pathname.includes("/events") || pathname.includes("/skills")) {
+  if (
+    pathname.includes("/sessions") ||
+    pathname.includes("/tasks") ||
+    pathname.includes("/approvals") ||
+    pathname.includes("/tools") ||
+    pathname.includes("/integrations") ||
+    pathname.includes("/workspaces") ||
+    pathname.includes("/prompt-packs") ||
+    pathname.includes("/cron") ||
+    pathname.includes("/files") ||
+    pathname.includes("/memory") ||
+    pathname.includes("/mcp") ||
+    pathname.includes("/agents") ||
+    pathname.includes("/mesh") ||
+    pathname.includes("/events") ||
+    pathname.includes("/skills")
+  ) {
     if (method === "POST" || method === "PATCH" || method === "PUT" || method === "DELETE") {
       return {};
     }
@@ -569,7 +611,16 @@ function installWindowAndFetch(): void {
     cancelAnimationFrame: (handle: number) => globalThis.clearTimeout(handle),
     addEventListener: () => undefined,
     removeEventListener: () => undefined,
-    matchMedia: () => ({ matches: false, media: "", onchange: null, addListener: () => undefined, removeListener: () => undefined, addEventListener: () => undefined, removeEventListener: () => undefined, dispatchEvent: () => false }),
+    matchMedia: () => ({
+      matches: false,
+      media: "",
+      onchange: null,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    }),
     confirm: () => true,
     prompt: () => "",
   };
@@ -659,17 +710,20 @@ function installWindowAndFetch(): void {
     });
   }
 
-  vi.stubGlobal("fetch", vi.fn(async (input: string | URL, init?: RequestInit) => {
-    const url = new URL(String(input), "http://localhost");
-    const method = (init?.method ?? "GET").toUpperCase();
-    const payload = buildPayload(url.pathname, method);
-    return new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: {
-        "content-type": "application/json",
-      },
-    });
-  }) as unknown as typeof fetch);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost");
+      const method = (init?.method ?? "GET").toUpperCase();
+      const payload = buildPayload(url.pathname, method);
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      });
+    }) as unknown as typeof fetch,
+  );
 }
 
 async function flush(): Promise<void> {
@@ -698,7 +752,10 @@ const targets: Array<{ name: string; element: React.ReactElement }> = [
   { name: "SystemPage", element: <SystemPage /> },
   { name: "OfficePage", element: <OfficePage /> },
   { name: "SkillsPage", element: <SkillsPage /> },
-  { name: "WorkspacesPage", element: <WorkspacesPage activeWorkspaceId="default" onWorkspaceChange={() => undefined} /> },
+  {
+    name: "WorkspacesPage",
+    element: <WorkspacesPage activeWorkspaceId="default" onWorkspaceChange={() => undefined} />,
+  },
   { name: "SessionsPage", element: <SessionsPage /> },
   { name: "ApprovalsPage", element: <ApprovalsPage /> },
   { name: "AgentsPage", element: <AgentsPage /> },
@@ -726,9 +783,10 @@ describe("mission-control interaction coverage", () => {
       try {
         await act(async () => {
           const created = create(
-            <TestBoundary onError={(message) => {
-              boundaryError = message;
-            }}
+            <TestBoundary
+              onError={(message) => {
+                boundaryError = message;
+              }}
             >
               {target.element}
             </TestBoundary>,

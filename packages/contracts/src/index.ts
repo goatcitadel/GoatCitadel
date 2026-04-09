@@ -15,6 +15,7 @@ export * from "./integrations.js";
 export * from "./mesh.js";
 export * from "./onboarding.js";
 export * from "./memory.js";
+export * from "./llama-cpp.js";
 export * from "./npu.js";
 export * from "./ui-change-risk.js";
 export * from "./agents.js";

@@ -9,7 +9,10 @@ import type {
 } from "@goatcitadel/contracts";
 import { buildA2UIProofLaneArtifactPath, buildA2UIProofLaneDraft } from "../services/a2ui-proof-lane.js";
 import { buildBrowserProofLaneArtifactPath, buildBrowserProofLaneDraft } from "../services/browser-proof-lane.js";
-import { buildCompanionBootstrapArtifactPath, buildCompanionBootstrapBrief } from "../services/companion-bootstrap-brief.js";
+import {
+  buildCompanionBootstrapArtifactPath,
+  buildCompanionBootstrapBrief,
+} from "../services/companion-bootstrap-brief.js";
 import { buildExtensionSdkArtifactPath, buildExtensionSdkBrief } from "../services/extension-sdk-brief.js";
 import {
   buildExtensionStarterPackArtifact,
@@ -62,11 +65,7 @@ const authUpdateSchema = z.object({
   basicPassword: z.string().optional(),
 });
 
-const llmApiStyleSchema = z.enum([
-  "openai-chat-completions",
-  "openai-responses",
-  "anthropic-messages",
-]);
+const llmApiStyleSchema = z.enum(["openai-chat-completions", "openai-responses", "anthropic-messages"]);
 
 const updateSettingsSchema = z.object({
   deploymentProfile: z.enum(["local_dev", "trusted_local", "remote_hardened"]).optional(),
@@ -75,66 +74,100 @@ const updateSettingsSchema = z.object({
   readAccessMode: z.enum(["roots_only", "approval_required", "full_disk"]).optional(),
   networkAllowlist: z.array(z.string().min(1)).optional(),
   auth: authUpdateSchema.optional(),
-  llm: z.object({
-    activeProviderId: z.string().optional(),
-    activeModel: z.string().optional(),
-    upsertProvider: z.object({
-      providerId: z.string().min(1),
-      label: z.string().min(1).optional(),
-      baseUrl: z.string().url().optional(),
-      apiStyle: llmApiStyleSchema.optional(),
-      defaultModel: z.string().min(1).optional(),
-      apiKey: z.string().min(1).optional(),
-      apiKeyEnv: z.string().min(1).optional(),
-      headers: z.record(z.string()).optional(),
-    }).optional(),
-  }).optional(),
-  memory: z.object({
-    enabled: z.boolean().optional(),
-    qmdEnabled: z.boolean().optional(),
-    qmdApplyToChat: z.boolean().optional(),
-    qmdApplyToOrchestration: z.boolean().optional(),
-    qmdMaxContextTokens: z.number().int().positive().optional(),
-    qmdMinPromptChars: z.number().int().nonnegative().optional(),
-    qmdCacheTtlSeconds: z.number().int().positive().optional(),
-    qmdDistillerProviderId: z.string().optional(),
-    qmdDistillerModel: z.string().optional(),
-  }).optional(),
-  web: z.object({
-    firecrawl: z.object({
+  llm: z
+    .object({
+      activeProviderId: z.string().optional(),
+      activeModel: z.string().optional(),
+      upsertProvider: z
+        .object({
+          providerId: z.string().min(1),
+          label: z.string().min(1).optional(),
+          baseUrl: z.string().url().optional(),
+          apiStyle: llmApiStyleSchema.optional(),
+          defaultModel: z.string().min(1).optional(),
+          apiKey: z.string().min(1).optional(),
+          apiKeyEnv: z.string().min(1).optional(),
+          headers: z.record(z.string()).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  memory: z
+    .object({
       enabled: z.boolean().optional(),
+      qmdEnabled: z.boolean().optional(),
+      qmdApplyToChat: z.boolean().optional(),
+      qmdApplyToOrchestration: z.boolean().optional(),
+      qmdMaxContextTokens: z.number().int().positive().optional(),
+      qmdMinPromptChars: z.number().int().nonnegative().optional(),
+      qmdCacheTtlSeconds: z.number().int().positive().optional(),
+      qmdDistillerProviderId: z.string().optional(),
+      qmdDistillerModel: z.string().optional(),
+    })
+    .optional(),
+  web: z
+    .object({
+      firecrawl: z
+        .object({
+          enabled: z.boolean().optional(),
+          baseUrl: z.string().url().optional(),
+          apiKeyEnv: z.string().optional(),
+          timeoutMs: z.number().int().positive().optional(),
+          defaultReadBackend: z.enum(["native", "firecrawl"]).optional(),
+          fallbackToNative: z.boolean().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  mesh: z
+    .object({
+      enabled: z.boolean().optional(),
+      mode: z.enum(["lan", "wan", "tailnet"]).optional(),
+      nodeId: z.string().min(1).optional(),
+      mdns: z.boolean().optional(),
+      staticPeers: z.array(z.string().min(1)).optional(),
+      requireMtls: z.boolean().optional(),
+      tailnetEnabled: z.boolean().optional(),
+    })
+    .optional(),
+  npu: z
+    .object({
+      enabled: z.boolean().optional(),
+      autoStart: z.boolean().optional(),
+      sidecarUrl: z.string().url().optional(),
+    })
+    .optional(),
+  llamaCpp: z
+    .object({
+      enabled: z.boolean().optional(),
+      autoStart: z.boolean().optional(),
       baseUrl: z.string().url().optional(),
-      apiKeyEnv: z.string().optional(),
-      timeoutMs: z.number().int().positive().optional(),
-      defaultReadBackend: z.enum(["native", "firecrawl"]).optional(),
-      fallbackToNative: z.boolean().optional(),
-    }).optional(),
-  }).optional(),
-  mesh: z.object({
-    enabled: z.boolean().optional(),
-    mode: z.enum(["lan", "wan", "tailnet"]).optional(),
-    nodeId: z.string().min(1).optional(),
-    mdns: z.boolean().optional(),
-    staticPeers: z.array(z.string().min(1)).optional(),
-    requireMtls: z.boolean().optional(),
-    tailnetEnabled: z.boolean().optional(),
-  }).optional(),
-  npu: z.object({
-    enabled: z.boolean().optional(),
-    autoStart: z.boolean().optional(),
-    sidecarUrl: z.string().url().optional(),
-  }).optional(),
-  features: z.object({
-    durableKernelV1Enabled: z.boolean().optional(),
-    replayOverridesV1Enabled: z.boolean().optional(),
-    memoryLifecycleAdminV1Enabled: z.boolean().optional(),
-    memoryMaintenanceV1Enabled: z.boolean().optional(),
-    connectorDiagnosticsV1Enabled: z.boolean().optional(),
-    computerUseGuardrailsV1Enabled: z.boolean().optional(),
-    bankrBuiltinEnabled: z.boolean().optional(),
-    cronReviewQueueV1Enabled: z.boolean().optional(),
-    replayRegressionV1Enabled: z.boolean().optional(),
-  }).optional(),
+      command: z.string().min(1).optional(),
+      extraArgs: z.array(z.string()).optional(),
+      modelPath: z.string().optional(),
+      alias: z.string().min(1).optional(),
+      ctxSize: z.number().int().positive().nullable().optional(),
+      threads: z.number().int().positive().nullable().optional(),
+      gpuLayers: z.number().int().nonnegative().nullable().optional(),
+      parallel: z.number().int().positive().nullable().optional(),
+      batchSize: z.number().int().positive().nullable().optional(),
+      ubatchSize: z.number().int().positive().nullable().optional(),
+      flashAttention: z.boolean().nullable().optional(),
+    })
+    .optional(),
+  features: z
+    .object({
+      durableKernelV1Enabled: z.boolean().optional(),
+      replayOverridesV1Enabled: z.boolean().optional(),
+      memoryLifecycleAdminV1Enabled: z.boolean().optional(),
+      memoryMaintenanceV1Enabled: z.boolean().optional(),
+      connectorDiagnosticsV1Enabled: z.boolean().optional(),
+      computerUseGuardrailsV1Enabled: z.boolean().optional(),
+      bankrBuiltinEnabled: z.boolean().optional(),
+      cronReviewQueueV1Enabled: z.boolean().optional(),
+      replayRegressionV1Enabled: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
@@ -145,7 +178,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     return {};
   };
 
-  const persistFollowOnParityArtifact = (artifact: FollowOnProofLaneArtifactRecord): FollowOnProofLaneArtifactRecord => {
+  const persistFollowOnParityArtifact = (
+    artifact: FollowOnProofLaneArtifactRecord,
+  ): FollowOnProofLaneArtifactRecord => {
     if (typeof fastify.gateway.rememberFollowOnParityArtifact === "function") {
       return fastify.gateway.rememberFollowOnParityArtifact(artifact);
     }
@@ -174,14 +209,16 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     draft: ExtensionStarterPackDraft,
   ): Promise<ExtensionStarterPackArtifactRecord> => {
     const files = await buildExtensionStarterPackFiles(draft);
-    const uploaded = await Promise.all(files.map(async (file) => {
-      const uploadedFile = await fastify.gateway.uploadWorkspaceFile(file.relativePath, file.content);
-      return {
-        relativePath: uploadedFile.relativePath,
-        fullPath: uploadedFile.fullPath,
-        bytes: uploadedFile.bytes,
-      };
-    }));
+    const uploaded = await Promise.all(
+      files.map(async (file) => {
+        const uploadedFile = await fastify.gateway.uploadWorkspaceFile(file.relativePath, file.content);
+        return {
+          relativePath: uploadedFile.relativePath,
+          fullPath: uploadedFile.fullPath,
+          bytes: uploadedFile.bytes,
+        };
+      }),
+    );
     return buildExtensionStarterPackArtifact(draft, uploaded);
   };
 
@@ -205,12 +242,14 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       voiceStatus,
       voiceRuntime,
       latestArtifacts: loadLatestFollowOnParityArtifacts(),
-      packagingProofCoverage: typeof fastify.gateway.getPackagingProofCoverage === "function"
-        ? fastify.gateway.getPackagingProofCoverage()
-        : undefined,
-      voiceProofCoverage: typeof fastify.gateway.getVoiceProofCoverage === "function"
-        ? fastify.gateway.getVoiceProofCoverage()
-        : undefined,
+      packagingProofCoverage:
+        typeof fastify.gateway.getPackagingProofCoverage === "function"
+          ? fastify.gateway.getPackagingProofCoverage()
+          : undefined,
+      voiceProofCoverage:
+        typeof fastify.gateway.getVoiceProofCoverage === "function"
+          ? fastify.gateway.getVoiceProofCoverage()
+          : undefined,
     });
   };
 

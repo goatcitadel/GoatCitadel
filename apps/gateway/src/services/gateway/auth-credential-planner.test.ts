@@ -3,10 +3,7 @@ import path from "node:path";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GatewayRuntimeConfig } from "../../config.js";
-import {
-  buildGatewayAuthCredentialPlan,
-  resolveGatewayInstallToken,
-} from "./auth-credential-planner.js";
+import { buildGatewayAuthCredentialPlan, resolveGatewayInstallToken } from "./auth-credential-planner.js";
 
 const TEMP_ROOTS: string[] = [];
 
@@ -58,19 +55,19 @@ describe("auth credential planner", () => {
   });
 
   it("generates and persists a token into the local env file when requested", async () => {
-    const root = await createTempRoot({
-      auth: {
-        mode: "token",
-        allowLoopbackBypass: false,
-        token: {
-          queryParam: "access_token",
+    const root = await createTempRoot(
+      {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: {
+            queryParam: "access_token",
+          },
+          basic: {},
         },
-        basic: {},
       },
-    }, [
-      "GOATCITADEL_AUTH_MODE=token",
-      "",
-    ]);
+      ["GOATCITADEL_AUTH_MODE=token", ""],
+    );
     const runtimeConfig = createRuntimeConfig(root, {
       mode: "token",
       allowLoopbackBypass: false,
@@ -134,14 +131,15 @@ describe("auth credential planner", () => {
   });
 });
 
-async function createTempRoot(
-  assistantConfig: Record<string, unknown>,
-  envLines: string[] = [],
-): Promise<string> {
+async function createTempRoot(assistantConfig: Record<string, unknown>, envLines: string[] = []): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-auth-plan-"));
   TEMP_ROOTS.push(root);
   await mkdir(path.join(root, "config"), { recursive: true });
-  await writeFile(path.join(root, "config", "assistant.config.json"), `${JSON.stringify(assistantConfig, null, 2)}\n`, "utf8");
+  await writeFile(
+    path.join(root, "config", "assistant.config.json"),
+    `${JSON.stringify(assistantConfig, null, 2)}\n`,
+    "utf8",
+  );
   await writeFile(path.join(root, ".env"), envLines.join("\n"), "utf8");
   return root;
 }
@@ -194,6 +192,27 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
           timeoutMs: 20000,
           defaultReadBackend: "native",
           fallbackToNative: true,
+        },
+      },
+      llamaCpp: {
+        enabled: false,
+        autoStart: false,
+        server: {
+          baseUrl: "http://127.0.0.1:8080/v1",
+          command: "",
+          extraArgs: [],
+          healthPath: "/health",
+          modelsPath: "/v1/models",
+          startTimeoutMs: 30000,
+          requestTimeoutMs: 15000,
+          restartBudget: {
+            windowMs: 300000,
+            maxRestarts: 3,
+            backoffMs: 2000,
+          },
+        },
+        launch: {
+          alias: "gemma-4",
         },
       },
       mesh: {

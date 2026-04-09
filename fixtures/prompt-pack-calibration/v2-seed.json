@@ -1,0 +1,58 @@
+[
+  {
+    "id": "obvious_good",
+    "label": "Obvious good",
+    "expectedVerdict": "pass",
+    "expectedReasonCodes": [],
+    "expectedDegradedReasons": []
+  },
+  {
+    "id": "obvious_bad",
+    "label": "Obvious bad",
+    "expectedVerdict": "fail",
+    "expectedReasonCodes": ["run_failed"],
+    "expectedDegradedReasons": []
+  },
+  {
+    "id": "polished_but_wrong",
+    "label": "Polished but wrong",
+    "expectedVerdict": "fail",
+    "expectedReasonCodes": [],
+    "expectedDegradedReasons": []
+  },
+  {
+    "id": "honest_but_incomplete",
+    "label": "Honest but incomplete",
+    "expectedVerdict": "review",
+    "expectedReasonCodes": ["self_reported_incomplete"],
+    "expectedDegradedReasons": []
+  },
+  {
+    "id": "protocol_violation",
+    "label": "Protocol violation",
+    "expectedVerdict": "fail",
+    "expectedReasonCodes": ["tool_tier_violation"],
+    "expectedDegradedReasons": []
+  },
+  {
+    "id": "fake_access",
+    "label": "Fake access claim",
+    "expectedVerdict": "fail",
+    "expectedReasonCodes": ["unsupported_access_claim"],
+    "expectedDegradedReasons": []
+  },
+  {
+    "id": "disagreement",
+    "label": "Judge and rule disagreement",
+    "expectedVerdict": "review",
+    "expectedReasonCodes": ["major_disagreement"],
+    "expectedDegradedReasons": []
+  },
+  {
+    "id": "weird_but_correct",
+    "label": "Weird but correct",
+    "expectedVerdict": "pass",
+    "expectedReasonCodes": [],
+    "expectedDegradedReasons": []
+  }
+]

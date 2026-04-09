@@ -30,6 +30,7 @@ export interface AssistantConfig {
   web: WebRuntimeConfig;
   mesh: MeshConfig;
   npu: NpuConfig;
+  llamaCpp: LlamaCppConfig;
   sqlite: SqliteTuningConfig;
   durable: DurableConfig;
   features: FeatureFlagsConfig;
@@ -156,6 +157,36 @@ export interface NpuConfig {
   };
 }
 
+export interface LlamaCppConfig {
+  enabled: boolean;
+  autoStart: boolean;
+  server: {
+    baseUrl: string;
+    command: string;
+    extraArgs: string[];
+    healthPath: string;
+    modelsPath: string;
+    startTimeoutMs: number;
+    requestTimeoutMs: number;
+    restartBudget: {
+      windowMs: number;
+      maxRestarts: number;
+      backoffMs: number;
+    };
+  };
+  launch: {
+    modelPath?: string;
+    alias: string;
+    ctxSize?: number;
+    threads?: number;
+    gpuLayers?: number;
+    parallel?: number;
+    batchSize?: number;
+    ubatchSize?: number;
+    flashAttention?: boolean;
+  };
+}
+
 export interface DurableConfig {
   enabled: boolean;
   diagnosticsEnabled: boolean;
@@ -202,9 +233,9 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
       syncResult.createdUnified ? "created config/goatcitadel.json" : undefined,
       ...syncResult.syncedSections.map((name) => `synced ${name}`),
     ].filter(Boolean);
-    const prefix = isVerboseLoggingEnabled()
-      ? "[goatcitadel:config]"
-      : "[goatcitadel]";
+    const prefix = isVerboseLoggingEnabled() ? "[goatcitadel:config]" : "[goatcitadel]";
+    // Config sync is intentionally visible so first-run bootstrap is understandable.
+    // eslint-disable-next-line no-console
     console.info(`${prefix} config sync: ${changes.join(", ")}`);
   }
 
@@ -229,12 +260,8 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
 
   applyEnvironmentOverrides(assistant);
 
-  toolPolicy.sandbox.writeJailRoots = toolPolicy.sandbox.writeJailRoots.map((root) =>
-    path.resolve(rootDir, root),
-  );
-  toolPolicy.sandbox.readOnlyRoots = toolPolicy.sandbox.readOnlyRoots.map((root) =>
-    path.resolve(rootDir, root),
-  );
+  toolPolicy.sandbox.writeJailRoots = toolPolicy.sandbox.writeJailRoots.map((root) => path.resolve(rootDir, root));
+  toolPolicy.sandbox.readOnlyRoots = toolPolicy.sandbox.readOnlyRoots.map((root) => path.resolve(rootDir, root));
 
   return {
     assistant,
@@ -244,14 +271,6 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
     rootDir,
     dbPath: path.join(rootDir, "data", "index.db"),
   };
-}
-
-function parseJsonConfig<T>(raw: string, filePath: string): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    throw new Error(`Failed to parse config JSON at ${filePath}: invalid JSON`);
-  }
 }
 
 function parseAndValidate<T>(raw: string, schema: ZodType<T>, filePath: string): T {
@@ -278,9 +297,9 @@ function parseAndValidate<T>(raw: string, schema: ZodType<T>, filePath: string):
 function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   const deploymentProfile = process.env.GOATCITADEL_DEPLOYMENT_PROFILE?.trim();
   if (
-    deploymentProfile === "local_dev"
-    || deploymentProfile === "trusted_local"
-    || deploymentProfile === "remote_hardened"
+    deploymentProfile === "local_dev" ||
+    deploymentProfile === "trusted_local" ||
+    deploymentProfile === "remote_hardened"
   ) {
     assistant.deploymentProfile = deploymentProfile;
   }
@@ -339,6 +358,31 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     assistant.npu.sidecar.baseUrl = npuBaseUrl.trim();
   }
 
+  const llamaCppEnabled = process.env.GOATCITADEL_LLAMACPP_ENABLED;
+  if (llamaCppEnabled) {
+    assistant.llamaCpp.enabled = llamaCppEnabled === "1" || llamaCppEnabled.toLowerCase() === "true";
+  }
+
+  const llamaCppAutoStart = process.env.GOATCITADEL_LLAMACPP_AUTOSTART;
+  if (llamaCppAutoStart) {
+    assistant.llamaCpp.autoStart = llamaCppAutoStart === "1" || llamaCppAutoStart.toLowerCase() === "true";
+  }
+
+  const llamaCppBaseUrl = process.env.GOATCITADEL_LLAMACPP_URL;
+  if (llamaCppBaseUrl?.trim()) {
+    assistant.llamaCpp.server.baseUrl = llamaCppBaseUrl.trim();
+  }
+
+  const llamaCppCommand = process.env.GOATCITADEL_LLAMACPP_COMMAND;
+  if (llamaCppCommand?.trim()) {
+    assistant.llamaCpp.server.command = llamaCppCommand.trim();
+  }
+
+  const llamaCppModelPath = process.env.GOATCITADEL_LLAMACPP_MODEL_PATH;
+  if (llamaCppModelPath?.trim()) {
+    assistant.llamaCpp.launch.modelPath = llamaCppModelPath.trim();
+  }
+
   const memoryEnabled = process.env.GOATCITADEL_MEMORY_ENABLED;
   if (memoryEnabled) {
     assistant.memory.enabled = memoryEnabled === "1" || memoryEnabled.toLowerCase() === "true";
@@ -356,20 +400,20 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
 
   const durableDiagnosticsEnabled = process.env.GOATCITADEL_DURABLE_DIAGNOSTICS_ENABLED;
   if (durableDiagnosticsEnabled) {
-    assistant.durable.diagnosticsEnabled = durableDiagnosticsEnabled === "1"
-      || durableDiagnosticsEnabled.toLowerCase() === "true";
+    assistant.durable.diagnosticsEnabled =
+      durableDiagnosticsEnabled === "1" || durableDiagnosticsEnabled.toLowerCase() === "true";
   }
 
   const durableExecutionEnabled = process.env.GOATCITADEL_DURABLE_EXECUTION_ENABLED;
   if (durableExecutionEnabled) {
-    assistant.durable.executionEnabled = durableExecutionEnabled === "1"
-      || durableExecutionEnabled.toLowerCase() === "true";
+    assistant.durable.executionEnabled =
+      durableExecutionEnabled === "1" || durableExecutionEnabled.toLowerCase() === "true";
   }
 
   const durableChatAutoPromoteEnabled = process.env.GOATCITADEL_DURABLE_CHAT_AUTO_PROMOTE_ENABLED;
   if (durableChatAutoPromoteEnabled) {
-    assistant.durable.chatAutoPromoteEnabled = durableChatAutoPromoteEnabled === "1"
-      || durableChatAutoPromoteEnabled.toLowerCase() === "true";
+    assistant.durable.chatAutoPromoteEnabled =
+      durableChatAutoPromoteEnabled === "1" || durableChatAutoPromoteEnabled.toLowerCase() === "true";
   }
 
   const featureFlagMap: Array<[keyof FeatureFlagsConfig, string | undefined]> = [
@@ -400,7 +444,12 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   }
   const sqliteWalAutoCheckpoint = parseIntEnv(process.env.GOATCITADEL_SQLITE_WAL_AUTOCHECKPOINT_PAGES);
   if (sqliteWalAutoCheckpoint !== undefined) {
-    assistant.sqlite.walAutoCheckpointPages = clampInt(sqliteWalAutoCheckpoint, assistant.sqlite.walAutoCheckpointPages, 1_000, 20_000);
+    assistant.sqlite.walAutoCheckpointPages = clampInt(
+      sqliteWalAutoCheckpoint,
+      assistant.sqlite.walAutoCheckpointPages,
+      1_000,
+      20_000,
+    );
   }
   const firecrawlEnabled = parseBooleanEnv(process.env.GOATCITADEL_FIRECRAWL_ENABLED);
   if (firecrawlEnabled !== undefined) {
@@ -449,6 +498,10 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
   const npuInput = (input.npu ?? {}) as Partial<NpuConfig>;
   const npuSidecar = (npuInput.sidecar ?? {}) as Partial<NpuConfig["sidecar"]>;
   const npuRestart = (npuSidecar.restartBudget ?? {}) as Partial<NpuConfig["sidecar"]["restartBudget"]>;
+  const llamaCppInput = (input.llamaCpp ?? {}) as Partial<LlamaCppConfig>;
+  const llamaCppServer = (llamaCppInput.server ?? {}) as Partial<LlamaCppConfig["server"]>;
+  const llamaCppRestart = (llamaCppServer.restartBudget ?? {}) as Partial<LlamaCppConfig["server"]["restartBudget"]>;
+  const llamaCppLaunch = (llamaCppInput.launch ?? {}) as Partial<LlamaCppConfig["launch"]>;
   const sqliteInput = (input.sqlite ?? {}) as Partial<SqliteTuningConfig>;
   const durableInput = (input.durable ?? {}) as Partial<DurableConfig>;
   const featuresInput = (input.features ?? {}) as Partial<FeatureFlagsConfig>;
@@ -569,6 +622,35 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
         },
       },
     },
+    llamaCpp: {
+      enabled: llamaCppInput.enabled ?? false,
+      autoStart: llamaCppInput.autoStart ?? false,
+      server: {
+        baseUrl: llamaCppServer.baseUrl ?? "http://127.0.0.1:8080/v1",
+        command: llamaCppServer.command ?? "llama-server",
+        extraArgs: llamaCppServer.extraArgs ?? [],
+        healthPath: llamaCppServer.healthPath ?? "/health",
+        modelsPath: llamaCppServer.modelsPath ?? "/v1/models",
+        startTimeoutMs: llamaCppServer.startTimeoutMs ?? 20_000,
+        requestTimeoutMs: llamaCppServer.requestTimeoutMs ?? 12_000,
+        restartBudget: {
+          windowMs: llamaCppRestart.windowMs ?? 60_000,
+          maxRestarts: llamaCppRestart.maxRestarts ?? 5,
+          backoffMs: llamaCppRestart.backoffMs ?? 2_000,
+        },
+      },
+      launch: {
+        modelPath: llamaCppLaunch.modelPath,
+        alias: llamaCppLaunch.alias ?? "gemma-4",
+        ctxSize: clampOptionalInt(llamaCppLaunch.ctxSize, 4096, 256, 262_144),
+        threads: clampOptionalInt(llamaCppLaunch.threads, undefined, 1, 512),
+        gpuLayers: clampOptionalInt(llamaCppLaunch.gpuLayers, undefined, 0, 512),
+        parallel: clampOptionalInt(llamaCppLaunch.parallel, undefined, 1, 128),
+        batchSize: clampOptionalInt(llamaCppLaunch.batchSize, undefined, 1, 262_144),
+        ubatchSize: clampOptionalInt(llamaCppLaunch.ubatchSize, undefined, 1, 262_144),
+        flashAttention: llamaCppLaunch.flashAttention,
+      },
+    },
     sqlite: {
       cacheSizeKb: clampInt(sqliteInput.cacheSizeKb, 65_536, 4_096, 262_144),
       tempStoreMemory: sqliteInput.tempStoreMemory ?? true,
@@ -598,6 +680,18 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       sessionTokenHardCap: input.budgets?.sessionTokenHardCap ?? 120000,
     },
   };
+}
+
+function clampOptionalInt(
+  value: number | undefined,
+  fallback: number | undefined,
+  min: number,
+  max: number,
+): number | undefined {
+  if (value === undefined) {
+    return fallback;
+  }
+  return clampInt(value, fallback ?? value, min, max);
 }
 
 async function readFileWithDefault(filePath: string, fallback: string): Promise<string> {

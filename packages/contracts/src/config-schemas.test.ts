@@ -284,12 +284,18 @@ describe("AssistantConfigInputSchema", () => {
       environment: "local",
       deploymentProfile: "trusted_local",
       auth: { mode: "token" },
+      llamaCpp: {
+        enabled: true,
+        server: { baseUrl: "http://127.0.0.1:8080/v1" },
+        launch: { alias: "gemma-4" },
+      },
       web: { firecrawl: { enabled: true, baseUrl: "http://127.0.0.1:3002", defaultReadBackend: "firecrawl" } },
       features: { computerUseGuardrailsV1Enabled: true },
     };
     const result = AssistantConfigInputSchema.parse(input);
     expect(result.environment).toBe("local");
     expect(result.deploymentProfile).toBe("trusted_local");
+    expect(result.llamaCpp?.launch?.alias).toBe("gemma-4");
     expect(result.web?.firecrawl?.defaultReadBackend).toBe("firecrawl");
   });
 
@@ -313,9 +319,7 @@ describe("AssistantConfigInputSchema", () => {
 describe("CronJobsConfigSchema", () => {
   it("accepts valid cron jobs config", () => {
     const input = {
-      jobs: [
-        { jobId: "backup", name: "Daily Backup", schedule: "0 2 * * *", enabled: true },
-      ],
+      jobs: [{ jobId: "backup", name: "Daily Backup", schedule: "0 2 * * *", enabled: true }],
     };
     const result = CronJobsConfigSchema.parse(input);
     expect(result.jobs).toHaveLength(1);

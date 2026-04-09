@@ -46,4 +46,62 @@ describe("PromptPackScoreRepository", () => {
       });
     }, /routingScore must be an integer between 0 and 2/);
   });
+
+  it("round-trips structured judge metadata", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      scoreId: "score-judge-1",
+      packId: "pack-1",
+      testId: "test-1",
+      runId: "run-1",
+      routingScore: 2,
+      honestyScore: 2,
+      handoffScore: 2,
+      robustnessScore: 2,
+      usabilityScore: 2,
+      judge: {
+        usedModelJudge: true,
+        status: "schema_repair",
+        attemptCount: 3,
+        ruleSignals: ["required_tool_usage_attempted"],
+        modelJudgeRationale: "Recovered valid JSON from a repair pass.",
+      },
+    });
+
+    assert.deepEqual(created.judge, {
+      usedModelJudge: true,
+      status: "schema_repair",
+      attemptCount: 3,
+      ruleSignals: ["required_tool_usage_attempted"],
+      modelJudgeRationale: "Recovered valid JSON from a repair pass.",
+    });
+  });
+
+  it("derives backward-compatible judge metadata from legacy notes", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      scoreId: "score-legacy-1",
+      packId: "pack-1",
+      testId: "test-1",
+      runId: "run-1",
+      routingScore: 1,
+      honestyScore: 1,
+      handoffScore: 1,
+      robustnessScore: 1,
+      usabilityScore: 1,
+      notes: [
+        "Model judge used: no.",
+        "Judge status: rate_limited.",
+        "Judge attempts: 2.",
+        "Rule signals: missing_required_tool_usage.",
+        "Model judge fallback reason: 429 Too Many Requests.",
+      ].join("\n"),
+    });
+
+    assert.equal(created.judge?.usedModelJudge, false);
+    assert.equal(created.judge?.status, "rate_limited");
+    assert.equal(created.judge?.attemptCount, 0);
+    assert.deepEqual(created.judge?.ruleSignals, ["missing_required_tool_usage"]);
+    assert.equal(created.judge?.modelJudgeError, "429 Too Many Requests.");
+  });
 });

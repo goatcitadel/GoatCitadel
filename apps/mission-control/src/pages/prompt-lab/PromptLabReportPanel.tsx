@@ -1,30 +1,12 @@
-import type {
-  PromptPackBenchmarkStatusRecord,
-  PromptPackRunRecord,
-  PromptPackScoreRecord,
-} from "@goatcitadel/contracts";
+import type { PromptPackBenchmarkStatusRecord, PromptPackReportRecord } from "@goatcitadel/contracts";
 import { formatDateTime } from "./prompt-lab-helpers";
 
 interface PromptLabReportPanelProps {
-  report: {
-    runs: PromptPackRunRecord[];
-    scores: PromptPackScoreRecord[];
-    summary: {
-      totalTests: number;
-      completedRuns: number;
-      failedRuns: number;
-      durableRuns?: number;
-      approvalPausedRuns?: number;
-      backgroundedRuns?: number;
-      passThreshold: number;
-      averageTotalScore: number;
-      passRate: number;
-      failingCodes: string[];
-    };
-  };
+  report: Pick<PromptPackReportRecord, "runs" | "summary" | "latestAssessments">;
   testOutcomeSummary: {
     runFailureCount: number;
     scoreFailureCount: number;
+    reviewCount: number;
     needsScoreCount: number;
     passingCount: number;
   };
@@ -55,6 +37,9 @@ interface PromptLabReportPanelProps {
 
 export function PromptLabReportPanel(props: PromptLabReportPanelProps) {
   const { report, testOutcomeSummary, passThreshold, benchmarkStatus, regressionStatus, trendSeries } = props;
+  const hasLegacyOnlyRows = report.latestAssessments.some(
+    (assessment) => assessment.legacyScore && !assessment.autoScore,
+  );
 
   return (
     <article className="card prompt-lab-surface prompt-lab-summary">
@@ -62,22 +47,33 @@ export function PromptLabReportPanel(props: PromptLabReportPanelProps) {
       <p>Total tests: {report.summary.totalTests}</p>
       <p>Executed runs: {report.summary.completedRuns}</p>
       <p>Failed runs: {report.summary.failedRuns}</p>
-      <p>Scored runs: {report.scores.length}</p>
+      <p>Invalid latest runs: {report.summary.invalidLatestRuns}</p>
+      <p>Auto-scored runs: {report.summary.autoScoredRuns}</p>
+      <p>Human-reviewed runs: {report.summary.humanReviewedRuns}</p>
+      <p>Degraded auto scores: {report.summary.degradedScoreCount}</p>
       <p>Run failures (execution/runtime): {testOutcomeSummary.runFailureCount}</p>
-      <p>Score failures (completed but below threshold): {testOutcomeSummary.scoreFailureCount}</p>
+      <p>Fail verdicts: {testOutcomeSummary.scoreFailureCount}</p>
+      <p>Review verdicts: {testOutcomeSummary.reviewCount}</p>
       <p>Runs waiting for score: {testOutcomeSummary.needsScoreCount}</p>
+      <p>Judge fallbacks: {report.summary.judgeFallbackCount}</p>
+      <p>Judge errors: {report.summary.judgeErrorCount}</p>
       <p>Durable-backed latest runs: {report.summary.durableRuns ?? 0}</p>
       <p>Approval-paused latest runs: {report.summary.approvalPausedRuns ?? 0}</p>
       <p>Backgrounded latest runs: {report.summary.backgroundedRuns ?? 0}</p>
       <p>Passing tests: {testOutcomeSummary.passingCount}</p>
-      <p>Average score: {report.summary.averageTotalScore.toFixed(2)}/10</p>
+      <p>Average weighted score: {report.summary.averageWeightedScore.toFixed(1)}/100</p>
       <p>
-        Pass rate: {(report.summary.passRate * 100).toFixed(1)}% (threshold {passThreshold}/10)
+        Effective pass rate: {(report.summary.effectivePassRate * 100).toFixed(1)}% (threshold {passThreshold}/100)
       </p>
+      <p>Review rate: {(report.summary.reviewRate * 100).toFixed(1)}%</p>
       <p>Failing tests: {report.summary.failingCodes.length > 0 ? report.summary.failingCodes.join(", ") : "none"}</p>
       <p className="office-subtitle">
-        Run failures indicate execution/runtime blockers. Score failures indicate model quality gaps on completed runs.
+        Comparison score and release verdict are now separate. Review means the run can still be useful for regression
+        comparison while staying out of the automatic ship lane.
       </p>
+      {hasLegacyOnlyRows ? (
+        <p className="office-subtitle">Legacy v1 history is shown as read-only and is kept out of v2 trend math.</p>
+      ) : null}
       {benchmarkStatus ? (
         <section>
           <h4>Latest benchmark</h4>
@@ -91,7 +87,8 @@ export function PromptLabReportPanel(props: PromptLabReportPanelProps) {
                 <tr>
                   <th>Model</th>
                   <th>Pass rate</th>
-                  <th>Avg score</th>
+                  <th>Review rate</th>
+                  <th>Avg weighted</th>
                   <th>Run failures</th>
                   <th>Top signals</th>
                 </tr>
@@ -103,7 +100,8 @@ export function PromptLabReportPanel(props: PromptLabReportPanelProps) {
                       {summary.providerId}/{summary.model}
                     </td>
                     <td>{(summary.passRate * 100).toFixed(1)}%</td>
-                    <td>{summary.averageTotalScore.toFixed(2)}</td>
+                    <td>{(summary.reviewRate * 100).toFixed(1)}%</td>
+                    <td>{summary.averageWeightedScore.toFixed(1)}/100</td>
                     <td>{summary.runFailures}</td>
                     <td>
                       {summary.topFailureSignals.length > 0

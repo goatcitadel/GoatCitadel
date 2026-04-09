@@ -4858,6 +4858,69 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("Web is set to Off");
   });
 
+  it("does not short-circuit chat prompt-pack no-tools runs that mention recently changed local facts", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: no-tools",
+      "",
+      "## User Task",
+      "You are given:",
+      "- A test failed",
+      "- Logs are incomplete",
+      "- One config file was recently changed",
+      "",
+      "Explain:",
+      "- most likely causes, ranked",
+      "- the weakest assumption in your reasoning",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "1. Config drift is most likely because the only explicitly changed fact is the config file.",
+              "2. Incomplete logs could hide a deployment mismatch or stale environment override.",
+              "3. A secondary code regression is possible, but the prompt gives less direct evidence for it.",
+              "",
+              "Weakest assumption: that the recent config change actually touched a runtime-loaded setting rather than an unrelated comment or dead path.",
+            ].join("\n"),
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-chat-recent-internal-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-chat-recent-internal-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "manual",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.assistantContent).toContain("Config drift is most likely");
+    expect(result.assistantContent).not.toContain("Web is set to Off");
+  });
+
   it("does not short-circuit code prompt-pack planning turns that only use recent as repo scope", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",

@@ -1,9 +1,15 @@
+/* eslint-disable max-lines */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { clampInt } from "@goatcitadel/contracts";
+import { clampInt, DEFAULT_PROMPT_PACK_POLICY_V2 } from "@goatcitadel/contracts";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+const DEFAULT_PROMPT_PACK_POLICY_V2_JSON = JSON.stringify(DEFAULT_PROMPT_PACK_POLICY_V2);
+const DEFAULT_PROMPT_PACK_POLICY_V2_HASH = createHash("sha256")
+  .update(DEFAULT_PROMPT_PACK_POLICY_V2_JSON)
+  .digest("hex");
 
 export interface SqliteOptions {
   dbPath: string;
@@ -41,7 +47,6 @@ export function createDatabase(options: SqliteOptions): DatabaseSync {
   return db;
 }
 
-
 function migrate(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -51,7 +56,9 @@ function migrate(db: DatabaseSync): void {
     );
   `);
 
-  const appliedRows = db.prepare("SELECT version FROM schema_migrations ORDER BY version ASC").all() as Array<{ version: number }>;
+  const appliedRows = db.prepare("SELECT version FROM schema_migrations ORDER BY version ASC").all() as Array<{
+    version: number;
+  }>;
   const applied = new Set(appliedRows.map((row) => row.version));
   const markApplied = db.prepare(`
     INSERT INTO schema_migrations (version, name, applied_at)
@@ -251,9 +258,7 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
         CREATE INDEX IF NOT EXISTS idx_chat_turn_traces_session_status ON chat_turn_traces(session_id, status, started_at DESC);
       `);
       // chat_tool_runs may not exist in databases that pre-date migration 31
-      const hasToolRuns = db.prepare(
-        `SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_tool_runs'`
-      ).get();
+      const hasToolRuns = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_tool_runs'`).get();
       if (hasToolRuns) {
         db.exec(`
           CREATE INDEX IF NOT EXISTS idx_chat_tool_runs_session_status ON chat_tool_runs(session_id, status, started_at DESC);
@@ -386,6 +391,19 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "proactive_actions", "origin_surface", "TEXT");
       addColumnIfMissingIfTableExists(db, "proactive_actions", "external_reference_roots_json", "TEXT");
     },
+  },
+  {
+    version: 52,
+    name: "prompt_pack_integrity_and_judge_schema",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "integrity_json", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_scores", "judge_json", "TEXT");
+    },
+  },
+  {
+    version: 53,
+    name: "prompt_pack_scoring_v2_schema",
+    up: createPromptPackScoringV2Schema,
   },
 ];
 
@@ -1651,6 +1669,9 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
       name TEXT NOT NULL,
       source_label TEXT,
       test_count INTEGER NOT NULL DEFAULT 0,
+      policy_v2_json TEXT NOT NULL DEFAULT '${DEFAULT_PROMPT_PACK_POLICY_V2_JSON.replace(/'/g, "''")}',
+      policy_v2_hash TEXT NOT NULL DEFAULT '${DEFAULT_PROMPT_PACK_POLICY_V2_HASH}',
+      policy_v2_source TEXT NOT NULL DEFAULT 'inherited_default',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -1684,6 +1705,7 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
       response_text TEXT,
       trace_json TEXT,
       citations_json TEXT,
+      integrity_json TEXT,
       error TEXT,
       started_at TEXT NOT NULL,
       finished_at TEXT
@@ -1705,12 +1727,58 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
       robustness_score INTEGER NOT NULL,
       usability_score INTEGER NOT NULL,
       total_score INTEGER NOT NULL,
+      judge_json TEXT,
       notes TEXT,
       created_at TEXT NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_prompt_pack_scores_pack_test
       ON prompt_pack_scores(pack_id, test_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS prompt_pack_auto_scores_v2 (
+      auto_score_id TEXT PRIMARY KEY,
+      pack_id TEXT NOT NULL,
+      test_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      scoring_schema_version TEXT NOT NULL,
+      scorer_version TEXT NOT NULL,
+      judge_rubric_version TEXT NOT NULL,
+      policy_hash TEXT NOT NULL,
+      policy_source TEXT NOT NULL,
+      score_state TEXT NOT NULL,
+      auto_verdict TEXT NOT NULL,
+      weighted_score REAL NOT NULL,
+      judge_status TEXT NOT NULL,
+      protocol_pass INTEGER NOT NULL DEFAULT 0,
+      record_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_pack_auto_scores_v2_run_version
+      ON prompt_pack_auto_scores_v2(run_id, scoring_schema_version, scorer_version, policy_hash);
+    CREATE INDEX IF NOT EXISTS idx_prompt_pack_auto_scores_v2_pack_test
+      ON prompt_pack_auto_scores_v2(pack_id, test_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_prompt_pack_auto_scores_v2_run
+      ON prompt_pack_auto_scores_v2(run_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_prompt_pack_auto_scores_v2_verdict
+      ON prompt_pack_auto_scores_v2(auto_verdict, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS prompt_pack_human_reviews_v2 (
+      review_id TEXT PRIMARY KEY,
+      pack_id TEXT NOT NULL,
+      test_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      auto_score_id TEXT,
+      reviewer_id TEXT NOT NULL,
+      override_verdict TEXT,
+      record_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_prompt_pack_human_reviews_v2_pack_test
+      ON prompt_pack_human_reviews_v2(pack_id, test_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_prompt_pack_human_reviews_v2_run
+      ON prompt_pack_human_reviews_v2(run_id, created_at DESC);
   `);
 }
 
@@ -2124,8 +2192,12 @@ function createPromptPackBenchmarkSchema(db: DatabaseSync): void {
       model TEXT NOT NULL,
       run_id TEXT,
       score_id TEXT,
+      auto_score_id TEXT,
       run_status TEXT NOT NULL,
       total_score INTEGER,
+      weighted_score REAL,
+      verdict TEXT,
+      score_state TEXT,
       failure_signal TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY(benchmark_run_id) REFERENCES prompt_pack_benchmark_runs(benchmark_run_id) ON DELETE CASCADE
@@ -2138,6 +2210,80 @@ function createPromptPackBenchmarkSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_items_test
       ON prompt_pack_benchmark_items(test_code, created_at DESC);
   `);
+}
+
+function createPromptPackScoringV2Schema(db: DatabaseSync): void {
+  addColumnIfMissingIfTableExists(
+    db,
+    "prompt_packs",
+    "policy_v2_json",
+    `TEXT NOT NULL DEFAULT '${DEFAULT_PROMPT_PACK_POLICY_V2_JSON.replace(/'/g, "''")}'`,
+  );
+  addColumnIfMissingIfTableExists(
+    db,
+    "prompt_packs",
+    "policy_v2_hash",
+    `TEXT NOT NULL DEFAULT '${DEFAULT_PROMPT_PACK_POLICY_V2_HASH}'`,
+  );
+  addColumnIfMissingIfTableExists(db, "prompt_packs", "policy_v2_source", "TEXT NOT NULL DEFAULT 'inherited_default'");
+
+  db.exec(`
+    UPDATE prompt_packs
+    SET
+      policy_v2_json = COALESCE(policy_v2_json, '${DEFAULT_PROMPT_PACK_POLICY_V2_JSON.replace(/'/g, "''")}'),
+      policy_v2_hash = COALESCE(policy_v2_hash, '${DEFAULT_PROMPT_PACK_POLICY_V2_HASH}'),
+      policy_v2_source = COALESCE(policy_v2_source, 'inherited_default');
+
+    CREATE TABLE IF NOT EXISTS prompt_pack_auto_scores_v2 (
+      auto_score_id TEXT PRIMARY KEY,
+      pack_id TEXT NOT NULL,
+      test_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      scoring_schema_version TEXT NOT NULL,
+      scorer_version TEXT NOT NULL,
+      judge_rubric_version TEXT NOT NULL,
+      policy_hash TEXT NOT NULL,
+      policy_source TEXT NOT NULL,
+      score_state TEXT NOT NULL,
+      auto_verdict TEXT NOT NULL,
+      weighted_score REAL NOT NULL,
+      judge_status TEXT NOT NULL,
+      protocol_pass INTEGER NOT NULL DEFAULT 0,
+      record_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_pack_auto_scores_v2_run_version
+      ON prompt_pack_auto_scores_v2(run_id, scoring_schema_version, scorer_version, policy_hash);
+    CREATE INDEX IF NOT EXISTS idx_prompt_pack_auto_scores_v2_pack_test
+      ON prompt_pack_auto_scores_v2(pack_id, test_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_prompt_pack_auto_scores_v2_run
+      ON prompt_pack_auto_scores_v2(run_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_prompt_pack_auto_scores_v2_verdict
+      ON prompt_pack_auto_scores_v2(auto_verdict, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS prompt_pack_human_reviews_v2 (
+      review_id TEXT PRIMARY KEY,
+      pack_id TEXT NOT NULL,
+      test_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      auto_score_id TEXT,
+      reviewer_id TEXT NOT NULL,
+      override_verdict TEXT,
+      record_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_prompt_pack_human_reviews_v2_pack_test
+      ON prompt_pack_human_reviews_v2(pack_id, test_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_prompt_pack_human_reviews_v2_run
+      ON prompt_pack_human_reviews_v2(run_id, created_at DESC);
+  `);
+
+  addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_items", "auto_score_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_items", "weighted_score", "REAL");
+  addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_items", "verdict", "TEXT");
+  addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_items", "score_state", "TEXT");
 }
 
 function createWorkspaceIsolationSchema(db: DatabaseSync): void {
@@ -2591,9 +2737,9 @@ function createApprovalExpiryRuntimeSchema(db: DatabaseSync): void {
 }
 
 function createRealtimeEventSequenceStateSchema(db: DatabaseSync): void {
-  const tableExists = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-  ).get("realtime_events") as { name: string } | undefined;
+  const tableExists = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get("realtime_events") as { name: string } | undefined;
   if (!tableExists) {
     return;
   }
@@ -2603,10 +2749,12 @@ function createRealtimeEventSequenceStateSchema(db: DatabaseSync): void {
       last_sequence INTEGER NOT NULL
     );
   `);
-  const maxSequenceRow = db.prepare("SELECT COALESCE(MAX(sequence), 0) AS max_sequence FROM realtime_events")
-    .get() as { max_sequence?: number | null } | undefined;
+  const maxSequenceRow = db.prepare("SELECT COALESCE(MAX(sequence), 0) AS max_sequence FROM realtime_events").get() as
+    | { max_sequence?: number | null }
+    | undefined;
   const maxSequence = Number(maxSequenceRow?.max_sequence ?? 0);
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO realtime_event_sequence_state (stream_name, last_sequence)
     VALUES ('events', @lastSequence)
     ON CONFLICT(stream_name) DO UPDATE SET
@@ -2615,13 +2763,14 @@ function createRealtimeEventSequenceStateSchema(db: DatabaseSync): void {
           THEN excluded.last_sequence
         ELSE realtime_event_sequence_state.last_sequence
       END
-  `).run({ lastSequence: maxSequence });
+  `,
+  ).run({ lastSequence: maxSequence });
 }
 
 function createToolAccessDecisionHotPathIndexes(db: DatabaseSync): void {
-  const tableExists = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-  ).get("tool_access_decisions") as { name: string } | undefined;
+  const tableExists = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get("tool_access_decisions") as { name: string } | undefined;
   if (!tableExists) {
     return;
   }
@@ -2716,9 +2865,9 @@ function createChannelSetupDraftsSchema(db: DatabaseSync): void {
 }
 
 function createChatSessionHistoryVisibilitySchema(db: DatabaseSync): void {
-  const tableExists = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-  ).get("chat_session_meta") as { name: string } | undefined;
+  const tableExists = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get("chat_session_meta") as { name: string } | undefined;
   if (!tableExists) {
     return;
   }
@@ -3079,9 +3228,9 @@ function createAssemblyOfMindsSchema(db: DatabaseSync): void {
 }
 
 function createRealtimeEventSequenceCursorSchema(db: DatabaseSync): void {
-  const tableExists = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-  ).get("realtime_events") as { name: string } | undefined;
+  const tableExists = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get("realtime_events") as { name: string } | undefined;
   if (!tableExists) {
     return;
   }
@@ -3114,10 +3263,15 @@ function addColumnIfMissing(db: DatabaseSync, tableName: string, columnName: str
   }
 }
 
-function addColumnIfMissingIfTableExists(db: DatabaseSync, tableName: string, columnName: string, columnSql: string): void {
-  const row = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-  ).get(tableName) as { name: string } | undefined;
+function addColumnIfMissingIfTableExists(
+  db: DatabaseSync,
+  tableName: string,
+  columnName: string,
+  columnSql: string,
+): void {
+  const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName) as
+    | { name: string }
+    | undefined;
   if (!row) {
     return;
   }

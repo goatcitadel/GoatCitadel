@@ -1,6 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { PromptPackRecord, PromptPackTestRecord } from "@goatcitadel/contracts";
+import type {
+  PromptPackPolicySource,
+  PromptPackPolicyV2,
+  PromptPackRecord,
+  PromptPackTestRecord,
+} from "@goatcitadel/contracts";
+import { DEFAULT_PROMPT_PACK_POLICY_V2 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 
 interface PromptPackRow {
@@ -8,6 +14,9 @@ interface PromptPackRow {
   name: string;
   source_label: string | null;
   test_count: number;
+  policy_v2_json: string | null;
+  policy_v2_hash: string | null;
+  policy_v2_source: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -41,12 +50,23 @@ export class PromptPackRepository {
       LIMIT @limit
     `);
     this.upsertPackStmt = db.prepare(`
-      INSERT INTO prompt_packs (pack_id, name, source_label, test_count, created_at, updated_at)
-      VALUES (@packId, @name, @sourceLabel, @testCount, @createdAt, @updatedAt)
+      INSERT INTO prompt_packs (
+        pack_id, name, source_label, test_count,
+        policy_v2_json, policy_v2_hash, policy_v2_source,
+        created_at, updated_at
+      )
+      VALUES (
+        @packId, @name, @sourceLabel, @testCount,
+        @policyV2Json, @policyV2Hash, @policyV2Source,
+        @createdAt, @updatedAt
+      )
       ON CONFLICT(pack_id) DO UPDATE SET
         name = excluded.name,
         source_label = excluded.source_label,
         test_count = excluded.test_count,
+        policy_v2_json = excluded.policy_v2_json,
+        policy_v2_hash = excluded.policy_v2_hash,
+        policy_v2_source = excluded.policy_v2_source,
         updated_at = excluded.updated_at
     `);
     this.deleteTestsByPackStmt = db.prepare("DELETE FROM prompt_pack_tests WHERE pack_id = ?");
@@ -72,17 +92,21 @@ export class PromptPackRepository {
   }
 
   public listPacks(limit = 100): PromptPackRecord[] {
-    const rows = toPromptPackRows(this.listPacksStmt.all({
-      limit: Math.max(1, Math.min(limit, 1000)),
-    }));
+    const rows = toPromptPackRows(
+      this.listPacksStmt.all({
+        limit: Math.max(1, Math.min(limit, 1000)),
+      }),
+    );
     return rows.map(mapPackRow);
   }
 
   public listTests(packId: string, limit = 1000): PromptPackTestRecord[] {
-    const rows = toPromptPackTestRows(this.listTestsStmt.all({
-      packId,
-      limit: Math.max(1, Math.min(limit, 5000)),
-    }));
+    const rows = toPromptPackTestRows(
+      this.listTestsStmt.all({
+        packId,
+        limit: Math.max(1, Math.min(limit, 5000)),
+      }),
+    );
     return rows.map(mapTestRow);
   }
 
@@ -106,6 +130,8 @@ export class PromptPackRepository {
       mode?: string;
       toolTier?: string;
     }>;
+    policyV2?: PromptPackPolicyV2;
+    policySource?: PromptPackPolicySource;
   }): {
     pack: PromptPackRecord;
     tests: PromptPackTestRecord[];
@@ -113,6 +139,9 @@ export class PromptPackRepository {
     const now = new Date().toISOString();
     const packId = input.packId ?? `pack-${randomUUID()}`;
     const existing = toPromptPackRow(this.getPackStmt.get(packId));
+    const resolvedPolicy = input.policyV2 ?? parsePolicy(existing?.policy_v2_json) ?? DEFAULT_PROMPT_PACK_POLICY_V2;
+    const resolvedSource =
+      input.policySource ?? normalizePolicySource(existing?.policy_v2_source) ?? "inherited_default";
     this.db.exec("SAVEPOINT prompt_pack_replace");
     try {
       this.upsertPackStmt.run({
@@ -120,6 +149,9 @@ export class PromptPackRepository {
         name: input.name,
         sourceLabel: input.sourceLabel ?? null,
         testCount: input.tests.length,
+        policyV2Json: JSON.stringify(resolvedPolicy),
+        policyV2Hash: hashPolicy(resolvedPolicy),
+        policyV2Source: resolvedSource,
         createdAt: existing?.created_at ?? now,
         updatedAt: now,
       });
@@ -153,11 +185,15 @@ export class PromptPackRepository {
 }
 
 function mapPackRow(row: PromptPackRow): PromptPackRecord {
+  const policy = parsePolicy(row.policy_v2_json) ?? DEFAULT_PROMPT_PACK_POLICY_V2;
   return {
     packId: row.pack_id,
     name: row.name,
     sourceLabel: row.source_label ?? undefined,
     testCount: row.test_count,
+    policyV2: policy,
+    policyHash: row.policy_v2_hash ?? hashPolicy(policy),
+    policySource: normalizePolicySource(row.policy_v2_source) ?? "inherited_default",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -194,29 +230,54 @@ function toPromptPackTestRows(value: unknown): PromptPackTestRow[] {
 }
 
 function isPromptPackRow(value: unknown): value is PromptPackRow {
-  return isRecord(value)
-    && typeof value.pack_id === "string"
-    && typeof value.name === "string"
-    && (typeof value.source_label === "string" || value.source_label === null)
-    && typeof value.test_count === "number"
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    isRecord(value) &&
+    typeof value.pack_id === "string" &&
+    typeof value.name === "string" &&
+    (typeof value.source_label === "string" || value.source_label === null) &&
+    typeof value.test_count === "number" &&
+    (typeof value.policy_v2_json === "string" || value.policy_v2_json === null) &&
+    (typeof value.policy_v2_hash === "string" || value.policy_v2_hash === null) &&
+    (typeof value.policy_v2_source === "string" || value.policy_v2_source === null) &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isPromptPackTestRow(value: unknown): value is PromptPackTestRow {
-  return isRecord(value)
-    && typeof value.test_id === "string"
-    && typeof value.pack_id === "string"
-    && typeof value.code === "string"
-    && typeof value.title === "string"
-    && typeof value.prompt === "string"
-    && typeof value.order_index === "number"
-    && (typeof value.mode === "string" || value.mode === null)
-    && (typeof value.tool_tier === "string" || value.tool_tier === null)
-    && typeof value.created_at === "string";
+  return (
+    isRecord(value) &&
+    typeof value.test_id === "string" &&
+    typeof value.pack_id === "string" &&
+    typeof value.code === "string" &&
+    typeof value.title === "string" &&
+    typeof value.prompt === "string" &&
+    typeof value.order_index === "number" &&
+    (typeof value.mode === "string" || value.mode === null) &&
+    (typeof value.tool_tier === "string" || value.tool_tier === null) &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function parsePolicy(raw?: string | null): PromptPackPolicyV2 | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw) as PromptPackPolicyV2;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizePolicySource(value?: string | null): PromptPackPolicySource | undefined {
+  return value === "pack_override" || value === "inherited_default" ? value : undefined;
+}
+
+function hashPolicy(policy: PromptPackPolicyV2): string {
+  return createHash("sha256").update(JSON.stringify(policy)).digest("hex");
+}

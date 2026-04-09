@@ -225,6 +225,10 @@ import type {
   LlmModelRecord,
   LlmProviderRequestConfig,
   LlmRuntimeConfig,
+  LlamaCppAdvisorRecommendation,
+  LlamaCppAdvisorRequest,
+  LlamaCppModelManifest,
+  LlamaCppRuntimeStatus,
   OnboardingBootstrapInput,
   OnboardingBootstrapResult,
   OnboardingChecklistItem,
@@ -261,9 +265,9 @@ import type {
   PromptPackBenchmarkRunRecord,
   PromptPackBenchmarkStatusRecord,
   PromptPackExportRecord,
+  PromptPackHumanReviewRecordV2,
   PromptPackReportRecord,
   PromptPackRunRecord,
-  PromptPackScoreRecord,
   PromptPackTestRecord,
   PromptPackToolTier,
   ProactiveTickWorkflowPayload,
@@ -408,6 +412,7 @@ import {
 } from "./integration-catalog.js";
 import { type ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cache.js";
 import { MemoryContextService } from "./memory-context-service.js";
+import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
 import { normalizeAgentInputFromSend } from "./chat-agent-orchestrator.js";
@@ -676,6 +681,23 @@ export interface RuntimeSettings {
     autoStart: boolean;
     sidecarUrl: string;
     status: NpuRuntimeStatus;
+  };
+  llamaCpp: {
+    enabled: boolean;
+    autoStart: boolean;
+    baseUrl: string;
+    command: string;
+    extraArgs: string[];
+    modelPath?: string;
+    alias: string;
+    ctxSize?: number;
+    threads?: number;
+    gpuLayers?: number;
+    parallel?: number;
+    batchSize?: number;
+    ubatchSize?: number;
+    flashAttention?: boolean;
+    status: LlamaCppRuntimeStatus;
   };
   features: {
     durableKernelV1Enabled: boolean;
@@ -1319,6 +1341,7 @@ export class GatewayService {
   /** @internal */ public readonly memoryContextService: MemoryContextService;
   /** @internal */ public readonly meshService: MeshService;
   /** @internal */ public readonly npuSidecar: NpuSidecarService;
+  /** @internal */ public readonly llamaCppRuntime: LlamaCppRuntimeService;
   private readonly approvalExplainer: ApprovalExplainerService;
   /** @internal */ public readonly turnRuntime: TurnRuntime;
   private readonly researchService: ResearchService;
@@ -1440,6 +1463,13 @@ export class GatewayService {
       config: config.assistant.npu,
       onEvent: (eventType, payload) => {
         this.publishRealtime(eventType, "npu", payload);
+      },
+    });
+    this.llamaCppRuntime = new LlamaCppRuntimeService({
+      rootDir: config.rootDir,
+      config: config.assistant.llamaCpp,
+      onEvent: (eventType, payload) => {
+        this.publishRealtime(eventType, "llamacpp", payload);
       },
     });
     this.approvalExplainer = new ApprovalExplainerService(
@@ -1720,6 +1750,7 @@ export class GatewayService {
     this.ensureUpdateReviewCronJob();
     this.meshService.init();
     await this.npuSidecar.init();
+    await this.llamaCppRuntime.init();
     if (this.closing) {
       return;
     }
@@ -4197,13 +4228,36 @@ export class GatewayService {
     packId: string;
     testId: string;
     runId: string;
-    routingScore: 0 | 1 | 2;
-    honestyScore: 0 | 1 | 2;
-    handoffScore: 0 | 1 | 2;
-    robustnessScore: 0 | 1 | 2;
-    usabilityScore: 0 | 1 | 2;
+    taskSuccess?: 0 | 1 | 2 | 3 | 4 | null;
+    honesty?: 0 | 1 | 2 | 3 | 4 | null;
+    executionQuality?: 0 | 1 | 2 | 3 | 4 | null;
+    robustness?: 0 | 1 | 2 | 3 | 4 | null;
+    usability?: 0 | 1 | 2 | 3 | 4 | null;
+    overrideVerdict?: "pass" | "fail" | "review";
+    reviewerId?: string;
+    routingScore?: 0 | 1 | 2;
+    honestyScore?: 0 | 1 | 2;
+    handoffScore?: 0 | 1 | 2;
+    robustnessScore?: 0 | 1 | 2;
+    usabilityScore?: 0 | 1 | 2;
     notes?: string;
-  }): PromptPackScoreRecord {
+  }): PromptPackHumanReviewRecordV2 {
+    return this.promptPackService.scorePromptPackTest(input);
+  }
+
+  public reviewPromptPackTest(input: {
+    packId: string;
+    testId: string;
+    runId: string;
+    taskSuccess?: 0 | 1 | 2 | 3 | 4 | null;
+    honesty?: 0 | 1 | 2 | 3 | 4 | null;
+    executionQuality?: 0 | 1 | 2 | 3 | 4 | null;
+    robustness?: 0 | 1 | 2 | 3 | 4 | null;
+    usability?: 0 | 1 | 2 | 3 | 4 | null;
+    overrideVerdict?: "pass" | "fail" | "review";
+    reviewerId?: string;
+    notes?: string;
+  }): PromptPackHumanReviewRecordV2 {
     return this.promptPackService.scorePromptPackTest(input);
   }
 
@@ -4238,12 +4292,16 @@ export class GatewayService {
     robustnessScore: 0 | 1 | 2;
     usabilityScore: 0 | 1 | 2;
     notes?: string;
-  }): Promise<PromptPackScoreRecord> {
+  }): Promise<PromptPackHumanReviewRecordV2> {
     return this.promptPackService.scorePromptPackLatestRunByCode(input);
   }
 
   public getPromptPackReport(packId: string): PromptPackReportRecord {
     return this.promptPackService.getPromptPackReport(packId);
+  }
+
+  public listPromptPackTestReviews(packId: string, testId: string): PromptPackHumanReviewRecordV2[] {
+    return this.promptPackService.listPromptPackTestReviews(packId, testId);
   }
 
   public runPromptPackBenchmark(
@@ -8802,6 +8860,45 @@ export class GatewayService {
     return this.npuSidecar.listModels();
   }
 
+  public getLlamaCppStatus(): LlamaCppRuntimeStatus {
+    return this.llamaCppRuntime.getStatus();
+  }
+
+  public async startLlamaCppRuntime(): Promise<LlamaCppRuntimeStatus> {
+    const status = await this.llamaCppRuntime.start("api");
+    this.publishRealtime("system", "llamacpp", {
+      type: "llamacpp_started",
+      status,
+    });
+    return status;
+  }
+
+  public async stopLlamaCppRuntime(): Promise<LlamaCppRuntimeStatus> {
+    const status = await this.llamaCppRuntime.stop("api");
+    this.publishRealtime("system", "llamacpp", {
+      type: "llamacpp_stopped",
+      status,
+    });
+    return status;
+  }
+
+  public async refreshLlamaCppRuntime(): Promise<LlamaCppRuntimeStatus> {
+    const status = await this.llamaCppRuntime.refresh();
+    this.publishRealtime("system", "llamacpp", {
+      type: "llamacpp_refreshed",
+      status,
+    });
+    return status;
+  }
+
+  public async listLlamaCppModels(): Promise<LlamaCppModelManifest[]> {
+    return this.llamaCppRuntime.listModels();
+  }
+
+  public async adviseLlamaCppRuntime(input: LlamaCppAdvisorRequest = {}): Promise<LlamaCppAdvisorRecommendation> {
+    return this.llamaCppRuntime.advise(input);
+  }
+
   public async createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
     return llmCompletionService.createChatCompletion(this, request);
   }
@@ -9394,6 +9491,7 @@ export class GatewayService {
     await this.discordRuntimeService.close();
     await this.assemblyService.close();
     await this.npuSidecar.close();
+    await this.llamaCppRuntime.close();
     this.storage.close();
   }
 
@@ -11167,6 +11265,7 @@ export class GatewayService {
       web: this.config.assistant.web,
       mesh: this.config.assistant.mesh,
       npu: this.config.assistant.npu,
+      llamaCpp: this.config.assistant.llamaCpp,
       sqlite: this.config.assistant.sqlite,
       durable: this.config.assistant.durable,
       features: this.readFeatureFlags(),
@@ -11211,6 +11310,7 @@ export class GatewayService {
       web: this.config.assistant.web,
       mesh: this.config.assistant.mesh,
       npu: this.config.assistant.npu,
+      llamaCpp: this.config.assistant.llamaCpp,
       sqlite: this.config.assistant.sqlite,
       durable: this.config.assistant.durable,
       features: this.readFeatureFlags(),

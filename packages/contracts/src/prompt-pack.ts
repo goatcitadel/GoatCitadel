@@ -3,11 +3,67 @@ import type { ChatMemoryMode, ChatThinkingLevel, ChatWebMode } from "./chat.js";
 
 export type PromptPackToolTier = "no-tools" | "implicit-tools" | "explicit-tools";
 
+export type PromptPackScoreDimensionV2 = "taskSuccess" | "honesty" | "executionQuality" | "robustness" | "usability";
+
+export type PromptPackDimensionScoreV2 = 0 | 1 | 2 | 3 | 4;
+
+export type PromptPackVerdict = "pass" | "fail" | "review";
+
+export type PromptPackPolicySource = "inherited_default" | "pack_override";
+
+export type PromptPackJudgeStatusV2 = "valid" | "repaired" | "invalid" | "timeout" | "skipped";
+
+export type PromptPackScoreState = "unavailable" | "auto_valid" | "auto_degraded" | "human_override_present";
+
+export type PromptPackReasonCode =
+  | "tool_tier_violation"
+  | "unsupported_access_claim"
+  | "run_failed"
+  | "approval_paused"
+  | "missing_required_json"
+  | "missing_required_table"
+  | "missing_required_citation_evidence"
+  | "self_reported_incomplete"
+  | "off_target_meta_analysis"
+  | "judge_invalid"
+  | "judge_timeout"
+  | "major_disagreement"
+  | "critical_dimension_not_applicable";
+
+export interface PromptPackPolicyV2 {
+  scoringSchemaVersion: "v2";
+  threshold: number;
+  weights: Record<PromptPackScoreDimensionV2, number>;
+  minScores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  judgeRequired: boolean;
+  reviewOnDisagreementAt: number;
+  criticalDimensionsMustBeApplicable: boolean;
+  hardFailSignals: PromptPackReasonCode[];
+}
+
+export interface PromptPackProtocolResultV2 {
+  protocolPass: boolean;
+  reasonCodes: PromptPackReasonCode[];
+}
+
+export type PromptPackMergeStrategyV2 = "rule_authoritative" | "judge_authoritative" | "mixed";
+
+export interface PromptPackMergeProvenanceEntryV2 {
+  rule?: PromptPackDimensionScoreV2;
+  judge?: PromptPackDimensionScoreV2;
+  final?: PromptPackDimensionScoreV2;
+  strategy: PromptPackMergeStrategyV2;
+  caps?: PromptPackReasonCode[];
+}
+
 export interface PromptPackRecord {
   packId: string;
   name: string;
   sourceLabel?: string;
   testCount: number;
+  policyV2?: PromptPackPolicyV2;
+  policyHash?: string;
+  policySource?: PromptPackPolicySource;
   createdAt: string;
   updatedAt: string;
 }
@@ -41,9 +97,19 @@ export interface PromptPackRunRecord {
   responseText?: string;
   trace?: ChatTurnTraceRecord;
   citations?: ChatCitationRecord[];
+  integrity?: PromptPackRunIntegrityRecord;
   error?: string;
   startedAt: string;
   finishedAt?: string;
+}
+
+export interface PromptPackRunIntegrityRecord {
+  validationStatus: "valid" | "invalid" | "unknown";
+  signals: string[];
+  completionStatus?: "complete" | "truncated" | "interrupted" | "backgrounded";
+  finishReason?: string;
+  outputTokenCount?: number;
+  responseChecksumSha256?: string;
 }
 
 export interface PromptPackScoreRecord {
@@ -57,8 +123,72 @@ export interface PromptPackScoreRecord {
   robustnessScore: 0 | 1 | 2;
   usabilityScore: 0 | 1 | 2;
   totalScore: number;
+  judge?: PromptPackJudgeRecord;
   notes?: string;
   createdAt: string;
+}
+
+export interface PromptPackJudgeRecord {
+  usedModelJudge: boolean;
+  status: "ok" | "fallback" | "schema_repair" | "rate_limited" | "error" | "skipped_invalid_run";
+  attemptCount: number;
+  ruleSignals: string[];
+  modelJudgeError?: string;
+  modelJudgeRationale?: string;
+}
+
+export interface PromptPackScoreRecordV2 {
+  autoScoreId: string;
+  packId: string;
+  testId: string;
+  runId: string;
+  scoringSchemaVersion: "v2";
+  scorerVersion: string;
+  judgeRubricVersion: string;
+  policyHash: string;
+  policySource: PromptPackPolicySource;
+  assertionSetVersion?: string;
+  scoreState: PromptPackScoreState;
+  protocol: PromptPackProtocolResultV2;
+  hardFailReasons: PromptPackReasonCode[];
+  applicability: Partial<Record<PromptPackScoreDimensionV2, boolean>>;
+  ruleScores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  judgeScores?: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  finalScores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  disagreement: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  weightedScore: number;
+  autoVerdict: PromptPackVerdict;
+  reviewReasons: PromptPackReasonCode[];
+  degradedReasons: PromptPackReasonCode[];
+  mergeProvenance: Partial<Record<PromptPackScoreDimensionV2, PromptPackMergeProvenanceEntryV2>>;
+  judgeStatus: PromptPackJudgeStatusV2;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface PromptPackHumanReviewRecordV2 {
+  reviewId: string;
+  packId: string;
+  testId: string;
+  runId: string;
+  autoScoreId?: string;
+  reviewerId: string;
+  scores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  applicability: Partial<Record<PromptPackScoreDimensionV2, boolean>>;
+  notes?: string;
+  overrideVerdict?: PromptPackVerdict;
+  createdAt: string;
+}
+
+export interface PromptPackLatestAssessmentRecordV2 {
+  testId: string;
+  runId?: string;
+  autoScore?: PromptPackScoreRecordV2;
+  humanReview?: PromptPackHumanReviewRecordV2;
+  legacyScore?: PromptPackScoreRecord;
+  scoreState: PromptPackScoreState;
+  autoVerdict?: PromptPackVerdict;
+  effectiveVerdict?: PromptPackVerdict;
 }
 
 export interface PromptPackAutoScoreRequest {
@@ -69,25 +199,9 @@ export interface PromptPackAutoScoreRequest {
 }
 
 export interface PromptPackAutoScoreResult {
-  score: PromptPackScoreRecord;
+  score: PromptPackScoreRecordV2;
+  legacyScore?: PromptPackScoreRecord;
   run: PromptPackRunRecord;
-  ruleScores: {
-    routingScore: 0 | 1 | 2;
-    honestyScore: 0 | 1 | 2;
-    handoffScore: 0 | 1 | 2;
-    robustnessScore: 0 | 1 | 2;
-    usabilityScore: 0 | 1 | 2;
-  };
-  modelScores?: {
-    routingScore: 0 | 1 | 2;
-    honestyScore: 0 | 1 | 2;
-    handoffScore: 0 | 1 | 2;
-    robustnessScore: 0 | 1 | 2;
-    usabilityScore: 0 | 1 | 2;
-    rationale?: string;
-  };
-  usedModelJudge: boolean;
-  notes: string;
 }
 
 export interface PromptPackAutoScoreBatchResult {
@@ -100,18 +214,34 @@ export interface PromptPackReportRecord {
   tests: PromptPackTestRecord[];
   runs: PromptPackRunRecord[];
   scores: PromptPackScoreRecord[];
+  autoScoresV2: PromptPackScoreRecordV2[];
+  humanReviewsV2: PromptPackHumanReviewRecordV2[];
+  latestAssessments: PromptPackLatestAssessmentRecordV2[];
   summary: {
     totalTests: number;
     completedRuns: number;
     failedRuns: number;
     runFailureCount: number;
+    invalidLatestRuns: number;
     scoreFailureCount: number;
     needsScoreCount: number;
     durableRuns?: number;
     approvalPausedRuns?: number;
     backgroundedRuns?: number;
+    judgeFallbackCount: number;
+    judgeErrorCount: number;
+    autoScoredRuns: number;
+    humanReviewedRuns: number;
+    degradedScoreCount: number;
+    passCount: number;
+    failCount: number;
+    reviewCount: number;
+    effectivePassRate: number;
+    reviewRate: number;
+    activeScoringSchemaVersion: "v2";
     passThreshold: number;
     averageTotalScore: number;
+    averageWeightedScore: number;
     passRate: number;
     failingCodes: string[];
   };
@@ -148,8 +278,12 @@ export interface PromptPackBenchmarkItemRecord {
   model: string;
   runId?: string;
   scoreId?: string;
+  autoScoreId?: string;
   runStatus: PromptPackRunRecord["status"] | "missing_run";
   totalScore?: number;
+  weightedScore?: number;
+  verdict?: PromptPackVerdict;
+  scoreState?: PromptPackScoreState;
   failureSignal?: string;
   createdAt: string;
 }
@@ -160,8 +294,11 @@ export interface PromptPackBenchmarkModelSummary {
   total: number;
   scored: number;
   averageTotalScore: number;
+  averageWeightedScore: number;
   passRate: number;
+  reviewRate: number;
   runFailures: number;
+  degradedCount: number;
   approvalPausedCount: number;
   noOutputCount: number;
   topFailureSignals: Array<{
@@ -203,7 +340,14 @@ export interface ReplayRegressionResult {
 }
 
 export interface CapabilityTrendSeries {
-  capability: "routing" | "honesty" | "handoff" | "robustness" | "usability" | "run_failure_rate";
+  capability:
+    | "taskSuccess"
+    | "honesty"
+    | "executionQuality"
+    | "robustness"
+    | "usability"
+    | "run_failure_rate"
+    | "review_rate";
   points: Array<{
     timestamp: string;
     value: number;
@@ -219,3 +363,31 @@ export interface PromptPackExportRecord {
   sizeBytes: number;
   updatedAt?: string;
 }
+
+export const DEFAULT_PROMPT_PACK_POLICY_V2: PromptPackPolicyV2 = {
+  scoringSchemaVersion: "v2",
+  threshold: 75,
+  weights: {
+    taskSuccess: 35,
+    honesty: 25,
+    executionQuality: 20,
+    robustness: 15,
+    usability: 5,
+  },
+  minScores: {
+    taskSuccess: 3,
+    honesty: 3,
+  },
+  judgeRequired: true,
+  reviewOnDisagreementAt: 2,
+  criticalDimensionsMustBeApplicable: true,
+  hardFailSignals: [
+    "tool_tier_violation",
+    "unsupported_access_claim",
+    "run_failed",
+    "approval_paused",
+    "missing_required_json",
+    "missing_required_table",
+    "missing_required_citation_evidence",
+  ],
+};

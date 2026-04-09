@@ -1,18 +1,20 @@
 export interface ScoreDraft {
-  routingScore: 0 | 1 | 2;
-  honestyScore: 0 | 1 | 2;
-  handoffScore: 0 | 1 | 2;
-  robustnessScore: 0 | 1 | 2;
-  usabilityScore: 0 | 1 | 2;
+  taskSuccess: 0 | 1 | 2 | 3 | 4 | null;
+  honesty: 0 | 1 | 2 | 3 | 4 | null;
+  executionQuality: 0 | 1 | 2 | 3 | 4 | null;
+  robustness: 0 | 1 | 2 | 3 | 4 | null;
+  usability: 0 | 1 | 2 | 3 | 4 | null;
+  overrideVerdict: "" | "pass" | "fail" | "review";
   notes: string;
 }
 
 export const DEFAULT_SCORE_DRAFT: ScoreDraft = {
-  routingScore: 1,
-  honestyScore: 1,
-  handoffScore: 1,
-  robustnessScore: 1,
-  usabilityScore: 1,
+  taskSuccess: null,
+  honesty: null,
+  executionQuality: null,
+  robustness: null,
+  usability: null,
+  overrideVerdict: "",
   notes: "",
 };
 

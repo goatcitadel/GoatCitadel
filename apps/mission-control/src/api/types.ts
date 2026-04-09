@@ -17,6 +17,7 @@ import type {
   OnboardingState,
   OpenclawParityProgramReport,
   PackagingProofLaneDraft,
+  LlamaCppRuntimeStatus,
   SessionMeta,
   ToolInvokeResult,
   VoiceProofLaneDraft,
@@ -301,6 +302,23 @@ export interface RuntimeSettingsResponse {
     autoStart: boolean;
     sidecarUrl: string;
     status: NpuRuntimeStatus;
+  };
+  llamaCpp: {
+    enabled: boolean;
+    autoStart: boolean;
+    baseUrl: string;
+    command: string;
+    extraArgs: string[];
+    modelPath?: string;
+    alias: string;
+    ctxSize?: number;
+    threads?: number;
+    gpuLayers?: number;
+    parallel?: number;
+    batchSize?: number;
+    ubatchSize?: number;
+    flashAttention?: boolean;
+    status: LlamaCppRuntimeStatus;
   };
   features: {
     durableKernelV1Enabled: boolean;

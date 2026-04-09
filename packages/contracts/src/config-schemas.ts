@@ -85,30 +85,32 @@ export const LlmProviderRequestProxyAuthSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-export const LlmProviderRequestTlsSchema = z.object({
-  insecureSkipVerify: z.boolean().optional(),
-  caCertPath: z.string().optional(),
-  clientCertPath: z.string().optional(),
-  clientKeyPath: z.string().optional(),
-  serverName: z.string().optional(),
-}).superRefine((value, ctx) => {
-  const hasClientCert = Boolean(value.clientCertPath);
-  const hasClientKey = Boolean(value.clientKeyPath);
-  if (hasClientCert !== hasClientKey) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "TLS clientCertPath and clientKeyPath must be provided together.",
-      path: hasClientCert ? ["clientKeyPath"] : ["clientCertPath"],
-    });
-  }
-  if (value.insecureSkipVerify && value.caCertPath) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "TLS caCertPath cannot be combined with insecureSkipVerify.",
-      path: ["caCertPath"],
-    });
-  }
-});
+export const LlmProviderRequestTlsSchema = z
+  .object({
+    insecureSkipVerify: z.boolean().optional(),
+    caCertPath: z.string().optional(),
+    clientCertPath: z.string().optional(),
+    clientKeyPath: z.string().optional(),
+    serverName: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const hasClientCert = Boolean(value.clientCertPath);
+    const hasClientKey = Boolean(value.clientKeyPath);
+    if (hasClientCert !== hasClientKey) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "TLS clientCertPath and clientKeyPath must be provided together.",
+        path: hasClientCert ? ["clientKeyPath"] : ["clientCertPath"],
+      });
+    }
+    if (value.insecureSkipVerify && value.caCertPath) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "TLS caCertPath cannot be combined with insecureSkipVerify.",
+        path: ["caCertPath"],
+      });
+    }
+  });
 
 export const LlmProviderRequestProxySchema = z.object({
   url: z.string().url(),
@@ -334,6 +336,47 @@ export const AssistantConfigInputSchema = z
               })
               .passthrough()
               .optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
+    llamaCpp: z
+      .object({
+        enabled: z.boolean().optional(),
+        autoStart: z.boolean().optional(),
+        server: z
+          .object({
+            baseUrl: z.string().optional(),
+            command: z.string().optional(),
+            extraArgs: z.array(z.string()).optional(),
+            healthPath: z.string().optional(),
+            modelsPath: z.string().optional(),
+            startTimeoutMs: z.number().optional(),
+            requestTimeoutMs: z.number().optional(),
+            restartBudget: z
+              .object({
+                windowMs: z.number().optional(),
+                maxRestarts: z.number().optional(),
+                backoffMs: z.number().optional(),
+              })
+              .passthrough()
+              .optional(),
+          })
+          .passthrough()
+          .optional(),
+        launch: z
+          .object({
+            modelPath: z.string().optional(),
+            alias: z.string().optional(),
+            ctxSize: z.number().optional(),
+            threads: z.number().optional(),
+            gpuLayers: z.number().optional(),
+            parallel: z.number().optional(),
+            batchSize: z.number().optional(),
+            ubatchSize: z.number().optional(),
+            flashAttention: z.boolean().optional(),
           })
           .passthrough()
           .optional(),

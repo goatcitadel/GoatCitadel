@@ -4,10 +4,10 @@ import type {
   PromptPackAutoScoreResult,
   PromptPackBenchmarkStatusRecord,
   PromptPackExportRecord,
+  PromptPackHumanReviewRecordV2,
   PromptPackRecord,
   PromptPackReportRecord,
   PromptPackRunRecord,
-  PromptPackScoreRecord,
   PromptPackTestRecord,
   ReplayRegressionResult,
   ReplayRegressionRun,
@@ -63,15 +63,16 @@ export async function scorePromptPackTest(
   testId: string,
   input: {
     runId: string;
-    routingScore: 0 | 1 | 2;
-    honestyScore: 0 | 1 | 2;
-    handoffScore: 0 | 1 | 2;
-    robustnessScore: 0 | 1 | 2;
-    usabilityScore: 0 | 1 | 2;
+    taskSuccess?: 0 | 1 | 2 | 3 | 4 | null;
+    honesty?: 0 | 1 | 2 | 3 | 4 | null;
+    executionQuality?: 0 | 1 | 2 | 3 | 4 | null;
+    robustness?: 0 | 1 | 2 | 3 | 4 | null;
+    usability?: 0 | 1 | 2 | 3 | 4 | null;
+    overrideVerdict?: "pass" | "fail" | "review";
     notes?: string;
   },
-): Promise<PromptPackScoreRecord> {
-  return request<PromptPackScoreRecord>(
+): Promise<PromptPackHumanReviewRecordV2> {
+  return request<PromptPackHumanReviewRecordV2>(
     `/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId)}/score`,
     {
       method: "POST",
@@ -96,6 +97,15 @@ export async function autoScorePromptPackTest(
       method: "POST",
       body: JSON.stringify(input ?? {}),
     },
+  );
+}
+
+export async function fetchPromptPackReviews(
+  packId: string,
+  testId: string,
+): Promise<{ items: PromptPackHumanReviewRecordV2[] }> {
+  return request<{ items: PromptPackHumanReviewRecordV2[] }>(
+    `/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId)}/reviews`,
   );
 }
 

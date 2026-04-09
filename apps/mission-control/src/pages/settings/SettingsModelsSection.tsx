@@ -36,7 +36,7 @@ export interface SettingsModelsCurrentRuntime {
 }
 
 export interface SettingsModelsSectionProps {
-  applyLocalProviderPreset: (id: "lmstudio" | "ollama") => void;
+  applyLocalProviderPreset: (id: "lmstudio" | "ollama" | "llamacpp") => void;
   activeProviderId: string;
   onActiveProviderIdChange: (nextProviderId: string) => void;
   providerSelectOptions: SelectOption[];
@@ -140,7 +140,7 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
           provider details. Known values should stay in selects; custom entry is the fallback.
         </FieldHelp>
         <details className="advanced-panel">
-          <summary>Local runtime quick setup: LM Studio + Ollama</summary>
+          <summary>Local runtime quick setup: LM Studio + Ollama + llama.cpp</summary>
           <p className="office-subtitle">
             <strong>LM Studio:</strong> load at least one model, then start its local server.
           </p>
@@ -155,6 +155,14 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
             <code>llama3.2</code>.
           </p>
           <p className="office-subtitle">
+            <strong>llama.cpp:</strong> start <code>llama-server</code> with your GGUF model and an alias such as{" "}
+            <code>--alias gemma-4</code>.
+          </p>
+          <p className="office-subtitle">
+            Base URL: <code>http://127.0.0.1:8080/v1</code> | model id: <code>gemma-4</code> or the alias returned by{" "}
+            <code>/v1/models</code>.
+          </p>
+          <p className="office-subtitle">
             If GoatCitadel is remote, replace <code>127.0.0.1</code> with the host IP/tailnet name and include that host
             in your outbound allowlist.
           </p>
@@ -164,6 +172,9 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
             </button>
             <button type="button" onClick={() => applyLocalProviderPreset("ollama")}>
               Use Ollama Preset
+            </button>
+            <button type="button" onClick={() => applyLocalProviderPreset("llamacpp")}>
+              Use llama.cpp Preset
             </button>
           </div>
         </details>

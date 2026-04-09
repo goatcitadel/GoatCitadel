@@ -8,16 +8,24 @@ describe("live data detection", () => {
   });
 
   it("does not treat code-like price identifiers as live-data intent", () => {
-    expect(hasLiveDataKeywords(
-      "Design test cases for calculateDiscount(price, customerTier, couponCode).",
-    )).toBe(false);
-    expect(hasLiveDataKeywords(
-      "Implement validatePrice(price: number) and handle negative values.",
-    )).toBe(false);
+    expect(hasLiveDataKeywords("Design test cases for calculateDiscount(price, customerTier, couponCode).")).toBe(
+      false,
+    );
+    expect(hasLiveDataKeywords("Implement validatePrice(price: number) and handle negative values.")).toBe(false);
   });
 
   it("still detects real price lookups that need current data", () => {
     expect(hasLiveDataKeywords("What's the current price of bitcoin?")).toBe(true);
     expect(hasLiveDataKeywords("Compare the latest price of ETH and BTC.")).toBe(true);
+  });
+
+  it("does not treat recently changed repo context as live-data intent", () => {
+    expect(hasLiveDataKeywords("One config file was recently changed and tests failed.")).toBe(false);
+    expect(hasLiveDataKeywords("Plan tests for recently added repo functionality.")).toBe(false);
+  });
+
+  it("still requires stronger currentness context for recency phrasing", () => {
+    expect(hasLiveDataKeywords("What are the latest news headlines today?")).toBe(true);
+    expect(hasLiveDataKeywords("Show me recently released games this month.")).toBe(true);
   });
 });

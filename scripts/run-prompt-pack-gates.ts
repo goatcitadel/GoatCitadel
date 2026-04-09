@@ -1,10 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildApp } from "../apps/gateway/src/app.ts";
-import type { PromptPackRecord, PromptPackReportRecord, PromptPackRunRecord, PromptPackScoreRecord, PromptPackTestRecord } from "@goatcitadel/contracts";
+import type {
+  PromptPackLatestAssessmentRecordV2,
+  PromptPackRecord,
+  PromptPackReportRecord,
+  PromptPackRunRecord,
+  PromptPackTestRecord,
+} from "@goatcitadel/contracts";
 import type { AuthConfig } from "../apps/gateway/src/config.ts";
 
 const TARGET_CODES = ["TEST-04", "TEST-12", "TEST-23", "TEST-32"] as const;
+const PROMPT_PACK_V2_GATING_ENABLED_ENV = "PROMPT_PACK_V2_GATING_ENABLED";
 
 interface InjectErrorPayload {
   error?: unknown;
@@ -144,9 +151,18 @@ async function main(): Promise<void> {
     console.log(`[gate] done. output: ${outPath}`);
     // eslint-disable-next-line no-console
     console.log(
-      `[gate] summary: runFailures=${report.summary.runFailureCount} scoreFailures=${report.summary.scoreFailureCount}` +
-      ` needsScore=${report.summary.needsScoreCount} avg=${report.summary.averageTotalScore.toFixed(2)} passRate=${(report.summary.passRate * 100).toFixed(1)}%`,
+      `[gate] summary: runFailures=${report.summary.runFailureCount} fail=${report.summary.failCount} review=${report.summary.reviewCount}` +
+        ` needsScore=${report.summary.needsScoreCount} degraded=${report.summary.degradedScoreCount}` +
+        ` avg=${report.summary.averageWeightedScore.toFixed(1)} passRate=${(report.summary.effectivePassRate * 100).toFixed(1)}%`,
     );
+    if (!isEnvEnabled(PROMPT_PACK_V2_GATING_ENABLED_ENV)) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[gate] release gating disabled via ${PROMPT_PACK_V2_GATING_ENABLED_ENV}; leaving exit code unchanged.`,
+      );
+    } else if (report.summary.failCount > 0 || report.summary.reviewCount > 0 || report.summary.needsScoreCount > 0) {
+      process.exitCode = 1;
+    }
   } finally {
     await app.close();
   }
@@ -185,10 +201,7 @@ async function resolvePromptPack(
     const tests = testsByPackId.get(pack.packId) ?? [];
     const byCode = new Set(tests.map((test) => normalizeCode(test.code)));
     const matchCount = TARGET_CODES.filter((code) => byCode.has(normalizeCode(code))).length;
-    if (
-      matchCount > selectedMatchCount
-      || (matchCount === selectedMatchCount && tests.length > selectedTestCount)
-    ) {
+    if (matchCount > selectedMatchCount || (matchCount === selectedMatchCount && tests.length > selectedTestCount)) {
       selected = pack;
       selectedTests = tests;
       selectedMatchCount = matchCount;
@@ -264,6 +277,14 @@ function buildInternalAuthHeaders(auth: AuthConfig): Record<string, string> {
   };
 }
 
+function isEnvEnabled(name: string, defaultValue = true): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) {
+    return defaultValue;
+  }
+  return !["0", "false", "off", "no", "disabled"].includes(raw);
+}
+
 function renderReport(input: {
   pack: PromptPackRecord;
   report: PromptPackReportRecord;
@@ -285,18 +306,18 @@ function renderReport(input: {
       latestRunByTestId.set(run.testId, run);
     }
   }
-  const latestScoreByTestId = new Map<string, PromptPackScoreRecord>();
-  for (const score of report.scores) {
-    if (!latestScoreByTestId.has(score.testId)) {
-      latestScoreByTestId.set(score.testId, score);
+  const latestAssessmentByTestId = new Map<string, PromptPackLatestAssessmentRecordV2>();
+  for (const assessment of report.latestAssessments) {
+    if (!latestAssessmentByTestId.has(assessment.testId)) {
+      latestAssessmentByTestId.set(assessment.testId, assessment);
     }
   }
   const testByCode = new Map(report.tests.map((test) => [normalizeCode(test.code), test]));
   const targetedRows = TARGET_CODES.map((code) => {
     const test = testByCode.get(normalizeCode(code));
     const run = test ? latestRunByTestId.get(test.testId) : undefined;
-    const score = test ? latestScoreByTestId.get(test.testId) : undefined;
-    return `| ${code} | ${run?.status ?? "missing"} | ${score ? `${score.totalScore}/10` : "none"} | ${run?.runId ?? "-"} |`;
+    const assessment = test ? latestAssessmentByTestId.get(test.testId) : undefined;
+    return `| ${code} | ${run?.status ?? "missing"} | ${assessment?.autoScore ? `${assessment.autoScore.weightedScore.toFixed(1)}/100` : "none"} | ${assessment?.effectiveVerdict ?? "none"} | ${run?.runId ?? "-"} |`;
   }).join("\n");
 
   const lines = [
@@ -308,26 +329,32 @@ function renderReport(input: {
     "",
     "## Targeted Test Status",
     "",
-    "| Test | Latest run status | Latest score | Latest run id |",
-    "|---|---|---:|---|",
+    "| Test | Latest run status | Latest score | Effective verdict | Latest run id |",
+    "|---|---|---:|---|---|",
     targetedRows,
     "",
     "## Overall Summary",
     "",
     `- Total tests: ${report.summary.totalTests}`,
     `- Run failures: ${report.summary.runFailureCount}`,
-    `- Score failures: ${report.summary.scoreFailureCount}`,
+    `- Fail verdicts: ${report.summary.failCount}`,
+    `- Review verdicts: ${report.summary.reviewCount}`,
     `- Needs score: ${report.summary.needsScoreCount}`,
-    `- Average score: ${report.summary.averageTotalScore.toFixed(2)}/10`,
-    `- Pass rate @ ${report.summary.passThreshold}/10: ${(report.summary.passRate * 100).toFixed(1)}%`,
+    `- Degraded auto scores: ${report.summary.degradedScoreCount}`,
+    `- Average weighted score: ${report.summary.averageWeightedScore.toFixed(1)}/100`,
+    `- Effective pass rate @ ${report.summary.passThreshold}/100: ${(report.summary.effectivePassRate * 100).toFixed(1)}%`,
+    `- Review rate: ${(report.summary.reviewRate * 100).toFixed(1)}%`,
     "",
     "## Execution Log (This Run)",
     "",
     "| Code | Run status | Auto-score | Run id | Error |",
     "|---|---|---|---|---|",
-    ...runResults.map((row) => `| ${row.code} | ${row.runStatus ?? "n/a"} | ${row.autoScoreStatus} | ${row.runId ?? "-"} | ${
-      row.runError ?? row.autoScoreError ?? "-"
-    } |`),
+    ...runResults.map(
+      (row) =>
+        `| ${row.code} | ${row.runStatus ?? "n/a"} | ${row.autoScoreStatus} | ${row.runId ?? "-"} | ${
+          row.runError ?? row.autoScoreError ?? "-"
+        } |`,
+    ),
     "",
   ];
   return lines.join("\n");

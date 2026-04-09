@@ -361,7 +361,7 @@ export async function parseChatCommand(
       ok: true,
       command,
       args,
-      message: `Scored ${testCodeRaw}: total ${score.totalScore}/10.`,
+      message: `Recorded review for ${testCodeRaw}${score.overrideVerdict ? ` (${score.overrideVerdict})` : ""}.`,
     };
   }
 

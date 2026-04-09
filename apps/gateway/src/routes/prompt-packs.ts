@@ -34,13 +34,20 @@ const promptPackRunBodySchema = z.object({
   placeholderValues: z.record(z.string(), z.string()).optional(),
 });
 
-const promptPackScoreBodySchema = z.object({
+const promptPackReviewBodySchema = z.object({
   runId: z.string().min(1),
-  routingScore: z.coerce.number().int().min(0).max(2),
-  honestyScore: z.coerce.number().int().min(0).max(2),
-  handoffScore: z.coerce.number().int().min(0).max(2),
-  robustnessScore: z.coerce.number().int().min(0).max(2),
-  usabilityScore: z.coerce.number().int().min(0).max(2),
+  taskSuccess: z.coerce.number().int().min(0).max(4).nullable().optional(),
+  honesty: z.coerce.number().int().min(0).max(4).nullable().optional(),
+  executionQuality: z.coerce.number().int().min(0).max(4).nullable().optional(),
+  robustness: z.coerce.number().int().min(0).max(4).nullable().optional(),
+  usability: z.coerce.number().int().min(0).max(4).nullable().optional(),
+  overrideVerdict: z.enum(["pass", "fail", "review"]).optional(),
+  reviewerId: z.string().optional(),
+  routingScore: z.coerce.number().int().min(0).max(2).optional(),
+  honestyScore: z.coerce.number().int().min(0).max(2).optional(),
+  handoffScore: z.coerce.number().int().min(0).max(2).optional(),
+  robustnessScore: z.coerce.number().int().min(0).max(2).optional(),
+  usabilityScore: z.coerce.number().int().min(0).max(2).optional(),
   notes: z.string().optional(),
 });
 
@@ -158,7 +165,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/prompt-packs/:packId/tests/:testId/score", async (request, reply) => {
     const params = promptPackTestParamsSchema.safeParse(request.params);
-    const body = promptPackScoreBodySchema.safeParse(request.body);
+    const body = promptPackReviewBodySchema.safeParse(request.body);
     if (!params.success || !body.success) {
       return reply.code(400).send({
         error: {
@@ -173,14 +180,67 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
           packId: params.data.packId,
           testId: params.data.testId,
           runId: body.data.runId,
-          routingScore: body.data.routingScore as 0 | 1 | 2,
-          honestyScore: body.data.honestyScore as 0 | 1 | 2,
-          handoffScore: body.data.handoffScore as 0 | 1 | 2,
-          robustnessScore: body.data.robustnessScore as 0 | 1 | 2,
-          usabilityScore: body.data.usabilityScore as 0 | 1 | 2,
+          taskSuccess: body.data.taskSuccess as 0 | 1 | 2 | 3 | 4 | null | undefined,
+          honesty: body.data.honesty as 0 | 1 | 2 | 3 | 4 | null | undefined,
+          executionQuality: body.data.executionQuality as 0 | 1 | 2 | 3 | 4 | null | undefined,
+          robustness: body.data.robustness as 0 | 1 | 2 | 3 | 4 | null | undefined,
+          usability: body.data.usability as 0 | 1 | 2 | 3 | 4 | null | undefined,
+          overrideVerdict: body.data.overrideVerdict,
+          reviewerId: body.data.reviewerId,
+          routingScore: body.data.routingScore as 0 | 1 | 2 | undefined,
+          honestyScore: body.data.honestyScore as 0 | 1 | 2 | undefined,
+          handoffScore: body.data.handoffScore as 0 | 1 | 2 | undefined,
+          robustnessScore: body.data.robustnessScore as 0 | 1 | 2 | undefined,
+          usabilityScore: body.data.usabilityScore as 0 | 1 | 2 | undefined,
           notes: body.data.notes,
         }),
       );
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/prompt-packs/:packId/tests/:testId/review", async (request, reply) => {
+    const params = promptPackTestParamsSchema.safeParse(request.params);
+    const body = promptPackReviewBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(
+        fastify.gateway.reviewPromptPackTest({
+          packId: params.data.packId,
+          testId: params.data.testId,
+          runId: body.data.runId,
+          taskSuccess: body.data.taskSuccess as 0 | 1 | 2 | 3 | 4 | null | undefined,
+          honesty: body.data.honesty as 0 | 1 | 2 | 3 | 4 | null | undefined,
+          executionQuality: body.data.executionQuality as 0 | 1 | 2 | 3 | 4 | null | undefined,
+          robustness: body.data.robustness as 0 | 1 | 2 | 3 | 4 | null | undefined,
+          usability: body.data.usability as 0 | 1 | 2 | 3 | 4 | null | undefined,
+          overrideVerdict: body.data.overrideVerdict,
+          reviewerId: body.data.reviewerId,
+          notes: body.data.notes,
+        }),
+      );
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/prompt-packs/:packId/tests/:testId/reviews", async (request, reply) => {
+    const params = promptPackTestParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send({
+        items: fastify.gateway.listPromptPackTestReviews(params.data.packId, params.data.testId),
+      });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

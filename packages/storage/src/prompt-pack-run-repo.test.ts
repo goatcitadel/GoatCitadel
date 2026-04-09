@@ -56,4 +56,54 @@ describe("PromptPackRunRepository", () => {
     assert.equal(secondPatch.responseText, "final response");
     assert.equal(secondPatch.error, "updated error");
   });
+
+  it("round-trips integrity metadata through create and patch", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      runId: "run-integrity-1",
+      packId: "pack-1",
+      testId: "test-1",
+      status: "completed",
+      responseText: "Final answer.",
+      integrity: {
+        validationStatus: "valid",
+        signals: [],
+        completionStatus: "complete",
+        finishReason: "stop",
+        outputTokenCount: 48,
+        responseChecksumSha256: "abc123",
+      },
+      startedAt: "2026-03-02T00:00:00.000Z",
+      finishedAt: "2026-03-02T00:00:02.000Z",
+    });
+
+    assert.deepEqual(created.integrity, {
+      validationStatus: "valid",
+      signals: [],
+      completionStatus: "complete",
+      finishReason: "stop",
+      outputTokenCount: 48,
+      responseChecksumSha256: "abc123",
+    });
+
+    const patched = repo.patch("run-integrity-1", {
+      integrity: {
+        validationStatus: "invalid",
+        signals: ["output_cut_off_fragment"],
+        completionStatus: "truncated",
+        finishReason: "length",
+        outputTokenCount: 48,
+        responseChecksumSha256: "def456",
+      },
+    });
+
+    assert.deepEqual(patched.integrity, {
+      validationStatus: "invalid",
+      signals: ["output_cut_off_fragment"],
+      completionStatus: "truncated",
+      finishReason: "length",
+      outputTokenCount: 48,
+      responseChecksumSha256: "def456",
+    });
+  });
 });

@@ -835,7 +835,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     setActiveModel((current) => resolveProviderModelSelection(nextProviderId, runtimeProviderCatalog, current));
   };
 
-  const applyLocalProviderPreset = (nextProviderId: "lmstudio" | "ollama") => {
+  const applyLocalProviderPreset = (nextProviderId: "lmstudio" | "ollama" | "llamacpp") => {
     const template = providerTemplates.find((item) => item.providerId === nextProviderId);
     if (!template) {
       return;

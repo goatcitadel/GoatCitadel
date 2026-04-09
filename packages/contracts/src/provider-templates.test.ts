@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  findProviderTemplate,
-  inferProviderForModelId,
-  providerAllowsForeignModelIds,
-} from "./provider-templates.js";
+import { findProviderTemplate, inferProviderForModelId, providerAllowsForeignModelIds } from "./provider-templates.js";
 
 describe("provider templates", () => {
   it("uses GPT-5.4-mini defaults for OpenAI-family templates", () => {
@@ -92,7 +88,17 @@ describe("provider templates", () => {
     expect(providerAllowsForeignModelIds("openrouter")).toBe(true);
     expect(providerAllowsForeignModelIds("vercel")).toBe(true);
     expect(providerAllowsForeignModelIds("ollama")).toBe(true);
+    expect(providerAllowsForeignModelIds("llamacpp")).toBe(true);
     expect(providerAllowsForeignModelIds("openai")).toBe(false);
     expect(providerAllowsForeignModelIds("anthropic")).toBe(false);
+  });
+
+  it("ships a llama.cpp local preset for Gemma 4", () => {
+    expect(findProviderTemplate("llamacpp")).toMatchObject({
+      label: "llama.cpp",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      defaultModel: "gemma-4",
+      apiStyle: "openai-chat-completions",
+    });
   });
 });

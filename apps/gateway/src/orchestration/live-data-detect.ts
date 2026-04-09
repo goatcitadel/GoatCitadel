@@ -1,7 +1,10 @@
 import type { ChatSessionPrefsRecord } from "@goatcitadel/contracts";
 
 const LIVE_DATA_KEYWORD_REGEX =
-  /\b(latest|today|right now|news|weather|recent|recently|lately|coming out|opening|releasing|release schedule)\b/;
+  /\b(latest|today|right now|news|weather|coming out|opening|releasing|release schedule)\b/;
+
+const RECENCY_EVENT_REGEX =
+  /\b(recent|recently|lately)\b.{0,30}\b(news|headlines?|events?|weather|forecast|release(?:s| schedule)?|price|prices|stock|stocks|market|markets|score|scores|traffic|deals?|sales?|benchmarks?|comparisons?)\b|\b(news|headlines?|events?|weather|forecast|release(?:s| schedule)?|price|prices|stock|stocks|market|markets|score|scores|traffic|deals?|sales?|benchmarks?|comparisons?)\b.{0,30}\b(recent|recently|lately)\b/i;
 
 const PRICE_LOOKUP_REGEX =
   /\b(price of|stock price|share price|market price|crypto price|bitcoin price|btc price|eth price|gas price|oil price|latest price|current price)\b/;
@@ -32,13 +35,14 @@ export { EXPLICIT_WEB_PHRASES };
 
 export function hasLiveDataKeywords(objective: string): boolean {
   return (
-    LIVE_DATA_KEYWORD_REGEX.test(objective)
-    || PRICE_LOOKUP_REGEX.test(objective)
-    || CURRENT_EVENT_REGEX.test(objective)
-    || TEMPORAL_EVENT_REGEX.test(objective)
-    || EXPLICIT_WEB_PHRASES.some((phrase) => objective.includes(phrase))
-    || objective.includes("what's going on with")
-    || objective.includes("whats going on with")
+    LIVE_DATA_KEYWORD_REGEX.test(objective) ||
+    RECENCY_EVENT_REGEX.test(objective) ||
+    PRICE_LOOKUP_REGEX.test(objective) ||
+    CURRENT_EVENT_REGEX.test(objective) ||
+    TEMPORAL_EVENT_REGEX.test(objective) ||
+    EXPLICIT_WEB_PHRASES.some((phrase) => objective.includes(phrase)) ||
+    objective.includes("what's going on with") ||
+    objective.includes("whats going on with")
   );
 }
 

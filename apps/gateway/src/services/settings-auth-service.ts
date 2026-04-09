@@ -156,6 +156,23 @@ export function getSettings(host: SettingsAuthHost): RuntimeSettings {
       sidecarUrl: host.config.assistant.npu.sidecar.baseUrl,
       status: host.npuSidecar.getStatus(),
     },
+    llamaCpp: {
+      enabled: host.config.assistant.llamaCpp.enabled,
+      autoStart: host.config.assistant.llamaCpp.autoStart,
+      baseUrl: host.config.assistant.llamaCpp.server.baseUrl,
+      command: host.config.assistant.llamaCpp.server.command,
+      extraArgs: host.config.assistant.llamaCpp.server.extraArgs,
+      modelPath: host.config.assistant.llamaCpp.launch.modelPath,
+      alias: host.config.assistant.llamaCpp.launch.alias,
+      ctxSize: host.config.assistant.llamaCpp.launch.ctxSize,
+      threads: host.config.assistant.llamaCpp.launch.threads,
+      gpuLayers: host.config.assistant.llamaCpp.launch.gpuLayers,
+      parallel: host.config.assistant.llamaCpp.launch.parallel,
+      batchSize: host.config.assistant.llamaCpp.launch.batchSize,
+      ubatchSize: host.config.assistant.llamaCpp.launch.ubatchSize,
+      flashAttention: host.config.assistant.llamaCpp.launch.flashAttention,
+      status: host.llamaCppRuntime.getStatus(),
+    },
     features,
   };
 }
@@ -217,6 +234,22 @@ export interface UpdateSettingsInput {
     enabled?: boolean;
     autoStart?: boolean;
     sidecarUrl?: string;
+  };
+  llamaCpp?: {
+    enabled?: boolean;
+    autoStart?: boolean;
+    baseUrl?: string;
+    command?: string;
+    extraArgs?: string[];
+    modelPath?: string;
+    alias?: string;
+    ctxSize?: number | null;
+    threads?: number | null;
+    gpuLayers?: number | null;
+    parallel?: number | null;
+    batchSize?: number | null;
+    ubatchSize?: number | null;
+    flashAttention?: boolean | null;
   };
   features?: Partial<RuntimeSettings["features"]>;
 }
@@ -398,6 +431,88 @@ export function updateSettings(host: SettingsAuthHost, input: UpdateSettingsInpu
     } else if (host.config.assistant.npu.autoStart) {
       void host.npuSidecar.start("config_autostart").catch((error) => {
         settingsLog.error("npu sidecar autostart failed after settings update", error);
+      });
+    }
+    persistAssistant = true;
+  }
+
+  if (input.llamaCpp) {
+    const hasLlamaField = (field: keyof NonNullable<UpdateSettingsInput["llamaCpp"]>) =>
+      Object.prototype.hasOwnProperty.call(input.llamaCpp, field);
+    if (input.llamaCpp.enabled !== undefined) {
+      host.config.assistant.llamaCpp.enabled = input.llamaCpp.enabled;
+    }
+    if (input.llamaCpp.autoStart !== undefined) {
+      host.config.assistant.llamaCpp.autoStart = input.llamaCpp.autoStart;
+    }
+    if (input.llamaCpp.baseUrl !== undefined) {
+      const trimmed = input.llamaCpp.baseUrl.trim();
+      if (!trimmed) {
+        throw new Error("llamaCpp.baseUrl cannot be empty");
+      }
+      host.config.assistant.llamaCpp.server.baseUrl = trimmed;
+    }
+    if (input.llamaCpp.command !== undefined) {
+      const trimmed = input.llamaCpp.command.trim();
+      if (!trimmed) {
+        throw new Error("llamaCpp.command cannot be empty");
+      }
+      host.config.assistant.llamaCpp.server.command = trimmed;
+    }
+    if (input.llamaCpp.extraArgs !== undefined) {
+      host.config.assistant.llamaCpp.server.extraArgs = input.llamaCpp.extraArgs
+        .map((value) => value.trim())
+        .filter(Boolean);
+    }
+    if (input.llamaCpp.modelPath !== undefined) {
+      const trimmed = input.llamaCpp.modelPath.trim();
+      host.config.assistant.llamaCpp.launch.modelPath = trimmed || undefined;
+    }
+    if (input.llamaCpp.alias !== undefined) {
+      const trimmed = input.llamaCpp.alias.trim();
+      if (!trimmed) {
+        throw new Error("llamaCpp.alias cannot be empty");
+      }
+      host.config.assistant.llamaCpp.launch.alias = trimmed;
+    }
+    if (hasLlamaField("ctxSize")) {
+      host.config.assistant.llamaCpp.launch.ctxSize =
+        input.llamaCpp.ctxSize == null ? undefined : clampInt(input.llamaCpp.ctxSize, 4096, 256, 262_144);
+    }
+    if (hasLlamaField("threads")) {
+      host.config.assistant.llamaCpp.launch.threads =
+        input.llamaCpp.threads == null ? undefined : clampInt(input.llamaCpp.threads, 1, 1, 512);
+    }
+    if (hasLlamaField("gpuLayers")) {
+      host.config.assistant.llamaCpp.launch.gpuLayers =
+        input.llamaCpp.gpuLayers == null ? undefined : clampInt(input.llamaCpp.gpuLayers, 0, 0, 512);
+    }
+    if (hasLlamaField("parallel")) {
+      host.config.assistant.llamaCpp.launch.parallel =
+        input.llamaCpp.parallel == null ? undefined : clampInt(input.llamaCpp.parallel, 1, 1, 128);
+    }
+    if (hasLlamaField("batchSize")) {
+      host.config.assistant.llamaCpp.launch.batchSize =
+        input.llamaCpp.batchSize == null ? undefined : clampInt(input.llamaCpp.batchSize, 512, 1, 262_144);
+    }
+    if (hasLlamaField("ubatchSize")) {
+      host.config.assistant.llamaCpp.launch.ubatchSize =
+        input.llamaCpp.ubatchSize == null ? undefined : clampInt(input.llamaCpp.ubatchSize, 256, 1, 262_144);
+    }
+    if (hasLlamaField("flashAttention")) {
+      host.config.assistant.llamaCpp.launch.flashAttention = input.llamaCpp.flashAttention ?? undefined;
+    }
+
+    host.llamaCppRuntime.updateConfig(host.config.assistant.llamaCpp);
+    if (!host.config.assistant.llamaCpp.enabled) {
+      void host.llamaCppRuntime.stop("disabled").catch((error) => {
+        settingsLog.warn("llama.cpp runtime stop failed after settings update", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    } else if (host.config.assistant.llamaCpp.autoStart) {
+      void host.llamaCppRuntime.start("config_autostart").catch((error) => {
+        settingsLog.error("llama.cpp autostart failed after settings update", error);
       });
     }
     persistAssistant = true;

@@ -15,6 +15,10 @@ vi.mock("./MeshPage", () => ({
   MeshPage: () => <div>MeshPage</div>,
 }));
 
+vi.mock("./LlamaCppPage", () => ({
+  LlamaCppPage: () => <div>LlamaCppPage</div>,
+}));
+
 vi.mock("./NpuPage", () => ({
   NpuPage: () => <div>NpuPage</div>,
 }));
@@ -82,6 +86,7 @@ describe("SettingsHubPage", () => {
       const text = rendererText(renderer);
       expect(text).toContain("SettingsPage:runtime");
       expect(text).toContain("MeshPage");
+      expect(text).toContain("LlamaCppPage");
       expect(text).toContain("NpuPage");
     } finally {
       renderer.unmount();

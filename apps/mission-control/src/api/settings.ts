@@ -116,6 +116,22 @@ export async function patchSettings(input: {
     autoStart?: boolean;
     sidecarUrl?: string;
   };
+  llamaCpp?: {
+    enabled?: boolean;
+    autoStart?: boolean;
+    baseUrl?: string;
+    command?: string;
+    extraArgs?: string[];
+    modelPath?: string;
+    alias?: string;
+    ctxSize?: number | null;
+    threads?: number | null;
+    gpuLayers?: number | null;
+    parallel?: number | null;
+    batchSize?: number | null;
+    ubatchSize?: number | null;
+    flashAttention?: boolean | null;
+  };
   features?: Partial<RuntimeSettingsResponse["features"]>;
 }): Promise<RuntimeSettingsResponse> {
   return request<RuntimeSettingsResponse>("/api/v1/settings", {

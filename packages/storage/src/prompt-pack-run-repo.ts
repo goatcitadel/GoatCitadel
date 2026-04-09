@@ -1,5 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { ChatCitationRecord, ChatTurnTraceRecord, PromptPackRunRecord } from "@goatcitadel/contracts";
+import type {
+  ChatCitationRecord,
+  ChatTurnTraceRecord,
+  PromptPackRunIntegrityRecord,
+  PromptPackRunRecord,
+} from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 
 interface PromptPackRunRow {
@@ -19,6 +24,7 @@ interface PromptPackRunRow {
   response_text: string | null;
   trace_json: string | null;
   citations_json: string | null;
+  integrity_json: string | null;
   error: string | null;
   started_at: string;
   finished_at: string | null;
@@ -38,11 +44,11 @@ export class PromptPackRunRepository {
       INSERT INTO prompt_pack_runs (
         run_id, pack_id, test_id, session_id, status, provider_id, model,
         mode, tool_tier, tool_autonomy, web_mode, memory_mode, thinking_level,
-        response_text, trace_json, citations_json, error, started_at, finished_at
+        response_text, trace_json, citations_json, integrity_json, error, started_at, finished_at
       ) VALUES (
         @runId, @packId, @testId, @sessionId, @status, @providerId, @model,
         @mode, @toolTier, @toolAutonomy, @webMode, @memoryMode, @thinkingLevel,
-        @responseText, @traceJson, @citationsJson, @error, @startedAt, @finishedAt
+        @responseText, @traceJson, @citationsJson, @integrityJson, @error, @startedAt, @finishedAt
       )
     `);
     this.patchStmt = db.prepare(`
@@ -58,6 +64,7 @@ export class PromptPackRunRepository {
         response_text = CASE WHEN @hasResponseText = 1 THEN @responseText ELSE response_text END,
         trace_json = CASE WHEN @hasTrace = 1 THEN @traceJson ELSE trace_json END,
         citations_json = CASE WHEN @hasCitations = 1 THEN @citationsJson ELSE citations_json END,
+        integrity_json = CASE WHEN @hasIntegrity = 1 THEN @integrityJson ELSE integrity_json END,
         error = CASE WHEN @hasError = 1 THEN @error ELSE error END,
         finished_at = CASE WHEN @hasFinishedAt = 1 THEN @finishedAt ELSE finished_at END
       WHERE run_id = @runId
@@ -102,6 +109,7 @@ export class PromptPackRunRepository {
     responseText?: string;
     trace?: ChatTurnTraceRecord;
     citations?: ChatCitationRecord[];
+    integrity?: PromptPackRunIntegrityRecord;
     error?: string;
     startedAt?: string;
     finishedAt?: string;
@@ -123,6 +131,7 @@ export class PromptPackRunRepository {
       responseText: input.responseText ?? null,
       traceJson: input.trace ? JSON.stringify(input.trace) : null,
       citationsJson: input.citations ? JSON.stringify(input.citations) : null,
+      integrityJson: input.integrity ? JSON.stringify(input.integrity) : null,
       error: input.error ?? null,
       startedAt: input.startedAt ?? new Date().toISOString(),
       finishedAt: input.finishedAt ?? null,
@@ -130,20 +139,24 @@ export class PromptPackRunRepository {
     return this.get(input.runId);
   }
 
-  public patch(runId: string, input: {
-    status?: PromptPackRunRecord["status"];
-    mode?: PromptPackRunRecord["mode"];
-    toolTier?: PromptPackRunRecord["toolTier"];
-    toolAutonomy?: PromptPackRunRecord["toolAutonomy"];
-    webMode?: PromptPackRunRecord["webMode"];
-    memoryMode?: PromptPackRunRecord["memoryMode"];
-    thinkingLevel?: PromptPackRunRecord["thinkingLevel"];
-    responseText?: string;
-    trace?: ChatTurnTraceRecord;
-    citations?: ChatCitationRecord[];
-    error?: string;
-    finishedAt?: string;
-  }): PromptPackRunRecord {
+  public patch(
+    runId: string,
+    input: {
+      status?: PromptPackRunRecord["status"];
+      mode?: PromptPackRunRecord["mode"];
+      toolTier?: PromptPackRunRecord["toolTier"];
+      toolAutonomy?: PromptPackRunRecord["toolAutonomy"];
+      webMode?: PromptPackRunRecord["webMode"];
+      memoryMode?: PromptPackRunRecord["memoryMode"];
+      thinkingLevel?: PromptPackRunRecord["thinkingLevel"];
+      responseText?: string;
+      trace?: ChatTurnTraceRecord;
+      citations?: ChatCitationRecord[];
+      integrity?: PromptPackRunIntegrityRecord;
+      error?: string;
+      finishedAt?: string;
+    },
+  ): PromptPackRunRecord {
     const result = this.patchStmt.run({
       runId,
       status: input.status ?? null,
@@ -165,6 +178,8 @@ export class PromptPackRunRepository {
       traceJson: input.trace !== undefined ? JSON.stringify(input.trace) : null,
       hasCitations: input.citations !== undefined ? 1 : 0,
       citationsJson: input.citations !== undefined ? JSON.stringify(input.citations) : null,
+      hasIntegrity: input.integrity !== undefined ? 1 : 0,
+      integrityJson: input.integrity !== undefined ? JSON.stringify(input.integrity) : null,
       hasError: input.error !== undefined ? 1 : 0,
       error: input.error ?? null,
       hasFinishedAt: input.finishedAt !== undefined ? 1 : 0,
@@ -177,18 +192,22 @@ export class PromptPackRunRepository {
   }
 
   public listByPack(packId: string, limit = 500): PromptPackRunRecord[] {
-    const rows = toPromptPackRunRows(this.listByPackStmt.all({
-      packId,
-      limit: Math.max(1, Math.min(limit, 5000)),
-    }));
+    const rows = toPromptPackRunRows(
+      this.listByPackStmt.all({
+        packId,
+        limit: Math.max(1, Math.min(limit, 5000)),
+      }),
+    );
     return rows.map(mapRow);
   }
 
   public listByTest(testId: string, limit = 100): PromptPackRunRecord[] {
-    const rows = toPromptPackRunRows(this.listByTestStmt.all({
-      testId,
-      limit: Math.max(1, Math.min(limit, 5000)),
-    }));
+    const rows = toPromptPackRunRows(
+      this.listByTestStmt.all({
+        testId,
+        limit: Math.max(1, Math.min(limit, 5000)),
+      }),
+    );
     return rows.map(mapRow);
   }
 
@@ -215,7 +234,12 @@ function mapRow(row: PromptPackRunRow): PromptPackRunRecord {
     thinkingLevel: row.thinking_level ?? undefined,
     responseText: row.response_text ?? undefined,
     trace: row.trace_json ? safeJsonParse<ChatTurnTraceRecord | undefined>(row.trace_json, undefined) : undefined,
-    citations: row.citations_json ? safeJsonParse<ChatCitationRecord[] | undefined>(row.citations_json, undefined) : undefined,
+    citations: row.citations_json
+      ? safeJsonParse<ChatCitationRecord[] | undefined>(row.citations_json, undefined)
+      : undefined,
+    integrity: row.integrity_json
+      ? safeJsonParse<PromptPackRunIntegrityRecord | undefined>(row.integrity_json, undefined)
+      : undefined,
     error: row.error ?? undefined,
     startedAt: row.started_at,
     finishedAt: row.finished_at ?? undefined,
@@ -239,26 +263,29 @@ function toPromptPackRunRows(value: unknown): PromptPackRunRow[] {
 }
 
 function isPromptPackRunRow(value: unknown): value is PromptPackRunRow {
-  return isRecord(value)
-    && typeof value.run_id === "string"
-    && typeof value.pack_id === "string"
-    && typeof value.test_id === "string"
-    && (typeof value.session_id === "string" || value.session_id === null)
-    && typeof value.status === "string"
-    && (typeof value.provider_id === "string" || value.provider_id === null)
-    && (typeof value.model === "string" || value.model === null)
-    && (typeof value.mode === "string" || value.mode === null)
-    && (typeof value.tool_tier === "string" || value.tool_tier === null)
-    && (typeof value.tool_autonomy === "string" || value.tool_autonomy === null)
-    && (typeof value.web_mode === "string" || value.web_mode === null)
-    && (typeof value.memory_mode === "string" || value.memory_mode === null)
-    && (typeof value.thinking_level === "string" || value.thinking_level === null)
-    && (typeof value.response_text === "string" || value.response_text === null)
-    && (typeof value.trace_json === "string" || value.trace_json === null)
-    && (typeof value.citations_json === "string" || value.citations_json === null)
-    && (typeof value.error === "string" || value.error === null)
-    && typeof value.started_at === "string"
-    && (typeof value.finished_at === "string" || value.finished_at === null);
+  return (
+    isRecord(value) &&
+    typeof value.run_id === "string" &&
+    typeof value.pack_id === "string" &&
+    typeof value.test_id === "string" &&
+    (typeof value.session_id === "string" || value.session_id === null) &&
+    typeof value.status === "string" &&
+    (typeof value.provider_id === "string" || value.provider_id === null) &&
+    (typeof value.model === "string" || value.model === null) &&
+    (typeof value.mode === "string" || value.mode === null) &&
+    (typeof value.tool_tier === "string" || value.tool_tier === null) &&
+    (typeof value.tool_autonomy === "string" || value.tool_autonomy === null) &&
+    (typeof value.web_mode === "string" || value.web_mode === null) &&
+    (typeof value.memory_mode === "string" || value.memory_mode === null) &&
+    (typeof value.thinking_level === "string" || value.thinking_level === null) &&
+    (typeof value.response_text === "string" || value.response_text === null) &&
+    (typeof value.trace_json === "string" || value.trace_json === null) &&
+    (typeof value.citations_json === "string" || value.citations_json === null) &&
+    (typeof value.integrity_json === "string" || value.integrity_json === null) &&
+    (typeof value.error === "string" || value.error === null) &&
+    typeof value.started_at === "string" &&
+    (typeof value.finished_at === "string" || value.finished_at === null)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

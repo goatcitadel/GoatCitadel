@@ -6,18 +6,19 @@
  * PromptLabPage.tsx smaller and makes the helpers unit-testable in isolation.
  */
 
-import type { PromptPackRunRecord, PromptPackScoreRecord } from "@goatcitadel/contracts";
+import type { PromptPackLatestAssessmentRecordV2, PromptPackRunRecord } from "@goatcitadel/contracts";
 
 export type TestResultFilter =
   | "all"
   | "approval_paused"
   | "run_failed"
   | "score_failed"
+  | "review"
   | "needs_score"
   | "not_run"
   | "passing";
 
-export const PROMPT_PACK_PASS_THRESHOLD = 7;
+export const PROMPT_PACK_PASS_THRESHOLD = 75;
 
 export function dedupeStrings(values: Array<string | undefined>): string[] {
   const out: string[] = [];
@@ -167,8 +168,7 @@ export function statusChipClass(status?: PromptPackRunRecord["status"]): string 
 
 export function classifyTestResultCategory(
   run: PromptPackRunRecord | undefined,
-  score: PromptPackScoreRecord | undefined,
-  passThreshold = PROMPT_PACK_PASS_THRESHOLD,
+  assessment: PromptPackLatestAssessmentRecordV2 | undefined,
 ): Exclude<TestResultFilter, "all"> {
   if (!run) {
     return "not_run";
@@ -182,28 +182,34 @@ export function classifyTestResultCategory(
   if (run.status !== "completed") {
     return "not_run";
   }
-  if (!score) {
-    return "needs_score";
+  if (!assessment?.autoScore) {
+    if (!assessment?.legacyScore) {
+      return "needs_score";
+    }
+    return assessment.legacyScore.totalScore >= 7 ? "passing" : "score_failed";
   }
-  return score.totalScore >= passThreshold ? "passing" : "score_failed";
+  if (assessment.effectiveVerdict === "review") {
+    return "review";
+  }
+  return assessment.effectiveVerdict === "pass" ? "passing" : "score_failed";
 }
 
 export function matchesTestResultFilter(
   filter: TestResultFilter,
   run: PromptPackRunRecord | undefined,
-  score: PromptPackScoreRecord | undefined,
-  passThreshold = PROMPT_PACK_PASS_THRESHOLD,
+  assessment: PromptPackLatestAssessmentRecordV2 | undefined,
 ): boolean {
   if (filter === "all") {
     return true;
   }
-  return classifyTestResultCategory(run, score, passThreshold) === filter;
+  return classifyTestResultCategory(run, assessment) === filter;
 }
 
 export function formatResultCategory(category: Exclude<TestResultFilter, "all">): string {
   if (category === "approval_paused") return "Approval paused";
   if (category === "run_failed") return "Run failure";
   if (category === "score_failed") return "Score failure";
+  if (category === "review") return "Review";
   if (category === "needs_score") return "Needs score";
   if (category === "passing") return "Passing";
   return "Not run";
@@ -213,7 +219,15 @@ export function resultCategoryClass(category: Exclude<TestResultFilter, "all">):
   if (category === "approval_paused") return "result-run-paused";
   if (category === "run_failed") return "result-run-failed";
   if (category === "score_failed") return "result-score-failed";
+  if (category === "review") return "result-needs-score";
   if (category === "needs_score") return "result-needs-score";
   if (category === "passing") return "result-passing";
   return "result-not-run";
+}
+
+export function formatWeightedScore(value?: number): string {
+  if (value === undefined || Number.isNaN(value)) {
+    return "Needs score";
+  }
+  return `${value.toFixed(1)}/100`;
 }

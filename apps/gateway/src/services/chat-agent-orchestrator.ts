@@ -377,6 +377,7 @@ export class ChatAgentOrchestrator {
         mode: input.mode,
         webLookupIntent: intents.webLookup,
         strictWebRequirement: detectExplicitWebLookupIntent(input.content) || detectDirectUrlIntent(input.content),
+        promptLabPrompt: isPromptLabHarnessContent(input.content),
         timeIntent: intents.time,
         localFileIntent,
         webMode: input.webMode,
@@ -4293,12 +4294,16 @@ function buildLiveDataSettingsConflictMessage(input: {
   mode: ChatMode;
   webLookupIntent: boolean;
   strictWebRequirement: boolean;
+  promptLabPrompt: boolean;
   timeIntent: boolean;
   localFileIntent: boolean;
   webMode: ChatWebMode;
   toolAutonomy: ChatAgentTurnInput["toolAutonomy"];
 }): string | undefined {
   if (!input.webLookupIntent || input.timeIntent || input.localFileIntent) {
+    return undefined;
+  }
+  if (input.promptLabPrompt && !input.strictWebRequirement) {
     return undefined;
   }
   if (input.mode !== "chat" && !input.strictWebRequirement) {

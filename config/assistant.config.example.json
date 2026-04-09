@@ -33,18 +33,7 @@
       "maxTranscriptEvents": 80,
       "maxMemoryFiles": 36,
       "maxBytesPerFile": 64000,
-      "allowedExtensions": [
-        ".md",
-        ".txt",
-        ".json",
-        ".yaml",
-        ".yml",
-        ".log",
-        ".ts",
-        ".tsx",
-        ".js",
-        ".jsx"
-      ],
+      "allowedExtensions": [".md", ".txt", ".json", ".yaml", ".yml", ".log", ".ts", ".tsx", ".js", ".jsx"],
       "cacheTtlSeconds": 300,
       "distiller": {
         "timeoutMs": 12000,
@@ -89,9 +78,7 @@
     "sidecar": {
       "baseUrl": "http://127.0.0.1:11440",
       "command": "python",
-      "args": [
-        "apps/npu-sidecar/server.py"
-      ],
+      "args": ["apps/npu-sidecar/server.py"],
       "healthPath": "/health",
       "modelsPath": "/v1/models",
       "startTimeoutMs": 20000,
@@ -101,6 +88,27 @@
         "maxRestarts": 5,
         "backoffMs": 2000
       }
+    }
+  },
+  "llamaCpp": {
+    "enabled": false,
+    "autoStart": false,
+    "server": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "command": "llama-server",
+      "extraArgs": [],
+      "healthPath": "/health",
+      "modelsPath": "/v1/models",
+      "startTimeoutMs": 20000,
+      "requestTimeoutMs": 12000,
+      "restartBudget": {
+        "windowMs": 60000,
+        "maxRestarts": 5,
+        "backoffMs": 2000
+      }
+    },
+    "launch": {
+      "alias": "gemma-4"
     }
   },
   "sqlite": {

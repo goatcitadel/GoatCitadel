@@ -1,14 +1,11 @@
+/* eslint-disable no-console */
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { confirm, input, password, select } from "@inquirer/prompts";
-import type {
-  LlmRuntimeConfig,
-  OnboardingBootstrapResult,
-  OnboardingState,
-} from "@goatcitadel/contracts";
+import type { LlmRuntimeConfig, OnboardingBootstrapResult, OnboardingState } from "@goatcitadel/contracts";
 import { providerTemplates } from "@goatcitadel/contracts";
 import { resolveGoatCitadelAppDir } from "./onboarding-tui-paths.js";
 import { renderBox, renderBulletList, renderKeyValueSummary, renderSection } from "./tui/render.js";
@@ -58,6 +55,10 @@ const PROVIDER_TEMPLATE_META: Record<string, { envVar: string; note: string }> =
   ollama: {
     envVar: "",
     note: "Local endpoint with built-in model management.",
+  },
+  llamacpp: {
+    envVar: "",
+    note: "Local OpenAI-compatible llama.cpp server. Good for raw GGUF performance and manual tuning.",
   },
   localai: {
     envVar: "LOCALAI_API_KEY",
@@ -117,12 +118,22 @@ const USE_DEFAULT_MODEL = "__default__";
 async function run(): Promise<void> {
   try {
     console.log();
-    console.log(renderSection("GoatCitadel Onboarding", "Guided local-first setup for gateway access, provider/model selection, runtime defaults, and optional mesh."));
-    console.log(renderBulletList([
-      "Press Enter to accept defaults shown in brackets.",
-      "Arrow keys move through choices. Enter selects the highlighted option.",
-      "Nothing is written until you confirm the final review step.",
-    ], "accent"));
+    console.log(
+      renderSection(
+        "GoatCitadel Onboarding",
+        "Guided local-first setup for gateway access, provider/model selection, runtime defaults, and optional mesh.",
+      ),
+    );
+    console.log(
+      renderBulletList(
+        [
+          "Press Enter to accept defaults shown in brackets.",
+          "Arrow keys move through choices. Enter selects the highlighted option.",
+          "Nothing is written until you confirm the final review step.",
+        ],
+        "accent",
+      ),
+    );
     console.log();
 
     const gatewayBaseUrl = await promptGatewayBaseUrl();
@@ -130,7 +141,13 @@ async function run(): Promise<void> {
     const initialState = await fetchOnboardingStateWithRecovery(gatewayBaseUrl, auth);
 
     console.log();
-    console.log(renderBox("Current checklist", initialState.checklist.map((item) => `${item.label}: ${item.status}${item.detail ? ` (${item.detail})` : ""}`), "info"));
+    console.log(
+      renderBox(
+        "Current checklist",
+        initialState.checklist.map((item) => `${item.label}: ${item.status}${item.detail ? ` (${item.detail})` : ""}`),
+        "info",
+      ),
+    );
 
     const provider = await promptProviderAndModel(initialState, gatewayBaseUrl, auth);
     const runtimeDefaults = await promptRuntimeDefaults(initialState, provider.providerBaseUrl);
@@ -139,25 +156,36 @@ async function run(): Promise<void> {
 
     console.log();
     console.log(renderSection("Review and apply", "This is what GoatCitadel will write into runtime settings."));
-    console.log(renderKeyValueSummary([
-      { key: "Gateway", value: gatewayBaseUrl },
-      { key: "Gateway auth", value: auth.mode },
-      { key: "Provider", value: `${provider.providerLabel} (${provider.providerId})` },
-      { key: "Base URL", value: provider.providerBaseUrl },
-      { key: "Active model", value: provider.activeModel },
-      { key: "Default model", value: provider.providerDefaultModel },
-      { key: "Tool profile", value: runtimeDefaults.defaultToolProfile },
-      { key: "Budget mode", value: runtimeDefaults.budgetMode },
-      { key: "Network allowlist", value: runtimeDefaults.networkAllowlist.length > 0 ? runtimeDefaults.networkAllowlist.join(", ") : "none" },
-      { key: "Mesh", value: mesh.enabled ? `${mesh.mode} (${mesh.nodeId || "auto"})` : "disabled" },
-      { key: "Mark complete", value: completion.markComplete ? `yes (${completion.completedBy})` : "no" },
-    ]));
+    console.log(
+      renderKeyValueSummary([
+        { key: "Gateway", value: gatewayBaseUrl },
+        { key: "Gateway auth", value: auth.mode },
+        { key: "Provider", value: `${provider.providerLabel} (${provider.providerId})` },
+        { key: "Base URL", value: provider.providerBaseUrl },
+        { key: "Active model", value: provider.activeModel },
+        { key: "Default model", value: provider.providerDefaultModel },
+        { key: "Tool profile", value: runtimeDefaults.defaultToolProfile },
+        { key: "Budget mode", value: runtimeDefaults.budgetMode },
+        {
+          key: "Network allowlist",
+          value: runtimeDefaults.networkAllowlist.length > 0 ? runtimeDefaults.networkAllowlist.join(", ") : "none",
+        },
+        { key: "Mesh", value: mesh.enabled ? `${mesh.mode} (${mesh.nodeId || "auto"})` : "disabled" },
+        { key: "Mark complete", value: completion.markComplete ? `yes (${completion.completedBy})` : "no" },
+      ]),
+    );
     if (provider.providerApiKey && !provider.saveProviderApiKeyToSecureStore) {
       console.log();
-      console.log(renderBox("Provider key note", [
-        "You entered a provider key but chose not to save it to the OS secure store.",
-        "Set the suggested env var or keep the .env file path available before future restarts.",
-      ], "warning"));
+      console.log(
+        renderBox(
+          "Provider key note",
+          [
+            "You entered a provider key but chose not to save it to the OS secure store.",
+            "Set the suggested env var or keep the .env file path available before future restarts.",
+          ],
+          "warning",
+        ),
+      );
     }
 
     const apply = await confirm({
@@ -195,9 +223,8 @@ async function run(): Promise<void> {
               defaultModel: provider.providerDefaultModel,
               apiKey: provider.providerApiKey || undefined,
               apiKeyEnv: provider.providerApiKeyEnv || undefined,
-              persistSecretToSecureStore: provider.providerApiKey.trim().length > 0
-                ? provider.saveProviderApiKeyToSecureStore
-                : undefined,
+              persistSecretToSecureStore:
+                provider.providerApiKey.trim().length > 0 ? provider.saveProviderApiKeyToSecureStore : undefined,
             },
           },
           mesh,
@@ -216,16 +243,27 @@ async function run(): Promise<void> {
     );
 
     console.log();
-    console.log(renderBox("Onboarding applied", [
-      `Applied at ${bootstrap.appliedAt}`,
-      `Completed: ${bootstrap.state.completed ? "yes" : "no"}`,
-      `Effective provider: ${runtimeConfig.activeProviderId}`,
-      `Effective model: ${runtimeConfig.activeModel}`,
-    ], "success"));
-    console.log(renderBulletList([
-      "Next step: run `goat up` if the gateway is not already running.",
-      "Then open Mission Control or continue with `goat doctor --deep` after the app is up.",
-    ], "accent"));
+    console.log(
+      renderBox(
+        "Onboarding applied",
+        [
+          `Applied at ${bootstrap.appliedAt}`,
+          `Completed: ${bootstrap.state.completed ? "yes" : "no"}`,
+          `Effective provider: ${runtimeConfig.activeProviderId}`,
+          `Effective model: ${runtimeConfig.activeModel}`,
+        ],
+        "success",
+      ),
+    );
+    console.log(
+      renderBulletList(
+        [
+          "Next step: run `goat up` if the gateway is not already running.",
+          "Then open Mission Control or continue with `goat doctor --deep` after the app is up.",
+        ],
+        "accent",
+      ),
+    );
   } catch (error) {
     console.error("Onboarding wizard failed.");
     console.error(error);
@@ -235,15 +273,21 @@ async function run(): Promise<void> {
 
 async function promptGatewayBaseUrl(): Promise<string> {
   console.log();
-  console.log(renderSection("1. Gateway access", "This first step tells the wizard which GoatCitadel gateway it should talk to."));
-  console.log(renderBulletList([
-    "For a normal single-machine install, keep the loopback default.",
-    "Only change this if you intentionally run the gateway on a different machine or port.",
-  ]));
-  return (await input({
-    message: "Gateway URL",
-    default: process.env.GOATCITADEL_GATEWAY_URL ?? "http://127.0.0.1:8787",
-  })).trim();
+  console.log(
+    renderSection("1. Gateway access", "This first step tells the wizard which GoatCitadel gateway it should talk to."),
+  );
+  console.log(
+    renderBulletList([
+      "For a normal single-machine install, keep the loopback default.",
+      "Only change this if you intentionally run the gateway on a different machine or port.",
+    ]),
+  );
+  return (
+    await input({
+      message: "Gateway URL",
+      default: process.env.GOATCITADEL_GATEWAY_URL ?? "http://127.0.0.1:8787",
+    })
+  ).trim();
 }
 
 async function promptGatewayAuth(): Promise<GatewayAuthInput> {
@@ -251,7 +295,11 @@ async function promptGatewayAuth(): Promise<GatewayAuthInput> {
     message: "Gateway auth mode",
     default: "none",
     choices: [
-      { name: "None - local single-user default", value: "none", description: "Use this for loopback-only local testing." },
+      {
+        name: "None - local single-user default",
+        value: "none",
+        description: "Use this for loopback-only local testing.",
+      },
       { name: "Token - recommended when exposing beyond loopback", value: "token", description: "Bearer token auth." },
       { name: "Basic - username/password", value: "basic", description: "Simple auth for controlled environments." },
     ],
@@ -260,10 +308,12 @@ async function promptGatewayAuth(): Promise<GatewayAuthInput> {
   if (authMode === "token") {
     return {
       mode: "token",
-      token: (await password({
-        message: "Gateway token",
-        mask: "*",
-      })).trim(),
+      token: (
+        await password({
+          message: "Gateway token",
+          mask: "*",
+        })
+      ).trim(),
     };
   }
 
@@ -290,10 +340,16 @@ async function fetchOnboardingStateWithRecovery(
     }
 
     console.log();
-    console.log(renderBox("Local gateway not running yet", [
-      "The loopback gateway did not answer the onboarding health check.",
-      "GoatCitadel can start the local gateway process for you and continue once /health is ready.",
-    ], "warning"));
+    console.log(
+      renderBox(
+        "Local gateway not running yet",
+        [
+          "The loopback gateway did not answer the onboarding health check.",
+          "GoatCitadel can start the local gateway process for you and continue once /health is ready.",
+        ],
+        "warning",
+      ),
+    );
 
     const startLocalGateway = await confirm({
       message: "Start the local gateway now?",
@@ -323,13 +379,18 @@ async function promptProviderAndModel(
   providerApiKeyEnv: string;
 }> {
   console.log();
-  console.log(renderSection("2. Provider and model", "Pick the model company first, then let GoatCitadel ask that provider which models it actually supports."));
+  console.log(
+    renderSection(
+      "2. Provider and model",
+      "Pick the model company first, then let GoatCitadel ask that provider which models it actually supports.",
+    ),
+  );
 
   const currentProvider = initialState.settings.llm.providers.find(
     (provider) => provider.providerId === initialState.settings.llm.activeProviderId,
   );
   const defaultTemplateId = PROVIDER_TEMPLATES.some((item) => item.providerId === currentProvider?.providerId)
-    ? currentProvider?.providerId ?? "glm"
+    ? (currentProvider?.providerId ?? "glm")
     : "glm";
 
   const providerChoice = await select<string>({
@@ -350,79 +411,114 @@ async function promptProviderAndModel(
   });
 
   const template = PROVIDER_TEMPLATES.find((item) => item.providerId === providerChoice);
-  const activeProvider = initialState.settings.llm.providers.find((provider) => provider.providerId === initialState.settings.llm.activeProviderId);
-  let providerId = providerChoice === "custom"
-    ? (activeProvider?.providerId ?? "custom-provider")
-    : (template?.providerId ?? activeProvider?.providerId ?? "glm");
-  let providerLabel = providerChoice === "custom"
-    ? (activeProvider?.label ?? providerId)
-    : (template?.label ?? activeProvider?.label ?? providerId);
-  let providerBaseUrl = providerChoice === "custom"
-    ? (activeProvider?.baseUrl ?? "http://127.0.0.1:1234/v1")
-    : (template?.baseUrl ?? activeProvider?.baseUrl ?? "http://127.0.0.1:1234/v1");
+  const activeProvider = initialState.settings.llm.providers.find(
+    (provider) => provider.providerId === initialState.settings.llm.activeProviderId,
+  );
+  let providerId =
+    providerChoice === "custom"
+      ? (activeProvider?.providerId ?? "custom-provider")
+      : (template?.providerId ?? activeProvider?.providerId ?? "glm");
+  let providerLabel =
+    providerChoice === "custom"
+      ? (activeProvider?.label ?? providerId)
+      : (template?.label ?? activeProvider?.label ?? providerId);
+  let providerBaseUrl =
+    providerChoice === "custom"
+      ? (activeProvider?.baseUrl ?? "http://127.0.0.1:1234/v1")
+      : (template?.baseUrl ?? activeProvider?.baseUrl ?? "http://127.0.0.1:1234/v1");
 
   if (providerChoice === "custom") {
     console.log();
-    console.log(renderBox("Custom provider details", [
-      "Custom providers need an internal ID, a display name, and the base URL of the compatible API endpoint.",
-      "If you are just using OpenAI, GLM, Moonshot, or another built-in template, you should not need this path.",
-    ], "info"));
+    console.log(
+      renderBox(
+        "Custom provider details",
+        [
+          "Custom providers need an internal ID, a display name, and the base URL of the compatible API endpoint.",
+          "If you are just using OpenAI, GLM, Moonshot, or another built-in template, you should not need this path.",
+        ],
+        "info",
+      ),
+    );
 
-    providerId = (await input({
-      message: "Internal provider ID",
-      default: providerId,
-    })).trim();
+    providerId = (
+      await input({
+        message: "Internal provider ID",
+        default: providerId,
+      })
+    ).trim();
 
-    console.log(renderBulletList([
-      "This is the stable internal name GoatCitadel stores in config, for example `glm` or `moonshot`.",
-      "Change it only if you intentionally want a custom alias for a non-built-in provider.",
-    ]));
+    console.log(
+      renderBulletList([
+        "This is the stable internal name GoatCitadel stores in config, for example `glm` or `moonshot`.",
+        "Change it only if you intentionally want a custom alias for a non-built-in provider.",
+      ]),
+    );
 
-    providerLabel = (await input({
-      message: "Display name",
-      default: providerLabel,
-    })).trim();
+    providerLabel = (
+      await input({
+        message: "Display name",
+        default: providerLabel,
+      })
+    ).trim();
 
-    providerBaseUrl = (await input({
-      message: "API base URL",
-      default: providerBaseUrl,
-    })).trim();
+    providerBaseUrl = (
+      await input({
+        message: "API base URL",
+        default: providerBaseUrl,
+      })
+    ).trim();
   } else {
     console.log();
-    console.log(renderBox("Built-in provider defaults", [
-      `GoatCitadel will use the built-in ${providerLabel} configuration.`,
-      `Endpoint: ${providerBaseUrl}`,
-      "You can rename aliases or change endpoints later in Settings or the config files if you need advanced customization.",
-    ], "info"));
+    console.log(
+      renderBox(
+        "Built-in provider defaults",
+        [
+          `GoatCitadel will use the built-in ${providerLabel} configuration.`,
+          `Endpoint: ${providerBaseUrl}`,
+          "You can rename aliases or change endpoints later in Settings or the config files if you need advanced customization.",
+        ],
+        "info",
+      ),
+    );
   }
 
-  const suggestedEnvVar = template?.envVar
-    || activeProvider?.apiKeyRef
-    || `${providerId.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}_API_KEY`;
+  const suggestedEnvVar =
+    template?.envVar ||
+    activeProvider?.apiKeyRef ||
+    `${providerId.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}_API_KEY`;
 
   console.log();
-  console.log(renderBox("Provider key guidance", [
-    "If this provider uses an API key, you can paste it now for onboarding.",
-    "You can also skip the secret here and rely on an env var later.",
-    `Suggested env var: ${suggestedEnvVar}`,
-  ], "info"));
+  console.log(
+    renderBox(
+      "Provider key guidance",
+      [
+        "If this provider uses an API key, you can paste it now for onboarding.",
+        "You can also skip the secret here and rely on an env var later.",
+        `Suggested env var: ${suggestedEnvVar}`,
+      ],
+      "info",
+    ),
+  );
 
   const providerApiKey = await password({
     message: "Provider API key (optional)",
     mask: "*",
   });
-  const saveProviderApiKeyToSecureStore = providerApiKey.trim().length > 0
-    ? await confirm({
-      message: "Save provider key to the OS secure store?",
-      default: true,
-    })
-    : false;
+  const saveProviderApiKeyToSecureStore =
+    providerApiKey.trim().length > 0
+      ? await confirm({
+          message: "Save provider key to the OS secure store?",
+          default: true,
+        })
+      : false;
   let providerApiKeyEnv = suggestedEnvVar;
   if (suggestedEnvVar) {
-    console.log(renderBulletList([
-      `If you skip saving the key, GoatCitadel will look for ${suggestedEnvVar} on future restarts.`,
-      "That env var name is just the lookup key. It is not the secret value itself.",
-    ]));
+    console.log(
+      renderBulletList([
+        `If you skip saving the key, GoatCitadel will look for ${suggestedEnvVar} on future restarts.`,
+        "That env var name is just the lookup key. It is not the secret value itself.",
+      ]),
+    );
   }
 
   if (suggestedEnvVar) {
@@ -431,16 +527,23 @@ async function promptProviderAndModel(
       default: false,
     });
     if (customizeEnvVar) {
-      providerApiKeyEnv = (await input({
-        message: "Provider API key env var",
-        default: suggestedEnvVar,
-      })).trim() || suggestedEnvVar;
+      providerApiKeyEnv =
+        (
+          await input({
+            message: "Provider API key env var",
+            default: suggestedEnvVar,
+          })
+        ).trim() || suggestedEnvVar;
     }
   } else {
     providerApiKeyEnv = "";
   }
 
-  let preview = await requestJson<{ items: Array<{ id: string; label?: string }>; source: "remote" | "fallback"; warning?: string }>(
+  let preview = await requestJson<{
+    items: Array<{ id: string; label?: string }>;
+    source: "remote" | "fallback";
+    warning?: string;
+  }>(
     gatewayBaseUrl,
     "/api/v1/llm/models/preview",
     {
@@ -456,38 +559,64 @@ async function promptProviderAndModel(
   );
 
   while (true) {
-    const fallbackDefaultModel = providerChoice === "custom"
-      ? (activeProvider?.defaultModel ?? initialState.settings.llm.activeModel)
-      : (template?.defaultModel ?? activeProvider?.defaultModel ?? initialState.settings.llm.activeModel);
+    const fallbackDefaultModel =
+      providerChoice === "custom"
+        ? (activeProvider?.defaultModel ?? initialState.settings.llm.activeModel)
+        : (template?.defaultModel ?? activeProvider?.defaultModel ?? initialState.settings.llm.activeModel);
     if (preview.warning) {
       console.log();
-      console.log(renderBox("Model discovery warning", [
-        preview.warning,
-        preview.source === "fallback"
-          ? "GoatCitadel fell back to the template/default model because the provider did not return a live catalog."
-          : "GoatCitadel still returned live model results, but the provider sent a warning.",
-      ], "warning"));
+      console.log(
+        renderBox(
+          "Model discovery warning",
+          [
+            preview.warning,
+            preview.source === "fallback"
+              ? "GoatCitadel fell back to the template/default model because the provider did not return a live catalog."
+              : "GoatCitadel still returned live model results, but the provider sent a warning.",
+          ],
+          "warning",
+        ),
+      );
     } else {
       console.log();
-      console.log(renderBox("Model discovery", [
-        preview.source === "remote"
-          ? "GoatCitadel successfully loaded a live model list from the provider API."
-          : "GoatCitadel did not get a live model list, so it is offering the built-in default as a safe fallback.",
-      ], preview.source === "remote" ? "success" : "warning"));
+      console.log(
+        renderBox(
+          "Model discovery",
+          [
+            preview.source === "remote"
+              ? "GoatCitadel successfully loaded a live model list from the provider API."
+              : "GoatCitadel did not get a live model list, so it is offering the built-in default as a safe fallback.",
+          ],
+          preview.source === "remote" ? "success" : "warning",
+        ),
+      );
     }
 
     const modelChoice = await select<string>({
       message: "Active model",
-      default: preview.items.find((item) => item.id === fallbackDefaultModel)?.id ?? preview.items[0]?.id ?? USE_DEFAULT_MODEL,
+      default:
+        preview.items.find((item) => item.id === fallbackDefaultModel)?.id ?? preview.items[0]?.id ?? USE_DEFAULT_MODEL,
       choices: [
         ...preview.items.map((item) => ({
           name: item.label ? `${item.label} (${item.id})` : item.id,
           value: item.id,
           description: preview.source === "remote" ? "Live provider-reported model" : "Fallback model entry",
         })),
-        { name: `Use provider default (${fallbackDefaultModel})`, value: USE_DEFAULT_MODEL, description: "Skip live selection and keep the template default." },
-        { name: "Retry model discovery", value: RETRY_MODEL_PREVIEW, description: "Ask the provider for models again after changing key or endpoint details." },
-        { name: "Enter model manually", value: MANUAL_MODEL_ENTRY, description: "Use this only if the provider supports the model but did not list it." },
+        {
+          name: `Use provider default (${fallbackDefaultModel})`,
+          value: USE_DEFAULT_MODEL,
+          description: "Skip live selection and keep the template default.",
+        },
+        {
+          name: "Retry model discovery",
+          value: RETRY_MODEL_PREVIEW,
+          description: "Ask the provider for models again after changing key or endpoint details.",
+        },
+        {
+          name: "Enter model manually",
+          value: MANUAL_MODEL_ENTRY,
+          description: "Use this only if the provider supports the model but did not list it.",
+        },
       ],
     });
 
@@ -510,10 +639,12 @@ async function promptProviderAndModel(
     }
 
     if (modelChoice === MANUAL_MODEL_ENTRY) {
-      const manualModel = (await input({
-        message: "Model id",
-        default: fallbackDefaultModel,
-      })).trim();
+      const manualModel = (
+        await input({
+          message: "Model id",
+          default: fallbackDefaultModel,
+        })
+      ).trim();
       return {
         providerId,
         providerLabel,
@@ -545,18 +676,29 @@ async function promptRuntimeDefaults(
   initialState: OnboardingState,
   providerBaseUrl: string,
 ): Promise<{
-  defaultToolProfile: typeof TOOL_PROFILES[number];
-  budgetMode: typeof BUDGET_MODES[number];
+  defaultToolProfile: (typeof TOOL_PROFILES)[number];
+  budgetMode: (typeof BUDGET_MODES)[number];
   networkAllowlist: string[];
 }> {
   console.log();
-  console.log(renderSection("3. Runtime defaults", "These settings control how much GoatCitadel can do by default and which outbound hosts are allowed."));
-  console.log(renderBox("Network allowlist note", [
-    "This is an outbound host allowlist. It is not your machine's desktop or LAN IP.",
-    "Add cloud API hosts you want GoatCitadel to call, plus localhost when using local services.",
-  ], "info"));
+  console.log(
+    renderSection(
+      "3. Runtime defaults",
+      "These settings control how much GoatCitadel can do by default and which outbound hosts are allowed.",
+    ),
+  );
+  console.log(
+    renderBox(
+      "Network allowlist note",
+      [
+        "This is an outbound host allowlist. It is not your machine's desktop or LAN IP.",
+        "Add cloud API hosts you want GoatCitadel to call, plus localhost when using local services.",
+      ],
+      "info",
+    ),
+  );
 
-  const defaultToolProfile = await select<typeof TOOL_PROFILES[number]>({
+  const defaultToolProfile = await select<(typeof TOOL_PROFILES)[number]>({
     message: "Default tool profile",
     default: clampOption(initialState.settings.defaultToolProfile, TOOL_PROFILES, "minimal"),
     choices: [
@@ -565,11 +707,15 @@ async function promptRuntimeDefaults(
       { name: "coding", value: "coding", description: "File and code oriented profile." },
       { name: "ops", value: "ops", description: "Operational and runtime oriented profile." },
       { name: "research", value: "research", description: "Discovery-oriented profile." },
-      { name: "danger", value: "danger", description: "High-risk profile. Only use when you intentionally want broad power." },
+      {
+        name: "danger",
+        value: "danger",
+        description: "High-risk profile. Only use when you intentionally want broad power.",
+      },
     ],
   });
 
-  const budgetMode = await select<typeof BUDGET_MODES[number]>({
+  const budgetMode = await select<(typeof BUDGET_MODES)[number]>({
     message: "Budget mode",
     default: clampOption(initialState.settings.budgetMode, BUDGET_MODES, "balanced"),
     choices: [
@@ -580,24 +726,38 @@ async function promptRuntimeDefaults(
   });
 
   const providerHost = safeHostnameFromUrl(providerBaseUrl);
-  const defaultAllowlist = initialState.settings.networkAllowlist.length > 0
-    ? initialState.settings.networkAllowlist.join(", ")
-    : ["127.0.0.1", "localhost", providerHost].filter(Boolean).join(", ");
-  const networkAllowlist = parseCommaSeparated((await input({
-    message: "Network allowlist hosts (comma-separated, blank for none)",
-    default: defaultAllowlist,
-  })).trim());
+  const defaultAllowlist =
+    initialState.settings.networkAllowlist.length > 0
+      ? initialState.settings.networkAllowlist.join(", ")
+      : ["127.0.0.1", "localhost", providerHost].filter(Boolean).join(", ");
+  const networkAllowlist = parseCommaSeparated(
+    (
+      await input({
+        message: "Network allowlist hosts (comma-separated, blank for none)",
+        default: defaultAllowlist,
+      })
+    ).trim(),
+  );
 
   return { defaultToolProfile, budgetMode, networkAllowlist };
 }
 
-async function promptMesh(initialState: OnboardingState): Promise<OnboardingBootstrapResult["state"]["settings"]["mesh"]> {
+async function promptMesh(
+  initialState: OnboardingState,
+): Promise<OnboardingBootstrapResult["state"]["settings"]["mesh"]> {
   console.log();
-  console.log(renderSection("4. Mesh (optional)", "Only enable mesh when you intentionally want this machine to participate in a multi-node GoatCitadel cluster."));
-  console.log(renderBulletList([
-    "For a single-machine setup, leave mesh disabled.",
-    "Static peers are other GoatCitadel nodes, not your own desktop IP unless you are explicitly peering to it.",
-  ]));
+  console.log(
+    renderSection(
+      "4. Mesh (optional)",
+      "Only enable mesh when you intentionally want this machine to participate in a multi-node GoatCitadel cluster.",
+    ),
+  );
+  console.log(
+    renderBulletList([
+      "For a single-machine setup, leave mesh disabled.",
+      "Static peers are other GoatCitadel nodes, not your own desktop IP unless you are explicitly peering to it.",
+    ]),
+  );
 
   const enabled = await confirm({
     message: "Enable mesh?",
@@ -610,7 +770,7 @@ async function promptMesh(initialState: OnboardingState): Promise<OnboardingBoot
     };
   }
 
-  const mode = await select<typeof MESH_MODES[number]>({
+  const mode = await select<(typeof MESH_MODES)[number]>({
     message: "Mesh mode",
     default: clampOption(initialState.settings.mesh.mode, MESH_MODES, "lan"),
     choices: [
@@ -620,28 +780,35 @@ async function promptMesh(initialState: OnboardingState): Promise<OnboardingBoot
     ],
   });
 
-  const nodeId = (await input({
-    message: "Mesh node ID",
-    default: initialState.settings.mesh.nodeId || `node-${process.pid}`,
-  })).trim();
+  const nodeId = (
+    await input({
+      message: "Mesh node ID",
+      default: initialState.settings.mesh.nodeId || `node-${process.pid}`,
+    })
+  ).trim();
   const mdns = await confirm({
     message: "Enable mDNS discovery?",
     default: initialState.settings.mesh.mdns,
   });
-  const staticPeers = parseCommaSeparated((await input({
-    message: "Mesh static peers (comma-separated, blank to rely on discovery)",
-    default: initialState.settings.mesh.staticPeers.join(", "),
-  })).trim());
+  const staticPeers = parseCommaSeparated(
+    (
+      await input({
+        message: "Mesh static peers (comma-separated, blank to rely on discovery)",
+        default: initialState.settings.mesh.staticPeers.join(", "),
+      })
+    ).trim(),
+  );
   const requireMtls = await confirm({
     message: "Require mTLS between peers?",
     default: initialState.settings.mesh.requireMtls,
   });
-  const tailnetEnabled = mode === "tailnet"
-    ? await confirm({
-      message: "Tailnet path enabled?",
-      default: initialState.settings.mesh.tailnetEnabled || true,
-    })
-    : initialState.settings.mesh.tailnetEnabled;
+  const tailnetEnabled =
+    mode === "tailnet"
+      ? await confirm({
+          message: "Tailnet path enabled?",
+          default: initialState.settings.mesh.tailnetEnabled || true,
+        })
+      : initialState.settings.mesh.tailnetEnabled;
 
   return {
     enabled,
@@ -654,17 +821,22 @@ async function promptMesh(initialState: OnboardingState): Promise<OnboardingBoot
   };
 }
 
-async function promptCompletion(initialState: OnboardingState): Promise<{ markComplete: boolean; completedBy: string }> {
+async function promptCompletion(
+  initialState: OnboardingState,
+): Promise<{ markComplete: boolean; completedBy: string }> {
   console.log();
   console.log(renderSection("5. Completion", "Choose whether this run should mark onboarding complete right now."));
   const markComplete = await confirm({
     message: "Mark onboarding complete now?",
     default: true,
   });
-  const completedBy = (await input({
-    message: "Completed by",
-    default: initialState.completedBy ?? "tui-operator",
-  })).trim() || "tui-operator";
+  const completedBy =
+    (
+      await input({
+        message: "Completed by",
+        default: initialState.completedBy ?? "tui-operator",
+      })
+    ).trim() || "tui-operator";
   return { markComplete, completedBy };
 }
 
@@ -722,9 +894,10 @@ async function startLocalGatewayProcess(gatewayBaseUrl: string): Promise<void> {
 
 function resolvePnpmCommand(appDir: string): { cmd: string; prefix: string[] } {
   const baseDir = path.dirname(appDir);
-  const localCandidates = process.platform === "win32"
-    ? [path.join(baseDir, "bin", "pnpm.cmd"), path.join(baseDir, "bin", "pnpm.ps1")]
-    : [path.join(baseDir, "bin", "pnpm")];
+  const localCandidates =
+    process.platform === "win32"
+      ? [path.join(baseDir, "bin", "pnpm.cmd"), path.join(baseDir, "bin", "pnpm.ps1")]
+      : [path.join(baseDir, "bin", "pnpm")];
 
   for (const candidate of localCandidates) {
     if (!fs.existsSync(candidate)) {
@@ -742,16 +915,10 @@ function resolvePnpmCommand(appDir: string): { cmd: string; prefix: string[] } {
     };
   }
 
-  return process.platform === "win32"
-    ? { cmd: "pnpm.cmd", prefix: [] }
-    : { cmd: "pnpm", prefix: [] };
+  return process.platform === "win32" ? { cmd: "pnpm.cmd", prefix: [] } : { cmd: "pnpm", prefix: [] };
 }
 
-function spawnCommand(
-  cmd: string,
-  args: string[],
-  options: Parameters<typeof spawn>[2] = {},
-) {
+function spawnCommand(cmd: string, args: string[], options: Parameters<typeof spawn>[2] = {}) {
   if (process.platform === "win32" && /\.(cmd|bat)$/i.test(cmd)) {
     return spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", buildWindowsCommand([cmd, ...args])], options);
   }
@@ -800,11 +967,7 @@ function isLoopbackGatewayUrl(baseUrl: string): boolean {
   }
 }
 
-function clampOption<const T extends readonly string[]>(
-  value: string,
-  options: T,
-  fallback: T[number],
-): T[number] {
+function clampOption<const T extends readonly string[]>(value: string, options: T, fallback: T[number]): T[number] {
   return (options.find((option) => option === value) ?? fallback) as T[number];
 }
 

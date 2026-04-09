@@ -3,6 +3,7 @@ import { PageTabs } from "../components/PageTabs";
 import { SectionTitle } from "../components/SectionTitle";
 import type { SettingsTab } from "../content/page-registry";
 import { AddonsPage } from "./AddonsPage";
+import { LlamaCppPage } from "./LlamaCppPage";
 import { MeshPage } from "./MeshPage";
 import { NpuPage } from "./NpuPage";
 import { OnboardingPage } from "./OnboardingPage";
@@ -36,10 +37,7 @@ export function SettingsHubPage({
   onOnboardingCompleted,
 }: SettingsHubPageProps) {
   const rendersSettingsPage =
-    activeTab === "general" ||
-    activeTab === "providers" ||
-    activeTab === "access" ||
-    activeTab === "budget";
+    activeTab === "general" || activeTab === "providers" || activeTab === "access" || activeTab === "budget";
 
   return (
     <section className="space-page settings-hub">
@@ -62,6 +60,7 @@ export function SettingsHubPage({
               <div className="stack-lg">
                 <SettingsPage activeTab={activeTab} />
                 <MeshPage />
+                <LlamaCppPage />
                 <NpuPage />
               </div>
             ) : null}

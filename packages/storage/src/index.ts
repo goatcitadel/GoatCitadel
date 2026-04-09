@@ -53,6 +53,8 @@ import { ResearchRunRepository } from "./research-run-repo.js";
 import { ResearchSourceRepository } from "./research-source-repo.js";
 import { PromptPackRepository } from "./prompt-pack-repo.js";
 import { PromptPackRunRepository } from "./prompt-pack-run-repo.js";
+import { PromptPackAutoScoreV2Repository } from "./prompt-pack-auto-score-v2-repo.js";
+import { PromptPackHumanReviewV2Repository } from "./prompt-pack-human-review-v2-repo.js";
 import { PromptPackScoreRepository } from "./prompt-pack-score-repo.js";
 import { WorkspaceRepository } from "./workspace-repo.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
@@ -130,6 +132,8 @@ export class Storage {
   public readonly researchSources: ResearchSourceRepository;
   public readonly promptPacks: PromptPackRepository;
   public readonly promptPackRuns: PromptPackRunRepository;
+  public readonly promptPackAutoScoresV2: PromptPackAutoScoreV2Repository;
+  public readonly promptPackHumanReviewsV2: PromptPackHumanReviewV2Repository;
   public readonly promptPackScores: PromptPackScoreRepository;
   public readonly workspaces: WorkspaceRepository;
   public readonly workspaceHooks: WorkspaceHookRepository;
@@ -198,6 +202,8 @@ export class Storage {
     this.researchSources = new ResearchSourceRepository(this.db);
     this.promptPacks = new PromptPackRepository(this.db);
     this.promptPackRuns = new PromptPackRunRepository(this.db);
+    this.promptPackAutoScoresV2 = new PromptPackAutoScoreV2Repository(this.db);
+    this.promptPackHumanReviewsV2 = new PromptPackHumanReviewV2Repository(this.db);
     this.promptPackScores = new PromptPackScoreRepository(this.db);
     this.workspaces = new WorkspaceRepository(this.db);
     this.workspaceHooks = new WorkspaceHookRepository(this.db);
@@ -245,7 +251,9 @@ export class Storage {
       const attachmentIdsJson = JSON.stringify(attachments.map((record) => record.attachmentId));
 
       // Subquery-dependent deletes (must run before their parent tables)
-      this.db.prepare(`
+      this.db
+        .prepare(
+          `
         DELETE FROM media_artifacts
         WHERE job_id IN (
           SELECT job_id
@@ -253,32 +261,74 @@ export class Storage {
           WHERE session_id = @sessionId
              OR attachment_id IN (SELECT value FROM json_each(@attachmentIdsJson))
         )
-      `).run({ sessionId: normalizedSessionId, attachmentIdsJson });
-      this.db.prepare(`
+      `,
+        )
+        .run({ sessionId: normalizedSessionId, attachmentIdsJson });
+      this.db
+        .prepare(
+          `
         DELETE FROM media_jobs
         WHERE session_id = @sessionId
            OR attachment_id IN (SELECT value FROM json_each(@attachmentIdsJson))
-      `).run({ sessionId: normalizedSessionId, attachmentIdsJson });
-      this.db.prepare(`
+      `,
+        )
+        .run({ sessionId: normalizedSessionId, attachmentIdsJson });
+      this.db
+        .prepare(
+          `
         DELETE FROM research_sources
         WHERE run_id IN (SELECT run_id FROM research_runs WHERE session_id = ?)
-      `).run(normalizedSessionId);
-      this.db.prepare(`
+      `,
+        )
+        .run(normalizedSessionId);
+      this.db
+        .prepare(
+          `
         DELETE FROM chat_delegation_steps
         WHERE run_id IN (SELECT run_id FROM chat_delegation_runs WHERE session_id = ?)
-      `).run(normalizedSessionId);
-      this.db.prepare(`
+      `,
+        )
+        .run(normalizedSessionId);
+      this.db
+        .prepare(
+          `
         DELETE FROM learned_memory_sources
         WHERE item_id IN (SELECT item_id FROM learned_memory_items WHERE session_id = ?)
-      `).run(normalizedSessionId);
-      this.db.prepare(`
+      `,
+        )
+        .run(normalizedSessionId);
+      this.db
+        .prepare(
+          `
+        DELETE FROM prompt_pack_human_reviews_v2
+        WHERE run_id IN (SELECT run_id FROM prompt_pack_runs WHERE session_id = ?)
+      `,
+        )
+        .run(normalizedSessionId);
+      this.db
+        .prepare(
+          `
+        DELETE FROM prompt_pack_auto_scores_v2
+        WHERE run_id IN (SELECT run_id FROM prompt_pack_runs WHERE session_id = ?)
+      `,
+        )
+        .run(normalizedSessionId);
+      this.db
+        .prepare(
+          `
         DELETE FROM prompt_pack_scores
         WHERE run_id IN (SELECT run_id FROM prompt_pack_runs WHERE session_id = ?)
-      `).run(normalizedSessionId);
-      this.db.prepare(`
+      `,
+        )
+        .run(normalizedSessionId);
+      this.db
+        .prepare(
+          `
         DELETE FROM chat_execution_plan_steps
         WHERE plan_id IN (SELECT plan_id FROM chat_execution_plans WHERE session_id = ?)
-      `).run(normalizedSessionId);
+      `,
+        )
+        .run(normalizedSessionId);
 
       // All simple WHERE session_id = ? deletes in a single statement batch
       const sid = normalizedSessionId;
@@ -323,14 +373,16 @@ export class Storage {
         this.db.prepare(`DELETE FROM ${table} WHERE session_id = ?`).run(sid);
       }
 
-      this.db.prepare(`
+      this.db
+        .prepare(
+          `
         DELETE FROM tool_grants
         WHERE scope = 'session'
           AND scope_ref = ?
-      `).run(sid);
-      const deleted = Number(
-        this.db.prepare("DELETE FROM sessions WHERE session_id = ?").run(sid).changes ?? 0,
-      ) > 0;
+      `,
+        )
+        .run(sid);
+      const deleted = Number(this.db.prepare("DELETE FROM sessions WHERE session_id = ?").run(sid).changes ?? 0) > 0;
       this.db.exec("COMMIT");
       return {
         sessionId: normalizedSessionId,
@@ -345,7 +397,9 @@ export class Storage {
   }
 
   private listMediaArtifactPathsForSession(sessionId: string, attachments: ChatAttachmentRecord[]): string[] {
-    const rows = this.db.prepare(`
+    const rows = this.db
+      .prepare(
+        `
       SELECT storage_rel_path
       FROM media_artifacts
       WHERE storage_rel_path IS NOT NULL
@@ -355,13 +409,13 @@ export class Storage {
           WHERE session_id = @sessionId
              OR attachment_id IN (SELECT value FROM json_each(@attachmentIdsJson))
         )
-    `).all({
-      sessionId,
-      attachmentIdsJson: JSON.stringify(attachments.map((record) => record.attachmentId)),
-    }) as Array<{ storage_rel_path?: string | null }>;
-    return rows
-      .map((row) => row.storage_rel_path?.trim())
-      .filter((value): value is string => Boolean(value));
+    `,
+      )
+      .all({
+        sessionId,
+        attachmentIdsJson: JSON.stringify(attachments.map((record) => record.attachmentId)),
+      }) as Array<{ storage_rel_path?: string | null }>;
+    return rows.map((row) => row.storage_rel_path?.trim()).filter((value): value is string => Boolean(value));
   }
 }
 
@@ -427,6 +481,8 @@ export * from "./research-run-repo.js";
 export * from "./research-source-repo.js";
 export * from "./prompt-pack-repo.js";
 export * from "./prompt-pack-run-repo.js";
+export * from "./prompt-pack-auto-score-v2-repo.js";
+export * from "./prompt-pack-human-review-v2-repo.js";
 export * from "./prompt-pack-score-repo.js";
 export * from "./workspace-repo.js";
 export * from "./workspace-hook-repo.js";

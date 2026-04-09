@@ -11,6 +11,10 @@ import type {
   CreateAssemblyRunInput,
   LlmProviderConfig,
   LlmProviderRequestConfig,
+  LlamaCppAdvisorRecommendation,
+  LlamaCppAdvisorRequest,
+  LlamaCppModelManifest,
+  LlamaCppRuntimeStatus,
   MemoryContextPack,
   ModelReputation,
   NpuModelManifest,
@@ -231,6 +235,42 @@ export async function refreshNpuRuntime(): Promise<NpuRuntimeStatus> {
   return request<NpuRuntimeStatus>("/api/v1/npu/refresh", {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+export async function fetchLlamaCppStatus(): Promise<LlamaCppRuntimeStatus> {
+  return request<LlamaCppRuntimeStatus>("/api/v1/llamacpp/status");
+}
+
+export async function fetchLlamaCppModels(): Promise<{ items: LlamaCppModelManifest[] }> {
+  return request<{ items: LlamaCppModelManifest[] }>("/api/v1/llamacpp/models");
+}
+
+export async function startLlamaCppRuntime(): Promise<LlamaCppRuntimeStatus> {
+  return request<LlamaCppRuntimeStatus>("/api/v1/llamacpp/start", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function stopLlamaCppRuntime(): Promise<LlamaCppRuntimeStatus> {
+  return request<LlamaCppRuntimeStatus>("/api/v1/llamacpp/stop", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function refreshLlamaCppRuntime(): Promise<LlamaCppRuntimeStatus> {
+  return request<LlamaCppRuntimeStatus>("/api/v1/llamacpp/refresh", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function fetchLlamaCppAdvisor(input: LlamaCppAdvisorRequest): Promise<LlamaCppAdvisorRecommendation> {
+  return request<LlamaCppAdvisorRecommendation>("/api/v1/llamacpp/advisor", {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 

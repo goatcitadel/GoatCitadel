@@ -21,6 +21,7 @@ import { eventsRoutes } from "./routes/events.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { filesRoutes } from "./routes/files.js";
 import { llmRoutes } from "./routes/llm.js";
+import { llamaCppRoutes } from "./routes/llamacpp.js";
 import { integrationsRoutes } from "./routes/integrations.js";
 import { integrationWebhookRoutes } from "./routes/integration-webhooks.js";
 import { meshRoutes } from "./routes/mesh.js";
@@ -299,6 +300,7 @@ export async function buildApp() {
   await app.register(dashboardRoutes);
   await app.register(filesRoutes);
   await app.register(llmRoutes);
+  await app.register(llamaCppRoutes);
   await app.register(integrationsRoutes);
   await app.register(integrationWebhookRoutes);
   await app.register(meshRoutes);

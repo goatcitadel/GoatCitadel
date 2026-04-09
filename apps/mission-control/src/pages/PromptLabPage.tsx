@@ -2,8 +2,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PromptPackBenchmarkStatusRecord,
+  PromptPackLatestAssessmentRecordV2,
+  PromptPackReportRecord,
   PromptPackRunRecord,
-  PromptPackScoreRecord,
   PromptPackTestRecord,
 } from "@goatcitadel/contracts";
 import {
@@ -39,6 +40,7 @@ import {
   PROMPT_PACK_PASS_THRESHOLD,
   classifyTestResultCategory,
   extractPromptPlaceholders,
+  formatWeightedScore,
   matchesTestResultFilter,
   normalizePromptPlaceholderKey,
   parseBenchmarkProviders,
@@ -51,6 +53,7 @@ import { DEFAULT_SCORE_DRAFT, type ActiveRunState, type ScoreDraft } from "./pro
 const DEFAULT_BENCHMARK_TEST_CODES = "TEST-03, TEST-06, TEST-10, TEST-12, TEST-15, TEST-28";
 
 export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
+  const v2UiEnabled = isPromptPackV2UiEnabled();
   const hasLoadedOnceRef = useRef(false);
   const selectedPackIdRef = useRef<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -76,22 +79,8 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   const [testResultFilter, setTestResultFilter] = useState<TestResultFilter>("all");
   const [report, setReport] = useState<{
     runs: PromptPackRunRecord[];
-    scores: PromptPackScoreRecord[];
-    summary: {
-      totalTests: number;
-      completedRuns: number;
-      failedRuns: number;
-      runFailureCount: number;
-      scoreFailureCount: number;
-      needsScoreCount: number;
-      durableRuns?: number;
-      approvalPausedRuns?: number;
-      backgroundedRuns?: number;
-      passThreshold: number;
-      averageTotalScore: number;
-      passRate: number;
-      failingCodes: string[];
-    };
+    latestAssessments: PromptPackLatestAssessmentRecordV2[];
+    summary: PromptPackReportRecord["summary"];
   } | null>(null);
   const [reuseLastModel, setReuseLastModel] = useState(true);
   const [autoScoreOnRun, setAutoScoreOnRun] = useState(true);
@@ -158,7 +147,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     setTests(testsResponse.items);
     setReport({
       runs: reportResponse.runs,
-      scores: reportResponse.scores,
+      latestAssessments: reportResponse.latestAssessments,
       summary: reportResponse.summary,
     });
     setExportInfo(exportResponse);
@@ -262,24 +251,13 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     return map;
   }, [report?.runs]);
 
-  const latestScoreByTest = useMemo(() => {
-    const map = new Map<string, PromptPackScoreRecord>();
-    const orderedScores = [...(report?.scores ?? [])].sort((left, right) => {
-      const leftTs = Date.parse(left.createdAt || "1970-01-01T00:00:00.000Z");
-      const rightTs = Date.parse(right.createdAt || "1970-01-01T00:00:00.000Z");
-      return rightTs - leftTs;
-    });
-    for (const score of orderedScores) {
-      if (!map.has(score.testId)) {
-        map.set(score.testId, score);
-      }
-    }
-    return map;
-  }, [report?.scores]);
+  const latestAssessmentByTest = useMemo(() => {
+    return new Map((report?.latestAssessments ?? []).map((assessment) => [assessment.testId, assessment] as const));
+  }, [report?.latestAssessments]);
 
   const selectedTest = tests.find((item) => item.testId === selectedTestId) ?? null;
   const selectedRun = selectedTest ? latestRunByTest.get(selectedTest.testId) : undefined;
-  const selectedScore = selectedTest ? latestScoreByTest.get(selectedTest.testId) : undefined;
+  const selectedAssessment = selectedTest ? latestAssessmentByTest.get(selectedTest.testId) : undefined;
   const selectedRunModelUsage = useMemo(() => resolvePromptPackRunModelUsage(selectedRun), [selectedRun]);
   const passThreshold = report?.summary.passThreshold ?? PROMPT_PACK_PASS_THRESHOLD;
   const selectedPlaceholders = useMemo(
@@ -305,10 +283,10 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     () =>
       tests.filter((test) => {
         const run = latestRunByTest.get(test.testId);
-        const score = latestScoreByTest.get(test.testId);
-        return run?.status === "completed" && !score;
+        const assessment = latestAssessmentByTest.get(test.testId);
+        return run?.status === "completed" && !assessment?.autoScore;
       }).length,
-    [latestRunByTest, latestScoreByTest, tests],
+    [latestAssessmentByTest, latestRunByTest, tests],
   );
 
   const testOutcomeSummary = useMemo(() => {
@@ -318,12 +296,12 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     let needsScoreCount = 0;
     let notRunCount = 0;
     let passingCount = 0;
+    let reviewCount = 0;
 
     for (const test of tests) {
       const category = classifyTestResultCategory(
         latestRunByTest.get(test.testId),
-        latestScoreByTest.get(test.testId),
-        passThreshold,
+        latestAssessmentByTest.get(test.testId),
       );
       if (category === "approval_paused") {
         approvalPausedCount += 1;
@@ -331,6 +309,8 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         runFailureCount += 1;
       } else if (category === "score_failed") {
         scoreFailureCount += 1;
+      } else if (category === "review") {
+        reviewCount += 1;
       } else if (category === "needs_score") {
         needsScoreCount += 1;
       } else if (category === "not_run") {
@@ -347,8 +327,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       needsScoreCount,
       notRunCount,
       passingCount,
+      reviewCount,
     };
-  }, [latestRunByTest, latestScoreByTest, passThreshold, tests]);
+  }, [latestAssessmentByTest, latestRunByTest, tests]);
 
   const filteredTests = useMemo(
     () =>
@@ -356,11 +337,10 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         matchesTestResultFilter(
           testResultFilter,
           latestRunByTest.get(test.testId),
-          latestScoreByTest.get(test.testId),
-          passThreshold,
+          latestAssessmentByTest.get(test.testId),
         ),
       ),
-    [latestRunByTest, latestScoreByTest, passThreshold, testResultFilter, tests],
+    [latestAssessmentByTest, latestRunByTest, testResultFilter, tests],
   );
 
   useEffect(() => {
@@ -422,19 +402,20 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   }, [benchmarkProvidersInput, selectedModel, selectedRunModel]);
 
   useEffect(() => {
-    if (selectedScore) {
+    if (selectedAssessment?.humanReview) {
       setScoreDraft({
-        routingScore: selectedScore.routingScore,
-        honestyScore: selectedScore.honestyScore,
-        handoffScore: selectedScore.handoffScore,
-        robustnessScore: selectedScore.robustnessScore,
-        usabilityScore: selectedScore.usabilityScore,
-        notes: selectedScore.notes ?? "",
+        taskSuccess: selectedAssessment.humanReview.scores.taskSuccess ?? null,
+        honesty: selectedAssessment.humanReview.scores.honesty ?? null,
+        executionQuality: selectedAssessment.humanReview.scores.executionQuality ?? null,
+        robustness: selectedAssessment.humanReview.scores.robustness ?? null,
+        usability: selectedAssessment.humanReview.scores.usability ?? null,
+        overrideVerdict: selectedAssessment.humanReview.overrideVerdict ?? "",
+        notes: selectedAssessment.humanReview.notes ?? "",
       });
       return;
     }
     setScoreDraft(DEFAULT_SCORE_DRAFT);
-  }, [selectedScore, selectedTestId]);
+  }, [selectedAssessment, selectedTestId]);
 
   const buildRunInput = useCallback(
     (
@@ -493,7 +474,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
           const auto = await autoScorePromptPackTest(selectedPackId, test.testId, {
             runId: run.runId,
           });
-          autoScoreSummary = ` Auto-scored ${auto.score.totalScore}/10.`;
+          autoScoreSummary = ` Auto-scored ${formatWeightedScore(auto.score.weightedScore)} (${auto.score.autoVerdict}).`;
         }
         await loadPack(selectedPackId);
         setSelectedTestId(test.testId);
@@ -562,8 +543,8 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     const nextFailed = tests.find((test) => latestRunByTest.get(test.testId)?.status === "failed");
     const nextUnscoredCompleted = tests.find((test) => {
       const run = latestRunByTest.get(test.testId);
-      const score = latestScoreByTest.get(test.testId);
-      return run?.status === "completed" && !score;
+      const assessment = latestAssessmentByTest.get(test.testId);
+      return run?.status === "completed" && !assessment?.autoScore;
     });
     const next = nextNotRun ?? nextFailed ?? nextUnscoredCompleted ?? tests[0];
     if (!next) {
@@ -571,7 +552,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     }
     await runOne(next, "next");
     setSelectedTestId(next.testId);
-  }, [latestRunByTest, latestScoreByTest, runOne, selectedPackId, tests]);
+  }, [latestAssessmentByTest, latestRunByTest, runOne, selectedPackId, tests]);
 
   const exportReport = useCallback(async () => {
     if (!selectedPackId) {
@@ -644,11 +625,12 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     try {
       await scorePromptPackTest(selectedPackId, selectedTest.testId, {
         runId: selectedRun.runId,
-        routingScore: scoreDraft.routingScore,
-        honestyScore: scoreDraft.honestyScore,
-        handoffScore: scoreDraft.handoffScore,
-        robustnessScore: scoreDraft.robustnessScore,
-        usabilityScore: scoreDraft.usabilityScore,
+        taskSuccess: scoreDraft.taskSuccess,
+        honesty: scoreDraft.honesty,
+        executionQuality: scoreDraft.executionQuality,
+        robustness: scoreDraft.robustness,
+        usability: scoreDraft.usability,
+        overrideVerdict: scoreDraft.overrideVerdict || undefined,
         notes: scoreDraft.notes.trim() || undefined,
       });
       await loadPack(selectedPackId);
@@ -673,7 +655,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         force: true,
       });
       await loadPack(selectedPackId);
-      setSuccess(`Auto-scored ${selectedTest.code}: ${result.score.totalScore}/10.`);
+      setSuccess(
+        `Auto-scored ${selectedTest.code}: ${formatWeightedScore(result.score.weightedScore)} (${result.score.autoVerdict}).`,
+      );
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -851,7 +835,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       label: "Quality",
       value: report ? `${(report.summary.passRate * 100).toFixed(1)}% pass` : "No report yet",
       detail: report
-        ? `${report.summary.averageTotalScore.toFixed(2)}/10 average at threshold ${passThreshold}/10`
+        ? `${report.summary.averageWeightedScore.toFixed(1)}/100 average at threshold ${passThreshold}/100`
         : "Run and score a pack to generate the scorecard.",
     },
     {
@@ -960,14 +944,14 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       />
 
       <PromptLabWorkspace
+        v2UiEnabled={v2UiEnabled}
         tests={tests}
         filteredTests={filteredTests}
         testResultFilter={testResultFilter}
         onTestResultFilterChange={setTestResultFilter}
         testOutcomeSummary={testOutcomeSummary}
         latestRunByTest={latestRunByTest}
-        latestScoreByTest={latestScoreByTest}
-        passThreshold={passThreshold}
+        latestAssessmentByTest={latestAssessmentByTest}
         selectedTestId={selectedTestId}
         onSelectedTestIdChange={setSelectedTestId}
         activeRun={activeRun}
@@ -980,6 +964,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         selectedMissingPlaceholders={selectedMissingPlaceholders}
         selectedRun={selectedRun}
         selectedRunModelUsage={selectedRunModelUsage}
+        selectedAssessment={selectedAssessment}
         scoreDraft={scoreDraft}
         onScoreDraftChange={setScoreDraft}
         savingScore={savingScore}
@@ -1018,4 +1003,12 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       />
     </section>
   );
+}
+
+function isPromptPackV2UiEnabled(): boolean {
+  const raw = (import.meta.env.VITE_PROMPT_PACK_V2_UI_ENABLED as string | undefined)?.trim().toLowerCase();
+  if (!raw) {
+    return true;
+  }
+  return !["0", "false", "off", "no", "disabled"].includes(raw);
 }

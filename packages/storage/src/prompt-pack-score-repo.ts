@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { PromptPackScoreRecord } from "@goatcitadel/contracts";
+import type { PromptPackJudgeRecord, PromptPackScoreRecord } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 
 interface PromptPackScoreRow {
@@ -13,6 +13,7 @@ interface PromptPackScoreRow {
   robustness_score: number;
   usability_score: number;
   total_score: number;
+  judge_json: string | null;
   notes: string | null;
   created_at: string;
 }
@@ -31,11 +32,11 @@ export class PromptPackScoreRepository {
       INSERT INTO prompt_pack_scores (
         score_id, pack_id, test_id, run_id,
         routing_score, honesty_score, handoff_score, robustness_score, usability_score,
-        total_score, notes, created_at
+        total_score, judge_json, notes, created_at
       ) VALUES (
         @scoreId, @packId, @testId, @runId,
         @routingScore, @honestyScore, @handoffScore, @robustnessScore, @usabilityScore,
-        @totalScore, @notes, @createdAt
+        @totalScore, @judgeJson, @notes, @createdAt
       )
     `);
     this.listByPackStmt = db.prepare(`
@@ -67,13 +68,16 @@ export class PromptPackScoreRepository {
     return mapRow(row);
   }
 
-  public create(input: Omit<PromptPackScoreRecord, "totalScore" | "createdAt"> & { createdAt?: string }): PromptPackScoreRecord {
+  public create(
+    input: Omit<PromptPackScoreRecord, "totalScore" | "createdAt"> & { createdAt?: string },
+  ): PromptPackScoreRecord {
     assertValidScore(input.routingScore, "routingScore");
     assertValidScore(input.honestyScore, "honestyScore");
     assertValidScore(input.handoffScore, "handoffScore");
     assertValidScore(input.robustnessScore, "robustnessScore");
     assertValidScore(input.usabilityScore, "usabilityScore");
-    const totalScore = input.routingScore + input.honestyScore + input.handoffScore + input.robustnessScore + input.usabilityScore;
+    const totalScore =
+      input.routingScore + input.honestyScore + input.handoffScore + input.robustnessScore + input.usabilityScore;
     this.insertStmt.run({
       scoreId: input.scoreId,
       packId: input.packId,
@@ -85,6 +89,7 @@ export class PromptPackScoreRepository {
       robustnessScore: input.robustnessScore,
       usabilityScore: input.usabilityScore,
       totalScore,
+      judgeJson: input.judge ? JSON.stringify(input.judge) : null,
       notes: input.notes ?? null,
       createdAt: input.createdAt ?? new Date().toISOString(),
     });
@@ -92,26 +97,32 @@ export class PromptPackScoreRepository {
   }
 
   public listByPack(packId: string, limit = 1000): PromptPackScoreRecord[] {
-    const rows = toPromptPackScoreRows(this.listByPackStmt.all({
-      packId,
-      limit: Math.max(1, Math.min(limit, 5000)),
-    }));
+    const rows = toPromptPackScoreRows(
+      this.listByPackStmt.all({
+        packId,
+        limit: Math.max(1, Math.min(limit, 5000)),
+      }),
+    );
     return rows.map(mapRow);
   }
 
   public listByTest(testId: string, limit = 200): PromptPackScoreRecord[] {
-    const rows = toPromptPackScoreRows(this.listByTestStmt.all({
-      testId,
-      limit: Math.max(1, Math.min(limit, 5000)),
-    }));
+    const rows = toPromptPackScoreRows(
+      this.listByTestStmt.all({
+        testId,
+        limit: Math.max(1, Math.min(limit, 5000)),
+      }),
+    );
     return rows.map(mapRow);
   }
 
   public listByRun(runId: string, limit = 50): PromptPackScoreRecord[] {
-    const rows = toPromptPackScoreRows(this.listByRunStmt.all({
-      runId,
-      limit: Math.max(1, Math.min(limit, 5000)),
-    }));
+    const rows = toPromptPackScoreRows(
+      this.listByRunStmt.all({
+        runId,
+        limit: Math.max(1, Math.min(limit, 5000)),
+      }),
+    );
     return rows.map(mapRow);
   }
 
@@ -133,8 +144,55 @@ function mapRow(row: PromptPackScoreRow): PromptPackScoreRecord {
     robustnessScore: clampScore(row.robustness_score),
     usabilityScore: clampScore(row.usability_score),
     totalScore: row.total_score,
+    judge: row.judge_json
+      ? safeJsonParse<PromptPackJudgeRecord | undefined>(row.judge_json, undefined)
+      : deriveJudgeFromNotes(row.notes ?? undefined),
     notes: row.notes ?? undefined,
     createdAt: row.created_at,
+  };
+}
+
+function safeJsonParse<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function deriveJudgeFromNotes(notes?: string): PromptPackJudgeRecord | undefined {
+  const normalized = notes?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  const usedModelJudgeMatch = normalized.match(/Model judge used:\s*(yes|no)\./i);
+  const ruleSignalsMatch = normalized.match(/Rule signals:\s*([^\n]+)\./i);
+  const rationaleMatch = normalized.match(/Model rationale:\s*([^\n]+(?:\n(?!Model judge fallback reason:).+)*)/i);
+  const errorMatch = normalized.match(/Model judge fallback reason:\s*([^\n]+(?:\n.+)*)/i);
+  if (!usedModelJudgeMatch && !ruleSignalsMatch && !rationaleMatch && !errorMatch) {
+    return undefined;
+  }
+
+  const modelJudgeError = errorMatch?.[1]?.trim();
+  let status: PromptPackJudgeRecord["status"] = "ok";
+  if (modelJudgeError) {
+    status = /429|rate[_ -]?limit|too many requests/i.test(modelJudgeError) ? "rate_limited" : "fallback";
+  } else if (usedModelJudgeMatch?.[1]?.toLowerCase() === "no") {
+    status = "error";
+  }
+
+  return {
+    usedModelJudge: usedModelJudgeMatch?.[1]?.toLowerCase() === "yes",
+    status,
+    attemptCount: 0,
+    ruleSignals:
+      ruleSignalsMatch?.[1]
+        ?.split(",")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0 && value !== "none") ?? [],
+    modelJudgeError,
+    modelJudgeRationale: rationaleMatch?.[1]?.trim(),
   };
 }
 
@@ -163,19 +221,22 @@ function toPromptPackScoreRows(value: unknown): PromptPackScoreRow[] {
 }
 
 function isPromptPackScoreRow(value: unknown): value is PromptPackScoreRow {
-  return isRecord(value)
-    && typeof value.score_id === "string"
-    && typeof value.pack_id === "string"
-    && typeof value.test_id === "string"
-    && typeof value.run_id === "string"
-    && typeof value.routing_score === "number"
-    && typeof value.honesty_score === "number"
-    && typeof value.handoff_score === "number"
-    && typeof value.robustness_score === "number"
-    && typeof value.usability_score === "number"
-    && typeof value.total_score === "number"
-    && (typeof value.notes === "string" || value.notes === null)
-    && typeof value.created_at === "string";
+  return (
+    isRecord(value) &&
+    typeof value.score_id === "string" &&
+    typeof value.pack_id === "string" &&
+    typeof value.test_id === "string" &&
+    typeof value.run_id === "string" &&
+    typeof value.routing_score === "number" &&
+    typeof value.honesty_score === "number" &&
+    typeof value.handoff_score === "number" &&
+    typeof value.robustness_score === "number" &&
+    typeof value.usability_score === "number" &&
+    typeof value.total_score === "number" &&
+    (typeof value.judge_json === "string" || value.judge_json === null) &&
+    (typeof value.notes === "string" || value.notes === null) &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
