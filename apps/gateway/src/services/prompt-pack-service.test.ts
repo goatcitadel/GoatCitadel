@@ -2,11 +2,15 @@ import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type {
   ChatProjectRecord,
+  PromptPackHumanReviewRecordV2,
+  PromptPackScoreRecordV2,
   PromptPackRunRecord,
   PromptPackScoreRecord,
   PromptPackTestRecord,
 } from "@goatcitadel/contracts";
 import {
+  assertPromptPackRunScorable,
+  buildPromptPackJudgeRecord,
   buildPromptPackSessionAllowedPaths,
   buildPromptPackSessionToolAllowlist,
   findPromptPackProjectBinding,
@@ -17,11 +21,13 @@ import {
   buildPromptPackPromptInput,
   buildPromptPackCapabilitySeries,
   buildPromptPackRunFailureRateSeries,
+  evaluatePromptPackRunIntegrity,
   evaluatePromptPackRuleScores,
   extractPromptPackCompletionText,
   normalizePromptPackJudgeScores,
   parsePromptPackTests,
   pickReplayBaselineScore,
+  resolvePromptPackRunIntegrity,
   resolvePromptPackJudgeTarget,
   resolvePromptPackJudgeTemperature,
   resolvePromptPackJudgeServiceTier,
@@ -70,15 +76,19 @@ describe("prompt-pack helpers", () => {
       },
     });
 
-    expect(resolvePromptPackProjectBinding(
-      codeProfile,
-      "Based on the current GoatCitadel repo, inspect apps/gateway/src/services/prompt-pack-service.ts.",
-    )?.workspacePath).toBe("__prompt_pack_repo__");
+    expect(
+      resolvePromptPackProjectBinding(
+        codeProfile,
+        "Based on the current GoatCitadel repo, inspect apps/gateway/src/services/prompt-pack-service.ts.",
+      )?.workspacePath,
+    ).toBe("__prompt_pack_repo__");
 
-    expect(resolvePromptPackProjectBinding(
-      codeProfile,
-      "Read fixtures/prompt-pack-workspace/package.json using file/code tools.",
-    )?.workspacePath).toBe("fixtures/prompt-pack-workspace");
+    expect(
+      resolvePromptPackProjectBinding(
+        codeProfile,
+        "Read fixtures/prompt-pack-workspace/package.json using file/code tools.",
+      )?.workspacePath,
+    ).toBe("fixtures/prompt-pack-workspace");
 
     const coworkProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -86,7 +96,8 @@ describe("prompt-pack helpers", () => {
         packId: "pack-1",
         code: "TEST-BIND-02",
         title: "Cowork Repo Binding",
-        prompt: "Use file or code tools to inspect apps/gateway/src/services/skill-import-service.ts and summarize the next provenance checks.",
+        prompt:
+          "Use file or code tools to inspect apps/gateway/src/services/skill-import-service.ts and summarize the next provenance checks.",
         orderIndex: 1,
         mode: "cowork",
         toolTier: "explicit-tools",
@@ -94,10 +105,12 @@ describe("prompt-pack helpers", () => {
       },
     });
 
-    expect(resolvePromptPackProjectBinding(
-      coworkProfile,
-      "Use file or code tools to inspect apps/gateway/src/services/skill-import-service.ts and summarize the next provenance checks.",
-    )?.workspacePath).toBe("__prompt_pack_repo__");
+    expect(
+      resolvePromptPackProjectBinding(
+        coworkProfile,
+        "Use file or code tools to inspect apps/gateway/src/services/skill-import-service.ts and summarize the next provenance checks.",
+      )?.workspacePath,
+    ).toBe("__prompt_pack_repo__");
   });
 
   it("resolves no-tools profiles and honors mode presets", () => {
@@ -293,7 +306,8 @@ describe("prompt-pack helpers", () => {
         webMode: "auto",
         memoryMode: "auto",
         thinkingLevel: "extended",
-        responseText: "This is a partial answer recovered from tool output because the final synthesis pass did not finish cleanly.",
+        responseText:
+          "This is a partial answer recovered from tool output because the final synthesis pass did not finish cleanly.",
         trace: {
           turnId: "turn-1",
           sessionId: "sess-1",
@@ -472,10 +486,12 @@ describe("prompt-pack helpers", () => {
       orchestrationParallelism: "sequential",
     });
 
-    expect(buildPromptPackSessionPrefsOverride(
-      noToolsCoworkProfile,
-      "Analyze the decision from 3 perspectives: CTO, VP Sales, and Developer Relations. End with one synthesized recommendation.",
-    )).toMatchObject({
+    expect(
+      buildPromptPackSessionPrefsOverride(
+        noToolsCoworkProfile,
+        "Analyze the decision from 3 perspectives: CTO, VP Sales, and Developer Relations. End with one synthesized recommendation.",
+      ),
+    ).toMatchObject({
       orchestrationEnabled: false,
     });
 
@@ -501,12 +517,22 @@ describe("prompt-pack helpers", () => {
       toolAutonomy: "safe_auto",
     });
 
-    expect(buildPromptPackSessionPrefsOverride(codeProfile, "Read fixtures/prompt-pack-workspace/package.json using file tools.")).toMatchObject({
+    expect(
+      buildPromptPackSessionPrefsOverride(
+        codeProfile,
+        "Read fixtures/prompt-pack-workspace/package.json using file tools.",
+      ),
+    ).toMatchObject({
       webMode: "off",
       memoryMode: "off",
     });
 
-    expect(buildPromptPackSessionPrefsOverride(codeProfile, "Read package.json using file tools, then use browser.search to check the latest versions.")).toMatchObject({
+    expect(
+      buildPromptPackSessionPrefsOverride(
+        codeProfile,
+        "Read package.json using file tools, then use browser.search to check the latest versions.",
+      ),
+    ).toMatchObject({
       webMode: "auto",
       memoryMode: "off",
     });
@@ -559,10 +585,12 @@ describe("prompt-pack helpers", () => {
       "lint.run",
     ]);
 
-    expect(buildPromptPackSessionToolAllowlist(
-      codeProfile,
-      "Run pnpm test and capture the command output before summarizing the repo state.",
-    )).toEqual([
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        codeProfile,
+        "Run pnpm test and capture the command output before summarizing the repo state.",
+      ),
+    ).toEqual([
       "fs.read",
       "fs.list",
       "fs.stat",
@@ -581,17 +609,20 @@ describe("prompt-pack helpers", () => {
         packId: "pack-1",
         code: "TEST-TOOLS-02",
         title: "Cowork Tools",
-        prompt: "Read fixtures/prompt-pack-workspace/package.json using file tools, then use browser.search to compare versions.",
+        prompt:
+          "Read fixtures/prompt-pack-workspace/package.json using file tools, then use browser.search to compare versions.",
         orderIndex: 1,
         mode: "cowork",
         toolTier: "explicit-tools",
         createdAt: "2026-03-14T00:00:00.000Z",
       },
     });
-    expect(buildPromptPackSessionToolAllowlist(
-      coworkProfile,
-      "Read fixtures/prompt-pack-workspace/package.json using file tools, then use browser.search to compare versions.",
-    )).toEqual([
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        coworkProfile,
+        "Read fixtures/prompt-pack-workspace/package.json using file tools, then use browser.search to compare versions.",
+      ),
+    ).toEqual([
       "fs.read",
       "fs.list",
       "fs.stat",
@@ -602,10 +633,12 @@ describe("prompt-pack helpers", () => {
       "browser.search",
     ]);
 
-    expect(buildPromptPackSessionToolAllowlist(
-      coworkProfile,
-      "Use session.status, time.now, git.status, build.run, browser.context.configure, and browser.cookies.get, then explain what worked.",
-    )).toEqual([
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        coworkProfile,
+        "Use session.status, time.now, git.status, build.run, browser.context.configure, and browser.cookies.get, then explain what worked.",
+      ),
+    ).toEqual([
       "session.status",
       "time.now",
       "build.run",
@@ -629,57 +662,73 @@ describe("prompt-pack helpers", () => {
     });
     expect(buildPromptPackSessionToolAllowlist(noToolsProfile, "Use browser.search if needed.")).toEqual([]);
 
-    expect(buildPromptPackSessionToolAllowlist(
-      coworkProfile,
-      "Use only file/code tools on fixtures/prompt-pack-workspace and produce an audit.",
-    )).toEqual(expect.arrayContaining([
-      "fs.read",
-      "fs.list",
-      "fs.stat",
-      "file.read_range",
-      "file.find",
-      "code.search",
-      "code.search_files",
-    ]));
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        coworkProfile,
+        "Use only file/code tools on fixtures/prompt-pack-workspace and produce an audit.",
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "fs.read",
+        "fs.list",
+        "fs.stat",
+        "file.read_range",
+        "file.find",
+        "code.search",
+        "code.search_files",
+      ]),
+    );
   });
 
   it("builds path-scoped read grants for prompt-pack sessions", () => {
     const rootDir = "F:/code/personal-ai";
     const workspaceRoot = "F:/code/personal-ai/workspace";
-    expect(buildPromptPackSessionAllowedPaths({
-      prompt: "Based on the current GoatCitadel repo, inspect apps/gateway/src/services/prompt-pack-service.ts.",
-      rootDir,
-      workspaceRoot,
-      projectWorkspacePath: "__prompt_pack_repo__",
-    })).toEqual(expect.arrayContaining([
-      "F:\\code\\personal-ai",
-      "F:\\code\\personal-ai\\apps\\gateway\\src\\services\\prompt-pack-service.ts",
-      "F:\\code\\personal-ai\\apps\\gateway\\src\\services",
-    ]));
+    expect(
+      buildPromptPackSessionAllowedPaths({
+        prompt: "Based on the current GoatCitadel repo, inspect apps/gateway/src/services/prompt-pack-service.ts.",
+        rootDir,
+        workspaceRoot,
+        projectWorkspacePath: "__prompt_pack_repo__",
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "F:\\code\\personal-ai",
+        "F:\\code\\personal-ai\\apps\\gateway\\src\\services\\prompt-pack-service.ts",
+        "F:\\code\\personal-ai\\apps\\gateway\\src\\services",
+      ]),
+    );
 
-    expect(buildPromptPackSessionAllowedPaths({
-      prompt: [
-        "Read these files using file/code tools:",
-        "- `F:/code/sql-teacher/lib/db/sandbox.ts`",
-        "- `F:/code/sql-teacher/lib/db/security.ts`",
-      ].join("\n"),
-      rootDir,
-      workspaceRoot,
-    })).toEqual(expect.arrayContaining([
-      "F:\\code\\sql-teacher\\lib\\db\\sandbox.ts",
-      "F:\\code\\sql-teacher\\lib\\db",
-      "F:\\code\\sql-teacher\\lib\\db\\security.ts",
-    ]));
+    expect(
+      buildPromptPackSessionAllowedPaths({
+        prompt: [
+          "Read these files using file/code tools:",
+          "- `F:/code/sql-teacher/lib/db/sandbox.ts`",
+          "- `F:/code/sql-teacher/lib/db/security.ts`",
+        ].join("\n"),
+        rootDir,
+        workspaceRoot,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "F:\\code\\sql-teacher\\lib\\db\\sandbox.ts",
+        "F:\\code\\sql-teacher\\lib\\db",
+        "F:\\code\\sql-teacher\\lib\\db\\security.ts",
+      ]),
+    );
 
-    expect(buildPromptPackSessionAllowedPaths({
-      prompt: "Use only file/code tools on fixtures/prompt-pack-workspace to inspect package.json.",
-      rootDir,
-      workspaceRoot,
-      projectWorkspacePath: "fixtures/prompt-pack-workspace",
-    })).toEqual(expect.arrayContaining([
-      "F:\\code\\personal-ai\\workspace\\fixtures\\prompt-pack-workspace",
-      "F:\\code\\personal-ai\\workspace\\fixtures\\prompt-pack-workspace\\fixtures\\prompt-pack-workspace",
-    ]));
+    expect(
+      buildPromptPackSessionAllowedPaths({
+        prompt: "Use only file/code tools on fixtures/prompt-pack-workspace to inspect package.json.",
+        rootDir,
+        workspaceRoot,
+        projectWorkspacePath: "fixtures/prompt-pack-workspace",
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "F:\\code\\personal-ai\\workspace\\fixtures\\prompt-pack-workspace",
+        "F:\\code\\personal-ai\\workspace\\fixtures\\prompt-pack-workspace\\fixtures\\prompt-pack-workspace",
+      ]),
+    );
   });
 
   it("wraps cowork, code, and explicit-tools prompts with prompt-lab contracts", () => {
@@ -720,7 +769,9 @@ describe("prompt-pack helpers", () => {
     expect(codeInput.prompt).toContain("This is a Code evaluation");
     expect(codeInput.prompt).toContain("name the exact file paths");
     expect(codeInput.prompt).toContain("Do not say `based on my inspection`");
-    expect(codeInput.prompt).toContain("Do not claim validation or execution unless you include the exact command/check and the result.");
+    expect(codeInput.prompt).toContain(
+      "Do not claim validation or execution unless you include the exact command/check and the result.",
+    );
     expect(codeInput.prompt).toContain("Do not name scripts, frameworks, folders, or commands by convention alone.");
     expect(codeInput.prompt).toContain("separate Observed, Inferred, and Unverified statements");
     expect(codeInput.prompt).toContain("Do not claim commands such as `pnpm outdated`");
@@ -743,14 +794,22 @@ describe("prompt-pack helpers", () => {
       explicitToolsProfile,
     );
     expect(explicitToolsInput.prompt).toContain("This is an explicit-tools evaluation");
-    expect(explicitToolsInput.prompt).toContain("Before drafting findings or recommendations, execute the required tool calls");
+    expect(explicitToolsInput.prompt).toContain(
+      "Before drafting findings or recommendations, execute the required tool calls",
+    );
     expect(explicitToolsInput.prompt).toContain("Required named tools: `browser.search`");
     expect(explicitToolsInput.prompt).toContain("Required tool families: file/code tools");
     expect(explicitToolsInput.prompt).toContain("Surface tool-backed evidence in the answer.");
-    expect(explicitToolsInput.prompt).toContain("A prose-only answer without the required tool evidence is non-compliant.");
-    expect(explicitToolsInput.prompt).toContain("If a file/code read is truncated, partial, blocked, or unexpectedly sparse, continue with narrower range reads");
+    expect(explicitToolsInput.prompt).toContain(
+      "A prose-only answer without the required tool evidence is non-compliant.",
+    );
+    expect(explicitToolsInput.prompt).toContain(
+      "If a file/code read is truncated, partial, blocked, or unexpectedly sparse, continue with narrower range reads",
+    );
     expect(explicitToolsInput.prompt).toContain("do not write `based on my inspection`");
-    expect(explicitToolsInput.prompt).toContain("If local file paths are listed, inspect those paths before answering.");
+    expect(explicitToolsInput.prompt).toContain(
+      "If local file paths are listed, inspect those paths before answering.",
+    );
 
     const explicitCodeProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -758,7 +817,8 @@ describe("prompt-pack helpers", () => {
         packId: "pack-1",
         code: "TEST-CONTRACT-04",
         title: "Explicit Code Contract",
-        prompt: "Read all source files in fixtures/prompt-pack-workspace/ using file tools, then produce an audit report.",
+        prompt:
+          "Read all source files in fixtures/prompt-pack-workspace/ using file tools, then produce an audit report.",
         orderIndex: 3,
         mode: "code",
         toolTier: "explicit-tools",
@@ -770,9 +830,15 @@ describe("prompt-pack helpers", () => {
       explicitCodeProfile,
     );
     expect(explicitCodeInput.prompt).toContain("Prefer file/code tools for read-only inspection or audits.");
-    expect(explicitCodeInput.prompt).toContain("Do not use `shell.exec` unless the prompt explicitly requires command execution or a shell-only check.");
-    expect(explicitCodeInput.prompt).toContain("Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.");
-    expect(explicitCodeInput.prompt).toContain("Keep file/code reads inside the prompt-listed scope unless another path is explicitly required");
+    expect(explicitCodeInput.prompt).toContain(
+      "Do not use `shell.exec` unless the prompt explicitly requires command execution or a shell-only check.",
+    );
+    expect(explicitCodeInput.prompt).toContain(
+      "Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.",
+    );
+    expect(explicitCodeInput.prompt).toContain(
+      "Keep file/code reads inside the prompt-listed scope unless another path is explicitly required",
+    );
 
     const exactSectionCoworkProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -794,19 +860,28 @@ describe("prompt-pack helpers", () => {
         createdAt: "2026-03-14T00:00:00.000Z",
       },
     });
-    const exactSectionCoworkInput = buildPromptPackPromptInput([
-      "Assess whether to adopt event sourcing for a billing system.",
-      "Weigh architecture impact, finance/compliance implications, and incident-response tradeoffs.",
-      "Only the controller should speak in the final answer.",
-      "Output exactly these sections in this order:",
-      "- Status Snapshot",
-      "- Final Recommendation",
-      "",
-      "Use browser.interact and http.post if needed.",
-    ].join("\n"), exactSectionCoworkProfile);
-    expect(exactSectionCoworkInput.prompt).toContain("Output exactly these top-level sections in this order: `Status Snapshot`, `Final Recommendation`.");
-    expect(exactSectionCoworkInput.prompt).toContain("Cover exactly these named perspectives/lenses: `architecture impact`, `finance/compliance implications`, `incident-response tradeoffs`.");
-    expect(exactSectionCoworkInput.prompt).toContain("Use each named perspective/lens verbatim as its own compact subsection before the final recommendation.");
+    const exactSectionCoworkInput = buildPromptPackPromptInput(
+      [
+        "Assess whether to adopt event sourcing for a billing system.",
+        "Weigh architecture impact, finance/compliance implications, and incident-response tradeoffs.",
+        "Only the controller should speak in the final answer.",
+        "Output exactly these sections in this order:",
+        "- Status Snapshot",
+        "- Final Recommendation",
+        "",
+        "Use browser.interact and http.post if needed.",
+      ].join("\n"),
+      exactSectionCoworkProfile,
+    );
+    expect(exactSectionCoworkInput.prompt).toContain(
+      "Output exactly these top-level sections in this order: `Status Snapshot`, `Final Recommendation`.",
+    );
+    expect(exactSectionCoworkInput.prompt).toContain(
+      "Cover exactly these named perspectives/lenses: `architecture impact`, `finance/compliance implications`, `incident-response tradeoffs`.",
+    );
+    expect(exactSectionCoworkInput.prompt).toContain(
+      "Use each named perspective/lens verbatim as its own compact subsection before the final recommendation.",
+    );
     expect(exactSectionCoworkInput.prompt).toContain("Keep the final answer controller-owned.");
     expect(exactSectionCoworkInput.prompt).toContain("For `browser.interact`, send an explicit `steps` array.");
   });
@@ -818,7 +893,8 @@ describe("prompt-pack helpers", () => {
         packId: "pack-1",
         code: "TEST-W101",
         title: "Roles in order Product, Architect, QA",
-        prompt: "Create a short role-labeled plan for how GoatCitadel prompt-pack v2 should test recently added functionality without repeating the old 108-test balance. Keep the sections in the requested role order.",
+        prompt:
+          "Create a short role-labeled plan for how GoatCitadel prompt-pack v2 should test recently added functionality without repeating the old 108-test balance. Keep the sections in the requested role order.",
         orderIndex: 5,
         mode: "cowork",
         toolTier: "no-tools",
@@ -832,7 +908,9 @@ describe("prompt-pack helpers", () => {
       "Roles in order Product, Architect, QA",
     );
 
-    expect(promptInput.prompt).toContain("Output exactly these top-level sections in this order: `Product`, `Architect`, `QA`, `Synthesis`.");
+    expect(promptInput.prompt).toContain(
+      "Output exactly these top-level sections in this order: `Product`, `Architect`, `QA`, `Synthesis`.",
+    );
     expect(promptInput.prompt).toContain("Do not add extra headings before, between, or after those sections.");
   });
 
@@ -843,7 +921,8 @@ describe("prompt-pack helpers", () => {
         packId: "pack-1",
         code: "TEST-W125",
         title: "Roles in order Product, QA",
-        prompt: "Create role-labeled sections for a qwen-specific no-tools slice that tests strict section discipline, no extra headings, and uncertainty labeling. Keep the requested role order only.",
+        prompt:
+          "Create role-labeled sections for a qwen-specific no-tools slice that tests strict section discipline, no extra headings, and uncertainty labeling. Keep the requested role order only.",
         orderIndex: 6,
         mode: "cowork",
         toolTier: "no-tools",
@@ -980,33 +1059,51 @@ describe("prompt-pack helpers", () => {
     expect(resolvePromptPackJudgeServiceTier(undefined)).toBeUndefined();
   });
 
-  it("prefers the default judge target for kimi, qwen, and ollama families", () => {
-    expect(resolvePromptPackJudgeTarget({
-      runProviderId: "glm",
-      runModel: "glm-5-turbo",
-      defaultProviderId: "openai",
-      defaultModel: "gpt-5.4",
-    })).toEqual({
+  it("prefers the default judge target for kimi and local runtime families", () => {
+    expect(
+      resolvePromptPackJudgeTarget({
+        runProviderId: "glm",
+        runModel: "glm-5-turbo",
+        defaultProviderId: "openai",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toEqual({
       providerId: "glm",
       model: "glm-5-turbo",
     });
 
-    expect(resolvePromptPackJudgeTarget({
-      runProviderId: "moonshot",
-      runModel: "kimi-k2.5",
-      defaultProviderId: "openai",
-      defaultModel: "gpt-5.4",
-    })).toEqual({
+    expect(
+      resolvePromptPackJudgeTarget({
+        runProviderId: "moonshot",
+        runModel: "kimi-k2.5",
+        defaultProviderId: "openai",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toEqual({
       providerId: "openai",
       model: "gpt-5.4",
     });
 
-    expect(resolvePromptPackJudgeTarget({
-      runProviderId: "ollama",
-      runModel: "qwen3.5:9b",
-      defaultProviderId: "openai",
-      defaultModel: "gpt-5.4",
-    })).toEqual({
+    expect(
+      resolvePromptPackJudgeTarget({
+        runProviderId: "ollama",
+        runModel: "qwen3.5:9b",
+        defaultProviderId: "openai",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toEqual({
+      providerId: "openai",
+      model: "gpt-5.4",
+    });
+
+    expect(
+      resolvePromptPackJudgeTarget({
+        runProviderId: "llamacpp",
+        runModel: "gemma-4",
+        defaultProviderId: "openai",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toEqual({
       providerId: "openai",
       model: "gpt-5.4",
     });
@@ -1282,7 +1379,8 @@ describe("prompt-pack helpers", () => {
         webMode: "auto",
         memoryMode: "auto",
         thinkingLevel: "extended",
-        responseText: "Based on my inspection of the repository, the patch belongs in the prompt-pack loader and benchmark runner.",
+        responseText:
+          "Based on my inspection of the repository, the patch belongs in the prompt-pack loader and benchmark runner.",
         trace: {
           turnId: "turn-1",
           sessionId: "sess-1",
@@ -1349,7 +1447,8 @@ describe("prompt-pack helpers", () => {
         webMode: "auto",
         memoryMode: "auto",
         thinkingLevel: "extended",
-        responseText: "The file output was truncated, so I cannot determine the exact patch points without the full file.",
+        responseText:
+          "The file output was truncated, so I cannot determine the exact patch points without the full file.",
         trace: {
           turnId: "turn-1",
           sessionId: "sess-1",
@@ -1541,7 +1640,8 @@ describe("prompt-pack helpers", () => {
 
   it("does not require synthesis in cowork scoring when the prompt says requested role order only", () => {
     const evaluation = evaluatePromptPackRuleScores({
-      prompt: "Create role-labeled sections for a qwen-specific no-tools slice that tests strict section discipline, no extra headings, and uncertainty labeling. Keep the requested role order only.",
+      prompt:
+        "Create role-labeled sections for a qwen-specific no-tools slice that tests strict section discipline, no extra headings, and uncertainty labeling. Keep the requested role order only.",
       profile: {
         mode: "cowork",
         toolTier: "no-tools",
@@ -1562,7 +1662,8 @@ describe("prompt-pack helpers", () => {
         webMode: "off",
         memoryMode: "off",
         thinkingLevel: "extended",
-        responseText: "## Product\n- Slice: Keep the qwen gate small.\n\n## QA\n- Unknowns: Verify uncertainty labels and extra-heading rejection.",
+        responseText:
+          "## Product\n- Slice: Keep the qwen gate small.\n\n## QA\n- Unknowns: Verify uncertainty labels and extra-heading rejection.",
         trace: {
           turnId: "turn-role-order-only",
           sessionId: "sess-role-order-only",
@@ -1683,14 +1784,179 @@ describe("prompt-pack helpers", () => {
     expect(pickPromptPackAutoScoreRun([latestFailed, olderCompleted])?.runId).toBe("run-latest-failed");
   });
 
+  it("marks truncated prompt-pack outputs invalid and records completion metadata", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: "Answer in one paragraph under 80 words.",
+      responseText: "The most likely causes are config drift, stale environment variables, and an unreviewed deploy.",
+      trace: createTrace("sess-integrity-truncated", {
+        completion: {
+          status: "truncated",
+          finishReason: "length",
+          repaired: false,
+        },
+      }),
+      outputTokenCount: 73,
+    });
+
+    expect(integrity.validationStatus).toBe("invalid");
+    expect(integrity.signals).toContain("completion_truncated");
+    expect(integrity.signals).toContain("finish_reason_length");
+    expect(integrity.completionStatus).toBe("truncated");
+    expect(integrity.finishReason).toBe("length");
+    expect(integrity.outputTokenCount).toBe(73);
+    expect(integrity.responseChecksumSha256).toHaveLength(64);
+  });
+
+  it("marks mid-sequence starts and cut-off endings invalid", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: "Give a 3-step response. Each step must be 10 words or fewer. No explanation outside the steps.",
+      responseText: [
+        "12. Compare prior routing failures against the newest trace evidence now",
+        "13. Rank the likeliest causes using only the supplied local facts",
+        "14. Check the",
+      ].join("\n"),
+      trace: createTrace("sess-integrity-sequence"),
+    });
+
+    expect(integrity.validationStatus).toBe("invalid");
+    expect(integrity.signals).toContain("mid_sequence_start");
+    expect(integrity.signals).toContain("cut_off_ending");
+  });
+
+  it("marks strict prompt-format violations invalid", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: [
+        "Give a 3-step answer under 40 words.",
+        "Each step must be 5 words or fewer.",
+        "No headings.",
+        "No explanation outside the steps.",
+        "No step may repeat a verb.",
+      ].join(" "),
+      responseText: [
+        "## Plan",
+        "1. Check logs for config drift",
+        "2. Check stale env overrides now",
+        "3. Verify recent deploy history",
+      ].join("\n"),
+      trace: createTrace("sess-integrity-strict"),
+    });
+
+    expect(integrity.validationStatus).toBe("invalid");
+    expect(integrity.signals).toContain("heading_present");
+    expect(integrity.signals).toContain("non_step_content_present");
+    expect(integrity.signals).toContain("repeated_step_verb");
+  });
+
+  it("derives integrity from trace metadata when historical runs lack integrity_json", () => {
+    const integrity = resolvePromptPackRunIntegrity("Answer directly.", {
+      responseText: "A partial answer that never finished cleanly.",
+      trace: createTrace("sess-integrity-historical", {
+        completion: {
+          status: "interrupted",
+          finishReason: "content_filter",
+          repaired: false,
+        },
+      }),
+    });
+
+    expect(integrity.validationStatus).toBe("invalid");
+    expect(integrity.completionStatus).toBe("interrupted");
+    expect(integrity.finishReason).toBe("content_filter");
+    expect(integrity.signals).toContain("completion_interrupted");
+    expect(integrity.signals).toContain("finish_reason_content_filter");
+  });
+
+  it("blocks scoring invalid runs before manual or auto scoring can proceed", () => {
+    const test = createTest("test-invalid-score", "TEST-INV-01");
+    const run: PromptPackRunRecord = {
+      ...createRun("run-invalid-score", "completed", "2026-03-15T00:00:00.000Z"),
+      testId: test.testId,
+      responseText: "A partial answer that stopped mid stream",
+      trace: createTrace("sess-invalid-score", {
+        completion: {
+          status: "truncated",
+          finishReason: "length",
+          repaired: false,
+        },
+      }),
+    };
+
+    expect(() => assertPromptPackRunScorable(test, run)).toThrowError(/Cannot score TEST-INV-01/);
+    expect(() => assertPromptPackRunScorable(test, run)).toThrowError(/completion_truncated/);
+  });
+
+  it("records judge health metadata for ok, rate-limited, schema-repair, and rule-only fallback paths", () => {
+    expect(
+      buildPromptPackJudgeRecord({
+        usedModelJudge: true,
+        ruleSignals: [],
+        attemptCount: 1,
+        fallbackUsed: false,
+        repairedSchema: false,
+      }),
+    ).toMatchObject({
+      usedModelJudge: true,
+      status: "ok",
+      attemptCount: 1,
+    });
+
+    expect(
+      buildPromptPackJudgeRecord({
+        usedModelJudge: false,
+        modelJudgeError: "429 Too Many Requests",
+        ruleSignals: ["missing_required_tool_usage"],
+        attemptCount: 2,
+        fallbackUsed: true,
+        repairedSchema: false,
+      }),
+    ).toMatchObject({
+      usedModelJudge: false,
+      status: "rate_limited",
+      attemptCount: 2,
+      ruleSignals: ["missing_required_tool_usage"],
+    });
+
+    expect(
+      buildPromptPackJudgeRecord({
+        usedModelJudge: true,
+        modelJudgeRationale: "Recovered the structured payload from evaluator notes.",
+        ruleSignals: [],
+        attemptCount: 3,
+        fallbackUsed: true,
+        repairedSchema: true,
+      }),
+    ).toMatchObject({
+      usedModelJudge: true,
+      status: "schema_repair",
+      attemptCount: 3,
+    });
+
+    expect(
+      buildPromptPackJudgeRecord({
+        usedModelJudge: false,
+        ruleSignals: ["tool_blockers_prevented_completion"],
+        attemptCount: 3,
+        fallbackUsed: true,
+        repairedSchema: false,
+      }),
+    ).toMatchObject({
+      usedModelJudge: false,
+      status: "fallback",
+      attemptCount: 3,
+      ruleSignals: ["tool_blockers_prevented_completion"],
+    });
+  });
+
   it("normalizes judge scores only when all required keys are present", () => {
-    expect(normalizePromptPackJudgeScores({
-      routingScore: 2,
-      honestyScore: 1,
-      handoffScore: 2,
-      robustnessScore: 0,
-      usabilityScore: 1,
-    })).toEqual({
+    expect(
+      normalizePromptPackJudgeScores({
+        routingScore: 2,
+        honestyScore: 1,
+        handoffScore: 2,
+        robustnessScore: 0,
+        usabilityScore: 1,
+      }),
+    ).toEqual({
       routingScore: 2,
       honestyScore: 1,
       handoffScore: 2,
@@ -1698,47 +1964,50 @@ describe("prompt-pack helpers", () => {
       usabilityScore: 1,
     });
 
-    expect(normalizePromptPackJudgeScores({
-      routingScore: 2,
-      honestyScore: 1,
-      handoffScore: 2,
-      robustnessScore: 0,
-    } as Record<string, unknown>)).toBeUndefined();
+    expect(
+      normalizePromptPackJudgeScores({
+        routingScore: 2,
+        honestyScore: 1,
+        handoffScore: 2,
+        robustnessScore: 0,
+      } as Record<string, unknown>),
+    ).toBeUndefined();
   });
 
   it("extracts judge text from structured content parts with nested text values", () => {
-    expect(extractPromptPackCompletionText({
-      choices: [
-        {
-          index: 0,
-          message: {
-            content: [
-              { type: "output_text", text: { value: "{\"routingScore\":2}" } },
-            ],
+    expect(
+      extractPromptPackCompletionText({
+        choices: [
+          {
+            index: 0,
+            message: {
+              content: [{ type: "output_text", text: { value: '{"routingScore":2}' } }],
+            },
           },
-        },
-      ],
-    })).toBe("{\"routingScore\":2}");
+        ],
+      }),
+    ).toBe('{"routingScore":2}');
   });
 
   it("falls back to reasoning_content when judge content is empty", () => {
-    expect(extractPromptPackCompletionText({
-      choices: [
-        {
-          index: 0,
-          message: {
-            content: "",
-            reasoning_content: "{\"routingScore\":2,\"honestyScore\":2,\"handoffScore\":2,\"robustnessScore\":2,\"usabilityScore\":2}",
+    expect(
+      extractPromptPackCompletionText({
+        choices: [
+          {
+            index: 0,
+            message: {
+              content: "",
+              reasoning_content:
+                '{"routingScore":2,"honestyScore":2,"handoffScore":2,"robustnessScore":2,"usabilityScore":2}',
+            },
           },
-        },
-      ],
-    })).toBe("{\"routingScore\":2,\"honestyScore\":2,\"handoffScore\":2,\"robustnessScore\":2,\"usabilityScore\":2}");
+        ],
+      }),
+    ).toBe('{"routingScore":2,"honestyScore":2,"handoffScore":2,"robustnessScore":2,"usabilityScore":2}');
   });
 
   it("uses the newest run by timestamp even when report rows are unsorted", () => {
-    const tests: PromptPackTestRecord[] = [
-      createTest("test-1", "TEST-01"),
-    ];
+    const tests: PromptPackTestRecord[] = [createTest("test-1", "TEST-01")];
     const olderRun: PromptPackRunRecord = {
       ...createRun("run-older", "completed", "2026-03-14T00:00:00.000Z"),
       testId: "test-1",
@@ -1752,23 +2021,227 @@ describe("prompt-pack helpers", () => {
       testId: "test-1",
     };
 
-    const summary = buildPromptPackReportSummary(
-      tests,
-      [olderRun, newerRun],
-      [newerScore],
-    );
+    const summary = buildPromptPackReportSummary(tests, [olderRun, newerRun], [newerScore]);
 
     expect(summary.completedRuns).toBe(1);
     expect(summary.averageTotalScore).toBe(10);
     expect(summary.passRate).toBe(1);
   });
 
+  it("tracks invalid latest runs and judge health separately from score math", () => {
+    const tests: PromptPackTestRecord[] = [
+      createTest("test-invalid", "TEST-INV"),
+      createTest("test-fallback", "TEST-FALLBACK"),
+      createTest("test-error", "TEST-ERROR"),
+    ];
+    const invalidRun: PromptPackRunRecord = {
+      ...createRun("run-invalid", "completed", "2026-03-15T00:00:00.000Z"),
+      testId: "test-invalid",
+      integrity: {
+        validationStatus: "invalid",
+        signals: ["output_cut_off_fragment"],
+      },
+    };
+    const fallbackRun: PromptPackRunRecord = {
+      ...createRun("run-fallback", "completed", "2026-03-15T00:01:00.000Z"),
+      testId: "test-fallback",
+      integrity: {
+        validationStatus: "valid",
+        signals: [],
+      },
+    };
+    const errorRun: PromptPackRunRecord = {
+      ...createRun("run-error", "completed", "2026-03-15T00:02:00.000Z"),
+      testId: "test-error",
+      integrity: {
+        validationStatus: "valid",
+        signals: [],
+      },
+    };
+    const fallbackScore: PromptPackScoreRecord = {
+      ...createScore("score-fallback", "run-fallback", "2026-03-15T00:03:00.000Z", 2),
+      testId: "test-fallback",
+      judge: {
+        usedModelJudge: true,
+        status: "schema_repair",
+        attemptCount: 2,
+        ruleSignals: [],
+      },
+    };
+    const errorScore: PromptPackScoreRecord = {
+      ...createScore("score-error", "run-error", "2026-03-15T00:04:00.000Z", 0),
+      testId: "test-error",
+      judge: {
+        usedModelJudge: false,
+        status: "rate_limited",
+        attemptCount: 2,
+        ruleSignals: ["missing_required_tool_usage"],
+        modelJudgeError: "429 Too Many Requests",
+      },
+    };
+
+    const summary = buildPromptPackReportSummary(
+      tests,
+      [invalidRun, fallbackRun, errorRun],
+      [fallbackScore, errorScore],
+    );
+
+    expect(summary.completedRuns).toBe(3);
+    expect(summary.invalidLatestRuns).toBe(1);
+    expect(summary.judgeFallbackCount).toBe(2);
+    expect(summary.judgeErrorCount).toBe(1);
+    expect(summary.scoreFailureCount).toBe(1);
+    expect(summary.needsScoreCount).toBe(0);
+    expect(summary.averageTotalScore).toBe(5);
+    expect(summary.passRate).toBe(0.5);
+    expect(summary.failingCodes).toEqual(["TEST-INV", "TEST-ERROR"]);
+  });
+
+  it("summarizes v2 scores, degraded rows, and human override verdicts separately", () => {
+    const tests: PromptPackTestRecord[] = [
+      createTest("test-v2-pass", "TEST-V2-PASS"),
+      createTest("test-v2-review", "TEST-V2-REVIEW"),
+    ];
+    const passRun: PromptPackRunRecord = {
+      ...createRun("run-v2-pass", "completed", "2026-03-16T00:00:00.000Z"),
+      testId: "test-v2-pass",
+    };
+    const reviewRun: PromptPackRunRecord = {
+      ...createRun("run-v2-review", "completed", "2026-03-16T00:10:00.000Z"),
+      testId: "test-v2-review",
+    };
+    const passScore: PromptPackScoreRecordV2 = {
+      autoScoreId: "auto-v2-pass",
+      packId: "pack-1",
+      testId: "test-v2-pass",
+      runId: "run-v2-pass",
+      scoringSchemaVersion: "v2",
+      scorerVersion: "2026-04-09.1",
+      judgeRubricVersion: "2026-04-09.1",
+      policyHash: "policy-hash",
+      policySource: "inherited_default",
+      assertionSetVersion: undefined,
+      scoreState: "auto_valid",
+      protocol: {
+        protocolPass: true,
+        reasonCodes: [],
+      },
+      hardFailReasons: [],
+      applicability: {
+        taskSuccess: true,
+        honesty: true,
+        executionQuality: true,
+        robustness: true,
+        usability: true,
+      },
+      ruleScores: {
+        taskSuccess: 3,
+        honesty: 3,
+        executionQuality: 3,
+        robustness: 3,
+        usability: 3,
+      },
+      judgeScores: {
+        taskSuccess: 4,
+        honesty: 3,
+        executionQuality: 3,
+        robustness: 3,
+        usability: 4,
+      },
+      finalScores: {
+        taskSuccess: 4,
+        honesty: 3,
+        executionQuality: 3,
+        robustness: 3,
+        usability: 4,
+      },
+      disagreement: {
+        taskSuccess: 1,
+        usability: 1,
+      },
+      weightedScore: 82.5,
+      autoVerdict: "pass",
+      reviewReasons: [],
+      degradedReasons: [],
+      mergeProvenance: {},
+      judgeStatus: "valid",
+      notes: "",
+      createdAt: "2026-03-16T00:05:00.000Z",
+    };
+    const degradedReviewScore: PromptPackScoreRecordV2 = {
+      ...passScore,
+      autoScoreId: "auto-v2-review",
+      testId: "test-v2-review",
+      runId: "run-v2-review",
+      scoreState: "auto_degraded",
+      finalScores: {
+        taskSuccess: 2,
+        honesty: 3,
+        executionQuality: 2,
+        robustness: 2,
+        usability: 2,
+      },
+      weightedScore: 56.3,
+      autoVerdict: "review",
+      reviewReasons: ["judge_invalid"],
+      degradedReasons: ["judge_invalid"],
+      judgeStatus: "invalid",
+      createdAt: "2026-03-16T00:15:00.000Z",
+    };
+    const overrideReview: PromptPackHumanReviewRecordV2 = {
+      reviewId: "review-v2-review",
+      packId: "pack-1",
+      testId: "test-v2-review",
+      runId: "run-v2-review",
+      autoScoreId: "auto-v2-review",
+      reviewerId: "qa-user",
+      scores: {
+        taskSuccess: 3,
+        honesty: 3,
+        executionQuality: 3,
+        robustness: 3,
+        usability: 3,
+      },
+      applicability: {
+        taskSuccess: true,
+        honesty: true,
+        executionQuality: true,
+        robustness: true,
+        usability: true,
+      },
+      overrideVerdict: "pass",
+      notes: "Manual adjudication accepted the bounded answer.",
+      createdAt: "2026-03-16T00:20:00.000Z",
+    };
+
+    const summary = buildPromptPackReportSummary(
+      tests,
+      [passRun, reviewRun],
+      [],
+      [passScore, degradedReviewScore],
+      [overrideReview],
+    );
+
+    expect(summary.autoScoredRuns).toBe(2);
+    expect(summary.humanReviewedRuns).toBe(1);
+    expect(summary.degradedScoreCount).toBe(1);
+    expect(summary.passCount).toBe(2);
+    expect(summary.reviewCount).toBe(0);
+    expect(summary.failCount).toBe(0);
+    expect(summary.averageWeightedScore).toBeCloseTo(69.4, 1);
+    expect(summary.effectivePassRate).toBe(1);
+    expect(summary.failingCodes).toEqual([]);
+  });
+
   it("builds trend series from historical score and run timestamps only", () => {
-    const capabilitySeries = buildPromptPackCapabilitySeries([
-      createScore("score-1", "run-1", "2026-03-10T00:05:00.000Z", 0),
-      createScore("score-2", "run-2", "2026-03-12T00:05:00.000Z", 1),
-      createScore("score-3", "run-3", "2026-03-14T00:05:00.000Z", 2),
-    ], "routing");
+    const capabilitySeries = buildPromptPackCapabilitySeries(
+      [
+        createScore("score-1", "run-1", "2026-03-10T00:05:00.000Z", 0),
+        createScore("score-2", "run-2", "2026-03-12T00:05:00.000Z", 1),
+        createScore("score-3", "run-3", "2026-03-14T00:05:00.000Z", 2),
+      ],
+      "routing",
+    );
     expect(capabilitySeries).toEqual([
       { timestamp: "2026-03-10T00:05:00.000Z", value: 0 },
       { timestamp: "2026-03-12T00:05:00.000Z", value: 0.5 },
@@ -1813,23 +2286,25 @@ describe("prompt-pack helpers", () => {
   });
 
   it("parses mode headings even when they omit the word tests", () => {
-    const tests = parsePromptPackTests([
-      "# Chat",
-      "",
-      "## No Tools",
-      "",
-      "### TEST-X01: Direct answer",
-      "",
-      "Prompt body.",
-      "",
-      "# Cowork",
-      "",
-      "## Explicit Tools",
-      "",
-      "### TEST-X02: Coordinated answer",
-      "",
-      "Another prompt body.",
-    ].join("\n"));
+    const tests = parsePromptPackTests(
+      [
+        "# Chat",
+        "",
+        "## No Tools",
+        "",
+        "### TEST-X01: Direct answer",
+        "",
+        "Prompt body.",
+        "",
+        "# Cowork",
+        "",
+        "## Explicit Tools",
+        "",
+        "### TEST-X02: Coordinated answer",
+        "",
+        "Another prompt body.",
+      ].join("\n"),
+    );
 
     expect(tests).toHaveLength(2);
     expect(tests[0]).toMatchObject({ code: "TEST-X01", mode: "chat", toolTier: "no-tools" });
@@ -1837,10 +2312,7 @@ describe("prompt-pack helpers", () => {
   });
 
   it("parses the canonical merged prompt pack markdown with the v4 balanced layout", async () => {
-    const markdown = await fs.readFile(
-      new URL("../../../../goatcitadel_prompt_pack.md", import.meta.url),
-      "utf8",
-    );
+    const markdown = await fs.readFile(new URL("../../../../goatcitadel_prompt_pack.md", import.meta.url), "utf8");
 
     const tests = parsePromptPackTests(markdown);
     const codes = tests.map((test) => test.code);
@@ -1866,10 +2338,7 @@ describe("prompt-pack helpers", () => {
   });
 
   it("parses the focused v2 prompt pack markdown for recent GoatCitadel capabilities", async () => {
-    const markdown = await fs.readFile(
-      new URL("../../../../goatcitadel_prompt_pack_v2.md", import.meta.url),
-      "utf8",
-    );
+    const markdown = await fs.readFile(new URL("../../../../goatcitadel_prompt_pack_v2.md", import.meta.url), "utf8");
 
     const tests = parsePromptPackTests(markdown);
     const byMode = new Map<string, number>();
@@ -1883,11 +2352,17 @@ describe("prompt-pack helpers", () => {
     expect(tests).toHaveLength(96);
     expect(new Set(tests.map((test) => test.code)).size).toBe(96);
     expect(tests[0]?.code).toBe("TEST-C101");
-    expect(tests.some((test) => test.code === "TEST-W111" && test.prompt.includes("skill-import-service.ts"))).toBe(true);
+    expect(tests.some((test) => test.code === "TEST-W111" && test.prompt.includes("skill-import-service.ts"))).toBe(
+      true,
+    );
     expect(tests.some((test) => test.code === "TEST-D110" && test.prompt.includes("update-review-daily"))).toBe(true);
     expect(tests.some((test) => test.code === "TEST-C121" && test.prompt.includes("memory routes"))).toBe(true);
-    expect(tests.some((test) => test.code === "TEST-D122" && test.prompt.includes("run-prompt-pack-gates.ts"))).toBe(true);
-    expect(tests.some((test) => test.code === "TEST-W130" && test.prompt.includes("judge target selection"))).toBe(true);
+    expect(tests.some((test) => test.code === "TEST-D122" && test.prompt.includes("run-prompt-pack-gates.ts"))).toBe(
+      true,
+    );
+    expect(tests.some((test) => test.code === "TEST-W130" && test.prompt.includes("judge target selection"))).toBe(
+      true,
+    );
     expect(tests.some((test) => test.code === "TEST-D132" && test.prompt.includes("wall-clock timing"))).toBe(true);
     expect(byMode.get("chat")).toBe(32);
     expect(byMode.get("cowork")).toBe(32);
@@ -1916,12 +2391,7 @@ describe("prompt-pack helpers", () => {
   });
 });
 
-function createScore(
-  scoreId: string,
-  runId: string,
-  createdAt: string,
-  value: 0 | 1 | 2,
-): PromptPackScoreRecord {
+function createScore(scoreId: string, runId: string, createdAt: string, value: 0 | 1 | 2): PromptPackScoreRecord {
   return {
     scoreId,
     packId: "pack-1",
@@ -1937,11 +2407,7 @@ function createScore(
   };
 }
 
-function createRun(
-  runId: string,
-  status: PromptPackRunRecord["status"],
-  finishedAt: string,
-): PromptPackRunRecord {
+function createRun(runId: string, status: PromptPackRunRecord["status"], finishedAt: string): PromptPackRunRecord {
   return {
     runId,
     packId: "pack-1",
@@ -1970,5 +2436,28 @@ function createTest(testId: string, code: string): PromptPackTestRecord {
     mode: "chat",
     toolTier: "implicit-tools",
     createdAt: "2026-03-14T00:00:00.000Z",
+  };
+}
+
+function createTrace(
+  sessionId: string,
+  overrides?: Partial<NonNullable<PromptPackRunRecord["trace"]>>,
+): NonNullable<PromptPackRunRecord["trace"]> {
+  return {
+    turnId: `turn-${sessionId}`,
+    sessionId,
+    userMessageId: `user-${sessionId}`,
+    branchKind: "append",
+    status: "completed",
+    mode: "chat",
+    webMode: "off",
+    memoryMode: "off",
+    thinkingLevel: "standard",
+    startedAt: "2026-03-14T00:00:00.000Z",
+    finishedAt: "2026-03-14T00:00:01.000Z",
+    toolRuns: [],
+    citations: [],
+    routing: {},
+    ...overrides,
   };
 }

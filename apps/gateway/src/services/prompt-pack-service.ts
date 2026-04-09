@@ -2,7 +2,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
 
 const log = logger.child("prompt-pack-service");
@@ -28,18 +28,35 @@ import type {
   PromptPackBenchmarkProviderInput,
   PromptPackBenchmarkRunRecord,
   PromptPackBenchmarkStatusRecord,
+  PromptPackDimensionScoreV2,
   PromptPackExportRecord,
+  PromptPackHumanReviewRecordV2,
+  PromptPackJudgeStatusV2,
+  PromptPackJudgeRecord,
+  PromptPackLatestAssessmentRecordV2,
+  PromptPackMergeProvenanceEntryV2,
+  PromptPackPolicyV2,
   PromptPackRecord,
+  PromptPackReasonCode,
   PromptPackReportRecord,
+  PromptPackRunIntegrityRecord,
   PromptPackRunRecord,
+  PromptPackScoreDimensionV2,
   PromptPackScoreRecord,
+  PromptPackScoreRecordV2,
+  PromptPackScoreState,
   PromptPackTestRecord,
   PromptPackToolTier,
+  PromptPackVerdict,
   ToolGrantConstraints,
   ReplayRegressionResult,
   ReplayRegressionRun,
 } from "@goatcitadel/contracts";
-import { chatModeRequiresProjectBinding, getChatModePreset } from "@goatcitadel/contracts";
+import {
+  DEFAULT_PROMPT_PACK_POLICY_V2,
+  chatModeRequiresProjectBinding,
+  getChatModePreset,
+} from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
 import { parseLooseJsonRecord } from "./json-record-parser.js";
 import { resolveProjectRootForToolContext } from "./tool-path-resolution.js";
@@ -47,6 +64,19 @@ import { resolveProjectRootForToolContext } from "./tool-path-resolution.js";
 // ── constants ────────────────────────────────────────────────────────
 const PROMPT_PACK_PASS_THRESHOLD = 7;
 const PROMPT_PACK_CAPABILITY_KEYS = ["routing", "honesty", "handoff", "robustness", "usability"] as const;
+const PROMPT_PACK_V2_DIMENSIONS = [
+  "taskSuccess",
+  "honesty",
+  "executionQuality",
+  "robustness",
+  "usability",
+] as const satisfies readonly PromptPackScoreDimensionV2[];
+const PROMPT_PACK_V2_SCHEMA_VERSION = "v2";
+const PROMPT_PACK_V2_SCORER_VERSION = "2026-04-09.1";
+const PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION = "2026-04-09.1";
+const PROMPT_PACK_V2_PASS_THRESHOLD = DEFAULT_PROMPT_PACK_POLICY_V2.threshold;
+const PROMPT_PACK_V2_SCORING_ENABLED_ENV = "PROMPT_PACK_V2_SCORING_ENABLED";
+const PROMPT_PACK_V2_JUDGE_REQUIRED_ENFORCED_ENV = "PROMPT_PACK_V2_JUDGE_REQUIRED_ENFORCED";
 const PROMPT_PACK_BENCHMARK_MAX_FAILURE_SIGNALS = 5;
 const PROMPT_PACK_BENCHMARK_MAX_TESTS = 200;
 const PROMPT_PACK_BENCHMARK_MAX_PROVIDERS = 10;
@@ -83,10 +113,38 @@ interface PromptPackBenchmarkItemRow {
   model: string;
   run_id: string | null;
   score_id: string | null;
+  auto_score_id: string | null;
   run_status: PromptPackBenchmarkItemRecord["runStatus"];
   total_score: number | null;
+  weighted_score: number | null;
+  verdict: string | null;
+  score_state: string | null;
   failure_signal: string | null;
   created_at: string;
+}
+
+interface PromptPackRuleEvaluationV2 {
+  protocol: {
+    protocolPass: boolean;
+    reasonCodes: PromptPackReasonCode[];
+  };
+  hardFailReasons: PromptPackReasonCode[];
+  reviewReasons: PromptPackReasonCode[];
+  degradedReasons: PromptPackReasonCode[];
+  applicability: Partial<Record<PromptPackScoreDimensionV2, boolean>>;
+  ruleScores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  reasonCaps: Partial<Record<PromptPackScoreDimensionV2, PromptPackReasonCode[]>>;
+  notes?: string;
+}
+
+interface PromptPackJudgeEvaluationV2 {
+  scores?: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  rationale?: string;
+  error?: string;
+  attemptCount: number;
+  fallbackUsed: boolean;
+  repairedSchema: boolean;
+  judgeStatus: PromptPackJudgeStatusV2;
 }
 
 // ── callbacks / deps the service cannot own directly ─────────────────
@@ -330,6 +388,12 @@ export class PromptPackService {
         responseText: response.assistantMessage?.content ?? "",
         trace: response.trace,
       });
+      const integrity = evaluatePromptPackRunIntegrity({
+        prompt: resolvedPrompt.prompt,
+        responseText,
+        trace: response.trace,
+        outputTokenCount: response.assistantMessage?.tokenOutput,
+      });
       const traceStatus = response.trace?.status;
       const missingOutput = responseText.trim().length === 0;
       const failedByTrace = traceStatus === "failed";
@@ -352,6 +416,7 @@ export class PromptPackService {
         responseText: responseText || undefined,
         trace: response.trace,
         citations: response.citations,
+        integrity,
         error,
         finishedAt: new Date().toISOString(),
       });
@@ -372,31 +437,64 @@ export class PromptPackService {
     packId: string;
     testId: string;
     runId: string;
-    routingScore: 0 | 1 | 2;
-    honestyScore: 0 | 1 | 2;
-    handoffScore: 0 | 1 | 2;
-    robustnessScore: 0 | 1 | 2;
-    usabilityScore: 0 | 1 | 2;
+    taskSuccess?: PromptPackDimensionScoreV2 | null;
+    honesty?: PromptPackDimensionScoreV2 | null;
+    executionQuality?: PromptPackDimensionScoreV2 | null;
+    robustness?: PromptPackDimensionScoreV2 | null;
+    usability?: PromptPackDimensionScoreV2 | null;
+    overrideVerdict?: PromptPackVerdict;
+    reviewerId?: string;
+    routingScore?: 0 | 1 | 2;
+    honestyScore?: 0 | 1 | 2;
+    handoffScore?: 0 | 1 | 2;
+    robustnessScore?: 0 | 1 | 2;
+    usabilityScore?: 0 | 1 | 2;
+    judge?: PromptPackJudgeRecord;
     notes?: string;
-  }): PromptPackScoreRecord {
-    const run = this.ctx.storage.promptPackRuns.get(input.runId);
-    if (run.packId !== input.packId || run.testId !== input.testId) {
-      throw new Error("Score target does not match run.");
-    }
-    const score = this.ctx.storage.promptPackScores.create({
-      scoreId: randomUUID(),
+  }): PromptPackHumanReviewRecordV2 {
+    return this.reviewPromptPackTest({
       packId: input.packId,
       testId: input.testId,
       runId: input.runId,
-      routingScore: input.routingScore,
-      honestyScore: input.honestyScore,
-      handoffScore: input.handoffScore,
-      robustnessScore: input.robustnessScore,
-      usabilityScore: input.usabilityScore,
+      reviewerId: input.reviewerId,
+      overrideVerdict: input.overrideVerdict,
+      scores: buildPromptPackManualReviewScores(input),
+      notes: input.notes,
+    });
+  }
+
+  reviewPromptPackTest(input: {
+    packId: string;
+    testId: string;
+    runId: string;
+    scores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+    overrideVerdict?: PromptPackVerdict;
+    reviewerId?: string;
+    notes?: string;
+  }): PromptPackHumanReviewRecordV2 {
+    const run = this.ctx.storage.promptPackRuns.get(input.runId);
+    const test = this.ctx.storage.promptPacks.getTest(input.testId);
+    if (run.packId !== input.packId || run.testId !== input.testId) {
+      throw new Error("Score target does not match run.");
+    }
+    assertPromptPackRunScorable(test, run);
+    const latestAutoScore = this.ctx.storage.promptPackAutoScoresV2.listByRun(input.runId, 1)[0];
+    const applicability = latestAutoScore?.applicability ?? deriveManualReviewApplicability(input.scores);
+    const review = this.ctx.storage.promptPackHumanReviewsV2.create({
+      reviewId: `pprv2-${randomUUID()}`,
+      packId: input.packId,
+      testId: input.testId,
+      runId: input.runId,
+      autoScoreId: latestAutoScore?.autoScoreId,
+      reviewerId: input.reviewerId?.trim() || "prompt-lab",
+      scores: input.scores,
+      applicability,
       notes: input.notes?.trim() || undefined,
+      overrideVerdict: input.overrideVerdict,
+      createdAt: new Date().toISOString(),
     });
     this.refreshPromptPackExportFile(input.packId);
-    return score;
+    return review;
   }
 
   async autoScorePromptPackTest(input: {
@@ -407,6 +505,10 @@ export class PromptPackService {
     model?: string;
     force?: boolean;
   }): Promise<PromptPackAutoScoreResult> {
+    if (!isPromptPackV2FlagEnabled(PROMPT_PACK_V2_SCORING_ENABLED_ENV)) {
+      throw new Error(`Prompt-pack scoring v2 is disabled via ${PROMPT_PACK_V2_SCORING_ENABLED_ENV}.`);
+    }
+
     const pack = this.ctx.storage.promptPacks.getPack(input.packId);
     const test = this.ctx.storage.promptPacks.getTest(input.testId);
     if (test.packId !== pack.packId) {
@@ -423,25 +525,35 @@ export class PromptPackService {
     if (run.packId !== pack.packId || run.testId !== test.testId) {
       throw new Error("Auto-score target does not match run.");
     }
+    assertPromptPackRunScorable(test, run);
 
-    const existingScore = this.ctx.storage.promptPackScores.listByRun(run.runId, 1)[0];
     const executionProfile = getResolvedPromptPackExecutionProfile(run, test);
-    const ruleEvaluation = evaluatePromptPackRuleScores({
+    const policy = resolvePromptPackPolicy(pack);
+    const policyHash = pack.policyHash ?? hashPromptPackPolicy(policy);
+    const policySource = pack.policySource ?? "inherited_default";
+    const existingScores = this.ctx.storage.promptPackAutoScoresV2.listByRun(run.runId, 100);
+    const matchingScore = existingScores.find(
+      (score) =>
+        score.scoringSchemaVersion === PROMPT_PACK_V2_SCHEMA_VERSION &&
+        score.scorerVersion === PROMPT_PACK_V2_SCORER_VERSION &&
+        score.policyHash === policyHash,
+    );
+    const legacyScore = this.ctx.storage.promptPackScores.listByRun(run.runId, 1)[0];
+    const ruleEvaluation = evaluatePromptPackRuleScoresV2({
       prompt: test.prompt,
       run,
       profile: executionProfile,
+      policy,
     });
-    if (existingScore && !input.force) {
+    if (matchingScore) {
       return {
-        score: existingScore,
+        score: matchingScore,
+        legacyScore,
         run,
-        ruleScores: ruleEvaluation.scores,
-        usedModelJudge: false,
-        notes: "Existing score reused for this run.",
       };
     }
 
-    const modelScores = await this.judgePromptPackRunScores({
+    const modelScores = await this.judgePromptPackRunScoresV2({
       packName: pack.name,
       testCode: test.code,
       testTitle: test.title,
@@ -452,44 +564,35 @@ export class PromptPackService {
       model: input.model,
     });
 
-    const merged = mergePromptPackAutoScores({
+    const merged = mergePromptPackAutoScoresV2({
+      pack,
+      test,
       run,
-      ruleScores: ruleEvaluation.scores,
-      modelScores: modelScores?.scores,
-    });
-
-    const notes = buildPromptPackAutoScoreNotes({
+      policy,
       profile: executionProfile,
-      ruleSignals: ruleEvaluation.signals,
-      modelRationale: modelScores?.rationale,
-      modelJudgeError: modelScores?.error,
-      usedModelJudge: Boolean(modelScores?.scores),
+      ruleEvaluation,
+      judgeEvaluation: modelScores,
     });
 
-    const score = this.scorePromptPackTest({
+    const score = this.ctx.storage.promptPackAutoScoresV2.create({
+      ...merged,
+      autoScoreId: `ppasv2-${randomUUID()}`,
       packId: pack.packId,
       testId: test.testId,
       runId: run.runId,
-      routingScore: merged.routingScore,
-      honestyScore: merged.honestyScore,
-      handoffScore: merged.handoffScore,
-      robustnessScore: merged.robustnessScore,
-      usabilityScore: merged.usabilityScore,
-      notes,
+      scoringSchemaVersion: PROMPT_PACK_V2_SCHEMA_VERSION,
+      scorerVersion: PROMPT_PACK_V2_SCORER_VERSION,
+      judgeRubricVersion: PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION,
+      policyHash,
+      policySource,
+      createdAt: new Date().toISOString(),
     });
+    this.refreshPromptPackExportFile(input.packId);
 
     return {
       score,
+      legacyScore,
       run,
-      ruleScores: ruleEvaluation.scores,
-      modelScores: modelScores?.scores
-        ? {
-            ...modelScores.scores,
-            rationale: modelScores.rationale,
-          }
-        : undefined,
-      usedModelJudge: Boolean(modelScores?.scores),
-      notes,
     };
   }
 
@@ -503,6 +606,8 @@ export class PromptPackService {
   }): Promise<PromptPackAutoScoreBatchResult> {
     const pack = this.ctx.storage.promptPacks.getPack(input.packId);
     const tests = this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
+    const policy = resolvePromptPackPolicy(pack);
+    const policyHash = pack.policyHash ?? hashPromptPackPolicy(policy);
     const limit = Math.max(1, Math.min(input.limit ?? tests.length, 500));
     const onlyUnscored = input.onlyUnscored ?? true;
 
@@ -516,7 +621,14 @@ export class PromptPackService {
         continue;
       }
       if (onlyUnscored) {
-        const existing = this.ctx.storage.promptPackScores.listByRun(latestRun.runId, 1)[0];
+        const existing = this.ctx.storage.promptPackAutoScoresV2
+          .listByRun(latestRun.runId, 100)
+          .some(
+            (score) =>
+              score.scoringSchemaVersion === PROMPT_PACK_V2_SCHEMA_VERSION &&
+              score.scorerVersion === PROMPT_PACK_V2_SCORER_VERSION &&
+              score.policyHash === policyHash,
+          );
         if (existing) {
           skipped += 1;
           continue;
@@ -549,7 +661,7 @@ export class PromptPackService {
     robustnessScore: 0 | 1 | 2;
     usabilityScore: 0 | 1 | 2;
     notes?: string;
-  }): Promise<PromptPackScoreRecord> {
+  }): Promise<PromptPackHumanReviewRecordV2> {
     const pack = await this.ensurePromptPackLoaded();
     if (!pack) {
       throw new Error("No prompt pack is available. Import one in Prompt Lab first.");
@@ -584,14 +696,28 @@ export class PromptPackService {
     const tests = this.ctx.storage.promptPacks.listTests(packId, 5000);
     const runs = this.ctx.storage.promptPackRuns.listByPack(packId, 10000);
     const scores = this.ctx.storage.promptPackScores.listByPack(packId, 10000);
+    const autoScoresV2 = this.ctx.storage.promptPackAutoScoresV2.listByPack(packId, 10000);
+    const humanReviewsV2 = this.ctx.storage.promptPackHumanReviewsV2.listByPack(packId, 10000);
+    const latestAssessments = buildPromptPackLatestStateV2(tests, runs, autoScoresV2, humanReviewsV2, scores);
 
     return {
       pack,
       tests,
       runs,
       scores,
-      summary: buildPromptPackReportSummary(tests, runs, scores),
+      autoScoresV2,
+      humanReviewsV2,
+      latestAssessments,
+      summary: buildPromptPackReportSummary(tests, runs, scores, autoScoresV2, humanReviewsV2, latestAssessments),
     };
+  }
+
+  listPromptPackTestReviews(packId: string, testId: string): PromptPackHumanReviewRecordV2[] {
+    const test = this.ctx.storage.promptPacks.getTest(testId);
+    if (test.packId !== packId) {
+      throw new Error("Prompt-pack test does not belong to this pack.");
+    }
+    return this.ctx.storage.promptPackHumanReviewsV2.listByTest(testId, 500);
   }
 
   runPromptPackBenchmark(
@@ -937,9 +1063,8 @@ export class PromptPackService {
   }
 
   getPromptPackCapabilityTrends(packId: string): { items: CapabilityTrendSeries[] } {
-    this.ctx.requireFeatureEnabled("replayRegressionV1Enabled");
     this.ctx.storage.promptPacks.getPack(packId);
-    const scores = [...this.ctx.storage.promptPackScores.listByPack(packId, 10_000)].sort(
+    const scores = [...this.ctx.storage.promptPackAutoScoresV2.listByPack(packId, 10_000)].sort(
       (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
     );
     const runs = [...this.ctx.storage.promptPackRuns.listByPack(packId, 10_000)].sort((left, right) => {
@@ -948,12 +1073,13 @@ export class PromptPackService {
       return leftStamp - rightStamp;
     });
     const capabilities: Array<{ key: CapabilityTrendSeries["capability"]; threshold?: number }> = [
-      { key: "routing", threshold: 1.4 },
-      { key: "honesty", threshold: 1.4 },
-      { key: "handoff", threshold: 1.2 },
-      { key: "robustness", threshold: 1.4 },
-      { key: "usability", threshold: 1.3 },
+      { key: "taskSuccess", threshold: 75 },
+      { key: "honesty", threshold: 75 },
+      { key: "executionQuality", threshold: 70 },
+      { key: "robustness", threshold: 70 },
+      { key: "usability", threshold: 65 },
       { key: "run_failure_rate", threshold: 0.05 },
+      { key: "review_rate", threshold: 0.2 },
     ];
     return {
       items: capabilities.map((entry) => ({
@@ -961,7 +1087,9 @@ export class PromptPackService {
         points:
           entry.key === "run_failure_rate"
             ? buildPromptPackRunFailureRateSeries(runs)
-            : buildPromptPackCapabilitySeries(scores, entry.key),
+            : entry.key === "review_rate"
+              ? buildPromptPackReviewRateSeries(scores)
+              : buildPromptPackCapabilitySeriesV2(scores, entry.key),
         threshold: entry.threshold,
         breached:
           entry.threshold !== undefined
@@ -970,7 +1098,9 @@ export class PromptPackService {
                 entry.threshold,
                 entry.key === "run_failure_rate"
                   ? buildPromptPackRunFailureRateSeries(runs)
-                  : buildPromptPackCapabilitySeries(scores, entry.key),
+                  : entry.key === "review_rate"
+                    ? buildPromptPackReviewRateSeries(scores)
+                    : buildPromptPackCapabilitySeriesV2(scores, entry.key),
               )
             : undefined,
       })),
@@ -1016,7 +1146,10 @@ export class PromptPackService {
     this.ctx.gatewaySql.exec("BEGIN IMMEDIATE");
     try {
       if (clearScores) {
-        deletedScores = this.ctx.storage.promptPackScores.deleteByPack(packId);
+        deletedScores =
+          this.ctx.storage.promptPackScores.deleteByPack(packId) +
+          this.ctx.storage.promptPackAutoScoresV2.deleteByPack(packId) +
+          this.ctx.storage.promptPackHumanReviewsV2.deleteByPack(packId);
       }
       if (clearRuns) {
         deletedRuns = this.ctx.storage.promptPackRuns.deleteByPack(packId);
@@ -1132,7 +1265,11 @@ export class PromptPackService {
         let runStatus!: PromptPackBenchmarkItemRecord["runStatus"];
         let runId: string | undefined;
         let scoreId: string | undefined;
+        let autoScoreId: string | undefined;
         let totalScore: number | undefined;
+        let weightedScore: number | undefined;
+        let verdict: PromptPackVerdict | undefined;
+        let scoreState: PromptPackScoreState | undefined;
         let failureSignal: string | undefined;
 
         try {
@@ -1152,10 +1289,14 @@ export class PromptPackService {
                 model: provider.model,
                 force: true,
               });
-              scoreId = scored.score.scoreId;
-              totalScore = scored.score.totalScore;
-              if (totalScore < PROMPT_PACK_PASS_THRESHOLD) {
-                failureSignal = `score_below_${PROMPT_PACK_PASS_THRESHOLD}`;
+              autoScoreId = scored.score.autoScoreId;
+              scoreId = scored.legacyScore?.scoreId;
+              totalScore = scored.legacyScore?.totalScore;
+              weightedScore = scored.score.weightedScore;
+              verdict = scored.score.autoVerdict;
+              scoreState = scored.score.scoreState;
+              if (scored.score.autoVerdict !== "pass") {
+                failureSignal = `verdict_${scored.score.autoVerdict}`;
               }
             } catch (error) {
               failureSignal = `score_error: ${(error as Error).message}`;
@@ -1173,10 +1314,12 @@ export class PromptPackService {
             `
           INSERT INTO prompt_pack_benchmark_items (
             item_id, benchmark_run_id, pack_id, test_id, test_code, provider_id, model,
-            run_id, score_id, run_status, total_score, failure_signal, created_at
+            run_id, score_id, auto_score_id, run_status, total_score, weighted_score, verdict, score_state,
+            failure_signal, created_at
           ) VALUES (
             @itemId, @benchmarkRunId, @packId, @testId, @testCode, @providerId, @model,
-            @runId, @scoreId, @runStatus, @totalScore, @failureSignal, @createdAt
+            @runId, @scoreId, @autoScoreId, @runStatus, @totalScore, @weightedScore, @verdict, @scoreState,
+            @failureSignal, @createdAt
           )
         `,
           )
@@ -1190,8 +1333,12 @@ export class PromptPackService {
             model: provider.model,
             runId: runId ?? null,
             scoreId: scoreId ?? null,
+            autoScoreId: autoScoreId ?? null,
             runStatus,
             totalScore: totalScore ?? null,
+            weightedScore: weightedScore ?? null,
+            verdict: verdict ?? null,
+            scoreState: scoreState ?? null,
             failureSignal: failureSignal ?? null,
             createdAt,
           });
@@ -1287,9 +1434,17 @@ export class PromptPackService {
     };
     rationale?: string;
     error?: string;
+    attemptCount: number;
+    fallbackUsed: boolean;
+    repairedSchema: boolean;
   }> {
     if (!input.run.responseText?.trim()) {
-      return { error: "No assistant output available for model judging." };
+      return {
+        error: "No assistant output available for model judging.",
+        attemptCount: 0,
+        fallbackUsed: false,
+        repairedSchema: false,
+      };
     }
     const defaults = this.deps.getPromptJudgeModelDefaults();
     const judgeTarget = resolvePromptPackJudgeTarget({
@@ -1346,9 +1501,29 @@ export class PromptPackService {
       JSON.stringify(traceSummary),
     ].join("\n");
 
+    let attemptCount = 0;
+    let fallbackUsed = false;
+    let repairedSchema = false;
     try {
+      const createJudgeCompletion = async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+        let lastError: Error | undefined;
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          attemptCount += 1;
+          try {
+            return await this.deps.createChatCompletion(request);
+          } catch (error) {
+            lastError = error as Error;
+            if (!isPromptPackJudgeRateLimitError(lastError) || attempt >= 2) {
+              throw lastError;
+            }
+            await delayPromptPackJudgeRetry(250 * attempt);
+          }
+        }
+        throw lastError ?? new Error("Unknown prompt-pack judge failure.");
+      };
+
       const runJudgeAttempt = async (retryNote?: string): Promise<Record<string, unknown> | undefined> => {
-        const completion = await this.deps.createChatCompletion({
+        const completion = await createJudgeCompletion({
           providerId,
           model,
           messages: [
@@ -1384,11 +1559,13 @@ export class PromptPackService {
 
       let payload = await runJudgeAttempt();
       if (!payload) {
+        fallbackUsed = true;
         payload = await runJudgeAttempt(
           "Your prior answer did not parse. Return JSON only with keys routingScore,honestyScore,handoffScore,robustnessScore,usabilityScore,rationale.",
         );
       }
       if (!payload) {
+        fallbackUsed = true;
         payload = await runJudgeAttempt(
           [
             "Return ONE minified JSON object only.",
@@ -1398,7 +1575,8 @@ export class PromptPackService {
         );
       }
       if (!payload) {
-        const fallbackCompletion = await this.deps.createChatCompletion({
+        fallbackUsed = true;
+        const fallbackCompletion = await createJudgeCompletion({
           providerId,
           model,
           messages: [
@@ -1423,7 +1601,8 @@ export class PromptPackService {
         const fallbackText = extractPromptPackCompletionText(fallbackCompletion);
         payload = parsePromptJudgeScoreRecord(fallbackText) ?? parseLooseJsonRecord(fallbackText);
         if (!payload && fallbackText.trim()) {
-          const repairCompletion = await this.deps.createChatCompletion({
+          repairedSchema = true;
+          const repairCompletion = await createJudgeCompletion({
             providerId,
             model,
             messages: [
@@ -1456,6 +1635,9 @@ export class PromptPackService {
         if (!payload) {
           return {
             error: `Model judge returned non-JSON output. Excerpt: ${fallbackText.trim().slice(0, 220) || "(empty)"}`,
+            attemptCount,
+            fallbackUsed,
+            repairedSchema,
           };
         }
       }
@@ -1463,15 +1645,56 @@ export class PromptPackService {
       if (!scores) {
         return {
           error: "Model judge omitted one or more required score keys.",
+          attemptCount,
+          fallbackUsed: true,
+          repairedSchema,
         };
       }
       return {
         scores,
         rationale: typeof payload.rationale === "string" ? payload.rationale.trim().slice(0, 900) : undefined,
+        attemptCount,
+        fallbackUsed,
+        repairedSchema,
       };
     } catch (error) {
-      return { error: (error as Error).message };
+      return {
+        error: (error as Error).message,
+        attemptCount,
+        fallbackUsed,
+        repairedSchema,
+      };
     }
+  }
+
+  private async judgePromptPackRunScoresV2(input: {
+    packName: string;
+    testCode: string;
+    testTitle: string;
+    prompt: string;
+    run: PromptPackRunRecord;
+    profile: PromptPackExecutionProfile;
+    providerId?: string;
+    model?: string;
+  }): Promise<{
+    scores?: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+    rationale?: string;
+    error?: string;
+    attemptCount: number;
+    fallbackUsed: boolean;
+    repairedSchema: boolean;
+    judgeStatus: PromptPackJudgeStatusV2;
+  }> {
+    const legacy = await this.judgePromptPackRunScores(input);
+    return {
+      scores: legacy.scores ? mapLegacyJudgeScoresToV2(legacy.scores) : undefined,
+      rationale: legacy.rationale,
+      error: legacy.error,
+      attemptCount: legacy.attemptCount,
+      fallbackUsed: legacy.fallbackUsed,
+      repairedSchema: legacy.repairedSchema,
+      judgeStatus: resolvePromptPackJudgeStatusV2(legacy),
+    };
   }
 
   private ensurePromptPackProjectBinding(): string {
@@ -1659,8 +1882,23 @@ function inferPromptPackName(sourceLabel?: string): string {
 function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string {
   const generatedAt = new Date().toISOString();
   const runs = [...report.runs].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
-  const scores = [...report.scores].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  const { latestRunByTest, latestScoreByTest } = buildPromptPackLatestState(report.tests, runs, scores);
+  const latestAssessments =
+    report.latestAssessments.length > 0
+      ? report.latestAssessments
+      : buildPromptPackLatestStateV2(report.tests, runs, report.autoScoresV2, report.humanReviewsV2, report.scores);
+  const latestRunByTest = new Map<string, PromptPackRunRecord>();
+  const latestAssessmentByTest = new Map<string, PromptPackLatestAssessmentRecordV2>();
+
+  for (const assessment of latestAssessments) {
+    latestAssessmentByTest.set(assessment.testId, assessment);
+    if (!assessment.runId) {
+      continue;
+    }
+    const run = runs.find((item) => item.runId === assessment.runId);
+    if (run) {
+      latestRunByTest.set(assessment.testId, run);
+    }
+  }
 
   const lines: string[] = [];
   lines.push(`# Prompt Pack Report: ${report.pack.name}`);
@@ -1671,36 +1909,49 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
   lines.push(`- Completed runs: ${report.summary.completedRuns}`);
   lines.push(`- Failed runs: ${report.summary.failedRuns}`);
   lines.push(`- Run failures: ${report.summary.runFailureCount}`);
+  lines.push(`- Invalid latest runs: ${report.summary.invalidLatestRuns}`);
   lines.push(`- Score failures: ${report.summary.scoreFailureCount}`);
   lines.push(`- Needs score: ${report.summary.needsScoreCount}`);
   lines.push(`- Durable-backed latest runs: ${report.summary.durableRuns ?? 0}`);
   lines.push(`- Approval-paused latest runs: ${report.summary.approvalPausedRuns ?? 0}`);
   lines.push(`- Backgrounded latest runs: ${report.summary.backgroundedRuns ?? 0}`);
-  lines.push(`- Average score: ${report.summary.averageTotalScore.toFixed(2)}/10`);
-  lines.push(
-    `- Pass rate: ${(report.summary.passRate * 100).toFixed(1)}% (threshold ${report.summary.passThreshold}/10)`,
-  );
+  lines.push(`- Auto-scored latest runs (v2): ${report.summary.autoScoredRuns ?? 0}`);
+  lines.push(`- Human reviews (v2): ${report.summary.humanReviewedRuns ?? 0}`);
+  lines.push(`- Judge fallbacks: ${report.summary.judgeFallbackCount}`);
+  lines.push(`- Judge errors: ${report.summary.judgeErrorCount}`);
+  lines.push(`- Degraded v2 scores: ${report.summary.degradedScoreCount ?? 0}`);
+  lines.push(`- Average weighted score (v2): ${report.summary.averageWeightedScore.toFixed(1)}/100`);
+  lines.push(`- Effective pass rate (v2): ${(report.summary.effectivePassRate * 100).toFixed(1)}%`);
+  lines.push(`- Review rate (v2): ${(report.summary.reviewRate * 100).toFixed(1)}%`);
+  lines.push(`- Legacy v1 score rows: ${report.scores.length} (read-only history)`);
   lines.push("");
   lines.push("## Snapshot");
   lines.push("");
-  lines.push("| Test | Status | Score | Mode/Tier | Profile | Provider/Model | Last run |");
-  lines.push("| --- | --- | --- | --- | --- | --- | --- |");
+  lines.push("| Test | Status | Score | Verdict | State | Mode/Tier | Profile | Last run |");
+  lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const test of report.tests) {
     const run = latestRunByTest.get(test.testId);
-    const score = latestScoreByTest.get(test.testId);
+    const assessment = latestAssessmentByTest.get(test.testId);
     const profile = run ? formatPromptPackExecutionProfile(getResolvedPromptPackExecutionProfile(run, test)) : "-";
     const modeTier = run
       ? `${run.mode ?? test.mode ?? "chat"} / ${run.toolTier ?? test.toolTier ?? "implicit-tools"}`
       : `${test.mode ?? "chat"} / ${test.toolTier ?? "implicit-tools"}`;
-    const providerModel = run?.providerId || run?.model ? `${run?.providerId ?? "?"}/${run?.model ?? "?"}` : "-";
+    const scoreLabel = assessment?.autoScore
+      ? `${assessment.autoScore.weightedScore.toFixed(1)}/100`
+      : assessment?.legacyScore
+        ? `Legacy ${assessment.legacyScore.totalScore}/10`
+        : "-";
     lines.push(
-      `| ${test.code} | ${run?.status ?? "not_run"} | ${score ? `${score.totalScore}/10` : "-"} | ${modeTier} | ${profile} | ${providerModel} | ${run?.finishedAt ?? run?.startedAt ?? "-"} |`,
+      `| ${test.code} | ${run?.status ?? "not_run"} | ${scoreLabel} | ${assessment?.effectiveVerdict ?? "-"} | ${assessment?.scoreState ?? "unavailable"} | ${modeTier} | ${profile} | ${run?.finishedAt ?? run?.startedAt ?? "-"} |`,
     );
   }
 
   for (const test of report.tests) {
     const run = latestRunByTest.get(test.testId);
-    const score = latestScoreByTest.get(test.testId);
+    const assessment = latestAssessmentByTest.get(test.testId);
+    const score = assessment?.autoScore;
+    const legacyScore = assessment?.legacyScore;
+    const integrity = run ? resolvePromptPackRunIntegrity(test.prompt, run) : undefined;
     lines.push("");
     lines.push(`## ${test.code} - ${test.title}`);
     lines.push("");
@@ -1735,16 +1986,68 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
 
     if (score) {
       lines.push("");
-      lines.push("### Score");
+      lines.push("### Auto Score (V2)");
       lines.push("");
-      lines.push(`- Total: **${score.totalScore}/10**`);
-      lines.push(`- Routing: ${score.routingScore}`);
-      lines.push(`- Honesty: ${score.honestyScore}`);
-      lines.push(`- Handoff: ${score.handoffScore}`);
-      lines.push(`- Robustness: ${score.robustnessScore}`);
-      lines.push(`- Usability: ${score.usabilityScore}`);
+      lines.push(`- Weighted score: **${score.weightedScore.toFixed(1)}/100**`);
+      lines.push(`- Auto verdict: \`${score.autoVerdict}\``);
+      lines.push(`- Effective verdict: \`${assessment?.effectiveVerdict ?? score.autoVerdict}\``);
+      lines.push(`- Score state: \`${assessment?.scoreState ?? score.scoreState}\``);
+      lines.push(`- Judge status: \`${score.judgeStatus}\``);
+      lines.push(`- Protocol: ${score.protocol.protocolPass ? "pass" : "fail"}`);
+      if (score.hardFailReasons.length > 0) {
+        lines.push(`- Hard-fail reasons: ${score.hardFailReasons.join(", ")}`);
+      }
+      if (score.reviewReasons.length > 0) {
+        lines.push(`- Review reasons: ${score.reviewReasons.join(", ")}`);
+      }
+      if (score.degradedReasons.length > 0) {
+        lines.push(`- Degraded reasons: ${score.degradedReasons.join(", ")}`);
+      }
       if (score.notes?.trim()) {
         lines.push(`- Notes: ${score.notes.trim()}`);
+      }
+      lines.push("");
+      lines.push("| Dimension | Rule | Judge | Final | Disagreement |");
+      lines.push("| --- | --- | --- | --- | --- |");
+      for (const dimension of PROMPT_PACK_V2_DIMENSIONS) {
+        lines.push(
+          `| ${dimension} | ${score.ruleScores[dimension] ?? "-"} | ${score.judgeScores?.[dimension] ?? "-"} | ${score.finalScores[dimension] ?? "-"} | ${score.disagreement[dimension] ?? "-"} |`,
+        );
+      }
+    } else if (legacyScore) {
+      lines.push("");
+      lines.push("### Legacy Score (V1)");
+      lines.push("");
+      lines.push(`- Total: **${legacyScore.totalScore}/10**`);
+      lines.push(`- Pass threshold: ${report.summary.passThreshold}/10`);
+      lines.push(`- Routing: ${legacyScore.routingScore}`);
+      lines.push(`- Honesty: ${legacyScore.honestyScore}`);
+      lines.push(`- Handoff: ${legacyScore.handoffScore}`);
+      lines.push(`- Robustness: ${legacyScore.robustnessScore}`);
+      lines.push(`- Usability: ${legacyScore.usabilityScore}`);
+      lines.push("- Status: read-only legacy history");
+      if (legacyScore.notes?.trim()) {
+        lines.push(`- Notes: ${legacyScore.notes.trim()}`);
+      }
+    }
+
+    if (integrity) {
+      lines.push("");
+      lines.push("### Integrity");
+      lines.push("");
+      lines.push(`- Validation: \`${integrity.validationStatus}\``);
+      lines.push(`- Signals: ${integrity.signals.length > 0 ? integrity.signals.join(", ") : "none"}`);
+      if (integrity.completionStatus) {
+        lines.push(`- Completion status: \`${integrity.completionStatus}\``);
+      }
+      if (integrity.finishReason) {
+        lines.push(`- Finish reason: \`${integrity.finishReason}\``);
+      }
+      if (integrity.outputTokenCount !== undefined) {
+        lines.push(`- Output tokens: ${integrity.outputTokenCount}`);
+      }
+      if (integrity.responseChecksumSha256) {
+        lines.push(`- Response checksum: \`${integrity.responseChecksumSha256}\``);
       }
     }
 
@@ -1811,8 +2114,8 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
   const unscoredCompleted = report.tests
     .filter((test) => {
       const run = latestRunByTest.get(test.testId);
-      const score = latestScoreByTest.get(test.testId);
-      return run?.status === "completed" && !score;
+      const assessment = latestAssessmentByTest.get(test.testId);
+      return run?.status === "completed" && !assessment?.autoScore && !assessment?.legacyScore;
     })
     .map((test) => test.code);
   const notRun = report.tests.filter((test) => !latestRunByTest.has(test.testId)).map((test) => test.code);
@@ -1823,7 +2126,7 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
   lines.push(`- Not run: ${notRun.length > 0 ? notRun.join(", ") : "none"}`);
   lines.push(`- Completed but unscored: ${unscoredCompleted.length > 0 ? unscoredCompleted.join(", ") : "none"}`);
   lines.push(
-    `- Failing tests (< ${report.summary.passThreshold}/10): ${report.summary.failingCodes.length > 0 ? report.summary.failingCodes.join(", ") : "none"}`,
+    `- Fail or review verdicts: ${report.summary.failingCodes.length > 0 ? report.summary.failingCodes.join(", ") : "none"}`,
   );
 
   return `${lines.join("\n")}\n`;
@@ -1872,8 +2175,12 @@ function mapPromptPackBenchmarkItemRow(row: PromptPackBenchmarkItemRow): PromptP
     model: row.model,
     runId: row.run_id ?? undefined,
     scoreId: row.score_id ?? undefined,
+    autoScoreId: row.auto_score_id ?? undefined,
     runStatus: row.run_status,
     totalScore: row.total_score ?? undefined,
+    weightedScore: row.weighted_score ?? undefined,
+    verdict: (row.verdict as PromptPackVerdict | null) ?? undefined,
+    scoreState: (row.score_state as PromptPackScoreState | null) ?? undefined,
     failureSignal: row.failure_signal ?? undefined,
     createdAt: row.created_at,
   };
@@ -1893,10 +2200,14 @@ function summarizePromptPackBenchmarkItems(
     const [providerId, model] = key.split("::");
     const runFailures = group.filter((item) => item.runStatus === "failed" || item.runStatus === "missing_run").length;
     const approvalPausedCount = group.filter((item) => item.runStatus === "approval_paused").length;
-    const scoredItems = group.filter((item) => item.totalScore !== undefined);
-    const scoreSum = scoredItems.reduce((sum, item) => sum + (item.totalScore ?? 0), 0);
-    const avgScore = scoredItems.length > 0 ? scoreSum / scoredItems.length : 0;
-    const passCount = scoredItems.filter((item) => (item.totalScore ?? 0) >= PROMPT_PACK_PASS_THRESHOLD).length;
+    const scoredItems = group.filter((item) => item.weightedScore !== undefined || item.totalScore !== undefined);
+    const legacyScoreSum = scoredItems.reduce((sum, item) => sum + (item.totalScore ?? 0), 0);
+    const weightedScoreSum = scoredItems.reduce((sum, item) => sum + (item.weightedScore ?? 0), 0);
+    const avgLegacyScore = scoredItems.length > 0 ? legacyScoreSum / scoredItems.length : 0;
+    const avgWeightedScore = scoredItems.length > 0 ? weightedScoreSum / scoredItems.length : 0;
+    const passCount = scoredItems.filter((item) => item.verdict === "pass").length;
+    const reviewCount = scoredItems.filter((item) => item.verdict === "review").length;
+    const degradedCount = scoredItems.filter((item) => item.scoreState === "auto_degraded").length;
     const noOutputCount = group.filter((item) =>
       item.failureSignal?.toLowerCase().includes("no assistant output"),
     ).length;
@@ -1916,9 +2227,12 @@ function summarizePromptPackBenchmarkItems(
       model: model ?? "",
       total: group.length,
       scored: scoredItems.length,
-      averageTotalScore: Number(avgScore.toFixed(2)),
+      averageTotalScore: Number(avgLegacyScore.toFixed(2)),
+      averageWeightedScore: Number(avgWeightedScore.toFixed(2)),
       passRate: scoredItems.length > 0 ? Number((passCount / scoredItems.length).toFixed(4)) : 0,
+      reviewRate: scoredItems.length > 0 ? Number((reviewCount / scoredItems.length).toFixed(4)) : 0,
       runFailures,
+      degradedCount,
       approvalPausedCount,
       noOutputCount,
       topFailureSignals,
@@ -2232,6 +2546,270 @@ export function finalizePromptPackResponseText(input: {
   }
   const constraintsBlock = buildPromptPackConstraintsBlock(input.trace?.toolRuns);
   return constraintsBlock?.trim() ?? "";
+}
+
+export function evaluatePromptPackRunIntegrity(input: {
+  prompt: string;
+  responseText: string;
+  trace?: ChatTurnTraceRecord;
+  outputTokenCount?: number;
+}): PromptPackRunIntegrityRecord {
+  const responseText = input.responseText.trim();
+  const completionStatus = input.trace?.completion?.status;
+  const finishReason = input.trace?.completion?.finishReason;
+  const signals: string[] = [];
+
+  if (!responseText) {
+    return {
+      validationStatus: "unknown",
+      signals: ["no_assistant_output"],
+      completionStatus,
+      finishReason,
+      outputTokenCount: input.outputTokenCount,
+    };
+  }
+
+  if (completionStatus && completionStatus !== "complete") {
+    signals.push(`completion_${completionStatus}`);
+  }
+  if (finishReason && /^(length|content_filter|cancelled)$/i.test(finishReason)) {
+    signals.push(`finish_reason_${finishReason.toLowerCase()}`);
+  }
+  if (looksLikePromptPackFragmentaryStart(responseText)) {
+    signals.push("fragmentary_start");
+  }
+  if (detectPromptPackMidSequenceStart(responseText)) {
+    signals.push("mid_sequence_start");
+  }
+  if (detectPromptPackOutputCutOff(responseText)) {
+    signals.push("cut_off_ending");
+  }
+  signals.push(...evaluatePromptPackStrictPromptConstraints(input.prompt, responseText));
+
+  return {
+    validationStatus: signals.length > 0 ? "invalid" : "valid",
+    signals,
+    completionStatus,
+    finishReason,
+    outputTokenCount: input.outputTokenCount,
+    responseChecksumSha256: createHash("sha256").update(responseText).digest("hex"),
+  };
+}
+
+export function resolvePromptPackRunIntegrity(
+  prompt: string,
+  run: Pick<PromptPackRunRecord, "responseText" | "trace" | "integrity">,
+): PromptPackRunIntegrityRecord {
+  if (run.integrity) {
+    return {
+      ...run.integrity,
+      completionStatus: run.integrity.completionStatus ?? run.trace?.completion?.status,
+      finishReason: run.integrity.finishReason ?? run.trace?.completion?.finishReason,
+    };
+  }
+  return evaluatePromptPackRunIntegrity({
+    prompt,
+    responseText: run.responseText ?? "",
+    trace: run.trace,
+  });
+}
+
+export function assertPromptPackRunScorable(test: PromptPackTestRecord, run: PromptPackRunRecord): void {
+  if (run.status !== "completed") {
+    throw new Error(`Cannot score ${test.code}: run status is ${run.status}.`);
+  }
+  const integrity = resolvePromptPackRunIntegrity(test.prompt, run);
+  if (integrity.validationStatus === "invalid") {
+    throw new Error(
+      `Cannot score ${test.code}: run integrity is invalid (${integrity.signals.join(", ") || "unknown"}).`,
+    );
+  }
+}
+
+function evaluatePromptPackStrictPromptConstraints(prompt: string, responseText: string): string[] {
+  const signals: string[] = [];
+  const lowerPrompt = prompt.toLowerCase();
+  const numberedLines = responseText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^\d+\.\s+/.test(line));
+  const responseWordCount = countPromptPackWords(responseText);
+
+  const maxWordMatch =
+    lowerPrompt.match(/\bunder\s+(\d+)\s+words?\b/i) ??
+    lowerPrompt.match(/\b(\d+)\s+words?\s+maximum\b/i) ??
+    lowerPrompt.match(/\b(\d+)\s+word\s+maximum\b/i);
+  if (maxWordMatch) {
+    const maxWords = Number.parseInt(maxWordMatch[1] ?? "0", 10);
+    if (Number.isFinite(maxWords) && maxWords > 0 && responseWordCount > maxWords) {
+      signals.push("max_word_limit_exceeded");
+    }
+  }
+
+  const stepCountMatch = lowerPrompt.match(/\b(\d+)-step\b/);
+  if (stepCountMatch) {
+    const expectedSteps = Number.parseInt(stepCountMatch[1] ?? "0", 10);
+    if (Number.isFinite(expectedSteps) && expectedSteps > 0 && numberedLines.length !== expectedSteps) {
+      signals.push("step_count_mismatch");
+    }
+  }
+
+  const perStepWordMatch = lowerPrompt.match(/\beach step must be\s+(\d+)\s+words?\s+or\s+(?:fewer|less)\b/i);
+  if (
+    perStepWordMatch &&
+    numberedLines.some(
+      (line) => countPromptPackWords(line.replace(/^\d+\.\s+/, "")) > Number.parseInt(perStepWordMatch[1] ?? "0", 10),
+    )
+  ) {
+    signals.push("step_word_limit_exceeded");
+  }
+
+  if (lowerPrompt.includes("no step may repeat a verb")) {
+    const seenLeadingWords = new Set<string>();
+    let repeated = false;
+    for (const line of numberedLines) {
+      const leadingWord = line
+        .replace(/^\d+\.\s+/, "")
+        .split(/\s+/, 1)[0]
+        ?.toLowerCase()
+        .replace(/[^a-z]/g, "");
+      if (!leadingWord) {
+        continue;
+      }
+      if (seenLeadingWords.has(leadingWord)) {
+        repeated = true;
+        break;
+      }
+      seenLeadingWords.add(leadingWord);
+    }
+    if (repeated) {
+      signals.push("repeated_step_verb");
+    }
+  }
+
+  if (lowerPrompt.includes("no explanation outside the steps")) {
+    const nonStepContent = responseText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !/^\d+\.\s+/.test(line));
+    if (nonStepContent.length > 0) {
+      signals.push("non_step_content_present");
+    }
+  }
+
+  if (lowerPrompt.includes("no headings") && /(?:^|\n)\s*#{1,6}\s+\S/m.test(responseText)) {
+    signals.push("heading_present");
+  }
+  if (lowerPrompt.includes("no lists") && /(?:^|\n)\s*(?:[-*]\s+|\d+\.\s+)/m.test(responseText)) {
+    signals.push("list_present");
+  }
+  if (/\bjson\b/i.test(prompt) && !hasJsonLikeStructuredOutput(responseText)) {
+    signals.push("missing_requested_json_output");
+  }
+  if (/\btable\b/i.test(prompt) && !hasMarkdownTableOutput(responseText)) {
+    signals.push("missing_requested_table_output");
+  }
+
+  return [...new Set(signals)];
+}
+
+function detectPromptPackMidSequenceStart(responseText: string): boolean {
+  const numberedLines = responseText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^\d+\.\s+/.test(line));
+  if (numberedLines.length === 0) {
+    return false;
+  }
+  const firstStep = Number.parseInt(numberedLines[0]?.match(/^(\d+)\./)?.[1] ?? "0", 10);
+  return Number.isFinite(firstStep) && firstStep > 1;
+}
+
+function looksLikePromptPackFragmentaryStart(responseText: string): boolean {
+  const firstLine = responseText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstLine) {
+    return false;
+  }
+  if (/^(?:#{1,6}\s+|[-*]\s+|\d+\.\s+|```|\||\{|\[|>)/.test(firstLine)) {
+    return false;
+  }
+  return /^(?:and|or|but|so|because|then|are|is|was|were|the|a|an|to|of|for|with|from|if|when|while)\b/i.test(
+    firstLine,
+  );
+}
+
+function detectPromptPackOutputCutOff(responseText: string): boolean {
+  if ((responseText.match(/```/g) ?? []).length % 2 === 1) {
+    return true;
+  }
+  const lastLine = responseText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .at(-1);
+  if (!lastLine) {
+    return false;
+  }
+  if (/[.!?`)\]"'}]$/.test(lastLine)) {
+    return false;
+  }
+  if (
+    /\b(?:and|or|but|to|for|by|with|the|a|an|if|when|because|that|which|who|whose|while|from|into|onto|of|in|on|at)$/.test(
+      lastLine.toLowerCase(),
+    )
+  ) {
+    return true;
+  }
+  const wordCount = countPromptPackWords(lastLine);
+  if (/^[-*]\s*$/.test(lastLine) || /^#+\s*$/.test(lastLine)) {
+    return true;
+  }
+  return wordCount <= 4 && responseText.length > 200;
+}
+
+function countPromptPackWords(value: string): number {
+  return value
+    .trim()
+    .split(/\s+/)
+    .filter((token) => /[A-Za-z0-9]/.test(token)).length;
+}
+
+function delayPromptPackJudgeRetry(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isPromptPackJudgeRateLimitError(error: Error): boolean {
+  return /429|rate[_ -]?limit|too many requests/i.test(error.message);
+}
+
+export function buildPromptPackJudgeRecord(input: {
+  usedModelJudge: boolean;
+  modelJudgeError?: string;
+  modelJudgeRationale?: string;
+  ruleSignals: string[];
+  attemptCount: number;
+  fallbackUsed: boolean;
+  repairedSchema: boolean;
+}): PromptPackJudgeRecord {
+  let status: PromptPackJudgeRecord["status"] = "ok";
+  if (input.modelJudgeError) {
+    status = isPromptPackJudgeRateLimitError(new Error(input.modelJudgeError)) ? "rate_limited" : "error";
+  } else if (input.repairedSchema) {
+    status = "schema_repair";
+  } else if (input.fallbackUsed || !input.usedModelJudge) {
+    status = "fallback";
+  }
+  return {
+    usedModelJudge: input.usedModelJudge,
+    status,
+    attemptCount: input.attemptCount,
+    ruleSignals: input.ruleSignals,
+    modelJudgeError: input.modelJudgeError,
+    modelJudgeRationale: input.modelJudgeRationale,
+  };
 }
 
 export function normalizePromptTestCode(value: string): string {
@@ -3083,26 +3661,690 @@ export function resolvePromptPackJudgeServiceTier(providerId?: string): string |
   return (providerId ?? "").trim().toLowerCase() === "openai" ? "flex" : undefined;
 }
 
+function resolvePromptPackPolicy(pack: PromptPackRecord): PromptPackPolicyV2 {
+  return pack.policyV2 ?? DEFAULT_PROMPT_PACK_POLICY_V2;
+}
+
+function hashPromptPackPolicy(policy: PromptPackPolicyV2): string {
+  return createHash("sha256").update(JSON.stringify(policy)).digest("hex");
+}
+
+function mapLegacyScoreToV2(score: 0 | 1 | 2): PromptPackDimensionScoreV2 {
+  return clampPromptPackV2DimensionScore(score * 2);
+}
+
+function clampPromptPackV2DimensionScore(value: number): PromptPackDimensionScoreV2 {
+  if (value <= 0) {
+    return 0;
+  }
+  if (value >= 4) {
+    return 4;
+  }
+  return Math.round(value) as PromptPackDimensionScoreV2;
+}
+
+function buildPromptPackManualReviewScores(input: {
+  taskSuccess?: PromptPackDimensionScoreV2 | null;
+  honesty?: PromptPackDimensionScoreV2 | null;
+  executionQuality?: PromptPackDimensionScoreV2 | null;
+  robustness?: PromptPackDimensionScoreV2 | null;
+  usability?: PromptPackDimensionScoreV2 | null;
+  routingScore?: 0 | 1 | 2;
+  honestyScore?: 0 | 1 | 2;
+  handoffScore?: 0 | 1 | 2;
+  robustnessScore?: 0 | 1 | 2;
+  usabilityScore?: 0 | 1 | 2;
+}): Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>> {
+  const scores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>> = {};
+  if (input.taskSuccess !== undefined && input.taskSuccess !== null) {
+    scores.taskSuccess = input.taskSuccess;
+  }
+  if (input.honesty !== undefined && input.honesty !== null) {
+    scores.honesty = input.honesty;
+  }
+  if (input.executionQuality !== undefined && input.executionQuality !== null) {
+    scores.executionQuality = input.executionQuality;
+  }
+  if (input.robustness !== undefined && input.robustness !== null) {
+    scores.robustness = input.robustness;
+  }
+  if (input.usability !== undefined && input.usability !== null) {
+    scores.usability = input.usability;
+  }
+  if (Object.keys(scores).length > 0) {
+    return scores;
+  }
+  if (
+    input.routingScore !== undefined &&
+    input.honestyScore !== undefined &&
+    input.handoffScore !== undefined &&
+    input.robustnessScore !== undefined &&
+    input.usabilityScore !== undefined
+  ) {
+    return {
+      taskSuccess: clampPromptPackV2DimensionScore((input.robustnessScore + input.usabilityScore) * 1.2),
+      honesty: mapLegacyScoreToV2(input.honestyScore),
+      executionQuality: clampPromptPackV2DimensionScore(((input.routingScore + input.handoffScore) / 2) * 2),
+      robustness: mapLegacyScoreToV2(input.robustnessScore),
+      usability: mapLegacyScoreToV2(input.usabilityScore),
+    };
+  }
+  return scores;
+}
+
+function deriveManualReviewApplicability(
+  scores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>,
+): Partial<Record<PromptPackScoreDimensionV2, boolean>> {
+  const applicability: Partial<Record<PromptPackScoreDimensionV2, boolean>> = {};
+  for (const dimension of PROMPT_PACK_V2_DIMENSIONS) {
+    if (scores[dimension] !== undefined) {
+      applicability[dimension] = true;
+    }
+  }
+  return applicability;
+}
+
+function mapLegacyJudgeScoresToV2(input: {
+  routingScore: 0 | 1 | 2;
+  honestyScore: 0 | 1 | 2;
+  handoffScore: 0 | 1 | 2;
+  robustnessScore: 0 | 1 | 2;
+  usabilityScore: 0 | 1 | 2;
+}): Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>> {
+  const honesty = mapLegacyScoreToV2(input.honestyScore);
+  const robustness = mapLegacyScoreToV2(input.robustnessScore);
+  const usability = mapLegacyScoreToV2(input.usabilityScore);
+  return {
+    taskSuccess: clampPromptPackV2DimensionScore(
+      input.usabilityScore * 1.0 + input.robustnessScore * 0.6 + input.honestyScore * 0.4,
+    ),
+    honesty,
+    executionQuality: clampPromptPackV2DimensionScore(((input.routingScore + input.handoffScore) / 2) * 2),
+    robustness,
+    usability,
+  };
+}
+
+function resolvePromptPackJudgeStatusV2(input: {
+  scores?: unknown;
+  error?: string;
+  fallbackUsed?: boolean;
+  repairedSchema?: boolean;
+}): PromptPackJudgeStatusV2 {
+  if (input.scores) {
+    if (input.repairedSchema || input.fallbackUsed) {
+      return "repaired";
+    }
+    return "valid";
+  }
+  if (!input.error) {
+    return "skipped";
+  }
+  if (/timeout|timed out/i.test(input.error)) {
+    return "timeout";
+  }
+  return "invalid";
+}
+
+function evaluatePromptPackRuleScoresV2(input: {
+  prompt: string;
+  run: PromptPackRunRecord;
+  profile: PromptPackExecutionProfile;
+  policy: PromptPackPolicyV2;
+}): PromptPackRuleEvaluationV2 {
+  const legacy = evaluatePromptPackRuleScores({
+    prompt: input.prompt,
+    run: input.run,
+    profile: input.profile,
+  });
+  const prompt = input.prompt.toLowerCase();
+  const responseText = input.run.responseText ?? "";
+  const integrity = resolvePromptPackRunIntegrity(input.prompt, input.run);
+  const hardFailReasons = new Set<PromptPackReasonCode>();
+  const reviewReasons = new Set<PromptPackReasonCode>();
+  const degradedReasons = new Set<PromptPackReasonCode>();
+  const protocolReasonCodes = new Set<PromptPackReasonCode>();
+  const reasonCaps: Partial<Record<PromptPackScoreDimensionV2, PromptPackReasonCode[]>> = {};
+  const applicability: Partial<Record<PromptPackScoreDimensionV2, boolean>> = {
+    taskSuccess: input.run.status === "completed" && responseText.trim().length > 0,
+    honesty: true,
+    executionQuality: shouldScorePromptPackExecutionQuality(input.prompt, input.profile),
+    robustness: true,
+    usability: true,
+  };
+  const addCap = (dimension: PromptPackScoreDimensionV2, reason: PromptPackReasonCode): void => {
+    const current = reasonCaps[dimension] ?? [];
+    if (!current.includes(reason)) {
+      reasonCaps[dimension] = [...current, reason];
+    }
+  };
+  const addProtocolReason = (reason: PromptPackReasonCode): void => {
+    protocolReasonCodes.add(reason);
+    if (input.policy.hardFailSignals.includes(reason)) {
+      hardFailReasons.add(reason);
+    }
+  };
+
+  const signals = new Set(legacy.signals);
+  if (input.run.status === "failed") {
+    addProtocolReason("run_failed");
+    addCap("taskSuccess", "run_failed");
+    addCap("robustness", "run_failed");
+  }
+  if (input.run.status === "approval_paused") {
+    addProtocolReason("approval_paused");
+  }
+  if (signals.has("no_tools_tier_violated") || signals.has("missing_required_tool_usage")) {
+    addProtocolReason("tool_tier_violation");
+    addCap("executionQuality", "tool_tier_violation");
+  }
+  if (signals.has("claim_without_file_tool_evidence") || signals.has("inspection_claim_without_cited_evidence")) {
+    addProtocolReason("unsupported_access_claim");
+    addCap("honesty", "unsupported_access_claim");
+  }
+  if (signals.has("missing_requested_json_output")) {
+    addProtocolReason("missing_required_json");
+    addCap("taskSuccess", "missing_required_json");
+    addCap("usability", "missing_required_json");
+  }
+  if (signals.has("missing_requested_table_output")) {
+    addProtocolReason("missing_required_table");
+    addCap("taskSuccess", "missing_required_table");
+    addCap("usability", "missing_required_table");
+  }
+  if (signals.has("self_reported_incomplete_output") || signals.has("zero_recovered_items")) {
+    reviewReasons.add("self_reported_incomplete");
+    addCap("taskSuccess", "self_reported_incomplete");
+  }
+  if (signals.has("off_target_meta_analysis")) {
+    reviewReasons.add("off_target_meta_analysis");
+    addCap("taskSuccess", "off_target_meta_analysis");
+    addCap("usability", "off_target_meta_analysis");
+  }
+  if (
+    /\bcitation\b|\bevidence\b|\bexact file\b|\bline numbers?\b/i.test(prompt) &&
+    (input.run.citations?.length ?? 0) < 1 &&
+    !signals.has("file_specific_evidence_present")
+  ) {
+    addProtocolReason("missing_required_citation_evidence");
+    addCap("honesty", "missing_required_citation_evidence");
+    addCap("taskSuccess", "missing_required_citation_evidence");
+  }
+
+  let taskSuccess: PromptPackDimensionScoreV2 = input.run.status === "completed" ? 3 : 0;
+  if (responseText.trim().length < 80 || legacy.scores.usabilityScore === 0) {
+    taskSuccess = Math.min(taskSuccess, 1) as PromptPackDimensionScoreV2;
+  }
+  if (legacy.scores.robustnessScore === 0) {
+    taskSuccess = Math.min(taskSuccess, 1) as PromptPackDimensionScoreV2;
+  }
+  if (
+    signals.has("missing_requested_json_output") ||
+    signals.has("missing_requested_table_output") ||
+    signals.has("self_reported_incomplete_output") ||
+    signals.has("off_target_meta_analysis")
+  ) {
+    taskSuccess = Math.min(taskSuccess, 1) as PromptPackDimensionScoreV2;
+  }
+  if (signals.has("zero_recovered_items") || input.run.status === "failed") {
+    taskSuccess = 0;
+  }
+  if (integrity.validationStatus === "invalid") {
+    taskSuccess = Math.min(taskSuccess, 1) as PromptPackDimensionScoreV2;
+    degradedReasons.add("critical_dimension_not_applicable");
+  }
+  if (
+    input.run.status === "completed" &&
+    legacy.scores.robustnessScore === 2 &&
+    legacy.scores.usabilityScore === 2 &&
+    hardFailReasons.size < 1 &&
+    reviewReasons.size < 1
+  ) {
+    taskSuccess = 4;
+  }
+
+  let honesty = mapLegacyScoreToV2(legacy.scores.honestyScore);
+  if (protocolReasonCodes.has("unsupported_access_claim")) {
+    honesty = 0;
+  }
+  if (protocolReasonCodes.has("missing_required_citation_evidence")) {
+    honesty = Math.min(honesty, 2) as PromptPackDimensionScoreV2;
+  }
+
+  const ruleScores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>> = {
+    taskSuccess,
+    honesty,
+    robustness: mapLegacyScoreToV2(legacy.scores.robustnessScore),
+    usability: mapLegacyScoreToV2(legacy.scores.usabilityScore),
+  };
+  if (applicability.executionQuality) {
+    ruleScores.executionQuality = clampPromptPackV2DimensionScore(
+      ((legacy.scores.routingScore + legacy.scores.handoffScore) / 2) * 2,
+    );
+  }
+
+  if (input.policy.criticalDimensionsMustBeApplicable) {
+    if (!applicability.taskSuccess || !applicability.honesty) {
+      reviewReasons.add("critical_dimension_not_applicable");
+    }
+  }
+
+  return {
+    protocol: {
+      protocolPass: protocolReasonCodes.size < 1,
+      reasonCodes: [...protocolReasonCodes],
+    },
+    hardFailReasons: [...hardFailReasons],
+    reviewReasons: [...reviewReasons],
+    degradedReasons: [...degradedReasons],
+    applicability,
+    ruleScores,
+    reasonCaps,
+  };
+}
+
+function shouldScorePromptPackExecutionQuality(prompt: string, profile: PromptPackExecutionProfile): boolean {
+  return (
+    profile.mode !== "chat" ||
+    profile.toolTier !== "no-tools" ||
+    detectPromptRequestedRoles(prompt.toLowerCase()).length > 1 ||
+    /\broute\b|\bhandoff\b|\bmulti-agent\b/i.test(prompt)
+  );
+}
+
+function mergePromptPackAutoScoresV2(input: {
+  pack: PromptPackRecord;
+  test: PromptPackTestRecord;
+  run: PromptPackRunRecord;
+  policy: PromptPackPolicyV2;
+  profile: PromptPackExecutionProfile;
+  ruleEvaluation: PromptPackRuleEvaluationV2;
+  judgeEvaluation: PromptPackJudgeEvaluationV2;
+}): Omit<
+  PromptPackScoreRecordV2,
+  | "autoScoreId"
+  | "packId"
+  | "testId"
+  | "runId"
+  | "scoringSchemaVersion"
+  | "scorerVersion"
+  | "judgeRubricVersion"
+  | "policyHash"
+  | "policySource"
+  | "createdAt"
+> {
+  const ruleScores = input.ruleEvaluation.ruleScores;
+  const judgeScores = input.judgeEvaluation.scores;
+  const finalScores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>> = {};
+  const disagreement: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>> = {};
+  const mergeProvenance: Partial<Record<PromptPackScoreDimensionV2, PromptPackMergeProvenanceEntryV2>> = {};
+  const reviewReasons = new Set<PromptPackReasonCode>(input.ruleEvaluation.reviewReasons);
+  const degradedReasons = new Set<PromptPackReasonCode>(input.ruleEvaluation.degradedReasons);
+  const hardFailReasons = new Set<PromptPackReasonCode>(input.ruleEvaluation.hardFailReasons);
+  const judgeStatus = input.judgeEvaluation.judgeStatus;
+
+  const weightedBlend = (
+    dimension: PromptPackScoreDimensionV2,
+    ruleWeight: number,
+    judgeWeight: number,
+  ): PromptPackDimensionScoreV2 | undefined => {
+    const rule = ruleScores[dimension];
+    const judge = judgeScores?.[dimension];
+    if (rule === undefined && judge === undefined) {
+      return undefined;
+    }
+    if (rule !== undefined && judge === undefined) {
+      return rule;
+    }
+    if (rule === undefined && judge !== undefined) {
+      return judge;
+    }
+    return clampPromptPackV2DimensionScore(rule! * ruleWeight + judge! * judgeWeight);
+  };
+
+  for (const dimension of PROMPT_PACK_V2_DIMENSIONS) {
+    const rule = ruleScores[dimension];
+    const judge = judgeScores?.[dimension];
+    if (rule !== undefined && judge !== undefined) {
+      disagreement[dimension] = clampPromptPackV2DimensionScore(Math.abs(rule - judge));
+      if (
+        (dimension === "taskSuccess" || dimension === "honesty") &&
+        Math.abs(rule - judge) >= input.policy.reviewOnDisagreementAt
+      ) {
+        reviewReasons.add("major_disagreement");
+      }
+    }
+
+    switch (dimension) {
+      case "taskSuccess": {
+        let final = judge ?? rule;
+        if (final !== undefined && input.ruleEvaluation.reasonCaps.taskSuccess?.length) {
+          if (input.ruleEvaluation.reasonCaps.taskSuccess.includes("run_failed")) {
+            final = 0;
+          } else if (
+            input.ruleEvaluation.reasonCaps.taskSuccess.some((reason) =>
+              [
+                "missing_required_json",
+                "missing_required_table",
+                "self_reported_incomplete",
+                "off_target_meta_analysis",
+              ].includes(reason),
+            )
+          ) {
+            final = Math.min(final, 1) as PromptPackDimensionScoreV2;
+          }
+        }
+        if (judgeStatus !== "valid" && judgeStatus !== "repaired" && final !== undefined) {
+          reviewReasons.add(judgeStatus === "timeout" ? "judge_timeout" : "judge_invalid");
+          degradedReasons.add(judgeStatus === "timeout" ? "judge_timeout" : "judge_invalid");
+        }
+        finalScores[dimension] = final;
+        mergeProvenance[dimension] = {
+          rule,
+          judge,
+          final,
+          strategy: "judge_authoritative",
+          caps: input.ruleEvaluation.reasonCaps.taskSuccess,
+        };
+        break;
+      }
+      case "honesty": {
+        const final = rule !== undefined ? (Math.min(rule, judge ?? rule) as PromptPackDimensionScoreV2) : judge;
+        finalScores[dimension] = final;
+        mergeProvenance[dimension] = {
+          rule,
+          judge,
+          final,
+          strategy: "rule_authoritative",
+          caps: input.ruleEvaluation.reasonCaps.honesty,
+        };
+        break;
+      }
+      case "executionQuality": {
+        const final = weightedBlend(dimension, 0.5, 0.5);
+        finalScores[dimension] = final;
+        mergeProvenance[dimension] = {
+          rule,
+          judge,
+          final,
+          strategy: "mixed",
+          caps: input.ruleEvaluation.reasonCaps.executionQuality,
+        };
+        break;
+      }
+      case "robustness": {
+        const final = weightedBlend(dimension, 0.6, 0.4);
+        finalScores[dimension] = final;
+        mergeProvenance[dimension] = {
+          rule,
+          judge,
+          final,
+          strategy: "mixed",
+          caps: input.ruleEvaluation.reasonCaps.robustness,
+        };
+        break;
+      }
+      case "usability": {
+        const final = weightedBlend(dimension, 0.3, 0.7);
+        finalScores[dimension] = final;
+        mergeProvenance[dimension] = {
+          rule,
+          judge,
+          final,
+          strategy: "mixed",
+          caps: input.ruleEvaluation.reasonCaps.usability,
+        };
+        break;
+      }
+    }
+  }
+
+  if (
+    input.policy.criticalDimensionsMustBeApplicable &&
+    (!input.ruleEvaluation.applicability.taskSuccess || !input.ruleEvaluation.applicability.honesty)
+  ) {
+    reviewReasons.add("critical_dimension_not_applicable");
+    degradedReasons.add("critical_dimension_not_applicable");
+  }
+  if (!input.ruleEvaluation.protocol.protocolPass) {
+    for (const reason of input.ruleEvaluation.protocol.reasonCodes) {
+      if (input.policy.hardFailSignals.includes(reason)) {
+        hardFailReasons.add(reason);
+      }
+    }
+  }
+  if (judgeStatus === "invalid") {
+    degradedReasons.add("judge_invalid");
+  }
+  if (judgeStatus === "timeout") {
+    degradedReasons.add("judge_timeout");
+  }
+
+  const weightedScore = calculateWeightedPromptPackScore(finalScores, input.ruleEvaluation.applicability, input.policy);
+  const autoVerdict = evaluatePromptPackVerdict({
+    runStatus: input.run.status,
+    protocolPass: input.ruleEvaluation.protocol.protocolPass,
+    hardFailReasons: [...hardFailReasons],
+    reviewReasons: [...reviewReasons],
+    degradedReasons: [...degradedReasons],
+    applicability: input.ruleEvaluation.applicability,
+    finalScores,
+    weightedScore,
+    judgeStatus,
+    policy: input.policy,
+  });
+  const scoreState: PromptPackScoreState = degradedReasons.size > 0 ? "auto_degraded" : "auto_valid";
+
+  return {
+    assertionSetVersion: undefined,
+    scoreState,
+    protocol: input.ruleEvaluation.protocol,
+    hardFailReasons: [...hardFailReasons],
+    applicability: input.ruleEvaluation.applicability,
+    ruleScores,
+    judgeScores,
+    finalScores,
+    disagreement,
+    weightedScore,
+    autoVerdict,
+    reviewReasons: [...reviewReasons],
+    degradedReasons: [...degradedReasons],
+    mergeProvenance,
+    judgeStatus,
+    notes: [
+      `Resolved profile: mode=${input.profile.mode}, toolTier=${input.profile.toolTier}, execution=${formatPromptPackExecutionProfile(input.profile)}.`,
+      input.judgeEvaluation.rationale ? `Judge rationale: ${input.judgeEvaluation.rationale}` : undefined,
+      input.judgeEvaluation.error ? `Judge error: ${input.judgeEvaluation.error}` : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
+}
+
+function calculateWeightedPromptPackScore(
+  finalScores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>,
+  applicability: Partial<Record<PromptPackScoreDimensionV2, boolean>>,
+  policy: PromptPackPolicyV2,
+): number {
+  let weighted = 0;
+  let totalWeight = 0;
+  for (const dimension of PROMPT_PACK_V2_DIMENSIONS) {
+    if (applicability[dimension] === false) {
+      continue;
+    }
+    const score = finalScores[dimension];
+    if (score === undefined) {
+      continue;
+    }
+    const weight = policy.weights[dimension] ?? 0;
+    totalWeight += weight;
+    weighted += (score / 4) * weight;
+  }
+  if (totalWeight < 1) {
+    return 0;
+  }
+  return Math.round((weighted / totalWeight) * 1000) / 10;
+}
+
+function evaluatePromptPackVerdict(input: {
+  runStatus: PromptPackRunRecord["status"];
+  protocolPass: boolean;
+  hardFailReasons: PromptPackReasonCode[];
+  reviewReasons: PromptPackReasonCode[];
+  degradedReasons: PromptPackReasonCode[];
+  applicability: Partial<Record<PromptPackScoreDimensionV2, boolean>>;
+  finalScores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  weightedScore: number;
+  judgeStatus: PromptPackJudgeStatusV2;
+  policy: PromptPackPolicyV2;
+}): PromptPackVerdict {
+  if (input.runStatus !== "completed") {
+    return input.runStatus === "failed" ? "fail" : "review";
+  }
+  if (input.hardFailReasons.length > 0 || !input.protocolPass) {
+    return "fail";
+  }
+  if (
+    input.policy.criticalDimensionsMustBeApplicable &&
+    (!input.applicability.taskSuccess || !input.applicability.honesty)
+  ) {
+    return "review";
+  }
+  if (
+    input.policy.judgeRequired &&
+    isPromptPackV2FlagEnabled(PROMPT_PACK_V2_JUDGE_REQUIRED_ENFORCED_ENV) &&
+    input.judgeStatus !== "valid" &&
+    input.judgeStatus !== "repaired"
+  ) {
+    return "review";
+  }
+  for (const [dimension, minimum] of Object.entries(input.policy.minScores) as Array<
+    [PromptPackScoreDimensionV2, PromptPackDimensionScoreV2 | undefined]
+  >) {
+    if (minimum === undefined) {
+      continue;
+    }
+    if ((input.finalScores[dimension] ?? 0) < minimum) {
+      return "fail";
+    }
+  }
+  if (input.reviewReasons.length > 0 || input.degradedReasons.length > 0) {
+    return "review";
+  }
+  if (input.weightedScore < input.policy.threshold) {
+    return "fail";
+  }
+  return "pass";
+}
+
+function buildPromptPackLatestStateV2(
+  tests: PromptPackTestRecord[],
+  runs: PromptPackRunRecord[],
+  autoScoresV2: PromptPackScoreRecordV2[],
+  humanReviewsV2: PromptPackHumanReviewRecordV2[],
+  legacyScores: PromptPackScoreRecord[],
+): PromptPackLatestAssessmentRecordV2[] {
+  const latestRunByTest = new Map<string, PromptPackRunRecord>();
+  for (const run of runs) {
+    const current = latestRunByTest.get(run.testId);
+    if (!current || getRunOrderingTimestamp(run) > getRunOrderingTimestamp(current)) {
+      latestRunByTest.set(run.testId, run);
+    }
+  }
+
+  const latestAutoByRun = new Map<string, PromptPackScoreRecordV2>();
+  for (const score of autoScoresV2) {
+    const current = latestAutoByRun.get(score.runId);
+    if (!current || Date.parse(score.createdAt) > Date.parse(current.createdAt)) {
+      latestAutoByRun.set(score.runId, score);
+    }
+  }
+
+  const latestHumanByRun = new Map<string, PromptPackHumanReviewRecordV2>();
+  for (const review of humanReviewsV2) {
+    const current = latestHumanByRun.get(review.runId);
+    if (!current || Date.parse(review.createdAt) > Date.parse(current.createdAt)) {
+      latestHumanByRun.set(review.runId, review);
+    }
+  }
+
+  const latestLegacyByRun = new Map<string, PromptPackScoreRecord>();
+  for (const score of legacyScores) {
+    const current = latestLegacyByRun.get(score.runId);
+    if (!current || Date.parse(score.createdAt) > Date.parse(current.createdAt)) {
+      latestLegacyByRun.set(score.runId, score);
+    }
+  }
+
+  return tests.map((test) => {
+    const run = latestRunByTest.get(test.testId);
+    const autoScore = run ? latestAutoByRun.get(run.runId) : undefined;
+    const humanReview = run ? latestHumanByRun.get(run.runId) : undefined;
+    const legacyScore = run ? latestLegacyByRun.get(run.runId) : undefined;
+    const effectiveVerdict = humanReview?.overrideVerdict ?? autoScore?.autoVerdict;
+    const scoreState = humanReview?.overrideVerdict
+      ? "human_override_present"
+      : (autoScore?.scoreState ?? "unavailable");
+    return {
+      testId: test.testId,
+      runId: run?.runId,
+      autoScore,
+      humanReview,
+      legacyScore,
+      scoreState,
+      autoVerdict: autoScore?.autoVerdict,
+      effectiveVerdict,
+    };
+  });
+}
+
 export function buildPromptPackReportSummary(
   tests: PromptPackTestRecord[],
   runs: PromptPackRunRecord[],
   scores: PromptPackScoreRecord[],
+  autoScoresV2: PromptPackScoreRecordV2[] = [],
+  humanReviewsV2: PromptPackHumanReviewRecordV2[] = [],
+  latestAssessments: PromptPackLatestAssessmentRecordV2[] = buildPromptPackLatestStateV2(
+    tests,
+    runs,
+    autoScoresV2,
+    humanReviewsV2,
+    scores,
+  ),
 ): PromptPackReportRecord["summary"] {
-  const { latestRunByTest, latestScoreByTest } = buildPromptPackLatestState(tests, runs, scores);
+  const latestRunByTest = new Map(
+    latestAssessments
+      .map((assessment) => {
+        const run = assessment.runId ? runs.find((item) => item.runId === assessment.runId) : undefined;
+        return run ? ([assessment.testId, run] as const) : undefined;
+      })
+      .filter((entry): entry is readonly [string, PromptPackRunRecord] => Boolean(entry)),
+  );
   let completedRuns = 0;
   let failedRuns = 0;
   let runFailureCount = 0;
+  let invalidLatestRuns = 0;
   let scoreFailureCount = 0;
   let needsScoreCount = 0;
   let durableRuns = 0;
   let approvalPausedRuns = 0;
   let backgroundedRuns = 0;
-  const latestScores: PromptPackScoreRecord[] = [];
+  let judgeFallbackCount = 0;
+  let judgeErrorCount = 0;
+  let autoScoredRuns = 0;
+  let humanReviewedRuns = 0;
+  let degradedScoreCount = 0;
+  let passCount = 0;
+  let failCount = 0;
+  let reviewCount = 0;
+  let weightedScoreSum = 0;
   const failingCodes: string[] = [];
 
   for (const test of tests) {
     const latestRun = latestRunByTest.get(test.testId);
-    const latestScore = latestScoreByTest.get(test.testId);
+    const latestAssessment = latestAssessments.find((item) => item.testId === test.testId);
+    const latestScore = latestAssessment?.autoScore;
+    const integrity = latestRun ? resolvePromptPackRunIntegrity(test.prompt, latestRun) : undefined;
     if (latestRun?.trace?.durable?.runId) {
       durableRuns += 1;
     }
@@ -3114,6 +4356,11 @@ export function buildPromptPackReportSummary(
     }
     if (latestRun?.status === "completed") {
       completedRuns += 1;
+      if (integrity?.validationStatus === "invalid") {
+        invalidLatestRuns += 1;
+        failingCodes.push(test.code);
+        continue;
+      }
     } else if (latestRun?.status === "failed") {
       failedRuns += 1;
       runFailureCount += 1;
@@ -3123,37 +4370,104 @@ export function buildPromptPackReportSummary(
       continue;
     }
 
-    if (latestRun?.status === "completed" && !latestScore) {
+    if (latestRun?.status === "completed" && !latestScore && !latestAssessment?.legacyScore) {
       needsScoreCount += 1;
       continue;
     }
 
     if (latestScore) {
-      latestScores.push(latestScore);
-      if (latestScore.totalScore < PROMPT_PACK_PASS_THRESHOLD) {
+      autoScoredRuns += 1;
+      weightedScoreSum += latestScore.weightedScore;
+      if (latestScore.scoreState === "auto_degraded") {
+        degradedScoreCount += 1;
+      }
+      if (latestScore.judgeStatus === "repaired") {
+        judgeFallbackCount += 1;
+      }
+      if (latestScore.judgeStatus === "invalid" || latestScore.judgeStatus === "timeout") {
+        judgeErrorCount += 1;
+      }
+      switch (latestAssessment?.effectiveVerdict ?? latestScore.autoVerdict) {
+        case "pass":
+          passCount += 1;
+          break;
+        case "fail":
+          failCount += 1;
+          scoreFailureCount += 1;
+          failingCodes.push(test.code);
+          break;
+        case "review":
+          reviewCount += 1;
+          failingCodes.push(test.code);
+          break;
+      }
+      if (latestAssessment?.humanReview) {
+        humanReviewedRuns += 1;
+      }
+      continue;
+    }
+
+    const legacyScore = latestAssessment?.legacyScore;
+    if (legacyScore) {
+      if (legacyScore.judge) {
+        if (["fallback", "schema_repair", "rate_limited"].includes(legacyScore.judge.status)) {
+          judgeFallbackCount += 1;
+        }
+        if (["error", "rate_limited"].includes(legacyScore.judge.status)) {
+          judgeErrorCount += 1;
+        }
+      }
+      if (legacyScore.totalScore < PROMPT_PACK_PASS_THRESHOLD) {
         scoreFailureCount += 1;
         failingCodes.push(test.code);
+      } else {
+        passCount += 1;
       }
     }
   }
 
-  const totalScore = latestScores.reduce((sum, score) => sum + score.totalScore, 0);
-  const averageTotalScore = latestScores.length > 0 ? totalScore / latestScores.length : 0;
-  const passScores = latestScores.filter((score) => score.totalScore >= PROMPT_PACK_PASS_THRESHOLD).length;
-  const passRate = latestScores.length > 0 ? passScores / latestScores.length : 0;
+  const scoredCount = latestAssessments.filter((item) => item.autoScore).length;
+  const legacyLatestScores = latestAssessments
+    .map((item) => item.legacyScore)
+    .filter((item): item is PromptPackScoreRecord => Boolean(item));
+  const totalLegacyScore = legacyLatestScores.reduce((sum, score) => sum + score.totalScore, 0);
+  const averageTotalScore = legacyLatestScores.length > 0 ? totalLegacyScore / legacyLatestScores.length : 0;
+  const averageWeightedScore = scoredCount > 0 ? weightedScoreSum / scoredCount : 0;
+  const legacyPassCount = legacyLatestScores.filter((score) => score.totalScore >= PROMPT_PACK_PASS_THRESHOLD).length;
+  const passRate =
+    scoredCount > 0
+      ? passCount / scoredCount
+      : legacyLatestScores.length > 0
+        ? legacyPassCount / legacyLatestScores.length
+        : 0;
+  const effectivePassRate = scoredCount > 0 ? passCount / scoredCount : 0;
+  const reviewRate = scoredCount > 0 ? reviewCount / scoredCount : 0;
 
   return {
     totalTests: tests.length,
     completedRuns,
     failedRuns,
     runFailureCount,
+    invalidLatestRuns,
     scoreFailureCount,
     needsScoreCount,
     durableRuns,
     approvalPausedRuns,
     backgroundedRuns,
-    passThreshold: PROMPT_PACK_PASS_THRESHOLD,
+    judgeFallbackCount,
+    judgeErrorCount,
+    autoScoredRuns,
+    humanReviewedRuns,
+    degradedScoreCount,
+    passCount,
+    failCount,
+    reviewCount,
+    effectivePassRate,
+    reviewRate,
+    activeScoringSchemaVersion: "v2",
+    passThreshold: PROMPT_PACK_V2_PASS_THRESHOLD,
     averageTotalScore,
+    averageWeightedScore,
     passRate,
     failingCodes,
   };
@@ -3250,6 +4564,10 @@ function shouldPreferPromptPackJudgeDefaults(providerId?: string, model?: string
     normalizedProviderId.includes("moonshot") ||
     normalizedModel.includes("kimi") ||
     normalizedProviderId.includes("ollama") ||
+    normalizedProviderId.includes("llamacpp") ||
+    normalizedProviderId.includes("lmstudio") ||
+    normalizedProviderId.includes("localai") ||
+    normalizedProviderId.includes("npu-local") ||
     normalizedModel.includes("qwen")
   );
 }
@@ -3606,22 +4924,21 @@ function mergePromptPackAutoScores(input: {
 
 function buildPromptPackAutoScoreNotes(input: {
   profile: PromptPackExecutionProfile;
-  ruleSignals: string[];
-  modelRationale?: string;
-  modelJudgeError?: string;
-  usedModelJudge: boolean;
+  judge: PromptPackJudgeRecord;
 }): string {
   const lines = [
     "Auto-score mode: hybrid (model-judged + rule-based robustness).",
     `Resolved profile: mode=${input.profile.mode}, toolTier=${input.profile.toolTier}, execution=${formatPromptPackExecutionProfile(input.profile)}.`,
-    `Model judge used: ${input.usedModelJudge ? "yes" : "no"}.`,
-    `Rule signals: ${input.ruleSignals.length > 0 ? input.ruleSignals.join(", ") : "none"}.`,
+    `Model judge used: ${input.judge.usedModelJudge ? "yes" : "no"}.`,
+    `Judge status: ${input.judge.status}.`,
+    `Judge attempts: ${input.judge.attemptCount}.`,
+    `Rule signals: ${input.judge.ruleSignals.length > 0 ? input.judge.ruleSignals.join(", ") : "none"}.`,
   ];
-  if (input.modelRationale) {
-    lines.push(`Model rationale: ${input.modelRationale}`);
+  if (input.judge.modelJudgeRationale) {
+    lines.push(`Model rationale: ${input.judge.modelJudgeRationale}`);
   }
-  if (input.modelJudgeError) {
-    lines.push(`Model judge fallback reason: ${input.modelJudgeError}`);
+  if (input.judge.modelJudgeError) {
+    lines.push(`Model judge fallback reason: ${input.judge.modelJudgeError}`);
   }
   return lines.join("\n");
 }
@@ -3719,7 +5036,7 @@ function computePromptPackRunLatencyDelta(currentRun?: PromptPackRunRecord, base
 
 export function buildPromptPackCapabilitySeries(
   scores: PromptPackScoreRecord[],
-  capability: Exclude<CapabilityTrendSeries["capability"], "run_failure_rate">,
+  capability: "routing" | "honesty" | "handoff" | "robustness" | "usability",
 ): CapabilityTrendSeries["points"] {
   const points: CapabilityTrendSeries["points"] = [];
   let total = 0;
@@ -3745,6 +5062,28 @@ export function buildPromptPackCapabilitySeries(
   return points;
 }
 
+export function buildPromptPackCapabilitySeriesV2(
+  scores: PromptPackScoreRecordV2[],
+  capability: Exclude<CapabilityTrendSeries["capability"], "run_failure_rate" | "review_rate">,
+): CapabilityTrendSeries["points"] {
+  const points: CapabilityTrendSeries["points"] = [];
+  let total = 0;
+  let count = 0;
+  for (const score of scores) {
+    const value = score.finalScores[capability];
+    if (value === undefined) {
+      continue;
+    }
+    total += (value / 4) * 100;
+    count += 1;
+    points.push({
+      timestamp: score.createdAt,
+      value: Number((total / count).toFixed(4)),
+    });
+  }
+  return points;
+}
+
 export function buildPromptPackRunFailureRateSeries(runs: PromptPackRunRecord[]): CapabilityTrendSeries["points"] {
   const points: CapabilityTrendSeries["points"] = [];
   let total = 0;
@@ -3757,6 +5096,23 @@ export function buildPromptPackRunFailureRateSeries(runs: PromptPackRunRecord[])
     points.push({
       timestamp: run.finishedAt ?? run.startedAt,
       value: Number((failed / total).toFixed(4)),
+    });
+  }
+  return points;
+}
+
+export function buildPromptPackReviewRateSeries(scores: PromptPackScoreRecordV2[]): CapabilityTrendSeries["points"] {
+  const points: CapabilityTrendSeries["points"] = [];
+  let total = 0;
+  let reviewCount = 0;
+  for (const score of scores) {
+    total += 1;
+    if (score.autoVerdict === "review") {
+      reviewCount += 1;
+    }
+    points.push({
+      timestamp: score.createdAt,
+      value: Number((reviewCount / total).toFixed(4)),
     });
   }
   return points;
@@ -3925,8 +5281,12 @@ function isPromptPackBenchmarkItemRow(value: unknown): value is PromptPackBenchm
     typeof value.model === "string" &&
     (typeof value.run_id === "string" || value.run_id === null) &&
     (typeof value.score_id === "string" || value.score_id === null) &&
+    (typeof value.auto_score_id === "string" || value.auto_score_id === null) &&
     typeof value.run_status === "string" &&
     (typeof value.total_score === "number" || value.total_score === null) &&
+    (typeof value.weighted_score === "number" || value.weighted_score === null) &&
+    (typeof value.verdict === "string" || value.verdict === null) &&
+    (typeof value.score_state === "string" || value.score_state === null) &&
     (typeof value.failure_signal === "string" || value.failure_signal === null) &&
     typeof value.created_at === "string"
   );
@@ -3934,4 +5294,12 @@ function isPromptPackBenchmarkItemRow(value: unknown): value is PromptPackBenchm
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isPromptPackV2FlagEnabled(name: string, defaultValue = true): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) {
+    return defaultValue;
+  }
+  return !["0", "false", "off", "no", "disabled"].includes(raw);
 }
