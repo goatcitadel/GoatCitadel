@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import {
   connectEventStream,
   fetchAgents,
@@ -20,19 +20,15 @@ import type {
   OperatorPreset,
 } from "../components/OfficeCanvas";
 import { OfficeCanvasErrorBoundary } from "../components/OfficeCanvasErrorBoundary";
+import { OfficeInspectorPanel } from "./office/OfficeInspectorPanel";
 import { OfficeOperationsDock } from "./office/OfficeOperationsDock";
-import { OfficeStageControlBar } from "./office/OfficeStageControlBar";
-import { OfficeKpiGrid } from "./office/OfficeKpiGrid";
-import { FieldHelp } from "../components/FieldHelp";
-import { PageGuideCard } from "../components/PageGuideCard";
-import { PageHeader } from "../components/PageHeader";
-import { Panel } from "../components/Panel";
-import { SelectOrCustom } from "../components/SelectOrCustom";
-import { StatusChip } from "../components/StatusChip";
+import { OfficeOverviewPanel } from "./office/OfficeOverviewPanel";
+import { OfficeStagePanel } from "./office/OfficeStagePanel";
+import { useOfficeStageState } from "./office/useOfficeStageState";
 import { CardSkeleton } from "../components/CardSkeleton";
+import { PageHeader } from "../components/PageHeader";
 import { pageCopy } from "../content/copy";
 import "../styles/office.css";
-import { GCSelect } from "../components/ui";
 import { OFFICE_ZONE_ORDER, inferOfficeZone, officeZoneLabel, type OfficeZoneId } from "../data/office-zones";
 
 import {
@@ -45,13 +41,7 @@ import {
   MAX_EVENTS,
   MAX_VISIBLE_COLLAB_EDGES,
   MAX_VISIBLE_ZONE_LANES,
-  MOTION_MODE_OPTIONS,
   OFFICE_PAGE_VARIANTS,
-  OPERATOR_NAME_OPTIONS,
-  PLAYBACK_SPEED_OPTIONS,
-  PLAYBACK_STEP_MS,
-  PLAYBACK_WINDOW_MS,
-  PRESET_DETAILS,
   PRESET_OPTIONS,
   SNAPSHOT_INTERVAL_MS,
   WARM_AGENT_WINDOW_MS,
@@ -62,15 +52,12 @@ import {
 import {
   asRecord,
   asString,
-  attentionLabel,
-  attentionPillClass,
   buildOperatorThought,
   classifyAgentHeat,
   extractSessionId,
   extractTaskId,
   formatClock,
   formatRelative,
-  initials,
   normalize,
   parseTimestamp,
   persistOperatorPreferences,
@@ -120,20 +107,11 @@ export function OfficePage({ variant = "stable", onOpenLab }: OfficePageProps) {
   const [operators, setOperators] = useState<OperatorsResponse["items"]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalsResponse["items"]>([]);
   const [events, setEvents] = useState<RealtimeEvent[]>([]);
-  const [selectedEntityId, setSelectedEntityId] = useState<SelectedEntityId>("operator");
   const [operatorPrefs, setOperatorPrefs] = useState<OperatorPreferences>(() =>
     readOperatorPreferences(variantConfig.storageKey, variantConfig.defaultPrefs),
   );
   const [assetPack, setAssetPack] = useState<OfficeAssetPack>({});
-  const [dockTab, setDockTab] = useState<OfficeDockTab>(variantConfig.initialDockTab);
-  const [focusedZoneOverride, setFocusedZoneOverride] = useState<OfficeZoneId | null>(null);
-  const [playback, setPlayback] = useState<PlaybackState>({
-    mode: "live",
-    playing: false,
-    speed: 2,
-  });
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
-  const [sceneReady, setSceneReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [streamHealthy, setStreamHealthy] = useState(false);
@@ -243,303 +221,6 @@ export function OfficePage({ variant = "stable", onOpenLab }: OfficePageProps) {
     };
   }, []);
 
-  const sortedEvents = useMemo(() => sortEvents(events), [events]);
-  const replayWindow = useMemo(() => {
-    const newestTimestamp = parseTimestamp(sortedEvents[0]?.timestamp) || Date.now();
-    const startTime = newestTimestamp - PLAYBACK_WINDOW_MS;
-    const replayableEvents = sortedEvents.filter((event) => parseTimestamp(event.timestamp) >= startTime);
-    const earliestReplayTimestamp = parseTimestamp(replayableEvents.at(-1)?.timestamp);
-    return {
-      newestTimestamp,
-      replayableEvents,
-      startTime: earliestReplayTimestamp || startTime,
-      endTime: newestTimestamp,
-    };
-  }, [sortedEvents]);
-  const playbackCursorTime = playback.mode === "replay" ? (playback.cursorTime ?? replayWindow.startTime) : undefined;
-  const sceneEvents = useMemo(() => {
-    if (playback.mode !== "replay") {
-      return sortedEvents;
-    }
-    return sortedEvents.filter((event) => {
-      const timestamp = parseTimestamp(event.timestamp);
-      return timestamp >= replayWindow.startTime && timestamp <= (playbackCursorTime ?? replayWindow.startTime);
-    });
-  }, [playback.mode, playbackCursorTime, replayWindow.startTime, sortedEvents]);
-  const officeAgents = useMemo(() => deriveOfficeAgents(directory, sceneEvents), [directory, sceneEvents]);
-  const officeAgentNamesByRole = useMemo(
-    () => new Map(officeAgents.map((agent) => [agent.roleId, agent.name])),
-    [officeAgents],
-  );
-  const collaborationEdges = useMemo(() => deriveCollaborationEdges(officeAgents), [officeAgents]);
-  const zoneActivityLanes = useMemo(() => deriveZoneActivityLanes(officeAgents), [officeAgents]);
-  const zoneTelemetry = useMemo(
-    () => deriveZoneTelemetry(officeAgents, zoneActivityLanes),
-    [officeAgents, zoneActivityLanes],
-  );
-  const signalRoutes = useMemo(() => deriveSignalRoutes(officeAgents), [officeAgents]);
-  const selectedAgent = useMemo(
-    () => officeAgents.find((agent) => agent.roleId === selectedEntityId),
-    [officeAgents, selectedEntityId],
-  );
-  const selectionZoneId = useMemo<OfficeZoneId>(
-    () => (selectedEntityId === "operator" ? "command" : (selectedAgent?.zoneId ?? "command")),
-    [selectedAgent?.zoneId, selectedEntityId],
-  );
-  const selectedZoneId = useMemo<OfficeZoneId>(
-    () => (operatorPrefs.focusMode ? (focusedZoneOverride ?? selectionZoneId) : selectionZoneId),
-    [focusedZoneOverride, operatorPrefs.focusMode, selectionZoneId],
-  );
-  const selectedZoneTelemetry = useMemo(
-    () => zoneTelemetry.find((zone) => zone.zoneId === selectedZoneId) ?? null,
-    [selectedZoneId, zoneTelemetry],
-  );
-  const stageZoneTelemetry = useMemo(
-    () => (operatorPrefs.focusMode ? zoneTelemetry.filter((zone) => zone.zoneId === selectedZoneId) : zoneTelemetry),
-    [operatorPrefs.focusMode, selectedZoneId, zoneTelemetry],
-  );
-  const selectedAgentHandoffs = useMemo(
-    () => (selectedAgent ? buildAgentHandoffs(selectedAgent, officeAgentNamesByRole) : []),
-    [officeAgentNamesByRole, selectedAgent],
-  );
-  const focusSummary = useMemo(() => {
-    if (!operatorPrefs.focusMode) {
-      return null;
-    }
-    if (selectedEntityId === "operator") {
-      return {
-        title: `${operatorPrefs.name} focus lens`,
-        summary: "Command view tightens around the bridge while the rest of the office quiets down.",
-        detail: selectedZoneTelemetry?.focus ?? "Command pressure is stable.",
-      };
-    }
-    return {
-      title: `${selectedAgent?.name ?? "Selected desk"} focus lens`,
-      summary: `${selectedAgent?.zoneLabel ?? officeZoneLabel(selectedZoneId)} takes priority, with background desks de-emphasized.`,
-      detail:
-        selectedAgent?.behaviorDirective ??
-        selectedAgent?.currentAction ??
-        selectedZoneTelemetry?.focus ??
-        "Selected desk is in focus.",
-    };
-  }, [
-    operatorPrefs.focusMode,
-    operatorPrefs.name,
-    selectedAgent?.behaviorDirective,
-    selectedAgent?.currentAction,
-    selectedAgent?.name,
-    selectedAgent?.zoneLabel,
-    selectedEntityId,
-    selectedZoneId,
-    selectedZoneTelemetry?.focus,
-  ]);
-
-  useEffect(() => {
-    if (selectedEntityId === "operator") {
-      return;
-    }
-    const exists = officeAgents.some((agent) => agent.roleId === selectedEntityId);
-    if (!exists) {
-      setSelectedEntityId("operator");
-    }
-  }, [officeAgents, selectedEntityId]);
-
-  useEffect(() => {
-    if (!operatorPrefs.focusMode) {
-      setFocusedZoneOverride(selectionZoneId);
-      return;
-    }
-    setFocusedZoneOverride((current) => current ?? selectionZoneId);
-  }, [operatorPrefs.focusMode, selectionZoneId]);
-
-  useEffect(() => {
-    if (playback.mode !== "replay") {
-      return;
-    }
-    setPlayback((current) => ({
-      ...current,
-      cursorTime: current.cursorTime ?? replayWindow.startTime,
-    }));
-  }, [playback.mode, replayWindow.startTime]);
-
-  useEffect(() => {
-    if (playback.mode !== "replay" || !playback.playing) {
-      return;
-    }
-    const interval = window.setInterval(() => {
-      setPlayback((current) => {
-        const baseCursor = current.cursorTime ?? replayWindow.startTime;
-        const nextCursor = baseCursor + PLAYBACK_STEP_MS * current.speed;
-        if (nextCursor >= replayWindow.endTime) {
-          return {
-            ...current,
-            cursorTime: replayWindow.endTime,
-            playing: false,
-          };
-        }
-        return {
-          ...current,
-          cursorTime: nextCursor,
-        };
-      });
-    }, 420);
-    return () => window.clearInterval(interval);
-  }, [playback.mode, playback.playing, replayWindow.endTime, replayWindow.startTime]);
-
-  useEffect(() => {
-    if (dockTab === "inspector" && operatorPrefs.showInspectorDock) {
-      return;
-    }
-    if (dockTab !== "inspector" && operatorPrefs.showRailDock) {
-      return;
-    }
-    if (operatorPrefs.showInspectorDock) {
-      setDockTab("inspector");
-      return;
-    }
-    if (operatorPrefs.showRailDock) {
-      setDockTab("operators");
-    }
-  }, [dockTab, operatorPrefs.showInspectorDock, operatorPrefs.showRailDock]);
-
-  const focusZone = useCallback(
-    (zoneId: OfficeZoneId) => {
-      setFocusedZoneOverride(zoneId);
-      if (zoneId === "command") {
-        setSelectedEntityId("operator");
-        return;
-      }
-      const preferredAgent =
-        officeAgents.find((agent) => agent.zoneId === zoneId && agent.attentionLevel === "priority") ??
-        officeAgents.find((agent) => agent.zoneId === zoneId && agent.attentionLevel === "watch") ??
-        officeAgents.find((agent) => agent.zoneId === zoneId);
-      if (preferredAgent) {
-        setSelectedEntityId(preferredAgent.roleId);
-      }
-    },
-    [officeAgents],
-  );
-
-  useEffect(() => {
-    if (!operatorPrefs.focusMode) {
-      return;
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (
-        target &&
-        (target instanceof HTMLInputElement ||
-          target instanceof HTMLTextAreaElement ||
-          target instanceof HTMLSelectElement ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
-      const zoneIndex = Number.parseInt(event.key, 10);
-      if (zoneIndex >= 1 && zoneIndex <= OFFICE_ZONE_ORDER.length) {
-        event.preventDefault();
-        focusZone(OFFICE_ZONE_ORDER[zoneIndex - 1] ?? "command");
-        return;
-      }
-      if (event.key !== "[" && event.key !== "]" && event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
-        return;
-      }
-      event.preventDefault();
-      const currentIndex = Math.max(0, OFFICE_ZONE_ORDER.indexOf(selectedZoneId));
-      const delta = event.key === "[" || event.key === "ArrowLeft" ? -1 : 1;
-      const nextIndex = (currentIndex + delta + OFFICE_ZONE_ORDER.length) % OFFICE_ZONE_ORDER.length;
-      focusZone(OFFICE_ZONE_ORDER[nextIndex] ?? "command");
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [focusZone, operatorPrefs.focusMode, selectedZoneId]);
-
-  const activeAgents = useMemo(() => officeAgents.filter((agent) => agent.status === "active").length, [officeAgents]);
-  const readyAgents = useMemo(() => officeAgents.filter((agent) => agent.status === "ready").length, [officeAgents]);
-  const eventFlow = useMemo(() => {
-    const anchorTime = playback.mode === "replay" ? (playbackCursorTime ?? replayWindow.startTime) : Date.now();
-    const threshold = anchorTime - EVENTS_PER_MINUTE_WINDOW_MS;
-    const count = sceneEvents.filter((event) => {
-      const timestamp = parseTimestamp(event.timestamp);
-      return timestamp >= threshold && timestamp <= anchorTime;
-    }).length;
-    return count / 5;
-  }, [playback.mode, playbackCursorTime, replayWindow.startTime, sceneEvents]);
-  const hotAgents = useMemo(
-    () => officeAgents.filter((agent) => classifyAgentHeat(agent.lastSeenAt) === "hot").length,
-    [officeAgents],
-  );
-  const blockedAgents = useMemo(
-    () => officeAgents.filter((agent) => agent.risk === "blocked" || agent.risk === "error").length,
-    [officeAgents],
-  );
-  const priorityAgents = useMemo(
-    () => officeAgents.filter((agent) => agent.attentionLevel === "priority").length,
-    [officeAgents],
-  );
-  const watchAgents = useMemo(
-    () => officeAgents.filter((agent) => agent.attentionLevel === "watch").length,
-    [officeAgents],
-  );
-
-  const operatorActivityState: OfficeOperatorModel["activityState"] = useMemo(() => {
-    if (activeAgents >= 3 || pendingApprovals.length > 0 || eventFlow >= 2.2) {
-      return "command_center";
-    }
-    return "idle_patrol";
-  }, [activeAgents, eventFlow, pendingApprovals.length]);
-
-  const effectiveMotionMode: OfficeMotionMode = prefersReducedMotion
-    ? "reduced"
-    : operatorPrefs.quietMode && operatorPrefs.motionMode === "cinematic"
-      ? "subtle"
-      : operatorPrefs.quietMode && operatorPrefs.motionMode === "balanced"
-        ? "subtle"
-        : operatorPrefs.quietMode && operatorPrefs.motionMode === "subtle"
-          ? "reduced"
-          : operatorPrefs.motionMode;
-  const sceneBusy = useMemo(
-    () =>
-      !operatorPrefs.quietMode && (blockedAgents > 0 || priorityAgents > 0 || activeAgents >= 4 || eventFlow >= 2.5),
-    [activeAgents, blockedAgents, eventFlow, operatorPrefs.quietMode, priorityAgents],
-  );
-  const goatAssetStatus = useMemo(() => describeGoatAssetStatus(assetPack), [assetPack]);
-  const sceneResetKey = useMemo(
-    () =>
-      [effectiveMotionMode, assetPack.goatModelPath ?? "procedural", assetPack.goatModelVariant ?? "procedural"].join(
-        "::",
-      ),
-    [assetPack.goatModelPath, assetPack.goatModelVariant, effectiveMotionMode],
-  );
-
-  const operatorModel: OfficeOperatorModel = useMemo(
-    () => ({
-      operatorId: "operator",
-      name: operatorPrefs.name,
-      preset: operatorPrefs.preset,
-      currentThought: buildOperatorThought({
-        activeAgents,
-        blockedAgents,
-        pendingApprovals: pendingApprovals.length,
-        eventFlow,
-      }),
-      activityState: operatorActivityState,
-    }),
-    [
-      activeAgents,
-      blockedAgents,
-      eventFlow,
-      operatorActivityState,
-      operatorPrefs.name,
-      operatorPrefs.preset,
-      pendingApprovals.length,
-    ],
-  );
-
-  useEffect(() => {
-    return scheduleSceneActivation(() => setSceneReady(true));
-  }, []);
-
   const officeCopy = pageCopy[variantConfig.pageId];
   const officeGuide = officeCopy.guide ?? {
     what: "Live WebGL operations room for agent activity.",
@@ -554,303 +235,61 @@ export function OfficePage({ variant = "stable", onOpenLab }: OfficePageProps) {
       { term: "Signal", meaning: "Realtime event from gateway, tools, tasks, or approvals." },
     ],
   };
-  const presetDetail = PRESET_DETAILS[operatorPrefs.preset];
-  const availableDockTabs = useMemo(() => {
-    const tabs: OfficeDockTab[] = [];
-    if (operatorPrefs.showInspectorDock) {
-      tabs.push("inspector");
-    }
-    if (operatorPrefs.showRailDock) {
-      tabs.push("operators", "approvals", "rail");
-    }
-    return tabs;
-  }, [operatorPrefs.showInspectorDock, operatorPrefs.showRailDock]);
-
-  const handleEntitySelect = (entityId: SelectedEntityId) => {
-    const nextZoneId =
-      entityId === "operator"
-        ? "command"
-        : (officeAgents.find((agent) => agent.roleId === entityId)?.zoneId ?? "command");
-    setSelectedEntityId(entityId);
-    if (operatorPrefs.focusMode) {
-      setFocusedZoneOverride(nextZoneId);
-    }
-    if (operatorPrefs.showInspectorDock) {
-      setDockTab("inspector");
-    }
-  };
-
-  const handlePlaybackModeChange = useCallback(
-    (mode: PlaybackState["mode"]) => {
-      setPlayback((current) => ({
-        ...current,
-        mode,
-        playing: mode === "replay" ? current.playing : false,
-        cursorTime: mode === "replay" ? (current.cursorTime ?? replayWindow.startTime) : undefined,
-      }));
-    },
-    [replayWindow.startTime],
-  );
-
-  const renderInspectorPanel = () => {
-    if (selectedEntityId === "operator") {
-      return (
-        <>
-          <header className="office-agent-header">
-            <div className="office-avatar office-avatar-hot">GH</div>
-            <div>
-              <h3>{operatorPrefs.name}</h3>
-              <p className="office-agent-id">GoatHerder - Central Herd Operator - Command Hub</p>
-            </div>
-            <span className="office-pill office-pill-active">{operatorModel.activityState.replace("_", " ")}</span>
-          </header>
-
-          <p>Coordinates specialist goats, approvals, and live mission flow from the center desk.</p>
-          <p>
-            <strong>Thinking:</strong> {operatorModel.currentThought}
-          </p>
-
-          <dl className="office-meta-grid">
-            <div>
-              <dt>Active goats</dt>
-              <dd>{activeAgents}</dd>
-            </div>
-            <div>
-              <dt>Pending approvals</dt>
-              <dd>{pendingApprovals.length}</dd>
-            </div>
-            <div>
-              <dt>Risked goats</dt>
-              <dd>{blockedAgents}</dd>
-            </div>
-            <div>
-              <dt>Event pace</dt>
-              <dd>{eventFlow.toFixed(1)}/min</dd>
-            </div>
-            <div>
-              <dt>Primary zone</dt>
-              <dd>Command Hub</dd>
-            </div>
-          </dl>
-
-          <h4>Zone Pressure</h4>
-          <div className="office-zone-grid office-zone-grid-compact">
-            {zoneTelemetry.map((zone) => (
-              <article key={zone.zoneId} className={`office-zone-card office-zone-card-${zone.attentionLevel}`}>
-                <div className="office-zone-card-head">
-                  <p className="office-zone-card-label">{zone.label}</p>
-                  <span className={`office-pill ${attentionPillClass(zone.attentionLevel)}`}>
-                    {attentionLabel(zone.attentionLevel)}
-                  </span>
-                </div>
-                <p className="office-zone-card-metrics">
-                  {zone.activeAgents} active · {zone.linkedAgents} linked · {zone.alertAgents} alerts
-                </p>
-                <p className="office-zone-card-focus">{zone.focus}</p>
-              </article>
-            ))}
-          </div>
-
-          <h4>Goatherder Preset</h4>
-          <div className="office-preset-active">
-            <span className={`office-preset-swatch ${presetDetail.swatchClass}`} aria-hidden="true" />
-            <div>
-              <p className="office-preset-title">{presetDetail.title}</p>
-              <p className="office-preset-copy">{presetDetail.description}</p>
-              <p className="office-preset-bestfor">{presetDetail.bestFor}</p>
-            </div>
-          </div>
-
-          <h4>Operator Customization</h4>
-          <div className="controls-row">
-            <label htmlFor="goatHerderName">Operator name</label>
-            <SelectOrCustom
-              id="goatHerderName"
-              value={operatorPrefs.name}
-              onChange={(name) => setOperatorPrefs((prev) => ({ ...prev, name: name || "GoatHerder" }))}
-              options={OPERATOR_NAME_OPTIONS}
-              customPlaceholder="Custom operator name"
-              customLabel="Operator name"
-            />
-          </div>
-          <FieldHelp>
-            Use a preset name or switch to custom if you want the Goatherder identity to match the current mission
-            theme.
-          </FieldHelp>
-          <div className="controls-row">
-            <label htmlFor="goatHerderPreset">Style preset</label>
-            <GCSelect
-              id="goatHerderPreset"
-              value={operatorPrefs.preset}
-              onChange={(value) =>
-                setOperatorPrefs((prev) => ({
-                  ...prev,
-                  preset: value as OperatorPreset,
-                }))
-              }
-              options={PRESET_OPTIONS}
-            />
-          </div>
-          <FieldHelp>
-            Presets adjust the Goatherder palette and scene mood without changing the underlying operator data.
-          </FieldHelp>
-          <div className="office-preset-grid">
-            {(Object.entries(PRESET_DETAILS) as Array<[OperatorPreset, (typeof PRESET_DETAILS)[OperatorPreset]]>).map(
-              ([key, detail]) => (
-                <article key={key} className={`office-preset-card ${operatorPrefs.preset === key ? "active" : ""}`}>
-                  <header>
-                    <span className={`office-preset-swatch ${detail.swatchClass}`} aria-hidden="true" />
-                    <strong>{detail.title}</strong>
-                  </header>
-                  <p>{detail.description}</p>
-                  <small>{detail.bestFor}</small>
-                </article>
-              ),
-            )}
-          </div>
-        </>
-      );
-    }
-
-    if (!selectedAgent) {
-      return <p>No goat selected.</p>;
-    }
-
-    return (
-      <>
-        <header className="office-agent-header">
-          <div className={`office-avatar office-avatar-${classifyAgentHeat(selectedAgent.lastSeenAt)}`}>
-            {initials(selectedAgent.name)}
-          </div>
-          <div>
-            <h3>{selectedAgent.name}</h3>
-            <p className="office-agent-id">
-              {selectedAgent.title} - {selectedAgent.zoneLabel}
-            </p>
-          </div>
-          <div className="office-agent-pills">
-            <span
-              className={`office-pill office-pill-${selectedAgent.status === "ready" ? "idle" : selectedAgent.status}`}
-            >
-              {selectedAgent.status}
-            </span>
-            <span className={`office-pill ${attentionPillClass(selectedAgent.attentionLevel)}`}>
-              {attentionLabel(selectedAgent.attentionLevel)}
-            </span>
-          </div>
-        </header>
-
-        <div className="office-dossier-strip">
-          <article className={`office-dossier-card office-dossier-card-${selectedAgent.attentionLevel}`}>
-            <p className="office-dossier-label">Current task</p>
-            <p className="office-dossier-value">{selectedAgent.currentTaskLabel}</p>
-            <p className="office-dossier-note">{selectedAgent.currentAction}</p>
-          </article>
-          <article
-            className={`office-dossier-card office-dossier-card-${selectedAgent.risk === "none" ? "stable" : selectedAgent.risk}`}
-          >
-            <p className="office-dossier-label">Risk state</p>
-            <p className="office-dossier-value">{selectedAgent.risk}</p>
-            <p className="office-dossier-note">{selectedAgent.currentThought}</p>
-          </article>
-          <article className="office-dossier-card office-dossier-card-stable">
-            <p className="office-dossier-label">Recent handoffs</p>
-            <p className="office-dossier-value">{selectedAgentHandoffs.length}</p>
-            <p className="office-dossier-note">{selectedAgentHandoffs[0]?.detail ?? "No handoffs recorded yet."}</p>
-          </article>
-        </div>
-
-        <div className={`office-behavior-banner office-behavior-banner-${selectedAgent.attentionLevel}`}>
-          <p className="office-behavior-label">Behavior directive</p>
-          <p>{selectedAgent.behaviorDirective}</p>
-        </div>
-
-        <dl className="office-meta-grid">
-          <div>
-            <dt>Risk</dt>
-            <dd>{selectedAgent.risk}</dd>
-          </div>
-          <div>
-            <dt>Task</dt>
-            <dd>{selectedAgent.taskId ?? "-"}</dd>
-          </div>
-          <div>
-            <dt>Session</dt>
-            <dd>{selectedAgent.sessionId ?? selectedAgent.runtimeAgentId ?? "-"}</dd>
-          </div>
-          <div>
-            <dt>State</dt>
-            <dd>{selectedAgent.activityState.replaceAll("_", " ")}</dd>
-          </div>
-          <div>
-            <dt>Attention</dt>
-            <dd>{attentionLabel(selectedAgent.attentionLevel)}</dd>
-          </div>
-          <div>
-            <dt>Zone</dt>
-            <dd>{selectedAgent.zoneLabel}</dd>
-          </div>
-          <div>
-            <dt>Collaborators</dt>
-            <dd>
-              {selectedAgent.collabPeers.length > 0
-                ? selectedAgent.collabPeers.map((roleId) => officeAgentNamesByRole.get(roleId) ?? roleId).join(", ")
-                : "-"}
-            </dd>
-          </div>
-          <div>
-            <dt>Last seen</dt>
-            <dd>{formatRelative(selectedAgent.lastSeenAt)}</dd>
-          </div>
-          <div>
-            <dt>Signal heat</dt>
-            <dd>{classifyAgentHeat(selectedAgent.lastSeenAt)}</dd>
-          </div>
-        </dl>
-
-        <h4>Specialties</h4>
-        <div className="token-row">
-          {selectedAgent.specialties.map((specialty) => (
-            <span key={specialty} className="token-chip">
-              {specialty}
-            </span>
-          ))}
-        </div>
-
-        <h4>Recent handoffs</h4>
-        <ul className="compact-list">
-          {selectedAgentHandoffs.length === 0 ? (
-            <li>No handoffs recorded.</li>
-          ) : (
-            selectedAgentHandoffs.map((handoff, index) => (
-              <li key={`${handoff.label}-${index}`}>
-                <strong>{handoff.label}</strong>
-                <p>{handoff.detail}</p>
-                <small>{handoff.timestamp ? formatClock(handoff.timestamp) : "current window"}</small>
-              </li>
-            ))
-          )}
-        </ul>
-
-        <h4>Recent Signals</h4>
-        <ul className="compact-list">
-          {selectedAgent.eventTrail.length === 0 ? (
-            <li>No events yet.</li>
-          ) : (
-            selectedAgent.eventTrail.slice(0, 8).map((event) => (
-              <li key={event.eventId}>
-                <strong>{event.eventType}</strong>
-                <p>{summarizeEvent(event)}</p>
-                <small>
-                  {formatClock(event.timestamp)} - {event.source}
-                </small>
-              </li>
-            ))
-          )}
-        </ul>
-      </>
-    );
-  };
+  const {
+    selectedEntityId,
+    dockTab,
+    setDockTab,
+    playback,
+    setPlayback,
+    sceneReady,
+    replayWindow,
+    playbackCursorTime,
+    sceneEvents,
+    officeAgents,
+    officeAgentNamesByRole,
+    collaborationEdges,
+    zoneActivityLanes,
+    zoneTelemetry,
+    signalRoutes,
+    selectedAgent,
+    selectedZoneId,
+    stageZoneTelemetry,
+    selectedAgentHandoffs,
+    focusSummary,
+    activeAgents,
+    readyAgents,
+    eventFlow,
+    hotAgents,
+    blockedAgents,
+    priorityAgents,
+    watchAgents,
+    effectiveMotionMode,
+    sceneBusy,
+    goatAssetStatus,
+    sceneResetKey,
+    operatorModel,
+    availableDockTabs,
+    handleEntitySelect,
+    handlePlaybackModeChange,
+    motionModeOptions,
+    playbackSpeedOptions,
+  } = useOfficeStageState({
+    directory,
+    events,
+    operatorPrefs,
+    initialDockTab: variantConfig.initialDockTab,
+    pendingApprovalsCount: pendingApprovals.length,
+    assetPack,
+    prefersReducedMotion,
+    deriveOfficeAgents,
+    deriveCollaborationEdges,
+    deriveZoneActivityLanes,
+    deriveZoneTelemetry,
+    deriveSignalRoutes,
+    buildAgentHandoffs,
+    describeGoatAssetStatus,
+    scheduleSceneActivation,
+  });
 
   if (loading) {
     return (
@@ -868,232 +307,94 @@ export function OfficePage({ variant = "stable", onOpenLab }: OfficePageProps) {
 
   return (
     <section className={`office-v5 ${operatorPrefs.focusMode ? "office-focus-mode" : ""}`}>
-      <PageHeader
+      <OfficeOverviewPanel
         eyebrow={variantConfig.eyebrow}
         title={officeCopy.title}
         subtitle={officeCopy.subtitle}
         hint={variantConfig.headerHint}
-        className="page-header-citadel"
-        actions={
-          <div className="office-page-actions">
-            <div className="office-surface-switch" role="tablist" aria-label="Office surface views">
-              <button type="button" className="active" aria-pressed="true">
-                Immersive
-              </button>
-              <button type="button" onClick={onOpenLab} aria-pressed="false">
-                Pixel Lab
-              </button>
-            </div>
-            <StatusChip tone={streamHealthy ? "live" : "warning"}>
-              Stream {streamHealthy ? "live" : "resyncing"}
-            </StatusChip>
-            <StatusChip tone={pendingApprovals.length > 0 ? "warning" : "muted"}>
-              {pendingApprovals.length} approvals
-            </StatusChip>
-            <StatusChip tone={blockedAgents > 0 ? "critical" : "success"}>{blockedAgents} blocked</StatusChip>
-            <StatusChip tone={priorityAgents > 0 ? "critical" : watchAgents > 0 ? "warning" : "success"}>
-              {priorityAgents} priority · {watchAgents} watch
-            </StatusChip>
-          </div>
-        }
-      />
-      <PageGuideCard
-        pageId="office"
-        what={officeGuide.what}
-        when={officeGuide.when}
-        actions={officeGuide.actions}
-        terms={officeGuide.terms}
-      />
-      {error ? (
-        <div className="office-stream-banner">
-          <strong>Command feed degraded.</strong>
-          <span>The office shell stays interactive while GoatCitadel reconnects. {error}</span>
-        </div>
-      ) : null}
-
-      <OfficeKpiGrid
+        onOpenLab={onOpenLab}
+        streamHealthy={streamHealthy}
+        pendingApprovalsCount={pendingApprovals.length}
+        blockedAgents={blockedAgents}
+        priorityAgents={priorityAgents}
+        watchAgents={watchAgents}
+        guide={officeGuide}
+        error={error}
         activeAgents={activeAgents}
         hotAgents={hotAgents}
         readyAgents={readyAgents}
         eventFlow={eventFlow}
-        pendingApprovalsCount={pendingApprovals.length}
-        streamHealthy={streamHealthy}
       />
 
       <div
         className={`office-v5-workspace${operatorPrefs.showInspectorDock || operatorPrefs.showRailDock ? "" : " office-v5-workspace-single"}`}
       >
-        <Panel
-          className={`office-stage-panel${operatorPrefs.focusMode ? " office-stage-panel-focus" : ""}`}
-          padding="spacious"
-          title="Immersive Command Stage"
-          subtitle="Drag to orbit, click the Goatherder or any desk, and watch live collaboration flow."
-          actions={
-            <div className="office-stage-statuses">
-              <StatusChip tone={sceneReady ? "success" : "muted"}>
-                {sceneReady ? "Scene ready" : "Scene warming up"}
-              </StatusChip>
-              <StatusChip tone={operatorPrefs.showCollabOverlay ? "live" : "muted"}>
-                {operatorPrefs.showCollabOverlay ? "Flow visible" : "Flow hidden"}
-              </StatusChip>
-              <StatusChip tone={blockedAgents > 0 ? "critical" : "success"}>{blockedAgents} alerts</StatusChip>
-              <StatusChip tone={priorityAgents > 0 ? "critical" : watchAgents > 0 ? "warning" : "muted"}>
-                {priorityAgents > 0
-                  ? "Priority desks active"
-                  : watchAgents > 0
-                    ? "Watch desks active"
-                    : "Desk pressure stable"}
-              </StatusChip>
-              <StatusChip tone={playback.mode === "replay" ? "warning" : "muted"}>
-                {playback.mode === "replay" ? "Replay window" : "Live window"}
-              </StatusChip>
-              <StatusChip tone={goatAssetStatus.tone}>{goatAssetStatus.chipLabel}</StatusChip>
-            </div>
-          }
-        >
-          {focusSummary ? (
-            <div className="office-focus-banner">
-              <p className="office-focus-label">Focus mode</p>
-              <p className="office-focus-title">{focusSummary.title}</p>
-              <p className="office-focus-summary">{focusSummary.summary}</p>
-              <p className="office-focus-detail">{focusSummary.detail}</p>
-              <p className="office-focus-hotkeys">Hotkeys: 1-5 jump zones, [ and ] cycle decks.</p>
-            </div>
-          ) : null}
-
-          <OfficeStageControlBar
-            playback={playback}
-            setPlayback={setPlayback}
-            replayWindow={replayWindow}
-            playbackCursorTime={playbackCursorTime ?? null}
-            onPlaybackModeChange={handlePlaybackModeChange}
-            playbackSpeedOptions={PLAYBACK_SPEED_OPTIONS}
-            operatorPrefs={operatorPrefs}
-            setOperatorPrefs={setOperatorPrefs}
-            effectiveMotionMode={effectiveMotionMode}
-            prefersReducedMotion={prefersReducedMotion}
-            motionModeOptions={MOTION_MODE_OPTIONS}
-          />
-
-          <div className="office-lane-grid">
-            {zoneActivityLanes.length === 0 ? (
-              <article className="office-lane-card office-lane-card-empty">
-                <p className="office-lane-label">Activity lanes</p>
-                <p className="office-lane-copy">No cross-zone traffic has surfaced yet in the current window.</p>
-              </article>
-            ) : (
-              zoneActivityLanes.map((lane) => (
-                <article
-                  key={`${lane.fromZoneId}-${lane.toZoneId}`}
-                  className={`office-lane-card${lane.risk ? " office-lane-card-risk" : ""}`}
+        <OfficeStagePanel
+          sceneReady={sceneReady}
+          blockedAgents={blockedAgents}
+          priorityAgents={priorityAgents}
+          watchAgents={watchAgents}
+          playbackMode={playback.mode}
+          goatAssetStatus={goatAssetStatus}
+          focusSummary={focusSummary}
+          stageControlProps={{
+            playback,
+            setPlayback,
+            replayWindow,
+            playbackCursorTime: playbackCursorTime ?? null,
+            onPlaybackModeChange: handlePlaybackModeChange,
+            playbackSpeedOptions,
+            operatorPrefs,
+            setOperatorPrefs,
+            effectiveMotionMode,
+            prefersReducedMotion,
+            motionModeOptions,
+          }}
+          zoneActivityLanes={zoneActivityLanes}
+          stageZoneTelemetry={stageZoneTelemetry}
+          selectedEntityId={selectedEntityId}
+          selectedAgentZoneId={selectedAgent?.zoneId ?? null}
+          officeAgents={officeAgents}
+          operatorName={operatorPrefs.name}
+          onSelectEntity={handleEntitySelect}
+          renderScene={() => (
+            <OfficeCanvasErrorBoundary resetKey={sceneResetKey}>
+              {sceneReady ? (
+                <Suspense
+                  fallback={
+                    <div className="office-webgl-stage office-webgl-stage-v5 office-stage-loading">
+                      <p>Loading office scene...</p>
+                    </div>
+                  }
                 >
-                  <p className="office-lane-label">{`${lane.fromLabel} -> ${lane.toLabel}`}</p>
-                  <p className="office-lane-value">{lane.count} linked handoffs</p>
-                  <p className="office-lane-copy">{lane.label}</p>
-                </article>
-              ))
-            )}
-          </div>
-
-          <div className={`office-zone-grid${operatorPrefs.focusMode ? " office-zone-grid-focus" : ""}`}>
-            {stageZoneTelemetry.map((zone) => {
-              const isSelectedZone =
-                selectedEntityId === "operator" ? zone.zoneId === "command" : selectedAgent?.zoneId === zone.zoneId;
-              return (
-                <article
-                  key={zone.zoneId}
-                  className={`office-zone-card office-zone-card-${zone.attentionLevel} office-zone-card-theme-${zone.zoneId}${isSelectedZone ? " active" : ""}`}
-                >
-                  <div className="office-zone-card-head">
-                    <p className="office-zone-card-label">{zone.label}</p>
-                    <span className={`office-pill ${attentionPillClass(zone.attentionLevel)}`}>
-                      {attentionLabel(zone.attentionLevel)}
-                    </span>
-                  </div>
-                  <p className="office-zone-card-metrics">
-                    {zone.totalAgents} goats · {zone.activeAgents} active · {zone.linkedAgents} linked · load{" "}
-                    {Math.round(zone.workloadScore * 100)}%
-                  </p>
-                  <p className="office-zone-card-focus">{zone.focus}</p>
-                  <p className="office-zone-card-architecture">
-                    {zone.landmark} · {zone.architectureNote}
-                  </p>
-                </article>
-              );
-            })}
-          </div>
-
-          <OfficeCanvasErrorBoundary resetKey={sceneResetKey}>
-            {sceneReady ? (
-              <Suspense
-                fallback={
-                  <div className="office-webgl-stage office-webgl-stage-v5 office-stage-loading">
-                    <p>Loading office scene...</p>
-                  </div>
-                }
-              >
-                <OfficeCanvasScene
-                  operator={operatorModel}
-                  agents={officeAgents}
-                  selectedEntityId={selectedEntityId}
-                  onSelect={(entityId) => handleEntitySelect(entityId as SelectedEntityId)}
-                  assetPack={assetPack}
-                  motionMode={effectiveMotionMode}
-                  focusMode={operatorPrefs.focusMode}
-                  focusedZoneId={selectedZoneId}
-                  quietMode={operatorPrefs.quietMode}
-                  followSelection={operatorPrefs.followSelection}
-                  sceneBusy={sceneBusy}
-                  showCollabOverlay={operatorPrefs.showCollabOverlay}
-                  idleMillingEnabled={operatorPrefs.idleMillingEnabled}
-                  collaborationEdges={collaborationEdges}
-                  zoneTelemetry={zoneTelemetry}
-                  activityLanes={zoneActivityLanes}
-                  signalRoutes={signalRoutes}
-                />
-              </Suspense>
-            ) : (
-              <div className="office-webgl-stage office-webgl-stage-v5 office-stage-loading">
-                <p>Loading office scene...</p>
-              </div>
-            )}
-          </OfficeCanvasErrorBoundary>
-          <FieldHelp className="office-stage-help">
-            Click the Goatherder or any desk to inspect the operator, desk zone, recent signals, collaboration edges,
-            and alert state without leaving the scene.
-          </FieldHelp>
-          <FieldHelp className="office-stage-help">
-            Goat asset pipeline: {goatAssetStatus.helpLabel}.{goatAssetStatus.helpCopy}
-          </FieldHelp>
-          {officeAgents.length === 0 ? (
-            <div className="gc-empty-state office-empty-state">
-              <p className="gc-empty-title">No agent roles are available yet.</p>
-              <p className="gc-empty-subtitle">
-                The Goatherder and office shell stay visible so you can inspect the room even before the herd is
-                configured.
-              </p>
-            </div>
-          ) : null}
-          <div className="office-desk-list">
-            <button
-              type="button"
-              className={selectedEntityId === "operator" ? "active" : ""}
-              onClick={() => handleEntitySelect("operator")}
-            >
-              {operatorPrefs.name}
-            </button>
-            {officeAgents.map((agent) => (
-              <button
-                type="button"
-                key={agent.roleId}
-                className={selectedEntityId === agent.roleId ? "active" : ""}
-                onClick={() => handleEntitySelect(agent.roleId)}
-              >
-                {agent.name}
-              </button>
-            ))}
-          </div>
-        </Panel>
+                  <OfficeCanvasScene
+                    operator={operatorModel}
+                    agents={officeAgents}
+                    selectedEntityId={selectedEntityId}
+                    onSelect={(entityId) => handleEntitySelect(entityId as SelectedEntityId)}
+                    assetPack={assetPack}
+                    motionMode={effectiveMotionMode}
+                    focusMode={operatorPrefs.focusMode}
+                    focusedZoneId={selectedZoneId}
+                    quietMode={operatorPrefs.quietMode}
+                    followSelection={operatorPrefs.followSelection}
+                    sceneBusy={sceneBusy}
+                    showCollabOverlay={operatorPrefs.showCollabOverlay}
+                    idleMillingEnabled={operatorPrefs.idleMillingEnabled}
+                    collaborationEdges={collaborationEdges}
+                    zoneTelemetry={zoneTelemetry}
+                    activityLanes={zoneActivityLanes}
+                    signalRoutes={signalRoutes}
+                  />
+                </Suspense>
+              ) : (
+                <div className="office-webgl-stage office-webgl-stage-v5 office-stage-loading">
+                  <p>Loading office scene...</p>
+                </div>
+              )}
+            </OfficeCanvasErrorBoundary>
+          )}
+        />
 
         <OfficeOperationsDock
           showInspectorDock={operatorPrefs.showInspectorDock}
@@ -1101,7 +402,22 @@ export function OfficePage({ variant = "stable", onOpenLab }: OfficePageProps) {
           dockTab={dockTab}
           onDockTabChange={setDockTab}
           availableDockTabs={availableDockTabs}
-          renderInspector={renderInspectorPanel}
+          renderInspector={() => (
+            <OfficeInspectorPanel
+              selectedEntityId={selectedEntityId}
+              operatorPrefs={operatorPrefs}
+              setOperatorPrefs={setOperatorPrefs}
+              operatorModel={operatorModel}
+              activeAgents={activeAgents}
+              pendingApprovalsCount={pendingApprovals.length}
+              blockedAgents={blockedAgents}
+              eventFlow={eventFlow}
+              zoneTelemetry={zoneTelemetry}
+              selectedAgent={selectedAgent}
+              selectedAgentHandoffs={selectedAgentHandoffs}
+              officeAgentNamesByRole={officeAgentNamesByRole}
+            />
+          )}
           operators={operators}
           pendingApprovals={pendingApprovals}
           sceneEvents={sceneEvents}

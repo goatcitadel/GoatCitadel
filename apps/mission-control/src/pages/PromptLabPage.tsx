@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PromptPackBenchmarkStatusRecord,
@@ -24,57 +24,29 @@ import {
   runPromptPackReplayRegression,
   scorePromptPackTest,
 } from "../api/client";
-import { ActionButton } from "../components/ActionButton";
 import { CardSkeleton } from "../components/CardSkeleton";
-import { ChatModelPicker, type ChatModelProviderOption } from "../components/ChatModelPicker";
+import { type ChatModelProviderOption } from "../components/ChatModelPicker";
 import { ConfirmModal } from "../components/ConfirmModal";
-import { GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import "../styles/prompt-lab.css";
+import { PromptLabReportPanel } from "./prompt-lab/PromptLabReportPanel";
+import { PromptLabSetupPanel } from "./prompt-lab/PromptLabSetupPanel";
+import { PromptLabSummaryPanel } from "./prompt-lab/PromptLabSummaryPanel";
+import { PromptLabWorkspace } from "./prompt-lab/PromptLabWorkspace";
 import {
   PROMPT_PACK_PASS_THRESHOLD,
   classifyTestResultCategory,
-  dedupeStrings,
   extractPromptPlaceholders,
-  formatDateTime,
-  formatPromptPackProviderModel,
-  formatResultCategory,
-  formatRunStatus,
   matchesTestResultFilter,
   normalizePromptPlaceholderKey,
   parseBenchmarkProviders,
   parseBenchmarkTestCodes,
   resolvePromptPackRunModelUsage,
-  resultCategoryClass,
-  statusChipClass,
   type TestResultFilter,
 } from "./prompt-lab/prompt-lab-helpers";
-
-interface ScoreDraft {
-  routingScore: 0 | 1 | 2;
-  honestyScore: 0 | 1 | 2;
-  handoffScore: 0 | 1 | 2;
-  robustnessScore: 0 | 1 | 2;
-  usabilityScore: 0 | 1 | 2;
-  notes: string;
-}
-
-const DEFAULT_SCORE_DRAFT: ScoreDraft = {
-  routingScore: 1,
-  honestyScore: 1,
-  handoffScore: 1,
-  robustnessScore: 1,
-  usabilityScore: 1,
-  notes: "",
-};
-
-interface ActiveRunState {
-  mode: "single" | "next" | "all";
-  testId?: string;
-  testCode?: string;
-}
+import { DEFAULT_SCORE_DRAFT, type ActiveRunState, type ScoreDraft } from "./prompt-lab/prompt-lab-types";
 
 const DEFAULT_BENCHMARK_TEST_CODES = "TEST-03, TEST-06, TEST-10, TEST-12, TEST-15, TEST-28";
 
@@ -813,6 +785,20 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     }
   }, [benchmarkRunId, benchmarkTestCodes, loadRegressionStatus, selectedPackId]);
 
+  const refreshBenchmark = useCallback(() => {
+    if (!benchmarkRunId) {
+      return;
+    }
+    void loadBenchmarkStatus(benchmarkRunId).catch((err: Error) => setError(err.message));
+  }, [benchmarkRunId, loadBenchmarkStatus]);
+
+  const refreshRegression = useCallback(() => {
+    if (!regressionRunId) {
+      return;
+    }
+    void loadRegressionStatus(regressionRunId).catch((err: Error) => setError(err.message));
+  }, [loadRegressionStatus, regressionRunId]);
+
   useEffect(() => {
     if (!selectedPackId) {
       setTrendSeries([]);
@@ -895,584 +881,122 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
 
   return (
     <section className="prompt-lab">
-      <header className="prompt-lab-hero">
-        <div className="prompt-lab-hero-copy">
-          <p className="prompt-lab-kicker">Evaluation Console</p>
-          <h2>{pageCopy.promptLab.title}</h2>
-          <p className="prompt-lab-intro">{pageCopy.promptLab.subtitle}</p>
-          <p className="office-subtitle">
-            Re-running a test creates a fresh run. Historical scores stay attached to older runs until you rescore the
-            new output.
-          </p>
-        </div>
-        <div className="prompt-lab-actions prompt-lab-hero-actions">
-          <ActionButton
-            label="Run next test"
-            pending={activeRun?.mode === "next"}
-            disabled={running && activeRun?.mode !== "next"}
-            onClick={() => void runNext()}
-          />
-          <ActionButton
-            label="Run all"
-            pending={activeRun?.mode === "all"}
-            disabled={running && activeRun?.mode !== "all"}
-            onClick={() => void runAll()}
-          />
-          <ActionButton
-            label="Run benchmark"
-            pending={benchmarkPending}
-            disabled={!selectedPackId || running || importing}
-            onClick={() => void runBenchmark()}
-          />
-          <ActionButton
-            label="Refresh data"
-            pending={isRefreshing}
-            disabled={initialLoading}
-            onClick={() => void load({ background: true })}
-          />
-          <ActionButton
-            label="Auto score unscored"
-            pending={autoScoring}
-            disabled={!selectedPackId || unscoredCompletedCount === 0 || running}
-            onClick={() => void autoScoreUnscored()}
-          />
-          <ActionButton
-            label="Export now"
-            pending={exporting}
-            disabled={!selectedPackId || running || resetting}
-            onClick={() => void exportReport()}
-          />
-          <ActionButton
-            label="Reset pack"
-            pending={resetting}
-            disabled={!selectedPackId || running || exporting || importing || autoScoring}
-            onClick={() => void resetPack()}
-          />
-        </div>
-      </header>
+      <PromptLabSummaryPanel
+        title={pageCopy.promptLab.title}
+        subtitle={pageCopy.promptLab.subtitle}
+        overviewCards={promptLabOverviewCards}
+        activeRun={activeRun}
+        benchmarkStatus={benchmarkStatus}
+        isRefreshing={isRefreshing}
+        isFallbackRefreshing={isFallbackRefreshing}
+        error={error}
+        success={success}
+        resetClearRuns={resetClearRuns}
+        resetClearScores={resetClearScores}
+        hasSelectedPack={Boolean(selectedPackId)}
+        running={running}
+        resetting={resetting}
+        exporting={exporting}
+        importing={importing}
+        autoScoring={autoScoring}
+        autoScoreOnRun={autoScoreOnRun}
+        unscoredCompletedCount={unscoredCompletedCount}
+        exportInfo={exportInfo}
+        benchmarkPending={benchmarkPending}
+        testOutcomeSummary={testOutcomeSummary}
+        onResetClearRunsChange={setResetClearRuns}
+        onResetClearScoresChange={setResetClearScores}
+        onCopyExportPath={() => void copyExportPath()}
+        onRunNext={() => void runNext()}
+        onRunAll={() => void runAll()}
+        onRunBenchmark={() => void runBenchmark()}
+        onRefreshData={() => void load({ background: true })}
+        onAutoScoreUnscored={() => void autoScoreUnscored()}
+        onExportNow={() => void exportReport()}
+        onResetPack={() => void resetPack()}
+      />
 
-      <section className="prompt-lab-overview" aria-label="Prompt Lab summary">
-        {promptLabOverviewCards.map((card) => (
-          <article key={card.label} className="prompt-lab-overview-card">
-            <span className="prompt-lab-overview-label">{card.label}</span>
-            <strong>{card.value}</strong>
-            <p>{card.detail}</p>
-          </article>
-        ))}
-      </section>
+      <PromptLabSetupPanel
+        importText={importText}
+        importing={importing}
+        packs={packs}
+        selectedPackId={selectedPackId}
+        providerOptions={providerOptions}
+        selectedProviderId={selectedProviderId}
+        selectedModel={selectedModel}
+        reuseLastModel={reuseLastModel}
+        autoScoreOnRun={autoScoreOnRun}
+        lastSuccessfulModel={lastSuccessfulModel ?? null}
+        selectedRunModel={selectedRunModel ?? null}
+        benchmarkTestCodes={benchmarkTestCodes}
+        benchmarkProvidersInput={benchmarkProvidersInput}
+        benchmarkPending={benchmarkPending}
+        benchmarkRunId={benchmarkRunId}
+        regressionPending={regressionPending}
+        regressionRunId={regressionRunId}
+        regressionStatus={regressionStatus}
+        running={running}
+        onImportTextChange={setImportText}
+        onImport={() => void handleImport()}
+        onSelectedPackIdChange={setSelectedPackId}
+        onSelectedProviderIdChange={(providerId) => {
+          setReuseLastModel(false);
+          setSelectedProviderId(providerId);
+          const provider = providerOptions.find((item) => item.providerId === providerId);
+          setSelectedModel(provider?.models[0] ?? "");
+        }}
+        onSelectedModelChange={(model) => {
+          setReuseLastModel(false);
+          setSelectedModel(model);
+        }}
+        onReuseLastModelChange={setReuseLastModel}
+        onAutoScoreOnRunChange={setAutoScoreOnRun}
+        onBenchmarkTestCodesChange={setBenchmarkTestCodes}
+        onBenchmarkProvidersInputChange={setBenchmarkProvidersInput}
+        onRunBenchmark={() => void runBenchmark()}
+        onRefreshBenchmark={refreshBenchmark}
+        onRunRegression={() => void runRegression()}
+        onRefreshRegression={refreshRegression}
+      />
 
-      {error ? <p className="error">{error}</p> : null}
-      {success ? <p className="status-banner">{success}</p> : null}
-      <div className="prompt-lab-status-stack">
-        {activeRun ? (
-          <div className="status-banner">
-            Run in progress: {activeRun.testCode ?? "prompt-pack run"} ({activeRun.mode})
-          </div>
-        ) : null}
-        {benchmarkStatus ? (
-          <div className="status-banner">
-            Benchmark {benchmarkStatus.run.benchmarkRunId}: {benchmarkStatus.run.status} (
-            {benchmarkStatus.progress.completedItems}/{benchmarkStatus.progress.totalItems})
-          </div>
-        ) : null}
-        {isRefreshing ? <div className="status-banner">Refreshing prompt-pack results in the background...</div> : null}
-        {isFallbackRefreshing ? (
-          <div className="status-banner warning">Live updates degraded, checking periodically.</div>
-        ) : null}
-        <div className="status-banner prompt-lab-reset-banner">
-          <span className="prompt-lab-inline-label">Reset options</span>
-          <label>
-            <input
-              type="checkbox"
-              checked={resetClearRuns}
-              onChange={(event) => setResetClearRuns(event.target.checked)}
-              disabled={running || resetting || exporting || importing || autoScoring}
-            />{" "}
-            Clear runs
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={resetClearScores}
-              onChange={(event) => setResetClearScores(event.target.checked)}
-              disabled={running || resetting || exporting || importing || autoScoring}
-            />{" "}
-            Clear scores
-          </label>
-        </div>
-        <div className="status-banner warning">
-          {autoScoreOnRun
-            ? "Auto-score is ON (model + rule checks). You can still edit any score manually."
-            : "Run status only confirms execution. Pass rate updates after scoring."}
-          {unscoredCompletedCount > 0 ? ` ${unscoredCompletedCount} run(s) still need scoring.` : ""}
-        </div>
-        <div className="status-banner">
-          Run failures: <strong>{testOutcomeSummary.runFailureCount}</strong> | Score failures:{" "}
-          <strong>{testOutcomeSummary.scoreFailureCount}</strong> | Needs score:{" "}
-          <strong>{testOutcomeSummary.needsScoreCount}</strong>
-        </div>
-        {exportInfo?.path ? (
-          <div className="status-banner prompt-lab-export-banner">
-            <div>
-              Export file: <code>{exportInfo.path}</code>
-              {exportInfo.updatedAt ? ` (updated ${new Date(exportInfo.updatedAt).toLocaleTimeString()})` : ""}
-              {exportInfo.exists ? ` • ${exportInfo.sizeBytes} bytes` : " • not generated yet"}
-            </div>
-            <button type="button" onClick={() => void copyExportPath()}>
-              Copy path
-            </button>
-          </div>
-        ) : null}
-      </div>
-
-      <div className="prompt-lab-grid">
-        <article className="card prompt-lab-surface prompt-lab-import">
-          <h3>Import Prompt Pack</h3>
-          <textarea
-            rows={10}
-            placeholder="Paste goatcitadel_prompt_pack.md content here..."
-            value={importText}
-            onChange={(event) => setImportText(event.target.value)}
-          />
-          <ActionButton label="Import" pending={importing} onClick={() => void handleImport()} />
-          <p className="office-subtitle">Tip: import once, then use Run next test to move quickly through the pack.</p>
-        </article>
-
-        <article className="card prompt-lab-surface prompt-lab-packs">
-          <h3>Prompt Packs</h3>
-          <ul>
-            {packs.map((pack) => (
-              <li key={pack.packId}>
-                <button
-                  type="button"
-                  className={selectedPackId === pack.packId ? "active" : ""}
-                  onClick={() => setSelectedPackId(pack.packId)}
-                >
-                  {pack.name}
-                </button>
-                <span>{pack.testCount} tests</span>
-              </li>
-            ))}
-          </ul>
-          <div className="prompt-lab-model-picker">
-            <p className="office-subtitle">
-              {reuseLastModel && lastSuccessfulModel
-                ? `New runs will reuse the last successful request: ${lastSuccessfulModel.providerId}/${lastSuccessfulModel.model}`
-                : selectedRunModel?.providerId
-                  ? `Requested model for new runs: ${selectedRunModel.providerId}/${selectedRunModel.model ?? "(provider default)"}`
-                  : "Select a provider/model for this prompt-pack run."}
-            </p>
-            <ChatModelPicker
-              providers={providerOptions}
-              providerId={selectedProviderId}
-              model={selectedModel}
-              disabled={running || providerOptions.length === 0}
-              onChangeProvider={(providerId) => {
-                setReuseLastModel(false);
-                setSelectedProviderId(providerId);
-                const provider = providerOptions.find((item) => item.providerId === providerId);
-                setSelectedModel(provider?.models[0] ?? "");
-              }}
-              onChangeModel={(model) => {
-                setReuseLastModel(false);
-                setSelectedModel(model);
-              }}
-            />
-          </div>
-          <label className="prompt-lab-toggle">
-            <input
-              type="checkbox"
-              checked={reuseLastModel}
-              onChange={(event) => setReuseLastModel(event.target.checked)}
-            />
-            Reuse last successful model settings
-          </label>
-          <label className="prompt-lab-toggle">
-            <input
-              type="checkbox"
-              checked={autoScoreOnRun}
-              onChange={(event) => setAutoScoreOnRun(event.target.checked)}
-            />
-            Auto-score completed runs (model + rules)
-          </label>
-          <details className="prompt-lab-benchmark-panel">
-            <summary>Benchmark matrix</summary>
-            <p className="office-subtitle">
-              Run a provider/model matrix on selected test codes (default high-signal subset).
-            </p>
-            <label className="prompt-lab-field">
-              Test codes (comma or newline separated)
-              <textarea
-                rows={2}
-                value={benchmarkTestCodes}
-                onChange={(event) => setBenchmarkTestCodes(event.target.value)}
-                placeholder="TEST-03, TEST-06, TEST-10, TEST-12, TEST-15, TEST-28"
-              />
-            </label>
-            <label className="prompt-lab-field">
-              Providers matrix (one per line: provider/model)
-              <textarea
-                rows={3}
-                value={benchmarkProvidersInput}
-                onChange={(event) => setBenchmarkProvidersInput(event.target.value)}
-                placeholder={"glm/glm-5\nmoonshot/kimi-k2.5"}
-              />
-            </label>
-            <div className="prompt-lab-actions">
-              <ActionButton
-                label="Start benchmark"
-                pending={benchmarkPending}
-                disabled={!selectedPackId || running}
-                onClick={() => void runBenchmark()}
-              />
-              <ActionButton
-                label="Refresh benchmark"
-                disabled={!benchmarkRunId}
-                onClick={() => {
-                  if (!benchmarkRunId) return;
-                  void loadBenchmarkStatus(benchmarkRunId).catch((err: Error) => setError(err.message));
-                }}
-              />
-              <ActionButton
-                label="Run replay regression"
-                pending={regressionPending}
-                disabled={!selectedPackId || running}
-                onClick={() => void runRegression()}
-              />
-              <ActionButton
-                label="Refresh regression"
-                disabled={!regressionRunId}
-                onClick={() => {
-                  if (!regressionRunId) return;
-                  void loadRegressionStatus(regressionRunId).catch((err: Error) => setError(err.message));
-                }}
-              />
-            </div>
-            {regressionStatus ? (
-              <p className="office-subtitle">
-                Replay regression: <code>{regressionStatus.run.regressionRunId}</code> • {regressionStatus.run.status}
-                {" • "}
-                results: {regressionStatus.results.length}
-              </p>
-            ) : null}
-          </details>
-        </article>
-      </div>
-
-      <div className="prompt-lab-grid">
-        <article className="card prompt-lab-surface prompt-lab-tests">
-          <div className="prompt-lab-tests-header">
-            <h3>Tests</h3>
-            <label className="chat-v11-select">
-              View
-              <GCSelect
-                value={testResultFilter}
-                onChange={(value) => setTestResultFilter(value as TestResultFilter)}
-                options={[
-                  { value: "all", label: `All (${tests.length})` },
-                  { value: "approval_paused", label: `Approval paused (${testOutcomeSummary.approvalPausedCount})` },
-                  { value: "run_failed", label: `Run failures (${testOutcomeSummary.runFailureCount})` },
-                  { value: "score_failed", label: `Score failures (${testOutcomeSummary.scoreFailureCount})` },
-                  { value: "needs_score", label: `Needs score (${testOutcomeSummary.needsScoreCount})` },
-                  { value: "not_run", label: `Not run (${testOutcomeSummary.notRunCount})` },
-                  { value: "passing", label: `Passing (${testOutcomeSummary.passingCount})` },
-                ]}
-              />
-            </label>
-          </div>
-          <ul>
-            {filteredTests.map((test) => {
-              const run = latestRunByTest.get(test.testId);
-              const score = latestScoreByTest.get(test.testId);
-              const categoryWithThreshold = classifyTestResultCategory(run, score, passThreshold);
-              return (
-                <li key={test.testId}>
-                  <button
-                    type="button"
-                    className={selectedTestId === test.testId ? "active" : ""}
-                    onClick={() => setSelectedTestId(test.testId)}
-                  >
-                    {test.code} - {test.title}
-                  </button>
-                  <div className="prompt-lab-test-meta">
-                    <span className={`prompt-lab-chip ${statusChipClass(run?.status)}`}>
-                      {formatRunStatus(run?.status)}
-                    </span>
-                    <span className={`prompt-lab-chip ${score ? "score-ready" : "score-missing"}`}>
-                      {score ? `${score.totalScore}/10` : "Needs score"}
-                    </span>
-                    <span className={`prompt-lab-chip ${resultCategoryClass(categoryWithThreshold)}`}>
-                      {formatResultCategory(categoryWithThreshold)}
-                    </span>
-                  </div>
-                  <ActionButton
-                    label="Run"
-                    pending={activeRun?.testId === test.testId}
-                    disabled={running && activeRun?.testId !== test.testId}
-                    onClick={() => void runOne(test, "single")}
-                  />
-                </li>
-              );
-            })}
-          </ul>
-          {filteredTests.length === 0 ? <p className="office-subtitle">No tests match this filter.</p> : null}
-        </article>
-
-        <article className="card prompt-lab-surface prompt-lab-detail">
-          <h3>{selectedTest ? `${selectedTest.code} - ${selectedTest.title}` : "Select a test"}</h3>
-          {selectedTest ? (
-            <pre>{selectedTest.prompt}</pre>
-          ) : (
-            <p className="office-subtitle">Pick a test to inspect prompt content and score it.</p>
-          )}
-          {selectedTest && selectedPlaceholders.length > 0 ? (
-            <section className="status-banner warning prompt-lab-placeholder-banner">
-              <p className="prompt-lab-placeholder-copy">This test has placeholder tokens. Fill them before running.</p>
-              <div className="prompt-lab-placeholder-fields">
-                {selectedPlaceholders.map((placeholder) => {
-                  const key = normalizePromptPlaceholderKey(placeholder);
-                  return (
-                    <label key={placeholder} className="prompt-lab-field">
-                      {placeholder}
-                      <input
-                        value={placeholderValues[key] ?? ""}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setPlaceholderValues((current) => ({
-                            ...current,
-                            [key]: value,
-                          }));
-                        }}
-                        placeholder={`Value for ${placeholder}`}
-                      />
-                    </label>
-                  );
-                })}
-              </div>
-              {selectedMissingPlaceholders.length > 0 ? (
-                <p className="prompt-lab-placeholder-note">Missing: {selectedMissingPlaceholders.join(", ")}</p>
-              ) : (
-                <p className="prompt-lab-placeholder-note">All placeholders set for this test.</p>
-              )}
-            </section>
-          ) : null}
-          {selectedRun ? (
-            <section className="prompt-lab-run-summary">
-              <p>
-                Latest run: <strong>{formatRunStatus(selectedRun.status)}</strong>
-                {selectedRun.runId ? ` • run ${selectedRun.runId}` : ""}
-                {selectedRun.startedAt ? ` • started ${formatDateTime(selectedRun.startedAt)}` : ""}
-                {selectedRun.finishedAt ? ` • finished ${formatDateTime(selectedRun.finishedAt)}` : ""}
-              </p>
-              <p className="office-subtitle">
-                Requested model:{" "}
-                {formatPromptPackProviderModel(
-                  selectedRunModelUsage.requestedProviderId,
-                  selectedRunModelUsage.requestedModel,
-                )}
-                {" • "}
-                Actual model used:{" "}
-                {formatPromptPackProviderModel(
-                  selectedRunModelUsage.actualProviderId,
-                  selectedRunModelUsage.actualModel,
-                )}
-                {selectedRunModelUsage.actualApiStyle ? ` • upstream API: ${selectedRunModelUsage.actualApiStyle}` : ""}
-                {selectedRunModelUsage.fallbackUsed
-                  ? ` • fallback: ${formatPromptPackProviderModel(selectedRunModelUsage.fallbackProviderId, selectedRunModelUsage.fallbackModel)}`
-                  : ""}
-              </p>
-              {selectedRunModelUsage.fallbackReason ? (
-                <p className="office-subtitle">Fallback reason: {selectedRunModelUsage.fallbackReason}</p>
-              ) : null}
-              {selectedRun.status === "failed" && selectedRun.error ? (
-                <p className="error">{selectedRun.error}</p>
-              ) : null}
-              {selectedRun.responseText ? (
-                <details>
-                  <summary>Assistant output</summary>
-                  <pre>{selectedRun.responseText}</pre>
-                </details>
-              ) : null}
-              {selectedRun.trace ? (
-                <p className="office-subtitle">Tools used: {selectedRun.trace.toolRuns.length}</p>
-              ) : null}
-              {selectedRun.citations && selectedRun.citations.length > 0 ? (
-                <p className="office-subtitle">Citations captured: {selectedRun.citations.length}</p>
-              ) : null}
-            </section>
-          ) : (
-            <p className="office-subtitle">No run yet for this test.</p>
-          )}
-          <div className="prompt-lab-score-grid">
-            <ScoreField
-              label="Routing"
-              value={scoreDraft.routingScore}
-              onChange={(value) => setScoreDraft((current) => ({ ...current, routingScore: value }))}
-            />
-            <ScoreField
-              label="Honesty"
-              value={scoreDraft.honestyScore}
-              onChange={(value) => setScoreDraft((current) => ({ ...current, honestyScore: value }))}
-            />
-            <ScoreField
-              label="Handoff"
-              value={scoreDraft.handoffScore}
-              onChange={(value) => setScoreDraft((current) => ({ ...current, handoffScore: value }))}
-            />
-            <ScoreField
-              label="Robustness"
-              value={scoreDraft.robustnessScore}
-              onChange={(value) => setScoreDraft((current) => ({ ...current, robustnessScore: value }))}
-            />
-            <ScoreField
-              label="Usability"
-              value={scoreDraft.usabilityScore}
-              onChange={(value) => setScoreDraft((current) => ({ ...current, usabilityScore: value }))}
-            />
-          </div>
-          <textarea
-            rows={3}
-            placeholder="Optional notes..."
-            value={scoreDraft.notes}
-            onChange={(event) => setScoreDraft((current) => ({ ...current, notes: event.target.value }))}
-          />
-          <div className="prompt-lab-actions">
-            <ActionButton label="Save score" pending={savingScore} onClick={() => void submitScore()} />
-            <ActionButton
-              label="Auto score this run"
-              pending={autoScoring}
-              disabled={!selectedRun || selectedRun.status !== "completed"}
-              onClick={() => void autoScoreSelected()}
-            />
-          </div>
-          {selectedRun?.status === "failed" ? (
-            <div className="status-banner warning">
-              Latest run failed. Try running again with web mode `quick`, then review trace and tool grants before
-              scoring.
-            </div>
-          ) : null}
-        </article>
-      </div>
+      <PromptLabWorkspace
+        tests={tests}
+        filteredTests={filteredTests}
+        testResultFilter={testResultFilter}
+        onTestResultFilterChange={setTestResultFilter}
+        testOutcomeSummary={testOutcomeSummary}
+        latestRunByTest={latestRunByTest}
+        latestScoreByTest={latestScoreByTest}
+        passThreshold={passThreshold}
+        selectedTestId={selectedTestId}
+        onSelectedTestIdChange={setSelectedTestId}
+        activeRun={activeRun}
+        running={running}
+        runOne={runOne}
+        selectedTest={selectedTest}
+        selectedPlaceholders={selectedPlaceholders}
+        placeholderValues={placeholderValues}
+        onPlaceholderValuesChange={setPlaceholderValues}
+        selectedMissingPlaceholders={selectedMissingPlaceholders}
+        selectedRun={selectedRun}
+        selectedRunModelUsage={selectedRunModelUsage}
+        scoreDraft={scoreDraft}
+        onScoreDraftChange={setScoreDraft}
+        savingScore={savingScore}
+        submitScore={submitScore}
+        autoScoring={autoScoring}
+        autoScoreSelected={autoScoreSelected}
+      />
 
       {report ? (
-        <article className="card prompt-lab-surface prompt-lab-summary">
-          <h3>Report</h3>
-          <p>Total tests: {report.summary.totalTests}</p>
-          <p>Executed runs: {report.summary.completedRuns}</p>
-          <p>Failed runs: {report.summary.failedRuns}</p>
-          <p>Scored runs: {report.scores.length}</p>
-          <p>Run failures (execution/runtime): {testOutcomeSummary.runFailureCount}</p>
-          <p>Score failures (completed but below threshold): {testOutcomeSummary.scoreFailureCount}</p>
-          <p>Runs waiting for score: {testOutcomeSummary.needsScoreCount}</p>
-          <p>Durable-backed latest runs: {report.summary.durableRuns ?? 0}</p>
-          <p>Approval-paused latest runs: {report.summary.approvalPausedRuns ?? 0}</p>
-          <p>Backgrounded latest runs: {report.summary.backgroundedRuns ?? 0}</p>
-          <p>Passing tests: {testOutcomeSummary.passingCount}</p>
-          <p>Average score: {report.summary.averageTotalScore.toFixed(2)}/10</p>
-          <p>
-            Pass rate: {(report.summary.passRate * 100).toFixed(1)}% (threshold {passThreshold}/10)
-          </p>
-          <p>
-            Failing tests: {report.summary.failingCodes.length > 0 ? report.summary.failingCodes.join(", ") : "none"}
-          </p>
-          <p className="office-subtitle">
-            Run failures indicate execution/runtime blockers. Score failures indicate model quality gaps on completed
-            runs.
-          </p>
-          {benchmarkStatus ? (
-            <section>
-              <h4>Latest benchmark</h4>
-              <p>
-                Run: <code>{benchmarkStatus.run.benchmarkRunId}</code> • {benchmarkStatus.run.status} (
-                {benchmarkStatus.progress.completedItems}/{benchmarkStatus.progress.totalItems})
-              </p>
-              {benchmarkStatus.modelSummaries.length > 0 ? (
-                <table className="prompt-lab-benchmark-table">
-                  <thead>
-                    <tr>
-                      <th>Model</th>
-                      <th>Pass rate</th>
-                      <th>Avg score</th>
-                      <th>Run failures</th>
-                      <th>Top signals</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {benchmarkStatus.modelSummaries.map((summary) => (
-                      <tr key={`${summary.providerId}/${summary.model}`}>
-                        <td>
-                          {summary.providerId}/{summary.model}
-                        </td>
-                        <td>{(summary.passRate * 100).toFixed(1)}%</td>
-                        <td>{summary.averageTotalScore.toFixed(2)}</td>
-                        <td>{summary.runFailures}</td>
-                        <td>
-                          {summary.topFailureSignals.length > 0
-                            ? summary.topFailureSignals.map((item) => `${item.signal} (${item.count})`).join(", ")
-                            : "none"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <p className="office-subtitle">No benchmark items recorded yet.</p>
-              )}
-            </section>
-          ) : null}
-          {regressionStatus ? (
-            <section>
-              <h4>Latest replay regression</h4>
-              <p>
-                Run: <code>{regressionStatus.run.regressionRunId}</code> • {regressionStatus.run.status}
-                {regressionStatus.run.finishedAt
-                  ? ` • finished ${formatDateTime(regressionStatus.run.finishedAt)}`
-                  : ""}
-              </p>
-              {regressionStatus.run.error ? <p className="error">{regressionStatus.run.error}</p> : null}
-              {regressionStatus.results.length > 0 ? (
-                <table className="prompt-lab-benchmark-table">
-                  <thead>
-                    <tr>
-                      <th>Test</th>
-                      <th>Capability</th>
-                      <th>Score Δ</th>
-                      <th>Pass Δ</th>
-                      <th>Latency Δ</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {regressionStatus.results.slice(0, 30).map((item) => (
-                      <tr key={item.resultId}>
-                        <td>{item.testCode}</td>
-                        <td>{item.capability}</td>
-                        <td>{item.scoreDelta.toFixed(2)}</td>
-                        <td>{item.passDelta.toFixed(2)}</td>
-                        <td>{Math.round(item.latencyDeltaMs)} ms</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <p className="office-subtitle">No regression results recorded yet.</p>
-              )}
-            </section>
-          ) : null}
-          {trendSeries.length > 0 ? (
-            <section>
-              <h4>Capability trend alerts</h4>
-              <div className="token-row">
-                {trendSeries.map((series) => (
-                  <span key={series.capability} className={`token-chip${series.breached ? " token-chip-alert" : ""}`}>
-                    {series.capability}:{" "}
-                    {series.points.length > 0 ? series.points[series.points.length - 1]?.value.toFixed(2) : "n/a"}
-                    {series.breached ? " (threshold breached)" : ""}
-                  </span>
-                ))}
-              </div>
-            </section>
-          ) : null}
-        </article>
+        <PromptLabReportPanel
+          report={report}
+          testOutcomeSummary={testOutcomeSummary}
+          passThreshold={passThreshold}
+          benchmarkStatus={benchmarkStatus}
+          regressionStatus={regressionStatus}
+          trendSeries={trendSeries}
+        />
       ) : null}
       <ConfirmModal
         open={confirmResetOpen}
@@ -1493,22 +1017,5 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         }}
       />
     </section>
-  );
-}
-
-function ScoreField(props: { label: string; value: 0 | 1 | 2; onChange: (value: 0 | 1 | 2) => void }) {
-  return (
-    <label className="chat-v11-select">
-      {props.label}
-      <GCSelect
-        value={String(props.value)}
-        onChange={(value) => props.onChange(Number(value) as 0 | 1 | 2)}
-        options={[
-          { value: "0", label: "0" },
-          { value: "1", label: "1" },
-          { value: "2", label: "2" },
-        ]}
-      />
-    </label>
   );
 }

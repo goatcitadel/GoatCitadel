@@ -114,11 +114,14 @@ describe("isTrustedGatewayHost", () => {
   });
 
   it("migrates legacy localStorage auth into session storage", () => {
-    window.localStorage.setItem("goatcitadel.gateway.auth", JSON.stringify({
-      mode: "token",
-      token: "legacy-token",
-      tokenQueryParam: "access_token",
-    }));
+    window.localStorage.setItem(
+      "goatcitadel.gateway.auth",
+      JSON.stringify({
+        mode: "token",
+        token: "legacy-token",
+        tokenQueryParam: "access_token",
+      }),
+    );
 
     const migrated = readStoredGatewayAuthState();
 
@@ -132,15 +135,17 @@ describe("isTrustedGatewayHost", () => {
     const fetchMock = vi.fn(async () => {
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(encoder.encode(
-            `data: ${JSON.stringify({
-              type: "message_start",
-              sessionId: "sess-1",
-              turnId: "turn-1",
-              messageId: "assistant-1",
-              branchKind: "append",
-            })}\n\n`,
-          ));
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                type: "message_start",
+                sessionId: "sess-1",
+                turnId: "turn-1",
+                messageId: "assistant-1",
+                branchKind: "append",
+              })}\n\n`,
+            ),
+          );
         },
       });
       return new Response(body, {
@@ -157,15 +162,17 @@ describe("isTrustedGatewayHost", () => {
     const controller = new AbortController();
     const chunks: Array<{ type: string }> = [];
 
-    await expect(streamAgentChatMessage(
-      "sess-1",
-      { content: "coverage" },
-      (chunk) => {
-        chunks.push({ type: chunk.type });
-        controller.abort();
-      },
-      { signal: controller.signal },
-    )).resolves.toBeUndefined();
+    await expect(
+      streamAgentChatMessage(
+        "sess-1",
+        { content: "coverage" },
+        (chunk) => {
+          chunks.push({ type: chunk.type });
+          controller.abort();
+        },
+        { signal: controller.signal },
+      ),
+    ).resolves.toBeUndefined();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(chunks).toEqual([{ type: "message_start" }]);
@@ -176,7 +183,7 @@ describe("isTrustedGatewayHost", () => {
     const fetchMock = vi.fn(async () => {
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(encoder.encode("data: {\"type\":\"message_start\"\n\n"));
+          controller.enqueue(encoder.encode('data: {"type":"message_start"\n\n'));
           controller.close();
         },
       });
@@ -191,11 +198,9 @@ describe("isTrustedGatewayHost", () => {
       value: fetchMock,
     });
 
-    await expect(streamAgentChatMessage(
-      "sess-1",
-      { content: "coverage" },
-      () => undefined,
-    )).rejects.toThrow(/Malformed SSE event payload/);
+    await expect(streamAgentChatMessage("sess-1", { content: "coverage" }, () => undefined)).rejects.toThrow(
+      /Malformed SSE event payload/,
+    );
   });
 
   it("fails chat streams when an SSE event grows past the client buffer limit", async () => {
@@ -219,15 +224,13 @@ describe("isTrustedGatewayHost", () => {
       value: fetchMock,
     });
 
-    await expect(streamAgentChatMessage(
-      "sess-1",
-      { content: "coverage" },
-      () => undefined,
-    )).rejects.toThrow(/buffer limit/);
+    await expect(streamAgentChatMessage("sess-1", { content: "coverage" }, () => undefined)).rejects.toThrow(
+      /buffer limit/,
+    );
   });
 
   it("targets the memory-maintenance read endpoints with workspace-scoped query params", async () => {
-    const fetchMock = vi.fn(async (input: string | URL) => {
+    const fetchMock = vi.fn(async (_input: string | URL) => {
       return new Response(JSON.stringify({ items: [], workspaceId: "workspace-alpha" }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -298,13 +301,13 @@ describe("isTrustedGatewayHost", () => {
     expect(patchUrl.pathname).toBe("/api/v1/memory/maintenance/policy");
     expect(patchUrl.searchParams.get("workspaceId")).toBe("workspace-alpha");
     expect(patchInit.method).toBe("PATCH");
-    expect(String(patchInit.body ?? "")).toContain("\"enabled\":true");
-    expect(String(patchInit.body ?? "")).toContain("\"minChangedSessions\":5");
+    expect(String(patchInit.body ?? "")).toContain('"enabled":true');
+    expect(String(patchInit.body ?? "")).toContain('"minChangedSessions":5');
 
     expect(runUrl.pathname).toBe("/api/v1/memory/maintenance/run-now");
     expect(runInit.method).toBe("POST");
-    expect(String(runInit.body ?? "")).toContain("\"workspaceId\":\"workspace-alpha\"");
-    expect(String(runInit.body ?? "")).toContain("\"triggerSource\":\"manual\"");
+    expect(String(runInit.body ?? "")).toContain('"workspaceId":"workspace-alpha"');
+    expect(String(runInit.body ?? "")).toContain('"triggerSource":"manual"');
 
     expect(acceptUrl.pathname).toBe("/api/v1/memory/maintenance/recommendations/recommendation-1/accept");
     expect(acceptInit.method).toBe("POST");

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Onboarding keeps setup state, review, and readiness on one guided page until the flow stabilizes further. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { providerTemplates } from "@goatcitadel/contracts";
 import {
@@ -10,7 +11,6 @@ import {
   startDaemon,
   type RuntimeSettingsResponse,
 } from "../api/client";
-import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { HelpHint } from "../components/HelpHint";
 import {
   createEmptyLlmTransportDraft,
@@ -23,6 +23,11 @@ import { SelectOrCustom, type SelectOption } from "../components/SelectOrCustom"
 import { pageCopy } from "../content/copy";
 import { previewProviderModels, useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
+import { OnboardingProgressPanel } from "./onboarding/OnboardingProgressPanel";
+import { OnboardingQuickstartProfilesPanel } from "./onboarding/OnboardingQuickstartProfilesPanel";
+import { OnboardingReadinessPanel } from "./onboarding/OnboardingReadinessPanel";
+import { OnboardingReviewApplyPanel } from "./onboarding/OnboardingReviewApplyPanel";
+import { OnboardingStepNav } from "./onboarding/OnboardingStepNav";
 
 const TOOL_PROFILE_OPTIONS: SelectOption[] = [
   { value: "minimal", label: "minimal (safest)" },
@@ -111,7 +116,8 @@ const QUICKSTART_PRESETS = [
       defaultToolProfile: "standard",
       budgetMode: "saver" as const,
       allowlistPreset: "web-research",
-      networkAllowlistText: "127.0.0.1\nlocalhost\n*.github.com\n*.developer.mozilla.org\napi.openai.com\nopenrouter.ai",
+      networkAllowlistText:
+        "127.0.0.1\nlocalhost\n*.github.com\n*.developer.mozilla.org\napi.openai.com\nopenrouter.ai",
       meshEnabled: false,
       meshMode: "wan" as const,
       meshRequireMtls: true,
@@ -164,32 +170,32 @@ function hasUnsavedOnboardingDraft(params: {
 }): boolean {
   const activeProvider = readOnboardingActiveProvider(params.state, params.activeProviderId);
   return Boolean(
-    !params.state
-    || params.authMode !== params.state.settings.auth.mode
-    || params.allowLoopbackBypass !== params.state.settings.auth.allowLoopbackBypass
-    || params.authToken.trim().length > 0
-    || params.basicUsername.trim().length > 0
-    || params.basicPassword.length > 0
-    || params.activeProviderId !== params.state.settings.llm.activeProviderId
-    || params.activeModel !== params.state.settings.llm.activeModel
-    || params.providerLabel !== (activeProvider?.label ?? "")
-    || params.providerBaseUrl !== (activeProvider?.baseUrl ?? "")
-    || params.providerApiStyle !== (activeProvider?.apiStyle ?? "openai-responses")
-    || params.providerDefaultModel !== (activeProvider?.defaultModel ?? "")
-    || params.providerApiKey.trim().length > 0
-    || params.providerApiKeyEnv !== (activeProvider?.apiKeySource === "env" ? (activeProvider.apiKeyRef ?? "") : "")
-    || params.currentProviderTransportDraftJson !== params.savedProviderTransportDraftJson
-    || params.defaultToolProfile !== params.state.settings.defaultToolProfile
-    || params.budgetMode !== params.state.settings.budgetMode
-    || params.networkAllowlistText !== params.state.settings.networkAllowlist.join("\n")
-    || params.meshEnabled !== params.state.settings.mesh.enabled
-    || params.meshMode !== params.state.settings.mesh.mode
-    || params.meshNodeId !== params.state.settings.mesh.nodeId
-    || params.meshMdns !== params.state.settings.mesh.mdns
-    || params.meshStaticPeers !== params.state.settings.mesh.staticPeers.join("\n")
-    || params.meshRequireMtls !== params.state.settings.mesh.requireMtls
-    || params.meshTailnetEnabled !== params.state.settings.mesh.tailnetEnabled
-    || params.markComplete !== !params.state.completed,
+    !params.state ||
+    params.authMode !== params.state.settings.auth.mode ||
+    params.allowLoopbackBypass !== params.state.settings.auth.allowLoopbackBypass ||
+    params.authToken.trim().length > 0 ||
+    params.basicUsername.trim().length > 0 ||
+    params.basicPassword.length > 0 ||
+    params.activeProviderId !== params.state.settings.llm.activeProviderId ||
+    params.activeModel !== params.state.settings.llm.activeModel ||
+    params.providerLabel !== (activeProvider?.label ?? "") ||
+    params.providerBaseUrl !== (activeProvider?.baseUrl ?? "") ||
+    params.providerApiStyle !== (activeProvider?.apiStyle ?? "openai-responses") ||
+    params.providerDefaultModel !== (activeProvider?.defaultModel ?? "") ||
+    params.providerApiKey.trim().length > 0 ||
+    params.providerApiKeyEnv !== (activeProvider?.apiKeySource === "env" ? (activeProvider.apiKeyRef ?? "") : "") ||
+    params.currentProviderTransportDraftJson !== params.savedProviderTransportDraftJson ||
+    params.defaultToolProfile !== params.state.settings.defaultToolProfile ||
+    params.budgetMode !== params.state.settings.budgetMode ||
+    params.networkAllowlistText !== params.state.settings.networkAllowlist.join("\n") ||
+    params.meshEnabled !== params.state.settings.mesh.enabled ||
+    params.meshMode !== params.state.settings.mesh.mode ||
+    params.meshNodeId !== params.state.settings.mesh.nodeId ||
+    params.meshMdns !== params.state.settings.mesh.mdns ||
+    params.meshStaticPeers !== params.state.settings.mesh.staticPeers.join("\n") ||
+    params.meshRequireMtls !== params.state.settings.mesh.requireMtls ||
+    params.meshTailnetEnabled !== params.state.settings.mesh.tailnetEnabled ||
+    params.markComplete !== !params.state.completed,
   );
 }
 
@@ -201,7 +207,9 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   const [state, setState] = useState<OnboardingRuntimeState | null>(null);
   const [daemonStatus, setDaemonStatus] = useState<Awaited<ReturnType<typeof fetchDaemonStatus>> | null>(null);
   const [daemonBusy, setDaemonBusy] = useState<"start" | "restart" | null>(null);
-  const [installTokenInfo, setInstallTokenInfo] = useState<Awaited<ReturnType<typeof resolveGatewayInstallToken>> | null>(null);
+  const [installTokenInfo, setInstallTokenInfo] = useState<Awaited<
+    ReturnType<typeof resolveGatewayInstallToken>
+  > | null>(null);
   const [installTokenBusy, setInstallTokenBusy] = useState(false);
 
   const [authMode, setAuthMode] = useState<"none" | "token" | "basic">("none");
@@ -219,7 +227,9 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   const [providerApiKey, setProviderApiKey] = useState("");
   const [providerApiKeyEnv, setProviderApiKeyEnv] = useState("");
   const [providerRequestDraft, setProviderRequestDraft] = useState(createEmptyLlmTransportDraft);
-  const [savedProviderTransportDraftJson, setSavedProviderTransportDraftJson] = useState(JSON.stringify(createEmptyLlmTransportDraft()));
+  const [savedProviderTransportDraftJson, setSavedProviderTransportDraftJson] = useState(
+    JSON.stringify(createEmptyLlmTransportDraft()),
+  );
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelDiscoverySource, setModelDiscoverySource] = useState<"remote" | "fallback" | null>(null);
@@ -292,7 +302,8 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   }, [providerLabel, state]);
 
   const providerConfigMap = useMemo(
-    () => new Map((runtimeLlmConfig?.providerConfigs ?? []).map((provider) => [provider.providerId, provider] as const)),
+    () =>
+      new Map((runtimeLlmConfig?.providerConfigs ?? []).map((provider) => [provider.providerId, provider] as const)),
     [runtimeLlmConfig?.providerConfigs],
   );
 
@@ -310,40 +321,47 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     }
   }, [providerRequestDraft]);
 
-  const hydrateFromState = useCallback((next: OnboardingRuntimeState) => {
-    setAuthMode(next.settings.auth.mode);
-    setAllowLoopbackBypass(next.settings.auth.allowLoopbackBypass);
-    setDefaultToolProfile(next.settings.defaultToolProfile);
-    setBudgetMode(next.settings.budgetMode);
-    setNetworkAllowlistText(next.settings.networkAllowlist.join("\n"));
-    setAllowlistPreset(matchAllowlistPreset(next.settings.networkAllowlist));
+  const hydrateFromState = useCallback(
+    (next: OnboardingRuntimeState) => {
+      setAuthMode(next.settings.auth.mode);
+      setAllowLoopbackBypass(next.settings.auth.allowLoopbackBypass);
+      setDefaultToolProfile(next.settings.defaultToolProfile);
+      setBudgetMode(next.settings.budgetMode);
+      setNetworkAllowlistText(next.settings.networkAllowlist.join("\n"));
+      setAllowlistPreset(matchAllowlistPreset(next.settings.networkAllowlist));
 
-    setActiveProviderId(next.settings.llm.activeProviderId);
-    setActiveModel(next.settings.llm.activeModel);
-    const activeProvider = next.settings.llm.providers.find((provider) => provider.providerId === next.settings.llm.activeProviderId);
-    if (activeProvider) {
-      setProviderLabel(activeProvider.label);
-      setProviderBaseUrl(activeProvider.baseUrl);
-      setProviderApiStyle(activeProvider.apiStyle);
-      setProviderDefaultModel(activeProvider.defaultModel);
-      setProviderApiKeyEnv(activeProvider.apiKeySource === "env" ? (activeProvider.apiKeyRef ?? "") : "");
-    } else {
-      setProviderApiKeyEnv("");
-    }
-    setProviderApiKey("");
+      setActiveProviderId(next.settings.llm.activeProviderId);
+      setActiveModel(next.settings.llm.activeModel);
+      const activeProvider = next.settings.llm.providers.find(
+        (provider) => provider.providerId === next.settings.llm.activeProviderId,
+      );
+      if (activeProvider) {
+        setProviderLabel(activeProvider.label);
+        setProviderBaseUrl(activeProvider.baseUrl);
+        setProviderApiStyle(activeProvider.apiStyle);
+        setProviderDefaultModel(activeProvider.defaultModel);
+        setProviderApiKeyEnv(activeProvider.apiKeySource === "env" ? (activeProvider.apiKeyRef ?? "") : "");
+      } else {
+        setProviderApiKeyEnv("");
+      }
+      setProviderApiKey("");
 
-    const nextTransportDraft = draftFromRequestConfig(providerConfigMap.get(next.settings.llm.activeProviderId)?.request);
-    setProviderRequestDraft(nextTransportDraft);
-    setSavedProviderTransportDraftJson(JSON.stringify(nextTransportDraft));
+      const nextTransportDraft = draftFromRequestConfig(
+        providerConfigMap.get(next.settings.llm.activeProviderId)?.request,
+      );
+      setProviderRequestDraft(nextTransportDraft);
+      setSavedProviderTransportDraftJson(JSON.stringify(nextTransportDraft));
 
-    setMeshEnabled(next.settings.mesh.enabled);
-    setMeshMode(next.settings.mesh.mode);
-    setMeshNodeId(next.settings.mesh.nodeId);
-    setMeshMdns(next.settings.mesh.mdns);
-    setMeshStaticPeers(next.settings.mesh.staticPeers.join("\n"));
-    setMeshRequireMtls(next.settings.mesh.requireMtls);
-    setMeshTailnetEnabled(next.settings.mesh.tailnetEnabled);
-  }, [providerConfigMap]);
+      setMeshEnabled(next.settings.mesh.enabled);
+      setMeshMode(next.settings.mesh.mode);
+      setMeshNodeId(next.settings.mesh.nodeId);
+      setMeshMdns(next.settings.mesh.mdns);
+      setMeshStaticPeers(next.settings.mesh.staticPeers.join("\n"));
+      setMeshRequireMtls(next.settings.mesh.requireMtls);
+      setMeshTailnetEnabled(next.settings.mesh.tailnetEnabled);
+    },
+    [providerConfigMap],
+  );
 
   useEffect(() => {
     if (!state || hasUnsavedDraftRef.current) {
@@ -414,26 +432,26 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     state,
   ]);
 
-  const load = useCallback(async (options: { preserveDrafts?: boolean } = {}) => {
-    const preserveDrafts = options.preserveDrafts ?? false;
-    setLoading(true);
-    setError(null);
-    try {
-      const [next, daemon] = await Promise.all([
-        fetchOnboardingState(),
-        fetchDaemonStatus().catch(() => null),
-      ]);
-      setState(next);
-      setDaemonStatus(daemon);
-      if (!preserveDrafts || !hasUnsavedDraftRef.current) {
-        hydrateFromState(next);
+  const load = useCallback(
+    async (options: { preserveDrafts?: boolean } = {}) => {
+      const preserveDrafts = options.preserveDrafts ?? false;
+      setLoading(true);
+      setError(null);
+      try {
+        const [next, daemon] = await Promise.all([fetchOnboardingState(), fetchDaemonStatus().catch(() => null)]);
+        setState(next);
+        setDaemonStatus(daemon);
+        if (!preserveDrafts || !hasUnsavedDraftRef.current) {
+          hydrateFromState(next);
+        }
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setLoading(false);
       }
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [hydrateFromState]);
+    },
+    [hydrateFromState],
+  );
 
   useEffect(() => {
     void load();
@@ -443,13 +461,17 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     if (!runtimeLlmConfig) {
       return;
     }
-    setState((current) => current ? {
-      ...current,
-      settings: {
-        ...current.settings,
-        llm: runtimeLlmConfig,
-      },
-    } : current);
+    setState((current) =>
+      current
+        ? {
+            ...current,
+            settings: {
+              ...current.settings,
+              llm: runtimeLlmConfig,
+            },
+          }
+        : current,
+    );
   }, [runtimeLlmConfig]);
 
   useEffect(() => {
@@ -518,11 +540,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
           }
           setChangeReview({
             overall: "warning",
-            items: [{
-              field: "onboarding",
-              level: "warning",
-              hint: "Risk preflight unavailable.",
-            }],
+            items: [
+              {
+                field: "onboarding",
+                level: "warning",
+                hint: "Risk preflight unavailable.",
+              },
+            ],
           });
         });
     }, 400);
@@ -561,17 +585,20 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       const controller = new AbortController();
       previewAbortRef.current = controller;
       setLoadingModels(true);
-      void previewProviderModels({
-        providerId,
-        baseUrl,
-        apiStyle: providerApiStyle,
-        apiKey: providerApiKey.trim() || undefined,
-        apiKeyEnv: providerApiKeyEnv.trim() || undefined,
-        request: providerRequestValidation.request,
-        fallbackModel: providerDefaultModel || activeModel,
-      }, {
-        signal: controller.signal,
-      })
+      void previewProviderModels(
+        {
+          providerId,
+          baseUrl,
+          apiStyle: providerApiStyle,
+          apiKey: providerApiKey.trim() || undefined,
+          apiKeyEnv: providerApiKeyEnv.trim() || undefined,
+          request: providerRequestValidation.request,
+          fallbackModel: providerDefaultModel || activeModel,
+        },
+        {
+          signal: controller.signal,
+        },
+      )
         .then((result) => {
           setAvailableModels(result.items);
           setModelDiscoverySource(result.source);
@@ -620,8 +647,9 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   ]);
 
   const applyProviderTemplate = (providerId: string) => {
-    const existing = runtimeProviderCatalog.find((provider) => provider.providerId === providerId)
-      ?? state?.settings.llm.providers.find((provider) => provider.providerId === providerId);
+    const existing =
+      runtimeProviderCatalog.find((provider) => provider.providerId === providerId) ??
+      state?.settings.llm.providers.find((provider) => provider.providerId === providerId);
     const template = providerTemplates.find((candidate) => candidate.providerId === providerId);
     const source = existing ?? template;
     if (!source) {
@@ -670,9 +698,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     setDaemonBusy(action);
     setError(null);
     try {
-      const response = action === "start"
-        ? await startDaemon()
-        : await restartDaemon();
+      const response = action === "start" ? await startDaemon() : await restartDaemon();
       setDaemonStatus(response.status);
       if (!response.accepted) {
         setError(response.reason);
@@ -753,7 +779,9 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       setState(bootstrap.state);
       hydrateFromState(bootstrap.state);
       await reloadProviderCatalog();
-      setApplyMessage(`Apply complete. Active provider: ${bootstrap.state.settings.llm.activeProviderId} · model: ${bootstrap.state.settings.llm.activeModel}.`);
+      setApplyMessage(
+        `Apply complete. Active provider: ${bootstrap.state.settings.llm.activeProviderId} · model: ${bootstrap.state.settings.llm.activeModel}.`,
+      );
       if (bootstrap.state.completed) {
         onCompleted?.();
       }
@@ -786,77 +814,50 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       {error ? <p className="error">{error}</p> : null}
       {applyMessage ? <p className="office-subtitle">{applyMessage}</p> : null}
 
-      <article className="card">
-        <h3>Launch Readiness</h3>
-        <div className="token-row">
-          <span className={`token-chip ${daemonReady ? "token-chip-active" : ""}`}>Gateway {daemonReady ? "running" : "unavailable"}</span>
-          <span className={`token-chip ${completedChecklistItems === totalChecklistItems ? "token-chip-active" : ""}`}>
-            Checklist {completedChecklistItems}/{totalChecklistItems}
-          </span>
-          <span className={`token-chip ${state?.completed ? "token-chip-active" : ""}`}>
-            Wizard {state?.completed ? "complete" : "in progress"}
-          </span>
-          {daemonStatus?.host ? <span className="token-chip">Host {daemonStatus.host}</span> : null}
-        </div>
-        <div className="controls-row">
-          <button type="button" onClick={() => void handleDaemonAction("start")} disabled={daemonBusy !== null || daemonReady || !daemonControlSupported}>
-            {daemonBusy === "start" ? "Starting..." : daemonReady ? "Gateway running" : "Start daemon"}
-          </button>
-          <button type="button" onClick={() => void handleDaemonAction("restart")} disabled={daemonBusy !== null || !daemonControlSupported}>
-            {daemonBusy === "restart" ? "Restarting..." : "Restart daemon"}
-          </button>
-          <button type="button" onClick={() => void load()}>
-            Refresh readiness
-          </button>
-        </div>
-        {daemonStatus ? (
-          <p className="office-subtitle">
-            State: {daemonStatus.state}
-            {daemonStatus.pid ? ` · pid ${daemonStatus.pid}` : ""}
-            {daemonStatus.uptimeSeconds ? ` · uptime ${Math.floor(daemonStatus.uptimeSeconds)}s` : ""}
-          </p>
-        ) : (
-          <p className="office-subtitle">Daemon status is unavailable right now.</p>
-        )}
-        {daemonStatus?.controlMessage ? <p className="office-subtitle">{daemonStatus.controlMessage}</p> : null}
-      </article>
+      <OnboardingReadinessPanel
+        daemonReady={daemonReady}
+        completedChecklistItems={completedChecklistItems}
+        totalChecklistItems={totalChecklistItems}
+        wizardCompleted={state?.completed === true}
+        daemonStatus={daemonStatus}
+        daemonBusy={daemonBusy}
+        daemonControlSupported={daemonControlSupported}
+        onDaemonAction={handleDaemonAction}
+        onRefresh={async () => {
+          await load();
+        }}
+      />
 
-      <article className="card">
-        <h3>Quickstart Profiles</h3>
-        <p className="office-subtitle">Pick the closest operator posture, then refine provider and mesh details before apply.</p>
-        <div className="compact-list">
-          {QUICKSTART_PRESETS.map((preset) => (
-            <li key={preset.id}>
-              <strong>{preset.title}</strong> {preset.summary}
-              <div className="actions" style={{ marginTop: 8 }}>
-                <button type="button" onClick={() => applyQuickstartPreset(preset.id)}>Load profile</button>
-              </div>
-            </li>
-          ))}
-        </div>
-      </article>
+      <OnboardingQuickstartProfilesPanel
+        presets={QUICKSTART_PRESETS}
+        onApplyQuickstartPreset={(presetId) =>
+          applyQuickstartPreset(presetId as (typeof QUICKSTART_PRESETS)[number]["id"])
+        }
+      />
 
-      <article className="card">
-        <div className="controls-row">
-          <strong>Progress</strong>
-          <span>{STEP_TITLES[step]}</span>
-          <button type="button" onClick={() => void load()}>Refresh</button>
-        </div>
-        <div className="compact-list">
-          {state?.checklist.map((item) => (
-            <li key={item.id}>
-              <strong>{item.label}</strong> [{item.status}] {item.detail}
-            </li>
-          ))}
-        </div>
-      </article>
+      <OnboardingProgressPanel
+        stepTitle={STEP_TITLES[step]}
+        checklist={state?.checklist ?? []}
+        onRefresh={async () => {
+          await load();
+        }}
+      />
 
       {step === 0 ? (
         <article className="card">
           <h3>Step 1: Gateway Access</h3>
-          <p className="office-subtitle">Choose how this GoatCitadel node should protect access. For a single local machine, <strong>none</strong> is the simplest starting point.</p>
+          <p className="office-subtitle">
+            Choose how this GoatCitadel node should protect access. For a single local machine, <strong>none</strong> is
+            the simplest starting point.
+          </p>
           <div className="controls-row">
-            <label htmlFor="wizard-auth-mode">Auth mode <HelpHint label="Auth mode help" text="Use none for trusted local-only testing. Use token or basic before exposing GoatCitadel on a non-loopback host." /></label>
+            <label htmlFor="wizard-auth-mode">
+              Auth mode{" "}
+              <HelpHint
+                label="Auth mode help"
+                text="Use none for trusted local-only testing. Use token or basic before exposing GoatCitadel on a non-loopback host."
+              />
+            </label>
             <select
               id="wizard-auth-mode"
               value={authMode}
@@ -868,7 +869,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
             </select>
           </div>
           <div className="controls-row">
-            <label htmlFor="wizard-loopback">Allow loopback bypass <HelpHint label="Loopback bypass help" text="When enabled, localhost access can stay friction-free even if stronger auth is configured for remote access." /></label>
+            <label htmlFor="wizard-loopback">
+              Allow loopback bypass{" "}
+              <HelpHint
+                label="Loopback bypass help"
+                text="When enabled, localhost access can stay friction-free even if stronger auth is configured for remote access."
+              />
+            </label>
             <input
               id="wizard-loopback"
               type="checkbox"
@@ -892,11 +899,19 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
               </div>
               {installTokenInfo ? (
                 <div className="card">
-                  <p><strong>Install token source:</strong> {installTokenInfo.source}</p>
-                  {installTokenInfo.token ? <p><code>{installTokenInfo.token}</code></p> : null}
+                  <p>
+                    <strong>Install token source:</strong> {installTokenInfo.source}
+                  </p>
+                  {installTokenInfo.token ? (
+                    <p>
+                      <code>{installTokenInfo.token}</code>
+                    </p>
+                  ) : null}
                   {installTokenInfo.warnings.length > 0 ? (
                     <ul className="compact-list">
-                      {installTokenInfo.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                      {installTokenInfo.warnings.map((warning) => (
+                        <li key={warning}>{warning}</li>
+                      ))}
                     </ul>
                   ) : null}
                 </div>
@@ -930,9 +945,18 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       {step === 1 ? (
         <article className="card">
           <h3>Step 2: LLM Provider</h3>
-          <p className="office-subtitle">Pick the company or endpoint GoatCitadel should use, then choose from a live-discovered model list when possible instead of guessing model names.</p>
+          <p className="office-subtitle">
+            Pick the company or endpoint GoatCitadel should use, then choose from a live-discovered model list when
+            possible instead of guessing model names.
+          </p>
           <div className="controls-row">
-            <label htmlFor="wizard-provider-id">Provider <HelpHint label="Provider help" text="Provider is the endpoint family GoatCitadel will talk to, such as glm, moonshot, openai, or a local server like ollama." /></label>
+            <label htmlFor="wizard-provider-id">
+              Provider{" "}
+              <HelpHint
+                label="Provider help"
+                text="Provider is the endpoint family GoatCitadel will talk to, such as glm, moonshot, openai, or a local server like ollama."
+              />
+            </label>
             <SelectOrCustom
               id="wizard-provider-id"
               value={activeProviderId}
@@ -946,7 +970,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
             />
           </div>
           <div className="controls-row">
-            <label htmlFor="wizard-provider-label">Label <HelpHint label="Provider label help" text="Label is the display name shown in the UI. It is human-facing and can be friendlier than the provider ID." /></label>
+            <label htmlFor="wizard-provider-label">
+              Label{" "}
+              <HelpHint
+                label="Provider label help"
+                text="Label is the display name shown in the UI. It is human-facing and can be friendlier than the provider ID."
+              />
+            </label>
             <SelectOrCustom
               id="wizard-provider-label"
               value={providerLabel}
@@ -957,7 +987,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
             />
           </div>
           <div className="controls-row">
-            <label htmlFor="wizard-provider-url">Base URL <HelpHint label="Base URL help" text="Base URL is the API root GoatCitadel will call. For GLM the recommended base URL is https://api.z.ai/api/paas/v4." /></label>
+            <label htmlFor="wizard-provider-url">
+              Base URL{" "}
+              <HelpHint
+                label="Base URL help"
+                text="Base URL is the API root GoatCitadel will call. For GLM the recommended base URL is https://api.z.ai/api/paas/v4."
+              />
+            </label>
             <SelectOrCustom
               id="wizard-provider-url"
               value={providerBaseUrl}
@@ -972,7 +1008,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
           </div>
           <p className="office-subtitle">Upstream API style: {providerApiStyle}</p>
           <div className="controls-row">
-            <label htmlFor="wizard-model">Active model <HelpHint label="Active model help" text="This is the model GoatCitadel will use immediately after onboarding. The list is discovered live when the provider supports it." /></label>
+            <label htmlFor="wizard-model">
+              Active model{" "}
+              <HelpHint
+                label="Active model help"
+                text="This is the model GoatCitadel will use immediately after onboarding. The list is discovered live when the provider supports it."
+              />
+            </label>
             <SelectOrCustom
               id="wizard-model"
               value={activeModel}
@@ -984,12 +1026,23 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
           </div>
           {modelDiscoverySource ? (
             <p className="office-subtitle">
-              Model discovery: {loadingModels ? "loading..." : modelDiscoverySource === "remote" ? "live provider list" : "fallback/default list"}
+              Model discovery:{" "}
+              {loadingModels
+                ? "loading..."
+                : modelDiscoverySource === "remote"
+                  ? "live provider list"
+                  : "fallback/default list"}
               {modelDiscoveryWarning ? ` · ${modelDiscoveryWarning}` : ""}
             </p>
           ) : null}
           <div className="controls-row">
-            <label htmlFor="wizard-provider-default-model">Provider default model <HelpHint label="Provider default model help" text="Default model is the model GoatCitadel will prefer for this provider when a page or session has not pinned another one yet." /></label>
+            <label htmlFor="wizard-provider-default-model">
+              Provider default model{" "}
+              <HelpHint
+                label="Provider default model help"
+                text="Default model is the model GoatCitadel will prefer for this provider when a page or session has not pinned another one yet."
+              />
+            </label>
             <SelectOrCustom
               id="wizard-provider-default-model"
               value={providerDefaultModel}
@@ -1001,7 +1054,10 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
           </div>
           <details className="advanced-panel">
             <summary>Advanced provider auth</summary>
-            <p className="office-subtitle">Use secure-store or env-based auth when possible. If you enter an env var name, it should be the variable name itself, for example <code>GLM_API_KEY</code>.</p>
+            <p className="office-subtitle">
+              Use secure-store or env-based auth when possible. If you enter an env var name, it should be the variable
+              name itself, for example <code>GLM_API_KEY</code>.
+            </p>
             <div className="controls-row">
               <label htmlFor="wizard-provider-api-key">API key (optional)</label>
               <input
@@ -1012,7 +1068,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
               />
             </div>
             <div className="controls-row">
-              <label htmlFor="wizard-provider-api-key-env">API key env var (optional) <HelpHint label="Provider env var help" text="This is the environment variable name GoatCitadel should read at runtime, not the secret value itself." /></label>
+              <label htmlFor="wizard-provider-api-key-env">
+                API key env var (optional){" "}
+                <HelpHint
+                  label="Provider env var help"
+                  text="This is the environment variable name GoatCitadel should read at runtime, not the secret value itself."
+                />
+              </label>
               <input
                 id="wizard-provider-api-key-env"
                 value={providerApiKeyEnv}
@@ -1032,7 +1094,9 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       {step === 2 ? (
         <article className="card">
           <h3>Step 3: Runtime Defaults</h3>
-          <p className="office-subtitle">These defaults shape how aggressively GoatCitadel can act and which outbound hosts it may contact.</p>
+          <p className="office-subtitle">
+            These defaults shape how aggressively GoatCitadel can act and which outbound hosts it may contact.
+          </p>
           <div className="controls-row">
             <label htmlFor="wizard-tool-profile">Tool profile</label>
             <SelectOrCustom
@@ -1059,7 +1123,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
             </select>
           </div>
           <div className="controls-row">
-            <label htmlFor="wizard-allowlist-preset">Network allowlist preset <HelpHint label="Network allowlist help" text="The network allowlist controls outbound hosts GoatCitadel may contact. It is not your desktop IP. Include localhost for local services and provider domains such as api.z.ai for cloud models." /></label>
+            <label htmlFor="wizard-allowlist-preset">
+              Network allowlist preset{" "}
+              <HelpHint
+                label="Network allowlist help"
+                text="The network allowlist controls outbound hosts GoatCitadel may contact. It is not your desktop IP. Include localhost for local services and provider domains such as api.z.ai for cloud models."
+              />
+            </label>
             <select
               id="wizard-allowlist-preset"
               value={allowlistPreset}
@@ -1090,7 +1160,10 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       {step === 3 ? (
         <article className="card">
           <h3>Step 4: Mesh (Optional)</h3>
-          <p className="office-subtitle">Mesh is only needed when you want multiple GoatCitadel nodes to cooperate. For a single-machine setup, leaving it off is correct.</p>
+          <p className="office-subtitle">
+            Mesh is only needed when you want multiple GoatCitadel nodes to cooperate. For a single-machine setup,
+            leaving it off is correct.
+          </p>
           <div className="controls-row">
             <label htmlFor="wizard-mesh-enabled">Enable mesh</label>
             <input
@@ -1103,7 +1176,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
           {meshEnabled ? (
             <>
               <div className="controls-row">
-                <label htmlFor="wizard-mesh-mode">Mode <HelpHint label="Mesh mode help" text="LAN is for local-network discovery, WAN is for explicitly reachable remote nodes, and tailnet is for Tailscale-style private networking." /></label>
+                <label htmlFor="wizard-mesh-mode">
+                  Mode{" "}
+                  <HelpHint
+                    label="Mesh mode help"
+                    text="LAN is for local-network discovery, WAN is for explicitly reachable remote nodes, and tailnet is for Tailscale-style private networking."
+                  />
+                </label>
                 <select
                   id="wizard-mesh-mode"
                   value={meshMode}
@@ -1115,7 +1194,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
                 </select>
               </div>
               <div className="controls-row">
-                <label htmlFor="wizard-mesh-node-id">Node ID <HelpHint label="Mesh node ID help" text="Node ID is this GoatCitadel node's stable identity inside the mesh. It should be unique enough to distinguish this machine from other nodes." /></label>
+                <label htmlFor="wizard-mesh-node-id">
+                  Node ID{" "}
+                  <HelpHint
+                    label="Mesh node ID help"
+                    text="Node ID is this GoatCitadel node's stable identity inside the mesh. It should be unique enough to distinguish this machine from other nodes."
+                  />
+                </label>
                 <input
                   id="wizard-mesh-node-id"
                   value={meshNodeId}
@@ -1123,7 +1208,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
                 />
               </div>
               <div className="controls-row">
-                <label htmlFor="wizard-mesh-mdns">mDNS discovery <HelpHint label="mDNS discovery help" text="mDNS lets local-network GoatCitadel nodes find each other automatically. Leave it on for simple LAN testing." /></label>
+                <label htmlFor="wizard-mesh-mdns">
+                  mDNS discovery{" "}
+                  <HelpHint
+                    label="mDNS discovery help"
+                    text="mDNS lets local-network GoatCitadel nodes find each other automatically. Leave it on for simple LAN testing."
+                  />
+                </label>
                 <input
                   id="wizard-mesh-mdns"
                   type="checkbox"
@@ -1149,7 +1240,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
                   onChange={(event) => setMeshTailnetEnabled(event.target.checked)}
                 />
               </div>
-              <label htmlFor="wizard-mesh-peers">Static peers (one per line) <HelpHint label="Static peers help" text="Static peers are other GoatCitadel nodes you want to connect to directly. Leave this blank unless you are intentionally linking to another machine." /></label>
+              <label htmlFor="wizard-mesh-peers">
+                Static peers (one per line){" "}
+                <HelpHint
+                  label="Static peers help"
+                  text="Static peers are other GoatCitadel nodes you want to connect to directly. Leave this blank unless you are intentionally linking to another machine."
+                />
+              </label>
               <textarea
                 id="wizard-mesh-peers"
                 rows={4}
@@ -1165,27 +1262,13 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
       ) : null}
 
       {step === 4 ? (
-        <article className="card">
-          <h3>Step 5: Review & Apply</h3>
-          <p>Ready to apply this onboarding configuration through the gateway API.</p>
-          <ChangeReviewPanel
-            title="Onboarding Change Risk"
-            overall={changeReview.overall}
-            items={changeReview.items}
-            requireCriticalConfirm
-            criticalConfirmed={criticalConfirmed}
-            onCriticalConfirmChange={setCriticalConfirmed}
-          />
-          <div className="controls-row">
-            <label htmlFor="wizard-mark-complete">Mark onboarding complete</label>
-            <input
-              id="wizard-mark-complete"
-              type="checkbox"
-              checked={markComplete}
-              onChange={(event) => setMarkComplete(event.target.checked)}
-            />
-          </div>
-          <pre>{JSON.stringify({
+        <OnboardingReviewApplyPanel
+          changeReview={changeReview}
+          criticalConfirmed={criticalConfirmed}
+          setCriticalConfirmed={setCriticalConfirmed}
+          markComplete={markComplete}
+          setMarkComplete={setMarkComplete}
+          summary={{
             authMode,
             activeProviderId,
             activeModel,
@@ -1201,24 +1284,18 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
               requireMtls: meshRequireMtls,
               tailnetEnabled: meshTailnetEnabled,
             },
-          }, null, 2)}</pre>
-          <button type="button" onClick={() => void submit()} disabled={applying}>
-            {applying ? "Applying..." : "Apply onboarding"}
-          </button>
-          <p className="office-subtitle">After apply, use Integrations to validate channels and Code mode to exercise implementation workflows.</p>
-        </article>
+          }}
+          applying={applying}
+          onSubmit={submit}
+        />
       ) : null}
 
-      <article className="card">
-        <div className="actions">
-          <button type="button" onClick={() => setStep((current) => Math.max(0, current - 1) as StepId)} disabled={step === 0 || applying}>
-            Back
-          </button>
-          <button type="button" onClick={() => setStep((current) => Math.min(4, current + 1) as StepId)} disabled={step === 4 || applying}>
-            Next
-          </button>
-        </div>
-      </article>
+      <OnboardingStepNav
+        step={step}
+        applying={applying}
+        onBack={() => setStep((current) => Math.max(0, current - 1) as StepId)}
+        onNext={() => setStep((current) => Math.min(4, current + 1) as StepId)}
+      />
     </section>
   );
 }
@@ -1243,4 +1320,3 @@ function matchAllowlistPreset(allowlist: string[]): string {
   }
   return "custom";
 }
-

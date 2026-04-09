@@ -1,0 +1,328 @@
+import type {
+  AddonActionResponse,
+  AddonCatalogEntry,
+  AddonInstalledRecord,
+  AddonInstallRequest,
+  AddonStatusRecord,
+  AddonUninstallResponse,
+  AssemblyRunDetailResponse,
+  AssemblyRunRecord,
+  ChangeRiskEvaluationResponse,
+  CreateAssemblyRunInput,
+  LlmProviderConfig,
+  LlmProviderRequestConfig,
+  MemoryContextPack,
+  ModelReputation,
+  NpuModelManifest,
+  NpuRuntimeStatus,
+} from "@goatcitadel/contracts";
+import type {
+  LlmChatCompletionResponse,
+  MeshLeaseRecord,
+  MeshNodeRecord,
+  MeshReplicationOffsetRecord,
+  MeshSessionOwnerRecord,
+  MeshStatusResponse,
+  RuntimeSettingsResponse,
+} from "./types.js";
+import { request } from "./client-core.js";
+
+export type LlmRuntimeConfigResponse = RuntimeSettingsResponse["llm"] & {
+  providerConfigs?: LlmProviderConfig[];
+};
+
+export interface ProviderSecretStatus {
+  providerId: string;
+  hasSecret: boolean;
+  source: "none" | "keychain" | "env" | "inline";
+}
+
+export async function fetchAddonsCatalog(): Promise<{ items: AddonCatalogEntry[] }> {
+  return request<{ items: AddonCatalogEntry[] }>("/api/v1/addons/catalog");
+}
+
+export async function fetchInstalledAddons(): Promise<{ items: AddonInstalledRecord[] }> {
+  return request<{ items: AddonInstalledRecord[] }>("/api/v1/addons/installed");
+}
+
+export async function fetchAddonStatus(addonId: string): Promise<AddonStatusRecord> {
+  return request<AddonStatusRecord>(`/api/v1/addons/${encodeURIComponent(addonId)}/status`);
+}
+
+export async function installAddon(addonId: string, input: AddonInstallRequest): Promise<AddonActionResponse> {
+  return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/install`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateAddon(addonId: string): Promise<AddonActionResponse> {
+  return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/update`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function launchAddon(addonId: string): Promise<AddonActionResponse> {
+  return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/launch`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function stopAddon(addonId: string): Promise<AddonActionResponse> {
+  return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/stop`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function uninstallAddon(addonId: string): Promise<AddonUninstallResponse> {
+  return request<AddonUninstallResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/uninstall`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchOrchestrationRunContext(runId: string): Promise<{ items: MemoryContextPack[] }> {
+  return request<{ items: MemoryContextPack[] }>(`/api/v1/orchestration/runs/${encodeURIComponent(runId)}/context`);
+}
+
+export async function fetchLlmConfig(): Promise<LlmRuntimeConfigResponse> {
+  return request<LlmRuntimeConfigResponse>("/api/v1/llm/config");
+}
+
+export async function fetchLlmModels(
+  providerId?: string,
+): Promise<{ items: Array<{ id: string; ownedBy?: string; created?: number }> }> {
+  const query = providerId ? `?providerId=${encodeURIComponent(providerId)}` : "";
+  return request(`/api/v1/llm/models${query}`);
+}
+
+export async function fetchAssemblyRuns(limit = 50): Promise<{ items: AssemblyRunRecord[] }> {
+  return request(`/api/v1/assembly/runs?limit=${limit}`);
+}
+
+export async function createAssemblyRun(input: CreateAssemblyRunInput): Promise<AssemblyRunRecord> {
+  return request("/api/v1/assembly/runs", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchAssemblyRunDetail(runId: string): Promise<AssemblyRunDetailResponse> {
+  return request(`/api/v1/assembly/runs/${encodeURIComponent(runId)}`);
+}
+
+export async function fetchAssemblyReputations(limit = 50): Promise<{ items: ModelReputation[] }> {
+  return request(`/api/v1/assembly/reputation?limit=${limit}`);
+}
+
+export async function previewLlmModels(
+  input: {
+    providerId: string;
+    baseUrl: string;
+    apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
+    apiKey?: string;
+    apiKeyEnv?: string;
+    request?: LlmProviderRequestConfig;
+    headers?: Record<string, string>;
+  },
+  options?: { signal?: AbortSignal },
+): Promise<{
+  items: Array<{ id: string; ownedBy?: string; created?: number }>;
+  source: "remote" | "fallback";
+  warning?: string;
+}> {
+  return request("/api/v1/llm/models/preview", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+
+export async function createLlmChatCompletion(input: {
+  providerId?: string;
+  model?: string;
+  messages: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string }>;
+  memory?: {
+    enabled?: boolean;
+    mode?: "qmd" | "off";
+    sessionId?: string;
+    taskId?: string;
+    workspace?: string;
+    maxContextTokens?: number;
+    forceRefresh?: boolean;
+  };
+  temperature?: number;
+  max_tokens?: number;
+}): Promise<LlmChatCompletionResponse> {
+  return request<LlmChatCompletionResponse>("/api/v1/llm/chat-completions", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchProviderSecretStatus(
+  providerId: string,
+  options?: { signal?: AbortSignal },
+): Promise<ProviderSecretStatus> {
+  return request<ProviderSecretStatus>(`/api/v1/secrets/providers/${encodeURIComponent(providerId)}/status`, {
+    signal: options?.signal,
+  });
+}
+
+export async function saveProviderSecret(providerId: string, apiKey: string): Promise<ProviderSecretStatus> {
+  return request<ProviderSecretStatus>(`/api/v1/secrets/providers/${encodeURIComponent(providerId)}`, {
+    method: "POST",
+    body: JSON.stringify({ apiKey }),
+  });
+}
+
+export async function deleteProviderSecret(providerId: string): Promise<ProviderSecretStatus> {
+  return request<ProviderSecretStatus>(`/api/v1/secrets/providers/${encodeURIComponent(providerId)}`, {
+    method: "DELETE",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function fetchMeshStatus(): Promise<MeshStatusResponse> {
+  return request<MeshStatusResponse>("/api/v1/mesh/status");
+}
+
+export async function fetchMeshNodes(limit = 200): Promise<{ items: MeshNodeRecord[] }> {
+  return request<{ items: MeshNodeRecord[] }>(`/api/v1/mesh/nodes?limit=${limit}`);
+}
+
+export async function fetchMeshLeases(limit = 200): Promise<{ items: MeshLeaseRecord[] }> {
+  return request<{ items: MeshLeaseRecord[] }>(`/api/v1/mesh/leases?limit=${limit}`);
+}
+
+export async function fetchMeshSessionOwners(limit = 500): Promise<{ items: MeshSessionOwnerRecord[] }> {
+  return request<{ items: MeshSessionOwnerRecord[] }>(`/api/v1/mesh/sessions/owners?limit=${limit}`);
+}
+
+export async function fetchMeshReplicationOffsets(limit = 500): Promise<{ items: MeshReplicationOffsetRecord[] }> {
+  return request<{ items: MeshReplicationOffsetRecord[] }>(`/api/v1/mesh/replication/offsets?limit=${limit}`);
+}
+
+export async function fetchNpuStatus(): Promise<NpuRuntimeStatus> {
+  return request<NpuRuntimeStatus>("/api/v1/npu/status");
+}
+
+export async function fetchNpuModels(): Promise<{ items: NpuModelManifest[] }> {
+  return request<{ items: NpuModelManifest[] }>("/api/v1/npu/models");
+}
+
+export async function startNpuRuntime(): Promise<NpuRuntimeStatus> {
+  return request<NpuRuntimeStatus>("/api/v1/npu/start", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function stopNpuRuntime(): Promise<NpuRuntimeStatus> {
+  return request<NpuRuntimeStatus>("/api/v1/npu/stop", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function refreshNpuRuntime(): Promise<NpuRuntimeStatus> {
+  return request<NpuRuntimeStatus>("/api/v1/npu/refresh", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function fetchDaemonStatus(): Promise<{
+  running: boolean;
+  pid: number;
+  uptimeSeconds: number;
+  host: string;
+  state: "running" | "stopped";
+  lastCommandAt?: string;
+  requestedState?: "running" | "stopped";
+  supported: boolean;
+  controllable: boolean;
+  controlMessage: string;
+}> {
+  return request<{
+    running: boolean;
+    pid: number;
+    uptimeSeconds: number;
+    host: string;
+    state: "running" | "stopped";
+    lastCommandAt?: string;
+    requestedState?: "running" | "stopped";
+    supported: boolean;
+    controllable: boolean;
+    controlMessage: string;
+  }>("/api/v1/daemon/status");
+}
+
+export async function startDaemon(): Promise<{
+  accepted: boolean;
+  reason: string;
+  status: Awaited<ReturnType<typeof fetchDaemonStatus>>;
+}> {
+  return request<{
+    accepted: boolean;
+    reason: string;
+    status: Awaited<ReturnType<typeof fetchDaemonStatus>>;
+  }>("/api/v1/daemon/start", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function stopDaemon(): Promise<{
+  accepted: boolean;
+  reason: string;
+  status: Awaited<ReturnType<typeof fetchDaemonStatus>>;
+}> {
+  return request<{
+    accepted: boolean;
+    reason: string;
+    status: Awaited<ReturnType<typeof fetchDaemonStatus>>;
+  }>("/api/v1/daemon/stop", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function restartDaemon(): Promise<{
+  accepted: boolean;
+  reason: string;
+  status: Awaited<ReturnType<typeof fetchDaemonStatus>>;
+}> {
+  return request<{
+    accepted: boolean;
+    reason: string;
+    status: Awaited<ReturnType<typeof fetchDaemonStatus>>;
+  }>("/api/v1/daemon/restart", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function fetchDaemonLogs(tail = 200): Promise<{
+  items: Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }>;
+}> {
+  return request<{
+    items: Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }>;
+  }>(`/api/v1/daemon/logs?tail=${Math.max(1, Math.min(2000, tail))}`);
+}
+
+export async function evaluateUiChangeRisk(
+  input: {
+    pageId: string;
+    changes: Array<{ field: string; from: unknown; to: unknown }>;
+  },
+  options?: { signal?: AbortSignal },
+): Promise<ChangeRiskEvaluationResponse> {
+  return request<ChangeRiskEvaluationResponse>("/api/v1/ui/change-risk/evaluate", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}

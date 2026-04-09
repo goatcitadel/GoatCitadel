@@ -27,7 +27,7 @@ export interface IntegrationsChannelTestBenchProps {
   selectedChannelConnectionId: string;
   onSelectedChannelConnectionIdChange: (value: string) => void;
   selectedChannelConnection: IntegrationConnection | null;
-  selectedChannelConnector: ConnectorRecord | undefined;
+  selectedChannelConnector: ConnectorRecord | null;
   selectedChannelRuntimeStatus: ChannelRuntimeStatus | undefined;
   selectedDiscordRuntime: DiscordRuntimeStatus | undefined;
   selectedDiscordPairings: DiscordPairingRecord[];

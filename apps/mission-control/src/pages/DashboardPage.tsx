@@ -23,11 +23,7 @@ import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 
 type DashboardTab = "approvals" | "tasks" | "sessions" | "settings" | "integrations" | "office" | "chat";
 
-export function DashboardPage({
-  onNavigate,
-}: {
-  onNavigate?: (tab: DashboardTab) => void;
-}) {
+export function DashboardPage({ onNavigate }: { onNavigate?: (tab: DashboardTab) => void }) {
   const [state, setState] = useState<DashboardStateResponse | null>(null);
   const [vitals, setVitals] = useState<SystemVitalsResponse | null>(null);
   const [cron, setCron] = useState<CronJobsResponse | null>(null);
@@ -45,8 +41,8 @@ export function DashboardPage({
       fetchMemoryFiles(),
     ]);
 
-    const dashboardError = dashboardResult.status === "rejected" ? dashboardResult.reason as Error : null;
-    const vitalsError = vitalsResult.status === "rejected" ? vitalsResult.reason as Error : null;
+    const dashboardError = dashboardResult.status === "rejected" ? (dashboardResult.reason as Error) : null;
+    const vitalsError = vitalsResult.status === "rejected" ? (vitalsResult.reason as Error) : null;
     const coreMessage = [dashboardError?.message, vitalsError?.message].filter(Boolean).join(" | ");
 
     if (dashboardResult.status === "fulfilled") {
@@ -109,11 +105,7 @@ export function DashboardPage({
   if (error && (!state || !vitals || !cron || !operators)) {
     return (
       <section>
-        <PageHeader
-          eyebrow="Mission Control"
-          title={pageCopy.dashboard.title}
-          subtitle={pageCopy.dashboard.subtitle}
-        />
+        <PageHeader eyebrow="Mission Control" title={pageCopy.dashboard.title} subtitle={pageCopy.dashboard.subtitle} />
         <p className="error">{error}</p>
       </section>
     );
@@ -122,11 +114,7 @@ export function DashboardPage({
   if (!state || !vitals || !cron || !operators) {
     return (
       <section>
-        <PageHeader
-          eyebrow="Mission Control"
-          title={pageCopy.dashboard.title}
-          subtitle={pageCopy.dashboard.subtitle}
-        />
+        <PageHeader eyebrow="Mission Control" title={pageCopy.dashboard.title} subtitle={pageCopy.dashboard.subtitle} />
         <div className="metric-grid">
           <CardSkeleton lines={5} />
           <CardSkeleton lines={5} />
@@ -171,17 +159,18 @@ export function DashboardPage({
     actionLabel: string;
   }>;
 
-  const heroPrimaryAction = state.pendingApprovals > 0
-    ? { label: "Review approvals", action: () => onNavigate?.("approvals") }
-    : operators.items.some((operator) => operator.activeSessions > 0)
-      ? { label: "Inspect active runs", action: () => onNavigate?.("sessions") }
-      : { label: "Open chat", action: () => onNavigate?.("chat") };
+  const heroPrimaryAction =
+    state.pendingApprovals > 0
+      ? { label: "Review approvals", action: () => onNavigate?.("approvals") }
+      : operators.items.some((operator) => operator.activeSessions > 0)
+        ? { label: "Inspect active runs", action: () => onNavigate?.("sessions") }
+        : { label: "Open chat", action: () => onNavigate?.("chat") };
 
-  const heroSecondaryAction = state.activeSubagents > 0
-    ? { label: "Open Herd HQ", action: () => onNavigate?.("office") }
-    : { label: "Open settings", action: () => onNavigate?.("settings") };
+  const heroSecondaryAction =
+    state.activeSubagents > 0
+      ? { label: "Open Herd HQ", action: () => onNavigate?.("office") }
+      : { label: "Open settings", action: () => onNavigate?.("settings") };
 
-  const schedulerDisabledCount = cron.items.filter((job) => !job.enabled).length;
   const activeOperatorSessions = operators.items.reduce((sum, operator) => sum + operator.activeSessions, 0);
   const memoryArtifactCount = memoryFiles.length;
 
@@ -227,10 +216,14 @@ export function DashboardPage({
               {urgentItems.map((item) => (
                 <li key={item.key}>
                   <div>
-                    <StatusChip tone={item.tone}>{item.tone === "live" ? "Live" : item.tone === "warning" ? "Needs review" : "Heads-up"}</StatusChip>
+                    <StatusChip tone={item.tone}>
+                      {item.tone === "live" ? "Live" : item.tone === "warning" ? "Needs review" : "Heads-up"}
+                    </StatusChip>
                     <p>{item.label}</p>
                   </div>
-                  <button type="button" onClick={item.action}>{item.actionLabel}</button>
+                  <button type="button" onClick={item.action}>
+                    {item.actionLabel}
+                  </button>
                 </li>
               ))}
             </ul>
@@ -254,26 +247,15 @@ export function DashboardPage({
             interactive
             onClick={() => onNavigate?.("sessions")}
           />
-          <StatCard
-            label="Daily cost"
-            value={`$${state.dailyCostUsd.toFixed(4)}`}
-            note="Current node today"
-          />
-          <StatCard
-            label="Tracked sessions"
-            value={state.sessions.length}
-            note="Visible to this node"
-          />
+          <StatCard label="Daily cost" value={`$${state.dailyCostUsd.toFixed(4)}`} note="Current node today" />
+          <StatCard label="Tracked sessions" value={state.sessions.length} note="Visible to this node" />
         </div>
       </div>
 
       {/* ── Tier 2: Monitoring — moderate contrast ── */}
       <div className="dashboard-tier dashboard-tier-2">
         <div className="dashboard-main-grid">
-          <Panel
-            title="System vitals"
-            subtitle={`${vitals.hostname} · ${vitals.platform} ${vitals.release}`}
-          >
+          <Panel title="System vitals" subtitle={`${vitals.hostname} · ${vitals.platform} ${vitals.release}`}>
             <div className="dashboard-vitals-grid">
               <div>
                 <p className="dashboard-vitals-label">CPU cores</p>
@@ -297,7 +279,10 @@ export function DashboardPage({
           <Panel title="Task load" subtitle="Pressure by status bucket">
             <table className="dashboard-data-table">
               <thead>
-                <tr><th>Status</th><th>Count</th></tr>
+                <tr>
+                  <th>Status</th>
+                  <th>Count</th>
+                </tr>
               </thead>
               <tbody>
                 {state.taskStatusCounts.map((row) => (
@@ -317,12 +302,24 @@ export function DashboardPage({
           className="dashboard-quick-actions-panel"
         >
           <div className="dashboard-action-grid">
-            <button type="button" onClick={() => onNavigate?.("approvals")}>Review approvals</button>
-            <button type="button" onClick={() => onNavigate?.("tasks")}>Open Trailboard</button>
-            <button type="button" onClick={() => onNavigate?.("sessions")}>Inspect runs</button>
-            <button type="button" onClick={() => onNavigate?.("office")}>Open Herd HQ</button>
-            <button type="button" onClick={() => onNavigate?.("settings")}>Tune Forge</button>
-            <button type="button" onClick={() => onNavigate?.("integrations")}>Configure connections</button>
+            <button type="button" onClick={() => onNavigate?.("approvals")}>
+              Review approvals
+            </button>
+            <button type="button" onClick={() => onNavigate?.("tasks")}>
+              Open Trailboard
+            </button>
+            <button type="button" onClick={() => onNavigate?.("sessions")}>
+              Inspect runs
+            </button>
+            <button type="button" onClick={() => onNavigate?.("office")}>
+              Open Herd HQ
+            </button>
+            <button type="button" onClick={() => onNavigate?.("settings")}>
+              Tune Forge
+            </button>
+            <button type="button" onClick={() => onNavigate?.("integrations")}>
+              Configure connections
+            </button>
           </div>
         </Panel>
       </div>
@@ -336,14 +333,22 @@ export function DashboardPage({
             ) : (
               <table className="dashboard-data-table">
                 <thead>
-                  <tr><th>Job</th><th>Schedule</th><th>Status</th></tr>
+                  <tr>
+                    <th>Job</th>
+                    <th>Schedule</th>
+                    <th>Status</th>
+                  </tr>
                 </thead>
                 <tbody>
                   {cron.items.map((job) => (
                     <tr key={job.jobId}>
                       <td>{job.name}</td>
                       <td className="dashboard-data-table-mono">{job.schedule}</td>
-                      <td><StatusChip tone={job.enabled ? "success" : "muted"}>{job.enabled ? "Enabled" : "Disabled"}</StatusChip></td>
+                      <td>
+                        <StatusChip tone={job.enabled ? "success" : "muted"}>
+                          {job.enabled ? "Enabled" : "Disabled"}
+                        </StatusChip>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -356,7 +361,11 @@ export function DashboardPage({
             ) : (
               <table className="dashboard-data-table">
                 <thead>
-                  <tr><th>Operator</th><th>Sessions</th><th>Active</th></tr>
+                  <tr>
+                    <th>Operator</th>
+                    <th>Sessions</th>
+                    <th>Active</th>
+                  </tr>
                 </thead>
                 <tbody>
                   {operators.items.map((operator) => (

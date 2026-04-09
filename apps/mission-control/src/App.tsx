@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { CHAT_MODE_PRESETS } from "@goatcitadel/contracts";
 import {
@@ -13,7 +14,7 @@ import {
   type GatewayStartupPhaseTiming,
   type RealtimeEvent,
 } from "./api/shell-client";
-import type { DashboardStateResponse } from "./api/client";
+import { fetchDashboardState, type DashboardStateResponse } from "./api/client";
 import { DeviceAccessApprovalModal, type DeviceAccessApprovalPrompt } from "./components/DeviceAccessApprovalModal";
 import { GCSelect } from "./components/ui";
 import { GatewayAccessGate } from "./components/GatewayAccessGate";
@@ -63,7 +64,7 @@ import {
 function lazyPage(loader: () => Promise<Record<string, unknown>>, exportName: string) {
   return lazy(async () => {
     const module = await loader();
-    return { default: module[exportName] as ComponentType<any> };
+    return { default: module[exportName] as ComponentType<Record<string, never>> };
   });
 }
 
@@ -138,9 +139,39 @@ function PageLoadingFallback({ label }: { label: string }) {
 }
 
 const refreshTopicRules: Array<{ topic: RefreshTopic; keywords: string[] }> = [
-  { topic: "surface", keywords: ["dashboard", "surface", "operator", "summit", "cron", "memory", "settings", "system", "onboarding", "llm", "approval"] },
+  {
+    topic: "surface",
+    keywords: [
+      "dashboard",
+      "surface",
+      "operator",
+      "summit",
+      "cron",
+      "memory",
+      "settings",
+      "system",
+      "onboarding",
+      "llm",
+      "approval",
+    ],
+  },
   { topic: "quality", keywords: ["prompt_pack", "promptlab", "prompt_lab", "prompt-pack", "quality"] },
-  { topic: "chat", keywords: ["chat", "message", "session", "delegate", "proactive", "learned_memory", "llm", "provider", "model", "onboarding", "settings"] },
+  {
+    topic: "chat",
+    keywords: [
+      "chat",
+      "message",
+      "session",
+      "delegate",
+      "proactive",
+      "learned_memory",
+      "llm",
+      "provider",
+      "model",
+      "onboarding",
+      "settings",
+    ],
+  },
   { topic: "approvals", keywords: ["approval", "gatehouse"] },
   { topic: "tools", keywords: ["tool", "grant", "policy"] },
   { topic: "files", keywords: ["file", "artifact", "workspace"] },
@@ -157,10 +188,10 @@ const refreshTopicRules: Array<{ topic: RefreshTopic; keywords: string[] }> = [
 type GatewayAccessViewState =
   | GatewayAccessPreflightResult
   | {
-    status: "checking";
-    message: string;
-    healthDetail?: string;
-  };
+      status: "checking";
+      message: string;
+      healthDetail?: string;
+    };
 
 export function deriveRefreshTopics(event: RealtimeEvent): RefreshTopic[] {
   if (event.payload.kind === "replay_gap") {
@@ -208,7 +239,7 @@ export function App() {
   } = useUiPreferences();
   const [route, setRoute] = useState<ResolvedRoute>(() => readRouteFromLocation());
   const [streamState, setStreamState] = useState<EventStreamConnectionState>("closed");
-  const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null);
+  const [, setOnboardingComplete] = useState<boolean | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ workspaceId: string; name: string }>>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -243,10 +274,12 @@ export function App() {
   const loadWorkspaceOptions = useCallback(async () => {
     try {
       const response = await fetchWorkspaces("all", 400);
-      setWorkspaceOptions(response.items.map((item) => ({
-        workspaceId: item.workspaceId,
-        name: item.name,
-      })));
+      setWorkspaceOptions(
+        response.items.map((item) => ({
+          workspaceId: item.workspaceId,
+          name: item.name,
+        })),
+      );
     } catch {
       setWorkspaceOptions([]);
     }
@@ -254,7 +287,6 @@ export function App() {
 
   const loadOperateStatus = useCallback(async () => {
     try {
-      const { fetchDashboardState } = await import("./api/client");
       const next = await fetchDashboardState();
       setOperateStatus(next);
       setOperateStatusLastSuccessAt(Date.now());
@@ -265,13 +297,15 @@ export function App() {
   }, []);
 
   const pushNotification = useCallback((tone: NotificationItem["tone"], message: string, groupKey?: string) => {
-    setNotifications((current) => upsertNotificationItem(current, {
-      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      tone,
-      message,
-      timestamp: Date.now(),
-      groupKey,
-    }));
+    setNotifications((current) =>
+      upsertNotificationItem(current, {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        tone,
+        message,
+        timestamp: Date.now(),
+        groupKey,
+      }),
+    );
   }, []);
 
   const dismissDeviceAccessPrompt = useCallback((approvalId: string) => {
@@ -290,47 +324,57 @@ export function App() {
     setRoute(normalizeResolvedRoute(nextRoute));
   }, []);
 
-  const handleSelectSpace = useCallback((space: Space) => {
-    const defaultRoute = space === "operate"
-      ? { space, page: "surface" as const, surface: "chat" as const }
-      : space === "observe"
-        ? { space, page: "activity" as const, tab: "activity" as const }
-        : { space, page: "settings" as const, tab: "general" as const };
-    navigate(defaultRoute);
-  }, [navigate]);
+  const handleSelectSpace = useCallback(
+    (space: Space) => {
+      const defaultRoute =
+        space === "operate"
+          ? { space, page: "surface" as const, surface: "chat" as const }
+          : space === "observe"
+            ? { space, page: "activity" as const, tab: "activity" as const }
+            : { space, page: "settings" as const, tab: "general" as const };
+      navigate(defaultRoute);
+    },
+    [navigate],
+  );
 
-  const handleSelectPage = useCallback((page: SpacePage) => {
-    if (page === "surface") {
-      navigate({ space: "operate", page: "surface", surface: route.page === "surface" ? route.surface : "chat" });
-      return;
-    }
-    const meta = PAGE_META[page];
-    if (meta.space === "observe" && page === "activity") {
-      navigate({ space: "observe", page, tab: "activity" });
-      return;
-    }
-    if (meta.space === "observe" && page === "artifacts") {
-      navigate({ space: "observe", page, tab: "memory" });
-      return;
-    }
-    if (meta.space === "configure" && page === "settings") {
-      navigate({ space: "configure", page, tab: route.page === "settings" ? route.tab : "general" });
-      return;
-    }
-    if (meta.space === "configure" && page === "integrations") {
-      navigate({ space: "configure", page, tab: route.page === "integrations" ? route.tab : "overview" });
-      return;
-    }
-    if (meta.space === "configure" && page === "agents") {
-      navigate({ space: "configure", page, tab: route.page === "agents" ? route.tab : "overview" });
-      return;
-    }
-    navigate({ space: meta.space, page });
-  }, [navigate, route.page, route.surface, route.tab]);
+  const handleSelectPage = useCallback(
+    (page: SpacePage) => {
+      if (page === "surface") {
+        navigate({ space: "operate", page: "surface", surface: route.page === "surface" ? route.surface : "chat" });
+        return;
+      }
+      const meta = PAGE_META[page];
+      if (meta.space === "observe" && page === "activity") {
+        navigate({ space: "observe", page, tab: "activity" });
+        return;
+      }
+      if (meta.space === "observe" && page === "artifacts") {
+        navigate({ space: "observe", page, tab: "memory" });
+        return;
+      }
+      if (meta.space === "configure" && page === "settings") {
+        navigate({ space: "configure", page, tab: route.page === "settings" ? route.tab : "general" });
+        return;
+      }
+      if (meta.space === "configure" && page === "integrations") {
+        navigate({ space: "configure", page, tab: route.page === "integrations" ? route.tab : "overview" });
+        return;
+      }
+      if (meta.space === "configure" && page === "agents") {
+        navigate({ space: "configure", page, tab: route.page === "agents" ? route.tab : "overview" });
+        return;
+      }
+      navigate({ space: meta.space, page });
+    },
+    [navigate, route.page, route.surface, route.tab],
+  );
 
-  const handleSelectSurface = useCallback((surface: WorkSurface) => {
-    navigate({ space: "operate", page: "surface", surface });
-  }, [navigate]);
+  const handleSelectSurface = useCallback(
+    (surface: WorkSurface) => {
+      navigate({ space: "operate", page: "surface", surface });
+    },
+    [navigate],
+  );
 
   const handleOnboardingCompleted = useCallback(() => {
     setOnboardingComplete(true);
@@ -361,51 +405,63 @@ export function App() {
     setGatewayAccessRunId((current) => current + 1);
   }, []);
 
-  const handleResolveDeviceAccessPrompt = useCallback(async (decision: "approve" | "reject") => {
-    if (!activeDeviceAccessPrompt) {
-      return;
-    }
-    setDeviceAccessResolveBusy(true);
-    try {
-      await resolveApproval(activeDeviceAccessPrompt.approvalId, {
-        decision,
-        resolvedBy: buildMissionControlResolverId(),
-        resolutionNote: decision === "approve"
-          ? "Approved from Mission Control."
-          : "Rejected from Mission Control.",
-      });
-      dismissDeviceAccessPrompt(activeDeviceAccessPrompt.approvalId);
-      pushNotification(
-        decision === "approve" ? "success" : "warning",
-        `${activeDeviceAccessPrompt.deviceLabel} ${decision === "approve" ? "was approved" : "was rejected"}.`,
-        `device-access:${activeDeviceAccessPrompt.approvalId}`,
-      );
-    } catch (error) {
-      pushNotification("error", (error as Error).message, `device-access-error:${activeDeviceAccessPrompt.approvalId}`);
-    } finally {
-      setDeviceAccessResolveBusy(false);
-    }
-  }, [activeDeviceAccessPrompt, dismissDeviceAccessPrompt, pushNotification]);
+  const handleResolveDeviceAccessPrompt = useCallback(
+    async (decision: "approve" | "reject") => {
+      if (!activeDeviceAccessPrompt) {
+        return;
+      }
+      setDeviceAccessResolveBusy(true);
+      try {
+        await resolveApproval(activeDeviceAccessPrompt.approvalId, {
+          decision,
+          resolvedBy: buildMissionControlResolverId(),
+          resolutionNote: decision === "approve" ? "Approved from Mission Control." : "Rejected from Mission Control.",
+        });
+        dismissDeviceAccessPrompt(activeDeviceAccessPrompt.approvalId);
+        pushNotification(
+          decision === "approve" ? "success" : "warning",
+          `${activeDeviceAccessPrompt.deviceLabel} ${decision === "approve" ? "was approved" : "was rejected"}.`,
+          `device-access:${activeDeviceAccessPrompt.approvalId}`,
+        );
+      } catch (error) {
+        pushNotification(
+          "error",
+          (error as Error).message,
+          `device-access-error:${activeDeviceAccessPrompt.approvalId}`,
+        );
+      } finally {
+        setDeviceAccessResolveBusy(false);
+      }
+    },
+    [activeDeviceAccessPrompt, dismissDeviceAccessPrompt, pushNotification],
+  );
 
-  const handleResolveRemoteApprovalPrompt = useCallback(async (decision: "approve" | "reject") => {
-    if (!activeRemoteApprovalPrompt) {
-      return;
-    }
-    setRemoteApprovalResolveBusy(true);
-    try {
-      await resolveApprovalWithRemoteToken(activeRemoteApprovalPrompt.token, decision);
-      dismissRemoteApprovalPrompt(activeRemoteApprovalPrompt.approvalId);
-      pushNotification(
-        decision === "approve" ? "success" : "warning",
-        `${activeRemoteApprovalPrompt.kind} ${decision === "approve" ? "was approved" : "was rejected"} from Mission Control.`,
-        `remote-approval:${activeRemoteApprovalPrompt.approvalId}`,
-      );
-    } catch (error) {
-      pushNotification("error", (error as Error).message, `remote-approval-error:${activeRemoteApprovalPrompt.approvalId}`);
-    } finally {
-      setRemoteApprovalResolveBusy(false);
-    }
-  }, [activeRemoteApprovalPrompt, dismissRemoteApprovalPrompt, pushNotification]);
+  const handleResolveRemoteApprovalPrompt = useCallback(
+    async (decision: "approve" | "reject") => {
+      if (!activeRemoteApprovalPrompt) {
+        return;
+      }
+      setRemoteApprovalResolveBusy(true);
+      try {
+        await resolveApprovalWithRemoteToken(activeRemoteApprovalPrompt.token, decision);
+        dismissRemoteApprovalPrompt(activeRemoteApprovalPrompt.approvalId);
+        pushNotification(
+          decision === "approve" ? "success" : "warning",
+          `${activeRemoteApprovalPrompt.kind} ${decision === "approve" ? "was approved" : "was rejected"} from Mission Control.`,
+          `remote-approval:${activeRemoteApprovalPrompt.approvalId}`,
+        );
+      } catch (error) {
+        pushNotification(
+          "error",
+          (error as Error).message,
+          `remote-approval-error:${activeRemoteApprovalPrompt.approvalId}`,
+        );
+      } finally {
+        setRemoteApprovalResolveBusy(false);
+      }
+    },
+    [activeRemoteApprovalPrompt, dismissRemoteApprovalPrompt, pushNotification],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -480,15 +536,17 @@ export function App() {
           finishedAt: new Date().toISOString(),
           durationMs,
           outcome: "misconfigured",
-          phases: [{
-            key: "shell",
-            label: "Shell ready",
-            status: "error",
-            startedAt: startupStartedAt,
-            finishedAt: new Date().toISOString(),
-            durationMs,
-            detail: "Mission Control startup crashed before the shell could become interactive.",
-          }],
+          phases: [
+            {
+              key: "shell",
+              label: "Shell ready",
+              status: "error",
+              startedAt: startupStartedAt,
+              finishedAt: new Date().toISOString(),
+              durationMs,
+              detail: "Mission Control startup crashed before the shell could become interactive.",
+            },
+          ],
         });
         recordClientDiagnostic({
           level: "error",
@@ -580,7 +638,11 @@ export function App() {
           const prompt = parseDeviceAccessPrompt(event);
           if (prompt) {
             setDeviceAccessPrompts((current) => upsertDeviceAccessPrompt(current, prompt));
-            pushNotification("warning", `${prompt.deviceLabel} is waiting for approval.`, `device-access:${prompt.approvalId}`);
+            pushNotification(
+              "warning",
+              `${prompt.deviceLabel} is waiting for approval.`,
+              `device-access:${prompt.approvalId}`,
+            );
           }
         }
         if (event.eventType === "auth_device_request_resolved") {
@@ -593,7 +655,11 @@ export function App() {
           const prompt = parseRemoteApprovalActionPrompt(event);
           if (prompt) {
             setRemoteApprovalPrompts((current) => upsertRemoteApprovalPrompt(current, prompt));
-            pushNotification("warning", `${prompt.kind} is waiting for a Mission Control decision.`, `remote-approval:${prompt.approvalId}`);
+            pushNotification(
+              "warning",
+              `${prompt.kind} is waiting for a Mission Control decision.`,
+              `remote-approval:${prompt.approvalId}`,
+            );
           }
         }
         if (event.eventType === "approval_resolved") {
@@ -702,7 +768,7 @@ export function App() {
         id: `operate:${item.page}`,
         label: item.page === "surface" ? "Open Chat surface" : `Open ${item.label}`,
         keywords: [item.label.toLowerCase(), item.page],
-        run: () => item.page === "surface" ? handleSelectSurface("chat") : handleSelectPage(item.page),
+        run: () => (item.page === "surface" ? handleSelectSurface("chat") : handleSelectPage(item.page)),
       })),
       ...(["chat", "cowork", "code"] as const).map((surface) => ({
         id: `surface:${surface}`,
@@ -771,12 +837,14 @@ export function App() {
         run: () => setShowTechnicalDetails(!showTechnicalDetails),
       },
       ...(isDevDiagnosticsEnabled()
-        ? [{
-          id: "dev:diagnostics",
-          label: diagnosticsOpen ? "Hide developer diagnostics" : "Show developer diagnostics",
-          keywords: ["diagnostics", "dev", "logs", "debug"],
-          run: () => setDiagnosticsOpen((current) => !current),
-        }]
+        ? [
+            {
+              id: "dev:diagnostics",
+              label: diagnosticsOpen ? "Hide developer diagnostics" : "Show developer diagnostics",
+              keywords: ["diagnostics", "dev", "logs", "debug"],
+              run: () => setDiagnosticsOpen((current) => !current),
+            },
+          ]
         : []),
     ],
     [
@@ -797,39 +865,36 @@ export function App() {
   const operateApprovalsCount = deriveShellApprovalCount(operateStatus, localApprovalPromptCount);
   const operateActiveAgentsCount = operateStatus?.activeSubagents ?? 0;
   const operateDailyCostUsd = operateStatus?.dailyCostUsd ?? 0;
-  const operateOpenTasksCount = (operateStatus?.taskStatusCounts ?? []).reduce((sum, item) => (
-    item.status === "done" ? sum : sum + item.count
-  ), 0);
+  const operateOpenTasksCount = (operateStatus?.taskStatusCounts ?? []).reduce(
+    (sum, item) => (item.status === "done" ? sum : sum + item.count),
+    0,
+  );
   const operateStatusFreshness = deriveOperateStatusFreshness(operateStatusLastSuccessAt, operateStatusLastError);
-  const decisionsChipLabel = operateApprovalsCount > 0
-    ? `${operateApprovalsCount} decisions`
-    : operateStatusFreshness.state === "stale"
-      ? "Decision status stale"
-      : "Decisions clear";
+  const decisionsChipLabel =
+    operateApprovalsCount > 0
+      ? `${operateApprovalsCount} decisions`
+      : operateStatusFreshness.state === "stale"
+        ? "Decision status stale"
+        : "Decisions clear";
 
-  const operateSurfaceTab = route.space === "operate" && route.page === "surface"
-    ? (route.surface ?? "chat")
-    : "chat";
+  const operateSurfaceTab = route.space === "operate" && route.page === "surface" ? (route.surface ?? "chat") : "chat";
 
-  const observeActivityTab = route.space === "observe" && route.page === "activity"
-    ? ((route.tab ?? "activity") as ActivityTab)
-    : "activity";
+  const observeActivityTab =
+    route.space === "observe" && route.page === "activity" ? ((route.tab ?? "activity") as ActivityTab) : "activity";
 
-  const observeArtifactsTab = route.space === "observe" && route.page === "artifacts"
-    ? ((route.tab ?? "memory") as ArtifactsTab)
-    : "memory";
+  const observeArtifactsTab =
+    route.space === "observe" && route.page === "artifacts" ? ((route.tab ?? "memory") as ArtifactsTab) : "memory";
 
-  const configureSettingsTab = route.space === "configure" && route.page === "settings"
-    ? ((route.tab ?? "general") as SettingsTab)
-    : "general";
+  const configureSettingsTab =
+    route.space === "configure" && route.page === "settings" ? ((route.tab ?? "general") as SettingsTab) : "general";
 
-  const configureIntegrationsTab = route.space === "configure" && route.page === "integrations"
-    ? ((route.tab ?? "overview") as IntegrationsTab)
-    : "overview";
+  const configureIntegrationsTab =
+    route.space === "configure" && route.page === "integrations"
+      ? ((route.tab ?? "overview") as IntegrationsTab)
+      : "overview";
 
-  const configureAgentsTab = route.space === "configure" && route.page === "agents"
-    ? ((route.tab ?? "overview") as AgentsTab)
-    : "overview";
+  const configureAgentsTab =
+    route.space === "configure" && route.page === "agents" ? ((route.tab ?? "overview") as AgentsTab) : "overview";
 
   const content = useMemo(() => {
     if (route.space === "operate") {
@@ -992,19 +1057,19 @@ export function App() {
     .filter((item, index, arr) => arr.findIndex((other) => other.workspaceId === item.workspaceId) === index)
     .map((item) => ({ value: item.workspaceId, label: item.name }));
 
-  const compactShellNavOptions = route.space === "operate"
-    ? [
-      { value: "chat", label: CHAT_MODE_PRESETS.chat.label },
-      { value: "cowork", label: CHAT_MODE_PRESETS.cowork.label },
-      { value: "code", label: CHAT_MODE_PRESETS.code.label },
-      { value: "tasks", label: "Tasks" },
-      { value: "approvals", label: "Approvals" },
-    ]
-    : SPACE_PAGES[route.space].map((item) => ({ value: item.page, label: item.label }));
+  const compactShellNavOptions =
+    route.space === "operate"
+      ? [
+          { value: "chat", label: CHAT_MODE_PRESETS.chat.label },
+          { value: "cowork", label: CHAT_MODE_PRESETS.cowork.label },
+          { value: "code", label: CHAT_MODE_PRESETS.code.label },
+          { value: "tasks", label: "Tasks" },
+          { value: "approvals", label: "Approvals" },
+        ]
+      : SPACE_PAGES[route.space].map((item) => ({ value: item.page, label: item.label }));
 
-  const compactShellNavValue = route.space === "operate"
-    ? (route.page === "surface" ? route.surface ?? "chat" : route.page)
-    : route.page;
+  const compactShellNavValue =
+    route.space === "operate" ? (route.page === "surface" ? (route.surface ?? "chat") : route.page) : route.page;
 
   return (
     <div
@@ -1045,7 +1110,9 @@ export function App() {
             className="shell-status-link"
             onClick={() => navigate({ space: "operate", page: "approvals" })}
           >
-            <StatusChip tone={operateApprovalsCount > 0 || operateStatusFreshness.state === "stale" ? "warning" : "success"}>
+            <StatusChip
+              tone={operateApprovalsCount > 0 || operateStatusFreshness.state === "stale" ? "warning" : "success"}
+            >
               {decisionsChipLabel}
             </StatusChip>
           </button>
@@ -1127,17 +1194,17 @@ export function App() {
           </div>
         ) : null}
         {route.space === "operate" && operateStatusFreshness.state === "stale" ? (
-          <div className="status-banner warning">
-            {operateStatusFreshness.note}
-          </div>
+          <div className="status-banner warning">{operateStatusFreshness.note}</div>
         ) : null}
         {route.space === "operate" ? (
           <StatusStrip
             approvalsCount={operateApprovalsCount}
             approvalsLabel="Pending decisions"
-            approvalsNote={operateStatusFreshness.state === "stale"
-              ? `${operateStatusFreshness.note} Review the Approvals page before trusting these counts.`
-              : "Backend approvals plus local Mission Control prompts."}
+            approvalsNote={
+              operateStatusFreshness.state === "stale"
+                ? `${operateStatusFreshness.note} Review the Approvals page before trusting these counts.`
+                : "Backend approvals plus local Mission Control prompts."
+            }
             activeAgentsCount={operateActiveAgentsCount}
             dailyCostUsd={operateDailyCostUsd}
             openTasksCount={operateOpenTasksCount}
@@ -1152,9 +1219,7 @@ export function App() {
           pageLabel={currentPageLabel}
           onReturnToChat={() => navigate(DEFAULT_ROUTE)}
         >
-          <Suspense fallback={<PageLoadingFallback label={currentPageLabel} />}>
-            {content}
-          </Suspense>
+          <Suspense fallback={<PageLoadingFallback label={currentPageLabel} />}>{content}</Suspense>
         </PageErrorBoundary>
       </main>
 
@@ -1243,9 +1308,10 @@ function parseRemoteApprovalActionPrompt(event: RealtimeEvent): RemoteApprovalAc
     kind: readDeviceAccessPromptField(payload, "kind") ?? "approval",
     riskLevel: readDeviceAccessPromptField(payload, "riskLevel") ?? "danger",
     status: readDeviceAccessPromptField(payload, "status") ?? "pending",
-    preview: preview && typeof preview === "object" && !Array.isArray(preview)
-      ? preview as Record<string, unknown>
-      : undefined,
+    preview:
+      preview && typeof preview === "object" && !Array.isArray(preview)
+        ? (preview as Record<string, unknown>)
+        : undefined,
     expiresAt: readDeviceAccessPromptField(payload, "expiresAt"),
   };
 }

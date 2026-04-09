@@ -1,0 +1,99 @@
+import type {
+  ChatCapabilityUpgradeSuggestion,
+  ChatDelegationSuggestionRecord,
+  ChatModePresetRecord,
+  ChatOrchestrationSummary,
+  ChatSessionBindingRecord,
+  ChatSessionPrefsRecord,
+  ChatSessionPrefsPatch,
+  ChatSessionRecord,
+  ChatSpecialistCandidatePatchInput,
+  ChatSpecialistCandidateRecord,
+  ChatSpecialistCandidateSuggestionRecord,
+  ChatThreadTurnRecord,
+  LearnedMemoryItemRecord,
+  ProactivePolicy,
+  ProactiveRunRecord,
+} from "@goatcitadel/contracts";
+import type { CoworkTaskItem } from "../../components/CoworkCanvasPanel";
+import type { ChatModelProviderOption } from "../../components/ChatModelPicker";
+import type { ChatProactivePolicyPatch } from "./useChatDelegationPolicyActions";
+import type { MissionControlDockSectionId } from "./useMissionControlSurfaceState";
+
+export interface ChatContextDockPanelsProps {
+  mode: "chat" | "cowork" | "code";
+  dockOpen: boolean;
+  dockSectionStyle: (sectionId: MissionControlDockSectionId) => { order: number };
+  isChatSurface: boolean;
+  isCoworkSurface: boolean;
+  isCodeSurface: boolean;
+  activeModePreset: ChatModePresetRecord;
+  planningMode: "off" | "advisory";
+  effectiveToolAutonomy: ChatSessionPrefsRecord["toolAutonomy"] | undefined;
+  codeModeNeedsProjectBinding: boolean;
+  selectedSession: ChatSessionRecord;
+  selectedProject?: { name: string } | null;
+  selectedProjectBindingCandidateId?: string;
+  selectedProjectBindingCandidateName?: string;
+  sending: boolean;
+  sessionControlPending: "rename" | "pin" | "archive" | "delete" | "project" | "binding" | null;
+  providerOptions: ChatModelProviderOption[];
+  selectedProviderId?: string;
+  selectedModel?: string;
+  streamEnabled: boolean;
+  onStreamEnabledChange: (checked: boolean) => void;
+  prefs: ChatSessionPrefsRecord | null;
+  selectedSessionId: string | null;
+  showTracePanel: boolean;
+  selectedTurn: ChatThreadTurnRecord | null;
+  showSuggestionsPanel: boolean;
+  showLearnedMemoryPanel: boolean;
+  latestOrchestration: ChatOrchestrationSummary | null | undefined;
+  coworkItems: CoworkTaskItem[];
+  proactiveStatus: ProactivePolicy | null;
+  proactiveRuns: ProactiveRunRecord[];
+  proactiveSuggestionCount: number;
+  capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
+  specialistSuggestions: ChatSpecialistCandidateSuggestionRecord[];
+  specialistCandidates: ChatSpecialistCandidateRecord[];
+  delegationSuggestion: ChatDelegationSuggestionRecord | null;
+  learnedMemory: LearnedMemoryItemRecord[];
+  secondaryLoading: boolean;
+  binding: ChatSessionBindingRecord | null;
+  integrationConnectionId: string;
+  integrationTarget: string;
+  selectedSessionProjectValue: string;
+  projectOptions: Array<{ value: string; label: string }>;
+  loadModelsForProvider: (providerId: string, options?: { force?: boolean }) => Promise<string[]>;
+  getCachedModels: (providerId: string) => string[];
+  resolveProviderModelSelection: (input: {
+    provider: ChatModelProviderOption | undefined;
+    loadedModels: string[];
+    selectedModel: string | undefined;
+  }) => { model?: string };
+  onPrefPatch: (patch: ChatSessionPrefsPatch) => Promise<void>;
+  onSuggestDelegation: () => Promise<void>;
+  onTriggerProactive: () => Promise<void>;
+  onProactivePolicyPatch: (patch: ChatProactivePolicyPatch) => Promise<void>;
+  onRunCodeDelegation: (presetKey: "implement" | "review" | "test" | "ship") => Promise<void>;
+  onCapabilitySuggestionAction: (suggestion: ChatCapabilityUpgradeSuggestion) => void;
+  onCreateSpecialistDraft: (suggestion: ChatSpecialistCandidateSuggestionRecord) => Promise<void>;
+  onSpecialistCandidatePatch: (
+    candidateId: string,
+    patch: ChatSpecialistCandidatePatchInput,
+    notice: string,
+  ) => Promise<void>;
+  onAcceptDelegation: () => Promise<void>;
+  onRebuildLearnedMemory: () => Promise<void>;
+  onUpdateMemoryStatus: (itemId: string, status: "active" | "superseded" | "conflict" | "disabled") => Promise<void>;
+  onRenameTitleChange: (value: string) => void;
+  renameTitle: string;
+  onRenameSession: () => Promise<void>;
+  onTogglePinSession: () => Promise<void>;
+  onToggleArchiveSession: () => Promise<void>;
+  onDeleteSession: () => void;
+  onAssignProject: (value: string) => Promise<void>;
+  onIntegrationConnectionIdChange: (value: string) => void;
+  onIntegrationTargetChange: (value: string) => void;
+  onSaveExternalBinding: () => Promise<void>;
+}

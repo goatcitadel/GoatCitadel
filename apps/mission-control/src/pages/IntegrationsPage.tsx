@@ -1,15 +1,8 @@
-/* eslint-disable @typescript-eslint/no-unused-vars, max-lines, react-hooks/exhaustive-deps */
+/* eslint-disable @typescript-eslint/no-unused-vars, react-hooks/exhaustive-deps */
 import { useEffect, useMemo, useRef, useState } from "react";
 import "../styles/integrations.css";
 import {
-  approveDiscordPairing,
-  commsReact,
   commsSend,
-  commsUnsend,
-  createIntegrationConnection,
-  disableIntegrationPlugin,
-  deleteIntegrationConnection,
-  enableIntegrationPlugin,
   evaluateUiChangeRisk,
   fetchChannelRuntimeStatus,
   fetchChannelSetupDefinitions,
@@ -21,16 +14,7 @@ import {
   fetchIntegrationFormSchema,
   fetchIntegrationPlugins,
   fetchObsidianIntegrationStatus,
-  installIntegrationPlugin,
-  patchObsidianIntegrationConfig,
   fetchIntegrationConnectionDiagnostics,
-  reconnectDiscordRuntime,
-  revokeDiscordPairing,
-  searchObsidianNotes,
-  testObsidianIntegration,
-  uploadChatAttachment,
-  captureObsidianInboxEntry,
-  updateIntegrationConnection,
   type IntegrationCatalogEntry,
   type IntegrationConnection,
   type ObsidianIntegrationStatus,
@@ -46,9 +30,6 @@ import type {
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
-import { PageGuideCard } from "../components/PageGuideCard";
-import { PageHeader } from "../components/PageHeader";
-import { Panel } from "../components/Panel";
 import { SelectOrCustom } from "../components/SelectOrCustom";
 import { ConfigFormBuilder } from "../components/ConfigFormBuilder";
 import { ConfirmModal } from "../components/ConfirmModal";
@@ -65,7 +46,6 @@ import {
   type UiRiskLevel,
   connectorSetupReady,
   connectorSupportsDeliveryAction,
-  dedupeUploadedAttachments,
   deriveOverallRisk,
   describeChannelSetupPath,
   describeMaturity,
@@ -88,8 +68,6 @@ import {
   isDiscordGatewayConnection,
   maxRisk,
   mergeRiskItems,
-  parseAttachmentIdInputs,
-  parseAttachmentUrlInputs,
   renderConnectorApprovalDeliverySummary,
   requiresExplicitChannelTarget,
   resolveChannelSetupPath,
@@ -100,10 +78,15 @@ import { IntegrationsChannelTestBench } from "./integrations/IntegrationsChannel
 import { IntegrationsConnectionsTable } from "./integrations/IntegrationsConnectionsTable";
 import { IntegrationsCreateConnectionPanel } from "./integrations/IntegrationsCreateConnectionPanel";
 import { IntegrationsObsidianPanel } from "./integrations/IntegrationsObsidianPanel";
+import { IntegrationsPageIntro } from "./integrations/IntegrationsPageIntro";
 import { IntegrationsPluginsPanel } from "./integrations/IntegrationsPluginsPanel";
+import { useIntegrationsChannelActions } from "./integrations/useIntegrationsChannelActions";
+import { useIntegrationsMutationActions } from "./integrations/useIntegrationsMutationActions";
+import { useIntegrationsObsidianActions } from "./integrations/useIntegrationsObsidianActions";
+import { useIntegrationsRiskReview } from "./integrations/useIntegrationsRiskReview";
+import { useIntegrationsRuntimeActions } from "./integrations/useIntegrationsRuntimeActions";
 
 import {
-  INTEGRATIONS_UPLOAD_SESSION_ID,
   isAbortError,
   KIND_DESCRIPTIONS,
   KIND_OPTIONS,
@@ -152,10 +135,6 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
   const [obsidianInboxRequest, setObsidianInboxRequest] = useState("");
   const [obsidianBusy, setObsidianBusy] = useState<null | "save" | "test" | "search" | "capture">(null);
   const [criticalConfirmed, setCriticalConfirmed] = useState(false);
-  const [changeReview, setChangeReview] = useState<{ overall: UiRiskLevel; items: UiRiskItem[] }>({
-    overall: "safe",
-    items: [],
-  });
   const [deleteTarget, setDeleteTarget] = useState<IntegrationConnection | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -199,8 +178,6 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
   const [channelReactionEmoji, setChannelReactionEmoji] = useState("\ud83d\udc4d");
   const [channelUnsendMessageId, setChannelUnsendMessageId] = useState("");
   const requestSeq = useRef(0);
-  const riskDebounceRef = useRef<number | null>(null);
-  const riskAbortRef = useRef<AbortController | null>(null);
   const createAction = useAction();
   const deleteAction = useAction();
 
@@ -428,7 +405,8 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     [channelConnections, selectedChannelConnectionId],
   );
   const selectedChannelConnector = useMemo(
-    () => (selectedChannelConnection ? connectorBySourceId.get(selectedChannelConnection.connectionId) : undefined),
+    () =>
+      selectedChannelConnection ? (connectorBySourceId.get(selectedChannelConnection.connectionId) ?? null) : null,
     [connectorBySourceId, selectedChannelConnection],
   );
   const selectedDiscordRuntime = selectedChannelConnection
@@ -451,68 +429,14 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     }
     return guidedConfig;
   }, [configJson, guidedConfig, showAdvancedJson]);
-
-  useEffect(() => {
-    const localReview = evaluateLocalRisk({
-      selectedCatalog,
-      selectedCatalogId,
-      configJson: JSON.stringify(effectiveConfig),
-      status,
-      enabled,
-    });
-    if (riskDebounceRef.current) {
-      window.clearTimeout(riskDebounceRef.current);
-      riskDebounceRef.current = null;
-    }
-    riskDebounceRef.current = window.setTimeout(() => {
-      riskAbortRef.current?.abort();
-      const controller = new AbortController();
-      riskAbortRef.current = controller;
-      void evaluateUiChangeRisk(
-        {
-          pageId: "integrations",
-          changes: [
-            { field: "integration.kindFilter", from: "all", to: kindFilter },
-            { field: "integration.catalogId", from: "", to: selectedCatalogId },
-            { field: "integration.status", from: "connected", to: status },
-            { field: "integration.enabled", from: true, to: enabled },
-            { field: "integration.configJson", from: "{}", to: JSON.stringify(effectiveConfig) },
-          ],
-        },
-        { signal: controller.signal },
-      )
-        .then((remoteReview) => {
-          const merged = mergeRiskItems(
-            localReview.items,
-            remoteReview.items.map((item) => ({
-              field: item.field,
-              level: item.level,
-              hint: item.hint,
-            })),
-          );
-          setChangeReview({
-            overall: deriveOverallRisk(merged),
-            items: merged,
-          });
-        })
-        .catch((err: unknown) => {
-          if (isAbortError(err)) {
-            return;
-          }
-          setChangeReview({
-            overall: deriveOverallRisk(localReview.items),
-            items: localReview.items,
-          });
-        });
-    }, 400);
-    return () => {
-      if (riskDebounceRef.current) {
-        window.clearTimeout(riskDebounceRef.current);
-        riskDebounceRef.current = null;
-      }
-      riskAbortRef.current?.abort();
-    };
-  }, [kindFilter, selectedCatalogId, selectedCatalog, status, enabled, effectiveConfig]);
+  const changeReview = useIntegrationsRiskReview({
+    kindFilter,
+    selectedCatalog,
+    selectedCatalogId,
+    status,
+    enabled,
+    effectiveConfig,
+  });
 
   useEffect(() => {
     if (channelConnections.length === 0) {
@@ -573,454 +497,92 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
       });
   }, [selectedChannelConnection]);
 
-  const onCreate = async () => {
-    if (changeReview.overall === "critical" && !criticalConfirmed) {
-      setError("Confirm critical integration changes before creating.");
-      return;
-    }
-    if (!selectedCatalogId) {
-      setError("Select a catalog entry first.");
-      return;
-    }
-    if (!selectedCatalogIsRunnable) {
-      setError(
-        "This catalog entry is not runnable in the current runtime. Pick a runnable integration before creating a connection.",
-      );
-      return;
-    }
-    let parsedConfig: Record<string, unknown>;
-    if (showAdvancedJson) {
-      try {
-        parsedConfig = JSON.parse(configJson) as Record<string, unknown>;
-      } catch {
-        setError("Connection config JSON is invalid.");
-        return;
-      }
-    } else {
-      parsedConfig = sanitizeGuidedConfig(guidedConfig);
-      setConfigJson(JSON.stringify(parsedConfig, null, 2));
-    }
+  const { onRunDiagnostics, onApproveDiscordPairing, onRevokeDiscordPairing, onReconnectDiscordRuntime } =
+    useIntegrationsRuntimeActions({
+      connectorDiagnosticsEnabled,
+      setError,
+      setPluginBusyId,
+      setDiagnosticsByConnectionId,
+      setSelectedDiagnosticConnectionId,
+      setDiscordPairingBusyId,
+      setDiscordPairingsByConnectionId,
+    });
 
-    const derivedLabel = label.trim() || (typeof parsedConfig.label === "string" ? parsedConfig.label : "");
-    const derivedEnabled = typeof parsedConfig.enabled === "boolean" ? parsedConfig.enabled : enabled;
-    const { label: _omitLabel, enabled: _omitEnabled, ...normalizedConfig } = parsedConfig;
+  const { onCreate, onToggle, onInstallPlugin, onTogglePlugin, onDeleteConfirmed } = useIntegrationsMutationActions({
+    changeReviewOverall: changeReview.overall,
+    criticalConfirmed,
+    selectedCatalogId,
+    selectedCatalogIsRunnable,
+    showAdvancedJson,
+    configJson,
+    guidedConfig,
+    label,
+    enabled,
+    status,
+    pluginSource,
+    deleteTarget,
+    load,
+    createRun: createAction.run,
+    deleteRun: deleteAction.run,
+    setError,
+    setConfigJson,
+    setLabel,
+    setGuidedConfig,
+    setCriticalConfirmed,
+    setPluginBusyId,
+    setPluginSource,
+    setDeleteTarget,
+  });
 
-    try {
-      await createAction.run(async () => {
-        await createIntegrationConnection({
-          catalogId: selectedCatalogId,
-          label: derivedLabel || undefined,
-          enabled: derivedEnabled,
-          status,
-          config: normalizedConfig,
-        });
-      });
-      setLabel("");
-      setGuidedConfig({});
-      setConfigJson("{}");
-      setCriticalConfirmed(false);
-      setError(null);
-      load({ background: true });
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
+  const {
+    onSendChannelTest,
+    onReactChannelTest,
+    onUploadChannelAttachments,
+    onRemoveUploadedChannelAttachment,
+    onUnsendChannelTest,
+  } = useIntegrationsChannelActions({
+    selectedChannelConnection,
+    selectedChannelConnector,
+    channelTestTarget,
+    channelTestMessage,
+    channelAttachmentUrls,
+    channelAttachmentIdsText,
+    uploadedChannelAttachments,
+    channelReplyToMessageId,
+    channelReplyToPartIndex,
+    channelEffectId,
+    channelSubject,
+    channelReactionMessageId,
+    channelReactionEmoji,
+    channelUnsendMessageId,
+    setError,
+    setChannelTestBusy,
+    setChannelTestResult,
+    setChannelActionBusy,
+    setChannelActionResult,
+    setChannelUploadBusy,
+    setUploadedChannelAttachments,
+  });
 
-  const onToggle = async (connection: IntegrationConnection) => {
-    try {
-      await updateIntegrationConnection(connection.connectionId, {
-        enabled: !connection.enabled,
-        status: !connection.enabled ? "connected" : "paused",
-      });
-      load({ background: true });
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const onRunDiagnostics = async (connectionId: string) => {
-    if (!connectorDiagnosticsEnabled) {
-      setError("Connector diagnostics are disabled in this runtime.");
-      return;
-    }
-    setPluginBusyId(`diag:${connectionId}`);
-    try {
-      const report = await fetchIntegrationConnectionDiagnostics(connectionId);
-      setDiagnosticsByConnectionId((current) => ({
-        ...current,
-        [connectionId]: report,
-      }));
-      setSelectedDiagnosticConnectionId(connectionId);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setPluginBusyId(null);
-    }
-  };
-
-  const refreshDiscordPairings = async (connectionId: string) => {
-    const result = await fetchDiscordPairings(connectionId);
-    setDiscordPairingsByConnectionId((current) => ({
-      ...current,
-      [connectionId]: result,
-    }));
-  };
-
-  const onApproveDiscordPairing = async (connectionId: string, pairingId: string) => {
-    setDiscordPairingBusyId(`approve:${pairingId}`);
-    try {
-      await approveDiscordPairing(connectionId, pairingId);
-      await refreshDiscordPairings(connectionId);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setDiscordPairingBusyId(null);
-    }
-  };
-
-  const onRevokeDiscordPairing = async (connectionId: string, pairingId: string) => {
-    setDiscordPairingBusyId(`revoke:${pairingId}`);
-    try {
-      await revokeDiscordPairing(connectionId, pairingId);
-      await refreshDiscordPairings(connectionId);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setDiscordPairingBusyId(null);
-    }
-  };
-
-  const onReconnectDiscordRuntime = async (connectionId: string) => {
-    setDiscordPairingBusyId(`reconnect:${connectionId}`);
-    try {
-      const runtime = await reconnectDiscordRuntime(connectionId);
-      setDiscordPairingsByConnectionId((current) => ({
-        ...current,
-        [connectionId]: {
-          runtime,
-          items: current[connectionId]?.items ?? [],
-        },
-      }));
-      await refreshDiscordPairings(connectionId);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setDiscordPairingBusyId(null);
-    }
-  };
-
-  const onInstallPlugin = async () => {
-    const source = pluginSource.trim();
-    if (!source) {
-      setError("Enter a plugin source first.");
-      return;
-    }
-    setPluginBusyId("install");
-    try {
-      await installIntegrationPlugin({ source });
-      setPluginSource("");
-      setError(null);
-      load({ background: true });
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setPluginBusyId(null);
-    }
-  };
-
-  const onTogglePlugin = async (pluginId: string, enabled: boolean) => {
-    setPluginBusyId(pluginId);
-    try {
-      if (enabled) {
-        await disableIntegrationPlugin(pluginId);
-      } else {
-        await enableIntegrationPlugin(pluginId);
-      }
-      setError(null);
-      load({ background: true });
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setPluginBusyId(null);
-    }
-  };
-
-  const onDeleteConfirmed = async () => {
-    if (!deleteTarget) {
-      return;
-    }
-    try {
-      await deleteAction.run(async () => {
-        await deleteIntegrationConnection(deleteTarget.connectionId);
-      });
-      setDeleteTarget(null);
-      load({ background: true });
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const onSendChannelTest = async () => {
-    if (!selectedChannelConnection) {
-      setError("Choose a channel connection first.");
-      return;
-    }
-    const message = channelTestMessage.trim();
-    const target = channelTestTarget.trim();
-    if (!message) {
-      setError("Enter a test message.");
-      return;
-    }
-    if (!target && requiresExplicitChannelTarget(selectedChannelConnection)) {
-      setError("Enter a destination target or configure a default one.");
-      return;
-    }
-    setChannelTestBusy(true);
-    setChannelTestResult(null);
-    try {
-      const attachments = parseAttachmentUrlInputs(channelAttachmentUrls);
-      const uploadedAttachmentIds = parseAttachmentIdInputs(channelAttachmentIdsText);
-      for (const attachment of uploadedChannelAttachments) {
-        if (!uploadedAttachmentIds.includes(attachment.attachmentId)) {
-          uploadedAttachmentIds.push(attachment.attachmentId);
-        }
-      }
-      const replyToPartIndex = channelReplyToPartIndex.trim()
-        ? Number.parseInt(channelReplyToPartIndex.trim(), 10)
-        : undefined;
-      const result = await commsSend({
-        connectionId: selectedChannelConnection.connectionId,
-        target,
-        message,
-        attachments,
-        attachmentIds: uploadedAttachmentIds.length > 0 ? uploadedAttachmentIds : undefined,
-        replyToMessageId: channelReplyToMessageId.trim() || undefined,
-        replyToPartIndex: Number.isFinite(replyToPartIndex) ? replyToPartIndex : undefined,
-        effectId: channelEffectId.trim() || undefined,
-        subject: channelSubject.trim() || undefined,
-      });
-      const statusText =
-        typeof result === "object" && result && "status" in result
-          ? String((result as { status?: unknown }).status ?? "sent")
-          : "sent";
-      const providerMessageId =
-        typeof result === "object" && result && "providerMessageId" in result
-          ? String((result as { providerMessageId?: unknown }).providerMessageId ?? "")
-          : "";
-      setChannelTestResult(
-        providerMessageId
-          ? `Delivered with status ${statusText}. Provider message id: ${providerMessageId}.`
-          : `Delivered with status ${statusText}.`,
-      );
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setChannelTestBusy(false);
-    }
-  };
-
-  const onReactChannelTest = async () => {
-    if (!selectedChannelConnection || !selectedChannelConnector) {
-      setError("Choose a channel connection first.");
-      return;
-    }
-    if (!connectorSupportsDeliveryAction(selectedChannelConnector, "channel.react")) {
-      setError("This channel connection does not support reactions.");
-      return;
-    }
-    const messageId = channelReactionMessageId.trim();
-    const emoji = channelReactionEmoji.trim();
-    const target = channelTestTarget.trim();
-    if (!messageId) {
-      setError("Enter a provider message id to react to.");
-      return;
-    }
-    if (!emoji) {
-      setError("Enter a reaction emoji.");
-      return;
-    }
-    if (!target && requiresExplicitChannelTarget(selectedChannelConnection)) {
-      setError("Enter a destination target or configure a default one.");
-      return;
-    }
-    setChannelActionBusy("react");
-    setChannelActionResult(null);
-    try {
-      const result = await commsReact({
-        connectionId: selectedChannelConnection.connectionId,
-        target,
-        messageId,
-        reaction: emoji,
-      });
-      const statusText =
-        typeof result === "object" && result && "status" in result
-          ? String((result as { status?: unknown }).status ?? "reacted")
-          : "reacted";
-      setChannelActionResult(`Reaction request completed with status ${statusText}.`);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setChannelActionBusy(null);
-    }
-  };
-
-  const onUploadChannelAttachments = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) {
-      return;
-    }
-    setChannelUploadBusy(true);
-    try {
-      const uploaded: ChatAttachmentRecord[] = [];
-      for (const file of Array.from(fileList)) {
-        uploaded.push(
-          await uploadChatAttachment({
-            sessionId: INTEGRATIONS_UPLOAD_SESSION_ID,
-            file,
-          }),
-        );
-      }
-      setUploadedChannelAttachments((current) => dedupeUploadedAttachments([...current, ...uploaded]));
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setChannelUploadBusy(false);
-    }
-  };
-
-  const onRemoveUploadedChannelAttachment = (attachmentId: string) => {
-    setUploadedChannelAttachments((current) => current.filter((item) => item.attachmentId !== attachmentId));
-  };
-
-  const onUnsendChannelTest = async () => {
-    if (!selectedChannelConnection || !selectedChannelConnector) {
-      setError("Choose a channel connection first.");
-      return;
-    }
-    if (!connectorSupportsDeliveryAction(selectedChannelConnector, "channel.unsend")) {
-      setError("This channel connection does not support unsend.");
-      return;
-    }
-    const messageId = channelUnsendMessageId.trim();
-    const target = channelTestTarget.trim();
-    if (!messageId) {
-      setError("Enter a provider message id to unsend.");
-      return;
-    }
-    if (!target && requiresExplicitChannelTarget(selectedChannelConnection)) {
-      setError("Enter a destination target or configure a default one.");
-      return;
-    }
-    setChannelActionBusy("unsend");
-    setChannelActionResult(null);
-    try {
-      const result = await commsUnsend({
-        connectionId: selectedChannelConnection.connectionId,
-        target,
-        messageId,
-      });
-      const statusText =
-        typeof result === "object" && result && "status" in result
-          ? String((result as { status?: unknown }).status ?? "unsent")
-          : "unsent";
-      setChannelActionResult(`Unsend request completed with status ${statusText}.`);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setChannelActionBusy(null);
-    }
-  };
-
-  const onSaveObsidianConfig = async () => {
-    setObsidianBusy("save");
-    try {
-      const allowedSubpaths = obsidianAllowedSubpaths
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-      const updated = await patchObsidianIntegrationConfig({
-        enabled: obsidianEnabled,
-        vaultPath: obsidianVaultPath.trim(),
-        mode: obsidianMode,
-        allowedSubpaths,
-      });
-      setObsidianEnabled(updated.enabled);
-      setObsidianVaultPath(updated.vaultPath);
-      setObsidianMode(updated.mode);
-      setObsidianAllowedSubpaths(updated.allowedSubpaths.join(", "));
-      setError(null);
-      await load({ background: true });
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setObsidianBusy(null);
-    }
-  };
-
-  const onTestObsidian = async () => {
-    setObsidianBusy("test");
-    try {
-      const tested = await testObsidianIntegration();
-      setObsidianStatus(tested);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setObsidianBusy(null);
-    }
-  };
-
-  const onSearchObsidian = async () => {
-    const query = obsidianQuery.trim();
-    if (!query) {
-      setError("Enter a search query for Obsidian notes.");
-      return;
-    }
-    setObsidianBusy("search");
-    try {
-      const response = await searchObsidianNotes({ query, limit: 8 });
-      setObsidianSearchResults(response.items);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setObsidianBusy(null);
-    }
-  };
-
-  const onCaptureObsidianInbox = async () => {
-    const requestText = obsidianInboxRequest.trim();
-    if (!requestText) {
-      setError("Enter a short request to capture in Obsidian inbox.");
-      return;
-    }
-    setObsidianBusy("capture");
-    try {
-      await captureObsidianInboxEntry({
-        id: `GC-IN-${Math.floor(Date.now() / 1000)}`,
-        request: requestText,
-        type: "feature",
-        priority: "medium",
-        owner: "Personal Assistant Goat",
-        state: "new",
-        taskLink: "[[GoatCitadel Tasks]]",
-      });
-      setObsidianInboxRequest("");
-      setError(null);
-      await load({ background: true });
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setObsidianBusy(null);
-    }
-  };
+  const { onSaveObsidianConfig, onTestObsidian, onSearchObsidian, onCaptureObsidianInbox } =
+    useIntegrationsObsidianActions({
+      obsidianAllowedSubpaths,
+      obsidianEnabled,
+      obsidianVaultPath,
+      obsidianMode,
+      obsidianQuery,
+      obsidianInboxRequest,
+      load,
+      setError,
+      setObsidianBusy,
+      setObsidianEnabled,
+      setObsidianVaultPath,
+      setObsidianMode,
+      setObsidianAllowedSubpaths,
+      setObsidianStatus,
+      setObsidianSearchResults,
+      setObsidianInboxRequest,
+    });
 
   const blockCreate = changeReview.overall === "critical" && !criticalConfirmed;
   const selectedDiagnostics = selectedDiagnosticConnectionId
@@ -1064,58 +626,16 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
 
   return (
     <section className="workflow-page">
-      <PageHeader
-        eyebrow="Integrate"
-        title={headerTitle}
-        subtitle={headerSubtitle}
-        hint={headerHint}
-        actions={integrationsHeaderActions}
+      <IntegrationsPageIntro
+        isChannelsView={isChannelsView}
+        headerTitle={headerTitle}
+        headerSubtitle={headerSubtitle}
+        headerHint={headerHint}
+        headerActions={integrationsHeaderActions}
+        error={error}
+        isRefreshing={isRefreshing}
+        connectionSummary={connectionSummary}
       />
-      {!isChannelsView ? (
-        <PageGuideCard
-          pageId="integrations"
-          what={pageCopy.integrations.guide?.what ?? ""}
-          when={pageCopy.integrations.guide?.when ?? ""}
-          mostCommonAction={pageCopy.integrations.guide?.mostCommonAction}
-          actions={pageCopy.integrations.guide?.actions ?? []}
-          terms={pageCopy.integrations.guide?.terms}
-        />
-      ) : null}
-
-      <div className="workflow-status-stack">
-        {error ? <p className="error">{error}</p> : null}
-        {isRefreshing ? <p className="status-banner">Refreshing integrations...</p> : null}
-      </div>
-
-      <Panel
-        title="How Connections Work"
-        subtitle="Catalog entries define the shape. Connections hold config and activate only when a page or workflow needs them."
-      >
-        <ol>
-          <li>
-            {isChannelsView
-              ? "Pick a channel adapter from the catalog."
-              : "Pick a catalog entry to define what you are connecting."}
-          </li>
-          <li>
-            {isChannelsView
-              ? "Use guided fields first so default targets and auth expectations stay visible."
-              : "Fill guided fields (recommended), then save the connection."}
-          </li>
-          <li>
-            {isChannelsView
-              ? "Validate delivery in Channel Test Bench before you trust the adapter live."
-              : "Leave it connected for live use, or pause it until needed."}
-          </li>
-        </ol>
-        <div className="token-row">
-          <span className="token-chip">Configured: {connectionSummary.total}</span>
-          <span className="token-chip token-chip-active">Ready: {connectionSummary.connected}</span>
-          <span className="token-chip">Paused: {connectionSummary.paused}</span>
-          <span className="token-chip">Errors: {connectionSummary.error}</span>
-          <span className="token-chip">Disabled: {connectionSummary.disabled}</span>
-        </div>
-      </Panel>
 
       {!isChannelsView ? (
         <IntegrationsObsidianPanel

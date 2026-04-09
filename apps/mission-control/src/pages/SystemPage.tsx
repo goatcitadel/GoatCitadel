@@ -1,4 +1,3 @@
-/* eslint-disable max-lines */
 import { useEffect, useState } from "react";
 import {
   exportBrowserProofLaneDraft,
@@ -36,12 +35,13 @@ import {
 } from "../api/client";
 import { ActionButton } from "../components/ActionButton";
 import { FieldHelp } from "../components/FieldHelp";
-import { HelpHint } from "../components/HelpHint";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
-import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
 import { pageCopy } from "../content/copy";
+import { SystemHostVitalsGrid } from "./system/SystemHostVitalsGrid";
+import { SystemParityPanel } from "./system/SystemParityPanel";
+import { SystemServiceManagerPanel } from "./system/SystemServiceManagerPanel";
 import {
   buildUiArtifactStatus,
   buildUiProfileArtifactStatus,
@@ -55,14 +55,7 @@ import {
   normalizeSystemVitals,
   normalizeVoiceProofLaneDraft,
 } from "./system-page-normalizers";
-import {
-  formatArtifactStatus,
-  formatBytes,
-  formatProgramBlockerKind,
-  formatProofArtifactStatus,
-  mapParityTone,
-  mapProgramParityTone,
-} from "./system/system-page-helpers";
+import { formatArtifactStatus, formatProofArtifactStatus, mapParityTone } from "./system/system-page-helpers";
 
 export function SystemPage() {
   const [vitals, setVitals] = useState<SystemVitalsResponse | null>(null);
@@ -481,124 +474,15 @@ export function SystemPage() {
           manager; Mission Control cannot start or stop the process directly.
         </FieldHelp>
       </div>
-      <div className="metric-grid">
-        <Panel title="Host Vitals" subtitle="Local machine and process health at a glance." className="stat-card">
-          <p className="stat-card-value">{Math.round(vitals.uptimeSeconds)}s</p>
-          <p className="stat-card-note">Uptime</p>
-          <p className="stat-card-note">
-            Hostname {vitals.hostname} · {vitals.cpuCount} cores
-          </p>
-        </Panel>
-        <Panel title="Load Average" subtitle="Three-sample host load average." className="stat-card">
-          <p className="stat-card-value system-stat-mono">{vitals.loadAverage.map((n) => n.toFixed(2)).join(" / ")}</p>
-          <p className="stat-card-note">1m / 5m / 15m load</p>
-        </Panel>
-        <Panel title="Memory" subtitle="Host and process memory use." className="stat-card">
-          <p className="stat-card-value">{formatBytes(vitals.memoryUsedBytes)}</p>
-          <p className="stat-card-note">of {formatBytes(vitals.memoryTotalBytes)} host memory</p>
-          <p className="stat-card-note">Process RSS {formatBytes(vitals.processRssBytes)}</p>
-        </Panel>
-      </div>
-      <Panel
-        title="OpenClaw Parity"
-        subtitle={
-          <>
-            Track the full parity closeout program while keeping browser, canvas, deployment, companion, plugin, and
-            voice follow-on work grounded in live runtime truth.
-            <HelpHint
-              label="OpenClaw parity help"
-              text="This surface is intentionally conservative. It shows the full parity program plus the live follow-on foundations without pretending external proof or publication work is already done."
-            />
-          </>
-        }
-        actions={
-          openclawParity ? (
-            <div className="workflow-summary-strip">
-              <StatusChip tone="success">
-                {openclawParity.completedEpicIds.length}/{openclawParity.epics.length} complete
-              </StatusChip>
-              <StatusChip tone="warning">{openclawParity.openEpicIds.length} open</StatusChip>
-              <StatusChip tone="muted">next {openclawParity.nextEpicId ?? "none"}</StatusChip>
-            </div>
-          ) : followOnParity ? (
-            <div className="workflow-summary-strip">
-              <StatusChip tone="muted">{followOnParity.deploymentProfile}</StatusChip>
-              <StatusChip tone="muted">auth {followOnParity.authMode}</StatusChip>
-              <StatusChip tone={followOnParity.voice.runtimeReadiness === "ready" ? "success" : "warning"}>
-                voice {followOnParity.voice.runtimeReadiness}
-              </StatusChip>
-            </div>
-          ) : undefined
-        }
+      <SystemHostVitalsGrid vitals={vitals} />
+      <SystemParityPanel
+        openclawParity={openclawParity}
+        openclawParityError={openclawParityError}
+        followOnParity={followOnParity}
+        followOnParityError={followOnParityError}
       >
-        {followOnParityError ? (
+        {followOnParity ? (
           <>
-            {openclawParityError ? (
-              <p className="office-subtitle">OpenClaw parity program unavailable: {openclawParityError}</p>
-            ) : null}
-            <p className="office-subtitle">Follow-on parity report unavailable: {followOnParityError}</p>
-          </>
-        ) : followOnParity ? (
-          <>
-            <div className="workflow-status-stack">
-              {openclawParityError ? (
-                <p className="office-subtitle">OpenClaw parity program unavailable: {openclawParityError}</p>
-              ) : openclawParity ? (
-                <>
-                  <FieldHelp>
-                    Full-program status: {openclawParity.completedEpicIds.length} complete ·{" "}
-                    {openclawParity.openEpicIds.length} open · next {openclawParity.nextEpicId ?? "none"}.
-                  </FieldHelp>
-                  <FieldHelp>Completion order: {openclawParity.completionOrder.join(" -> ")}</FieldHelp>
-                  <FieldHelp>Next program slice: {openclawParity.nextSlice}</FieldHelp>
-                  <FieldHelp>
-                    Blockers: repo runtime {openclawParity.blockerCounts.repo_runtime} · manual/operator{" "}
-                    {openclawParity.blockerCounts.manual_operator} · external repo{" "}
-                    {openclawParity.blockerCounts.external_repo} · publication{" "}
-                    {openclawParity.blockerCounts.publication}.
-                  </FieldHelp>
-                  {openclawParity.unsafeClaims.map((claim) => (
-                    <FieldHelp key={`openclaw-unsafe-${claim}`}>Unsafe to claim yet: {claim}</FieldHelp>
-                  ))}
-                </>
-              ) : null}
-              <FieldHelp>
-                Follow-on runtime posture: {followOnParity.deploymentProfile} · auth {followOnParity.authMode} · voice{" "}
-                {followOnParity.voice.runtimeReadiness} · browser {followOnParity.browser.controlToolCount} control
-                tool(s).
-              </FieldHelp>
-            </div>
-            <div className="metric-grid">
-              <Panel title="Browser" subtitle="Registered browser tools and catalog maturity." className="stat-card">
-                <p className="stat-card-value">{followOnParity.browser.totalToolCount}</p>
-                <p className="stat-card-note">
-                  {followOnParity.browser.readToolCount} read · {followOnParity.browser.controlToolCount} control
-                </p>
-                <p className="stat-card-note">
-                  Catalog {followOnParity.browser.automationCatalog?.maturity ?? "missing"}
-                </p>
-              </Panel>
-              <Panel title="Voice" subtitle="Wake/talk runtime readiness and current state." className="stat-card">
-                <p className="stat-card-value">{followOnParity.voice.runtimeReadiness}</p>
-                <p className="stat-card-note">
-                  Talk {followOnParity.voice.talkState} · Wake{" "}
-                  {followOnParity.voice.wakeEnabled ? followOnParity.voice.wakeState : "disabled"}
-                </p>
-                <p className="stat-card-note">Model {followOnParity.voice.selectedModelId ?? "none selected"}</p>
-              </Panel>
-              <Panel title="Extensions" subtitle="Add-ons and integration plugin breadth." className="stat-card">
-                <p className="stat-card-value">
-                  {followOnParity.addons.catalogCount + followOnParity.plugins.totalCount}
-                </p>
-                <p className="stat-card-note">
-                  {followOnParity.addons.installedCount} add-ons installed · {followOnParity.addons.runningCount}{" "}
-                  running
-                </p>
-                <p className="stat-card-note">
-                  {followOnParity.plugins.enabledCount}/{followOnParity.plugins.totalCount} plugins enabled
-                </p>
-              </Panel>
-            </div>
             <div className="workflow-status-stack">
               <FieldHelp>Browser posture: {followOnParity.browser.guardrailSummary}</FieldHelp>
               <FieldHelp>
@@ -1063,89 +947,20 @@ export function SystemPage() {
                 </>
               ) : null}
             </div>
-            <div className="workflow-status-stack">
-              {(openclawParity?.epics ?? followOnParity.epics).map((epic) =>
-                "status" in epic ? (
-                  <div key={epic.epicId}>
-                    <p className="office-subtitle">
-                      <strong>
-                        {epic.epicId} · {epic.label}
-                      </strong>{" "}
-                      <StatusChip tone={mapProgramParityTone(epic.status)}>
-                        {epic.status.replaceAll("_", " ")}
-                      </StatusChip>
-                    </p>
-                    <p className="office-subtitle">{epic.summary}</p>
-                    <p className="office-subtitle">Next slice: {epic.nextSlice}</p>
-                    {epic.blockers.map((entry, index) => (
-                      <FieldHelp key={`${epic.epicId}-blocker-${entry.kind}-${index}`}>
-                        Blocker [{formatProgramBlockerKind(entry.kind)}]: {entry.summary}
-                      </FieldHelp>
-                    ))}
-                  </div>
-                ) : (
-                  <div key={epic.epicId}>
-                    <p className="office-subtitle">
-                      <strong>
-                        {epic.epicId} · {epic.label}
-                      </strong>{" "}
-                      <StatusChip tone={mapParityTone(epic.state)}>{epic.state.replaceAll("_", " ")}</StatusChip>
-                    </p>
-                    <p className="office-subtitle">{epic.summary}</p>
-                    <p className="office-subtitle">Next slice: {epic.nextSlice}</p>
-                  </div>
-                ),
-              )}
-            </div>
           </>
-        ) : (
-          <p className="office-subtitle">Loading parity reports...</p>
-        )}
-      </Panel>
-      <Panel
-        title="Service Manager"
-        subtitle={
-          <>
-            Manage the local GoatCitadel daemon lifecycle and inspect recent service events.
-            <HelpHint
-              label="Service manager help"
-              text="Use Start, Stop, Restart, and Refresh to control the local daemon process. Refresh only reloads status and recent logs."
-            />
-          </>
-        }
-        actions={
-          <div className="workflow-summary-strip">
-            <StatusChip tone={daemonStateTone}>{daemonStatus?.state ?? "unknown"}</StatusChip>
-            <StatusChip tone="muted">PID {daemonStatus?.pid ?? 0}</StatusChip>
-            <StatusChip tone="muted">{Math.round(daemonStatus?.uptimeSeconds ?? 0)}s uptime</StatusChip>
-          </div>
-        }
-      >
-        <div className="row-actions">
-          <ActionButton
-            label="Start"
-            onClick={onDaemonStart}
-            disabled={daemonBusy || !daemonControlSupported || daemonStatus?.running}
-          />
-          <ActionButton
-            label="Stop"
-            onClick={onDaemonStop}
-            disabled={daemonBusy || !daemonControlSupported || !daemonStatus?.running}
-          />
-          <ActionButton label="Restart" onClick={onDaemonRestart} disabled={daemonBusy || !daemonControlSupported} />
-          <ActionButton label="Refresh" onClick={() => void refreshDaemon()} disabled={daemonBusy} />
-        </div>
-        {daemonStatus?.controlMessage ? <p className="office-subtitle">{daemonStatus.controlMessage}</p> : null}
-        {daemonLogs.length > 0 ? (
-          <pre>
-            {daemonLogs
-              .map((entry) => `[${entry.timestamp}] ${entry.level.toUpperCase()}: ${entry.message}`)
-              .join("\n")}
-          </pre>
-        ) : (
-          <p className="office-subtitle">No daemon log events yet.</p>
-        )}
-      </Panel>
+        ) : null}
+      </SystemParityPanel>
+      <SystemServiceManagerPanel
+        daemonStatus={daemonStatus}
+        daemonStateTone={daemonStateTone}
+        daemonControlSupported={daemonControlSupported}
+        daemonBusy={daemonBusy}
+        daemonLogs={daemonLogs}
+        onStart={onDaemonStart}
+        onStop={onDaemonStop}
+        onRestart={onDaemonRestart}
+        onRefresh={() => void refreshDaemon()}
+      />
     </section>
   );
 }

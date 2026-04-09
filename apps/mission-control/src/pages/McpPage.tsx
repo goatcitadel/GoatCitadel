@@ -1,4 +1,4 @@
-/* eslint-disable max-lines, react-hooks/exhaustive-deps */
+/* eslint-disable react-hooks/exhaustive-deps, max-lines -- MCP operations remain on one operator surface while server and approval flows stay tightly coupled. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import {
@@ -27,17 +27,12 @@ import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { StatusChip } from "../components/StatusChip";
-import { GCSelect, GCSwitch } from "../components/ui";
+import { GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
-import {
-  describeConnectorApprovalDelivery,
-  describeMcpBlockReason,
-  formatMcpError,
-  parseApprovalInboxItems,
-  readConnectorApprovalReady,
-  summarizeApprovalPreview,
-} from "./mcp/mcp-page-helpers";
+import { McpApprovalInboxPanel } from "./mcp/McpApprovalInboxPanel";
+import { McpSelectedServerPanel } from "./mcp/McpSelectedServerPanel";
+import { formatMcpError, parseApprovalInboxItems } from "./mcp/mcp-page-helpers";
 
 type Transport = "stdio" | "http" | "sse";
 type McpCategory =
@@ -860,211 +855,106 @@ export function McpPage() {
               )}
             />
           </div>
-          {selected ? (
-            <div className="stack-md">
-              <div className="actions">
-                <ActionButton
-                  label={selected.status === "connected" ? "Disconnect" : "Connect"}
-                  pending={busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      if (selected.status === "connected") {
-                        await disconnectMcpServer(selected.serverId);
-                      } else {
-                        await connectMcpServer(selected.serverId);
-                      }
-                      await loadServers();
-                      if (selectedServerId) {
-                        await loadTools(selectedServerId);
-                      }
-                      setError(null);
-                    } catch (err) {
-                      setError((err as Error).message);
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                />
-                {selected.authType === "oauth2" ? (
-                  <ActionButton
-                    label="Start OAuth"
-                    pending={busy}
-                    onClick={async () => {
-                      setBusy(true);
-                      try {
-                        const oauth = await startMcpOAuth(selected.serverId);
-                        setResult(`Open OAuth URL: ${oauth.authorizeUrl}`);
-                        setError(null);
-                      } catch (err) {
-                        setError((err as Error).message);
-                      } finally {
-                        setBusy(false);
-                      }
-                    }}
-                  />
-                ) : null}
-                <ActionButton
-                  label="Delete"
-                  pending={busy}
-                  danger
-                  onClick={() => {
-                    setConfirmDeleteServer({
-                      serverId: selected.serverId,
-                      label: selected.label,
-                    });
-                  }}
-                />
-                <ActionButton
-                  label="Health Check"
-                  pending={busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      const diagnostic = await runMcpServerHealthCheck(selected.serverId);
-                      setDiagnosticByServerId((current) => ({
-                        ...current,
-                        [selected.serverId]: diagnostic,
-                      }));
-                      setError(null);
-                    } catch (err) {
-                      setError((err as Error).message);
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                />
-              </div>
-              <p className="office-subtitle">{describeMcpBlockReason(selected)}</p>
-              {selectedConnector ? (
-                <div className="prompt-lab-run-summary">
-                  <p>
-                    <strong>Approval delivery</strong>{" "}
-                    <span
-                      className={`token-chip ${readConnectorApprovalReady(selectedConnector) ? "token-chip-active" : ""}`}
-                    >
-                      {readConnectorApprovalReady(selectedConnector) ? "ready" : "not ready"}
-                    </span>
-                  </p>
-                  <p className="office-subtitle">{describeConnectorApprovalDelivery(selectedConnector)}</p>
-                </div>
-              ) : null}
-              {selectedDiagnostic ? (
-                <details open>
-                  <summary>
-                    Latest health check: {selectedDiagnostic.status}
-                    {" • "}
-                    {new Date(selectedDiagnostic.checkedAt).toLocaleString()}
-                  </summary>
-                  <ul className="improvement-simple-list">
-                    {selectedDiagnostic.checks.map((check) => (
-                      <li key={`${check.key}:${check.message}`}>
-                        <strong>{check.key}</strong> [{check.status}] - {check.message}
-                      </li>
-                    ))}
-                  </ul>
-                  {selectedDiagnostic.recommendedNextAction ? (
-                    <p className="office-subtitle">Next step: {selectedDiagnostic.recommendedNextAction}</p>
-                  ) : null}
-                </details>
-              ) : null}
-              <div className="controls-row">
-                <label className="checkbox-inline">
-                  <GCSwitch
-                    checked={policyRequireFirst}
-                    onCheckedChange={(checked) => {
-                      setPolicyRequireFirst(checked);
-                      setPolicyDirty(true);
-                    }}
-                    label="Require first-use approval"
-                  />
-                </label>
-                <label htmlFor="mcpPolicyRedaction">Redaction mode</label>
-                <GCSelect
-                  id="mcpPolicyRedaction"
-                  value={policyRedaction}
-                  onChange={(value) => {
-                    setPolicyRedaction(value as "off" | "basic" | "strict");
-                    setPolicyDirty(true);
-                  }}
-                  options={[
-                    { value: "off", label: "off" },
-                    { value: "basic", label: "basic" },
-                    { value: "strict", label: "strict" },
-                  ]}
-                />
-              </div>
-              <div className="controls-row">
-                <label htmlFor="mcpAllowedPatterns">Allow patterns</label>
-                <input
-                  id="mcpAllowedPatterns"
-                  placeholder="search.*, fetch"
-                  value={policyAllowed}
-                  onChange={(event) => {
-                    setPolicyAllowed(event.target.value);
-                    setPolicyDirty(true);
-                  }}
-                />
-              </div>
-              <div className="controls-row">
-                <label htmlFor="mcpBlockedPatterns">Block patterns</label>
-                <input
-                  id="mcpBlockedPatterns"
-                  placeholder="admin.*, shell.*"
-                  value={policyBlocked}
-                  onChange={(event) => {
-                    setPolicyBlocked(event.target.value);
-                    setPolicyDirty(true);
-                  }}
-                />
-              </div>
-              <div className="controls-row">
-                <label htmlFor="mcpPolicyNotes">Notes</label>
-                <input
-                  id="mcpPolicyNotes"
-                  placeholder="Optional policy note"
-                  value={policyNotes}
-                  onChange={(event) => {
-                    setPolicyNotes(event.target.value);
-                    setPolicyDirty(true);
-                  }}
-                />
-                <ActionButton
-                  label="Save Policy"
-                  pending={busy}
-                  disabled={!policyDirty}
-                  onClick={async () => {
-                    if (!selected) {
-                      return;
-                    }
-                    setBusy(true);
-                    try {
-                      await updateMcpServerPolicy(selected.serverId, {
-                        requireFirstToolApproval: policyRequireFirst,
-                        redactionMode: policyRedaction,
-                        allowedToolPatterns: policyAllowed
-                          .split(",")
-                          .map((item) => item.trim())
-                          .filter(Boolean),
-                        blockedToolPatterns: policyBlocked
-                          .split(",")
-                          .map((item) => item.trim())
-                          .filter(Boolean),
-                        notes: policyNotes.trim() || undefined,
-                      });
-                      setPolicyDirty(false);
-                      await loadServers();
-                      setError(null);
-                    } catch (err) {
-                      setError((err as Error).message);
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                />
-              </div>
-            </div>
-          ) : null}
+          <McpSelectedServerPanel
+            selected={selected}
+            selectedConnector={selectedConnector}
+            selectedDiagnostic={selectedDiagnostic}
+            busy={busy}
+            policyRequireFirst={policyRequireFirst}
+            setPolicyRequireFirst={setPolicyRequireFirst}
+            policyRedaction={policyRedaction}
+            setPolicyRedaction={setPolicyRedaction}
+            policyAllowed={policyAllowed}
+            setPolicyAllowed={setPolicyAllowed}
+            policyBlocked={policyBlocked}
+            setPolicyBlocked={setPolicyBlocked}
+            policyNotes={policyNotes}
+            setPolicyNotes={setPolicyNotes}
+            setPolicyDirty={setPolicyDirty}
+            policyDirty={policyDirty}
+            onToggleConnection={async () => {
+              if (!selected) return;
+              setBusy(true);
+              try {
+                if (selected.status === "connected") {
+                  await disconnectMcpServer(selected.serverId);
+                } else {
+                  await connectMcpServer(selected.serverId);
+                }
+                await loadServers();
+                if (selectedServerId) {
+                  await loadTools(selectedServerId);
+                }
+                setError(null);
+              } catch (err) {
+                setError((err as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+            onStartOAuth={async () => {
+              if (!selected) return;
+              setBusy(true);
+              try {
+                const oauth = await startMcpOAuth(selected.serverId);
+                setResult(`Open OAuth URL: ${oauth.authorizeUrl}`);
+                setError(null);
+              } catch (err) {
+                setError((err as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+            onDelete={() => {
+              if (!selected) return;
+              setConfirmDeleteServer({
+                serverId: selected.serverId,
+                label: selected.label,
+              });
+            }}
+            onHealthCheck={async () => {
+              if (!selected) return;
+              setBusy(true);
+              try {
+                const diagnostic = await runMcpServerHealthCheck(selected.serverId);
+                setDiagnosticByServerId((current) => ({
+                  ...current,
+                  [selected.serverId]: diagnostic,
+                }));
+                setError(null);
+              } catch (err) {
+                setError((err as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+            onSavePolicy={async () => {
+              if (!selected) return;
+              setBusy(true);
+              try {
+                await updateMcpServerPolicy(selected.serverId, {
+                  requireFirstToolApproval: policyRequireFirst,
+                  redactionMode: policyRedaction,
+                  allowedToolPatterns: policyAllowed
+                    .split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                  blockedToolPatterns: policyBlocked
+                    .split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                  notes: policyNotes.trim() || undefined,
+                });
+                setPolicyDirty(false);
+                await loadServers();
+                setError(null);
+              } catch (err) {
+                setError((err as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          />
         </Panel>
       </div>
 
@@ -1127,90 +1017,19 @@ export function McpPage() {
         {result ? <pre>{result}</pre> : null}
       </Panel>
       {selected && selectedIsInternalApprovalInbox ? (
-        <Panel
-          title="Approval Inbox"
-          subtitle="Resolve non-browser approval deliveries that arrive through the internal MCP approval inbox."
-        >
-          <div className="controls-row">
-            <label htmlFor="approvalInboxState">State</label>
-            <GCSelect
-              id="approvalInboxState"
-              value={inboxFilterState}
-              onChange={(value) => setInboxFilterState(value as ApprovalInboxFilterState)}
-              options={[
-                { value: "pending", label: "pending" },
-                { value: "all", label: "all" },
-                { value: "approved", label: "approved" },
-                { value: "rejected", label: "rejected" },
-                { value: "edited", label: "edited" },
-                { value: "expired", label: "expired" },
-                { value: "failed", label: "failed" },
-              ]}
-            />
-            <ActionButton
-              label="Refresh Inbox"
-              pending={inboxBusy}
-              onClick={() => void loadApprovalInbox(selected.serverId, inboxFilterState)}
-            />
-          </div>
-          <p className="office-subtitle">
-            This inbox is the internal non-browser receiver for durable approval actions. Each item keeps token state,
-            delivery count, and terminal resolution details for later debugging.
-          </p>
-          {selected.status !== "connected" ? (
-            <p className="office-subtitle">Connect this server before loading approval inbox items.</p>
-          ) : null}
-          {inboxError ? <p className="error">{inboxError}</p> : null}
-          <div className="stack-md">
-            {inboxItems.map((item) => (
-              <div key={item.inboxItemId} className="prompt-lab-run-summary">
-                <p>
-                  <strong>{item.approvalKind}</strong>
-                  <span className="token-chip" style={{ marginLeft: 8 }}>
-                    {item.state}
-                  </span>
-                  <span className="token-chip" style={{ marginLeft: 8 }}>
-                    {item.riskLevel}
-                  </span>
-                  <span className="token-chip" style={{ marginLeft: 8 }}>
-                    deliveries {item.deliveryCount}
-                  </span>
-                </p>
-                <p className="office-subtitle">{summarizeApprovalPreview(item.preview)}</p>
-                <p className="office-subtitle">
-                  Approval {item.approvalId} | token {item.tokenId} | expires{" "}
-                  {new Date(item.expiresAt).toLocaleString()}
-                </p>
-                {item.lastError ? <p className="office-subtitle">Last error: {item.lastError}</p> : null}
-                {item.state === "pending" ? (
-                  <div className="actions">
-                    <ActionButton
-                      label="Approve"
-                      pending={pendingInboxActionId === item.inboxItemId}
-                      disabled={pendingInboxActionId !== null && pendingInboxActionId !== item.inboxItemId}
-                      onClick={() => void handleResolveInboxItem(item, "approve")}
-                    />
-                    <ActionButton
-                      label="Reject"
-                      pending={pendingInboxActionId === item.inboxItemId}
-                      disabled={pendingInboxActionId !== null && pendingInboxActionId !== item.inboxItemId}
-                      danger
-                      onClick={() => void handleResolveInboxItem(item, "reject")}
-                    />
-                  </div>
-                ) : (
-                  <p className="office-subtitle">
-                    Resolved {item.resolvedAt ? new Date(item.resolvedAt).toLocaleString() : "pending timestamp"}
-                    {item.resolvedBy ? ` by ${item.resolvedBy}` : ""}
-                  </p>
-                )}
-              </div>
-            ))}
-            {!inboxBusy && inboxItems.length === 0 && selected.status === "connected" ? (
-              <p className="office-subtitle">No approval inbox items matched the current filter.</p>
-            ) : null}
-          </div>
-        </Panel>
+        <McpApprovalInboxPanel
+          selectedStatus={selected.status}
+          inboxFilterState={inboxFilterState}
+          setInboxFilterState={setInboxFilterState}
+          inboxBusy={inboxBusy}
+          inboxError={inboxError}
+          inboxItems={inboxItems}
+          pendingInboxActionId={pendingInboxActionId}
+          onRefresh={async () => {
+            await loadApprovalInbox(selected.serverId, inboxFilterState);
+          }}
+          onResolve={handleResolveInboxItem}
+        />
       ) : null}
       <ConfirmModal
         open={Boolean(confirmDeleteServer)}

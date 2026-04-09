@@ -1,4 +1,4 @@
-/* eslint-disable react-hooks/exhaustive-deps, max-lines */
+/* eslint-disable react-hooks/exhaustive-deps */
 import { useEffect, useMemo, useState } from "react";
 import type { ToolAccessEvaluateResponse, ToolCatalogEntry, ToolGrantRecord } from "@goatcitadel/contracts";
 import {
@@ -13,7 +13,6 @@ import {
   patchSettings,
   revokeToolGrant,
 } from "../api/client";
-import { DataToolbar } from "../components/DataToolbar";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { CardSkeleton } from "../components/CardSkeleton";
 import { HelpHint } from "../components/HelpHint";
@@ -24,6 +23,9 @@ import { GCCombobox, GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { useUiPreferences } from "../state/ui-preferences";
+import { ToolAccessModesPanel } from "./tools/ToolAccessModesPanel";
+import { ToolActiveGrantsPanel } from "./tools/ToolActiveGrantsPanel";
+import { ToolCatalogPanel } from "./tools/ToolCatalogPanel";
 import {
   dedupeOptions,
   ensureCurrentOption,
@@ -551,45 +553,15 @@ export function ToolsPage() {
       </div>
       {isInitialLoading ? <CardSkeleton lines={8} /> : null}
 
-      <Panel
-        title="Access Modes"
-        subtitle={
-          <>
-            One-click profile switching for safe days versus power days. Current profile:{" "}
-            <strong>{currentToolProfile}</strong>.
-          </>
-        }
-      >
-        <div className="tool-profile-grid">
-          {TOOL_PROFILE_PRESETS.map((preset) => (
-            <button
-              type="button"
-              key={preset.id}
-              className={`tool-profile-card ${currentToolProfile === preset.id ? "active" : ""}`}
-              onClick={() => void onApplyToolProfile(preset.id)}
-              disabled={profileSwitchBusy !== null}
-            >
-              <strong>{preset.label}</strong>
-              <span>{preset.helper}</span>
-              <small>{preset.id}</small>
-              {profileSwitchBusy === preset.id ? <em>Applying…</em> : null}
-            </button>
-          ))}
-        </div>
-        <label className="tools-advanced-toggle">
-          <input
-            type="checkbox"
-            checked={showTechnicalDetails}
-            onChange={(event) => setShowTechnicalDetails(event.target.checked)}
-          />
-          Show technical controls on this and other pages
-        </label>
-        {uiMode === "simple" && !showTechnicalDetails ? (
-          <p className="tools-helper">
-            Beginner mode is active. You can still grant access safely with the wizard below.
-          </p>
-        ) : null}
-      </Panel>
+      <ToolAccessModesPanel
+        currentToolProfile={currentToolProfile}
+        profileSwitchBusy={profileSwitchBusy}
+        presets={TOOL_PROFILE_PRESETS}
+        showTechnicalDetails={showTechnicalDetails}
+        setShowTechnicalDetails={setShowTechnicalDetails}
+        uiMode={uiMode}
+        onApplyToolProfile={onApplyToolProfile}
+      />
 
       <div className="split-grid">
         <Panel
@@ -985,113 +957,21 @@ export function ToolsPage() {
           ) : null}
         </Panel>
 
-        <Panel title="Active Grants" subtitle="Review, filter, and revoke scoped permissions.">
-          <DataToolbar
-            primary={
-              <div className="controls-row">
-                <label>Filter</label>
-                <input
-                  value={grantFilter}
-                  onChange={(event) => setGrantFilter(event.target.value)}
-                  placeholder="Search tool, scope, decision, created by..."
-                />
-              </div>
-            }
-            secondary={<StatusChip>{visibleGrants.length} visible</StatusChip>}
-          />
-          <table>
-            <thead>
-              <tr>
-                <th>Tool</th>
-                <th>Decision</th>
-                <th>Scope</th>
-                <th>Type</th>
-                <th>Expires</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleGrants.map((grant) => (
-                <tr key={grant.grantId}>
-                  <td>{grant.toolPattern}</td>
-                  <td>{grant.decision}</td>
-                  <td>
-                    {grant.scope}:{grant.scopeRef}
-                  </td>
-                  <td>{grant.grantType}</td>
-                  <td>{grant.expiresAt ?? "-"}</td>
-                  <td>
-                    {grant.revokedAt ? (
-                      <span>revoked</span>
-                    ) : (
-                      <button type="button" className="danger" onClick={() => void onRevoke(grant.grantId)}>
-                        Revoke
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {visibleGrants.length === 0 ? (
-                <tr>
-                  <td colSpan={6}>No grants match your filter.</td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </Panel>
+        <ToolActiveGrantsPanel
+          grantFilter={grantFilter}
+          setGrantFilter={setGrantFilter}
+          visibleGrants={visibleGrants}
+          onRevoke={onRevoke}
+        />
       </div>
 
-      <Panel
-        title="Tool Catalog"
-        subtitle="Inspect the full tool surface by pack, category, risk, and approval posture."
-        className={showTechnicalDetails ? "" : "expert-only"}
-      >
-        <DataToolbar
-          primary={
-            <div className="controls-row">
-              <label>Filter</label>
-              <input
-                value={catalogFilter}
-                onChange={(event) => setCatalogFilter(event.target.value)}
-                placeholder="Search by tool name, category, or description..."
-              />
-            </div>
-          }
-          secondary={<StatusChip>{catalog.length} total</StatusChip>}
-        />
-        {(["core", "devops", "knowledge", "comms"] as const).map((pack) => (
-          <div key={pack}>
-            <h4>{pack.toUpperCase()}</h4>
-            <table>
-              <thead>
-                <tr>
-                  <th>Tool</th>
-                  <th>Category</th>
-                  <th>Risk</th>
-                  <th>Approval</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {catalogByPack[pack].map((entry) => (
-                  <tr key={entry.toolName}>
-                    <td>{entry.toolName}</td>
-                    <td>{entry.category}</td>
-                    <td>{entry.riskLevel}</td>
-                    <td>{entry.requiresApproval ? "yes" : "no"}</td>
-                    <td>{entry.description}</td>
-                  </tr>
-                ))}
-                {catalogByPack[pack].length === 0 ? (
-                  <tr>
-                    <td colSpan={5}>No tools in this pack.</td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        ))}
-      </Panel>
+      <ToolCatalogPanel
+        showTechnicalDetails={showTechnicalDetails}
+        catalogFilter={catalogFilter}
+        setCatalogFilter={setCatalogFilter}
+        catalogCount={catalog.length}
+        catalogByPack={catalogByPack}
+      />
     </section>
   );
 }

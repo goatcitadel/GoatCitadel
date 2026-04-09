@@ -1,11 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-vars, max-lines, react-hooks/exhaustive-deps */
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  buildVoiceOperatorGuidance,
-  buildVoiceRecoveryActions,
-  providerTemplates,
-  type DeviceAccessGrantRecord,
-} from "@goatcitadel/contracts";
+import { providerTemplates, type DeviceAccessGrantRecord } from "@goatcitadel/contracts";
 import {
   clearGatewayAuthState,
   createLlmChatCompletion,
@@ -16,27 +11,14 @@ import {
   persistGatewayAuthState,
   readStoredGatewayAuthState,
   revokeDeviceAccessGrant,
-  fetchVoiceTalkSessions,
-  fetchVoiceStatus,
-  fetchVoiceRuntimeStatus,
   fetchProviderSecretStatus,
   fetchSettings,
-  installVoiceRuntime,
   patchSettings,
-  removeVoiceRuntimeModel,
   saveProviderSecret,
-  selectVoiceRuntimeModel,
   setGatewayAuthStorageMode,
-  startVoiceTalkSession,
-  startVoiceWake,
-  stopVoiceTalkSession,
-  stopVoiceWake,
-  transcribeVoice,
   type GatewayAuthStorageMode,
   type ProviderSecretStatus,
-  type RuntimeSettingsResponse,
 } from "../api/client";
-import type { VoiceRuntimeStatus, VoiceStatus, VoiceTalkSessionRecord } from "@goatcitadel/contracts";
 import { SettingsAccessSection } from "./settings/SettingsAccessSection";
 import { SettingsOverviewSection } from "./settings/SettingsOverviewSection";
 import { SettingsRuntimeSection } from "./settings/SettingsRuntimeSection";
@@ -44,15 +26,7 @@ import { SettingsModelsSection } from "./settings/SettingsModelsSection";
 import { SettingsTestsSection } from "./settings/SettingsTestsSection";
 import { SettingsVoiceSection } from "./settings/SettingsVoiceSection";
 import { SettingsSectionNav } from "./settings/SettingsSectionNav";
-import {
-  describeVoiceState,
-  describeVoiceRuntimeReadiness,
-  formatVoiceLanguageScope,
-  formatTalkModeLabel,
-  formatVoiceDate,
-  formatDeploymentProfileLabel,
-  fileToBase64,
-} from "./settings-page-utils";
+import { formatDeploymentProfileLabel } from "./settings-page-utils";
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { FieldHelp } from "../components/FieldHelp";
 import { HelpHint } from "../components/HelpHint";
@@ -97,6 +71,7 @@ import {
   resolveSettingsTabSections,
   scrollToSettingsSection,
 } from "./settings/settings-page-helpers";
+import { useSettingsVoiceRuntime } from "./settings/useSettingsVoiceRuntime";
 
 export { resolveSettingsTabSection, resolveSettingsTabSections } from "./settings/settings-page-helpers";
 import "../styles/settings.css";
@@ -154,14 +129,6 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [allowlistPreset, setAllowlistPreset] = useState("strict");
   const [chatResponse, setChatResponse] = useState("");
-  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
-  const [voiceRuntime, setVoiceRuntime] = useState<VoiceRuntimeStatus | null>(null);
-  const [voiceTalkSessions, setVoiceTalkSessions] = useState<VoiceTalkSessionRecord[]>([]);
-  const [voiceBusy, setVoiceBusy] = useState(false);
-  const [voiceTalkMode, setVoiceTalkMode] = useState<"push_to_talk" | "wake">("push_to_talk");
-  const [voiceFile, setVoiceFile] = useState<File | null>(null);
-  const [voiceTranscriptResult, setVoiceTranscriptResult] = useState("");
-  const [voiceActionInfo, setVoiceActionInfo] = useState("");
   const [criticalConfirmed, setCriticalConfirmed] = useState(false);
   const [changeReview, setChangeReview] = useState<{
     overall: "safe" | "warning" | "critical";
@@ -240,6 +207,30 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
   }, [activeTab]);
   const showSectionRail = !activeTab;
   const shouldRenderSection = (sectionId: SettingsSectionId) => !visibleSectionIds || visibleSectionIds.has(sectionId);
+  const {
+    voiceStatus,
+    voiceRuntime,
+    voiceTalkSessions,
+    voiceBusy,
+    voiceTalkMode,
+    setVoiceTalkMode,
+    voiceFile,
+    setVoiceFile,
+    voiceTranscriptResult,
+    voiceActionInfo,
+    voiceRecoveryActions,
+    voiceOperatorGuidance,
+    installedVoiceModelIds,
+    refreshVoiceRuntime,
+    onInstallManagedVoiceRuntime,
+    onSelectManagedVoiceModel,
+    onRemoveManagedVoiceModel,
+    onStartVoiceTalk,
+    onStopVoiceTalk,
+    onStartWake,
+    onStopWake,
+    onRunVoiceTranscribeTest,
+  } = useSettingsVoiceRuntime({ setError });
 
   useEffect(() => {
     if (!focusSectionId || activeTab || typeof window === "undefined") {
@@ -394,23 +385,6 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       pollIntervalMs: 20000,
     },
   );
-
-  useEffect(() => {
-    void Promise.all([fetchVoiceStatus(), fetchVoiceRuntimeStatus(), fetchVoiceTalkSessions(8)])
-      .then(([status, runtime, talkSessions]) => {
-        setVoiceStatus(status);
-        setVoiceRuntime(runtime);
-        setVoiceTalkSessions(talkSessions);
-        if (status.talk.mode) {
-          setVoiceTalkMode(status.talk.mode);
-        }
-      })
-      .catch(() => {
-        setVoiceStatus(null);
-        setVoiceRuntime(null);
-        setVoiceTalkSessions([]);
-      });
-  }, []);
 
   const onRevokeDeviceGrant = async (grantId: string) => {
     setDeviceGrantBusyId(grantId);
@@ -778,180 +752,6 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     }
   };
 
-  const refreshVoiceRuntime = async () => {
-    const [status, runtime, talkSessions] = await Promise.all([
-      fetchVoiceStatus(),
-      fetchVoiceRuntimeStatus(),
-      fetchVoiceTalkSessions(8),
-    ]);
-    setVoiceStatus(status);
-    setVoiceRuntime(runtime);
-    setVoiceTalkSessions(talkSessions);
-    if (status.talk.mode) {
-      setVoiceTalkMode(status.talk.mode);
-    }
-  };
-
-  const refreshVoiceRuntimeAfterFailure = async () => {
-    try {
-      await refreshVoiceRuntime();
-    } catch {
-      // Preserve the original operator-facing failure when the refresh probe also fails.
-    }
-  };
-
-  const onInstallManagedVoiceRuntime = async (modelId?: string, activate = true) => {
-    setVoiceBusy(true);
-    setError(null);
-    try {
-      const runtime = await installVoiceRuntime({
-        modelId,
-        activate,
-      });
-      setVoiceRuntime(runtime);
-      await refreshVoiceRuntime();
-      setVoiceActionInfo(
-        runtime.readiness === "ready"
-          ? `Managed voice runtime is ready${runtime.selectedModelId ? ` with ${runtime.selectedModelId}` : ""}.`
-          : "Managed voice runtime was updated, but it still needs attention.",
-      );
-    } catch (err) {
-      setVoiceActionInfo("");
-      setError((err as Error).message);
-    } finally {
-      setVoiceBusy(false);
-    }
-  };
-
-  const onSelectManagedVoiceModel = async (modelId: string) => {
-    setVoiceBusy(true);
-    setError(null);
-    try {
-      const runtime = await selectVoiceRuntimeModel(modelId);
-      setVoiceRuntime(runtime);
-      await refreshVoiceRuntime();
-      setVoiceActionInfo(`Activated local voice model ${modelId}.`);
-    } catch (err) {
-      setVoiceActionInfo("");
-      setError((err as Error).message);
-    } finally {
-      setVoiceBusy(false);
-    }
-  };
-
-  const onRemoveManagedVoiceModel = async (modelId: string) => {
-    setVoiceBusy(true);
-    setError(null);
-    try {
-      const runtime = await removeVoiceRuntimeModel(modelId);
-      setVoiceRuntime(runtime);
-      await refreshVoiceRuntime();
-      setVoiceActionInfo(`Removed local voice model ${modelId}.`);
-    } catch (err) {
-      setVoiceActionInfo("");
-      setError((err as Error).message);
-    } finally {
-      setVoiceBusy(false);
-    }
-  };
-
-  const onStartVoiceTalk = async () => {
-    setVoiceBusy(true);
-    setError(null);
-    try {
-      await startVoiceTalkSession({ mode: voiceTalkMode });
-      await refreshVoiceRuntime();
-      setVoiceActionInfo(`Talk Mode started (${formatTalkModeLabel(voiceTalkMode)}).`);
-      setError(null);
-    } catch (err) {
-      await refreshVoiceRuntimeAfterFailure();
-      setVoiceActionInfo("");
-      setError((err as Error).message);
-    } finally {
-      setVoiceBusy(false);
-    }
-  };
-
-  const onStopVoiceTalk = async () => {
-    if (!voiceStatus?.talk.activeSessionId) {
-      return;
-    }
-    setVoiceBusy(true);
-    setError(null);
-    try {
-      await stopVoiceTalkSession(voiceStatus.talk.activeSessionId);
-      await refreshVoiceRuntime();
-      setVoiceActionInfo("Talk Mode stopped.");
-      setError(null);
-    } catch (err) {
-      setVoiceActionInfo("");
-      setError((err as Error).message);
-    } finally {
-      setVoiceBusy(false);
-    }
-  };
-
-  const onStartWake = async () => {
-    setVoiceBusy(true);
-    setError(null);
-    try {
-      await startVoiceWake();
-      await refreshVoiceRuntime();
-      setVoiceActionInfo("Wake listener enabled.");
-      setError(null);
-    } catch (err) {
-      await refreshVoiceRuntimeAfterFailure();
-      setVoiceActionInfo("");
-      setError((err as Error).message);
-    } finally {
-      setVoiceBusy(false);
-    }
-  };
-
-  const onStopWake = async () => {
-    setVoiceBusy(true);
-    setError(null);
-    try {
-      await stopVoiceWake();
-      await refreshVoiceRuntime();
-      setVoiceActionInfo("Wake listener disabled.");
-      setError(null);
-    } catch (err) {
-      setVoiceActionInfo("");
-      setError((err as Error).message);
-    } finally {
-      setVoiceBusy(false);
-    }
-  };
-
-  const onRunVoiceTranscribeTest = async () => {
-    if (!voiceFile) {
-      setError("Choose an audio file first.");
-      return;
-    }
-    setVoiceBusy(true);
-    setError(null);
-    try {
-      const bytesBase64 = await fileToBase64(voiceFile);
-      const result = await transcribeVoice({
-        bytesBase64,
-        mimeType: voiceFile.type || "audio/wav",
-      });
-      setVoiceTranscriptResult(result.text);
-      await refreshVoiceRuntime();
-      setVoiceActionInfo(
-        `Transcription completed with ${result.provider}${typeof result.durationMs === "number" ? ` in ${result.durationMs}ms` : ""}.`,
-      );
-      setError(null);
-    } catch (err) {
-      await refreshVoiceRuntimeAfterFailure();
-      setVoiceActionInfo("");
-      setError((err as Error).message);
-    } finally {
-      setVoiceBusy(false);
-    }
-  };
-
   const hydrateStoredAuthCredentials = () => {
     const stored = readStoredGatewayAuthState();
     if (!stored) {
@@ -1055,16 +855,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     setShowAdvanced(true);
   };
 
-  const voiceRecoveryActions = useMemo(
-    () => buildVoiceRecoveryActions(voiceStatus, voiceRuntime),
-    [voiceStatus, voiceRuntime],
-  );
-  const voiceOperatorGuidance = useMemo(
-    () => buildVoiceOperatorGuidance(voiceStatus, voiceRuntime),
-    [voiceStatus, voiceRuntime],
-  );
   const blockSaves = changeReview.overall === "critical" && !criticalConfirmed;
-  const installedVoiceModelIds = new Set(voiceRuntime?.installedModels.map((item) => item.modelId) ?? []);
 
   if (!settings) {
     return <p>Loading Forge settings...</p>;
@@ -1314,8 +1105,6 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     </section>
   );
 }
-
-export { buildVoiceRecoveryActions };
 export {
   buildProviderScopedModelOptions,
   getModelPreviewFallbackModel,
