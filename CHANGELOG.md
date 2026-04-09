@@ -45,6 +45,14 @@ The format is inspired by Keep a Changelog and uses semantic pre-release tags.
 
 ### Changed
 
+- Mission Control shell and surface runtime were tightened:
+  - browser and shell transport behavior now share one authoritative transport core instead of drifting across duplicate request paths
+  - `ChatPage` and several large operator surfaces were decomposed into smaller page, hook, and panel units without changing the live surface model
+  - chat dock and approval/session orchestration now use narrower typed contracts instead of broad mixed state props
+- Gateway runtime extraction work moved from file-shape cleanup toward clearer ownership:
+  - webhook ingress now uses a shared handler factory instead of provider-specific route duplication
+  - channel setup, integration diagnostics, and Discord runtime bridging now run behind narrower extracted service seams
+  - route and service behavior are protected by contract-oriented tests rather than forwarding-only delegation seams
 - Built-in planned channel bridges no longer auto-promote to `beta` just because a partial runtime seam exists; they stay `planned` while still surfacing whether the current runtime can exercise them manually.
 - Mission Control client coverage now includes memory-maintenance read/mutate flows and OpenClaw parity fetches.
 - Gateway chat memory-context resolution now uses workspace-relative memory roots more consistently when session/workspace metadata is present.
@@ -53,6 +61,9 @@ The format is inspired by Keep a Changelog and uses semantic pre-release tags.
 
 ### Fixed
 
+- Mission Control lazy-loaded pages now preserve their real prop contracts instead of falling back to an untyped lazy wrapper.
+- Dev diagnostics route/session/source sanitization is stricter, so invalid client-side values do not get recorded as if they were trustworthy runtime state.
+- Targeted lint and type debt in Mission Control operator pages no longer rely on ignored hook dependency gaps or `any`-based chat dock contracts.
 - Extension starter-pack export no longer resolves source files from outside the repo root; the export route now succeeds instead of failing with `400`.
 - Signed webhook routes for WhatsApp and LINE no longer get blocked by the generic auth/idempotency middleware before their own verification logic can run.
 - Extension SDK dry-run publication no longer packages compiled test output; the tarball now contains only the intended runtime build artifacts and package metadata.
@@ -60,6 +71,11 @@ The format is inspired by Keep a Changelog and uses semantic pre-release tags.
 
 ### Verification
 
+- `pnpm --filter @goatcitadel/gateway exec tsc -p tsconfig.json --noEmit`
+- `pnpm --filter @goatcitadel/gateway exec vitest run src/routes/chat.routes.test.ts src/routes/chat.messages.test.ts src/routes/integrations.test.ts src/routes/approvals.test.ts src/services/channel-setup-service.contract.test.ts src/services/integration-diagnostics-service.contract.test.ts src/services/discord-runtime-bridge-service.contract.test.ts src/routes/webhook-handler-factory.test.ts`
+- `pnpm --filter @goatcitadel/mission-control typecheck`
+- `pnpm --filter @goatcitadel/mission-control exec vitest run src/pages/ChatPage.test.ts src/pages/chat/chat-page-helpers.test.ts src/pages/chat/useChatSurfaceOrchestration.test.tsx src/pages/chat/useChatOutboundExecution.test.tsx src/pages/chat/useChatSessionControls.test.tsx src/pages/chat/useChatComposerInteractions.test.tsx src/pages/chat/ChatContextDockPanels.test.tsx src/interaction-coverage.test.tsx src/module-load-smoke.test.ts`
+- `pnpm exec eslint apps/gateway/src/routes apps/gateway/src/services apps/mission-control/src/api apps/mission-control/src/pages apps/mission-control/src/state`
 - `pnpm vitest run apps/gateway/src/routes/integrations.test.ts apps/gateway/src/services/whatsapp-webhook.test.ts apps/gateway/src/services/line-webhook.test.ts apps/gateway/src/services/channel-setup-definitions.test.ts apps/gateway/src/services/integration-catalog.test.ts packages/gateway-core/src/channel-core.test.ts`
 - `pnpm vitest run apps/gateway/src/routes/memory.test.ts apps/gateway/src/services/memory-maintenance-service.test.ts apps/gateway/src/services/gateway-service.dream-command.test.ts apps/mission-control/src/pages/MemoryPage.test.tsx`
 - `pnpm vitest run apps/gateway/src/routes/dashboard.follow-on-parity.test.ts apps/gateway/src/services/follow-on-parity-report.test.ts apps/gateway/src/services/openclaw-parity-report.test.ts packages/contracts/src/openclaw-parity.alignment.test.ts apps/mission-control/src/pages/SystemPage.test.tsx apps/mission-control/src/pages/IntegrationsPage.load.test.tsx apps/mission-control/src/api/client.test.ts`

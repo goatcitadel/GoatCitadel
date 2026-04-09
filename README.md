@@ -106,6 +106,15 @@ The workspace SDK package now has a one-command publication workflow once GitHub
 - automatic prerelease tag derivation such as `beta`
 - tarball cleanup so runtime output ships without compiled test noise
 
+### Mission Control and gateway stabilization landed on main
+
+The current `main` line also includes a large post-refactor stabilization pass:
+
+- Mission Control browser and shell transport paths now converge on a shared transport core instead of carrying separate request, retry, and diagnostics behavior
+- chat execution, approvals, dock state, and session controls were split into narrower typed hooks and panels so the operator shell stays reviewable without changing its surface model
+- gateway webhook ingress now runs through a shared handler factory, and the recently extracted runtime services use narrower contracts instead of reaching through the full gateway service object
+- targeted route, contract, chat, lint, and type validation was added so the risky seams from the decomposition work are protected by behavior-level checks
+
 ## Truth in advertising
 
 > [!NOTE]
@@ -118,6 +127,7 @@ Safe claims today:
 - memory-maintenance plumbing now exists end to end in-repo
 - WhatsApp and LINE now have signed inbound runtime paths in the gateway
 - the extensions SDK can be dry-run published cleanly
+- the current `main` line has completed a transport and runtime stabilization pass for Mission Control and gateway ingress without widening public route contracts
 
 Not safe to over-claim yet:
 
