@@ -1,9 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type {
-  DevDiagnosticsCategory,
-  DevDiagnosticsEvent,
-  DevDiagnosticsLevel,
-} from "@goatcitadel/contracts";
+import type { DevDiagnosticsCategory, DevDiagnosticsEvent, DevDiagnosticsLevel } from "@goatcitadel/contracts";
 import type { EventStreamConnectionState } from "../api/client";
 
 interface DevDiagnosticsState {
@@ -77,18 +73,13 @@ const eventTimestamps = new Map<string, number>();
 
 const diagnosticsEnabled = resolveDevDiagnosticsEnabled();
 const verboseDiagnostics = resolveDevDiagnosticsVerbose();
-const maxItems = resolveBufferSize(
-  readEnv("VITE_GOATCITADEL_DEV_DIAGNOSTICS_CLIENT_BUFFER"),
-  DEFAULT_BUFFER_SIZE,
-);
+const maxItems = resolveBufferSize(readEnv("VITE_GOATCITADEL_DEV_DIAGNOSTICS_CLIENT_BUFFER"), DEFAULT_BUFFER_SIZE);
 
 let state: DevDiagnosticsState = {
   enabled: diagnosticsEnabled,
   verbose: verboseDiagnostics,
   items: [],
-  currentRoute: typeof window === "undefined"
-    ? ""
-    : sanitizeDiagnosticRoute(window.location.pathname + window.location.search + window.location.hash),
+  currentRoute: typeof window === "undefined" ? "" : readWindowDiagnosticRoute(),
 };
 
 if (typeof window !== "undefined" && diagnosticsEnabled) {
@@ -130,23 +121,25 @@ export function setDevDiagnosticsCurrentRoute(route: string): void {
 }
 
 export function setDevDiagnosticsActiveChatSession(sessionId: string | undefined): void {
-  if (!state.enabled || state.activeChatSessionId === sessionId) {
+  const sanitized = sanitizeOptionalDiagnosticText(sessionId);
+  if (!state.enabled || state.activeChatSessionId === sanitized) {
     return;
   }
   state = {
     ...state,
-    activeChatSessionId: sessionId,
+    activeChatSessionId: sanitized,
   };
   notify();
 }
 
 export function setDevDiagnosticsCurrentEffectsMode(effectsMode: string): void {
-  if (!state.enabled || state.currentEffectsMode === effectsMode) {
+  const sanitized = sanitizeOptionalDiagnosticText(effectsMode);
+  if (!state.enabled || state.currentEffectsMode === sanitized) {
     return;
   }
   state = {
     ...state,
-    currentEffectsMode: effectsMode,
+    currentEffectsMode: sanitized,
   };
   notify();
 }
@@ -174,12 +167,13 @@ export function setDevDiagnosticsGatewayReachable(reachable: boolean): void {
 }
 
 export function setDevDiagnosticsLastRequestError(errorMessage: string | undefined): void {
-  if (!state.enabled || state.lastRequestError === errorMessage) {
+  const sanitized = sanitizeOptionalDiagnosticText(errorMessage);
+  if (!state.enabled || state.lastRequestError === sanitized) {
     return;
   }
   state = {
     ...state,
-    lastRequestError: errorMessage,
+    lastRequestError: sanitized,
   };
   notify();
 }
@@ -241,13 +235,13 @@ export function recordClientDiagnostic(input: {
     event: input.event,
     message: input.message,
     context: sanitizeContext(input.context),
-    correlationId: input.correlationId ?? state.activeCorrelationId,
-    sessionId: input.sessionId ?? state.activeChatSessionId,
-    chatId: input.chatId,
-    turnId: input.turnId,
+    correlationId: sanitizeOptionalDiagnosticText(input.correlationId) ?? state.activeCorrelationId,
+    sessionId: sanitizeOptionalDiagnosticText(input.sessionId) ?? state.activeChatSessionId,
+    chatId: sanitizeOptionalDiagnosticText(input.chatId),
+    turnId: sanitizeOptionalDiagnosticText(input.turnId),
     route: sanitizeDiagnosticRoute(input.route ?? state.currentRoute),
-    providerId: input.providerId,
-    modelId: input.modelId,
+    providerId: sanitizeOptionalDiagnosticText(input.providerId),
+    modelId: sanitizeOptionalDiagnosticText(input.modelId),
     source: "client",
   };
   state = {
@@ -256,19 +250,20 @@ export function recordClientDiagnostic(input: {
     activeCorrelationId: event.correlationId ?? state.activeCorrelationId,
   };
   if (state.verbose || event.level !== "debug") {
-    console.debug("[goatcitadel:dev-diagnostics]", event);
+    debugLogDiagnosticEvent(event);
   }
   notify();
   return event;
 }
 
 function sanitizeDiagnosticRoute(route: string): string {
-  if (!route) {
-    return route;
+  const normalized = normalizeDiagnosticRouteInput(route);
+  if (!normalized) {
+    return "";
   }
 
   try {
-    const url = new URL(route, "http://goatcitadel.local");
+    const url = new URL(normalized, "http://goatcitadel.local");
     url.searchParams.delete("access_token");
 
     const rawHash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
@@ -279,19 +274,20 @@ function sanitizeDiagnosticRoute(route: string): string {
       url.hash = nextHash ? `#${nextHash}` : "";
     }
 
-    return `${url.pathname}${url.search}${url.hash}`;
+    return normalizeDiagnosticRouteInput(`${url.pathname}${url.search}${url.hash}`) ?? "";
   } catch {
-    return route.replace(/([?#&])access_token=[^&#]*/giu, "$1").replace(/[?#&]$/u, "");
+    return (normalized.replace(/([?#&])access_token=[^&#]*/giu, "$1").replace(/[?#&]$/u, "") || "").trim();
   }
 }
 
 export function setDevDiagnosticsActiveCorrelationId(correlationId: string | undefined): void {
-  if (!state.enabled || !correlationId || state.activeCorrelationId === correlationId) {
+  const sanitized = sanitizeOptionalDiagnosticText(correlationId);
+  if (!state.enabled || !sanitized || state.activeCorrelationId === sanitized) {
     return;
   }
   state = {
     ...state,
-    activeCorrelationId: correlationId,
+    activeCorrelationId: sanitized,
   };
   notify();
 }
@@ -358,6 +354,41 @@ function getSnapshot(): DevDiagnosticsState {
   return state;
 }
 
+function readWindowDiagnosticRoute(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return sanitizeDiagnosticRoute(
+    `${readWindowLocationPart(window.location?.pathname)}${readWindowLocationPart(window.location?.search)}${readWindowLocationPart(window.location?.hash)}`,
+  );
+}
+
+function readWindowLocationPart(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function normalizeDiagnosticRouteInput(route: unknown): string | undefined {
+  if (typeof route !== "string") {
+    return undefined;
+  }
+  const trimmed = route.trim();
+  if (!trimmed || trimmed === "undefined" || trimmed === "null" || trimmed === "NaN") {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function sanitizeOptionalDiagnosticText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "undefined" || trimmed === "null" || trimmed === "NaN") {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function notify(): void {
   for (const listener of listeners) {
     listener();
@@ -395,16 +426,23 @@ function readEnv(key: string): string | undefined {
   return (import.meta.env[key] as string | undefined)?.trim() || undefined;
 }
 
+function debugLogDiagnosticEvent(event: DevDiagnosticsEvent): void {
+  // eslint-disable-next-line no-console
+  console.debug("[goatcitadel:dev-diagnostics]", event);
+}
+
 function sanitizeContext(context: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   if (!context) {
     return undefined;
   }
-  return JSON.parse(JSON.stringify(context, (_key, value: unknown) => {
-    if (typeof value === "string" && /^bearer\s+/i.test(value)) {
-      return "[redacted]";
-    }
-    return value;
-  })) as Record<string, unknown>;
+  return JSON.parse(
+    JSON.stringify(context, (_key, value: unknown) => {
+      if (typeof value === "string" && /^bearer\s+/i.test(value)) {
+        return "[redacted]";
+      }
+      return value;
+    }),
+  ) as Record<string, unknown>;
 }
 
 export function createCorrelationId(): string {

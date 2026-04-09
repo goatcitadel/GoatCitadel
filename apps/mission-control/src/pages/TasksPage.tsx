@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addTaskActivity,
   addTaskDeliverable,
@@ -37,15 +37,7 @@ import { BUILTIN_AGENT_ROSTER } from "../data/agent-roster";
 import { useAction } from "../hooks/useAction";
 import { pageCopy } from "../content/copy";
 
-const statuses: TaskRecord["status"][] = [
-  "inbox",
-  "assigned",
-  "in_progress",
-  "testing",
-  "review",
-  "done",
-  "blocked",
-];
+const statuses: TaskRecord["status"][] = ["inbox", "assigned", "in_progress", "testing", "review", "done", "blocked"];
 
 const TASK_TITLE_OPTIONS = [
   "Implement feature request",
@@ -104,12 +96,14 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
     blockedReason?: string;
     updatedAt: string;
   } | null>(null);
-  const [durableTimeline, setDurableTimeline] = useState<Array<{
-    eventId: string;
-    eventType: string;
-    stepKey?: string;
-    createdAt: string;
-  }>>([]);
+  const [durableTimeline, setDurableTimeline] = useState<
+    Array<{
+      eventId: string;
+      eventType: string;
+      stepKey?: string;
+      createdAt: string;
+    }>
+  >([]);
   const [durableBusy, setDurableBusy] = useState<null | "load" | "resume" | "wake">(null);
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
@@ -123,10 +117,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
   const detailRequestSeq = useRef(0);
   const deleteAction = useAction();
 
-  const selectedTask = useMemo(
-    () => tasks.find((task) => task.taskId === selectedTaskId),
-    [selectedTaskId, tasks],
-  );
+  const selectedTask = useMemo(() => tasks.find((task) => task.taskId === selectedTaskId), [selectedTaskId, tasks]);
 
   const isSelectedTaskDeleted = Boolean(selectedTask?.deletedAt);
   const canCreateTask = createTitle.trim().length > 0;
@@ -135,21 +126,27 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
   const canAddSubagent = Boolean(selectedTask) && !isSelectedTaskDeleted && subagentSessionId.trim().length > 0;
   const activityBlockedReason = !selectedTask
     ? "Pick a task first."
-    : (isSelectedTaskDeleted
+    : isSelectedTaskDeleted
       ? "Restore this task before adding activity."
-      : (!activityMessage.trim() ? "Enter or select an activity message first." : ""));
+      : !activityMessage.trim()
+        ? "Enter or select an activity message first."
+        : "";
   const deliverableBlockedReason = !selectedTask
     ? "Pick a task first."
-    : (isSelectedTaskDeleted
+    : isSelectedTaskDeleted
       ? "Restore this task before adding deliverables."
-      : (!deliverableTitle.trim() ? "Enter or select a deliverable title first." : ""));
+      : !deliverableTitle.trim()
+        ? "Enter or select a deliverable title first."
+        : "";
   const subagentBlockedReason = !selectedTask
     ? "Pick a task first."
-    : (isSelectedTaskDeleted
+    : isSelectedTaskDeleted
       ? "Restore this task before linking subagent sessions."
-      : (!subagentSessionId.trim() ? "Choose or enter a subagent session ID first." : ""));
+      : !subagentSessionId.trim()
+        ? "Choose or enter a subagent session ID first."
+        : "";
 
-  const loadTasks = () => {
+  const loadTasks = useCallback(() => {
     setLoadingTasks(true);
     void fetchTasksByView(viewFilter, undefined, workspaceId)
       .then((res) => {
@@ -163,16 +160,12 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoadingTasks(false));
-  };
+  }, [viewFilter, workspaceId]);
 
   const loadTaskDetail = (taskId: string) => {
     const requestId = ++detailRequestSeq.current;
     setLoadingDetails(true);
-    void Promise.all([
-      fetchTaskActivities(taskId),
-      fetchTaskDeliverables(taskId),
-      fetchTaskSubagents(taskId),
-    ])
+    void Promise.all([fetchTaskActivities(taskId), fetchTaskDeliverables(taskId), fetchTaskSubagents(taskId)])
       .then(([a, d, s]) => {
         if (requestId !== detailRequestSeq.current) {
           return;
@@ -191,7 +184,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
 
   useEffect(() => {
     loadTasks();
-  }, [viewFilter, workspaceId]);
+  }, [loadTasks]);
 
   useEffect(() => {
     void fetchSessions()
@@ -202,11 +195,13 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
   useEffect(() => {
     void fetchAgents("active", 500)
       .then((res) => {
-        setAgentProfiles(res.items.map((agent) => ({
-          roleId: agent.roleId,
-          name: agent.name,
-          title: agent.title,
-        })));
+        setAgentProfiles(
+          res.items.map((agent) => ({
+            roleId: agent.roleId,
+            name: agent.name,
+            title: agent.title,
+          })),
+        );
       })
       .catch(() => {
         // keep builtin fallback
@@ -437,11 +432,13 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
 
   const onMoveToTrash = async (task: TaskRecord) => {
     try {
-      await deleteAction.run(async () => deleteTask(task.taskId, {
-        mode: "soft",
-        deletedBy: "mission-control",
-        deleteReason: "Operator requested cleanup",
-      }));
+      await deleteAction.run(async () =>
+        deleteTask(task.taskId, {
+          mode: "soft",
+          deletedBy: "mission-control",
+          deleteReason: "Operator requested cleanup",
+        }),
+      );
       setInfo("Task moved to Trash.");
       loadTasks();
     } catch (err) {
@@ -461,10 +458,12 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
 
   const onPermanentDelete = async (task: TaskRecord) => {
     try {
-      await deleteAction.run(async () => deleteTask(task.taskId, {
-        mode: "hard",
-        confirmToken: "PERMANENT_DELETE",
-      }));
+      await deleteAction.run(async () =>
+        deleteTask(task.taskId, {
+          mode: "hard",
+          confirmToken: "PERMANENT_DELETE",
+        }),
+      );
       setInfo("Task permanently deleted.");
       loadTasks();
     } catch (err) {
@@ -473,27 +472,23 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
   };
 
   const subagentSessionOptions = useMemo(() => {
-    const values = new Set<string>([
-      ...sessionHints,
-      ...subagents.map((session) => session.agentSessionId),
-    ]);
+    const values = new Set<string>([...sessionHints, ...subagents.map((session) => session.agentSessionId)]);
     return [...values].filter(Boolean).map((value) => ({ value, label: value }));
   }, [sessionHints, subagents]);
 
-  const subagentRoleOptions = useMemo(
-    () => {
-      if (agentProfiles.length > 0) {
-        return agentProfiles.map((agent) => ({ value: agent.roleId, label: `${agent.name} (${agent.title})` }));
-      }
-      return BUILTIN_AGENT_ROSTER.map((agent) => ({ value: agent.roleId, label: `${agent.name} (${agent.title})` }));
-    },
-    [agentProfiles],
-  );
+  const subagentRoleOptions = useMemo(() => {
+    if (agentProfiles.length > 0) {
+      return agentProfiles.map((agent) => ({ value: agent.roleId, label: `${agent.name} (${agent.title})` }));
+    }
+    return BUILTIN_AGENT_ROSTER.map((agent) => ({ value: agent.roleId, label: `${agent.name} (${agent.title})` }));
+  }, [agentProfiles]);
 
   const subagentNameOptions = useMemo(() => {
     const values = new Set<string>([
-      ...(agentProfiles.length > 0 ? agentProfiles.map((agent) => agent.name) : BUILTIN_AGENT_ROSTER.map((agent) => agent.name)),
-      ...subagents.map((session) => session.agentName).filter(Boolean) as string[],
+      ...(agentProfiles.length > 0
+        ? agentProfiles.map((agent) => agent.name)
+        : BUILTIN_AGENT_ROSTER.map((agent) => agent.name)),
+      ...(subagents.map((session) => session.agentName).filter(Boolean) as string[]),
     ]);
     return [...values].map((value) => ({ value, label: value }));
   }, [agentProfiles, subagents]);
@@ -505,13 +500,13 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
         title={pageCopy.tasks.title}
         subtitle={pageCopy.tasks.subtitle}
         hint="Manage queue state, recovery, deliverables, and delegated sessions from one task surface."
-        actions={(
+        actions={
           <div className="workflow-summary-strip">
             <StatusChip tone="live">{tasks.length} visible tasks</StatusChip>
             <StatusChip tone="warning">{tasks.filter((task) => task.status === "blocked").length} blocked</StatusChip>
             <StatusChip tone="muted">{tasks.filter((task) => task.deletedAt).length} trashed</StatusChip>
           </div>
-        )}
+        }
       />
       <PageGuideCard
         pageId="tasks"
@@ -526,7 +521,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
       </div>
 
       <DataToolbar
-        primary={(
+        primary={
           <>
             <GCSelect
               id="taskView"
@@ -547,16 +542,17 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
               autoSelectFirstOption
             />
           </>
-        )}
-        secondary={<button type="button" onClick={onCreateTask} disabled={!canCreateTask}>Create Task</button>}
+        }
+        secondary={
+          <button type="button" onClick={onCreateTask} disabled={!canCreateTask}>
+            Create Task
+          </button>
+        }
       />
 
       {loadingTasks ? <TableSkeleton rows={6} cols={5} /> : null}
       <div className="split-grid">
-        <Panel
-          title="Task Queue"
-          subtitle="Switch views, then inspect the selected task."
-        >
+        <Panel title="Task Queue" subtitle="Switch views, then inspect the selected task.">
           <table>
             <thead>
               <tr>
@@ -592,9 +588,13 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                   <td>{new Date(task.updatedAt).toLocaleString()}</td>
                   <td className="actions">
                     {!task.deletedAt ? (
-                      <button type="button" onClick={() => setConfirmDelete({ task, mode: "soft" })}>Move to Trash</button>
+                      <button type="button" onClick={() => setConfirmDelete({ task, mode: "soft" })}>
+                        Move to Trash
+                      </button>
                     ) : (
-                      <button type="button" onClick={() => void onRestore(task)}>Restore</button>
+                      <button type="button" onClick={() => void onRestore(task)}>
+                        Restore
+                      </button>
                     )}
                     <button
                       type="button"
@@ -618,18 +618,19 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
               <Panel
                 title={selectedTask.title}
                 subtitle="Task summary and queue controls."
-                actions={(
+                actions={
                   <div className="workflow-summary-strip">
                     <StatusChip tone={isSelectedTaskDeleted ? "muted" : "live"}>{selectedTask.status}</StatusChip>
                     <StatusChip tone="muted">Priority {selectedTask.priority}</StatusChip>
                     {selectedTask.deletedAt ? <StatusChip tone="warning">In trash</StatusChip> : null}
                   </div>
-                )}
+                }
                 className="task-detail-summary-panel"
               >
                 <p>{selectedTask.description || "No description yet."}</p>
                 <FieldHelp>
-                  Use the status controls here to move the task through the execution lane before updating detailed notes.
+                  Use the status controls here to move the task through the execution lane before updating detailed
+                  notes.
                 </FieldHelp>
                 {selectedTask.deletedAt ? (
                   <p className="office-subtitle">
@@ -641,7 +642,8 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                 <div className="controls-row task-status-row">
                   <span>Status:</span>
                   {statuses.map((status) => (
-                    <button type="button"
+                    <button
+                      type="button"
                       key={status}
                       className={selectedTask.status === status ? "active" : ""}
                       disabled={isSelectedTaskDeleted}
@@ -666,25 +668,31 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                       {" | "}
                       Approval: {selectedTask.proactiveContext.approvalId ?? "none"}
                       {" | "}
-                      Next wake: {selectedTask.proactiveContext.nextWakeAt ? new Date(selectedTask.proactiveContext.nextWakeAt).toLocaleString() : "none"}
+                      Next wake:{" "}
+                      {selectedTask.proactiveContext.nextWakeAt
+                        ? new Date(selectedTask.proactiveContext.nextWakeAt).toLocaleString()
+                        : "none"}
                     </p>
                     <p className="office-subtitle">
                       Stop reason: {selectedTask.proactiveContext.stopReason ?? "active"}
                     </p>
                     {selectedTask.proactiveContext.externalReferenceRoots?.length ? (
                       <p className="office-subtitle">
-                        Reference roots: {selectedTask.proactiveContext.externalReferenceRoots
-                          .map((root) => root.label)
-                          .join(", ")}
+                        Reference roots:{" "}
+                        {selectedTask.proactiveContext.externalReferenceRoots.map((root) => root.label).join(", ")}
                       </p>
                     ) : null}
                   </div>
                 ) : null}
               </Panel>
 
-              <Panel title="Run checkpoint resume" subtitle="Recover long-running workflows from the last known checkpoint.">
+              <Panel
+                title="Run checkpoint resume"
+                subtitle="Recover long-running workflows from the last known checkpoint."
+              >
                 <p className="office-subtitle">
-                  Use this when a long-running workflow is paused or waiting. Resume continues from the exact checkpoint.
+                  Use this when a long-running workflow is paused or waiting. Resume continues from the exact
+                  checkpoint.
                 </p>
                 <FieldHelp>Load the run first so you can see the blocked step before resuming or waking it.</FieldHelp>
                 <div className="controls-row">
@@ -697,14 +705,18 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                   />
                   <button
                     type="button"
-                    onClick={() => { void loadDurableState(durableRunId); }}
+                    onClick={() => {
+                      void loadDurableState(durableRunId);
+                    }}
                     disabled={durableBusy !== null}
                   >
                     {durableBusy === "load" ? "Loading..." : "Load run"}
                   </button>
                   <button
                     type="button"
-                    onClick={() => { void onResumeDurable(); }}
+                    onClick={() => {
+                      void onResumeDurable();
+                    }}
                     disabled={durableBusy !== null || !durableStatus}
                   >
                     {durableBusy === "resume" ? "Resuming..." : "Resume from checkpoint"}
@@ -721,7 +733,9 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     />
                     <button
                       type="button"
-                      onClick={() => { void onWakeDurable(); }}
+                      onClick={() => {
+                        void onWakeDurable();
+                      }}
                       disabled={durableBusy !== null}
                     >
                       {durableBusy === "wake" ? "Waking..." : "Wake waiting run"}
@@ -745,14 +759,17 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                   <details>
                     <summary>Checkpoint timeline ({durableTimeline.length})</summary>
                     <ul className="compact-list">
-                      {durableTimeline.slice(-12).reverse().map((event) => (
-                        <li key={event.eventId}>
-                          <strong>{event.eventType}</strong>
-                          {event.stepKey ? ` | ${event.stepKey}` : ""}
-                          {" | "}
-                          {new Date(event.createdAt).toLocaleString()}
-                        </li>
-                      ))}
+                      {durableTimeline
+                        .slice(-12)
+                        .reverse()
+                        .map((event) => (
+                          <li key={event.eventId}>
+                            <strong>{event.eventType}</strong>
+                            {event.stepKey ? ` | ${event.stepKey}` : ""}
+                            {" | "}
+                            {new Date(event.createdAt).toLocaleString()}
+                          </li>
+                        ))}
                     </ul>
                   </details>
                 ) : null}
@@ -770,7 +787,9 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     customLabel="Activity message"
                     autoSelectFirstOption
                   />
-                  <button type="button" disabled={!canAddActivity} onClick={() => void onAddActivity()}>Add Activity</button>
+                  <button type="button" disabled={!canAddActivity} onClick={() => void onAddActivity()}>
+                    Add Activity
+                  </button>
                 </div>
                 {!canAddActivity ? <p className="office-subtitle">{activityBlockedReason}</p> : null}
                 <ul className="compact-list">
@@ -802,7 +821,9 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     customPlaceholder="Optional custom path"
                     customLabel="Deliverable path"
                   />
-                  <button type="button" disabled={!canAddDeliverable} onClick={() => void onAddDeliverable()}>Add Deliverable</button>
+                  <button type="button" disabled={!canAddDeliverable} onClick={() => void onAddDeliverable()}>
+                    Add Deliverable
+                  </button>
                 </div>
                 {!canAddDeliverable ? <p className="office-subtitle">{deliverableBlockedReason}</p> : null}
                 <ul className="compact-list">
@@ -816,7 +837,10 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                 {deliverables.length === 0 ? <p className="office-subtitle">No deliverables yet.</p> : null}
               </Panel>
 
-              <Panel title="Goat subagent sessions" subtitle="Track delegated execution without leaving the selected task.">
+              <Panel
+                title="Goat subagent sessions"
+                subtitle="Track delegated execution without leaving the selected task."
+              >
                 <FieldHelp>Link delegated sessions here when the task is split across agents.</FieldHelp>
                 <div className="controls-row">
                   <SelectOrCustom
@@ -831,11 +855,10 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     value={subagentRoleId}
                     onChange={(nextRoleId) => {
                       setSubagentRoleId(nextRoleId);
-                      const role = (
+                      const role =
                         agentProfiles.length > 0
                           ? agentProfiles.find((item) => item.roleId === nextRoleId)
-                          : BUILTIN_AGENT_ROSTER.find((item) => item.roleId === nextRoleId)
-                      );
+                          : BUILTIN_AGENT_ROSTER.find((item) => item.roleId === nextRoleId);
                       if (role) {
                         setSubagentName(role.name);
                       }
@@ -851,12 +874,15 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     customPlaceholder="Optional agent name"
                     customLabel="Agent name"
                   />
-                  <button type="button" disabled={!canAddSubagent} onClick={() => void onAddSubagent()}>Add Subagent</button>
+                  <button type="button" disabled={!canAddSubagent} onClick={() => void onAddSubagent()}>
+                    Add Subagent
+                  </button>
                 </div>
                 {!canAddSubagent ? <p className="office-subtitle">{subagentBlockedReason}</p> : null}
                 {!showAdvanced && subagentSessionOptions.length === 0 ? (
                   <p className="office-subtitle">
-                    No existing session IDs found yet. Create a chat session first, or open advanced mode to enter an external session ID.
+                    No existing session IDs found yet. Create a chat session first, or open advanced mode to enter an
+                    external session ID.
                   </p>
                 ) : null}
                 <button type="button" onClick={() => setShowAdvanced((current) => !current)}>
@@ -872,7 +898,13 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     <li key={session.subagentSessionId}>
                       <strong>{session.agentName ?? session.agentSessionId}</strong> - {session.status}
                       {session.status === "active" ? (
-                        <button type="button" disabled={isSelectedTaskDeleted} onClick={() => void onCompleteSubagent(session.agentSessionId)}>Mark Completed</button>
+                        <button
+                          type="button"
+                          disabled={isSelectedTaskDeleted}
+                          onClick={() => void onCompleteSubagent(session.agentSessionId)}
+                        >
+                          Mark Completed
+                        </button>
                       ) : null}
                     </li>
                   ))}
@@ -891,7 +923,9 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
             ? `Move "${confirmDelete?.task.title ?? "this task"}" to Trash?`
             : `Permanently delete "${confirmDelete?.task.title}"? This cannot be undone.`
         }
-        confirmLabel={deleteAction.pending ? "Applying..." : (confirmDelete?.mode === "soft" ? "Move to Trash" : "Delete Permanently")}
+        confirmLabel={
+          deleteAction.pending ? "Applying..." : confirmDelete?.mode === "soft" ? "Move to Trash" : "Delete Permanently"
+        }
         danger={confirmDelete?.mode === "hard"}
         onCancel={() => setConfirmDelete(null)}
         onConfirm={() => {
@@ -907,4 +941,3 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
     </section>
   );
 }
-

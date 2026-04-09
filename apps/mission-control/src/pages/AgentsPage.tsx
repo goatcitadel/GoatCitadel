@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   archiveAgentProfile,
   createAgentProfile,
@@ -61,9 +61,7 @@ export function AgentsPage() {
   const [form, setForm] = useState<AgentFormState>(emptyForm());
   const [saving, setSaving] = useState(false);
   const [confirmAction, setConfirmAction] = useState<
-    | { type: "archive"; name: string }
-    | { type: "hardDelete"; name: string }
-    | null
+    { type: "archive"; name: string } | { type: "hardDelete"; name: string } | null
   >(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -149,7 +147,7 @@ export function AgentsPage() {
     return null;
   }, [creating, form.name, form.summary, form.title, normalizedRoleIdCandidate, roleIdAvailability]);
 
-  const load = () => {
+  const load = useCallback(() => {
     void fetchAgents(view, 500)
       .then((res) => {
         setAgentsResponse(res);
@@ -165,11 +163,11 @@ export function AgentsPage() {
         setError(null);
       })
       .catch((err: Error) => setError(err.message));
-  };
+  }, [creating, view]);
 
   useEffect(() => {
     load();
-  }, [view]);
+  }, [load]);
 
   useEffect(() => {
     if (!creating && selected) {
@@ -183,11 +181,7 @@ export function AgentsPage() {
   }, [creating, selected]);
 
   useEffect(() => {
-    const baseline = creating
-      ? emptyForm()
-      : selected
-        ? formFromAgent(selected)
-        : emptyForm();
+    const baseline = creating ? emptyForm() : selected ? formFromAgent(selected) : emptyForm();
 
     const changes = buildFormChanges(form, baseline);
     if (changes.length === 0) {
@@ -203,10 +197,13 @@ export function AgentsPage() {
       riskAbortRef.current?.abort();
       const controller = new AbortController();
       riskAbortRef.current = controller;
-      void evaluateUiChangeRisk({
-        pageId: "agents",
-        changes,
-      }, { signal: controller.signal })
+      void evaluateUiChangeRisk(
+        {
+          pageId: "agents",
+          changes,
+        },
+        { signal: controller.signal },
+      )
         .then((res) => {
           setRisk({
             overall: res.overall,
@@ -269,7 +266,9 @@ export function AgentsPage() {
     try {
       if (creating) {
         const latest = await fetchAgents("all", 1000);
-        const latestRoleIds = new Set(latest.items.map((item) => normalizeRoleIdCandidate(item.roleId)).filter(Boolean));
+        const latestRoleIds = new Set(
+          latest.items.map((item) => normalizeRoleIdCandidate(item.roleId)).filter(Boolean),
+        );
         for (const builtin of BUILTIN_AGENT_ROSTER) {
           const normalized = normalizeRoleIdCandidate(builtin.roleId);
           if (normalized) {
@@ -322,10 +321,12 @@ export function AgentsPage() {
       return;
     }
     try {
-      const archived = await archiveAction.run(async () => archiveAgentProfile(selected.agentId, {
-        archivedBy: "mission-control",
-        archiveReason: "Operator archived from Goat Crew.",
-      }));
+      const archived = await archiveAction.run(async () =>
+        archiveAgentProfile(selected.agentId, {
+          archivedBy: "mission-control",
+          archiveReason: "Operator archived from Goat Crew.",
+        }),
+      );
       setInfo(`Archived "${archived.name}".`);
       load();
     } catch (err) {
@@ -368,13 +369,17 @@ export function AgentsPage() {
         title={pageCopy.agents.title}
         subtitle={pageCopy.agents.subtitle}
         hint="Use Herd HQ to manage built-in and custom goat profiles, adjust role posture, and keep assignment-ready agents easy to inspect."
-        actions={(
+        actions={
           <div className="workflow-summary-strip">
-            <StatusChip tone="live">{agentsResponse.items.filter((item) => item.lifecycleStatus === "active").length} active</StatusChip>
+            <StatusChip tone="live">
+              {agentsResponse.items.filter((item) => item.lifecycleStatus === "active").length} active
+            </StatusChip>
             <StatusChip>{agentsResponse.items.length} visible</StatusChip>
-            <StatusChip tone="muted">{agentsResponse.items.filter((item) => item.isBuiltin).length} built-in</StatusChip>
+            <StatusChip tone="muted">
+              {agentsResponse.items.filter((item) => item.isBuiltin).length} built-in
+            </StatusChip>
           </div>
-        )}
+        }
       />
       <PageGuideCard
         pageId="agents"
@@ -391,12 +396,16 @@ export function AgentsPage() {
       <div className="office-kpi-grid">
         <article className="office-kpi-card">
           <p className="office-kpi-label">Active roles</p>
-          <p className="office-kpi-value">{agentsResponse.items.filter((item) => item.lifecycleStatus === "active").length}</p>
+          <p className="office-kpi-value">
+            {agentsResponse.items.filter((item) => item.lifecycleStatus === "active").length}
+          </p>
           <p className="office-kpi-note">Ready for assignments</p>
         </article>
         <article className="office-kpi-card">
           <p className="office-kpi-label">Archived roles</p>
-          <p className="office-kpi-value">{agentsResponse.items.filter((item) => item.lifecycleStatus === "archived").length}</p>
+          <p className="office-kpi-value">
+            {agentsResponse.items.filter((item) => item.lifecycleStatus === "archived").length}
+          </p>
           <p className="office-kpi-note">Disabled but recoverable</p>
         </article>
         <article className="office-kpi-card">
@@ -412,7 +421,7 @@ export function AgentsPage() {
       </div>
 
       <DataToolbar
-        primary={(
+        primary={
           <>
             <GCSelect
               id="agentView"
@@ -425,13 +434,19 @@ export function AgentsPage() {
               ]}
             />
           </>
-        )}
-        secondary={(
+        }
+        secondary={
           <>
-            <button type="button" onClick={onNew}>Create Custom Agent</button>
-            {creating ? <button type="button" onClick={onCancelNew}>{globalCopy.common.cancel}</button> : null}
+            <button type="button" onClick={onNew}>
+              Create Custom Agent
+            </button>
+            {creating ? (
+              <button type="button" onClick={onCancelNew}>
+                {globalCopy.common.cancel}
+              </button>
+            ) : null}
           </>
-        )}
+        }
       />
 
       <div className="split-grid">
@@ -467,10 +482,15 @@ export function AgentsPage() {
                     }}
                   >
                     <td>{agent.name}</td>
-                    <td>{agent.roleId}{agent.isBuiltin ? <span className="token-chip">built-in</span> : null}</td>
+                    <td>
+                      {agent.roleId}
+                      {agent.isBuiltin ? <span className="token-chip">built-in</span> : null}
+                    </td>
                     <td>{agent.lifecycleStatus}</td>
                     <td>{agent.status}</td>
-                    <td>{agent.activeSessions}/{agent.sessionCount}</td>
+                    <td>
+                      {agent.activeSessions}/{agent.sessionCount}
+                    </td>
                   </tr>
                 ))}
             </tbody>
@@ -479,14 +499,17 @@ export function AgentsPage() {
 
         <Panel
           title={creating ? "Create Custom Agent" : selected ? `Edit ${selected.name}` : "Select an agent"}
-          subtitle={creating
-            ? "Custom roles let you tailor GoatCitadel’s roster without changing built-in defaults."
-            : "Use the editor to adjust titles, summaries, specialties, and lifecycle posture."}
+          subtitle={
+            creating
+              ? "Custom roles let you tailor GoatCitadel’s roster without changing built-in defaults."
+              : "Use the editor to adjust titles, summaries, specialties, and lifecycle posture."
+          }
         >
           {creating || selected ? (
             <>
               <FieldHelp>
-                Built-in roles stay protected. Custom roles are safe to create, archive, restore, and permanently delete from here.
+                Built-in roles stay protected. Custom roles are safe to create, archive, restore, and permanently delete
+                from here.
               </FieldHelp>
               <div className="controls-row">
                 <label htmlFor="agentRoleId">Role ID</label>
@@ -599,24 +622,33 @@ export function AgentsPage() {
               />
 
               <div className="controls-row">
-                <button type="button"
+                <button
+                  type="button"
                   onClick={() => void onSave()}
                   disabled={saving || Boolean(createDisabledReason)}
                   title={createDisabledReason ?? undefined}
                 >
                   {saving ? "Saving..." : creating ? "Create Agent" : "Save Changes"}
                 </button>
-                {creating && createDisabledReason ? <span className="office-subtitle">{createDisabledReason}</span> : null}
+                {creating && createDisabledReason ? (
+                  <span className="office-subtitle">{createDisabledReason}</span>
+                ) : null}
                 {!creating && selected && selected.lifecycleStatus === "active" ? (
                   <button type="button" onClick={() => setConfirmAction({ type: "archive", name: selected.name })}>
                     {globalCopy.common.archive}
                   </button>
                 ) : null}
                 {!creating && selected && selected.lifecycleStatus === "archived" ? (
-                  <button type="button" onClick={() => void onRestore()}>{globalCopy.common.restore}</button>
+                  <button type="button" onClick={() => void onRestore()}>
+                    {globalCopy.common.restore}
+                  </button>
                 ) : null}
                 {!creating && selected && !selected.isBuiltin ? (
-                  <button type="button" className="danger" onClick={() => setConfirmAction({ type: "hardDelete", name: selected.name })}>
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => setConfirmAction({ type: "hardDelete", name: selected.name })}
+                  >
                     {globalCopy.common.deletePermanently}
                   </button>
                 ) : null}
@@ -637,8 +669,12 @@ export function AgentsPage() {
         }
         confirmLabel={
           confirmAction?.type === "archive"
-            ? (archiveAction.pending ? "Archiving..." : "Archive")
-            : (hardDeleteAction.pending ? "Deleting..." : "Delete Permanently")
+            ? archiveAction.pending
+              ? "Archiving..."
+              : "Archive"
+            : hardDeleteAction.pending
+              ? "Deleting..."
+              : "Delete Permanently"
         }
         danger={confirmAction?.type === "hardDelete"}
         onCancel={() => setConfirmAction(null)}
@@ -680,12 +716,14 @@ function formFromAgent(agent: AgentsResponse["items"][number]): AgentFormState {
 }
 
 function splitMultiline(value: string): string[] {
-  return [...new Set(
-    value
-      .split(/\r?\n/g)
-      .map((item) => item.trim())
-      .filter(Boolean),
-  )];
+  return [
+    ...new Set(
+      value
+        .split(/\r?\n/g)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function normalizeRoleIdCandidate(value: string): string {
@@ -701,7 +739,10 @@ function normalizeRoleIdCandidate(value: string): string {
   return normalized.slice(0, 80);
 }
 
-function buildFormChanges(current: AgentFormState, baseline: AgentFormState): Array<{ field: string; from: unknown; to: unknown }> {
+function buildFormChanges(
+  current: AgentFormState,
+  baseline: AgentFormState,
+): Array<{ field: string; from: unknown; to: unknown }> {
   const entries: Array<{ field: keyof AgentFormState; label: string }> = [
     { field: "roleId", label: "roleId" },
     { field: "name", label: "name" },
@@ -725,4 +766,3 @@ function buildFormChanges(current: AgentFormState, baseline: AgentFormState): Ar
   }
   return changes;
 }
-

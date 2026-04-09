@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   evaluateUiChangeRisk,
   fetchNpuModels,
@@ -71,7 +71,7 @@ export function NpuPage({ settings }: NpuPageProps) {
     }
   };
 
-  const load = (options?: { background?: boolean }): Promise<void> => {
+  const load = useCallback((options?: { background?: boolean }): Promise<void> => {
     const background = options?.background ?? false;
     if (background) {
       setIsRefreshing(true);
@@ -79,9 +79,7 @@ export function NpuPage({ settings }: NpuPageProps) {
       setIsInitialLoading(true);
     }
     setError(null);
-    const settingsPromise = background
-      ? Promise.resolve<RuntimeSettingsResponse | null>(null)
-      : fetchSettings();
+    const settingsPromise = background ? Promise.resolve<RuntimeSettingsResponse | null>(null) : fetchSettings();
     return Promise.all([fetchNpuStatus(), settingsPromise])
       .then(async ([statusRes, settingsRes]) => {
         setStatus(statusRes);
@@ -105,11 +103,11 @@ export function NpuPage({ settings }: NpuPageProps) {
           setIsInitialLoading(false);
         }
       });
-  };
+  }, []);
 
   useEffect(() => {
-    load({ background: false });
-  }, []);
+    void load({ background: false });
+  }, [load]);
 
   useRefreshSubscription(
     "npu",
@@ -136,14 +134,17 @@ export function NpuPage({ settings }: NpuPageProps) {
       riskAbortRef.current?.abort();
       const controller = new AbortController();
       riskAbortRef.current = controller;
-      void evaluateUiChangeRisk({
-        pageId: "npu",
-        changes: [
-          { field: "npu.enabled", from: baseline.enabled, to: npuEnabled },
-          { field: "npu.autoStart", from: baseline.autoStart, to: autoStart },
-          { field: "npu.sidecarUrl", from: baseline.sidecarUrl, to: sidecarUrl },
-        ],
-      }, { signal: controller.signal })
+      void evaluateUiChangeRisk(
+        {
+          pageId: "npu",
+          changes: [
+            { field: "npu.enabled", from: baseline.enabled, to: npuEnabled },
+            { field: "npu.autoStart", from: baseline.autoStart, to: autoStart },
+            { field: "npu.sidecarUrl", from: baseline.sidecarUrl, to: sidecarUrl },
+          ],
+        },
+        { signal: controller.signal },
+      )
         .then((result) => {
           setChangeReview({
             overall: result.overall,
@@ -160,11 +161,13 @@ export function NpuPage({ settings }: NpuPageProps) {
           }
           setChangeReview({
             overall: "warning",
-            items: [{
-              field: "npu",
-              level: "warning",
-              hint: "Unable to fetch risk hints from gateway.",
-            }],
+            items: [
+              {
+                field: "npu",
+                level: "warning",
+                hint: "Unable to fetch risk hints from gateway.",
+              },
+            ],
           });
         });
     }, 400);
@@ -262,13 +265,15 @@ export function NpuPage({ settings }: NpuPageProps) {
         title={pageCopy.npu.title}
         subtitle={pageCopy.npu.subtitle}
         hint="Use this page to configure the local NPU sidecar, inspect runtime health, and verify the on-device model catalog."
-        actions={(
+        actions={
           <div className="workflow-summary-strip">
             <StatusChip tone={npuEnabled ? "success" : "muted"}>{npuEnabled ? "Enabled" : "Disabled"}</StatusChip>
-            <StatusChip tone={status?.healthy ? "success" : "warning"}>{status?.healthy ? "Healthy" : "Needs attention"}</StatusChip>
+            <StatusChip tone={status?.healthy ? "success" : "warning"}>
+              {status?.healthy ? "Healthy" : "Needs attention"}
+            </StatusChip>
             <StatusChip tone="muted">{models.length} models</StatusChip>
           </div>
-        )}
+        }
       />
       <PageGuideCard
         pageId="npu"
@@ -283,7 +288,8 @@ export function NpuPage({ settings }: NpuPageProps) {
         {isRefreshing ? <p className="status-banner">Refreshing NPU status...</p> : null}
         {busy ? <p className="status-banner">Applying NPU action...</p> : null}
         <FieldHelp>
-          Most operators only need this page when they intentionally want local on-device inference. Review the risk panel before changing runtime settings.
+          Most operators only need this page when they intentionally want local on-device inference. Review the risk
+          panel before changing runtime settings.
         </FieldHelp>
       </div>
       <ChangeReviewPanel
@@ -295,21 +301,21 @@ export function NpuPage({ settings }: NpuPageProps) {
         onCriticalConfirmChange={setCriticalConfirmed}
       />
 
-      <Panel title="Configuration" subtitle="Local sidecar settings that control whether the NPU runtime is enabled and how it starts.">
+      <Panel
+        title="Configuration"
+        subtitle="Local sidecar settings that control whether the NPU runtime is enabled and how it starts."
+      >
         <div className="controls-row">
           <GCSwitch id="npuEnabled" checked={npuEnabled} onCheckedChange={setNpuEnabled} label="Enabled" />
           <GCSwitch id="npuAutoStart" checked={autoStart} onCheckedChange={setAutoStart} label="Auto start" />
         </div>
         <label className="field" htmlFor="npuSidecarUrl">
           Sidecar URL
-          <input
-            id="npuSidecarUrl"
-            value={sidecarUrl}
-            onChange={(event) => setSidecarUrl(event.target.value)}
-          />
+          <input id="npuSidecarUrl" value={sidecarUrl} onChange={(event) => setSidecarUrl(event.target.value)} />
         </label>
         <FieldHelp>
-          Point this at the local NPU sidecar you expect GoatCitadel to use. Leave it on loopback unless you intentionally run the accelerator on another machine.
+          Point this at the local NPU sidecar you expect GoatCitadel to use. Leave it on loopback unless you
+          intentionally run the accelerator on another machine.
         </FieldHelp>
         <ActionButton label="Save NPU Config" onClick={() => void onSaveConfig()} disabled={busy || blockConfigSave} />
       </Panel>
@@ -317,12 +323,16 @@ export function NpuPage({ settings }: NpuPageProps) {
       <Panel
         title="Runtime Control"
         subtitle="Start, stop, and refresh the sidecar while keeping the current runtime status visible."
-        actions={status ? (
-          <div className="workflow-summary-strip">
-            <StatusChip tone={status.processState === "running" ? "success" : "warning"}>{status.processState}</StatusChip>
-            <StatusChip tone="muted">{status.backend}</StatusChip>
-          </div>
-        ) : null}
+        actions={
+          status ? (
+            <div className="workflow-summary-strip">
+              <StatusChip tone={status.processState === "running" ? "success" : "warning"}>
+                {status.processState}
+              </StatusChip>
+              <StatusChip tone="muted">{status.backend}</StatusChip>
+            </div>
+          ) : null
+        }
       >
         <div className="row-actions">
           <ActionButton label="Start" onClick={() => void onStart()} disabled={busy} />
@@ -331,7 +341,8 @@ export function NpuPage({ settings }: NpuPageProps) {
         </div>
         {settings ? (
           <p className="field-help">
-            Config: enabled={String(settings.npu.enabled)}, autoStart={String(settings.npu.autoStart)}, sidecar={settings.npu.sidecarUrl}
+            Config: enabled={String(settings.npu.enabled)}, autoStart={String(settings.npu.autoStart)}, sidecar=
+            {settings.npu.sidecarUrl}
           </p>
         ) : null}
       </Panel>
@@ -386,24 +397,28 @@ export function NpuPage({ settings }: NpuPageProps) {
               </tr>
             ) : modelCatalogError ? (
               <tr>
-                <td colSpan={8} className="error">{modelCatalogError}</td>
+                <td colSpan={8} className="error">
+                  {modelCatalogError}
+                </td>
               </tr>
             ) : models.length === 0 ? (
               <tr>
                 <td colSpan={8}>No models reported by sidecar.</td>
               </tr>
-            ) : models.map((model) => (
-              <tr key={model.modelId}>
-                <td>{model.modelId}</td>
-                <td>{model.label}</td>
-                <td>{model.family}</td>
-                <td>{model.source}</td>
-                <td>{model.default ? "yes" : "no"}</td>
-                <td>{model.enabled ? "yes" : "no"}</td>
-                <td>{model.requiresQnn ? "yes" : "no"}</td>
-                <td>{model.contextWindow ?? "-"}</td>
-              </tr>
-            ))}
+            ) : (
+              models.map((model) => (
+                <tr key={model.modelId}>
+                  <td>{model.modelId}</td>
+                  <td>{model.label}</td>
+                  <td>{model.family}</td>
+                  <td>{model.source}</td>
+                  <td>{model.default ? "yes" : "no"}</td>
+                  <td>{model.enabled ? "yes" : "no"}</td>
+                  <td>{model.requiresQnn ? "yes" : "no"}</td>
+                  <td>{model.contextWindow ?? "-"}</td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </Panel>

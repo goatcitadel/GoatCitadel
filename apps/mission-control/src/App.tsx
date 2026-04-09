@@ -64,7 +64,10 @@ import {
 function lazyPage(loader: () => Promise<Record<string, unknown>>, exportName: string) {
   return lazy(async () => {
     const module = await loader();
-    return { default: module[exportName] as ComponentType<Record<string, never>> };
+    return {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Lazy-loaded surfaces expose distinct prop contracts; the call sites remain the authoritative type check.
+      default: module[exportName] as ComponentType<any>,
+    };
   });
 }
 

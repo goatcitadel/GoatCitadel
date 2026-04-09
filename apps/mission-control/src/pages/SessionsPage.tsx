@@ -54,7 +54,7 @@ export function SessionsPage() {
     };
   }, []);
 
-  const items = data?.items ?? [];
+  const items = useMemo(() => data?.items ?? [], [data]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -117,9 +117,7 @@ export function SessionsPage() {
     return [...values].filter(Boolean).map((value) => ({ value, label: value }));
   }, [items]);
 
-  const selected = filtered.find((session) => session.sessionId === selectedSessionId)
-    ?? filtered[0]
-    ?? null;
+  const selected = filtered.find((session) => session.sessionId === selectedSessionId) ?? filtered[0] ?? null;
 
   if (error && !data) {
     return <p className="error">{error}</p>;
@@ -128,11 +126,7 @@ export function SessionsPage() {
   if (!data) {
     return (
       <section className="workflow-page">
-        <PageHeader
-          eyebrow="Runtime"
-          title={pageCopy.sessions.title}
-          subtitle={pageCopy.sessions.subtitle}
-        />
+        <PageHeader eyebrow="Runtime" title={pageCopy.sessions.title} subtitle={pageCopy.sessions.subtitle} />
         <CardSkeleton lines={5} />
       </section>
     );
@@ -145,7 +139,7 @@ export function SessionsPage() {
         title={pageCopy.sessions.title}
         subtitle={pageCopy.sessions.subtitle}
         hint="Inspect active and historical session health, cost, and transcript flow without leaving Mission Control."
-        actions={(
+        actions={
           <div className="workflow-summary-strip">
             <StatusChip tone="live">{filtered.length} visible</StatusChip>
             <StatusChip tone={filtered.some((session) => session.health === "blocked") ? "warning" : "muted"}>
@@ -153,7 +147,7 @@ export function SessionsPage() {
             </StatusChip>
             <StatusChip>${totalCost.toFixed(4)} visible cost</StatusChip>
           </div>
-        )}
+        }
       />
       <PageGuideCard
         pageId="sessions"
@@ -162,9 +156,7 @@ export function SessionsPage() {
         actions={pageCopy.sessions.guide?.actions ?? []}
         terms={pageCopy.sessions.guide?.terms}
       />
-      <div className="workflow-status-stack">
-        {error ? <p className="error">{error}</p> : null}
-      </div>
+      <div className="workflow-status-stack">{error ? <p className="error">{error}</p> : null}</div>
 
       <div className="office-kpi-grid">
         <article className="office-kpi-card">
@@ -190,7 +182,7 @@ export function SessionsPage() {
       </div>
 
       <DataToolbar
-        primary={(
+        primary={
           <>
             <SelectOrCustom
               value={search}
@@ -210,12 +202,12 @@ export function SessionsPage() {
               ]}
             />
           </>
-        )}
-        secondary={(
+        }
+        secondary={
           <button type="button" onClick={() => setViewMode((current) => (current === "split" ? "table" : "split"))}>
             {viewMode === "split" ? "Switch to table view" : "Switch to split view"}
           </button>
-        )}
+        }
       />
 
       {viewMode === "table" ? (
@@ -223,7 +215,9 @@ export function SessionsPage() {
           title="Sessions Table"
           subtitle="Use the table when you want a compact scan of session health, recency, and spend."
         >
-          {detailsLoading ? <TableSkeleton rows={6} cols={5} /> : (
+          {detailsLoading ? (
+            <TableSkeleton rows={6} cols={5} />
+          ) : (
             <div className="virtual-table-shell">
               <TableVirtuoso
                 data={filtered}
@@ -239,7 +233,9 @@ export function SessionsPage() {
                 itemContent={(_index, session) => (
                   <>
                     <td>{session.sessionKey}</td>
-                    <td><span className="token-chip">{session.health}</span></td>
+                    <td>
+                      <span className="token-chip">{session.health}</span>
+                    </td>
                     <td>{new Date(session.updatedAt).toLocaleString()}</td>
                     <td>{session.tokenTotal}</td>
                     <td>{session.costUsdTotal.toFixed(4)}</td>
@@ -268,7 +264,8 @@ export function SessionsPage() {
                       {session.sessionKey}
                     </button>
                     <p className="office-subtitle session-detail-copy">
-                      {session.health} | {new Date(session.updatedAt).toLocaleString()} | ${session.costUsdTotal.toFixed(4)}
+                      {session.health} | {new Date(session.updatedAt).toLocaleString()} | $
+                      {session.costUsdTotal.toFixed(4)}
                     </p>
                   </div>
                 )}
@@ -284,10 +281,10 @@ export function SessionsPage() {
             {detailsLoading ? <CardSkeleton lines={7} /> : null}
             {selected && !detailsLoading ? (
               <>
-                <p><strong>{selected.sessionKey}</strong></p>
-                <p className="office-subtitle session-detail-copy">
-                  Session ID: {selected.sessionId}
+                <p>
+                  <strong>{selected.sessionKey}</strong>
                 </p>
+                <p className="office-subtitle session-detail-copy">Session ID: {selected.sessionId}</p>
                 <p className="office-subtitle session-detail-copy">
                   Last message: {summary?.lastMessagePreview ?? "(none yet)"}
                 </p>
@@ -318,7 +315,9 @@ export function SessionsPage() {
                   </div>
                 ) : null}
                 <h4>Recent Timeline</h4>
-                {timeline.length === 0 ? <p className="office-subtitle">No transcript events yet.</p> : (
+                {timeline.length === 0 ? (
+                  <p className="office-subtitle">No transcript events yet.</p>
+                ) : (
                   <div className="virtual-list-shell compact">
                     <Virtuoso
                       data={timeline.slice(0, 120)}
