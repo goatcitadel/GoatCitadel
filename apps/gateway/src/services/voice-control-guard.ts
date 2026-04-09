@@ -19,7 +19,6 @@ interface BuildVoiceControlStartFailureInput {
 export function buildVoiceControlStartFailure(
   input: BuildVoiceControlStartFailureInput,
 ): VoiceControlStartFailure | undefined {
-  const label = input.action === "talk" ? "Talk Mode" : "Wake listener";
   const message = resolveVoiceControlStartFailureMessage(input);
   if (!message) {
     return undefined;
@@ -57,9 +56,7 @@ export function buildVoiceControlStartFailure(
   };
 }
 
-function resolveVoiceControlStartFailureMessage(
-  input: BuildVoiceControlStartFailureInput,
-): string | undefined {
+function resolveVoiceControlStartFailureMessage(input: BuildVoiceControlStartFailureInput): string | undefined {
   const label = input.action === "talk" ? "Talk Mode" : "Wake listener";
   if (input.runtime.readiness !== "ready") {
     return `Cannot start ${label} while the managed voice runtime is ${input.runtime.readiness}.`;

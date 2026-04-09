@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The parity report stays centralized so follow-on gap analysis remains reviewable as one policy surface. */
 import type {
   CompanionAuthRequirement,
   CompanionServerPrerequisite,
@@ -58,12 +59,7 @@ const VOICE_CURRENT_PROOF_ACTION =
 const VOICE_LOCAL_FIRST_PROOF_ACTION =
   "Current local-first voice proof is on file for local_dev; rerun trusted_local or remote_hardened only when deliberately widening the supported voice posture.";
 
-const BROWSER_READ_TOOLS = new Set([
-  "browser.search",
-  "browser.navigate",
-  "browser.extract",
-  "browser.screenshot",
-]);
+const BROWSER_READ_TOOLS = new Set(["browser.search", "browser.navigate", "browser.extract", "browser.screenshot"]);
 
 const BROWSER_CONTROL_TOOLS = new Set([
   "browser.interact",
@@ -83,40 +79,44 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
     input.deploymentProfile,
     input.latestArtifacts?.a2ui,
   );
-  const companionArtifactStatus = buildArtifactStatus(
-    generatedAt,
-    input.latestArtifacts?.companion,
-  );
-  const androidRuntimeProven = canvasArtifactStatus.hasArtifact
-    && canvasArtifactStatus.freshness === "current"
-    && canvasArtifactStatus.matchedCurrentProfile
-    && companionArtifactStatus.hasArtifact
-    && companionArtifactStatus.freshness === "current";
+  const companionArtifactStatus = buildArtifactStatus(generatedAt, input.latestArtifacts?.companion);
+  const androidRuntimeProven =
+    canvasArtifactStatus.hasArtifact &&
+    canvasArtifactStatus.freshness === "current" &&
+    canvasArtifactStatus.matchedCurrentProfile &&
+    companionArtifactStatus.hasArtifact &&
+    companionArtifactStatus.freshness === "current";
   const browserTools = input.toolCatalog.filter((tool) => tool.toolName.startsWith("browser."));
   const readToolCount = browserTools.filter((tool) => BROWSER_READ_TOOLS.has(tool.toolName)).length;
   const controlToolCount = browserTools.filter((tool) => BROWSER_CONTROL_TOOLS.has(tool.toolName)).length;
   const hasInteractionTool = browserTools.some((tool) => tool.toolName === "browser.interact");
-  const registeredBrowserStateTools = browserTools
-    .map((tool) => tool.toolName)
-    .filter(isRestrictedBrowserStateTool);
-  const allowedBrowserStateTools = registeredBrowserStateTools.filter((toolName) =>
-    !evaluateDeploymentProfileToolAccess(input.deploymentProfile, toolName, {}));
+  const registeredBrowserStateTools = browserTools.map((tool) => tool.toolName).filter(isRestrictedBrowserStateTool);
+  const allowedBrowserStateTools = registeredBrowserStateTools.filter(
+    (toolName) => !evaluateDeploymentProfileToolAccess(input.deploymentProfile, toolName, {}),
+  );
   const blockedBrowserStateTools = registeredBrowserStateTools.filter((toolName) =>
-    Boolean(evaluateDeploymentProfileToolAccess(input.deploymentProfile, toolName, {})));
-  const browserCatalog = asTargetRecord(findCatalogEntry(input.integrationCatalog, "automation.browser-chrome-control"));
+    Boolean(evaluateDeploymentProfileToolAccess(input.deploymentProfile, toolName, {})),
+  );
+  const browserCatalog = asTargetRecord(
+    findCatalogEntry(input.integrationCatalog, "automation.browser-chrome-control"),
+  );
   const canvasCatalog = asTargetRecord(findCatalogEntry(input.integrationCatalog, "automation.canvas-a2ui"));
   const voiceCatalog = asTargetRecord(findCatalogEntry(input.integrationCatalog, "automation.voice-wake-talk"));
   const companionTargets = input.integrationCatalog
-    .filter((entry) => entry.kind === "platform" && (
-      entry.catalogId === "platform.android-canvas-camera-screen"
-      || entry.catalogId === "platform.ios-canvas-camera-voice"
-      || entry.catalogId === "platform.macos-menubar-voice"
-    ))
+    .filter(
+      (entry) =>
+        entry.kind === "platform" &&
+        (entry.catalogId === "platform.android-canvas-camera-screen" ||
+          entry.catalogId === "platform.ios-canvas-camera-voice" ||
+          entry.catalogId === "platform.macos-menubar-voice"),
+    )
     .map(asTargetRecord)
     .filter((entry): entry is FollowOnParityTargetRecord => Boolean(entry));
-  const canvasPlatformTargets = companionTargets.filter((entry) =>
-    entry.catalogId === "platform.android-canvas-camera-screen"
-    || entry.catalogId === "platform.ios-canvas-camera-voice");
+  const canvasPlatformTargets = companionTargets.filter(
+    (entry) =>
+      entry.catalogId === "platform.android-canvas-camera-screen" ||
+      entry.catalogId === "platform.ios-canvas-camera-voice",
+  );
   const a2uiContract = buildA2UIContract(canvasCatalog, canvasPlatformTargets, {
     androidRuntimeProven,
   });
@@ -149,12 +149,11 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
     input.deploymentProfile,
     input.latestArtifacts?.browser,
   );
-  const browserProofCurrent = (
-    browserArtifactStatus.hasArtifact
-    && browserArtifactStatus.freshness === "current"
-    && browserArtifactStatus.matchedCurrentProfile
-    && browserGuidance.blockingIssues.length === 0
-  );
+  const browserProofCurrent =
+    browserArtifactStatus.hasArtifact &&
+    browserArtifactStatus.freshness === "current" &&
+    browserArtifactStatus.matchedCurrentProfile &&
+    browserGuidance.blockingIssues.length === 0;
   const rawPackagingProofStatus = buildProfileArtifactStatus(
     generatedAt,
     input.deploymentProfile,
@@ -172,15 +171,11 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
     input.latestArtifacts?.voice,
   );
   const voiceProofCoverage = input.voiceProofCoverage ?? buildEmptyProfileCoverage();
-  const voiceLocalFirstClosed = (
-    voiceProofCoverage.currentProfiles.includes("local_dev")
-    && voiceGuidance.blockingIssues.length === 0
-    && voiceRecoveryActions.length === 0
-  );
-  const pluginArtifactStatus = buildArtifactStatus(
-    generatedAt,
-    input.latestArtifacts?.extensions,
-  );
+  const voiceLocalFirstClosed =
+    voiceProofCoverage.currentProfiles.includes("local_dev") &&
+    voiceGuidance.blockingIssues.length === 0 &&
+    voiceRecoveryActions.length === 0;
+  const pluginArtifactStatus = buildArtifactStatus(generatedAt, input.latestArtifacts?.extensions);
   const canvasGuidance = buildCanvasGuidance(canvasCatalog, canvasPlatformTargets, a2uiContract, canvasArtifactStatus);
   const companionGuidance = buildCompanionGuidance(companionTargets, companionContract, companionArtifactStatus);
   const pluginGuidance = buildPluginGuidance(
@@ -194,38 +189,42 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
     ...buildArtifactRecommendations("browser proof artifact", browserArtifactStatus, input.deploymentProfile),
   );
   if (browserProofCurrent) {
-    browserGuidance.recommendedActions = browserGuidance.recommendedActions.filter((action) => action !== BROWSER_OPERATOR_RUN_ACTION);
+    browserGuidance.recommendedActions = browserGuidance.recommendedActions.filter(
+      (action) => action !== BROWSER_OPERATOR_RUN_ACTION,
+    );
     browserGuidance.recommendedActions.push(BROWSER_CURRENT_PROOF_ACTION);
   }
-  packagingGuidance.recommendedActions.push(...buildPackagingProofRecommendations(packagingProofStatus, input.deploymentProfile));
+  packagingGuidance.recommendedActions.push(
+    ...buildPackagingProofRecommendations(packagingProofStatus, input.deploymentProfile),
+  );
   canvasGuidance.recommendedActions.push(
     ...buildArtifactRecommendations("A2UI proof artifact", canvasArtifactStatus, input.deploymentProfile),
   );
   companionGuidance.recommendedActions.push(
     ...buildArtifactRecommendations("companion bootstrap brief", companionArtifactStatus),
   );
-  pluginGuidance.recommendedActions.push(
-    ...buildArtifactRecommendations("extension SDK brief", pluginArtifactStatus),
-  );
+  pluginGuidance.recommendedActions.push(...buildArtifactRecommendations("extension SDK brief", pluginArtifactStatus));
   if (voiceLocalFirstClosed) {
-    voiceGuidance.recommendedActions = voiceGuidance.recommendedActions.filter((action) => action !== VOICE_OPERATOR_RUN_ACTION);
+    voiceGuidance.recommendedActions = voiceGuidance.recommendedActions.filter(
+      (action) => action !== VOICE_OPERATOR_RUN_ACTION,
+    );
     voiceGuidance.recommendedActions.push(
-      voiceProofCoverage.currentProfiles.length >= 3
-        ? VOICE_CURRENT_PROOF_ACTION
-        : VOICE_LOCAL_FIRST_PROOF_ACTION,
+      voiceProofCoverage.currentProfiles.length >= 3 ? VOICE_CURRENT_PROOF_ACTION : VOICE_LOCAL_FIRST_PROOF_ACTION,
     );
   } else {
     voiceGuidance.recommendedActions.push(
       ...buildArtifactRecommendations("voice proof artifact", voiceArtifactStatus, input.deploymentProfile),
     );
     if (
-      voiceArtifactStatus.hasArtifact
-      && voiceArtifactStatus.freshness === "current"
-      && voiceArtifactStatus.matchedCurrentProfile
-      && voiceGuidance.blockingIssues.length === 0
-      && voiceRecoveryActions.length === 0
+      voiceArtifactStatus.hasArtifact &&
+      voiceArtifactStatus.freshness === "current" &&
+      voiceArtifactStatus.matchedCurrentProfile &&
+      voiceGuidance.blockingIssues.length === 0 &&
+      voiceRecoveryActions.length === 0
     ) {
-      voiceGuidance.recommendedActions = voiceGuidance.recommendedActions.filter((action) => action !== VOICE_OPERATOR_RUN_ACTION);
+      voiceGuidance.recommendedActions = voiceGuidance.recommendedActions.filter(
+        (action) => action !== VOICE_OPERATOR_RUN_ACTION,
+      );
       voiceGuidance.recommendedActions.push(VOICE_CURRENT_PROOF_ACTION);
     }
   }
@@ -318,7 +317,9 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
         label: "Browser control parity",
         state: browserProofCurrent
           ? "have_foundation"
-          : browserTools.length > 0 && controlToolCount > 0 ? "partial" : "missing",
+          : browserTools.length > 0 && controlToolCount > 0
+            ? "partial"
+            : "missing",
         summary: browserProofCurrent
           ? `${browserTools.length} browser tools are registered (${readToolCount} read, ${controlToolCount} control), catalog maturity is ${browserCatalog?.maturity ?? "missing"}, and current operator proof is on file for ${input.deploymentProfile}.`
           : `${browserTools.length} browser tools are registered (${readToolCount} read, ${controlToolCount} control) and catalog maturity is ${browserCatalog?.maturity ?? "missing"}.`,
@@ -329,25 +330,37 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
       buildEpicRecord({
         epicId: "GC-P0-07",
         label: "Canvas / A2UI parity",
-        state: a2uiContract && canvasArtifactStatus.hasArtifact && canvasArtifactStatus.freshness === "current" && canvasArtifactStatus.matchedCurrentProfile
-          ? "have_foundation"
-          : canvasCatalog || canvasPlatformTargets.length > 0 ? "partial" : "missing",
+        state:
+          a2uiContract &&
+          canvasArtifactStatus.hasArtifact &&
+          canvasArtifactStatus.freshness === "current" &&
+          canvasArtifactStatus.matchedCurrentProfile
+            ? "have_foundation"
+            : canvasCatalog || canvasPlatformTargets.length > 0
+              ? "partial"
+              : "missing",
         summary: a2uiContract
-          ? canvasArtifactStatus.hasArtifact && canvasArtifactStatus.freshness === "current" && canvasArtifactStatus.matchedCurrentProfile
+          ? canvasArtifactStatus.hasArtifact &&
+            canvasArtifactStatus.freshness === "current" &&
+            canvasArtifactStatus.matchedCurrentProfile
             ? `A2UI contract ${a2uiContract.contractId} defines ${a2uiContract.scopes.join(" + ")} scope across ${canvasPlatformTargets.length} declared canvas-capable platform target(s); Android proof is current for the active deployment profile.`
             : `A2UI contract ${a2uiContract.contractId} defines ${a2uiContract.scopes.join(" + ")} scope across ${canvasPlatformTargets.length} declared canvas-capable platform target(s); catalog maturity is ${canvasCatalog?.maturity ?? "missing"}.`
           : `Canvas/A2UI catalog maturity is ${canvasCatalog?.maturity ?? "missing"} with ${canvasPlatformTargets.length} canvas-capable platform targets currently declared.`,
-        nextSlice: canvasArtifactStatus.hasArtifact && canvasArtifactStatus.freshness === "current" && canvasArtifactStatus.matchedCurrentProfile
-          ? "Keep the Android A2UI proof current and rerun the lane only when the canvas contract, deployment profile, or operator flow changes."
-          : "Export the System-page A2UI proof artifact for the Office Lab handoff and directed-move pass, then use the first filed run to drive deeper canvas proof before extending the contract to companion sessions.",
+        nextSlice:
+          canvasArtifactStatus.hasArtifact &&
+          canvasArtifactStatus.freshness === "current" &&
+          canvasArtifactStatus.matchedCurrentProfile
+            ? "Keep the Android A2UI proof current and rerun the lane only when the canvas contract, deployment profile, or operator flow changes."
+            : "Export the System-page A2UI proof artifact for the Office Lab handoff and directed-move pass, then use the first filed run to drive deeper canvas proof before extending the contract to companion sessions.",
       }),
       buildEpicRecord({
         epicId: "GC-P1-09",
         label: "Packaging and remote deployment parity",
         state: "partial",
-        summary: packagingProofCoverage.currentProfiles.length > 0
-          ? `Deployment is running in ${input.deploymentProfile} with auth mode ${input.authMode}, loopback bypass ${input.allowLoopbackBypass ? "enabled" : "disabled"}, ${input.networkAllowlistCount} allowlisted hosts, and current completed packaging bundles on file for ${packagingProofCoverage.currentProfiles.join(", ")}.`
-          : `Deployment is running in ${input.deploymentProfile} with auth mode ${input.authMode}, loopback bypass ${input.allowLoopbackBypass ? "enabled" : "disabled"}, and ${input.networkAllowlistCount} allowlisted hosts.`,
+        summary:
+          packagingProofCoverage.currentProfiles.length > 0
+            ? `Deployment is running in ${input.deploymentProfile} with auth mode ${input.authMode}, loopback bypass ${input.allowLoopbackBypass ? "enabled" : "disabled"}, ${input.networkAllowlistCount} allowlisted hosts, and current completed packaging bundles on file for ${packagingProofCoverage.currentProfiles.join(", ")}.`
+            : `Deployment is running in ${input.deploymentProfile} with auth mode ${input.authMode}, loopback bypass ${input.allowLoopbackBypass ? "enabled" : "disabled"}, and ${input.networkAllowlistCount} allowlisted hosts.`,
         nextSlice: packagingProofCoverage.currentProfiles.includes("remote_hardened")
           ? "Close the remaining packaging gap with blank-machine clean install, packaged Mission Control startup, and explicit rollback or recovery evidence."
           : "Use the System page packaging proof-lane draft to collect repeatable install, hardened-run, and rollback evidence.",
@@ -355,17 +368,21 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
       buildEpicRecord({
         epicId: "GC-P1-08",
         label: "Companion apps / nodes / device surfaces",
-        state: companionTargets.length > 0
-          ? companionArtifactStatus.hasArtifact && companionArtifactStatus.freshness === "current" ? "have_foundation" : "partial"
-          : "missing",
+        state:
+          companionTargets.length > 0
+            ? companionArtifactStatus.hasArtifact && companionArtifactStatus.freshness === "current"
+              ? "have_foundation"
+              : "partial"
+            : "missing",
         summary: companionContract
           ? companionArtifactStatus.hasArtifact && companionArtifactStatus.freshness === "current"
             ? `${companionTargets.length} companion-capable platform targets exist in the catalog, and ${companionContract.contractId} now has current Android runtime/UI proof against the existing ${companionContract.bootstrapRepo} repo.`
             : `${companionTargets.length} companion-capable platform targets exist in the catalog, and ${companionContract.contractId} now defines the Android-first bootstrap lane against the existing ${companionContract.bootstrapRepo} repo; live gateway session proof is complete, but Android UI/runtime proof is still open.`
           : `${companionTargets.length} companion-capable platform targets exist in the catalog, but there is no proven companion.android.v1 runtime lane yet.`,
-        nextSlice: companionArtifactStatus.hasArtifact && companionArtifactStatus.freshness === "current"
-          ? "Keep the Android companion proof current and rerun the lane only when the bootstrap contract, runtime flow, or signed-session behavior changes."
-          : "Use companion.android.v1 to align the existing GoatCitadel-mobile repo with the current device approval/auth plumbing and capture Android-resident UI/runtime proof on top of the already-proven gateway session path.",
+        nextSlice:
+          companionArtifactStatus.hasArtifact && companionArtifactStatus.freshness === "current"
+            ? "Keep the Android companion proof current and rerun the lane only when the bootstrap contract, runtime flow, or signed-session behavior changes."
+            : "Use companion.android.v1 to align the existing GoatCitadel-mobile repo with the current device approval/auth plumbing and capture Android-resident UI/runtime proof on top of the already-proven gateway session path.",
       }),
       buildEpicRecord({
         epicId: "GC-P1-10",
@@ -379,14 +396,13 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
         label: "Extension / plugin SDK breadth",
         state: input.addonsCatalog.length > 0 || input.integrationPlugins.length > 0 ? "have_foundation" : "missing",
         summary: `${input.addonsCatalog.length} add-ons are cataloged, ${input.installedAddons.length} are installed, ${input.integrationPlugins.length} integration plugins are registered (${enabledPluginCount} enabled), and ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} is now published to GitHub Packages as the current public beta author SDK.`,
-        nextSlice: "Keep the published beta SDK package, the reference integration plugin lifecycle, and the exported starter-pack handoff green; only widen runtime guarantees deliberately.",
+        nextSlice:
+          "Keep the published beta SDK package, the reference integration plugin lifecycle, and the exported starter-pack handoff green; only widen runtime guarantees deliberately.",
       }),
       buildEpicRecord({
         epicId: "GC-P2-12",
         label: "Voice Wake / Talk Mode parity",
-        state: voiceLocalFirstClosed
-          ? "have_foundation"
-          : "partial",
+        state: voiceLocalFirstClosed ? "have_foundation" : "partial",
         summary: voiceLocalFirstClosed
           ? voiceProofCoverage.currentProfiles.length >= 3
             ? `Voice runtime is ready on ${input.voiceRuntime.selectedModelId ?? "the active model"}, talk is ${input.voiceStatus.talk.state}, wake is ${input.voiceStatus.wake.enabled ? input.voiceStatus.wake.state : "disabled"}, and current operator proof now covers local_dev, trusted_local, and remote_hardened.`
@@ -445,25 +461,37 @@ function buildPackagingGuidance(
     blockingIssues.push("Auth mode is set to none, which is not a safe packaging or remote-share default.");
   }
   if (allowLoopbackBypass) {
-    blockingIssues.push("Loopback bypass is enabled, so auth and remote-share proof is weaker than the hardened target.");
+    blockingIssues.push(
+      "Loopback bypass is enabled, so auth and remote-share proof is weaker than the hardened target.",
+    );
   }
   if (networkAllowlistCount === 0 && deploymentProfile !== "trusted_local") {
     blockingIssues.push("No network allowlist entries are configured for a non-trusted deployment profile.");
   }
 
-  let postureSummary = `Packaging is currently aligned to ${deploymentProfile} with ${authMode} auth.`;
+  const postureSummary =
+    deploymentProfile === "remote_hardened"
+      ? "Packaging is aligned to remote_hardened posture, but parity still requires clean-install, auth, and policy proof."
+      : deploymentProfile === "trusted_local"
+        ? "Packaging is currently operating in trusted_local posture, which is useful for operator validation but not the full hardened deployment lane."
+        : "Packaging is still in local_dev posture, so deployment claims should stay limited to development and installer smoke proof.";
   if (deploymentProfile === "remote_hardened") {
-    postureSummary = "Packaging is aligned to remote_hardened posture, but parity still requires clean-install, auth, and policy proof.";
-    recommendedActions.push("Capture a clean install/startup proof run under remote_hardened before claiming deployment parity.");
+    recommendedActions.push(
+      "Capture a clean install/startup proof run under remote_hardened before claiming deployment parity.",
+    );
   } else if (deploymentProfile === "trusted_local") {
-    postureSummary = "Packaging is currently operating in trusted_local posture, which is useful for operator validation but not the full hardened deployment lane.";
-    recommendedActions.push("Generate the packaging proof-lane draft from System, run a trusted_local smoke pass, then rerun the same install/startup path under remote_hardened.");
+    recommendedActions.push(
+      "Generate the packaging proof-lane draft from System, run a trusted_local smoke pass, then rerun the same install/startup path under remote_hardened.",
+    );
   } else {
-    postureSummary = "Packaging is still in local_dev posture, so deployment claims should stay limited to development and installer smoke proof.";
-    recommendedActions.push("Generate the packaging proof-lane draft from System, then promote the current setup into trusted_local and remote_hardened proof runs before expanding parity claims.");
+    recommendedActions.push(
+      "Generate the packaging proof-lane draft from System, then promote the current setup into trusted_local and remote_hardened proof runs before expanding parity claims.",
+    );
   }
 
-  recommendedActions.push(`Record each packaging parity run with ${FOLLOW_ON_PROOF_LANE_SPECS.packaging.templatePath}.`);
+  recommendedActions.push(
+    `Record each packaging parity run with ${FOLLOW_ON_PROOF_LANE_SPECS.packaging.templatePath}.`,
+  );
 
   return {
     postureSummary,
@@ -488,12 +516,12 @@ function buildProfileArtifactStatus(
   const artifactProfile = parseArtifactDeploymentProfile(latestArtifact);
   const artifactGeneratedAtMs = Date.parse(latestArtifact.generatedAt);
   const reportGeneratedAtMs = Date.parse(generatedAt);
-  const ageDays = Number.isFinite(artifactGeneratedAtMs) && Number.isFinite(reportGeneratedAtMs)
-    ? Math.max(0, Math.floor((reportGeneratedAtMs - artifactGeneratedAtMs) / (24 * 60 * 60 * 1000)))
-    : undefined;
-  const freshness = typeof ageDays === "number" && ageDays > FOLLOW_ON_ARTIFACT_FRESHNESS_WINDOW_DAYS
-    ? "stale"
-    : "current";
+  const ageDays =
+    Number.isFinite(artifactGeneratedAtMs) && Number.isFinite(reportGeneratedAtMs)
+      ? Math.max(0, Math.floor((reportGeneratedAtMs - artifactGeneratedAtMs) / (24 * 60 * 60 * 1000)))
+      : undefined;
+  const freshness =
+    typeof ageDays === "number" && ageDays > FOLLOW_ON_ARTIFACT_FRESHNESS_WINDOW_DAYS ? "stale" : "current";
 
   return {
     hasArtifact: true,
@@ -517,12 +545,12 @@ function buildArtifactStatus(
 
   const artifactGeneratedAtMs = Date.parse(latestArtifact.generatedAt);
   const reportGeneratedAtMs = Date.parse(generatedAt);
-  const ageDays = Number.isFinite(artifactGeneratedAtMs) && Number.isFinite(reportGeneratedAtMs)
-    ? Math.max(0, Math.floor((reportGeneratedAtMs - artifactGeneratedAtMs) / (24 * 60 * 60 * 1000)))
-    : undefined;
-  const freshness = typeof ageDays === "number" && ageDays > FOLLOW_ON_ARTIFACT_FRESHNESS_WINDOW_DAYS
-    ? "stale"
-    : "current";
+  const ageDays =
+    Number.isFinite(artifactGeneratedAtMs) && Number.isFinite(reportGeneratedAtMs)
+      ? Math.max(0, Math.floor((reportGeneratedAtMs - artifactGeneratedAtMs) / (24 * 60 * 60 * 1000)))
+      : undefined;
+  const freshness =
+    typeof ageDays === "number" && ageDays > FOLLOW_ON_ARTIFACT_FRESHNESS_WINDOW_DAYS ? "stale" : "current";
 
   return {
     hasArtifact: true,
@@ -533,7 +561,9 @@ function buildArtifactStatus(
 
 function buildArtifactRecommendations(
   label: string,
-  artifactStatus: FollowOnParityReport["companion"]["artifactStatus"] | FollowOnParityReport["browser"]["artifactStatus"],
+  artifactStatus:
+    | FollowOnParityReport["companion"]["artifactStatus"]
+    | FollowOnParityReport["browser"]["artifactStatus"],
   deploymentProfile?: DeploymentProfile,
 ): string[] {
   const actions: string[] = [];
@@ -542,15 +572,19 @@ function buildArtifactRecommendations(
     return actions;
   }
   if (artifactStatus.freshness === "stale") {
-    actions.push(`Latest ${label} is ${artifactStatus.ageDays ?? "an unknown number of"} day(s) old; refresh it before relying on it.`);
+    actions.push(
+      `Latest ${label} is ${artifactStatus.ageDays ?? "an unknown number of"} day(s) old; refresh it before relying on it.`,
+    );
   }
   if (
-    deploymentProfile
-    && "matchedCurrentProfile" in artifactStatus
-    && artifactStatus.latestArtifactDeploymentProfile
-    && !artifactStatus.matchedCurrentProfile
+    deploymentProfile &&
+    "matchedCurrentProfile" in artifactStatus &&
+    artifactStatus.latestArtifactDeploymentProfile &&
+    !artifactStatus.matchedCurrentProfile
   ) {
-    actions.push(`Latest ${label} targets ${artifactStatus.latestArtifactDeploymentProfile}; rerun the lane under ${deploymentProfile} so proof matches current runtime truth.`);
+    actions.push(
+      `Latest ${label} targets ${artifactStatus.latestArtifactDeploymentProfile}; rerun the lane under ${deploymentProfile} so proof matches current runtime truth.`,
+    );
   }
   return actions;
 }
@@ -561,21 +595,25 @@ function buildPackagingProofRecommendations(
 ): string[] {
   const actions: string[] = [];
   if (!proofStatus.hasArtifact) {
-    actions.push("No packaging proof artifact is recorded yet; export the next clean install/startup bundle from System before expanding deployment claims.");
+    actions.push(
+      "No packaging proof artifact is recorded yet; export the next clean install/startup bundle from System before expanding deployment claims.",
+    );
     return actions;
   }
   if (proofStatus.freshness === "stale") {
-    actions.push(`Latest packaging proof artifact is ${proofStatus.ageDays ?? "an unknown number of"} day(s) old; refresh it with a new clean install/startup pass before relying on it.`);
+    actions.push(
+      `Latest packaging proof artifact is ${proofStatus.ageDays ?? "an unknown number of"} day(s) old; refresh it with a new clean install/startup pass before relying on it.`,
+    );
   }
   if (proofStatus.latestArtifactDeploymentProfile && !proofStatus.matchedCurrentProfile) {
-    actions.push(`Latest packaging proof artifact targets ${proofStatus.latestArtifactDeploymentProfile}; rerun the packaging proof lane under ${deploymentProfile} so proof matches current runtime truth.`);
+    actions.push(
+      `Latest packaging proof artifact targets ${proofStatus.latestArtifactDeploymentProfile}; rerun the packaging proof lane under ${deploymentProfile} so proof matches current runtime truth.`,
+    );
   }
   return actions;
 }
 
-function parseArtifactDeploymentProfile(
-  artifact: FollowOnProofLaneArtifactRecord,
-): DeploymentProfile | undefined {
+function parseArtifactDeploymentProfile(artifact: FollowOnProofLaneArtifactRecord): DeploymentProfile | undefined {
   const match = artifact.relativePath.match(/-(local_dev|trusted_local|remote_hardened)-\d{4}-\d{2}-\d{2}T/);
   const parsed = match?.[1];
   if (parsed === "local_dev" || parsed === "trusted_local" || parsed === "remote_hardened") {
@@ -613,21 +651,31 @@ function buildBrowserGuidance(
     blockingIssues.push("Browser control catalog maturity is not yet at a shipped operator-ready level.");
   }
 
-  let guardrailSummary = "Browser control uses step verification and deployment-profile guardrails.";
+  const guardrailSummary =
+    deploymentProfile === "remote_hardened"
+      ? "Remote-hardened posture blocks browser cookie/storage state tools and requires explicit confirm-before-submit for mutating browser control."
+      : deploymentProfile === "trusted_local"
+        ? "Trusted-local posture allows the full browser family, including cookie and storage tools, with normal guardrails."
+        : "Local-dev posture allows browser read/control flows with guardrails, but cookie/storage state tools are still restricted to trusted_local.";
   if (deploymentProfile === "remote_hardened") {
-    guardrailSummary = "Remote-hardened posture blocks browser cookie/storage state tools and requires explicit confirm-before-submit for mutating browser control.";
-    recommendedActions.push("Use browser.interact with verifyStep=true and confirmBeforeSubmit=true when testing mutating browser flows.");
+    recommendedActions.push(
+      "Use browser.interact with verifyStep=true and confirmBeforeSubmit=true when testing mutating browser flows.",
+    );
     if (blockedStateTools.length > 0) {
-      recommendedActions.push(`Do not expect ${blockedStateTools.join(", ")} to work in remote_hardened; browser state tools are restricted to trusted_local.`);
+      recommendedActions.push(
+        `Do not expect ${blockedStateTools.join(", ")} to work in remote_hardened; browser state tools are restricted to trusted_local.`,
+      );
     }
   } else if (deploymentProfile === "trusted_local") {
-    guardrailSummary = "Trusted-local posture allows the full browser family, including cookie and storage tools, with normal guardrails.";
     recommendedActions.push(BROWSER_OPERATOR_RUN_ACTION);
   } else {
-    guardrailSummary = "Local-dev posture allows browser read/control flows with guardrails, but cookie/storage state tools are still restricted to trusted_local.";
-    recommendedActions.push("Generate the browser proof-lane draft from System, run browser read/control proof in local_dev if needed, then switch to trusted_local for cookie/storage validation and remote_hardened for blocked-policy proof.");
+    recommendedActions.push(
+      "Generate the browser proof-lane draft from System, run browser read/control proof in local_dev if needed, then switch to trusted_local for cookie/storage validation and remote_hardened for blocked-policy proof.",
+    );
     if (blockedStateTools.length > 0) {
-      recommendedActions.push(`Do not expect ${blockedStateTools.join(", ")} to work in local_dev; browser state tools are restricted to trusted_local.`);
+      recommendedActions.push(
+        `Do not expect ${blockedStateTools.join(", ")} to work in local_dev; browser state tools are restricted to trusted_local.`,
+      );
     }
   }
 
@@ -635,10 +683,14 @@ function buildBrowserGuidance(
     recommendedActions.push(`Record browser parity runs with ${FOLLOW_ON_PROOF_LANE_SPECS.browser.templatePath}.`);
   }
   if (!hasInteractionTool) {
-    recommendedActions.push("Expose browser.interact before treating the browser proof lane as ready for click/input validation.");
+    recommendedActions.push(
+      "Expose browser.interact before treating the browser proof lane as ready for click/input validation.",
+    );
   }
   if (registeredStateTools.length === 0) {
-    recommendedActions.push("Keep browser proof claims limited to read/control flows until cookie/storage state tools are actually registered.");
+    recommendedActions.push(
+      "Keep browser proof claims limited to read/control flows until cookie/storage state tools are actually registered.",
+    );
   }
 
   return {
@@ -648,15 +700,14 @@ function buildBrowserGuidance(
   };
 }
 
-function buildVoiceRecoveryNotes(
-  voiceStatus: VoiceStatus,
-  voiceRuntime: VoiceRuntimeStatus,
-): string[] {
+function buildVoiceRecoveryNotes(voiceStatus: VoiceStatus, voiceRuntime: VoiceRuntimeStatus): string[] {
   const notes: string[] = [];
   const lastError = voiceRuntime.lastError ?? voiceStatus.stt.lastError;
 
   if (voiceRuntime.readiness !== "ready") {
-    notes.push("Repair or install the managed voice runtime from Settings before attempting transcription, talk, or wake validation.");
+    notes.push(
+      "Repair or install the managed voice runtime from Settings before attempting transcription, talk, or wake validation.",
+    );
   }
   if (!voiceRuntime.selectedModelId) {
     notes.push("Install or activate a local voice model so the proof lane is not blocked on model selection.");
@@ -668,7 +719,9 @@ function buildVoiceRecoveryNotes(
     notes.push("Stop the stale talk session before starting the proof run so the talk-cycle evidence is clean.");
   }
   if (voiceStatus.wake.enabled) {
-    notes.push("Disable the current wake listener first, then re-enable it during the proof run to capture a clean state transition.");
+    notes.push(
+      "Disable the current wake listener first, then re-enable it during the proof run to capture a clean state transition.",
+    );
   }
 
   return Array.from(new Set(notes));
@@ -690,12 +743,20 @@ function buildCanvasGuidance(
   if (!canvasCatalog) {
     blockingIssues.push("No first-class canvas/A2UI automation catalog entry is registered.");
   } else if (canvasCatalog.maturity === "planned" || canvasCatalog.maturity === "disabled") {
-    blockingIssues.push(`Canvas/A2UI catalog maturity is ${canvasCatalog.maturity}, which is still below an operator-ready surface.`);
+    blockingIssues.push(
+      `Canvas/A2UI catalog maturity is ${canvasCatalog.maturity}, which is still below an operator-ready surface.`,
+    );
   }
   if (!a2uiContract) {
-    blockingIssues.push("A2UI contract resolution is missing, so operators still cannot distinguish Mission Control canvas work from companion canvas work.");
-  } else if (!(artifactStatus.hasArtifact && artifactStatus.freshness === "current" && artifactStatus.matchedCurrentProfile)) {
-    blockingIssues.push("A2UI contract v1 exists and the gateway session path is proven, but the Android/companion runtime lane still lacks platform proof.");
+    blockingIssues.push(
+      "A2UI contract resolution is missing, so operators still cannot distinguish Mission Control canvas work from companion canvas work.",
+    );
+  } else if (
+    !(artifactStatus.hasArtifact && artifactStatus.freshness === "current" && artifactStatus.matchedCurrentProfile)
+  ) {
+    blockingIssues.push(
+      "A2UI contract v1 exists and the gateway session path is proven, but the Android/companion runtime lane still lacks platform proof.",
+    );
   }
 
   const paritySummary = a2uiContract
@@ -703,11 +764,15 @@ function buildCanvasGuidance(
       ? `A2UI contract ${a2uiContract.contractId} now defines ${a2uiContract.scopes.join(" + ")} scope for ${canvasCatalog?.label ?? "canvas automation"} via ${a2uiContract.operatorSurface}, with ${canvasPlatformTargets.length} declared canvas-capable platform target(s), and current Android operator proof is on file.`
       : `A2UI contract ${a2uiContract.contractId} now defines ${a2uiContract.scopes.join(" + ")} scope for ${canvasCatalog?.label ?? "canvas automation"} via ${a2uiContract.operatorSurface}, with ${canvasPlatformTargets.length} declared canvas-capable platform target(s).`
     : canvasCatalog
-    ? `Canvas parity currently rests on ${canvasCatalog.label} (${canvasCatalog.maturity}) plus ${canvasPlatformTargets.length} declared canvas-capable platform target(s).`
-    : "Canvas parity currently relies on UI/canvas primitives and placeholder platform tracks, not a shipped A2UI runtime.";
+      ? `Canvas parity currently rests on ${canvasCatalog.label} (${canvasCatalog.maturity}) plus ${canvasPlatformTargets.length} declared canvas-capable platform target(s).`
+      : "Canvas parity currently relies on UI/canvas primitives and placeholder platform tracks, not a shipped A2UI runtime.";
 
-  recommendedActions.push("Use docs/A2UI_CONTRACT.md and packages/contracts/src/a2ui.ts as the source of truth for a2ui.v1.");
-  recommendedActions.push("Keep the Canvas + A2UI catalog entry aligned with a2ui.v1 capability naming instead of treating it as a generic visual-workspace placeholder.");
+  recommendedActions.push(
+    "Use docs/A2UI_CONTRACT.md and packages/contracts/src/a2ui.ts as the source of truth for a2ui.v1.",
+  );
+  recommendedActions.push(
+    "Keep the Canvas + A2UI catalog entry aligned with a2ui.v1 capability naming instead of treating it as a generic visual-workspace placeholder.",
+  );
   recommendedActions.push(
     artifactStatus.hasArtifact && artifactStatus.freshness === "current" && artifactStatus.matchedCurrentProfile
       ? "Keep the Android A2UI proof current and rerun the lane only when the canvas contract, deployment profile, or operator flow changes."
@@ -736,9 +801,13 @@ function buildCompanionGuidance(
   if (companionTargets.length === 0) {
     blockingIssues.push("No companion-capable platform targets are declared in the integration catalog.");
   } else if (!companionContract) {
-    blockingIssues.push("Companion targets are declared, but there is still no Android bootstrap contract tying them to a real separate-repo plan.");
+    blockingIssues.push(
+      "Companion targets are declared, but there is still no Android bootstrap contract tying them to a real separate-repo plan.",
+    );
   } else if (!(artifactStatus.hasArtifact && artifactStatus.freshness === "current")) {
-    blockingIssues.push(`Gateway session/signing proof is complete, but the existing ${companionContract.bootstrapRepo} runtime still needs Android UI/runtime proof on companion.android.v1.`);
+    blockingIssues.push(
+      `Gateway session/signing proof is complete, but the existing ${companionContract.bootstrapRepo} runtime still needs Android UI/runtime proof on companion.android.v1.`,
+    );
   }
 
   const paritySummary = companionContract
@@ -746,11 +815,15 @@ function buildCompanionGuidance(
       ? `${companionContract.contractId} defines an Android-first ${companionContract.repoStrategy} bootstrap lane for ${companionTargets.length} declared companion-capable platform target(s), and current Android runtime/UI proof is on file for the existing ${companionContract.bootstrapRepo} runtime.`
       : `${companionContract.contractId} defines an Android-first ${companionContract.repoStrategy} bootstrap lane for ${companionTargets.length} declared companion-capable platform target(s), and the gateway now has live session/signing proof while the existing ${companionContract.bootstrapRepo} runtime still lacks Android UI/runtime proof.`
     : companionTargets.length > 0
-    ? `${companionTargets.length} companion-capable platform target(s) are declared, but companion work is still docs/catalog-first.`
-    : "Companion parity does not yet have a declared runtime target lane.";
+      ? `${companionTargets.length} companion-capable platform target(s) are declared, but companion work is still docs/catalog-first.`
+      : "Companion parity does not yet have a declared runtime target lane.";
 
-  recommendedActions.push("Use docs/COMPANION_CONTRACT.md and docs/ANDROID_NATIVE_SPEC.md as the current companion bootstrap baseline.");
-  recommendedActions.push("Keep Android as the first bootstrap target and align the separate GoatCitadel-mobile repo to companion.android.v1.");
+  recommendedActions.push(
+    "Use docs/COMPANION_CONTRACT.md and docs/ANDROID_NATIVE_SPEC.md as the current companion bootstrap baseline.",
+  );
+  recommendedActions.push(
+    "Keep Android as the first bootstrap target and align the separate GoatCitadel-mobile repo to companion.android.v1.",
+  );
   recommendedActions.push(
     artifactStatus.hasArtifact && artifactStatus.freshness === "current"
       ? "Keep the Android companion proof current and rerun the lane only when the bootstrap contract, runtime flow, or signed-session behavior changes."
@@ -764,9 +837,7 @@ function buildCompanionGuidance(
   };
 }
 
-function buildCompanionAuthReadiness(
-  authMode: AuthMode,
-): FollowOnParityReadinessRecord<CompanionAuthRequirement>[] {
+function buildCompanionAuthReadiness(authMode: AuthMode): FollowOnParityReadinessRecord<CompanionAuthRequirement>[] {
   return [
     readinessRecord(
       "device_identity",
@@ -801,8 +872,7 @@ function buildCompanionAuthReadiness(
   ];
 }
 
-function buildCompanionPrerequisiteReadiness():
-FollowOnParityReadinessRecord<CompanionServerPrerequisite>[] {
+function buildCompanionPrerequisiteReadiness(): FollowOnParityReadinessRecord<CompanionServerPrerequisite>[] {
   return [
     readinessRecord(
       "device_pairing",
@@ -862,14 +932,19 @@ function buildPluginGuidance(
     matchesReferenceSource: doesPluginMatchReferenceSource(referencePlugin),
     capabilities: referencePlugin?.capabilities ?? [],
   };
-  const hasReferencePluginScaffold = referenceLifecycle.present;
 
   if (!referenceLifecycle.present) {
-    blockingIssues.push("The local reference integration plugin has not been installed through the operator lifecycle yet.");
+    blockingIssues.push(
+      "The local reference integration plugin has not been installed through the operator lifecycle yet.",
+    );
   } else if (!referenceLifecycle.enabled) {
-    blockingIssues.push("The local reference integration plugin is installed but currently disabled, so the lifecycle smoke path is incomplete.");
+    blockingIssues.push(
+      "The local reference integration plugin is installed but currently disabled, so the lifecycle smoke path is incomplete.",
+    );
   } else if (!referenceLifecycle.matchesReferenceSource) {
-    blockingIssues.push("The local reference integration plugin is installed, but its source no longer points at the repo reference scaffold.");
+    blockingIssues.push(
+      "The local reference integration plugin is installed, but its source no longer points at the repo reference scaffold.",
+    );
   }
   if (addonsCatalogCount === 0 && pluginCount === 0) {
     blockingIssues.push("No add-on catalog entries or integration plugins are currently registered.");
@@ -878,21 +953,39 @@ function buildPluginGuidance(
   const sdkSummary = !hasRegisteredBreadth
     ? `No add-on catalog entries or integration plugins are currently registered, so there is no live operator breadth yet; the author contract is explicit and ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} is published to GitHub Packages, but the local reference lifecycle still needs to be installed and exercised.`
     : referenceLifecycle.present && referenceLifecycle.enabled && referenceLifecycle.matchesReferenceSource
-    ? `${addonsCatalogCount} cataloged add-on(s), ${installedAddonCount} installed (${runningAddonCount} running), and ${pluginCount} integration plugin(s) (${enabledPluginCount} enabled) show operator breadth; the author contract is explicit and ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} is published to GitHub Packages as the current public beta SDK boundary.`
-    : `${addonsCatalogCount} cataloged add-on(s), ${installedAddonCount} installed (${runningAddonCount} running), and ${pluginCount} integration plugin(s) (${enabledPluginCount} enabled) show operator breadth; the author contract is explicit and ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} is published to GitHub Packages, but the local reference lifecycle still needs to be installed, enabled, and source-aligned before it counts as the repeatable smoke path.`;
+      ? `${addonsCatalogCount} cataloged add-on(s), ${installedAddonCount} installed (${runningAddonCount} running), and ${pluginCount} integration plugin(s) (${enabledPluginCount} enabled) show operator breadth; the author contract is explicit and ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} is published to GitHub Packages as the current public beta SDK boundary.`
+      : `${addonsCatalogCount} cataloged add-on(s), ${installedAddonCount} installed (${runningAddonCount} running), and ${pluginCount} integration plugin(s) (${enabledPluginCount} enabled) show operator breadth; the author contract is explicit and ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} is published to GitHub Packages, but the local reference lifecycle still needs to be installed, enabled, and source-aligned before it counts as the repeatable smoke path.`;
 
-  recommendedActions.push("Use docs/PLUGIN_SDK_CONTRACT.md as the current author-contract baseline for extension work.");
-  recommendedActions.push("Use packages/extensions-sdk/ as the local author SDK baseline for manifest validation and file helpers.");
-  recommendedActions.push(`Use ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} from GitHub Packages when validating the external author-install flow.`);
-  recommendedActions.push("Use templates/integration-plugins/reference-integration-plugin/ as the local installable plugin reference path.");
-  recommendedActions.push("Use the generated or exported extension starter pack when the current contract doc and reference scaffolds need to be handed off outside the repo.");
-  recommendedActions.push("Keep a smoke test around discovery, install metadata, enable/disable, and runtime reporting for the reference plugin lifecycle.");
+  recommendedActions.push(
+    "Use docs/PLUGIN_SDK_CONTRACT.md as the current author-contract baseline for extension work.",
+  );
+  recommendedActions.push(
+    "Use packages/extensions-sdk/ as the local author SDK baseline for manifest validation and file helpers.",
+  );
+  recommendedActions.push(
+    `Use ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} from GitHub Packages when validating the external author-install flow.`,
+  );
+  recommendedActions.push(
+    "Use templates/integration-plugins/reference-integration-plugin/ as the local installable plugin reference path.",
+  );
+  recommendedActions.push(
+    "Use the generated or exported extension starter pack when the current contract doc and reference scaffolds need to be handed off outside the repo.",
+  );
+  recommendedActions.push(
+    "Keep a smoke test around discovery, install metadata, enable/disable, and runtime reporting for the reference plugin lifecycle.",
+  );
   if (!referenceLifecycle.present) {
-    recommendedActions.push("Install the local reference integration plugin through Mission Control or the integrations API before tomorrow's operator pass.");
+    recommendedActions.push(
+      "Install the local reference integration plugin through Mission Control or the integrations API before tomorrow's operator pass.",
+    );
   } else if (!referenceLifecycle.enabled) {
-    recommendedActions.push("Re-enable the local reference integration plugin so the smoke path proves install plus active lifecycle state.");
+    recommendedActions.push(
+      "Re-enable the local reference integration plugin so the smoke path proves install plus active lifecycle state.",
+    );
   } else if (!referenceLifecycle.matchesReferenceSource) {
-    recommendedActions.push("Reinstall the local reference integration plugin from templates/integration-plugins/reference-integration-plugin/ so the smoke path is anchored to the repo scaffold.");
+    recommendedActions.push(
+      "Reinstall the local reference integration plugin from templates/integration-plugins/reference-integration-plugin/ so the smoke path is anchored to the repo scaffold.",
+    );
   }
 
   return {

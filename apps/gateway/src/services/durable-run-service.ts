@@ -83,13 +83,17 @@ export class DurableRunService {
   listDurableRunTimeline(runId: string, limit = 300): DurableRunTimelineEvent[] {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const safeLimit = Math.max(1, Math.min(2_000, Math.floor(limit)));
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT event_id, run_id, event_type, step_key, payload_json, created_at
       FROM durable_run_events
       WHERE run_id = ?
       ORDER BY created_at ASC
       LIMIT ?
-    `).all(runId, safeLimit) as Array<{
+    `,
+      )
+      .all(runId, safeLimit) as Array<{
       event_id: string;
       run_id: string;
       event_type: DurableRunTimelineEvent["eventType"];
@@ -123,8 +127,8 @@ export class DurableRunService {
     if (this.workerActive) {
       return;
     }
-    let task: Promise<void> | undefined;
-    task = (async () => {
+    const backgroundTasks = this.deps.backgroundTasks;
+    const task = Promise.resolve().then(async () => {
       this.workerActive = true;
       try {
         do {
@@ -134,12 +138,10 @@ export class DurableRunService {
         } while (this.workerRequested);
       } finally {
         this.workerActive = false;
-        if (task) {
-          this.deps?.backgroundTasks.delete(task);
-        }
+        backgroundTasks.delete(task);
       }
-    })();
-    this.deps.backgroundTasks.add(task);
+    });
+    backgroundTasks.add(task);
   }
 
   // ── mutations ────────────────────────────────────────────────────
@@ -361,8 +363,9 @@ export class DurableRunService {
     if (current.status !== "waiting" && current.status !== "paused") {
       throw new Error(`Durable run ${runId} is not waiting/paused`);
     }
-    const waitForEvent = ((current.metadata as { waitForEvent?: { eventKey?: string; correlationId?: string } } | undefined)
-      ?.waitForEvent ?? {}) as { eventKey?: string; correlationId?: string };
+    const waitForEvent = ((
+      current.metadata as { waitForEvent?: { eventKey?: string; correlationId?: string } } | undefined
+    )?.waitForEvent ?? {}) as { eventKey?: string; correlationId?: string };
     if (waitForEvent.eventKey && waitForEvent.eventKey !== event.eventKey) {
       throw new Error(`Wake event key mismatch: expected ${waitForEvent.eventKey}`);
     }
@@ -393,23 +396,31 @@ export class DurableRunService {
 
   recoverDurableDeadLetter(entryId: string, actorId = "operator"): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT dead_letter_id, run_id, reason
       FROM durable_dead_letters
       WHERE dead_letter_id = ?
-    `).get(entryId) as { dead_letter_id: string; run_id: string; reason: string } | undefined;
+    `,
+      )
+      .get(entryId) as { dead_letter_id: string; run_id: string; reason: string } | undefined;
     if (!row) {
       throw new Error(`Durable dead-letter entry not found: ${entryId}`);
     }
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       UPDATE durable_dead_letters
       SET resolved_at = @resolvedAt, resolution_note = @note
       WHERE dead_letter_id = @entryId
-    `).run({
-      entryId,
-      resolvedAt: new Date().toISOString(),
-      note: `recovered by ${actorId}`,
-    });
+    `,
+      )
+      .run({
+        entryId,
+        resolvedAt: new Date().toISOString(),
+        note: `recovered by ${actorId}`,
+      });
     const next = this.ctx.storage.durableRuns.updateRun({
       runId: row.run_id,
       status: "queued",
@@ -442,17 +453,29 @@ export class DurableRunService {
 
   normalizeDurableRetryPolicy(input: Partial<DurableRetryPolicy> | undefined): DurableRetryPolicy {
     return {
-      maxAttempts: Math.max(1, Math.min(20, Math.floor(input?.maxAttempts ?? DURABLE_RETRY_POLICY_DEFAULT.maxAttempts))),
-      baseDelayMs: Math.max(100, Math.min(300_000, Math.floor(input?.baseDelayMs ?? DURABLE_RETRY_POLICY_DEFAULT.baseDelayMs))),
-      maxDelayMs: Math.max(100, Math.min(900_000, Math.floor(input?.maxDelayMs ?? DURABLE_RETRY_POLICY_DEFAULT.maxDelayMs))),
-      backoffMultiplier: Math.max(1, Math.min(8, input?.backoffMultiplier ?? DURABLE_RETRY_POLICY_DEFAULT.backoffMultiplier)),
+      maxAttempts: Math.max(
+        1,
+        Math.min(20, Math.floor(input?.maxAttempts ?? DURABLE_RETRY_POLICY_DEFAULT.maxAttempts)),
+      ),
+      baseDelayMs: Math.max(
+        100,
+        Math.min(300_000, Math.floor(input?.baseDelayMs ?? DURABLE_RETRY_POLICY_DEFAULT.baseDelayMs)),
+      ),
+      maxDelayMs: Math.max(
+        100,
+        Math.min(900_000, Math.floor(input?.maxDelayMs ?? DURABLE_RETRY_POLICY_DEFAULT.maxDelayMs)),
+      ),
+      backoffMultiplier: Math.max(
+        1,
+        Math.min(8, input?.backoffMultiplier ?? DURABLE_RETRY_POLICY_DEFAULT.backoffMultiplier),
+      ),
     };
   }
 
   computeDurableRetryDelayMs(current: DurableRunRecord, attemptNo: number): number {
     const metadataPolicy = (current.metadata as { retryPolicy?: Partial<DurableRetryPolicy> } | undefined)?.retryPolicy;
     const policy = this.normalizeDurableRetryPolicy(metadataPolicy);
-    const raw = policy.baseDelayMs * (policy.backoffMultiplier ** Math.max(0, attemptNo - 1));
+    const raw = policy.baseDelayMs * policy.backoffMultiplier ** Math.max(0, attemptNo - 1);
     return Math.max(100, Math.min(policy.maxDelayMs, Math.floor(raw)));
   }
 
@@ -470,17 +493,21 @@ export class DurableRunService {
       payload: payload ?? {},
       createdAt: new Date().toISOString(),
     };
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       INSERT INTO durable_run_events (event_id, run_id, event_type, step_key, payload_json, created_at)
       VALUES (@eventId, @runId, @eventType, @stepKey, @payloadJson, @createdAt)
-    `).run({
-      eventId: event.eventId,
-      runId: event.runId,
-      eventType: event.eventType,
-      stepKey: event.stepKey ?? null,
-      payloadJson: JSON.stringify(event.payload ?? {}),
-      createdAt: event.createdAt,
-    });
+    `,
+      )
+      .run({
+        eventId: event.eventId,
+        runId: event.runId,
+        eventType: event.eventType,
+        stepKey: event.stepKey ?? null,
+        payloadJson: JSON.stringify(event.payload ?? {}),
+        createdAt: event.createdAt,
+      });
     return event;
   }
 
@@ -488,12 +515,16 @@ export class DurableRunService {
     if (!this.deps) {
       return;
     }
-    const runningRows = this.ctx.gatewaySql.prepare(`
+    const runningRows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT run_id
       FROM durable_runs
       WHERE status = 'running'
       ORDER BY created_at ASC
-    `).all() as Array<{ run_id: string }>;
+    `,
+      )
+      .all() as Array<{ run_id: string }>;
 
     for (const row of runningRows) {
       if (this.activeRunIds.has(row.run_id)) {
@@ -544,12 +575,16 @@ export class DurableRunService {
   }
 
   private claimNextQueuedRun(): DurableRunRecord | undefined {
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT run_id
       FROM durable_runs
       WHERE status = 'queued'
       ORDER BY created_at ASC
-    `).all() as Array<{ run_id: string }>;
+    `,
+      )
+      .all() as Array<{ run_id: string }>;
     if (rows.length === 0) {
       return undefined;
     }

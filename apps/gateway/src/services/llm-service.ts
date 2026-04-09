@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- LLM transport and provider normalization are intentionally centralized until provider seams are split further. */
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { assertHostAllowed } from "@goatcitadel/policy-engine";
@@ -21,11 +22,7 @@ import type {
   LlmProviderSummary,
   LlmRuntimeConfig,
 } from "@goatcitadel/contracts";
-import {
-  findProviderTemplate,
-  inferProviderForModelId,
-  providerAllowsForeignModelIds,
-} from "@goatcitadel/contracts";
+import { findProviderTemplate, inferProviderForModelId, providerAllowsForeignModelIds } from "@goatcitadel/contracts";
 import { applyEstimatedCostToChatResponse, applyEstimatedCostToStreamChunk } from "./llm-pricing.js";
 import {
   isSecretStoreUnavailableLikeError,
@@ -103,17 +100,14 @@ function normalizeConfiguredProviderId(providerId: string | undefined): string |
   return trimmed ? trimmed : undefined;
 }
 
-const DISALLOWED_BASE_HOSTS = new Set([
-  "0.0.0.0",
-  "169.254.169.254",
-  "metadata.google.internal",
-  "100.100.100.200",
-]);
+const DISALLOWED_BASE_HOSTS = new Set(["0.0.0.0", "169.254.169.254", "metadata.google.internal", "100.100.100.200"]);
 const SECRET_STATUS_CACHE_TTL_MS = 60_000;
-type UndiciConnectOptions = Exclude<
+type UndiciAgentConnectOptions = Exclude<
   NonNullable<NonNullable<ConstructorParameters<typeof Agent>[0]>["connect"]>,
-  (...args: any[]) => unknown
+  (...args: unknown[]) => unknown
 >;
+type UndiciProxyTlsOptions = Extract<ConstructorParameters<typeof ProxyAgent>[0], object>["requestTls"];
+type UndiciConnectOptions = UndiciAgentConnectOptions & UndiciProxyTlsOptions;
 type FetchRequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
 
 export class LlmService {
@@ -156,10 +150,11 @@ export class LlmService {
     }
 
     this.activeProviderId = active.providerId;
-    this.activeModel = resolveConfiguredModelForProvider(active, config.activeModel, {
-      fallbackModel: active.defaultModel,
-      onMismatch: "fallback",
-    }) ?? "";
+    this.activeModel =
+      resolveConfiguredModelForProvider(active, config.activeModel, {
+        fallbackModel: active.defaultModel,
+        onMismatch: "fallback",
+      }) ?? "";
   }
 
   public updateNetworkAllowlist(allowlist: string[], options?: { enforce?: boolean }): void {
@@ -172,9 +167,8 @@ export class LlmService {
   public listProviders(options: LlmListProvidersOptions = {}): LlmProviderSummary[] {
     const includeKeychainDefault = options.includeKeychain ?? false;
     return Array.from(this.providers.values()).map((provider) => {
-      const includeKeychain = options.includeKeychainForProviderId === provider.providerId
-        ? true
-        : includeKeychainDefault;
+      const includeKeychain =
+        options.includeKeychainForProviderId === provider.providerId ? true : includeKeychainDefault;
       const status = this.getProviderSecretStatus(provider.providerId, {
         includeKeychain,
         useCache: options.useCache,
@@ -195,15 +189,15 @@ export class LlmService {
     });
   }
 
-  public getRuntimeConfig(options: { includeKeychainForActiveProvider?: boolean; useCache?: boolean } = {}): LlmRuntimeConfig {
+  public getRuntimeConfig(
+    options: { includeKeychainForActiveProvider?: boolean; useCache?: boolean } = {},
+  ): LlmRuntimeConfig {
     return {
       activeProviderId: this.activeProviderId,
       activeModel: this.activeModel,
       providers: this.listProviders({
         includeKeychain: false,
-        includeKeychainForProviderId: options.includeKeychainForActiveProvider
-          ? this.activeProviderId
-          : undefined,
+        includeKeychainForProviderId: options.includeKeychainForActiveProvider ? this.activeProviderId : undefined,
         useCache: options.useCache,
       }),
     };
@@ -225,7 +219,10 @@ export class LlmService {
           input.upsertProvider.providerId,
           input.upsertProvider.apiStyle ?? existing?.apiStyle,
         ),
-        defaultModel: input.upsertProvider.defaultModel ?? existing?.defaultModel ?? defaultModelForProvider(input.upsertProvider.providerId),
+        defaultModel:
+          input.upsertProvider.defaultModel ??
+          existing?.defaultModel ??
+          defaultModelForProvider(input.upsertProvider.providerId),
         apiKey: submittedApiKey ? undefined : (input.upsertProvider.apiKey ?? existing?.apiKey),
         apiKeyEnv: input.upsertProvider.apiKeyEnv ?? existing?.apiKeyEnv,
         request: input.upsertProvider.request ?? existing?.request,
@@ -250,10 +247,11 @@ export class LlmService {
           throw new Error(`Unknown LLM provider: ${providerId}`);
         }
         this.activeProviderId = provider.providerId;
-        this.activeModel = resolveConfiguredModelForProvider(provider, hasActiveModel ? input.activeModel : undefined, {
-          fallbackModel: provider.defaultModel,
-          onMismatch: "throw",
-        }) ?? "";
+        this.activeModel =
+          resolveConfiguredModelForProvider(provider, hasActiveModel ? input.activeModel : undefined, {
+            fallbackModel: provider.defaultModel,
+            onMismatch: "throw",
+          }) ?? "";
       }
     } else if (hasActiveModel) {
       if (!this.activeProviderId) {
@@ -266,10 +264,11 @@ export class LlmService {
         if (!provider) {
           throw new Error(`Unknown LLM provider: ${this.activeProviderId}`);
         }
-        this.activeModel = resolveConfiguredModelForProvider(provider, input.activeModel, {
-          fallbackModel: provider.defaultModel,
-          onMismatch: "throw",
-        }) ?? "";
+        this.activeModel =
+          resolveConfiguredModelForProvider(provider, input.activeModel, {
+            fallbackModel: provider.defaultModel,
+            onMismatch: "throw",
+          }) ?? "";
       }
     }
 
@@ -330,7 +329,9 @@ export class LlmService {
       this.secretStore.setProviderApiKey(providerId, apiKey);
     } catch (error) {
       if (isSecretStoreUnavailableLikeError(error)) {
-        throw new Error("Secure keychain is unavailable on this host. Use apiKeyEnv for env-backed secrets.");
+        throw new Error("Secure keychain is unavailable on this host. Use apiKeyEnv for env-backed secrets.", {
+          cause: error,
+        });
       }
       throw error;
     }
@@ -351,7 +352,7 @@ export class LlmService {
       this.secretStore.deleteProviderApiKey(providerId);
     } catch (error) {
       if (error instanceof SecretStoreUnavailableError) {
-        throw new Error("Secure keychain is unavailable on this host.");
+        throw new Error("Secure keychain is unavailable on this host.", { cause: error });
       }
       throw error;
     }
@@ -409,16 +410,13 @@ export class LlmService {
       request: input.request ?? existing?.request,
       headers: input.headers ?? existing?.headers,
     });
-    const explicitPreviewApiKey = input.apiKey?.trim()
-      || (input.apiKeyEnv ? this.env[input.apiKeyEnv]?.trim() : undefined);
+    const explicitPreviewApiKey =
+      input.apiKey?.trim() || (input.apiKeyEnv ? this.env[input.apiKeyEnv]?.trim() : undefined);
     const resolved: ResolvedProvider = {
       provider,
       apiKey: explicitPreviewApiKey || this.resolveApiKey(provider),
     };
-    const fallbackCatalog = buildFallbackModelCatalog(
-      provider.providerId,
-      provider.defaultModel,
-    );
+    const fallbackCatalog = buildFallbackModelCatalog(provider.providerId, provider.defaultModel);
 
     try {
       const result = await this.fetchModelsForResolvedProvider(resolved);
@@ -429,9 +427,7 @@ export class LlmService {
         };
       }
     } catch (error) {
-      const fallbackItems = provider.defaultModel
-        ? [{ id: provider.defaultModel }]
-        : [];
+      const fallbackItems = provider.defaultModel ? [{ id: provider.defaultModel }] : [];
       if (fallbackItems.length > 0) {
         return {
           items: fallbackItems,
@@ -462,12 +458,16 @@ export class LlmService {
     }
 
     const model = request.model?.trim() || "gpt-image-1";
-    const operation = Array.isArray(request.referenceImages) && request.referenceImages.length > 0
-      ? "edit"
-      : "generate";
+    const operation =
+      Array.isArray(request.referenceImages) && request.referenceImages.length > 0 ? "edit" : "generate";
 
     if (operation === "edit") {
-      const target = this.buildRequestTarget(resolved, "chat", `${resolved.provider.baseUrl}/images/edits`, "multipart");
+      const target = this.buildRequestTarget(
+        resolved,
+        "chat",
+        `${resolved.provider.baseUrl}/images/edits`,
+        "multipart",
+      );
       const formData = new FormData();
       formData.set("model", model);
       formData.set("prompt", prompt);
@@ -584,10 +584,7 @@ export class LlmService {
     resolved: ResolvedProvider,
     model: string,
   ): Promise<ChatCompletionResponse> {
-    const normalizedMessages = normalizeProviderMessages(
-      request.messages,
-      model,
-    );
+    const normalizedMessages = normalizeProviderMessages(request.messages, model);
 
     const payload: Record<string, unknown> = {
       model,
@@ -639,13 +636,10 @@ export class LlmService {
       }
     }
 
-    return applyEstimatedCostToChatResponse(
-      (await response.json()) as ChatCompletionResponse,
-      {
-        providerId: resolved.provider.providerId,
-        model,
-      },
-    );
+    return applyEstimatedCostToChatResponse((await response.json()) as ChatCompletionResponse, {
+      providerId: resolved.provider.providerId,
+      model,
+    });
   }
 
   private async *executeChatCompletionsStream(
@@ -653,10 +647,7 @@ export class LlmService {
     resolved: ResolvedProvider,
     model: string,
   ): AsyncGenerator<Record<string, unknown>> {
-    const normalizedMessages = normalizeProviderMessages(
-      request.messages,
-      model,
-    );
+    const normalizedMessages = normalizeProviderMessages(request.messages, model);
 
     const payload: Record<string, unknown> = {
       model,
@@ -817,21 +808,24 @@ export class LlmService {
 
       if (eventType === "response.completed" && isRecord(event.response)) {
         const adapted = adaptOpenAiResponsesResponse(event.response);
-        yield applyEstimatedCostToStreamChunk({
-          id: adapted.id,
-          model: adapted.model,
-          choices: [
-            {
-              index: 0,
-              delta: {},
-              finish_reason: adapted.choices?.[0]?.finish_reason ?? "stop",
-            },
-          ],
-          usage: adapted.usage,
-        }, {
-          providerId: resolved.provider.providerId,
-          model,
-        });
+        yield applyEstimatedCostToStreamChunk(
+          {
+            id: adapted.id,
+            model: adapted.model,
+            choices: [
+              {
+                index: 0,
+                delta: {},
+                finish_reason: adapted.choices?.[0]?.finish_reason ?? "stop",
+              },
+            ],
+            usage: adapted.usage,
+          },
+          {
+            providerId: resolved.provider.providerId,
+            model,
+          },
+        );
         continue;
       }
 
@@ -894,11 +888,14 @@ export class LlmService {
       return;
     }
 
-    const toolUseBuffers = new Map<number, {
-      id: string;
-      name: string;
-      partialJson: string;
-    }>();
+    const toolUseBuffers = new Map<
+      number,
+      {
+        id: string;
+        name: string;
+        partialJson: string;
+      }
+    >();
     let messageId: string | undefined;
     let messageModel: string | undefined;
     let finishReason: string | undefined;
@@ -987,21 +984,24 @@ export class LlmService {
       }
 
       if (eventType === "message_stop") {
-        yield applyEstimatedCostToStreamChunk({
-          id: messageId,
-          model: messageModel,
-          choices: [
-            {
-              index: 0,
-              delta: {},
-              finish_reason: mapAnthropicStopReason(finishReason),
-            },
-          ],
-          usage: normalizeAnthropicUsage(usage),
-        }, {
-          providerId: resolved.provider.providerId,
-          model,
-        });
+        yield applyEstimatedCostToStreamChunk(
+          {
+            id: messageId,
+            model: messageModel,
+            choices: [
+              {
+                index: 0,
+                delta: {},
+                finish_reason: mapAnthropicStopReason(finishReason),
+              },
+            ],
+            usage: normalizeAnthropicUsage(usage),
+          },
+          {
+            providerId: resolved.provider.providerId,
+            model,
+          },
+        );
       }
     }
   }
@@ -1021,9 +1021,10 @@ export class LlmService {
   }
 
   private resolveRequestModel(provider: LlmProviderConfig, requestedModel?: string): string {
-    const fallbackModel = provider.providerId === this.activeProviderId
-      ? normalizeConfiguredActiveModel(this.activeModel) ?? provider.defaultModel
-      : provider.defaultModel;
+    const fallbackModel =
+      provider.providerId === this.activeProviderId
+        ? (normalizeConfiguredActiveModel(this.activeModel) ?? provider.defaultModel)
+        : provider.defaultModel;
 
     const resolvedModel = resolveConfiguredModelForProvider(provider, requestedModel, {
       fallbackModel,
@@ -1085,8 +1086,8 @@ export class LlmService {
       ...(resolved.provider.request?.headers ?? {}),
     };
     const explicitAuth = resolved.provider.request?.auth;
-    const useAnthropicNativeHeaders = resolved.provider.providerId === "anthropic"
-      && (purpose === "models" || purpose === "messages");
+    const useAnthropicNativeHeaders =
+      resolved.provider.providerId === "anthropic" && (purpose === "models" || purpose === "messages");
 
     delete headers.Authorization;
     delete headers["x-api-key"];
@@ -1211,10 +1212,7 @@ export class LlmService {
 
   private async fetchModelsForResolvedProvider(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
-    const fallback = buildFallbackModelCatalog(
-      resolved.provider.providerId,
-      resolved.provider.defaultModel,
-    );
+    const fallback = buildFallbackModelCatalog(resolved.provider.providerId, resolved.provider.defaultModel);
     const target = this.buildRequestTarget(resolved, "models", `${resolved.provider.baseUrl}/models`);
 
     try {
@@ -1284,12 +1282,7 @@ function normalizeProviderRequestConfig(
     ...(request ?? {}),
     headers: Object.keys(normalizedHeaders).length > 0 ? normalizedHeaders : undefined,
   };
-  if (
-    !normalizedRequest.headers
-    && !normalizedRequest.auth
-    && !normalizedRequest.proxy
-    && !normalizedRequest.tls
-  ) {
+  if (!normalizedRequest.headers && !normalizedRequest.auth && !normalizedRequest.proxy && !normalizedRequest.tls) {
     return undefined;
   }
   return normalizedRequest;
@@ -1313,20 +1306,14 @@ function resolveProviderExecutionApiStyle(provider: LlmProviderConfig, model: st
     if (provider.apiStyle === "openai-chat-completions") {
       return "openai-chat-completions";
     }
-    return isOpenAiResponsesPreferredModel(model)
-      ? "openai-responses"
-      : "openai-chat-completions";
+    return isOpenAiResponsesPreferredModel(model) ? "openai-responses" : "openai-chat-completions";
   }
 
   if (provider.providerId === "anthropic") {
-    return provider.apiStyle === "openai-chat-completions"
-      ? "openai-chat-completions"
-      : "anthropic-messages";
+    return provider.apiStyle === "openai-chat-completions" ? "openai-chat-completions" : "anthropic-messages";
   }
 
-  return provider.apiStyle === "openai-responses"
-    ? "openai-chat-completions"
-    : provider.apiStyle;
+  return provider.apiStyle === "openai-responses" ? "openai-chat-completions" : provider.apiStyle;
 }
 
 function isOpenAiResponsesPreferredModel(model: string): boolean {
@@ -1344,9 +1331,7 @@ function resolveConfiguredModelForProvider(
 ): string | undefined {
   const normalizedModel = normalizeConfiguredActiveModel(model);
   if (!normalizedModel) {
-    return options.fallbackModel
-      ? normalizeRequestedModel(provider.providerId, options.fallbackModel)
-      : undefined;
+    return options.fallbackModel ? normalizeRequestedModel(provider.providerId, options.fallbackModel) : undefined;
   }
 
   const foreignProviderId = inferForeignProviderForModel(provider.providerId, normalizedModel);
@@ -1356,9 +1341,7 @@ function resolveConfiguredModelForProvider(
         `Model ${normalizedModel} belongs to ${foreignProviderId}; switch providers or choose a ${provider.providerId} model.`,
       );
     }
-    return options.fallbackModel
-      ? normalizeRequestedModel(provider.providerId, options.fallbackModel)
-      : undefined;
+    return options.fallbackModel ? normalizeRequestedModel(provider.providerId, options.fallbackModel) : undefined;
   }
 
   return normalizeRequestedModel(provider.providerId, normalizedModel);
@@ -1397,15 +1380,9 @@ function normalizeRequestedModel(providerId: string, model: string): string {
  * Adding a new provider URL quirk is a config change, not a code change.
  */
 const PROVIDER_URL_CANONICALIZATION: Record<string, { match: RegExp; replace: string }[]> = {
-  google: [
-    { match: /\/v1beta\/openai\/v1$/i, replace: "/v1beta/openai" },
-  ],
-  moonshot: [
-    { match: /api\.moonshot\.cn/i, replace: "api.moonshot.ai" },
-  ],
-  minimax: [
-    { match: /api\.minimax\.chat/i, replace: "api.minimax.io" },
-  ],
+  google: [{ match: /\/v1beta\/openai\/v1$/i, replace: "/v1beta/openai" }],
+  moonshot: [{ match: /api\.moonshot\.cn/i, replace: "api.moonshot.ai" }],
+  minimax: [{ match: /api\.minimax\.chat/i, replace: "api.minimax.io" }],
 };
 
 function canonicalizeProviderUrl(providerId: string, baseUrl: string): string {
@@ -1433,10 +1410,7 @@ function canonicalizeProviderUrl(providerId: string, baseUrl: string): string {
   return baseUrl;
 }
 
-function buildFallbackModelCatalog(
-  providerId: string,
-  defaultModel: string | undefined,
-): LlmModelRecord[] {
+function buildFallbackModelCatalog(providerId: string, defaultModel: string | undefined): LlmModelRecord[] {
   const template = findProviderTemplate(providerId);
   const ids = new Set<string>();
 
@@ -1465,18 +1439,20 @@ function normalizeModelRecords(payload: unknown): LlmModelRecord[] {
     }
     normalized.push({
       id,
-      ownedBy: typeof record.owned_by === "string"
-        ? record.owned_by
-        : typeof record.ownedBy === "string"
-          ? record.ownedBy
-          : undefined,
-      created: typeof record.created === "number"
-        ? record.created
-        : typeof record.created_at === "number"
-          ? record.created_at
-          : typeof record.createdAt === "number"
-            ? record.createdAt
+      ownedBy:
+        typeof record.owned_by === "string"
+          ? record.owned_by
+          : typeof record.ownedBy === "string"
+            ? record.ownedBy
             : undefined,
+      created:
+        typeof record.created === "number"
+          ? record.created
+          : typeof record.created_at === "number"
+            ? record.created_at
+            : typeof record.createdAt === "number"
+              ? record.createdAt
+              : undefined,
     });
   }
   return normalized;
@@ -1610,9 +1586,9 @@ function applyRequestAuthHeaders(
 function isMetadataStoreCompatibilityError(text: string): boolean {
   const normalized = text.toLowerCase();
   return (
-    normalized.includes("metadata")
-    && normalized.includes("store")
-    && (normalized.includes("only allowed") || normalized.includes("enabled"))
+    normalized.includes("metadata") &&
+    normalized.includes("store") &&
+    (normalized.includes("only allowed") || normalized.includes("enabled"))
   );
 }
 
@@ -1654,9 +1630,7 @@ async function postJsonRequest(
   externalSignal?: AbortSignal,
 ): Promise<Response> {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = externalSignal
-    ? AbortSignal.any([timeoutSignal, externalSignal])
-    : timeoutSignal;
+  const signal = externalSignal ? AbortSignal.any([timeoutSignal, externalSignal]) : timeoutSignal;
   const requestInit: FetchRequestInitWithDispatcher = {
     method: "POST",
     headers: target.headers,
@@ -1675,9 +1649,7 @@ async function postMultipartRequest(
   externalSignal?: AbortSignal,
 ): Promise<Response> {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = externalSignal
-    ? AbortSignal.any([timeoutSignal, externalSignal])
-    : timeoutSignal;
+  const signal = externalSignal ? AbortSignal.any([timeoutSignal, externalSignal]) : timeoutSignal;
   const requestInit: FetchRequestInitWithDispatcher = {
     method: "POST",
     headers: target.headers,
@@ -1694,9 +1666,7 @@ function createRequestDispatcher(
   requestConfig: LlmProviderRequestConfig,
   env: NodeJS.ProcessEnv,
 ): Dispatcher | undefined {
-  const tlsOptions = targetUrl.protocol === "https:"
-    ? buildRequestTlsOptions(requestConfig.tls)
-    : undefined;
+  const tlsOptions = targetUrl.protocol === "https:" ? buildRequestTlsOptions(requestConfig.tls) : undefined;
   const proxy = requestConfig.proxy;
   if (proxy && !shouldBypassProxy(targetUrl.hostname, proxy.bypassHosts)) {
     const proxyHeaders = buildProxyRequestHeaders(proxy.auth, env);
@@ -1723,15 +1693,13 @@ function buildRequestDispatcherCacheKey(targetUrl: URL, requestConfig: LlmProvid
     origin: targetUrl.origin,
     useProxy,
     proxyUrl: useProxy ? requestConfig.proxy?.url : undefined,
-    proxyAuth: useProxy ? requestConfig.proxy?.auth ?? undefined : undefined,
-    proxyTls: useProxy ? requestConfig.proxy?.tls ?? undefined : undefined,
+    proxyAuth: useProxy ? (requestConfig.proxy?.auth ?? undefined) : undefined,
+    proxyTls: useProxy ? (requestConfig.proxy?.tls ?? undefined) : undefined,
     tls: requestConfig.tls ?? undefined,
   });
 }
 
-function buildRequestTlsOptions(
-  tlsConfig: LlmProviderRequestTlsConfig | undefined,
-): UndiciConnectOptions | undefined {
+function buildRequestTlsOptions(tlsConfig: LlmProviderRequestTlsConfig | undefined): UndiciConnectOptions | undefined {
   if (!tlsConfig) {
     return undefined;
   }
@@ -1928,7 +1896,7 @@ function tryParseJsonRecord(payload: string): Record<string, unknown> | null {
   return null;
 }
 
-async function *streamJsonSseResponse(response: Response): AsyncGenerator<Record<string, unknown>> {
+async function* streamJsonSseResponse(response: Response): AsyncGenerator<Record<string, unknown>> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!contentType.includes("text/event-stream") || !response.body) {
     const json = (await response.json()) as Record<string, unknown>;
@@ -1971,10 +1939,7 @@ async function *streamJsonSseResponse(response: Response): AsyncGenerator<Record
   }
 }
 
-function buildOpenAiResponsesPayload(
-  request: ChatCompletionRequest,
-  model: string,
-): Record<string, unknown> {
+function buildOpenAiResponsesPayload(request: ChatCompletionRequest, model: string): Record<string, unknown> {
   const { instructions, input } = buildOpenAiResponsesInput(request.messages);
   const payload: Record<string, unknown> = {
     model,
@@ -1988,7 +1953,8 @@ function buildOpenAiResponsesPayload(
   if (request.top_p !== undefined) payload.top_p = request.top_p;
   if (request.max_tokens !== undefined) payload.max_output_tokens = request.max_tokens;
   if (request.reasoning?.effort) payload.reasoning = { effort: request.reasoning.effort };
-  if (request.verbosity) payload.text = { ...(isRecord(payload.text) ? payload.text : {}), verbosity: request.verbosity };
+  if (request.verbosity)
+    payload.text = { ...(isRecord(payload.text) ? payload.text : {}), verbosity: request.verbosity };
   if (request.response_format !== undefined) {
     payload.text = {
       ...(isRecord(payload.text) ? payload.text : {}),
@@ -2044,9 +2010,10 @@ function mapOpenAiResponsesToolChoice(
   return mapped as ChatCompletionRequest["tool_choice"];
 }
 
-function buildOpenAiResponsesInput(
-  messages: ChatCompletionRequest["messages"],
-): { instructions?: string; input: Array<Record<string, unknown>> } {
+function buildOpenAiResponsesInput(messages: ChatCompletionRequest["messages"]): {
+  instructions?: string;
+  input: Array<Record<string, unknown>>;
+} {
   const instructionParts: string[] = [];
   const input: Array<Record<string, unknown>> = [];
 
@@ -2107,19 +2074,21 @@ function mapOpenAiResponsesContent(
   if (!Array.isArray(content)) {
     return [];
   }
-  return content.map((block) => {
-    if (!isRecord(block)) {
-      return undefined;
-    }
-    if (block.type === "input_text" || block.type === "input_image" || block.type === "input_file") {
+  return content
+    .map((block) => {
+      if (!isRecord(block)) {
+        return undefined;
+      }
+      if (block.type === "input_text" || block.type === "input_image" || block.type === "input_file") {
+        return block;
+      }
+      if (block.type === "text" || block.type === "output_text") {
+        const text = String(block.text ?? "");
+        return text.trim() ? { type: textBlockType, text } : undefined;
+      }
       return block;
-    }
-    if (block.type === "text" || block.type === "output_text") {
-      const text = String(block.text ?? "");
-      return text.trim() ? { type: textBlockType, text } : undefined;
-    }
-    return block;
-  }).filter((block): block is Record<string, unknown> => Boolean(block));
+    })
+    .filter((block): block is Record<string, unknown> => Boolean(block));
 }
 
 function adaptOpenAiResponsesResponse(json: Record<string, unknown>): ChatCompletionResponse {
@@ -2141,9 +2110,7 @@ function adaptOpenAiResponsesResponse(json: Record<string, unknown>): ChatComple
   const content = assistantMessage
     ? extractOpenAiResponsesMessageText(assistantMessage)
     : String(json.output_text ?? "");
-  const finishReason = toolCalls.length > 0
-    ? "tool_calls"
-    : mapOpenAiResponsesFinishReason(json);
+  const finishReason = toolCalls.length > 0 ? "tool_calls" : mapOpenAiResponsesFinishReason(json);
 
   return {
     id: typeof json.id === "string" ? json.id : undefined,
@@ -2183,10 +2150,7 @@ function mapOpenAiResponsesFinishReason(json: Record<string, unknown>): string {
   return "stop";
 }
 
-function buildAnthropicMessagesPayload(
-  request: ChatCompletionRequest,
-  model: string,
-): Record<string, unknown> {
+function buildAnthropicMessagesPayload(request: ChatCompletionRequest, model: string): Record<string, unknown> {
   const { system, messages } = buildAnthropicMessagesInput(request.messages);
   const payload: Record<string, unknown> = {
     model,
@@ -2213,9 +2177,10 @@ function buildAnthropicMessagesPayload(
   return payload;
 }
 
-function buildAnthropicMessagesInput(
-  messages: ChatCompletionRequest["messages"],
-): { system?: string | Array<Record<string, unknown>>; messages: Array<Record<string, unknown>> } {
+function buildAnthropicMessagesInput(messages: ChatCompletionRequest["messages"]): {
+  system?: string | Array<Record<string, unknown>>;
+  messages: Array<Record<string, unknown>>;
+} {
   const systemStrings: string[] = [];
   const systemBlocks: Array<Record<string, unknown>> = [];
   const normalizedMessages: Array<Record<string, unknown>> = [];
@@ -2273,14 +2238,19 @@ function buildAnthropicMessagesInput(
     });
   }
 
-  const system = systemBlocks.length > 0
-    ? [...systemBlocks, ...systemStrings.filter(Boolean).map((text) => ({ type: "text", text }))]
-    : (systemStrings.filter(Boolean).length > 0 ? systemStrings.filter(Boolean).join("\n\n") : undefined);
+  const system =
+    systemBlocks.length > 0
+      ? [...systemBlocks, ...systemStrings.filter(Boolean).map((text) => ({ type: "text", text }))]
+      : systemStrings.filter(Boolean).length > 0
+        ? systemStrings.filter(Boolean).join("\n\n")
+        : undefined;
 
   return { system, messages: normalizedMessages };
 }
 
-function mapAnthropicMessageContent(content: ChatCompletionRequest["messages"][number]["content"]): Array<Record<string, unknown>> {
+function mapAnthropicMessageContent(
+  content: ChatCompletionRequest["messages"][number]["content"],
+): Array<Record<string, unknown>> {
   if (typeof content === "string") {
     return content.trim() ? [{ type: "text", text: content }] : [];
   }
@@ -2311,7 +2281,9 @@ function anthropicContentValue(content: Array<Record<string, unknown>>): string 
   return content;
 }
 
-function normalizeAnthropicToolResultContent(content: ChatCompletionRequest["messages"][number]["content"]): string | Array<Record<string, unknown>> {
+function normalizeAnthropicToolResultContent(
+  content: ChatCompletionRequest["messages"][number]["content"],
+): string | Array<Record<string, unknown>> {
   if (typeof content === "string") {
     return content;
   }
@@ -2396,7 +2368,9 @@ function anthropicThinkingBudgetForEffort(effort: NonNullable<ChatCompletionRequ
   }
 }
 
-function normalizeToolOutputContent(content: ChatCompletionRequest["messages"][number]["content"]): string | Array<Record<string, unknown>> {
+function normalizeToolOutputContent(
+  content: ChatCompletionRequest["messages"][number]["content"],
+): string | Array<Record<string, unknown>> {
   if (typeof content === "string") {
     return content;
   }
@@ -2479,10 +2453,10 @@ function adaptImageGenerationResponse(
 ): ImageGenerationResponse {
   const items = Array.isArray(payload.data)
     ? payload.data.filter(isRecord).map((item) => ({
-      b64Json: typeof item.b64_json === "string" ? item.b64_json : undefined,
-      url: typeof item.url === "string" ? item.url : undefined,
-      revisedPrompt: typeof item.revised_prompt === "string" ? item.revised_prompt : undefined,
-    }))
+        b64Json: typeof item.b64_json === "string" ? item.b64_json : undefined,
+        url: typeof item.url === "string" ? item.url : undefined,
+        revisedPrompt: typeof item.revised_prompt === "string" ? item.revised_prompt : undefined,
+      }))
     : [];
   return {
     providerId: context.providerId,
@@ -2533,24 +2507,36 @@ function inferProviderCapabilities(provider: LlmProviderConfig): {
 } {
   const model = provider.defaultModel.toLowerCase();
   const base = provider.baseUrl.toLowerCase();
-  const hasVision = (
-    model.includes("vision")
-    || model.includes("gpt-5")
-    || model.includes("gpt-4o")
-    || model.includes("gpt-4.1")
-    || model.includes("gemini")
-    || model.includes("claude-3")
-    || model.includes("claude-sonnet-4")
-    || model.includes("claude-opus-4")
-    || model.includes("kimi")
-    || model.includes("glm")
-  );
+  const hasVision =
+    model.includes("vision") ||
+    model.includes("gpt-5") ||
+    model.includes("gpt-4o") ||
+    model.includes("gpt-4.1") ||
+    model.includes("gemini") ||
+    model.includes("claude-3") ||
+    model.includes("claude-sonnet-4") ||
+    model.includes("claude-opus-4") ||
+    model.includes("kimi") ||
+    model.includes("glm");
   const hasAudio = model.includes("audio") || model.includes("whisper");
   const hasVideo = model.includes("video");
   const hasToolCalling = true;
-  const hasJsonMode = model.includes("gpt") || model.includes("glm") || model.includes("gemini") || base.includes("openai");
-  const hasWebSearch = model.includes("search") || model.includes("sonar") || model.includes("kimi") || model.includes("gpt-4.1") || model.includes("gpt-5");
-  const hasReasoning = model.includes("gpt-5") || model.includes("reason") || model.includes("thinking") || model.includes("o1") || model.includes("o3") || model.includes("claude-sonnet-4") || model.includes("claude-opus-4");
+  const hasJsonMode =
+    model.includes("gpt") || model.includes("glm") || model.includes("gemini") || base.includes("openai");
+  const hasWebSearch =
+    model.includes("search") ||
+    model.includes("sonar") ||
+    model.includes("kimi") ||
+    model.includes("gpt-4.1") ||
+    model.includes("gpt-5");
+  const hasReasoning =
+    model.includes("gpt-5") ||
+    model.includes("reason") ||
+    model.includes("thinking") ||
+    model.includes("o1") ||
+    model.includes("o3") ||
+    model.includes("claude-sonnet-4") ||
+    model.includes("claude-opus-4");
   return {
     vision: hasVision,
     audio: hasAudio,
@@ -2590,26 +2576,19 @@ function applyProviderSpecificChatOptions(input: {
   }
 }
 
-function validateOpenAiChatRequestCompatibility(
-  request: ChatCompletionRequest,
-  model: string,
-): void {
+function validateOpenAiChatRequestCompatibility(request: ChatCompletionRequest, model: string): void {
   const hasSamplingControls = request.temperature !== undefined || request.top_p !== undefined;
   if (!hasSamplingControls) {
     return;
   }
   if (isOpenAiGpt54Or52Model(model)) {
     if (request.reasoning?.effort && request.reasoning.effort !== "none") {
-      throw new Error(
-        "OpenAI GPT-5.4/GPT-5.2 only support temperature/top_p when reasoning effort is set to none.",
-      );
+      throw new Error("OpenAI GPT-5.4/GPT-5.2 only support temperature/top_p when reasoning effort is set to none.");
     }
     return;
   }
   if (isOlderOpenAiGpt5Model(model)) {
-    throw new Error(
-      "Older OpenAI GPT-5 family models do not support temperature/top_p in chat/completions.",
-    );
+    throw new Error("Older OpenAI GPT-5 family models do not support temperature/top_p in chat/completions.");
   }
 }
 

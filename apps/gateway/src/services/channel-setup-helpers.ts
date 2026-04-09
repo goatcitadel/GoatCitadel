@@ -15,7 +15,7 @@ import {
 } from "./channel-setup-test-cache.js";
 import type { GatewayService } from "./gateway-service.js";
 
-export type ChannelSetupHost = GatewayService;
+export type ChannelSetupHost = Pick<GatewayService, "getIntegrationConnection">;
 
 export function buildDefaultChannelSetupDraft(definition: ChannelSetupDefinition): Record<string, unknown> {
   const defaults: Record<string, unknown> = {};

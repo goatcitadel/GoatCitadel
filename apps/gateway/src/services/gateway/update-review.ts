@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const ANSI_ESCAPE_RE = /\u001B\[[0-9;]*m/g;
+const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 
 export interface DependencyUpdateReviewItem {
   packageName: string;
@@ -107,29 +107,32 @@ export async function collectWorkspaceDependencyDrift(
   runCommand: ExecFileLike = execFileAsync,
 ): Promise<{ items: DependencyUpdateReviewItem[]; warnings: string[] }> {
   const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  let stdout = "";
-  let stderr = "";
+  const result = await (async (): Promise<{ stdout: string; stderr: string }> => {
+    try {
+      const execResult = await runCommand(command, ["outdated", "-r", "--no-color"], {
+        cwd: rootDir,
+        timeout: 30_000,
+        windowsHide: true,
+        maxBuffer: 2 * 1024 * 1024,
+      });
+      return {
+        stdout: normalizeExecText(execResult.stdout),
+        stderr: normalizeExecText(execResult.stderr),
+      };
+    } catch (error) {
+      return {
+        stdout: normalizeExecText((error as { stdout?: string | Buffer }).stdout),
+        stderr: normalizeExecText((error as { stderr?: string | Buffer }).stderr),
+      };
+    }
+  })();
 
-  try {
-    const result = await runCommand(command, ["outdated", "-r", "--no-color"], {
-      cwd: rootDir,
-      timeout: 30_000,
-      windowsHide: true,
-      maxBuffer: 2 * 1024 * 1024,
-    });
-    stdout = normalizeExecText(result.stdout);
-    stderr = normalizeExecText(result.stderr);
-  } catch (error) {
-    stdout = normalizeExecText((error as { stdout?: string | Buffer }).stdout);
-    stderr = normalizeExecText((error as { stderr?: string | Buffer }).stderr);
-  }
-
-  const items = parsePnpmOutdatedOutput(stdout);
+  const items = parsePnpmOutdatedOutput(result.stdout);
   const warnings: string[] = [];
-  if (stderr.trim().length > 0 && items.length === 0) {
-    warnings.push(`pnpm outdated reported an error without parseable rows: ${stderr.trim()}`);
+  if (result.stderr.trim().length > 0 && items.length === 0) {
+    warnings.push(`pnpm outdated reported an error without parseable rows: ${result.stderr.trim()}`);
   }
-  if (stdout.trim().length === 0 && warnings.length === 0) {
+  if (result.stdout.trim().length === 0 && warnings.length === 0) {
     warnings.push("pnpm outdated returned no dependency data.");
   }
   return { items, warnings };
@@ -144,10 +147,11 @@ export async function collectSkillSourceDrift(
   const warnings: string[] = [];
 
   for (const manifest of manifests) {
-    const sourceUrl = manifest.resolvedUpstream?.url
-      ?? manifest.candidate?.repositoryUrl
-      ?? manifest.candidate?.sourceUrl
-      ?? manifest.candidate?.sourceRef;
+    const sourceUrl =
+      manifest.resolvedUpstream?.url ??
+      manifest.candidate?.repositoryUrl ??
+      manifest.candidate?.sourceUrl ??
+      manifest.candidate?.sourceRef;
     const currentVersion = manifest.resolvedUpstream?.version;
 
     if (!sourceUrl) {
@@ -212,9 +216,10 @@ export async function collectSkillSourceDrift(
         currentVersion,
         latestVersion,
         status: latestVersion === currentVersion ? "unchanged" : "changed",
-        message: latestVersion === currentVersion
-          ? "Upstream repository HEAD matches the recorded installed revision."
-          : "Upstream repository HEAD differs from the recorded installed revision.",
+        message:
+          latestVersion === currentVersion
+            ? "Upstream repository HEAD matches the recorded installed revision."
+            : "Upstream repository HEAD differs from the recorded installed revision.",
       });
     } catch (error) {
       const stderr = normalizeExecText((error as { stderr?: string | Buffer }).stderr).trim();
@@ -240,7 +245,10 @@ export async function collectVendorChangelogDrift(
   const sources: Array<{
     sourceId: VendorChangelogReviewItem["sourceId"];
     sourceUrl: string;
-    parser: (body: string, headers: Headers) => { latestVersion?: string; latestUpdatedAt?: string; message: string } | null;
+    parser: (
+      body: string,
+      headers: Headers,
+    ) => { latestVersion?: string; latestUpdatedAt?: string; message: string } | null;
   }> = [
     {
       sourceId: "openai",
@@ -370,8 +378,7 @@ export async function collectProviderModelStaleness(
       continue;
     }
 
-    const isCurrent = provider.apiStyle === target.preferredApiStyle
-      && provider.defaultModel === target.preferredModel;
+    const isCurrent = provider.apiStyle === target.preferredApiStyle && provider.defaultModel === target.preferredModel;
     const message = isCurrent
       ? "Configured default matches the preferred native-first provider baseline."
       : `Configured default is ${provider.defaultModel ?? "unset"} on ${provider.apiStyle ?? "unset"}; preferred is ${target.preferredModel} on ${target.preferredApiStyle}.`;
@@ -405,11 +412,12 @@ export async function createDailyUpdateReview(
   ]);
   const changedSkillSourceCount = skillSourceDrift.items.filter((item) => item.status === "changed").length;
   const staleProviderCount = providerModelStaleness.items.filter((item) => item.status === "stale").length;
-  const warningCount = dependencyDrift.warnings.length
-    + skillSourceDrift.warnings.length
-    + vendorChangelogDrift.warnings.length
-    + providerModelStaleness.warnings.length
-    + skillSourceDrift.items.filter((item) => item.status === "warning").length;
+  const warningCount =
+    dependencyDrift.warnings.length +
+    skillSourceDrift.warnings.length +
+    vendorChangelogDrift.warnings.length +
+    providerModelStaleness.warnings.length +
+    skillSourceDrift.items.filter((item) => item.status === "warning").length;
 
   return {
     generatedAt: new Date().toISOString(),
@@ -450,7 +458,9 @@ export function renderUpdateReviewMarkdown(report: UpdateReviewReport): string {
     lines.push("| --- | --- | --- | --- |");
     for (const item of report.dependencyDrift.items) {
       const packageLabel = item.dependencyType ? `${item.packageName} (${item.dependencyType})` : item.packageName;
-      lines.push(`| ${packageLabel} | ${item.currentVersion} | ${item.latestVersion} | ${item.dependents.join(", ") || "-"} |`);
+      lines.push(
+        `| ${packageLabel} | ${item.currentVersion} | ${item.latestVersion} | ${item.dependents.join(", ") || "-"} |`,
+      );
     }
   }
   lines.push("");
@@ -463,7 +473,9 @@ export function renderUpdateReviewMarkdown(report: UpdateReviewReport): string {
     lines.push("| Skill | Status | Installed | Latest | Notes |");
     lines.push("| --- | --- | --- | --- | --- |");
     for (const item of report.skillSourceDrift.items) {
-      lines.push(`| ${item.skillId} | ${item.status} | ${item.currentVersion ?? "-"} | ${item.latestVersion ?? "-"} | ${item.message} |`);
+      lines.push(
+        `| ${item.skillId} | ${item.status} | ${item.currentVersion ?? "-"} | ${item.latestVersion ?? "-"} | ${item.message} |`,
+      );
     }
   }
   lines.push("");
@@ -476,7 +488,9 @@ export function renderUpdateReviewMarkdown(report: UpdateReviewReport): string {
     lines.push("| Source | Status | Latest | Updated | Notes |");
     lines.push("| --- | --- | --- | --- | --- |");
     for (const item of report.vendorChangelogDrift.items) {
-      lines.push(`| ${item.sourceId} | ${item.status} | ${item.latestVersion ?? "-"} | ${item.latestUpdatedAt ?? "-"} | ${item.message} |`);
+      lines.push(
+        `| ${item.sourceId} | ${item.status} | ${item.latestVersion ?? "-"} | ${item.latestUpdatedAt ?? "-"} | ${item.message} |`,
+      );
     }
   }
   lines.push("");
@@ -489,9 +503,10 @@ export function renderUpdateReviewMarkdown(report: UpdateReviewReport): string {
     lines.push("| Provider | Status | Configured | Preferred | Notes |");
     lines.push("| --- | --- | --- | --- | --- |");
     for (const item of report.providerModelStaleness.items) {
-      const configured = item.defaultModel || item.configuredApiStyle
-        ? `${item.defaultModel ?? "-"} / ${item.configuredApiStyle ?? "-"}`
-        : "-";
+      const configured =
+        item.defaultModel || item.configuredApiStyle
+          ? `${item.defaultModel ?? "-"} / ${item.configuredApiStyle ?? "-"}`
+          : "-";
       const preferred = `${item.preferredModel} / ${item.preferredApiStyle}`;
       lines.push(`| ${item.providerId} | ${item.status} | ${configured} | ${preferred} | ${item.message} |`);
     }
@@ -499,10 +514,10 @@ export function renderUpdateReviewMarkdown(report: UpdateReviewReport): string {
   lines.push("");
 
   if (
-    report.dependencyDrift.warnings.length > 0
-    || report.skillSourceDrift.warnings.length > 0
-    || report.vendorChangelogDrift.warnings.length > 0
-    || report.providerModelStaleness.warnings.length > 0
+    report.dependencyDrift.warnings.length > 0 ||
+    report.skillSourceDrift.warnings.length > 0 ||
+    report.vendorChangelogDrift.warnings.length > 0 ||
+    report.providerModelStaleness.warnings.length > 0
   ) {
     lines.push("## Warnings");
     lines.push("");
@@ -633,7 +648,9 @@ function parseOpenClawChangelog(
   };
 }
 
-async function readInstalledSkillSourceManifests(rootDir: string): Promise<Array<InstalledSkillSourceManifest & { skillId: string }>> {
+async function readInstalledSkillSourceManifests(
+  rootDir: string,
+): Promise<Array<InstalledSkillSourceManifest & { skillId: string }>> {
   const extraRoot = path.resolve(rootDir, "skills", "extra");
   if (!fsSync.existsSync(extraRoot)) {
     return [];

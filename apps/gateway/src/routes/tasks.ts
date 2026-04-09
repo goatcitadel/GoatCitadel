@@ -2,16 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
 
-const statusSchema = z.enum([
-  "planning",
-  "inbox",
-  "assigned",
-  "in_progress",
-  "testing",
-  "review",
-  "done",
-  "blocked",
-]);
+const statusSchema = z.enum(["planning", "inbox", "assigned", "in_progress", "testing", "review", "done", "blocked"]);
 
 const prioritySchema = z.enum(["low", "normal", "high", "urgent"]);
 
@@ -72,12 +63,14 @@ const deleteTaskQuerySchema = z.object({
   mode: z.enum(["soft", "hard"]).default("soft"),
 });
 
-const deleteTaskBodySchema = z.object({
-  mode: z.enum(["soft", "hard"]).optional(),
-  deletedBy: z.string().min(1).optional(),
-  deleteReason: z.string().min(1).max(400).optional(),
-  confirmToken: z.string().optional(),
-}).optional();
+const deleteTaskBodySchema = z
+  .object({
+    mode: z.enum(["soft", "hard"]).optional(),
+    deletedBy: z.string().min(1).optional(),
+    deleteReason: z.string().min(1).max(400).optional(),
+    confirmToken: z.string().optional(),
+  })
+  .optional();
 
 export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/tasks", async (request, reply) => {
@@ -95,9 +88,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       parsed.data.workspaceId,
     );
     const last = items[items.length - 1];
-    const nextCursor = items.length === parsed.data.limit && last
-      ? `${last.updatedAt}|${last.taskId}`
-      : undefined;
+    const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.taskId}` : undefined;
     return reply.send({ items, nextCursor, view });
   });
 
@@ -153,14 +144,20 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const deleteReason = bodyParsed.data?.deleteReason;
     const confirmToken = bodyParsed.data?.confirmToken;
 
-    let deleted = false;
-    if (mode === "hard") {
+    const deleted =
+      mode === "hard"
+        ? (() => {
+            if (confirmToken !== "PERMANENT_DELETE") {
+              return undefined;
+            }
+            return fastify.gateway.hardDeleteTask(taskId);
+          })()
+        : fastify.gateway.softDeleteTask(taskId, deletedBy, deleteReason);
+
+    if (mode === "hard" && deleted === undefined) {
       if (confirmToken !== "PERMANENT_DELETE") {
         return reply.code(400).send({ error: "Hard delete requires confirmToken=PERMANENT_DELETE" });
       }
-      deleted = fastify.gateway.hardDeleteTask(taskId);
-    } else {
-      deleted = fastify.gateway.softDeleteTask(taskId, deletedBy, deleteReason);
     }
 
     if (!deleted) {

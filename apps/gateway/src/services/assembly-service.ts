@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Assembly orchestration remains centralized while runtime ownership is still being narrowed. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -76,9 +77,7 @@ interface ExecutionState {
 }
 
 export class ProviderAdapterRegistry implements ProviderAdapter {
-  public constructor(
-    private readonly createChatCompletion: AssemblyServiceOptions["createChatCompletion"],
-  ) {}
+  public constructor(private readonly createChatCompletion: AssemblyServiceOptions["createChatCompletion"]) {}
 
   public async invokeStructured(input: StructuredInvocationInput): Promise<StructuredInvocationResult> {
     const prompt = buildStructuredPrompt(input);
@@ -157,11 +156,13 @@ export class PeerReviewEngine {
   }
 
   public validateReview(review: PeerReview): boolean {
-    return review.strengths.length > 0
-      && review.weaknesses.length > 0
-      && Number.isFinite(review.confidence)
-      && review.confidence >= 0
-      && review.confidence <= 1;
+    return (
+      review.strengths.length > 0 &&
+      review.weaknesses.length > 0 &&
+      Number.isFinite(review.confidence) &&
+      review.confidence >= 0 &&
+      review.confidence <= 1
+    );
   }
 
   public detectMergeCandidates(reviews: PeerReview[]): string[] {
@@ -183,8 +184,10 @@ export class AdversarialEngine {
     }
     if (settings.selectionStrategy === "auto_selected_by_reputation") {
       const ranked = [...participants].sort((left, right) => {
-        const leftScore = reputations.find((item) => item.modelRef === participantModelRef(left))?.adversarialUsefulness ?? 0;
-        const rightScore = reputations.find((item) => item.modelRef === participantModelRef(right))?.adversarialUsefulness ?? 0;
+        const leftScore =
+          reputations.find((item) => item.modelRef === participantModelRef(left))?.adversarialUsefulness ?? 0;
+        const rightScore =
+          reputations.find((item) => item.modelRef === participantModelRef(right))?.adversarialUsefulness ?? 0;
         return rightScore - leftScore;
       });
       return ranked.slice(0, reviewerCount);
@@ -216,18 +219,22 @@ export class AdversarialEngine {
 
   public scoreChallenges(reviews: AdversarialReview[]): number {
     return reviews.reduce((total, review) => {
-      return total + review.objections.reduce((sum, objection) => {
-        const severity = objection.classification === "critical_flaw"
-          ? 1
-          : objection.classification === "moderate_risk"
-            ? 0.7
-            : objection.classification === "edge_case_concern"
-              ? 0.4
-              : 0.1;
-        const evidence = objection.evidenceBasis === "evidence_based" ? 1 : 0.7;
-        const actionability = objection.mitigation?.trim() ? 1 : 0.5;
-        return sum + (severity * evidence * actionability);
-      }, 0);
+      return (
+        total +
+        review.objections.reduce((sum, objection) => {
+          const severity =
+            objection.classification === "critical_flaw"
+              ? 1
+              : objection.classification === "moderate_risk"
+                ? 0.7
+                : objection.classification === "edge_case_concern"
+                  ? 0.4
+                  : 0.1;
+          const evidence = objection.evidenceBasis === "evidence_based" ? 1 : 0.7;
+          const actionability = objection.mitigation?.trim() ? 1 : 0.5;
+          return sum + severity * evidence * actionability;
+        }, 0)
+      );
     }, 0);
   }
 }
@@ -246,32 +253,33 @@ export class ConvergenceScorer {
       const reviews = input.peerReviews.filter((review) => review.proposalId === proposal.proposalId);
       const reviewScore = average(reviews.map((review) => weightedReviewScore(review)));
       const evidenceSupport = Math.min(1, proposal.evidence.length / 4);
-      const proposalQuality = (
-        (reviewScore || proposal.confidence) * 0.45
-        + clamp01(proposal.confidence) * 0.2
-        + clamp01(evidenceSupport) * 0.15
-        + clamp01(1 - (proposal.risks.length / 10)) * 0.2
-      );
+      const proposalQuality =
+        (reviewScore || proposal.confidence) * 0.45 +
+        clamp01(proposal.confidence) * 0.2 +
+        clamp01(evidenceSupport) * 0.15 +
+        clamp01(1 - proposal.risks.length / 10) * 0.2;
       const normalized = clamp01(proposalQuality);
       proposalSupportScores[proposal.proposalId] = normalized;
       return normalized;
     });
     const disagreementClusters = buildDisagreementClusters(input.peerReviews, input.adversarialReviews);
     const compositeScore = average(qualityScores);
-    const stagnationDelta = input.previous
-      ? Math.abs(compositeScore - input.previous.compositeScore)
-      : 1;
+    const stagnationDelta = input.previous ? Math.abs(compositeScore - input.previous.compositeScore) : 1;
     return {
       runId: input.runId,
       roundIndex: input.roundIndex,
       dimensionScores: {
         rootCause: compositeScore,
         solutionDesign: compositeScore,
-        riskAnalysis: clamp01(1 - (disagreementClusters.length * 0.12)),
+        riskAnalysis: clamp01(1 - disagreementClusters.length * 0.12),
         implementationScope: compositeScore,
-        evidenceStrength: clamp01(average(input.proposals.map((proposal) => Math.min(1, proposal.evidence.length / 4)))),
+        evidenceStrength: clamp01(
+          average(input.proposals.map((proposal) => Math.min(1, proposal.evidence.length / 4))),
+        ),
         confidenceStability: clamp01(1 - stagnationDelta),
-        testPlanAlignment: clamp01(average(input.proposals.map((proposal) => Math.min(1, proposal.testPlan.length / 4)))),
+        testPlanAlignment: clamp01(
+          average(input.proposals.map((proposal) => Math.min(1, proposal.testPlan.length / 4))),
+        ),
       },
       proposalSupportScores,
       compositeScore: clamp01(compositeScore),
@@ -301,10 +309,11 @@ export class ConvergenceScorer {
         return average(reviews.map((review) => weightedReviewScore(review))) < 0.55;
       })
       .map((proposal) => proposal.proposalId);
-    const critical = input.adversarialReviews
-      .flatMap((review) => review.objections
+    const critical = input.adversarialReviews.flatMap((review) =>
+      review.objections
         .filter((objection) => objection.classification === "critical_flaw")
-        .map(() => review.proposalId));
+        .map(() => review.proposalId),
+    );
     return [...new Set([...lowSupport, ...critical])];
   }
 }
@@ -324,21 +333,41 @@ export class ReputationTracker {
       const modelRef = participantModelRef(participant);
       const current = existing.find((item) => item.modelRef === modelRef) ?? createEmptyReputation(participant);
       const proposals = input.proposals.filter((proposal) => proposal.authorModelRef === modelRef);
-      const reviews = input.peerReviews.filter((review) => review.blindedReviewerToken === blindedReviewerToken(modelRef));
-      const adversarialReviews = input.adversarialReviews.filter((review) => review.blindedReviewerToken === blindedReviewerToken(modelRef));
+      const reviews = input.peerReviews.filter(
+        (review) => review.blindedReviewerToken === blindedReviewerToken(modelRef),
+      );
+      const adversarialReviews = input.adversarialReviews.filter(
+        (review) => review.blindedReviewerToken === blindedReviewerToken(modelRef),
+      );
       const sampleCount = current.sampleCount + 1;
       const next: ModelReputation = {
         ...current,
         accuracy: averageInto(current.accuracy, average(proposals.map((proposal) => proposal.confidence)), sampleCount),
-        reasoningStrength: averageInto(current.reasoningStrength, average(reviews.map((review) => review.scores.reasoningStrength)), sampleCount),
-        critiqueQuality: averageInto(current.critiqueQuality, average(reviews.map((review) => weightedReviewScore(review))), sampleCount),
+        reasoningStrength: averageInto(
+          current.reasoningStrength,
+          average(reviews.map((review) => review.scores.reasoningStrength)),
+          sampleCount,
+        ),
+        critiqueQuality: averageInto(
+          current.critiqueQuality,
+          average(reviews.map((review) => weightedReviewScore(review))),
+          sampleCount,
+        ),
         consensusLeadership: averageInto(
           current.consensusLeadership,
-          input.result.modelContributionSummary.some((item) => item.modelRef === modelRef && item.contributionRole === "synthesis") ? 1 : 0.5,
+          input.result.modelContributionSummary.some(
+            (item) => item.modelRef === modelRef && item.contributionRole === "synthesis",
+          )
+            ? 1
+            : 0.5,
           sampleCount,
         ),
         stability: averageInto(current.stability, clamp01(1 - (input.run.usage?.costUsd ?? 0)), sampleCount),
-        adversarialUsefulness: averageInto(current.adversarialUsefulness, this.adversarialUsefulnessScore(adversarialReviews), sampleCount),
+        adversarialUsefulness: averageInto(
+          current.adversarialUsefulness,
+          this.adversarialUsefulnessScore(adversarialReviews),
+          sampleCount,
+        ),
         sampleCount,
         updatedAt: new Date().toISOString(),
       };
@@ -371,7 +400,11 @@ export class ReputationTracker {
   public applyAdversarialUsefulness(current: ModelReputation, reviews: AdversarialReview[]): ModelReputation {
     return {
       ...current,
-      adversarialUsefulness: averageInto(current.adversarialUsefulness, this.adversarialUsefulnessScore(reviews), current.sampleCount + 1),
+      adversarialUsefulness: averageInto(
+        current.adversarialUsefulness,
+        this.adversarialUsefulnessScore(reviews),
+        current.sampleCount + 1,
+      ),
     };
   }
 
@@ -391,18 +424,27 @@ export class ReputationTracker {
   }
 
   private adversarialUsefulnessScore(reviews: AdversarialReview[]): number {
-    return clamp01(average(reviews.map((review) => average(review.objections.map((objection) => {
-      const severity = objection.classification === "critical_flaw"
-        ? 1
-        : objection.classification === "moderate_risk"
-          ? 0.7
-          : objection.classification === "edge_case_concern"
-            ? 0.4
-            : 0.1;
-      const evidence = objection.evidenceBasis === "evidence_based" ? 1 : 0.7;
-      const mitigation = objection.mitigation?.trim() ? 1 : 0.5;
-      return severity * evidence * mitigation;
-    })))));
+    return clamp01(
+      average(
+        reviews.map((review) =>
+          average(
+            review.objections.map((objection) => {
+              const severity =
+                objection.classification === "critical_flaw"
+                  ? 1
+                  : objection.classification === "moderate_risk"
+                    ? 0.7
+                    : objection.classification === "edge_case_concern"
+                      ? 0.4
+                      : 0.1;
+              const evidence = objection.evidenceBasis === "evidence_based" ? 1 : 0.7;
+              const mitigation = objection.mitigation?.trim() ? 1 : 0.5;
+              return severity * evidence * mitigation;
+            }),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -425,13 +467,16 @@ export class SynthesisEngine {
         ...input.adversarialReviews.flatMap((review) => review.objections.map((objection) => objection.detail)),
       ]),
       implementationPlan: this.buildImplementationPlan(input.proposals),
-      minorityReport: input.convergence.minorityFlags.length > 0
-        ? {
-          summary: "Minority objections remain unresolved.",
-          proposalIds: input.convergence.minorityFlags,
-          reasons: input.adversarialReviews.flatMap((review) => review.objections.map((objection) => objection.title)).slice(0, 4),
-        }
-        : undefined,
+      minorityReport:
+        input.convergence.minorityFlags.length > 0
+          ? {
+              summary: "Minority objections remain unresolved.",
+              proposalIds: input.convergence.minorityFlags,
+              reasons: input.adversarialReviews
+                .flatMap((review) => review.objections.map((objection) => objection.title))
+                .slice(0, 4),
+            }
+          : undefined,
       modelContributionSummary: this.buildContributionSummary(
         input.proposals,
         input.peerReviews,
@@ -452,7 +497,9 @@ export class SynthesisEngine {
     exports: AssemblyResultExportRecord[];
   }): AssemblyResult {
     const ranked = [...input.proposals].sort(
-      (left, right) => (input.convergence.proposalSupportScores[right.proposalId] ?? 0) - (input.convergence.proposalSupportScores[left.proposalId] ?? 0),
+      (left, right) =>
+        (input.convergence.proposalSupportScores[right.proposalId] ?? 0) -
+        (input.convergence.proposalSupportScores[left.proposalId] ?? 0),
     );
     const finalists = ranked.slice(0, 2);
     return {
@@ -487,13 +534,13 @@ export class SynthesisEngine {
     const modelRefs = new Set<string>(proposals.map((proposal) => proposal.authorModelRef));
     return [...modelRefs].map((modelRef) => {
       const proposalCount = proposals.filter((proposal) => proposal.authorModelRef === modelRef).length;
-      const reviewCount = peerReviews.filter((review) => review.blindedReviewerToken === blindedReviewerToken(modelRef)).length;
-      const adversaryCount = adversarialReviews.filter((review) => review.blindedReviewerToken === blindedReviewerToken(modelRef)).length;
-      const contributionRole = adversaryCount > 0
-        ? "adversary"
-        : reviewCount > 0
-          ? "review"
-          : "proposal";
+      const reviewCount = peerReviews.filter(
+        (review) => review.blindedReviewerToken === blindedReviewerToken(modelRef),
+      ).length;
+      const adversaryCount = adversarialReviews.filter(
+        (review) => review.blindedReviewerToken === blindedReviewerToken(modelRef),
+      ).length;
+      const contributionRole = adversaryCount > 0 ? "adversary" : reviewCount > 0 ? "review" : "proposal";
       return {
         modelRef,
         contributionRole,
@@ -553,7 +600,11 @@ export class AssemblyOrchestrator {
 
   public normalizeProblem(runId: string, input: CreateAssemblyRunInput): AssemblyProblem {
     const normalizedPrompt = input.prompt.trim().replace(/\s+/g, " ");
-    const objectives = normalizedPrompt.split(/[.?!]\s+/).map((item) => item.trim()).filter(Boolean).slice(0, 4);
+    const objectives = normalizedPrompt
+      .split(/[.?!]\s+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 4);
     const contextRefs = input.contextRefs ?? [];
     return {
       runId,
@@ -615,24 +666,40 @@ export class AssemblyOrchestrator {
     stageArtifacts.push(convergence);
 
     const revisedProposals = revisionArtifacts.artifacts
-      .filter((artifact): artifact is AssemblyArtifactRecord & { payload: ModelProposal } => artifact.artifactType === "proposal")
+      .filter(
+        (artifact): artifact is AssemblyArtifactRecord & { payload: ModelProposal } =>
+          artifact.artifactType === "proposal",
+      )
       .map((artifact) => artifact.payload);
-    const currentProposals = revisedProposals.length > 0
-      ? revisedProposals
-      : proposals.artifacts
-        .filter((artifact): artifact is AssemblyArtifactRecord & { payload: ModelProposal } => artifact.artifactType === "proposal")
-        .map((artifact) => artifact.payload);
+    const currentProposals =
+      revisedProposals.length > 0
+        ? revisedProposals
+        : proposals.artifacts
+            .filter(
+              (artifact): artifact is AssemblyArtifactRecord & { payload: ModelProposal } =>
+                artifact.artifactType === "proposal",
+            )
+            .map((artifact) => artifact.payload);
     const allArtifacts = stageArtifacts.flatMap((stage) => stage.artifacts);
     return {
       proposals: currentProposals,
       peerReviews: allArtifacts
-        .filter((artifact): artifact is AssemblyArtifactRecord & { payload: PeerReview } => artifact.artifactType === "peer_review")
+        .filter(
+          (artifact): artifact is AssemblyArtifactRecord & { payload: PeerReview } =>
+            artifact.artifactType === "peer_review",
+        )
         .map((artifact) => artifact.payload),
       adversarialReviews: allArtifacts
-        .filter((artifact): artifact is AssemblyArtifactRecord & { payload: AdversarialReview } => artifact.artifactType === "adversarial_review")
+        .filter(
+          (artifact): artifact is AssemblyArtifactRecord & { payload: AdversarialReview } =>
+            artifact.artifactType === "adversarial_review",
+        )
         .map((artifact) => artifact.payload),
       defenses: allArtifacts
-        .filter((artifact): artifact is AssemblyArtifactRecord & { payload: DefenseResponse } => artifact.artifactType === "defense_response")
+        .filter(
+          (artifact): artifact is AssemblyArtifactRecord & { payload: DefenseResponse } =>
+            artifact.artifactType === "defense_response",
+        )
         .map((artifact) => artifact.payload),
       convergence: convergence.artifacts[0]?.payload as ConvergenceScore | undefined,
     };
@@ -645,7 +712,7 @@ export class AssemblyOrchestrator {
     }
     const usage = summarizeUsage([
       ...state.proposals.map((proposal) => proposal.usage),
-      ...state.peerReviews.map((review) => ({ latencyMs: undefined, costUsd: undefined })),
+      ...state.peerReviews.map((_review) => ({ latencyMs: undefined, costUsd: undefined })),
     ]);
     if ((usage.costUsd ?? 0) >= run.settings.costBudgetUsd) {
       return { shouldStop: true, reason: "budget_exceeded", details: "Cost budget exhausted." };
@@ -656,12 +723,19 @@ export class AssemblyOrchestrator {
     if (current.compositeScore >= run.settings.convergenceThreshold && current.minorityFlags.length === 0) {
       return { shouldStop: true, reason: "converged", details: "Composite score reached threshold." };
     }
-    if (scores.length >= run.settings.stagnationWindow && this.convergenceScorer.detectStagnation(scores, run.settings.stagnationWindow) < 0.02) {
+    if (
+      scores.length >= run.settings.stagnationWindow &&
+      this.convergenceScorer.detectStagnation(scores, run.settings.stagnationWindow) < 0.02
+    ) {
       return { shouldStop: true, reason: "stagnated", details: "Convergence delta stayed below epsilon." };
     }
     const duplicateRate = calculateDuplicateObjectionRate(state.adversarialReviews);
     if (duplicateRate >= 0.65 && run.adversarialSettings.repetitiveObjectionCutoff) {
-      return { shouldStop: true, reason: "repetitive_objections", details: "Objection fingerprint duplication exceeded cutoff." };
+      return {
+        shouldStop: true,
+        reason: "repetitive_objections",
+        details: "Objection fingerprint duplication exceeded cutoff.",
+      };
     }
     if (run.currentRoundIndex >= run.settings.maxRounds) {
       return { shouldStop: true, reason: "max_rounds", details: "Configured max rounds reached." };
@@ -717,9 +791,9 @@ export class AssemblyOrchestrator {
   private async buildResult(run: AssemblyRunRecord, state: ExecutionState): Promise<AssemblyResult> {
     const exports = await writeAssemblyExports(this.storage, this.rootDir, run, state);
     const topScore = sortedProposalScores(state.convergence).slice(0, 2);
-    const shouldSplit = topScore.length > 1
-      && Math.abs(topScore[0]!.score - topScore[1]!.score) <= 0.05
-        || Boolean(state.convergence?.minorityFlags.length);
+    const shouldSplit =
+      (topScore.length > 1 && Math.abs(topScore[0]!.score - topScore[1]!.score) <= 0.05) ||
+      Boolean(state.convergence?.minorityFlags.length);
     if (shouldSplit && state.convergence) {
       return this.synthesisEngine.buildSplitDecision({
         run,
@@ -735,13 +809,15 @@ export class AssemblyOrchestrator {
       proposals: state.proposals,
       peerReviews: state.peerReviews,
       adversarialReviews: state.adversarialReviews,
-      convergence: state.convergence ?? this.convergenceScorer.scoreRound({
-        runId: run.runId,
-        roundIndex: run.currentRoundIndex,
-        proposals: state.proposals,
-        peerReviews: state.peerReviews,
-        adversarialReviews: state.adversarialReviews,
-      }),
+      convergence:
+        state.convergence ??
+        this.convergenceScorer.scoreRound({
+          runId: run.runId,
+          roundIndex: run.currentRoundIndex,
+          proposals: state.proposals,
+          peerReviews: state.peerReviews,
+          adversarialReviews: state.adversarialReviews,
+        }),
       exports,
     });
   }
@@ -752,34 +828,38 @@ export class AssemblyOrchestrator {
     stage: AssemblyStage,
     state: ExecutionState,
   ): Promise<StageArtifacts> {
-    const artifacts = await Promise.all(run.settings.participantModels.map(async (participant, index) => {
-      const fallback = fallbackProposal(run, roundIndex, participant, state.peerReviews);
-      const invoked = await this.registry.invokeStructured({
-        participant,
-        problem: run.problem,
-        stage,
-        instructions: proposalInstructions(run, state.peerReviews, state.adversarialReviews, participant),
-        schemaLabel: "ModelProposal",
-        priorArtifacts: [],
-        fallbackPayload: fallback,
-      }).catch(() => ({
-        payload: fallback,
-        usage: undefined,
-        providerId: participant.providerId,
-        modelId: participant.model,
-        modelRef: participantModelRef(participant),
-      }));
-      const proposal = mapProposalPayload(run.runId, roundIndex, participant, invoked.payload, invoked.usage, index);
-      return buildArtifactRecord({
-        runId: run.runId,
-        roundIndex,
-        stage,
-        artifactType: "proposal",
-        payload: proposal,
-        participantModelRef: proposal.authorModelRef,
-        blindedAuthorToken: proposal.blindedAuthorToken,
-      });
-    }));
+    const artifacts = await Promise.all(
+      run.settings.participantModels.map(async (participant, index) => {
+        const fallback = fallbackProposal(run, roundIndex, participant, state.peerReviews);
+        const invoked = await this.registry
+          .invokeStructured({
+            participant,
+            problem: run.problem,
+            stage,
+            instructions: proposalInstructions(run, state.peerReviews, state.adversarialReviews, participant),
+            schemaLabel: "ModelProposal",
+            priorArtifacts: [],
+            fallbackPayload: fallback,
+          })
+          .catch(() => ({
+            payload: fallback,
+            usage: undefined,
+            providerId: participant.providerId,
+            modelId: participant.model,
+            modelRef: participantModelRef(participant),
+          }));
+        const proposal = mapProposalPayload(run.runId, roundIndex, participant, invoked.payload, invoked.usage, index);
+        return buildArtifactRecord({
+          runId: run.runId,
+          roundIndex,
+          stage,
+          artifactType: "proposal",
+          payload: proposal,
+          participantModelRef: proposal.authorModelRef,
+          blindedAuthorToken: proposal.blindedAuthorToken,
+        });
+      }),
+    );
     return this.persistStage(run, roundIndex, stage, artifacts);
   }
 
@@ -792,34 +872,38 @@ export class AssemblyOrchestrator {
   ): Promise<StageArtifacts> {
     const proposals = proposalArtifacts.map((artifact) => artifact.payload as ModelProposal);
     const assignments = this.peerReviewEngine.assignBlindReviews(proposals, run.settings.participantModels);
-    const artifacts = await Promise.all(assignments.map(async ({ proposal, reviewer }) => {
-      const fallback = fallbackPeerReview(run.runId, roundIndex, proposal, reviewer);
-      const invoked = await this.registry.invokeStructured({
-        participant: reviewer,
-        problem: run.problem,
-        stage,
-        instructions: peerReviewInstructions(proposal, state.peerReviews),
-        schemaLabel: "PeerReview",
-        priorArtifacts: proposalArtifacts,
-        fallbackPayload: fallback,
-      }).catch(() => ({
-        payload: fallback,
-        usage: undefined,
-        providerId: reviewer.providerId,
-        modelId: reviewer.model,
-        modelRef: participantModelRef(reviewer),
-      }));
-      const review = mapPeerReviewPayload(run.runId, roundIndex, proposal, reviewer, invoked.payload);
-      return buildArtifactRecord({
-        runId: run.runId,
-        roundIndex,
-        stage,
-        artifactType: "peer_review",
-        payload: review,
-        participantModelRef: participantModelRef(reviewer),
-        blindedAuthorToken: review.blindedReviewerToken,
-      });
-    }));
+    const artifacts = await Promise.all(
+      assignments.map(async ({ proposal, reviewer }) => {
+        const fallback = fallbackPeerReview(run.runId, roundIndex, proposal, reviewer);
+        const invoked = await this.registry
+          .invokeStructured({
+            participant: reviewer,
+            problem: run.problem,
+            stage,
+            instructions: peerReviewInstructions(proposal, state.peerReviews),
+            schemaLabel: "PeerReview",
+            priorArtifacts: proposalArtifacts,
+            fallbackPayload: fallback,
+          })
+          .catch(() => ({
+            payload: fallback,
+            usage: undefined,
+            providerId: reviewer.providerId,
+            modelId: reviewer.model,
+            modelRef: participantModelRef(reviewer),
+          }));
+        const review = mapPeerReviewPayload(run.runId, roundIndex, proposal, reviewer, invoked.payload);
+        return buildArtifactRecord({
+          runId: run.runId,
+          roundIndex,
+          stage,
+          artifactType: "peer_review",
+          payload: review,
+          participantModelRef: participantModelRef(reviewer),
+          blindedAuthorToken: review.blindedReviewerToken,
+        });
+      }),
+    );
     return this.persistStage(run, roundIndex, stage, artifacts);
   }
 
@@ -827,7 +911,7 @@ export class AssemblyOrchestrator {
     run: AssemblyRunRecord,
     roundIndex: number,
     proposalArtifacts: AssemblyArtifactRecord[],
-    state: ExecutionState,
+    _state: ExecutionState,
   ): Promise<StageArtifacts> {
     const proposals = proposalArtifacts.map((artifact) => artifact.payload as ModelProposal);
     const selected = this.adversarialEngine.selectAdversaries(
@@ -835,50 +919,68 @@ export class AssemblyOrchestrator {
       run.adversarialSettings,
       this.storage.assembly.listReputations(100),
     );
-    const artifacts = await Promise.all(proposals.flatMap((proposal, index) => {
-      const reviewer = selected[index % selected.length];
-      if (!reviewer) {
-        return [];
-      }
-      const fallback = fallbackAdversarialReview(run.runId, roundIndex, proposal, reviewer);
-      return [this.registry.invokeStructured({
-        participant: reviewer,
-        problem: run.problem,
-        stage: "A3_adversarial_challenge",
-        instructions: adversarialInstructions(proposal, run.adversarialSettings),
-        schemaLabel: "AdversarialReview",
-        priorArtifacts: proposalArtifacts,
-        fallbackPayload: fallback,
-      }).then((invoked) => buildArtifactRecord({
-        runId: run.runId,
-        roundIndex,
-        stage: "A3_adversarial_challenge",
-        artifactType: "adversarial_review",
-        payload: mapAdversarialPayload(run.runId, roundIndex, proposal, reviewer, invoked.payload),
-        participantModelRef: participantModelRef(reviewer),
-        blindedAuthorToken: blindedReviewerToken(participantModelRef(reviewer)),
-      })).catch(() => buildArtifactRecord({
-        runId: run.runId,
-        roundIndex,
-        stage: "A3_adversarial_challenge",
-        artifactType: "adversarial_review",
-        payload: mapAdversarialPayload(run.runId, roundIndex, proposal, reviewer, fallback),
-        participantModelRef: participantModelRef(reviewer),
-        blindedAuthorToken: blindedReviewerToken(participantModelRef(reviewer)),
-      }))];
-    }));
+    const artifacts = await Promise.all(
+      proposals.flatMap((proposal, index) => {
+        const reviewer = selected[index % selected.length];
+        if (!reviewer) {
+          return [];
+        }
+        const fallback = fallbackAdversarialReview(run.runId, roundIndex, proposal, reviewer);
+        return [
+          this.registry
+            .invokeStructured({
+              participant: reviewer,
+              problem: run.problem,
+              stage: "A3_adversarial_challenge",
+              instructions: adversarialInstructions(proposal, run.adversarialSettings),
+              schemaLabel: "AdversarialReview",
+              priorArtifacts: proposalArtifacts,
+              fallbackPayload: fallback,
+            })
+            .then((invoked) =>
+              buildArtifactRecord({
+                runId: run.runId,
+                roundIndex,
+                stage: "A3_adversarial_challenge",
+                artifactType: "adversarial_review",
+                payload: mapAdversarialPayload(run.runId, roundIndex, proposal, reviewer, invoked.payload),
+                participantModelRef: participantModelRef(reviewer),
+                blindedAuthorToken: blindedReviewerToken(participantModelRef(reviewer)),
+              }),
+            )
+            .catch(() =>
+              buildArtifactRecord({
+                runId: run.runId,
+                roundIndex,
+                stage: "A3_adversarial_challenge",
+                artifactType: "adversarial_review",
+                payload: mapAdversarialPayload(run.runId, roundIndex, proposal, reviewer, fallback),
+                participantModelRef: participantModelRef(reviewer),
+                blindedAuthorToken: blindedReviewerToken(participantModelRef(reviewer)),
+              }),
+            ),
+        ];
+      }),
+    );
     const dedupedReviews = this.adversarialEngine.dedupeObjections(
       artifacts.map((artifact) => artifact.payload as AdversarialReview),
     );
-    return this.persistStage(run, roundIndex, "A3_adversarial_challenge", dedupedReviews.map((review) => buildArtifactRecord({
-      runId: run.runId,
+    return this.persistStage(
+      run,
       roundIndex,
-      stage: "A3_adversarial_challenge",
-      artifactType: "adversarial_review",
-      payload: review,
-      participantModelRef: undefined,
-      blindedAuthorToken: review.blindedReviewerToken,
-    })));
+      "A3_adversarial_challenge",
+      dedupedReviews.map((review) =>
+        buildArtifactRecord({
+          runId: run.runId,
+          roundIndex,
+          stage: "A3_adversarial_challenge",
+          artifactType: "adversarial_review",
+          payload: review,
+          participantModelRef: undefined,
+          blindedAuthorToken: review.blindedReviewerToken,
+        }),
+      ),
+    );
   }
 
   private async createRevisionStage(
@@ -892,32 +994,36 @@ export class AssemblyOrchestrator {
     const proposals = proposalArtifacts.map((artifact) => artifact.payload as ModelProposal);
     const peerReviews = reviewArtifacts.map((artifact) => artifact.payload as PeerReview);
     if (!run.adversarialSettings.enabled) {
-      const revised = proposals.map((proposal) => buildArtifactRecord({
-        runId: run.runId,
-        roundIndex,
-        stage,
-        artifactType: "proposal",
-        payload: {
-          ...proposal,
-          proposalId: randomUUID(),
-          abstract: `${proposal.abstract} (revised)`,
-          updatedAt: new Date().toISOString(),
-        },
-        participantModelRef: proposal.authorModelRef,
-        blindedAuthorToken: proposal.blindedAuthorToken,
-      }));
+      const revised = proposals.map((proposal) =>
+        buildArtifactRecord({
+          runId: run.runId,
+          roundIndex,
+          stage,
+          artifactType: "proposal",
+          payload: {
+            ...proposal,
+            proposalId: randomUUID(),
+            abstract: `${proposal.abstract} (revised)`,
+            updatedAt: new Date().toISOString(),
+          },
+          participantModelRef: proposal.authorModelRef,
+          blindedAuthorToken: proposal.blindedAuthorToken,
+        }),
+      );
       return this.persistStage(run, roundIndex, stage, revised);
     }
     const adversarialReviews = adversarialArtifacts.map((artifact) => artifact.payload as AdversarialReview);
-    const defenses = proposals.map((proposal) => buildArtifactRecord({
-      runId: run.runId,
-      roundIndex,
-      stage,
-      artifactType: "defense_response",
-      payload: buildDefenseResponse(run.runId, roundIndex, proposal, peerReviews, adversarialReviews),
-      participantModelRef: proposal.authorModelRef,
-      blindedAuthorToken: proposal.blindedAuthorToken,
-    }));
+    const defenses = proposals.map((proposal) =>
+      buildArtifactRecord({
+        runId: run.runId,
+        roundIndex,
+        stage,
+        artifactType: "defense_response",
+        payload: buildDefenseResponse(run.runId, roundIndex, proposal, peerReviews, adversarialReviews),
+        participantModelRef: proposal.authorModelRef,
+        blindedAuthorToken: proposal.blindedAuthorToken,
+      }),
+    );
     return this.persistStage(run, roundIndex, stage, defenses);
   }
 
@@ -932,14 +1038,18 @@ export class AssemblyOrchestrator {
     previous?: ConvergenceScore,
   ): Promise<StageArtifacts> {
     const revisedProposals = _revisionArtifacts
-      .filter((artifact): artifact is AssemblyArtifactRecord & { payload: ModelProposal } => artifact.artifactType === "proposal")
+      .filter(
+        (artifact): artifact is AssemblyArtifactRecord & { payload: ModelProposal } =>
+          artifact.artifactType === "proposal",
+      )
       .map((artifact) => artifact.payload);
     const convergence = this.convergenceScorer.scoreRound({
       runId: run.runId,
       roundIndex,
-      proposals: revisedProposals.length > 0
-        ? revisedProposals
-        : proposalArtifacts.map((artifact) => artifact.payload as ModelProposal),
+      proposals:
+        revisedProposals.length > 0
+          ? revisedProposals
+          : proposalArtifacts.map((artifact) => artifact.payload as ModelProposal),
       peerReviews: reviewArtifacts.map((artifact) => artifact.payload as PeerReview),
       adversarialReviews: adversarialArtifacts.map((artifact) => artifact.payload as AdversarialReview),
       previous,
@@ -953,15 +1063,20 @@ export class AssemblyOrchestrator {
     });
     return this.persistStage(run, roundIndex, stage, [artifact], {
       convergenceSnapshot: convergence,
-      stopCheck: this.shouldStop(run, {
-        proposals: revisedProposals.length > 0
-          ? revisedProposals
-          : proposalArtifacts.map((item) => item.payload as ModelProposal),
-        peerReviews: reviewArtifacts.map((item) => item.payload as PeerReview),
-        adversarialReviews: adversarialArtifacts.map((item) => item.payload as AdversarialReview),
-        defenses: [],
-        convergence,
-      }, previous ? [previous, convergence] : [convergence]),
+      stopCheck: this.shouldStop(
+        run,
+        {
+          proposals:
+            revisedProposals.length > 0
+              ? revisedProposals
+              : proposalArtifacts.map((item) => item.payload as ModelProposal),
+          peerReviews: reviewArtifacts.map((item) => item.payload as PeerReview),
+          adversarialReviews: adversarialArtifacts.map((item) => item.payload as AdversarialReview),
+          defenses: [],
+          convergence,
+        },
+        previous ? [previous, convergence] : [convergence],
+      ),
     });
   }
 
@@ -1076,8 +1191,7 @@ export class AssemblyService {
   }
 
   private async executeRun(runId: string): Promise<void> {
-    let run = this.options.storage.assembly.getRun(runId);
-    run = this.options.storage.assembly.updateRun(runId, {
+    let run = this.options.storage.assembly.updateRun(runId, {
       status: "running",
       startedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -1124,10 +1238,12 @@ export class AssemblyService {
       const convergenceHistory = this.options.storage.assembly
         .listArtifacts(runId, "convergence_score")
         .map((item) => item.payload)
-        .filter((item): item is ConvergenceScore => typeof item === "object" && item !== null && "compositeScore" in item);
+        .filter(
+          (item): item is ConvergenceScore => typeof item === "object" && item !== null && "compositeScore" in item,
+        );
       const stopCheck = this.orchestrator.shouldStop(run, state, convergenceHistory);
       if (stopCheck.shouldStop) {
-        run = this.options.storage.assembly.updateRun(runId, {
+        this.options.storage.assembly.updateRun(runId, {
           stopReason: stopCheck.reason,
           updatedAt: new Date().toISOString(),
         });
@@ -1209,8 +1325,12 @@ function proposalInstructions(
     `Constraints: ${run.problem.constraints.join("; ")}`,
     `Mode: ${run.settings.mode}`,
     `Participant: ${participant.providerId}/${participant.model}`,
-    peerReviews.length > 0 ? `Prior peer review signals: ${peerReviews.map((review) => review.verdict).join(", ")}` : "No prior peer review signals.",
-    adversarialReviews.length > 0 ? `Prior adversarial objections: ${adversarialReviews.flatMap((review) => review.objections.map((objection) => objection.title)).join("; ")}` : "No prior adversarial objections.",
+    peerReviews.length > 0
+      ? `Prior peer review signals: ${peerReviews.map((review) => review.verdict).join(", ")}`
+      : "No prior peer review signals.",
+    adversarialReviews.length > 0
+      ? `Prior adversarial objections: ${adversarialReviews.flatMap((review) => review.objections.map((objection) => objection.title)).join("; ")}`
+      : "No prior adversarial objections.",
     "Return JSON that matches ModelProposal.",
   ].join("\n");
 }
@@ -1221,7 +1341,9 @@ function peerReviewInstructions(proposal: ModelProposal, priorReviews: PeerRevie
     `Abstract: ${proposal.abstract}`,
     `Diagnosis: ${proposal.diagnosis}`,
     `Solution: ${proposal.proposedSolution}`,
-    priorReviews.length > 0 ? `Existing verdicts: ${priorReviews.map((review) => review.verdict).join(", ")}` : "No existing verdicts.",
+    priorReviews.length > 0
+      ? `Existing verdicts: ${priorReviews.map((review) => review.verdict).join(", ")}`
+      : "No existing verdicts.",
     "Return JSON that matches PeerReview.",
   ].join("\n");
 }
@@ -1244,7 +1366,9 @@ function buildStructuredPrompt(input: StructuredInvocationInput): string {
     `Problem title: ${input.problem.title}`,
     `Instructions:`,
     input.instructions,
-    input.priorArtifacts?.length ? `Prior artifacts available: ${input.priorArtifacts.length}` : "Prior artifacts available: 0",
+    input.priorArtifacts?.length
+      ? `Prior artifacts available: ${input.priorArtifacts.length}`
+      : "Prior artifacts available: 0",
     "If uncertain, still return syntactically valid JSON.",
   ].join("\n\n");
 }
@@ -1256,14 +1380,18 @@ function parseLooseJsonRecord(raw: string): Record<string, unknown> | undefined 
   }
   try {
     const parsed = JSON.parse(trimmed) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
   } catch {
     const start = trimmed.indexOf("{");
     const end = trimmed.lastIndexOf("}");
     if (start >= 0 && end > start) {
       try {
         const sliced = JSON.parse(trimmed.slice(start, end + 1)) as unknown;
-        return sliced && typeof sliced === "object" && !Array.isArray(sliced) ? sliced as Record<string, unknown> : undefined;
+        return sliced && typeof sliced === "object" && !Array.isArray(sliced)
+          ? (sliced as Record<string, unknown>)
+          : undefined;
       } catch {
         return undefined;
       }
@@ -1285,10 +1413,12 @@ function extractCompletionText(response: ChatCompletionResponse): string {
   if (!Array.isArray(content)) {
     return "";
   }
-  return content.map((part) => {
-    const record = part as Record<string, unknown>;
-    return typeof record.text === "string" ? record.text : "";
-  }).join("");
+  return content
+    .map((part) => {
+      const record = part as Record<string, unknown>;
+      return typeof record.text === "string" ? record.text : "";
+    })
+    .join("");
 }
 
 function readNumericUsage(usage: Record<string, unknown>, keys: string[]): number | undefined {
@@ -1355,7 +1485,9 @@ function mapPeerReviewPayload(
     blindedReviewerToken: blindedReviewerToken(participantModelRef(reviewer)),
     strengths: stringArrayOrFallback(payload.strengths, ["Clear framing."]),
     weaknesses: stringArrayOrFallback(payload.weaknesses, ["Needs more supporting detail."]),
-    missingAssumptions: stringArrayOrFallback(payload.missingAssumptions, ["Assumption gaps not explicitly called out."]),
+    missingAssumptions: stringArrayOrFallback(payload.missingAssumptions, [
+      "Assumption gaps not explicitly called out.",
+    ]),
     failureScenarios: stringArrayOrFallback(payload.failureScenarios, ["Edge cases need validation."]),
     scores: {
       correctness: clamp01(numberOrFallback(readRecord(payload, "scores")?.correctness, 0.66)),
@@ -1367,7 +1499,8 @@ function mapPeerReviewPayload(
       clarity: clamp01(numberOrFallback(readRecord(payload, "scores")?.clarity, 0.7)),
     },
     verdict: readVerdict(payload.verdict),
-    mergeTargetProposalId: typeof payload.mergeTargetProposalId === "string" ? payload.mergeTargetProposalId : undefined,
+    mergeTargetProposalId:
+      typeof payload.mergeTargetProposalId === "string" ? payload.mergeTargetProposalId : undefined,
     confidence: clamp01(numberOrFallback(payload.confidence, 0.65)),
     createdAt: new Date().toISOString(),
   };
@@ -1408,16 +1541,29 @@ function buildDefenseResponse(
     roundIndex,
     responseId: randomUUID(),
     proposalId: proposal.proposalId,
-    challengedReviewIds: [...proposalReviews.map((review) => review.reviewId), ...challenges.map((review) => review.reviewId)],
+    challengedReviewIds: [
+      ...proposalReviews.map((review) => review.reviewId),
+      ...challenges.map((review) => review.reviewId),
+    ],
     acceptedPoints: dedupeStrings([
       ...proposalReviews.flatMap((review) => review.weaknesses.slice(0, 1)),
-      ...challenges.flatMap((review) => review.objections.filter((objection) => objection.classification !== "speculative_concern").map((objection) => objection.title).slice(0, 1)),
+      ...challenges.flatMap((review) =>
+        review.objections
+          .filter((objection) => objection.classification !== "speculative_concern")
+          .map((objection) => objection.title)
+          .slice(0, 1),
+      ),
     ]),
-    rejectedPoints: challenges
-      .flatMap((review) => review.objections.filter((objection) => objection.classification === "speculative_concern").map((objection) => objection.title)),
+    rejectedPoints: challenges.flatMap((review) =>
+      review.objections
+        .filter((objection) => objection.classification === "speculative_concern")
+        .map((objection) => objection.title),
+    ),
     revisionsMade: proposal.testPlan.slice(0, 2).map((item) => `Expanded ${item.title}`),
-    unresolvedDisputes: challenges.flatMap((review) => review.objections.filter((objection) => !objection.mitigation?.trim()).map((objection) => objection.title)),
-    updatedConfidence: clamp01(proposal.confidence - (challenges.length * 0.04)),
+    unresolvedDisputes: challenges.flatMap((review) =>
+      review.objections.filter((objection) => !objection.mitigation?.trim()).map((objection) => objection.title),
+    ),
+    updatedConfidence: clamp01(proposal.confidence - challenges.length * 0.04),
     createdAt: new Date().toISOString(),
   };
 }
@@ -1433,18 +1579,27 @@ function fallbackProposal(
     abstract: `${participant.model} recommends an incremental ${run.problem.domain} path`,
     diagnosis: run.problem.normalizedStatement,
     proposedSolution: `Execute round ${roundIndex} with a bounded ${run.settings.mode} plan and validate the highest-risk assumptions first.`,
-    reasoning: peerReviews.length > 0
-      ? `Incorporate ${peerReviews.length} prior review signal(s) before converging.`
-      : "Start with a bounded proposal and preserve disagreement explicitly.",
+    reasoning:
+      peerReviews.length > 0
+        ? `Incorporate ${peerReviews.length} prior review signal(s) before converging.`
+        : "Start with a bounded proposal and preserve disagreement explicitly.",
     risks: ["Budget pressure", "Premature convergence", "Insufficient evidence"],
     assumptions: ["Relevant context is already present", "Participant models are complementary"],
     confidence: 0.64,
-    evidence: [
-      { evidenceId: randomUUID(), label: "Prompt", detail: run.problem.originalPrompt, kind: "claim" },
-    ],
+    evidence: [{ evidenceId: randomUUID(), label: "Prompt", detail: run.problem.originalPrompt, kind: "claim" }],
     testPlan: [
-      { testId: randomUUID(), title: "Review output", detail: "Inspect the proposal for correctness and scope.", kind: "review" },
-      { testId: randomUUID(), title: "Validate risks", detail: "Check the top listed risks before execution.", kind: "manual" },
+      {
+        testId: randomUUID(),
+        title: "Review output",
+        detail: "Inspect the proposal for correctness and scope.",
+        kind: "review",
+      },
+      {
+        testId: randomUUID(),
+        title: "Validate risks",
+        detail: "Check the top listed risks before execution.",
+        kind: "manual",
+      },
     ],
   };
 }
@@ -1514,7 +1669,7 @@ function normalizeEvidence(raw: unknown): ModelProposal["evidence"] {
       evidenceId: stringOrFallback(record.evidenceId, `evidence-${index + 1}`),
       label: stringOrFallback(record.label, `Evidence ${index + 1}`),
       detail: stringOrFallback(record.detail, "Evidence detail unavailable."),
-      kind: typeof record.kind === "string" ? record.kind as ModelProposal["evidence"][number]["kind"] : "claim",
+      kind: typeof record.kind === "string" ? (record.kind as ModelProposal["evidence"][number]["kind"]) : "claim",
       sourceUrl: typeof record.sourceUrl === "string" ? record.sourceUrl : undefined,
       confidence: typeof record.confidence === "number" ? clamp01(record.confidence) : undefined,
     };
@@ -1531,7 +1686,7 @@ function normalizeTestPlan(raw: unknown): ModelProposal["testPlan"] {
       testId: stringOrFallback(record.testId, `test-${index + 1}`),
       title: stringOrFallback(record.title, `Validation ${index + 1}`),
       detail: stringOrFallback(record.detail, "Validation detail unavailable."),
-      kind: typeof record.kind === "string" ? record.kind as ModelProposal["testPlan"][number]["kind"] : "review",
+      kind: typeof record.kind === "string" ? (record.kind as ModelProposal["testPlan"][number]["kind"]) : "review",
     };
   });
 }
@@ -1556,13 +1711,13 @@ function normalizeObjections(raw: unknown): AdversarialReview["objections"] {
 
 function weightedReviewScore(review: PeerReview): number {
   return clamp01(
-    review.scores.correctness * 0.24
-    + review.scores.reasoningStrength * 0.2
-    + review.scores.practicality * 0.16
-    + review.scores.evidenceQuality * 0.14
-    + review.scores.riskAwareness * 0.12
-    + review.scores.testability * 0.08
-    + review.scores.clarity * 0.06,
+    review.scores.correctness * 0.24 +
+      review.scores.reasoningStrength * 0.2 +
+      review.scores.practicality * 0.16 +
+      review.scores.evidenceQuality * 0.14 +
+      review.scores.riskAwareness * 0.12 +
+      review.scores.testability * 0.08 +
+      review.scores.clarity * 0.06,
   );
 }
 
@@ -1570,20 +1725,24 @@ function buildDisagreementClusters(
   reviews: PeerReview[],
   adversarialReviews: AdversarialReview[],
 ): AssemblyDisagreementCluster[] {
-  const fromWeaknesses = reviews.flatMap((review, index) => review.weaknesses.slice(0, 1).map((weakness) => ({
-    clusterId: `review-${index + 1}`,
-    topic: weakness,
-    proposalIds: [review.proposalId],
-    severity: "medium" as const,
-    summary: weakness,
-  })));
-  const fromChallenges = adversarialReviews.flatMap((review, index) => review.objections.slice(0, 1).map((objection) => ({
-    clusterId: `adversarial-${index + 1}`,
-    topic: objection.title,
-    proposalIds: [review.proposalId],
-    severity: objection.classification === "critical_flaw" ? "high" as const : "medium" as const,
-    summary: objection.detail,
-  })));
+  const fromWeaknesses = reviews.flatMap((review, index) =>
+    review.weaknesses.slice(0, 1).map((weakness) => ({
+      clusterId: `review-${index + 1}`,
+      topic: weakness,
+      proposalIds: [review.proposalId],
+      severity: "medium" as const,
+      summary: weakness,
+    })),
+  );
+  const fromChallenges = adversarialReviews.flatMap((review, index) =>
+    review.objections.slice(0, 1).map((objection) => ({
+      clusterId: `adversarial-${index + 1}`,
+      topic: objection.title,
+      proposalIds: [review.proposalId],
+      severity: objection.classification === "critical_flaw" ? ("high" as const) : ("medium" as const),
+      summary: objection.detail,
+    })),
+  );
   return dedupeBy([...fromWeaknesses, ...fromChallenges], (item) => fingerprintObjection(item.topic, item.summary));
 }
 
@@ -1671,7 +1830,11 @@ async function writeAssemblyExports(
       relPath,
     });
   } else {
-    exports.push({ target: "chat", status: requested.has("chat") ? "failed" : "not_requested", detail: requested.has("chat") ? "No source chat session was available." : undefined });
+    exports.push({
+      target: "chat",
+      status: requested.has("chat") ? "failed" : "not_requested",
+      detail: requested.has("chat") ? "No source chat session was available." : undefined,
+    });
   }
   return exports;
 }
@@ -1700,7 +1863,9 @@ function buildAssemblyMarkdown(run: AssemblyRunRecord, state: ExecutionState): s
     "",
     "## Implementation Plan",
     "",
-    ...dedupeStrings(topProposal?.testPlan.map((item) => `${item.title}: ${item.detail}`) ?? []).map((item) => `- ${item}`),
+    ...dedupeStrings(topProposal?.testPlan.map((item) => `${item.title}: ${item.detail}`) ?? []).map(
+      (item) => `- ${item}`,
+    ),
     "",
     "## Disagreements",
     "",
@@ -1711,12 +1876,15 @@ function buildAssemblyMarkdown(run: AssemblyRunRecord, state: ExecutionState): s
 }
 
 function summarizeUsage(values: Array<AssemblyUsageSummary | undefined>): AssemblyUsageSummary {
-  return values.reduce<AssemblyUsageSummary>((summary, usage) => ({
-    inputTokens: (summary.inputTokens ?? 0) + (usage?.inputTokens ?? 0),
-    outputTokens: (summary.outputTokens ?? 0) + (usage?.outputTokens ?? 0),
-    costUsd: roundCurrency((summary.costUsd ?? 0) + (usage?.costUsd ?? 0)),
-    latencyMs: (summary.latencyMs ?? 0) + (usage?.latencyMs ?? 0),
-  }), {});
+  return values.reduce<AssemblyUsageSummary>(
+    (summary, usage) => ({
+      inputTokens: (summary.inputTokens ?? 0) + (usage?.inputTokens ?? 0),
+      outputTokens: (summary.outputTokens ?? 0) + (usage?.outputTokens ?? 0),
+      costUsd: roundCurrency((summary.costUsd ?? 0) + (usage?.costUsd ?? 0)),
+      latencyMs: (summary.latencyMs ?? 0) + (usage?.latencyMs ?? 0),
+    }),
+    {},
+  );
 }
 
 function selectWinningProposal(proposals: ModelProposal[], convergence?: ConvergenceScore): ModelProposal | undefined {
@@ -1724,7 +1892,9 @@ function selectWinningProposal(proposals: ModelProposal[], convergence?: Converg
     return proposals[0];
   }
   return [...proposals].sort(
-    (left, right) => (convergence.proposalSupportScores[right.proposalId] ?? 0) - (convergence.proposalSupportScores[left.proposalId] ?? 0),
+    (left, right) =>
+      (convergence.proposalSupportScores[right.proposalId] ?? 0) -
+      (convergence.proposalSupportScores[left.proposalId] ?? 0),
   )[0];
 }
 
@@ -1738,11 +1908,13 @@ function sortedProposalScores(convergence?: ConvergenceScore): Array<{ proposalI
 }
 
 function calculateDuplicateObjectionRate(reviews: AdversarialReview[]): number {
-  const all = reviews.flatMap((review) => review.objections.map((objection) => fingerprintObjection(objection.title, objection.detail)));
+  const all = reviews.flatMap((review) =>
+    review.objections.map((objection) => fingerprintObjection(objection.title, objection.detail)),
+  );
   if (all.length === 0) {
     return 0;
   }
-  return 1 - (new Set(all).size / all.length);
+  return 1 - new Set(all).size / all.length;
 }
 
 function fingerprintObjection(title: string, detail: string): string {
@@ -1751,7 +1923,7 @@ function fingerprintObjection(title: string, detail: string): string {
 
 function readRecord(payload: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
   const value = payload[key];
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 function readVerdict(value: unknown): PeerReview["verdict"] {
@@ -1759,7 +1931,10 @@ function readVerdict(value: unknown): PeerReview["verdict"] {
 }
 
 function readObjectionClass(value: unknown): AdversarialReview["objections"][number]["classification"] {
-  return value === "critical_flaw" || value === "moderate_risk" || value === "edge_case_concern" || value === "speculative_concern"
+  return value === "critical_flaw" ||
+    value === "moderate_risk" ||
+    value === "edge_case_concern" ||
+    value === "speculative_concern"
     ? value
     : "moderate_risk";
 }
@@ -1794,7 +1969,7 @@ function averageInto(current: number, next: number, sampleCount: number): number
     return clamp01(next);
   }
   const previousWeight = Math.max(0, sampleCount - 1);
-  return clamp01(((current * previousWeight) + next) / sampleCount);
+  return clamp01((current * previousWeight + next) / sampleCount);
 }
 
 function roundCurrency(value: number): number {

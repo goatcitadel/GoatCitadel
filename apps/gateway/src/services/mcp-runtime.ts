@@ -43,10 +43,7 @@ export interface McpRuntimeInvocationResult {
   error?: string;
 }
 
-export function inferMcpToolsForServer(
-  server: McpServerRecord,
-  existingTools: McpToolRecord[],
-): McpToolRecord[] {
+export function inferMcpToolsForServer(server: McpServerRecord, existingTools: McpToolRecord[]): McpToolRecord[] {
   if (existingTools.length > 0) {
     return existingTools;
   }
@@ -71,23 +68,23 @@ export async function discoverMcpTools(
   return withStdioMcpClient(server, timeoutMs, async (client) => {
     const response = await client.request("tools/list", {});
     const tools = Array.isArray(response.result?.tools)
-      ? response.result?.tools as Array<Record<string, unknown>>
+      ? (response.result?.tools as Array<Record<string, unknown>>)
       : [];
     const updatedAt = new Date().toISOString();
     const discovered: McpToolRecord[] = [];
     for (const tool of tools) {
-        const toolName = typeof tool.name === "string" ? tool.name.trim() : "";
-        if (!toolName) {
-          continue;
-        }
-        discovered.push({
-          serverId: server.serverId,
-          toolName,
-          description: typeof tool.description === "string" ? tool.description : undefined,
-          inputSchema: isRecord(tool.inputSchema) ? tool.inputSchema : undefined,
-          enabled: true,
-          updatedAt,
-        });
+      const toolName = typeof tool.name === "string" ? tool.name.trim() : "";
+      if (!toolName) {
+        continue;
+      }
+      discovered.push({
+        serverId: server.serverId,
+        toolName,
+        description: typeof tool.description === "string" ? tool.description : undefined,
+        inputSchema: isRecord(tool.inputSchema) ? tool.inputSchema : undefined,
+        enabled: true,
+        updatedAt,
+      });
     }
     return discovered;
   });
@@ -111,41 +108,52 @@ export async function invokeMcpRuntimeTool(
     };
   }
   try {
-    return await withStdioMcpClient(server, timeoutMs, async (client) => {
-      const response = await client.request("tools/call", {
-        name: input.toolName,
-        arguments: input.arguments ?? {},
-      }, input.signal);
-      if (response.error) {
-        const detail = stringifyUnknown(response.error.data);
-        return {
-          ok: false,
-          error: [
-            `MCP tool ${input.toolName} failed`,
-            response.error.message,
-            detail ? `details: ${detail}` : undefined,
-          ].filter(Boolean).join(": "),
+    return await withStdioMcpClient(
+      server,
+      timeoutMs,
+      async (client) => {
+        const response = await client.request(
+          "tools/call",
+          {
+            name: input.toolName,
+            arguments: input.arguments ?? {},
+          },
+          input.signal,
+        );
+        if (response.error) {
+          const detail = stringifyUnknown(response.error.data);
+          return {
+            ok: false,
+            error: [
+              `MCP tool ${input.toolName} failed`,
+              response.error.message,
+              detail ? `details: ${detail}` : undefined,
+            ]
+              .filter(Boolean)
+              .join(": "),
+          };
+        }
+        const result = response.result ?? {};
+        const content = Array.isArray(result.content) ? result.content : [];
+        const contentText = extractMcpContentText(content);
+        const output: Record<string, unknown> = {
+          ...result,
+          contentText: contentText || undefined,
         };
-      }
-      const result = response.result ?? {};
-      const content = Array.isArray(result.content) ? result.content : [];
-      const contentText = extractMcpContentText(content);
-      const output: Record<string, unknown> = {
-        ...result,
-        contentText: contentText || undefined,
-      };
-      if (result.isError === true) {
+        if (result.isError === true) {
+          return {
+            ok: false,
+            output,
+            error: contentText || `MCP tool ${input.toolName} reported an error.`,
+          };
+        }
         return {
-          ok: false,
+          ok: true,
           output,
-          error: contentText || `MCP tool ${input.toolName} reported an error.`,
         };
-      }
-      return {
-        ok: true,
-        output,
-      };
-    }, input.signal);
+      },
+      input.signal,
+    );
   } catch (error) {
     return {
       ok: false,
@@ -173,8 +181,9 @@ export function collectMcpBrowserFallbackTargets(
       continue;
     }
     const serverTools = byServerId.get(server.serverId) ?? [];
-    const approvedTools = serverTools.filter((tool) =>
-      !server.policy.requireFirstToolApproval || isToolApproved(server.serverId, tool.toolName));
+    const approvedTools = serverTools.filter(
+      (tool) => !server.policy.requireFirstToolApproval || isToolApproved(server.serverId, tool.toolName),
+    );
     const target = buildBrowserFallbackTarget(server, approvedTools);
     if (!target) {
       continue;
@@ -221,7 +230,9 @@ function inferBrowserTier(
     server.command,
     ...(server.args ?? []),
     ...tools.flatMap((tool) => [tool.toolName, tool.description ?? ""]),
-  ].filter(Boolean).join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
   if (PLAYWRIGHT_SERVER_PATTERN.test(haystack)) {
     return "playwright_mcp";
   }
@@ -294,7 +305,8 @@ function scoreToolCapability(
 }
 
 function inferToolSeedNames(server: McpServerRecord): string[] {
-  const haystack = `${server.label} ${server.command ?? ""} ${(server.args ?? []).join(" ")} ${server.category}`.toLowerCase();
+  const haystack =
+    `${server.label} ${server.command ?? ""} ${(server.args ?? []).join(" ")} ${server.category}`.toLowerCase();
   if (PLAYWRIGHT_SERVER_PATTERN.test(haystack) || BROWSER_SERVER_PATTERN.test(haystack)) {
     return ["browser.search", "browser.navigate", "browser.extract"];
   }
@@ -317,11 +329,14 @@ async function withStdioMcpClient<T>(
     env: process.env,
     windowsHide: true,
   });
-  const pending = new Map<number, {
-    resolve: (value: JsonRpcEnvelope) => void;
-    reject: (reason?: unknown) => void;
-    timer: NodeJS.Timeout;
-  }>();
+  const pending = new Map<
+    number,
+    {
+      resolve: (value: JsonRpcEnvelope) => void;
+      reject: (reason?: unknown) => void;
+      timer: NodeJS.Timeout;
+    }
+  >();
   let nextId = 1;
   let stdoutBuffer = "";
   let stderrBuffer = "";
@@ -371,9 +386,11 @@ async function withStdioMcpClient<T>(
   child.on("close", (code, signal) => {
     closed = true;
     if (pending.size > 0) {
-      rejectAll(new Error(
-        `MCP server ${server.label} exited before responding (code=${code ?? "null"}, signal=${signal ?? "null"}). ${stderrBuffer.trim()}`.trim(),
-      ));
+      rejectAll(
+        new Error(
+          `MCP server ${server.label} exited before responding (code=${code ?? "null"}, signal=${signal ?? "null"}). ${stderrBuffer.trim()}`.trim(),
+        ),
+      );
     }
   });
 
@@ -402,7 +419,9 @@ async function withStdioMcpClient<T>(
       const timer = setTimeout(() => {
         pending.delete(id);
         cleanupAbort();
-        reject(new Error(`Timed out waiting for MCP ${method} response from ${server.label}. ${stderrBuffer.trim()}`.trim()));
+        reject(
+          new Error(`Timed out waiting for MCP ${method} response from ${server.label}. ${stderrBuffer.trim()}`.trim()),
+        );
       }, timeoutMs);
       const wrappedResolve = (value: JsonRpcEnvelope) => {
         cleanupAbort();
@@ -457,22 +476,24 @@ async function withStdioMcpClient<T>(
   };
 
   try {
-    await client.request("initialize", {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: {
-        name: "goatcitadel-gateway",
-        version: "0.6.0-beta.2",
+    await client.request(
+      "initialize",
+      {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: {
+          name: "goatcitadel-gateway",
+          version: "0.6.0-beta.2",
+        },
       },
-    }, signal);
+      signal,
+    );
     client.notify("notifications/initialized", {});
     return await run(client);
   } catch (error) {
     const suffix = client.readStderr();
-    const message = suffix
-      ? `${(error as Error).message} ${suffix}`.trim()
-      : (error as Error).message;
-    throw new Error(message);
+    const message = suffix ? `${(error as Error).message} ${suffix}`.trim() : (error as Error).message;
+    throw new Error(message, { cause: error });
   } finally {
     client.close();
   }

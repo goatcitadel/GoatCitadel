@@ -13,7 +13,6 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { ChatAgentOrchestrator } from "./chat-agent-orchestrator.js";
-import type { McpBrowserFallbackTarget } from "./mcp-runtime.js";
 
 function createToolCatalog(toolNames: string[] = ["browser.search"]): ToolCatalogEntry[] {
   return toolNames.map((toolName) => {
@@ -194,7 +193,11 @@ function createToolCatalog(toolNames: string[] = ["browser.search"]): ToolCatalo
         examples: [],
         pack: "devops",
         recommendedContexts: ["cowork", "code", "project_bound"],
-        preferredForIntents: ["local_file", "inspect_code", toolName === "code.search" ? "search_code" : "search_files"],
+        preferredForIntents: [
+          "local_file",
+          "inspect_code",
+          toolName === "code.search" ? "search_code" : "search_files",
+        ],
       };
     }
     if (toolName === "http.post") {
@@ -395,31 +398,6 @@ function httpGetToolCallCompletion(args: Record<string, unknown>): ChatCompletio
   };
 }
 
-function httpPostToolCallCompletion(args: Record<string, unknown>): ChatCompletionResponse {
-  return {
-    model: "glm-5",
-    choices: [
-      {
-        index: 0,
-        message: {
-          role: "assistant",
-          content: "",
-          tool_calls: [
-            {
-              id: "call-http-post-1",
-              type: "function",
-              function: {
-                name: "http_post",
-                arguments: JSON.stringify(args),
-              },
-            },
-          ],
-        },
-      },
-    ],
-  };
-}
-
 function createMockStorage(): unknown {
   const traces = new Map<string, ChatTurnTraceRecord>();
   const toolRuns = new Map<string, ChatToolRunRecord>();
@@ -500,20 +478,18 @@ describe("ChatAgentOrchestrator", () => {
   it("tolerates missing execution-plan storage while building the tool schema", async () => {
     const storage = createMockStorage() as Record<string, unknown>;
     delete storage.chatExecutionPlans;
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "Direct answer.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Direct answer.",
           },
-        ],
-      });
+        },
+      ],
+    });
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: storage as never,
@@ -629,9 +605,9 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("trips circuit breaker for repeated non-retryable tool failures", async () => {
-    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValue(
-      toolCallCompletion("latest ai tooling"),
-    );
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValue(toolCallCompletion("latest ai tooling"));
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
       outcome: "blocked",
       policyReason: "permission denied",
@@ -702,7 +678,8 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("maps auth failures to reconnect auth recovery guidance", async () => {
-    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>()
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
       .mockRejectedValue(new Error("401 unauthorized"));
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
@@ -749,7 +726,8 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>()
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
       .mockResolvedValueOnce({
         outcome: "executed",
         policyReason: "allowed",
@@ -790,44 +768,45 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: "What's the latest news on Kristi Noem?" }],
     });
 
-    expect(invokeTool).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      toolName: "browser.navigate",
-      args: expect.objectContaining({
-        url: "https://example.com/news/kristi-noem",
+    expect(invokeTool).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        toolName: "browser.navigate",
+        args: expect.objectContaining({
+          url: "https://example.com/news/kristi-noem",
+        }),
       }),
-    }));
-    expect(invokeTool).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      toolName: "browser.search",
-    }));
+    );
+    expect(invokeTool).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        toolName: "browser.search",
+      }),
+    );
     expect(result.assistantContent).toContain("Grounded answer");
   });
 
   it("normalizes generic live-news prompts into a cleaner search query", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "I found some headlines.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "I found some headlines.",
           },
-        ],
-      });
-    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-search-cleanup",
-        result: {
-          results: [
-            { title: "Headline", url: "https://example.com/news/today", snippet: "top stories" },
-          ],
         },
-      });
+      ],
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-search-cleanup",
+      result: {
+        results: [{ title: "Headline", url: "https://example.com/news/today", snippet: "top stories" }],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
@@ -847,15 +826,20 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Look online and tell me the 5 most interesting things that happened today." }],
+      historyMessages: [
+        { role: "user", content: "Look online and tell me the 5 most interesting things that happened today." },
+      ],
     });
 
-    expect(invokeTool).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      toolName: "browser.search",
-      args: expect.objectContaining({
-        query: "top news headlines today",
+    expect(invokeTool).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        toolName: "browser.search",
+        args: expect.objectContaining({
+          query: "top news headlines today",
+        }),
       }),
-    }));
+    );
   });
 
   it("recovers missing http.get url from the most recent visited page", async () => {
@@ -876,14 +860,19 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>()
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
       .mockResolvedValueOnce({
         outcome: "executed",
         policyReason: "allowed",
         auditEventId: "audit-search-http",
         result: {
           results: [
-            { title: "Kristi Noem latest news", url: "https://example.com/news/kristi-noem", snippet: "latest coverage" },
+            {
+              title: "Kristi Noem latest news",
+              url: "https://example.com/news/kristi-noem",
+              snippet: "latest coverage",
+            },
           ],
         },
       })
@@ -939,10 +928,14 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: "what's the latest news on Kristi Noem?" }],
     });
 
-    const invokeToolCalls = invokeTool.mock.calls as unknown as Array<[{
-      toolName: string;
-      args: Record<string, unknown>;
-    }]>;
+    const invokeToolCalls = invokeTool.mock.calls as unknown as Array<
+      [
+        {
+          toolName: string;
+          args: Record<string, unknown>;
+        },
+      ]
+    >;
     const lastInvokeToolCall = invokeToolCalls.at(-1)?.[0];
     expect(lastInvokeToolCall).toMatchObject({
       toolName: "http.get",
@@ -962,18 +955,20 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool: vi.fn(),
     });
 
-    const preflight = (orchestrator as unknown as {
-      preflightToolInvocation(input: {
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-        userContent: string;
-        priorToolRuns?: ChatToolRunRecord[];
-      }): {
-        toolName: string;
-        args: Record<string, unknown>;
-        failureReason?: string;
-      };
-    }).preflightToolInvocation({
+    const preflight = (
+      orchestrator as unknown as {
+        preflightToolInvocation(input: {
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+          userContent: string;
+          priorToolRuns?: ChatToolRunRecord[];
+        }): {
+          toolName: string;
+          args: Record<string, unknown>;
+          failureReason?: string;
+        };
+      }
+    ).preflightToolInvocation({
       toolName: "http.get",
       rawArgs: {},
       userContent: "what's the latest news on Kristi Noem?",
@@ -1025,18 +1020,20 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool: vi.fn(),
     });
 
-    const preflight = (orchestrator as unknown as {
-      preflightToolInvocation(input: {
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-        userContent: string;
-        priorToolRuns?: ChatToolRunRecord[];
-      }): {
-        toolName: string;
-        args: Record<string, unknown>;
-        failureReason?: string;
-      };
-    }).preflightToolInvocation({
+    const preflight = (
+      orchestrator as unknown as {
+        preflightToolInvocation(input: {
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+          userContent: string;
+          priorToolRuns?: ChatToolRunRecord[];
+        }): {
+          toolName: string;
+          args: Record<string, unknown>;
+          failureReason?: string;
+        };
+      }
+    ).preflightToolInvocation({
       toolName: "http.get",
       rawArgs: {},
       userContent: "what's the latest news on Kristi Noem?",
@@ -1088,18 +1085,20 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool: vi.fn(),
     });
 
-    const preflight = (orchestrator as unknown as {
-      preflightToolInvocation(input: {
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-        userContent: string;
-        priorToolRuns?: ChatToolRunRecord[];
-      }): {
-        toolName: string;
-        args: Record<string, unknown>;
-        failureReason?: string;
-      };
-    }).preflightToolInvocation({
+    const preflight = (
+      orchestrator as unknown as {
+        preflightToolInvocation(input: {
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+          userContent: string;
+          priorToolRuns?: ChatToolRunRecord[];
+        }): {
+          toolName: string;
+          args: Record<string, unknown>;
+          failureReason?: string;
+        };
+      }
+    ).preflightToolInvocation({
       toolName: "http.post",
       rawArgs: {},
       userContent: "what's the latest news on Kristi Noem?",
@@ -1146,18 +1145,20 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool: vi.fn(),
     });
 
-    const preflight = (orchestrator as unknown as {
-      preflightToolInvocation(input: {
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-        userContent: string;
-        priorToolRuns?: ChatToolRunRecord[];
-      }): {
-        toolName: string;
-        args: Record<string, unknown>;
-        failureReason?: string;
-      };
-    }).preflightToolInvocation({
+    const preflight = (
+      orchestrator as unknown as {
+        preflightToolInvocation(input: {
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+          userContent: string;
+          priorToolRuns?: ChatToolRunRecord[];
+        }): {
+          toolName: string;
+          args: Record<string, unknown>;
+          failureReason?: string;
+        };
+      }
+    ).preflightToolInvocation({
       toolName: "http.get",
       rawArgs: {},
       userContent: "tell me what's going on with Kristi Noem",
@@ -1175,17 +1176,19 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool: vi.fn(),
     });
 
-    const preflight = (orchestrator as unknown as {
-      preflightToolInvocation(input: {
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-        userContent: string;
-        priorToolRuns?: ChatToolRunRecord[];
-      }): {
-        toolName: string;
-        args: Record<string, unknown>;
-      };
-    }).preflightToolInvocation({
+    const preflight = (
+      orchestrator as unknown as {
+        preflightToolInvocation(input: {
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+          userContent: string;
+          priorToolRuns?: ChatToolRunRecord[];
+        }): {
+          toolName: string;
+          args: Record<string, unknown>;
+        };
+      }
+    ).preflightToolInvocation({
       toolName: "browser.search",
       rawArgs: {
         query: "latest news on Kristi Noem",
@@ -1201,7 +1204,11 @@ describe("ChatAgentOrchestrator", () => {
           args: { query: "latest news on Kristi Noem" },
           result: {
             results: [
-              { title: "Generic search results", url: "https://www.google.com/search?q=kristi+noem", snippet: "portal" },
+              {
+                title: "Generic search results",
+                url: "https://www.google.com/search?q=kristi+noem",
+                snippet: "portal",
+              },
               { title: "Kristi Noem latest news", url: "https://example.com/news/kristi-noem-1", snippet: "snippet 1" },
             ],
           },
@@ -1226,17 +1233,19 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool: vi.fn(),
     });
 
-    const preflight = (orchestrator as unknown as {
-      preflightToolInvocation(input: {
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-        userContent: string;
-        priorToolRuns?: ChatToolRunRecord[];
-      }): {
-        toolName: string;
-        args: Record<string, unknown>;
-      };
-    }).preflightToolInvocation({
+    const preflight = (
+      orchestrator as unknown as {
+        preflightToolInvocation(input: {
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+          userContent: string;
+          priorToolRuns?: ChatToolRunRecord[];
+        }): {
+          toolName: string;
+          args: Record<string, unknown>;
+        };
+      }
+    ).preflightToolInvocation({
       toolName: "browser.navigate",
       rawArgs: {
         url: "https://lite.duckduckgo.com/lite/?q=top+news+headlines+today",
@@ -1252,7 +1261,11 @@ describe("ChatAgentOrchestrator", () => {
           args: { query: "top news headlines today" },
           result: {
             results: [
-              { title: "Google News - Headlines", url: "https://news.google.com/topics/CAAqKggKIiRDQkFTRlFvSUwyMHZNRFZxYUdjU0JXVnVMVWRDR2dKVFJ5Z0FQAQ", snippet: "Headlines topic" },
+              {
+                title: "Google News - Headlines",
+                url: "https://news.google.com/topics/CAAqKggKIiRDQkFTRlFvSUwyMHZNRFZxYUdjU0JXVnVMVWRDR2dKVFJ5Z0FQAQ",
+                snippet: "Headlines topic",
+              },
               { title: "Reuters Top News", url: "https://www.reuters.com/world/", snippet: "Top stories from Reuters" },
             ],
           },
@@ -1269,9 +1282,11 @@ describe("ChatAgentOrchestrator", () => {
   it("normalizes explicit web lookup prompts before the synthetic browser.search runs", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce(navigateToolCallCompletion({
-        url: "https://www.techtarget.com/searchapparchitecture/definition/RESTful-API",
-      }))
+      .mockResolvedValueOnce(
+        navigateToolCallCompletion({
+          url: "https://www.techtarget.com/searchapparchitecture/definition/RESTful-API",
+        }),
+      )
       .mockResolvedValueOnce({
         model: "glm-5",
         choices: [
@@ -1279,7 +1294,8 @@ describe("ChatAgentOrchestrator", () => {
             index: 0,
             message: {
               role: "assistant",
-              content: "REST APIs are widely used for app backends, integrations, microservices, IoT, and public data APIs.",
+              content:
+                "REST APIs are widely used for app backends, integrations, microservices, IoT, and public data APIs.",
             },
           },
         ],
@@ -1335,10 +1351,16 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: "Can you look online and find out the top 5 uses for REST APIs?" }],
     });
 
-    const firstInvokeCall = (invokeTool.mock.calls as unknown as Array<[{
-      toolName: string;
-      args: Record<string, unknown>;
-    }]>) [0]?.[0];
+    const firstInvokeCall = (
+      invokeTool.mock.calls as unknown as Array<
+        [
+          {
+            toolName: string;
+            args: Record<string, unknown>;
+          },
+        ]
+      >
+    )[0]?.[0];
     expect(firstInvokeCall).toMatchObject({
       toolName: "browser.search",
       args: expect.objectContaining({
@@ -1375,22 +1397,20 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-runtime-benchmarks-1",
-        result: {
-          results: [
-            {
-              title: "Node.js vs Bun vs Deno benchmarks",
-              url: "https://example.com/benchmarks/node-bun-deno",
-              snippet: "Recent runtime benchmark comparison.",
-            },
-          ],
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-runtime-benchmarks-1",
+      result: {
+        results: [
+          {
+            title: "Node.js vs Bun vs Deno benchmarks",
+            url: "https://example.com/benchmarks/node-bun-deno",
+            snippet: "Recent runtime benchmark comparison.",
+          },
+        ],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
@@ -1402,7 +1422,8 @@ describe("ChatAgentOrchestrator", () => {
       sessionId: "sess-runtime-benchmarks-1",
       turnId: randomUUID(),
       userMessageId: "msg-runtime-benchmarks-1",
-      content: "Compare Node.js, Bun, and Deno runtime benchmarks. If you can find recent benchmarks or comparisons, cite them.",
+      content:
+        "Compare Node.js, Bun, and Deno runtime benchmarks. If you can find recent benchmarks or comparisons, cite them.",
       mode: "cowork",
       providerId: "glm",
       model: "glm-5",
@@ -1410,16 +1431,25 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{
-        role: "user",
-        content: "Compare Node.js, Bun, and Deno runtime benchmarks. If you can find recent benchmarks or comparisons, cite them.",
-      }],
+      historyMessages: [
+        {
+          role: "user",
+          content:
+            "Compare Node.js, Bun, and Deno runtime benchmarks. If you can find recent benchmarks or comparisons, cite them.",
+        },
+      ],
     });
 
-    const firstInvokeCall = (invokeTool.mock.calls as unknown as Array<[{
-      toolName: string;
-      args: Record<string, unknown>;
-    }]>) [0]?.[0];
+    const firstInvokeCall = (
+      invokeTool.mock.calls as unknown as Array<
+        [
+          {
+            toolName: string;
+            args: Record<string, unknown>;
+          },
+        ]
+      >
+    )[0]?.[0];
     const query = String(firstInvokeCall?.args.query ?? "");
     expect(firstInvokeCall?.toolName).toBe("browser.search");
     expect(query).toMatch(/\bnode(?:\.js)?\b/i);
@@ -1441,9 +1471,12 @@ describe("ChatAgentOrchestrator", () => {
     ].join("\n");
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", {
-        query: "navigate - Required tool families: web lookup tools - Do not substitute memory tools unless the prompt explicitly asks for memory.",
-      }))
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query:
+            "navigate - Required tool families: web lookup tools - Do not substitute memory tools unless the prompt explicitly asks for memory.",
+        }),
+      )
       .mockResolvedValueOnce({
         model: "glm-5",
         choices: [
@@ -1456,23 +1489,21 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-node-lts-grounded-1",
-        result: {
-          query: "current Node.js LTS version",
-          results: [
-            {
-              title: "Node.js Releases",
-              url: "https://nodejs.org/en/about/previous-releases",
-              snippet: "Node.js release schedule and LTS lines.",
-            },
-          ],
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-node-lts-grounded-1",
+      result: {
+        query: "current Node.js LTS version",
+        results: [
+          {
+            title: "Node.js Releases",
+            url: "https://nodejs.org/en/about/previous-releases",
+            snippet: "Node.js release schedule and LTS lines.",
+          },
+        ],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
@@ -1495,10 +1526,16 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    const firstInvokeCall = (invokeTool.mock.calls as unknown as Array<[{
-      toolName: string;
-      args: Record<string, unknown>;
-    }]>) [0]?.[0];
+    const firstInvokeCall = (
+      invokeTool.mock.calls as unknown as Array<
+        [
+          {
+            toolName: string;
+            args: Record<string, unknown>;
+          },
+        ]
+      >
+    )[0]?.[0];
     expect(firstInvokeCall).toMatchObject({
       toolName: "browser.search",
       args: expect.objectContaining({
@@ -1517,19 +1554,21 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool: vi.fn(),
     });
 
-    const preflight = (orchestrator as unknown as {
-      preflightToolInvocation(input: {
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-        userContent: string;
-        historyMessages: ChatCompletionRequest["messages"];
-        webMode: ChatWebMode;
-        priorToolRuns?: ChatToolRunRecord[];
-      }): {
-        toolName: string;
-        args: Record<string, unknown>;
-      };
-    }).preflightToolInvocation({
+    const preflight = (
+      orchestrator as unknown as {
+        preflightToolInvocation(input: {
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+          userContent: string;
+          historyMessages: ChatCompletionRequest["messages"];
+          webMode: ChatWebMode;
+          priorToolRuns?: ChatToolRunRecord[];
+        }): {
+          toolName: string;
+          args: Record<string, unknown>;
+        };
+      }
+    ).preflightToolInvocation({
       toolName: "browser.navigate",
       rawArgs: {
         url: "https://www.reddit.com/r/learnprogramming/comments/17kkjas/what_actually_is_a_rest_api_can_someone_provide/",
@@ -1547,9 +1586,21 @@ describe("ChatAgentOrchestrator", () => {
           args: { query: "the top 5 uses for REST APIs" },
           result: {
             results: [
-              { title: "What Is a REST API? Examples, Uses & Challenges - Postman Blog", url: "https://blog.postman.com/rest-api-examples/", snippet: "REST API examples and use cases." },
-              { title: "what actually is a REST api? Can someone provide an example it ... - Reddit", url: "https://www.reddit.com/r/learnprogramming/comments/17kkjas/what_actually_is_a_rest_api_can_someone_provide/", snippet: "Community discussion." },
-              { title: "What is a REST API? Benefits, Uses, Examples - TechTarget", url: "https://www.techtarget.com/searchapparchitecture/definition/RESTful-API", snippet: "REST APIs are used for software interoperability." },
+              {
+                title: "What Is a REST API? Examples, Uses & Challenges - Postman Blog",
+                url: "https://blog.postman.com/rest-api-examples/",
+                snippet: "REST API examples and use cases.",
+              },
+              {
+                title: "what actually is a REST api? Can someone provide an example it ... - Reddit",
+                url: "https://www.reddit.com/r/learnprogramming/comments/17kkjas/what_actually_is_a_rest_api_can_someone_provide/",
+                snippet: "Community discussion.",
+              },
+              {
+                title: "What is a REST API? Benefits, Uses, Examples - TechTarget",
+                url: "https://www.techtarget.com/searchapparchitecture/definition/RESTful-API",
+                snippet: "REST APIs are used for software interoperability.",
+              },
             ],
           },
           startedAt: "2026-03-12T22:30:00.000Z",
@@ -1559,7 +1610,9 @@ describe("ChatAgentOrchestrator", () => {
     });
 
     expect(preflight.toolName).toBe("browser.navigate");
-    expect(preflight.args.url).not.toBe("https://www.reddit.com/r/learnprogramming/comments/17kkjas/what_actually_is_a_rest_api_can_someone_provide/");
+    expect(preflight.args.url).not.toBe(
+      "https://www.reddit.com/r/learnprogramming/comments/17kkjas/what_actually_is_a_rest_api_can_someone_provide/",
+    );
     expect([
       "https://blog.postman.com/rest-api-examples/",
       "https://www.techtarget.com/searchapparchitecture/definition/RESTful-API",
@@ -1567,20 +1620,18 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("does not inject browser.search for generic duration prompts containing time", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "Cold brew usually takes 12 to 24 hours.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Cold brew usually takes 12 to 24 hours.",
           },
-        ],
-      });
+        },
+      ],
+    });
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
@@ -1610,30 +1661,27 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("treats explicit clock-time questions as time intent without using browser.search", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "It is currently 9:00 AM in Tokyo.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "It is currently 9:00 AM in Tokyo.",
           },
-        ],
-      });
-    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-time",
-        result: {
-          iso: "2026-03-06T17:00:00.000Z",
-          timezone: "Asia/Tokyo",
         },
-      });
+      ],
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-time",
+      result: {
+        iso: "2026-03-06T17:00:00.000Z",
+        timezone: "Asia/Tokyo",
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.search", "time.now"]),
@@ -1657,9 +1705,11 @@ describe("ChatAgentOrchestrator", () => {
     });
 
     expect(invokeTool).toHaveBeenCalledTimes(1);
-    expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({
-      toolName: "time.now",
-    }));
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "time.now",
+      }),
+    );
   });
 
   it("does not promote repeated search when recent results have no sufficiently relevant URL", async () => {
@@ -1670,17 +1720,19 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool: vi.fn(),
     });
 
-    const preflight = (orchestrator as unknown as {
-      preflightToolInvocation(input: {
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-        userContent: string;
-        priorToolRuns?: ChatToolRunRecord[];
-      }): {
-        toolName: string;
-        args: Record<string, unknown>;
-      };
-    }).preflightToolInvocation({
+    const preflight = (
+      orchestrator as unknown as {
+        preflightToolInvocation(input: {
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+          userContent: string;
+          priorToolRuns?: ChatToolRunRecord[];
+        }): {
+          toolName: string;
+          args: Record<string, unknown>;
+        };
+      }
+    ).preflightToolInvocation({
       toolName: "browser.search",
       rawArgs: {
         query: "latest weather in Paris",
@@ -1744,31 +1796,26 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("injects evidence grounding instruction when live-data intent triggers a proactive search", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "Here are headlines based on search results.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Here are headlines based on search results.",
           },
-        ],
-      });
-    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-grounding",
-        result: {
-          results: [
-            { title: "Top story", url: "https://example.com/top-story", snippet: "Important news" },
-          ],
         },
-      });
+      ],
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-grounding",
+      result: {
+        results: [{ title: "Top story", url: "https://example.com/top-story", snippet: "Important news" }],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
@@ -1792,7 +1839,6 @@ describe("ChatAgentOrchestrator", () => {
     });
 
     expect(createChatCompletion).toHaveBeenCalled();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const completionCall = (createChatCompletion as any).mock.calls[0]?.[0] as Record<string, unknown> | undefined;
     const messages = completionCall?.messages as Array<{ role: string; content?: unknown }> | undefined;
     const systemMessages = messages?.filter((msg) => msg.role === "system") ?? [];
@@ -1804,21 +1850,20 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("proactively opens the strongest live-data search result before synthesis when navigate is available", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "A humor roundup says a goat briefly disrupted a small-town parade yesterday.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "A humor roundup says a goat briefly disrupted a small-town parade yesterday.",
           },
-        ],
-      });
-    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>()
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
       .mockResolvedValueOnce({
         outcome: "executed",
         policyReason: "allowed",
@@ -1866,34 +1911,33 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: "tell me something funny that happened in the news yesterday" }],
     });
 
-    const invokedToolNames = (invokeTool.mock.calls as unknown as Array<[{ toolName: string }]>).map((call) => call[0].toolName);
+    const invokedToolNames = (invokeTool.mock.calls as unknown as Array<[{ toolName: string }]>).map(
+      (call) => call[0].toolName,
+    );
     expect(invokedToolNames).toEqual(["browser.search", "browser.navigate"]);
   });
 
   it("detects explicit web lookup phrases like 'search online' as live-data intent", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "Search results found.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Search results found.",
           },
-        ],
-      });
-    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-search-online",
-        result: {
-          results: [{ title: "Result", url: "https://example.com", snippet: "snippet" }],
         },
-      });
+      ],
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-search-online",
+      result: {
+        results: [{ title: "Result", url: "https://example.com", snippet: "snippet" }],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
@@ -1917,26 +1961,26 @@ describe("ChatAgentOrchestrator", () => {
     });
 
     expect(result.turnTrace.routing?.liveDataIntent).toBe(true);
-    expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({
-      toolName: "browser.search",
-    }));
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "browser.search",
+      }),
+    );
   });
 
   it("does not trigger proactive web search for generic current-state prompts", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "Here is a local summary.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Here is a local summary.",
           },
-        ],
-      });
+        },
+      ],
+    });
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
@@ -1982,7 +2026,8 @@ describe("ChatAgentOrchestrator", () => {
               index: 0,
               message: {
                 role: "assistant",
-                content: "REST APIs are commonly used for client-server CRUD backends, third-party integrations, mobile app data sync, workflow automation, and public partner APIs.",
+                content:
+                  "REST APIs are commonly used for client-server CRUD backends, third-party integrations, mobile app data sync, workflow automation, and public partner APIs.",
               },
             },
           ],
@@ -2059,7 +2104,9 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Summarize https://www.rfc-editor.org/rfc/rfc9110 from the page itself." }],
+      historyMessages: [
+        { role: "user", content: "Summarize https://www.rfc-editor.org/rfc/rfc9110 from the page itself." },
+      ],
     });
 
     expect(createChatCompletion).toHaveBeenCalledTimes(1);
@@ -2088,7 +2135,8 @@ describe("ChatAgentOrchestrator", () => {
           ],
         };
       });
-    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>()
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
       .mockResolvedValueOnce({
         outcome: "executed",
         policyReason: "allowed",
@@ -2135,7 +2183,9 @@ describe("ChatAgentOrchestrator", () => {
 
     expect(createChatCompletion).toHaveBeenCalledTimes(1);
     expect(invokeTool).toHaveBeenCalledTimes(2);
-    const explicitSearchCalls = invokeTool.mock.calls as unknown as Array<[{ toolName: string; args: Record<string, unknown> }]>;
+    const explicitSearchCalls = invokeTool.mock.calls as unknown as Array<
+      [{ toolName: string; args: Record<string, unknown> }]
+    >;
     const initialSearchCall = explicitSearchCalls[0]![0]!;
     const fallbackSearchCall = explicitSearchCalls[1]![0]!;
     expect(initialSearchCall).toMatchObject({
@@ -2188,7 +2238,8 @@ describe("ChatAgentOrchestrator", () => {
       sessionId: "sess-memory-save-confirm-1",
       turnId: randomUUID(),
       userMessageId: "msg-memory-save-confirm-1",
-      content: "Remember this as a memory note: I prefer concise status updates. Then search memory to confirm it was saved.",
+      content:
+        "Remember this as a memory note: I prefer concise status updates. Then search memory to confirm it was saved.",
       mode: "chat",
       providerId: "glm",
       model: "glm-5",
@@ -2199,7 +2250,8 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [
         {
           role: "user",
-          content: "Remember this as a memory note: I prefer concise status updates. Then search memory to confirm it was saved.",
+          content:
+            "Remember this as a memory note: I prefer concise status updates. Then search memory to confirm it was saved.",
         },
       ],
     });
@@ -2235,14 +2287,15 @@ describe("ChatAgentOrchestrator", () => {
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
-      listToolCatalog: () => createToolCatalog([
-        "memory.search",
-        "file.read_range",
-        "file.find",
-        "code.search",
-        "code.search_files",
-        "time.now",
-      ]),
+      listToolCatalog: () =>
+        createToolCatalog([
+          "memory.search",
+          "file.read_range",
+          "file.find",
+          "code.search",
+          "code.search_files",
+          "time.now",
+        ]),
       createChatCompletion,
       invokeTool,
     });
@@ -2290,21 +2343,17 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-file-find-inferred-path-1",
-        result: {
-          path: "src/index.ts",
-          pattern: "tasks",
-          count: 1,
-          matches: [
-            { path: "src/index.ts", line: 15, lineText: "const tasks: Map<string, Task> = new Map();" },
-          ],
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-file-find-inferred-path-1",
+      result: {
+        path: "src/index.ts",
+        pattern: "tasks",
+        count: 1,
+        matches: [{ path: "src/index.ts", line: 15, lineText: "const tasks: Map<string, Task> = new Map();" }],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["file.find"]),
@@ -2332,10 +2381,16 @@ describe("ChatAgentOrchestrator", () => {
       ],
     });
 
-    const firstInvokeCall = (invokeTool.mock.calls as unknown as Array<[{
-      toolName: string;
-      args: Record<string, unknown>;
-    }]>) [0]?.[0];
+    const firstInvokeCall = (
+      invokeTool.mock.calls as unknown as Array<
+        [
+          {
+            toolName: string;
+            args: Record<string, unknown>;
+          },
+        ]
+      >
+    )[0]?.[0];
     expect(firstInvokeCall).toMatchObject({
       toolName: "file.find",
       args: expect.objectContaining({
@@ -2361,21 +2416,17 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-code-search-files-inferred-1",
-        result: {
-          path: "fixtures/prompt-pack-workspace/",
-          query: ".",
-          count: 4,
-          matches: [
-            { path: "fixtures/prompt-pack-workspace/package.json", name: "package.json", type: "file" },
-          ],
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-code-search-files-inferred-1",
+      result: {
+        path: "fixtures/prompt-pack-workspace/",
+        query: ".",
+        count: 4,
+        matches: [{ path: "fixtures/prompt-pack-workspace/package.json", name: "package.json", type: "file" }],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["code.search_files"]),
@@ -2387,7 +2438,8 @@ describe("ChatAgentOrchestrator", () => {
       sessionId: "sess-code-search-files-inferred-1",
       turnId: randomUUID(),
       userMessageId: "msg-code-search-files-inferred-1",
-      content: "Read all source files in fixtures/prompt-pack-workspace/ using file tools. Produce a project audit report covering structure, code quality, and test coverage gaps.",
+      content:
+        "Read all source files in fixtures/prompt-pack-workspace/ using file tools. Produce a project audit report covering structure, code quality, and test coverage gaps.",
       mode: "code",
       providerId: "glm",
       model: "glm-5",
@@ -2398,15 +2450,22 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [
         {
           role: "user",
-          content: "Read all source files in fixtures/prompt-pack-workspace/ using file tools. Produce a project audit report covering structure, code quality, and test coverage gaps.",
+          content:
+            "Read all source files in fixtures/prompt-pack-workspace/ using file tools. Produce a project audit report covering structure, code quality, and test coverage gaps.",
         },
       ],
     });
 
-    const firstInvokeCall = (invokeTool.mock.calls as unknown as Array<[{
-      toolName: string;
-      args: Record<string, unknown>;
-    }]>) [0]?.[0];
+    const firstInvokeCall = (
+      invokeTool.mock.calls as unknown as Array<
+        [
+          {
+            toolName: string;
+            args: Record<string, unknown>;
+          },
+        ]
+      >
+    )[0]?.[0];
     expect(firstInvokeCall).toMatchObject({
       toolName: "code.search_files",
       args: expect.objectContaining({
@@ -2419,10 +2478,12 @@ describe("ChatAgentOrchestrator", () => {
   it("does not invent local file paths from bare technology names", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce(namedToolCallCompletion("file.read_range", {
-        startLine: 1,
-        endLine: 20,
-      }))
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("file.read_range", {
+          startLine: 1,
+          endLine: 20,
+        }),
+      )
       .mockResolvedValueOnce({
         model: "glm-5",
         choices: [
@@ -2468,36 +2529,32 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("treats release-window prompts like this week as live-data intent", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Here are the strongest current leads.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-movies-week-1",
+      result: {
+        results: [
           {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "Here are the strongest current leads.",
-            },
+            title: "IMDb upcoming releases",
+            url: "https://www.imdb.com/calendar/",
+            snippet: "Upcoming movie releases this week.",
           },
         ],
-      });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-movies-week-1",
-        result: {
-          results: [
-            {
-              title: "IMDb upcoming releases",
-              url: "https://www.imdb.com/calendar/",
-              snippet: "Upcoming movie releases this week.",
-            },
-          ],
-        },
-      });
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
@@ -2521,43 +2578,41 @@ describe("ChatAgentOrchestrator", () => {
     });
 
     expect(result.turnTrace.routing?.liveDataIntent).toBe(true);
-    expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({
-      toolName: "browser.search",
-      args: expect.objectContaining({
-        query: "What movies are coming out this week",
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "browser.search",
+        args: expect.objectContaining({
+          query: "What movies are coming out this week",
+        }),
       }),
-    }));
+    );
   });
 
   it("retries remote-blocked browser navigation through MCP fallback tiers", async () => {
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-remote-blocked-1",
-        result: {
-          url: "https://movieinsider.com/movies",
-          finalUrl: "https://movieinsider.com/movies",
-          status: 403,
-          title: "Attention Required! | Cloudflare",
-          textSnippet: "Sorry, you have been blocked. Cloudflare Ray ID.",
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-remote-blocked-1",
+      result: {
+        url: "https://movieinsider.com/movies",
+        finalUrl: "https://movieinsider.com/movies",
+        status: 403,
+        title: "Attention Required! | Cloudflare",
+        textSnippet: "Sorry, you have been blocked. Cloudflare Ray ID.",
+      },
+    });
+    const invokeMcpTool = vi.fn<() => Promise<McpInvokeResponse>>().mockResolvedValueOnce({
+      ok: true,
+      output: {
+        structuredContent: {
+          url: "https://www.imdb.com/calendar/",
+          finalUrl: "https://www.imdb.com/calendar/",
+          status: 200,
+          title: "IMDb Release Calendar",
+          textSnippet: "Upcoming movies this week.",
         },
-      });
-    const invokeMcpTool = vi
-      .fn<() => Promise<McpInvokeResponse>>()
-      .mockResolvedValueOnce({
-        ok: true,
-        output: {
-          structuredContent: {
-            url: "https://www.imdb.com/calendar/",
-            finalUrl: "https://www.imdb.com/calendar/",
-            status: 200,
-            title: "IMDb Release Calendar",
-            textSnippet: "Upcoming movies this week.",
-          },
-        },
-      });
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.navigate"]),
@@ -2575,24 +2630,26 @@ describe("ChatAgentOrchestrator", () => {
       ],
     });
 
-    const executed = await (orchestrator as unknown as {
-      executeToolCall(input: {
-        input: {
-          sessionId: string;
-          content: string;
-          mode: "chat";
-          providerId: string;
-          model: string;
-          webMode: "auto";
-          memoryMode: "off";
-          thinkingLevel: "standard";
-          toolAutonomy: "safe_auto";
-        };
-        turnId: string;
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-      }): Promise<{ record: ChatToolRunRecord }>;
-    }).executeToolCall({
+    const executed = await (
+      orchestrator as unknown as {
+        executeToolCall(input: {
+          input: {
+            sessionId: string;
+            content: string;
+            mode: "chat";
+            providerId: string;
+            model: string;
+            webMode: "auto";
+            memoryMode: "off";
+            thinkingLevel: "standard";
+            toolAutonomy: "safe_auto";
+          };
+          turnId: string;
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+        }): Promise<{ record: ChatToolRunRecord }>;
+      }
+    ).executeToolCall({
       input: {
         sessionId: "sess-mcp-fallback-1",
         content: "What movies are coming out this week?",
@@ -2612,13 +2669,15 @@ describe("ChatAgentOrchestrator", () => {
     });
 
     expect(invokeTool).toHaveBeenCalledTimes(1);
-    expect(invokeMcpTool).toHaveBeenCalledWith(expect.objectContaining({
-      serverId: "srv-playwright",
-      toolName: "browser.navigate",
-      arguments: expect.objectContaining({
-        url: "https://movieinsider.com/movies",
+    expect(invokeMcpTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverId: "srv-playwright",
+        toolName: "browser.navigate",
+        arguments: expect.objectContaining({
+          url: "https://movieinsider.com/movies",
+        }),
       }),
-    }));
+    );
     expect(executed.record.status).toBe("executed");
     expect(executed.record.result).toMatchObject({
       engineTier: "playwright_mcp",
@@ -2637,20 +2696,18 @@ describe("ChatAgentOrchestrator", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-12T20:00:00.000Z"));
     try {
-      const invokeTool = vi
-        .fn<() => Promise<ToolInvokeResult>>()
-        .mockResolvedValueOnce({
-          outcome: "executed",
-          policyReason: "allowed",
-          auditEventId: "audit-mcp-budget-nav-1",
-          result: {
-            url: "https://blocked-site.com/article",
-            finalUrl: "https://blocked-site.com/article",
-            status: 403,
-            title: "Attention Required! | Cloudflare",
-            textSnippet: "Sorry, you have been blocked. Cloudflare Ray ID.",
-          },
-        });
+      const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-mcp-budget-nav-1",
+        result: {
+          url: "https://blocked-site.com/article",
+          finalUrl: "https://blocked-site.com/article",
+          status: 403,
+          title: "Attention Required! | Cloudflare",
+          textSnippet: "Sorry, you have been blocked. Cloudflare Ray ID.",
+        },
+      });
       const invokeMcpTool = vi
         .fn<(request: McpInvokeRequest) => Promise<McpInvokeResponse>>()
         .mockImplementation(async (request: McpInvokeRequest) => {
@@ -2691,25 +2748,27 @@ describe("ChatAgentOrchestrator", () => {
         ],
       });
 
-      const executed = await (orchestrator as unknown as {
-        executeToolCall(input: {
-          input: {
-            sessionId: string;
-            content: string;
-            mode: "chat";
-            providerId: string;
-            model: string;
-            webMode: "auto";
-            memoryMode: "off";
-            thinkingLevel: "standard";
-            toolAutonomy: "safe_auto";
-          };
-          turnId: string;
-          toolName: string;
-          rawArgs: Record<string, unknown>;
-          turnBudgetDeadline?: number;
-        }): Promise<{ record: ChatToolRunRecord }>;
-      }).executeToolCall({
+      const executed = await (
+        orchestrator as unknown as {
+          executeToolCall(input: {
+            input: {
+              sessionId: string;
+              content: string;
+              mode: "chat";
+              providerId: string;
+              model: string;
+              webMode: "auto";
+              memoryMode: "off";
+              thinkingLevel: "standard";
+              toolAutonomy: "safe_auto";
+            };
+            turnId: string;
+            toolName: string;
+            rawArgs: Record<string, unknown>;
+            turnBudgetDeadline?: number;
+          }): Promise<{ record: ChatToolRunRecord }>;
+        }
+      ).executeToolCall({
         input: {
           sessionId: "sess-mcp-budget-1",
           content: "What's the latest news today?",
@@ -2745,17 +2804,19 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool: vi.fn(),
     });
 
-    const preflight = (orchestrator as unknown as {
-      preflightToolInvocation(input: {
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-        userContent: string;
-        priorToolRuns?: ChatToolRunRecord[];
-      }): {
-        toolName: string;
-        args: Record<string, unknown>;
-      };
-    }).preflightToolInvocation({
+    const preflight = (
+      orchestrator as unknown as {
+        preflightToolInvocation(input: {
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+          userContent: string;
+          priorToolRuns?: ChatToolRunRecord[];
+        }): {
+          toolName: string;
+          args: Record<string, unknown>;
+        };
+      }
+    ).preflightToolInvocation({
       toolName: "browser.navigate",
       rawArgs: { url: "https://lite.duckduckgo.com/lite/?q=movies+this+week" },
       userContent: "What movies are coming out this week?",
@@ -2770,7 +2831,11 @@ describe("ChatAgentOrchestrator", () => {
           result: {
             results: [
               { title: "Movie Insider releases", url: "https://www.movieinsider.com/movies", snippet: "Releases" },
-              { title: "Movies coming out this week - IMDb", url: "https://www.imdb.com/calendar/", snippet: "Upcoming releases this week." },
+              {
+                title: "Movies coming out this week - IMDb",
+                url: "https://www.imdb.com/calendar/",
+                snippet: "Upcoming releases this week.",
+              },
             ],
           },
           startedAt: "2026-03-10T01:00:00.000Z",
@@ -2807,20 +2872,18 @@ describe("ChatAgentOrchestrator", () => {
       .fn<() => Promise<ChatCompletionResponse>>()
       .mockResolvedValueOnce(navigateToolCallCompletion({ url: "https://www.movieinsider.com/movies" }))
       .mockResolvedValueOnce(navigateToolCallCompletion({ url: "https://www.movieinsider.com/movies" }));
-    const invokeTool = vi
-      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
-      .mockResolvedValue({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-movieinsider-blocked",
-        result: {
-          url: "https://www.movieinsider.com/movies",
-          finalUrl: "https://www.movieinsider.com/movies",
-          status: 403,
-          title: "Attention Required! | Cloudflare",
-          textSnippet: "Sorry, you have been blocked. Cloudflare Ray ID.",
-        },
-      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-movieinsider-blocked",
+      result: {
+        url: "https://www.movieinsider.com/movies",
+        finalUrl: "https://www.movieinsider.com/movies",
+        status: 403,
+        title: "Attention Required! | Cloudflare",
+        textSnippet: "Sorry, you have been blocked. Cloudflare Ray ID.",
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.navigate"]),
@@ -2858,25 +2921,32 @@ describe("ChatAgentOrchestrator", () => {
             index: 0,
             message: {
               role: "assistant",
-              content: "The main REST API use cases are CRUD, integrations, mobile backends, automation, and partner-facing services.",
+              content:
+                "The main REST API use cases are CRUD, integrations, mobile backends, automation, and partner-facing services.",
             },
           },
         ],
       });
-    const invokeTool = vi
-      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
-      .mockResolvedValue({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-rest-retry-grounded-1",
-        result: {
-          query: "top 5 ways REST APIs are used",
-          results: [
-            { title: "What Is REST API? Examples, Uses & Challenges - Postman Blog", url: "https://blog.postman.com/rest-api-examples/", snippet: "Examples and common use cases." },
-            { title: "REST API Introduction - GeeksforGeeks", url: "https://www.geeksforgeeks.org/rest-api-introduction/", snippet: "REST principles and use cases." },
-          ],
-        },
-      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-rest-retry-grounded-1",
+      result: {
+        query: "top 5 ways REST APIs are used",
+        results: [
+          {
+            title: "What Is REST API? Examples, Uses & Challenges - Postman Blog",
+            url: "https://blog.postman.com/rest-api-examples/",
+            snippet: "Examples and common use cases.",
+          },
+          {
+            title: "REST API Introduction - GeeksforGeeks",
+            url: "https://www.geeksforgeeks.org/rest-api-introduction/",
+            snippet: "REST principles and use cases.",
+          },
+        ],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
@@ -2912,7 +2982,9 @@ describe("ChatAgentOrchestrator", () => {
     });
 
     expect(invokeTool).toHaveBeenCalledTimes(1);
-    const groundedRetryCalls = invokeTool.mock.calls as unknown as Array<[{ toolName: string; args: Record<string, unknown> }]>;
+    const groundedRetryCalls = invokeTool.mock.calls as unknown as Array<
+      [{ toolName: string; args: Record<string, unknown> }]
+    >;
     const groundedRetryCall = groundedRetryCalls[0]![0]!;
     expect(groundedRetryCall).toMatchObject({
       toolName: "browser.search",
@@ -2968,19 +3040,21 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
-      .mockResolvedValue({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-rest-queries-grounded-1",
-        result: {
-          query: "top 5 ways REST APIs are used common use cases",
-          results: [
-            { title: "What Is REST API? Examples, Uses & Challenges - Postman Blog", url: "https://blog.postman.com/rest-api-examples/", snippet: "Examples and common use cases." },
-          ],
-        },
-      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-rest-queries-grounded-1",
+      result: {
+        query: "top 5 ways REST APIs are used common use cases",
+        results: [
+          {
+            title: "What Is REST API? Examples, Uses & Challenges - Postman Blog",
+            url: "https://blog.postman.com/rest-api-examples/",
+            snippet: "Examples and common use cases.",
+          },
+        ],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.search"]),
@@ -3004,7 +3078,8 @@ describe("ChatAgentOrchestrator", () => {
         { role: "user", content: "Can you look online and find the top 5 ways rest apis are used?" },
         {
           role: "assistant",
-          content: "A source blocked automated browsing on blog.postman.com, so I'm falling back to the strongest leads I recovered so far.",
+          content:
+            "A source blocked automated browsing on blog.postman.com, so I'm falling back to the strongest leads I recovered so far.",
         },
         { role: "user", content: "Try the search one more time" },
       ],
@@ -3028,7 +3103,8 @@ describe("ChatAgentOrchestrator", () => {
             index: 0,
             message: {
               role: "assistant",
-              content: "REST APIs are commonly used for CRUD app backends, third-party integrations, mobile app services, workflow automation, and partner/public APIs.",
+              content:
+                "REST APIs are commonly used for CRUD app backends, third-party integrations, mobile app services, workflow automation, and partner/public APIs.",
             },
           },
         ],
@@ -3042,8 +3118,16 @@ describe("ChatAgentOrchestrator", () => {
         result: {
           query: "top 5 ways REST APIs are used",
           results: [
-            { title: "What Is REST API? Examples, Uses & Challenges - Postman Blog", url: "https://blog.postman.com/rest-api-examples/", snippet: "Examples and use cases." },
-            { title: "How to Use REST API: Examples, Key Features, and Applications - ClickUp", url: "https://clickup.com/blog/rest-api-examples/", snippet: "Key features and real-world applications." },
+            {
+              title: "What Is REST API? Examples, Uses & Challenges - Postman Blog",
+              url: "https://blog.postman.com/rest-api-examples/",
+              snippet: "Examples and use cases.",
+            },
+            {
+              title: "How to Use REST API: Examples, Key Features, and Applications - ClickUp",
+              url: "https://clickup.com/blog/rest-api-examples/",
+              snippet: "Key features and real-world applications.",
+            },
           ],
         },
       })
@@ -3090,11 +3174,15 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Can you look online into the top 5 ways that a REST API can be used?" }],
+      historyMessages: [
+        { role: "user", content: "Can you look online into the top 5 ways that a REST API can be used?" },
+      ],
     });
 
     expect(invokeTool).toHaveBeenCalledTimes(3);
-    const navigateRetryCalls = invokeTool.mock.calls as unknown as Array<[{ toolName: string; args: Record<string, unknown> }]>;
+    const navigateRetryCalls = invokeTool.mock.calls as unknown as Array<
+      [{ toolName: string; args: Record<string, unknown> }]
+    >;
     const firstNavigateCall = navigateRetryCalls[1]![0]!;
     const secondNavigateCall = navigateRetryCalls[2]![0]!;
     expect(firstNavigateCall).toMatchObject({
@@ -3123,7 +3211,8 @@ describe("ChatAgentOrchestrator", () => {
             index: 0,
             message: {
               role: "assistant",
-              content: "ABC reported that search efforts intensified for a missing US crew member as the conflict escalated.",
+              content:
+                "ABC reported that search efforts intensified for a missing US crew member as the conflict escalated.",
             },
           },
         ],
@@ -3137,10 +3226,26 @@ describe("ChatAgentOrchestrator", () => {
         result: {
           query: "latest news today us iran",
           results: [
-            { title: "Iran War: Latest Breaking News, Updates & Analysis | Reuters", url: "https://www.reuters.com/world/iran/", snippet: "Live coverage and analysis from Reuters." },
-            { title: "Iran live updates: Search for missing US crew member intensifies", url: "https://abcnews.com/International/live-updates/iran-live-updates-trump-touts-big-day-iran/?id=131532311", snippet: "ABC News live updates on the US and Iran." },
-            { title: "Tehran Dismisses U.S. Cease-Fire Conditions as Israel Steps Up Attacks", url: "https://www.nytimes.com/live/2026/03/25/world/iran-war-trump-oil-news", snippet: "New York Times live coverage of the conflict." },
-            { title: "Iran live updates: 290 American troops wounded in Iran war - Yahoo", url: "https://www.yahoo.com/news/articles/iran-live-updates-trumps-48-090509033.html", snippet: "Yahoo's live updates page covering the US and Iran." },
+            {
+              title: "Iran War: Latest Breaking News, Updates & Analysis | Reuters",
+              url: "https://www.reuters.com/world/iran/",
+              snippet: "Live coverage and analysis from Reuters.",
+            },
+            {
+              title: "Iran live updates: Search for missing US crew member intensifies",
+              url: "https://abcnews.com/International/live-updates/iran-live-updates-trump-touts-big-day-iran/?id=131532311",
+              snippet: "ABC News live updates on the US and Iran.",
+            },
+            {
+              title: "Tehran Dismisses U.S. Cease-Fire Conditions as Israel Steps Up Attacks",
+              url: "https://www.nytimes.com/live/2026/03/25/world/iran-war-trump-oil-news",
+              snippet: "New York Times live coverage of the conflict.",
+            },
+            {
+              title: "Iran live updates: 290 American troops wounded in Iran war - Yahoo",
+              url: "https://www.yahoo.com/news/articles/iran-live-updates-trumps-48-090509033.html",
+              snippet: "Yahoo's live updates page covering the US and Iran.",
+            },
           ],
         },
       })
@@ -3163,7 +3268,8 @@ describe("ChatAgentOrchestrator", () => {
         auditEventId: "audit-us-iran-abc-1",
         result: {
           url: "https://abcnews.com/International/live-updates/iran-live-updates-trump-touts-big-day-iran/?id=131532311",
-          finalUrl: "https://abcnews.com/International/live-updates/iran-live-updates-trump-touts-big-day-iran/?id=131532311",
+          finalUrl:
+            "https://abcnews.com/International/live-updates/iran-live-updates-trump-touts-big-day-iran/?id=131532311",
           status: 200,
           title: "Iran live updates: Search for missing US crew member intensifies",
           textSnippet: "ABC News reports that search efforts intensified for a missing US crew member.",
@@ -3192,7 +3298,9 @@ describe("ChatAgentOrchestrator", () => {
     });
 
     expect(invokeTool).toHaveBeenCalledTimes(3);
-    const navigateRetryCalls = invokeTool.mock.calls as unknown as Array<[{ toolName: string; args: Record<string, unknown> }]>;
+    const navigateRetryCalls = invokeTool.mock.calls as unknown as Array<
+      [{ toolName: string; args: Record<string, unknown> }]
+    >;
     const firstNavigateCall = navigateRetryCalls[1]![0]!;
     const secondNavigateCall = navigateRetryCalls[2]![0]!;
     expect(firstNavigateCall).toMatchObject({
@@ -3221,7 +3329,8 @@ describe("ChatAgentOrchestrator", () => {
             index: 0,
             message: {
               role: "assistant",
-              content: "REST APIs are commonly used for web and mobile apps, integrations, microservices, IoT, and internal tooling.",
+              content:
+                "REST APIs are commonly used for web and mobile apps, integrations, microservices, IoT, and internal tooling.",
             },
           },
         ],
@@ -3235,10 +3344,28 @@ describe("ChatAgentOrchestrator", () => {
         result: {
           query: "the top 5 uses for REST APIs",
           results: [
-            { title: "What Is a REST API? Examples, Uses & Challenges - Postman Blog", url: "https://blog.postman.com/rest-api-examples/", snippet: "What is a REST API? Examples, Uses & Challenges - Postman Blog." },
-            { title: "What is a REST API? Benefits, Uses, Examples - TechTarget", url: "https://www.techtarget.com/searchapparchitecture/definition/RESTful-API", snippet: "A REST API is an architectural style for an application programming interface that uses HTTP requests to access and use data." },
-            { title: "What is a REST API? Examples, Use Cases, and Best Practices", url: "https://www.browserstack.com/guide/rest-api", snippet: "Learn REST API basics with real-world REST API examples, key principles, architectural constraints, and best practices for reliable design." },
-            { title: "REST API basics and implementation | Google Cloud", url: "https://cloud.google.com/discover/what-is-rest-api", snippet: "Learn what a REST API is, how it works, and its core principles." },
+            {
+              title: "What Is a REST API? Examples, Uses & Challenges - Postman Blog",
+              url: "https://blog.postman.com/rest-api-examples/",
+              snippet: "What is a REST API? Examples, Uses & Challenges - Postman Blog.",
+            },
+            {
+              title: "What is a REST API? Benefits, Uses, Examples - TechTarget",
+              url: "https://www.techtarget.com/searchapparchitecture/definition/RESTful-API",
+              snippet:
+                "A REST API is an architectural style for an application programming interface that uses HTTP requests to access and use data.",
+            },
+            {
+              title: "What is a REST API? Examples, Use Cases, and Best Practices",
+              url: "https://www.browserstack.com/guide/rest-api",
+              snippet:
+                "Learn REST API basics with real-world REST API examples, key principles, architectural constraints, and best practices for reliable design.",
+            },
+            {
+              title: "REST API basics and implementation | Google Cloud",
+              url: "https://cloud.google.com/discover/what-is-rest-api",
+              snippet: "Learn what a REST API is, how it works, and its core principles.",
+            },
           ],
         },
       })
@@ -3263,7 +3390,8 @@ describe("ChatAgentOrchestrator", () => {
           finalUrl: "https://www.browserstack.com/guide/rest-api",
           status: 200,
           title: "What is a REST API? Examples, Use Cases, and Best Practices",
-          textSnippet: "REST APIs are used for web and mobile backends, integrations with third-party services, partner APIs, and automation workflows.",
+          textSnippet:
+            "REST APIs are used for web and mobile backends, integrations with third-party services, partner APIs, and automation workflows.",
         },
       });
     const orchestrator = new ChatAgentOrchestrator({
@@ -3288,7 +3416,9 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: "Can you look online and find out the top 5 uses for REST APIs?" }],
     });
 
-    const navigateCalls = (invokeTool.mock.calls as unknown as Array<[{ toolName: string; args: Record<string, unknown> }]>)
+    const navigateCalls = (
+      invokeTool.mock.calls as unknown as Array<[{ toolName: string; args: Record<string, unknown> }]>
+    )
       .map((call) => call[0])
       .filter((call) => call.toolName === "browser.navigate");
     expect(navigateCalls).toHaveLength(2);
@@ -3320,7 +3450,8 @@ describe("ChatAgentOrchestrator", () => {
                 index: 0,
                 message: {
                   role: "assistant",
-                  content: "The top REST API uses are CRUD backends, third-party integrations, mobile app services, workflow automation, and partner-facing APIs.",
+                  content:
+                    "The top REST API uses are CRUD backends, third-party integrations, mobile app services, workflow automation, and partner-facing APIs.",
                 },
               },
             ],
@@ -3359,10 +3490,12 @@ describe("ChatAgentOrchestrator", () => {
             auditEventId: "audit-rest-budget-navigate-1",
             result: {
               url: "https://www.techtarget.com/searchapparchitecture/tip/The-5-essential-HTTP-methods-in-RESTful-API-development",
-              finalUrl: "https://www.techtarget.com/searchapparchitecture/tip/The-5-essential-HTTP-methods-in-RESTful-API-development",
+              finalUrl:
+                "https://www.techtarget.com/searchapparchitecture/tip/The-5-essential-HTTP-methods-in-RESTful-API-development",
               status: 200,
               title: "The 5 essential HTTP methods in RESTful API development | TechTarget",
-              textSnippet: "REST APIs are widely used for web and mobile backends, app integrations, automation flows, and partner-facing services.",
+              textSnippet:
+                "REST APIs are widely used for web and mobile backends, app integrations, automation flows, and partner-facing services.",
             },
           };
         });
@@ -3475,7 +3608,9 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: "Can you look online and find out the top 5 uses for REST APIs?" }],
     });
 
-    expect(result.assistantContent).toContain("REST APIs are widely used to build web services and integrate different applications.");
+    expect(result.assistantContent).toContain(
+      "REST APIs are widely used to build web services and integrate different applications.",
+    );
     expect(result.assistantContent).toContain("An online store might use a RESTful API");
     expect(result.assistantContent).not.toContain("This website uses cookies");
     expect(result.assistantContent).not.toContain("Skip to content");
@@ -3504,29 +3639,29 @@ describe("ChatAgentOrchestrator", () => {
                 index: 0,
                 message: {
                   role: "assistant",
-                  content: "Protobuf is usually better for compact binary transport, while JSON Schema is stronger for JSON validation, interoperability, and contract tooling.",
+                  content:
+                    "Protobuf is usually better for compact binary transport, while JSON Schema is stronger for JSON validation, interoperability, and contract tooling.",
                 },
               },
             ],
           };
         });
-      const invokeTool = vi
-        .fn<() => Promise<ToolInvokeResult>>()
-        .mockImplementationOnce(async () => {
-          vi.setSystemTime(new Date(Date.now() + 15000));
-          return {
-            outcome: "executed",
-            policyReason: "allowed",
-            auditEventId: "audit-browser-extension-navigate-1",
-            result: {
-              url: "https://example.com/protobuf-vs-json-schema",
-              finalUrl: "https://example.com/protobuf-vs-json-schema",
-              status: 200,
-              title: "Protobuf vs JSON Schema for service contracts",
-              textSnippet: "Protobuf favors binary efficiency and typed contracts. JSON Schema favors human-readable JSON validation and broader ecosystem interoperability.",
-            },
-          };
-        });
+      const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date(Date.now() + 15000));
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: "audit-browser-extension-navigate-1",
+          result: {
+            url: "https://example.com/protobuf-vs-json-schema",
+            finalUrl: "https://example.com/protobuf-vs-json-schema",
+            status: 200,
+            title: "Protobuf vs JSON Schema for service contracts",
+            textSnippet:
+              "Protobuf favors binary efficiency and typed contracts. JSON Schema favors human-readable JSON validation and broader ecosystem interoperability.",
+          },
+        };
+      });
       const orchestrator = new ChatAgentOrchestrator({
         storage: createMockStorage() as never,
         listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
@@ -3546,7 +3681,12 @@ describe("ChatAgentOrchestrator", () => {
         memoryMode: "off",
         thinkingLevel: "standard",
         toolAutonomy: "safe_auto",
-        historyMessages: [{ role: "user", content: "Compare protobuf and JSON Schema tradeoffs using https://example.com/protobuf-vs-json-schema." }],
+        historyMessages: [
+          {
+            role: "user",
+            content: "Compare protobuf and JSON Schema tradeoffs using https://example.com/protobuf-vs-json-schema.",
+          },
+        ],
       });
 
       expect(result.turnTrace.routing?.liveDataIntent).toBe(false);
@@ -3595,21 +3735,23 @@ describe("ChatAgentOrchestrator", () => {
                 {
                   title: "Midnight Skinning Profession Overview - Wowhead",
                   url: "https://www.wowhead.com/guide/midnight/professions/skinning-overview-trainer-locations-hides-tracking-tools",
-                  snippet: "Skinning in WoW Midnight covers leveling, trainer locations, hides, tracking, and profession tools.",
+                  snippet:
+                    "Skinning in WoW Midnight covers leveling, trainer locations, hides, tracking, and profession tools.",
                 },
               ],
             },
           };
         })
         .mockImplementationOnce(async () => {
-          vi.setSystemTime(new Date(Date.now() + (31 * 60 * 1000)));
+          vi.setSystemTime(new Date(Date.now() + 31 * 60 * 1000));
           return {
             outcome: "executed",
             policyReason: "allowed",
             auditEventId: "audit-skinning-navigate-1",
             result: {
               url: "https://www.wowhead.com/guide/midnight/professions/skinning-overview-trainer-locations-hides-tracking-tools",
-              finalUrl: "https://www.wowhead.com/guide/midnight/professions/skinning-overview-trainer-locations-hides-tracking-tools",
+              finalUrl:
+                "https://www.wowhead.com/guide/midnight/professions/skinning-overview-trainer-locations-hides-tracking-tools",
               status: 200,
               title: "Midnight Skinning Profession Overview - Wowhead",
               textSnippet: [
@@ -3639,12 +3781,19 @@ describe("ChatAgentOrchestrator", () => {
         memoryMode: "off",
         thinkingLevel: "standard",
         toolAutonomy: "safe_auto",
-        historyMessages: [{ role: "user", content: "Look online and help me leveling my skinning profession in world of warcraft midnight." }],
+        historyMessages: [
+          {
+            role: "user",
+            content: "Look online and help me leveling my skinning profession in world of warcraft midnight.",
+          },
+        ],
       });
 
       expect(result.turnTrace.failure?.failureClass).toBeDefined();
       expect(result.assistantContent).toContain("Midnight Skinning Profession Overview - Wowhead");
-      expect(result.assistantContent).toContain("Leveling is primarily done by skinning beasts close to your current profession skill");
+      expect(result.assistantContent).toContain(
+        "Leveling is primarily done by skinning beasts close to your current profession skill",
+      );
       expect(result.assistantContent).not.toContain("strongest leads so far");
       expect(createChatCompletion.mock.calls.length).toBeGreaterThanOrEqual(1);
       expect(invokeTool).toHaveBeenCalledTimes(2);
@@ -3679,9 +3828,11 @@ describe("ChatAgentOrchestrator", () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
       .mockResolvedValueOnce(toolCallCompletion("the top 5 uses for REST APIs"))
-      .mockResolvedValueOnce(navigateToolCallCompletion({
-        url: "https://blog.postman.com/rest-api-examples/",
-      }))
+      .mockResolvedValueOnce(
+        navigateToolCallCompletion({
+          url: "https://blog.postman.com/rest-api-examples/",
+        }),
+      )
       .mockResolvedValueOnce({
         model: "glm-5",
         choices: [
@@ -3718,12 +3869,14 @@ describe("ChatAgentOrchestrator", () => {
             {
               title: "What Is a REST API? Examples, Uses & Challenges - Postman Blog",
               url: "https://blog.postman.com/rest-api-examples/",
-              snippet: "A REST API is a simple uniform interface used to make digital resources available through web URLs.",
+              snippet:
+                "A REST API is a simple uniform interface used to make digital resources available through web URLs.",
             },
             {
               title: "What is REST API: Examples, Principles, and Use Cases",
               url: "https://requestly.com/blog/rest-api-examples/",
-              snippet: "Learn what REST APIs are with practical examples such as user management, e-commerce, and payment systems.",
+              snippet:
+                "Learn what REST APIs are with practical examples such as user management, e-commerce, and payment systems.",
             },
           ],
         },
@@ -3770,7 +3923,9 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("I ran out of time before I could finish a full pass");
     expect(result.turnTrace.failure?.failureClass).toBe("unknown");
     expect(createChatCompletion).toHaveBeenCalledTimes(4);
-    const invokedToolNames = (invokeTool.mock.calls as unknown as Array<[{ toolName: string }]>).map((call) => call[0].toolName);
+    const invokedToolNames = (invokeTool.mock.calls as unknown as Array<[{ toolName: string }]>).map(
+      (call) => call[0].toolName,
+    );
     expect(invokedToolNames).toContain("browser.search");
     expect(invokedToolNames).toContain("browser.navigate");
   });
@@ -3786,9 +3941,11 @@ describe("ChatAgentOrchestrator", () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
       .mockResolvedValueOnce(toolCallCompletion("the top 5 uses for REST APIs"))
-      .mockResolvedValueOnce(navigateToolCallCompletion({
-        url: "https://blog.postman.com/rest-api-examples/",
-      }))
+      .mockResolvedValueOnce(
+        navigateToolCallCompletion({
+          url: "https://blog.postman.com/rest-api-examples/",
+        }),
+      )
       .mockResolvedValueOnce({
         model: "glm-5",
         choices: [
@@ -3814,7 +3971,8 @@ describe("ChatAgentOrchestrator", () => {
             {
               title: "What is REST API: Examples, Principles, and Use Cases",
               url: "https://requestly.com/blog/rest-api-examples/",
-              snippet: "REST APIs are often used for user management, e-commerce workflows, payment processing, and automation across third-party services.",
+              snippet:
+                "REST APIs are often used for user management, e-commerce workflows, payment processing, and automation across third-party services.",
             },
           ],
         },
@@ -3875,9 +4033,11 @@ describe("ChatAgentOrchestrator", () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
       .mockResolvedValueOnce(toolCallCompletion("the top 5 uses for REST APIs"))
-      .mockResolvedValueOnce(navigateToolCallCompletion({
-        url: "https://blog.postman.com/rest-api-examples/",
-      }))
+      .mockResolvedValueOnce(
+        navigateToolCallCompletion({
+          url: "https://blog.postman.com/rest-api-examples/",
+        }),
+      )
       .mockResolvedValueOnce({
         model: "glm-5",
         choices: [
@@ -3908,7 +4068,8 @@ describe("ChatAgentOrchestrator", () => {
             {
               title: "What is a REST API? Benefits, Uses, Examples - TechTarget",
               url: "https://www.techtarget.com/searchapparchitecture/definition/RESTful-API",
-              snippet: "A REST API is an architectural style for an application programming interface that uses HTTP requests to access and use data.",
+              snippet:
+                "A REST API is an architectural style for an application programming interface that uses HTTP requests to access and use data.",
             },
           ],
         },
@@ -3922,7 +4083,8 @@ describe("ChatAgentOrchestrator", () => {
           finalUrl: "https://www.techtarget.com/searchapparchitecture/definition/RESTful-API",
           status: 200,
           title: "What is a REST API? Benefits, uses, examples",
-          textSnippet: "Search the TechTarget Network Login Register TechTarget Network Software Quality Cloud Computing TheServerSide Search App Architecture API Management App Development & Design App Management Tools Architecture Management EAI News Features Tips Webinars Sponsored Sites More Follow: Home API design and management Tech Accelerator Guide to building an enterprise API strategy PREV NEXT DEFINITION What is a REST API? Benefits, Uses, Examples By Scott Robinson, New Era Technology Stephen J. Bigelow, Senior Technology Editor Alexander S. Gillis, Technical Writer and Editor Published: Sep 30, 2025 A REST API is an architectural style for an application programming interface that uses Hypertext Transfer Protocol (HTTP) requests to access and use data. That data can be used to GET, PUT, POST and DELETE data types, which refers to reading, updating, creating and deleting operations related to resources. The API's design spells out the proper way for a developer to write a program, or client, that uses the API to request services from another application, or the server. APIs are a vital mechanism for software interoperability. REST APIs are also referred to as RESTful web services and RESTful APIs. This approach can also facilitate communication between other application types. REST technology is generally preferred over similar technologies because it uses less bandwidth, making it more efficient for internet use. REST APIs can also be built with common programming languages such as PHP, JavaScript and Python. Cloud consumers use APIs to expose and organize access to web services. REST is a logical choice for building APIs to provide users with ways to flexibly connect to, manage and interact with cloud services in distributed environments. Sites such as Amazon, Google, LinkedIn and Twitter use REST APIs. A REST API fundamentally relies on the following three major elements: Client. The client is the software code or application that requests a resource from a server. The server is the software code or application that controls the resource and responds to client requests for the resource. The REST API supports data formats such as application/json, application/xml, application/x-web+xml, application/x-www-form-urlencoded and multipart.",
+          textSnippet:
+            "Search the TechTarget Network Login Register TechTarget Network Software Quality Cloud Computing TheServerSide Search App Architecture API Management App Development & Design App Management Tools Architecture Management EAI News Features Tips Webinars Sponsored Sites More Follow: Home API design and management Tech Accelerator Guide to building an enterprise API strategy PREV NEXT DEFINITION What is a REST API? Benefits, Uses, Examples By Scott Robinson, New Era Technology Stephen J. Bigelow, Senior Technology Editor Alexander S. Gillis, Technical Writer and Editor Published: Sep 30, 2025 A REST API is an architectural style for an application programming interface that uses Hypertext Transfer Protocol (HTTP) requests to access and use data. That data can be used to GET, PUT, POST and DELETE data types, which refers to reading, updating, creating and deleting operations related to resources. The API's design spells out the proper way for a developer to write a program, or client, that uses the API to request services from another application, or the server. APIs are a vital mechanism for software interoperability. REST APIs are also referred to as RESTful web services and RESTful APIs. This approach can also facilitate communication between other application types. REST technology is generally preferred over similar technologies because it uses less bandwidth, making it more efficient for internet use. REST APIs can also be built with common programming languages such as PHP, JavaScript and Python. Cloud consumers use APIs to expose and organize access to web services. REST is a logical choice for building APIs to provide users with ways to flexibly connect to, manage and interact with cloud services in distributed environments. Sites such as Amazon, Google, LinkedIn and Twitter use REST APIs. A REST API fundamentally relies on the following three major elements: Client. The client is the software code or application that requests a resource from a server. The server is the software code or application that controls the resource and responds to client requests for the resource. The REST API supports data formats such as application/json, application/xml, application/x-web+xml, application/x-www-form-urlencoded and multipart.",
         },
       });
     const orchestrator = new ChatAgentOrchestrator({
@@ -3980,19 +4142,17 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-http-get-reuse-1",
-        result: {
-          url: "https://example.com/research",
-          finalUrl: "https://example.com/research",
-          status: 200,
-          text: "Fetched content for reuse.",
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-http-get-reuse-1",
+      result: {
+        url: "https://example.com/research",
+        finalUrl: "https://example.com/research",
+        status: 200,
+        text: "Fetched content for reuse.",
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["http.get"]),
@@ -4053,20 +4213,18 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValue({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-nav-no-reuse",
-        result: {
-          url: "https://example.com/research",
-          finalUrl: "https://example.com/research",
-          status: 200,
-          title: "Example research",
-          textSnippet: "Example content",
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-nav-no-reuse",
+      result: {
+        url: "https://example.com/research",
+        finalUrl: "https://example.com/research",
+        status: 200,
+        title: "Example research",
+        textSnippet: "Example content",
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.navigate"]),
@@ -4221,42 +4379,41 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-nav-final-url-reuse-1",
-        result: {
-          url: finalUrl,
-          finalUrl,
-          status: 200,
-          title: "What is a REST API? Benefits, uses, examples",
-          textSnippet: "A REST API uses HTTP requests to access and use data. REST APIs are also referred to as RESTful web services.",
-          fallbackChain: [
-            {
-              toolName: "browser.navigate",
-              engineTier: "builtin",
-              engineLabel: "Built-in browser",
-              status: "failed",
-              url: "https://blog.postman.com/rest-api-examples/",
-              finalUrl: "https://blog.postman.com/rest-api-examples/",
-              httpStatus: 403,
-              browserFailureClass: "remote_blocked",
-              error: "remote site blocked automation (automation block 403)",
-            },
-            {
-              toolName: "browser.navigate",
-              engineTier: "builtin",
-              engineLabel: "Built-in browser",
-              status: "executed",
-              url: finalUrl,
-              finalUrl,
-              httpStatus: 200,
-            },
-          ],
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-nav-final-url-reuse-1",
+      result: {
+        url: finalUrl,
+        finalUrl,
+        status: 200,
+        title: "What is a REST API? Benefits, uses, examples",
+        textSnippet:
+          "A REST API uses HTTP requests to access and use data. REST APIs are also referred to as RESTful web services.",
+        fallbackChain: [
+          {
+            toolName: "browser.navigate",
+            engineTier: "builtin",
+            engineLabel: "Built-in browser",
+            status: "failed",
+            url: "https://blog.postman.com/rest-api-examples/",
+            finalUrl: "https://blog.postman.com/rest-api-examples/",
+            httpStatus: 403,
+            browserFailureClass: "remote_blocked",
+            error: "remote site blocked automation (automation block 403)",
+          },
+          {
+            toolName: "browser.navigate",
+            engineTier: "builtin",
+            engineLabel: "Built-in browser",
+            status: "executed",
+            url: finalUrl,
+            finalUrl,
+            httpStatus: 200,
+          },
+        ],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.navigate"]),
@@ -4305,20 +4462,19 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-nav-extract-reuse-1",
-        result: {
-          url: pageUrl,
-          finalUrl: pageUrl,
-          status: 200,
-          title: "Example research",
-          textSnippet: "REST APIs are used for backend services, third-party integrations, mobile apps, automation workflows, and partner APIs. This page explains those uses in detail with examples and implementation notes.",
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-nav-extract-reuse-1",
+      result: {
+        url: pageUrl,
+        finalUrl: pageUrl,
+        status: 200,
+        title: "Example research",
+        textSnippet:
+          "REST APIs are used for backend services, third-party integrations, mobile apps, automation workflows, and partner APIs. This page explains those uses in detail with examples and implementation notes.",
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.navigate", "browser.extract"]),
@@ -4428,7 +4584,9 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Open one page, open another page, then extract the first page again." }],
+      historyMessages: [
+        { role: "user", content: "Open one page, open another page, then extract the first page again." },
+      ],
     });
 
     expect(result.turnTrace.failure).toBeUndefined();
@@ -4450,7 +4608,8 @@ describe("ChatAgentOrchestrator", () => {
       sessionId: "sess-lonely-area-1",
       turnId: randomUUID(),
       userMessageId: "msg-lonely-area-1",
-      content: "Estimate the number of genuinely lonely singles in the area by combining demographic data, social indicators, and digital behavior patterns.",
+      content:
+        "Estimate the number of genuinely lonely singles in the area by combining demographic data, social indicators, and digital behavior patterns.",
       mode: "chat",
       providerId: "glm",
       model: "glm-5",
@@ -4458,7 +4617,13 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "auto",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Estimate the number of genuinely lonely singles in the area by combining demographic data, social indicators, and digital behavior patterns." }],
+      historyMessages: [
+        {
+          role: "user",
+          content:
+            "Estimate the number of genuinely lonely singles in the area by combining demographic data, social indicators, and digital behavior patterns.",
+        },
+      ],
     });
 
     expect(createChatCompletion).not.toHaveBeenCalled();
@@ -4482,7 +4647,8 @@ describe("ChatAgentOrchestrator", () => {
       sessionId: "sess-lonely-seattle-1",
       turnId: randomUUID(),
       userMessageId: "msg-lonely-seattle-1",
-      content: "Estimate the number of genuinely lonely singles in Seattle by combining demographic data, social indicators, and digital behavior patterns.",
+      content:
+        "Estimate the number of genuinely lonely singles in Seattle by combining demographic data, social indicators, and digital behavior patterns.",
       mode: "chat",
       providerId: "glm",
       model: "glm-5",
@@ -4490,7 +4656,13 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Estimate the number of genuinely lonely singles in Seattle by combining demographic data, social indicators, and digital behavior patterns." }],
+      historyMessages: [
+        {
+          role: "user",
+          content:
+            "Estimate the number of genuinely lonely singles in Seattle by combining demographic data, social indicators, and digital behavior patterns.",
+        },
+      ],
     });
 
     expect(createChatCompletion).not.toHaveBeenCalled();
@@ -4500,20 +4672,18 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("does not force clarification when both geography and qualifier are concrete", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "I can estimate that for Seattle with stated assumptions.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "I can estimate that for Seattle with stated assumptions.",
           },
-        ],
-      });
+        },
+      ],
+    });
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
@@ -4526,7 +4696,8 @@ describe("ChatAgentOrchestrator", () => {
       sessionId: "sess-seattle-concrete-1",
       turnId: randomUUID(),
       userMessageId: "msg-seattle-concrete-1",
-      content: "Estimate the number of single adults in Seattle by combining demographic data and digital behavior patterns.",
+      content:
+        "Estimate the number of single adults in Seattle by combining demographic data and digital behavior patterns.",
       mode: "chat",
       providerId: "glm",
       model: "glm-5",
@@ -4534,7 +4705,13 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Estimate the number of single adults in Seattle by combining demographic data and digital behavior patterns." }],
+      historyMessages: [
+        {
+          role: "user",
+          content:
+            "Estimate the number of single adults in Seattle by combining demographic data and digital behavior patterns.",
+        },
+      ],
     });
 
     expect(createChatCompletion).toHaveBeenCalledTimes(1);
@@ -4555,7 +4732,7 @@ describe("ChatAgentOrchestrator", () => {
       sessionId: "sess-lonely-followup-1",
       turnId: randomUUID(),
       userMessageId: "msg-lonely-followup-1",
-      content: "Suburbs generally lonely is defined as \"I cry myself to sleep all alone\".",
+      content: 'Suburbs generally lonely is defined as "I cry myself to sleep all alone".',
       mode: "chat",
       providerId: "glm",
       model: "glm-5",
@@ -4566,7 +4743,8 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [
         {
           role: "user",
-          content: "Estimate the number of genuinely lonely singles in the area by combining demographic data, social indicators, and digital behavior patterns.",
+          content:
+            "Estimate the number of genuinely lonely singles in the area by combining demographic data, social indicators, and digital behavior patterns.",
         },
         {
           role: "assistant",
@@ -4628,32 +4806,30 @@ describe("ChatAgentOrchestrator", () => {
       "## User Task",
       "Create a short role-labeled plan for how GoatCitadel prompt-pack v2 should test recently added functionality without repeating the old 108-test balance. Keep the sections in the requested role order.",
     ].join("\n");
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: [
-                "## Product",
-                "- Focus the slice on new v2-only capabilities instead of re-running the frozen baseline.",
-                "",
-                "## Architect",
-                "- Group tests around recently added retrieval, provenance, and prompt-pack routing behaviors.",
-                "",
-                "## QA",
-                "- Gate the slice on score deltas plus one replay pass for the touched cases.",
-                "",
-                "## Synthesis",
-                "- Start with a narrow v2-only regression slice, then expand only after those tests stabilize.",
-              ].join("\n"),
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "## Product",
+              "- Focus the slice on new v2-only capabilities instead of re-running the frozen baseline.",
+              "",
+              "## Architect",
+              "- Group tests around recently added retrieval, provenance, and prompt-pack routing behaviors.",
+              "",
+              "## QA",
+              "- Gate the slice on score deltas plus one replay pass for the touched cases.",
+              "",
+              "## Synthesis",
+              "- Start with a narrow v2-only regression slice, then expand only after those tests stabilize.",
+            ].join("\n"),
           },
-        ],
-      });
+        },
+      ],
+    });
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
@@ -4692,32 +4868,30 @@ describe("ChatAgentOrchestrator", () => {
       "## User Task",
       "Propose the smallest Prompt Lab rollout slice for the new v2 pack so GoatCitadel can tighten recent feature quality without immediately rerunning the entire v1 baseline.",
     ].join("\n");
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: [
-                "## Findings / Plan",
-                "- Start with the v2-only prompts that cover newly added provenance, replay, and focused-pack behavior.",
-                "",
-                "## Changes",
-                "- Add a dedicated v2 target list for those tests instead of touching the full v1 matrix.",
-                "",
-                "## Validation",
-                "- Re-run only the focused slice and compare score deltas before widening scope.",
-                "",
-                "## Risks",
-                "- The slice must stay narrow enough that failures map back to the new work rather than generic baseline noise.",
-              ].join("\n"),
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "## Findings / Plan",
+              "- Start with the v2-only prompts that cover newly added provenance, replay, and focused-pack behavior.",
+              "",
+              "## Changes",
+              "- Add a dedicated v2 target list for those tests instead of touching the full v1 matrix.",
+              "",
+              "## Validation",
+              "- Re-run only the focused slice and compare score deltas before widening scope.",
+              "",
+              "## Risks",
+              "- The slice must stay narrow enough that failures map back to the new work rather than generic baseline noise.",
+            ].join("\n"),
           },
-        ],
-      });
+        },
+      ],
+    });
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
@@ -4818,7 +4992,9 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "manual",
-      historyMessages: [{ role: "user", content: "Look online and tell me the 5 most interesting things that happened today." }],
+      historyMessages: [
+        { role: "user", content: "Look online and tell me the 5 most interesting things that happened today." },
+      ],
     });
 
     expect(createChatCompletion).not.toHaveBeenCalled();
@@ -4828,20 +5004,18 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("does not trap a fresh standalone prompt in an old clarification exchange", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "The capital of France is Paris.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "The capital of France is Paris.",
           },
-        ],
-      });
+        },
+      ],
+    });
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
@@ -4865,7 +5039,8 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [
         {
           role: "user",
-          content: "Estimate the number of genuinely lonely singles in the area by combining demographic data, social indicators, and digital behavior patterns.",
+          content:
+            "Estimate the number of genuinely lonely singles in the area by combining demographic data, social indicators, and digital behavior patterns.",
         },
         {
           role: "assistant",
@@ -4885,20 +5060,18 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("ignores stale clarifications once a later assistant turn has moved on", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "The capital of France is Paris.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "The capital of France is Paris.",
           },
-        ],
-      });
+        },
+      ],
+    });
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
@@ -4922,7 +5095,8 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [
         {
           role: "user",
-          content: "Estimate the number of genuinely lonely singles in the area by combining demographic data, social indicators, and digital behavior patterns.",
+          content:
+            "Estimate the number of genuinely lonely singles in the area by combining demographic data, social indicators, and digital behavior patterns.",
         },
         {
           role: "assistant",
@@ -4959,7 +5133,8 @@ describe("ChatAgentOrchestrator", () => {
           {
             index: 0,
             delta: {
-              content: "I'd be happy to help you find weekend activities! Since it's currently Wednesday, March 11th, you're asking about the upcoming weekend (March 14-15, 2026).\n\nTo give you the best recommendations, I",
+              content:
+                "I'd be happy to help you find weekend activities! Since it's currently Wednesday, March 11th, you're asking about the upcoming weekend (March 14-15, 2026).\n\nTo give you the best recommendations, I",
             },
           },
         ],
@@ -4976,7 +5151,13 @@ describe("ChatAgentOrchestrator", () => {
             index: 0,
             delta: {
               content: [
-                { type: "output_text", text: { value: " need a bit more information about your location and interests before I suggest specific plans." } },
+                {
+                  type: "output_text",
+                  text: {
+                    value:
+                      " need a bit more information about your location and interests before I suggest specific plans.",
+                  },
+                },
               ],
             },
           },
@@ -5073,14 +5254,12 @@ describe("ChatAgentOrchestrator", () => {
     vi.setSystemTime(new Date("2026-03-12T20:00:00.000Z"));
     try {
       let navigateCallCount = 0;
-      const createChatCompletion = vi
-        .fn<() => Promise<ChatCompletionResponse>>()
-        .mockImplementation(async () => {
-          vi.setSystemTime(new Date(Date.now() + 5000));
-          return navigateToolCallCompletion({
-            url: "https://blocked-site.com/article",
-          });
+      const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockImplementation(async () => {
+        vi.setSystemTime(new Date(Date.now() + 5000));
+        return navigateToolCallCompletion({
+          url: "https://blocked-site.com/article",
         });
+      });
       const invokeTool = vi
         .fn<() => Promise<ToolInvokeResult>>()
         .mockImplementationOnce(async () => {
@@ -5251,7 +5430,9 @@ describe("ChatAgentOrchestrator", () => {
     // The second navigate call should NOT use blocked-host.com/page2 because
     // blocked-host.com should be poisoned from the fallback chain of the first navigate.
     // It should instead use clean-host.com.
-    const navigateCalls = (invokeTool.mock.calls as unknown as Array<[{ toolName: string; args: Record<string, unknown> }]>)
+    const navigateCalls = (
+      invokeTool.mock.calls as unknown as Array<[{ toolName: string; args: Record<string, unknown> }]>
+    )
       .map((call) => call[0])
       .filter((arg) => arg.toolName === "browser.navigate");
     if (navigateCalls.length >= 2) {
@@ -5323,20 +5504,19 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("passes prompt-lab OpenAI reasoning controls for cowork runs", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "gpt-5.4",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "Researcher: risk is concentrated in migrations.\n\nArchitect: phase the rollout.\n\nSynthesis: keep the cutover staged.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "Researcher: risk is concentrated in migrations.\n\nArchitect: phase the rollout.\n\nSynthesis: keep the cutover staged.",
           },
-        ],
-      });
+        },
+      ],
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog([]),
@@ -5375,20 +5555,19 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("passes prompt-lab OpenAI reasoning controls for code runs", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "gpt-5.4",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "Plan: inspect the repo.\n\nChanges: update the config.\n\nValidation: run the tests.\n\nRisks: watch for regressions.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "Plan: inspect the repo.\n\nChanges: update the config.\n\nValidation: run the tests.\n\nRisks: watch for regressions.",
           },
-        ],
-      });
+        },
+      ],
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog([]),
@@ -5427,20 +5606,18 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("suppresses prompt-lab OpenAI reasoning controls on tool-enabled turns", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "gpt-5.4",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "I should inspect the files first.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "I should inspect the files first.",
           },
-        ],
-      });
+        },
+      ],
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["file.read_range"]),
@@ -5494,9 +5671,7 @@ describe("ChatAgentOrchestrator", () => {
         policyReason: "allowed",
         auditEventId: "audit-mcp-throw-search",
         result: {
-          results: [
-            { title: "Article", url: "https://blocked-site.com/page", snippet: "news" },
-          ],
+          results: [{ title: "Article", url: "https://blocked-site.com/page", snippet: "news" }],
         },
       })
       .mockResolvedValue({
@@ -5532,7 +5707,12 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool,
       invokeMcpTool,
       listMcpBrowserFallbackTargets: () => [
-        { serverId: "srv-broken", label: "Broken MCP", tier: "playwright_mcp" as const, navigateToolName: "mcp_navigate" },
+        {
+          serverId: "srv-broken",
+          label: "Broken MCP",
+          tier: "playwright_mcp" as const,
+          navigateToolName: "mcp_navigate",
+        },
         { serverId: "srv-good", label: "Good MCP", tier: "browser_mcp" as const, navigateToolName: "mcp_navigate" },
       ],
     });
@@ -5644,7 +5824,8 @@ describe("ChatAgentOrchestrator", () => {
             index: 0,
             message: {
               role: "assistant",
-              content: "Adopt event sourcing only if auditability and replay are first-order billing requirements; otherwise keep the current model and add targeted ledger controls.",
+              content:
+                "Adopt event sourcing only if auditability and replay are first-order billing requirements; otherwise keep the current model and add targeted ledger controls.",
             },
           },
         ],
@@ -5677,7 +5858,9 @@ describe("ChatAgentOrchestrator", () => {
       ],
     });
 
-    expect(result.assistantContent).toContain("Adopt event sourcing only if auditability and replay are first-order billing requirements");
+    expect(result.assistantContent).toContain(
+      "Adopt event sourcing only if auditability and replay are first-order billing requirements",
+    );
     expect(result.assistantContent).not.toContain("This turn failed before completion.");
     expect(result.turnTrace.status).toBe("completed");
     expect(createChatCompletion).toHaveBeenCalledTimes(2);
@@ -5731,7 +5914,8 @@ describe("ChatAgentOrchestrator", () => {
       sessionId: "sess-broken-standalone-1",
       turnId: randomUUID(),
       userMessageId: "msg-broken-standalone-1",
-      content: "Evaluate whether a team should move from Heroku to Kubernetes across delivery risk, operational burden, and rollback readiness, then give one recommendation.",
+      content:
+        "Evaluate whether a team should move from Heroku to Kubernetes across delivery risk, operational burden, and rollback readiness, then give one recommendation.",
       mode: "cowork",
       providerId: "glm",
       model: "glm-5",
@@ -5742,12 +5926,15 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [
         {
           role: "user",
-          content: "Evaluate whether a team should move from Heroku to Kubernetes across delivery risk, operational burden, and rollback readiness, then give one recommendation.",
+          content:
+            "Evaluate whether a team should move from Heroku to Kubernetes across delivery risk, operational burden, and rollback readiness, then give one recommendation.",
         },
       ],
     });
 
-    expect(result.assistantContent).toContain("Recommendation: stay on Heroku unless you need Kubernetes-specific controls");
+    expect(result.assistantContent).toContain(
+      "Recommendation: stay on Heroku unless you need Kubernetes-specific controls",
+    );
     expect(result.assistantContent).not.toContain("nine workstreams above");
     expect(result.turnTrace.status).toBe("completed");
     expect(createChatCompletion).toHaveBeenCalledTimes(2);
@@ -5892,7 +6079,8 @@ describe("ChatAgentOrchestrator", () => {
       sessionId: "sess-fragmentary-bullet-1",
       turnId: randomUUID(),
       userMessageId: "msg-fragmentary-bullet-1",
-      content: "Evaluate whether a team should move from Heroku to Kubernetes across delivery risk, operational burden, and rollback readiness, then give one recommendation.",
+      content:
+        "Evaluate whether a team should move from Heroku to Kubernetes across delivery risk, operational burden, and rollback readiness, then give one recommendation.",
       mode: "cowork",
       providerId: "glm",
       model: "glm-5",
@@ -5903,7 +6091,8 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [
         {
           role: "user",
-          content: "Evaluate whether a team should move from Heroku to Kubernetes across delivery risk, operational burden, and rollback readiness, then give one recommendation.",
+          content:
+            "Evaluate whether a team should move from Heroku to Kubernetes across delivery risk, operational burden, and rollback readiness, then give one recommendation.",
         },
       ],
     });
@@ -5958,7 +6147,7 @@ describe("ChatAgentOrchestrator", () => {
       auditEventId: "audit-file-analysis-1",
       result: {
         path: "fixtures/prompt-pack-workspace/package.json",
-        content: "{\n  \"name\": \"prompt-pack-workspace\",\n  \"scripts\": {\n    \"build\": \"tsc\"\n  }\n}",
+        content: '{\n  "name": "prompt-pack-workspace",\n  "scripts": {\n    "build": "tsc"\n  }\n}',
       },
     });
     const orchestrator = new ChatAgentOrchestrator({
@@ -5972,7 +6161,8 @@ describe("ChatAgentOrchestrator", () => {
       sessionId: "sess-file-analysis-1",
       turnId: randomUUID(),
       userMessageId: "msg-file-analysis-1",
-      content: "Read fixtures/prompt-pack-workspace/package.json using file tools. Analyze the scripts section and suggest missing scripts.",
+      content:
+        "Read fixtures/prompt-pack-workspace/package.json using file tools. Analyze the scripts section and suggest missing scripts.",
       mode: "code",
       providerId: "glm",
       model: "glm-5",
@@ -5983,7 +6173,8 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [
         {
           role: "user",
-          content: "Read fixtures/prompt-pack-workspace/package.json using file tools. Analyze the scripts section and suggest missing scripts.",
+          content:
+            "Read fixtures/prompt-pack-workspace/package.json using file tools. Analyze the scripts section and suggest missing scripts.",
         },
       ],
     });
@@ -6052,8 +6243,8 @@ describe("ChatAgentOrchestrator", () => {
         result: {
           path: "fixtures/prompt-pack-workspace/src/index.ts",
           content: [
-            "import express from \"express\";",
-            "import { createId, formatTimestamp, clampValue } from \"./utils.js\";",
+            'import express from "express";',
+            'import { createId, formatTimestamp, clampValue } from "./utils.js";',
           ].join("\n"),
         },
       })
@@ -6063,13 +6254,7 @@ describe("ChatAgentOrchestrator", () => {
         auditEventId: "audit-dependency-package-1",
         result: {
           path: "fixtures/prompt-pack-workspace/package.json",
-          content: [
-            "{",
-            "  \"dependencies\": {",
-            "    \"express\": \"^4.21.0\"",
-            "  }",
-            "}",
-          ].join("\n"),
+          content: ["{", '  "dependencies": {', '    "express": "^4.21.0"', "  }", "}"].join("\n"),
         },
       });
     const orchestrator = new ChatAgentOrchestrator({
@@ -6083,7 +6268,8 @@ describe("ChatAgentOrchestrator", () => {
       sessionId: "sess-dependency-audit-1",
       turnId: randomUUID(),
       userMessageId: "msg-dependency-audit-1",
-      content: "Read fixtures/prompt-pack-workspace/src/index.ts and fixtures/prompt-pack-workspace/package.json using file tools. List all imports used by the server entry file and report any missing or suspicious dependencies.",
+      content:
+        "Read fixtures/prompt-pack-workspace/src/index.ts and fixtures/prompt-pack-workspace/package.json using file tools. List all imports used by the server entry file and report any missing or suspicious dependencies.",
       mode: "code",
       providerId: "glm",
       model: "glm-5",
@@ -6094,17 +6280,20 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [
         {
           role: "user",
-          content: "Read fixtures/prompt-pack-workspace/src/index.ts and fixtures/prompt-pack-workspace/package.json using file tools. List all imports used by the server entry file and report any missing or suspicious dependencies.",
+          content:
+            "Read fixtures/prompt-pack-workspace/src/index.ts and fixtures/prompt-pack-workspace/package.json using file tools. List all imports used by the server entry file and report any missing or suspicious dependencies.",
         },
       ],
     });
 
-    const synthesisCallArgs = createChatCompletion.mock.calls.at(-1) as unknown as [{ messages?: Array<{ content?: unknown }> }] | undefined;
+    const synthesisCallArgs = createChatCompletion.mock.calls.at(-1) as unknown as
+      | [{ messages?: Array<{ content?: unknown }> }]
+      | undefined;
     const synthesisCall = synthesisCallArgs?.[0];
     const synthesisPrompt = String(synthesisCall?.messages?.[1]?.content ?? "");
-    expect(synthesisPrompt).toContain("import express from \"express\";");
-    expect(synthesisPrompt).toContain("\"dependencies\": {");
-    expect(synthesisPrompt).toContain("\"express\": \"^4.21.0\"");
+    expect(synthesisPrompt).toContain('import express from "express";');
+    expect(synthesisPrompt).toContain('"dependencies": {');
+    expect(synthesisPrompt).toContain('"express": "^4.21.0"');
   });
 
   it("prefetches explicit Prompt Lab file evidence before accepting a prose-only completion", async () => {
@@ -6122,20 +6311,19 @@ describe("ChatAgentOrchestrator", () => {
       "",
       "Summarize the main streaming risks.",
     ].join("\n");
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "Researcher\n- The streaming path has abort and cleanup risk.\n\nSynthesis\n- Audit cleanup and idempotency first.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "Researcher\n- The streaming path has abort and cleanup risk.\n\nSynthesis\n- Audit cleanup and idempotency first.",
           },
-        ],
-      });
+        },
+      ],
+    });
     const invokeTool = vi
       .fn<() => Promise<ToolInvokeResult>>()
       .mockResolvedValueOnce({
@@ -6183,10 +6371,16 @@ describe("ChatAgentOrchestrator", () => {
       ],
     });
 
-    const invokedPaths = (invokeTool.mock.calls as unknown as Array<[{
-      toolName: string;
-      args: Record<string, unknown>;
-    }]>)
+    const invokedPaths = (
+      invokeTool.mock.calls as unknown as Array<
+        [
+          {
+            toolName: string;
+            args: Record<string, unknown>;
+          },
+        ]
+      >
+    )
       .map((call) => call[0])
       .filter((call) => call.toolName === "file.read_range")
       .map((call) => String(call.args.path));
@@ -6251,17 +6445,15 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-local-file-refusal-1",
-        result: {
-          path: "F:/code/project/src/index.ts",
-          content: "export function main() {}\nexport function helper() {}",
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-local-file-refusal-1",
+      result: {
+        path: "F:/code/project/src/index.ts",
+        content: "export function main() {}\nexport function helper() {}",
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["file.read_range", "file.find", "code.search"]),
@@ -6346,17 +6538,15 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-prompt-lab-repair-1",
-        result: {
-          path: "F:/code/project/src/index.ts",
-          content: "export function main() {}\nexport function helper() {}",
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-repair-1",
+      result: {
+        path: "F:/code/project/src/index.ts",
+        content: "export function main() {}\nexport function helper() {}",
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["file.read_range", "file.find", "code.search"]),
@@ -6395,20 +6585,18 @@ describe("ChatAgentOrchestrator", () => {
       "## User Task",
       "Read `F:/code/sql-teacher/lib/db/sandbox.ts` using file/code tools and review the sandbox safety.",
     ].join("\n");
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "Findings\n- The sandbox uses strict schema guards and appears safe.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Findings\n- The sandbox uses strict schema guards and appears safe.",
           },
-        ],
-      });
+        },
+      ],
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog([]),
@@ -6452,31 +6640,27 @@ describe("ChatAgentOrchestrator", () => {
       "## User Task",
       "Read `F:/code/project/src/index.ts` using file/code tools and summarize the exports.",
     ].join("\n");
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "The file exports a main function and several helpers.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "The file exports a main function and several helpers.",
           },
-        ],
-      });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-prefetch-retry-1",
-        result: {
-          path: "F:/code/project/src/index.ts",
-          content: "export function main() {}\nexport function helper() {}",
         },
-      });
+      ],
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prefetch-retry-1",
+      result: {
+        path: "F:/code/project/src/index.ts",
+        content: "export function main() {}\nexport function helper() {}",
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["file.read_range", "file.find", "code.search"]),
@@ -6598,37 +6782,33 @@ describe("ChatAgentOrchestrator", () => {
       "## User Task",
       "Use file or code tools to inspect the skill import path, overlap detection behavior, and repo-managed skill provenance metadata. Summarize the concrete evidence an operator can review today and cite the exact files used.",
     ].join("\n");
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "gpt-5.4",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: [
-                "Operators can review the install and overlap logic in `apps/gateway/src/services/skill-import-service.ts`, the operator-facing policy in `docs/SKILL_ADOPTION_MATRIX.md`, and repo-managed provenance manifests under `skills/extra/<skill-id>/source.json`.",
-                "Those files together show the import path, overlapping family checks, and stored provenance fields.",
-              ].join(" "),
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "Operators can review the install and overlap logic in `apps/gateway/src/services/skill-import-service.ts`, the operator-facing policy in `docs/SKILL_ADOPTION_MATRIX.md`, and repo-managed provenance manifests under `skills/extra/<skill-id>/source.json`.",
+              "Those files together show the import path, overlapping family checks, and stored provenance fields.",
+            ].join(" "),
           },
-        ],
-      });
-    const invokeTool = vi
-      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
-      .mockResolvedValue({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-prefetch-search-files-1",
-        result: {
-          matches: [
-            { path: "apps/gateway/src/services/skill-import-service.ts", name: "skill-import-service.ts" },
-            { path: "docs/SKILL_ADOPTION_MATRIX.md", name: "SKILL_ADOPTION_MATRIX.md" },
-            { path: "skills/extra/cloudflare-api/source.json", name: "source.json" },
-          ],
         },
-      });
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prefetch-search-files-1",
+      result: {
+        matches: [
+          { path: "apps/gateway/src/services/skill-import-service.ts", name: "skill-import-service.ts" },
+          { path: "docs/SKILL_ADOPTION_MATRIX.md", name: "SKILL_ADOPTION_MATRIX.md" },
+          { path: "skills/extra/cloudflare-api/source.json", name: "source.json" },
+        ],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["code.search_files"]),
@@ -6666,20 +6846,18 @@ describe("ChatAgentOrchestrator", () => {
   });
 
   it("passes non-Prompt-Lab prompts through without explicit-tools enforcement", async () => {
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "glm-5",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "Here is a plain answer without any tools.",
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Here is a plain answer without any tools.",
           },
-        ],
-      });
+        },
+      ],
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["file.read_range", "browser.search"]),
@@ -6767,7 +6945,8 @@ describe("ChatAgentOrchestrator", () => {
             index: 0,
             message: {
               role: "assistant",
-              content: "The module exports `main` and `helper`, but there is no direct test evidence in the file itself. I would add export-focused tests first.",
+              content:
+                "The module exports `main` and `helper`, but there is no direct test evidence in the file itself. I would add export-focused tests first.",
             },
           },
         ],
@@ -6779,7 +6958,8 @@ describe("ChatAgentOrchestrator", () => {
             index: 0,
             message: {
               role: "assistant",
-              content: "The module exports `main` and `helper`, but there is no direct test evidence in the file itself. I would add export-focused tests first.",
+              content:
+                "The module exports `main` and `helper`, but there is no direct test evidence in the file itself. I would add export-focused tests first.",
             },
           },
         ],
@@ -6826,7 +7006,9 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.turnTrace.status).toBe("completed");
     expect(result.assistantContent).toContain("exports `main` and `helper`");
     expect(result.assistantContent).not.toContain("Approval required by policy.");
-    expect(result.turnTrace.toolRuns.some((run) => run.toolName === "shell.exec" && run.status === "approval_required")).toBe(true);
+    expect(
+      result.turnTrace.toolRuns.some((run) => run.toolName === "shell.exec" && run.status === "approval_required"),
+    ).toBe(true);
   });
 
   it("salvages Prompt Lab explicit-tools turns after approval-gated browser state tools", async () => {
@@ -6886,14 +7068,12 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "approval_required",
-        policyReason: "approval_required",
-        auditEventId: "audit-browser-context-configure-1",
-        approvalId: "approval-browser-context-configure-1",
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "approval_required",
+      policyReason: "approval_required",
+      auditEventId: "audit-browser-context-configure-1",
+      approvalId: "approval-browser-context-configure-1",
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.context.configure"]),
@@ -6919,8 +7099,9 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.turnTrace.status).toBe("completed");
     expect(result.assistantContent).toContain("approval-gated");
     expect(result.assistantContent).not.toContain("Approval required by policy.");
-    expect(result.turnTrace.toolRuns.some((run) =>
-      run.status === "approval_required" && run.toolName.includes("browser"))).toBe(true);
+    expect(
+      result.turnTrace.toolRuns.some((run) => run.status === "approval_required" && run.toolName.includes("browser")),
+    ).toBe(true);
   });
 
   it("enforces cowork scaffolding and evidence packets for local qwen Prompt Lab turns", async () => {
@@ -6965,17 +7146,15 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-local-qwen-streaming-1",
-        result: {
-          path: "F:/code/project/src/streaming.ts",
-          content: "export function streamChatCompletion(signal?: AbortSignal) { signal?.throwIfAborted(); }",
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-local-qwen-streaming-1",
+      result: {
+        path: "F:/code/project/src/streaming.ts",
+        content: "export function streamChatCompletion(signal?: AbortSignal) { signal?.throwIfAborted(); }",
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["file.read_range"]),
@@ -7020,29 +7199,27 @@ describe("ChatAgentOrchestrator", () => {
       "## User Task",
       "Outline the safest operator-owned rollout path.",
     ].join("\n");
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "qwen3.5:9b",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: [
-                "## Product",
-                "- Goal: Keep the rollout narrow and reversible.",
-                "",
-                "## Ops",
-                "- Gate production behind one explicit validation checkpoint.",
-                "",
-                "## Synthesis",
-                "- Roll out in one controlled slice, then expand only after the checkpoint passes.",
-              ].join("\n"),
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "qwen3.5:9b",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "## Product",
+              "- Goal: Keep the rollout narrow and reversible.",
+              "",
+              "## Ops",
+              "- Gate production behind one explicit validation checkpoint.",
+              "",
+              "## Synthesis",
+              "- Roll out in one controlled slice, then expand only after the checkpoint passes.",
+            ].join("\n"),
           },
-        ],
-      });
+        },
+      ],
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog([]),
@@ -7068,8 +7245,12 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("## Product");
     expect(result.assistantContent).toContain("## Ops");
     expect(result.assistantContent).toContain("## Synthesis");
-    expect(result.assistantContent).not.toContain("## Do Not Add Extra Headings Before, Between, Or After Those Sections");
-    expect(result.assistantContent).not.toContain("## Keep Each Requested Section Compact, Evidence-backed, And Decision-oriented");
+    expect(result.assistantContent).not.toContain(
+      "## Do Not Add Extra Headings Before, Between, Or After Those Sections",
+    );
+    expect(result.assistantContent).not.toContain(
+      "## Keep Each Requested Section Compact, Evidence-backed, And Decision-oriented",
+    );
   });
 
   it("does not force a synthesis section when the prompt says to keep the requested role order only", async () => {
@@ -7084,26 +7265,24 @@ describe("ChatAgentOrchestrator", () => {
       "## User Task",
       "Create role-labeled sections for a qwen-specific no-tools slice that tests strict section discipline, no extra headings, and uncertainty labeling. Keep the requested role order only.",
     ].join("\n");
-    const createChatCompletion = vi
-      .fn<() => Promise<ChatCompletionResponse>>()
-      .mockResolvedValueOnce({
-        model: "qwen3.5:9b",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: [
-                "## Product",
-                "- Slice: Keep the qwen gate small and section-locked.",
-                "",
-                "## QA",
-                "- Unknowns: It still needs a strict grader check for extra headings.",
-              ].join("\n"),
-            },
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "qwen3.5:9b",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "## Product",
+              "- Slice: Keep the qwen gate small and section-locked.",
+              "",
+              "## QA",
+              "- Unknowns: It still needs a strict grader check for extra headings.",
+            ].join("\n"),
           },
-        ],
-      });
+        },
+      ],
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog([]),
@@ -7234,8 +7413,12 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("## QA");
     expect(result.assistantContent).toContain("## Synthesis");
     expect(result.assistantContent).toContain("apps/gateway/src/services/prompt-pack-service.ts");
-    expect(result.assistantContent).not.toContain("## Do Not Add Extra Headings Before, Between, Or After Those Sections");
-    expect(result.assistantContent).not.toContain("## Keep Each Requested Section Compact, Evidence-backed, And Decision-oriented");
+    expect(result.assistantContent).not.toContain(
+      "## Do Not Add Extra Headings Before, Between, Or After Those Sections",
+    );
+    expect(result.assistantContent).not.toContain(
+      "## Keep Each Requested Section Compact, Evidence-backed, And Decision-oriented",
+    );
   });
 
   it("repairs raw qwen tool-call markup into a final answer after tool execution", async () => {
@@ -7282,7 +7465,7 @@ describe("ChatAgentOrchestrator", () => {
             index: 0,
             message: {
               role: "assistant",
-              content: "<function=code_search_files>{\"query\":\"frozen baseline\"}</function>",
+              content: '<function=code_search_files>{"query":"frozen baseline"}</function>',
             },
           },
         ],
@@ -7294,7 +7477,8 @@ describe("ChatAgentOrchestrator", () => {
             index: 0,
             message: {
               role: "assistant",
-              content: "Add one parser-focused regression test that loads `goatcitadel_prompt_pack_v2.md`, asserts the parse succeeds, and checks the parsed identity differs from the frozen baseline fixture instead of matching it byte-for-byte.",
+              content:
+                "Add one parser-focused regression test that loads `goatcitadel_prompt_pack_v2.md`, asserts the parse succeeds, and checks the parsed identity differs from the frozen baseline fixture instead of matching it byte-for-byte.",
             },
           },
         ],

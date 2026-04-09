@@ -14,7 +14,7 @@ describe("chat routes additional coverage", () => {
   });
 
   it("creates sessions and returns pagination cursors", async () => {
-    const listChatSessions = vi.fn(() => ([
+    const listChatSessions = vi.fn(() => [
       {
         sessionId: "sess-2",
         updatedAt: "2026-03-05T10:00:02.000Z",
@@ -23,7 +23,7 @@ describe("chat routes additional coverage", () => {
         sessionId: "sess-1",
         updatedAt: "2026-03-05T10:00:01.000Z",
       },
-    ]));
+    ]);
     const createChatSession = vi.fn(() => ({
       sessionId: "sess-new",
       title: "Fresh chat",
@@ -43,10 +43,12 @@ describe("chat routes additional coverage", () => {
     expect(listResponse.json()).toMatchObject({
       nextCursor: "2026-03-05T10:00:01.000Z|sess-1",
     });
-    expect(listChatSessions).toHaveBeenCalledWith(expect.objectContaining({
-      includeHidden: true,
-      limit: 2,
-    }));
+    expect(listChatSessions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeHidden: true,
+        limit: 2,
+      }),
+    );
 
     const createResponse = await app.inject({
       method: "POST",
@@ -150,7 +152,7 @@ describe("chat routes additional coverage", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/event-stream");
-    expect(response.body).toContain("\"type\":\"delta\"");
+    expect(response.body).toContain('"type":"delta"');
     expect(agentSendChatMessageStream).toHaveBeenCalledWith(
       "sess-1",
       expect.objectContaining({ content: "Hello" }),
@@ -160,6 +162,7 @@ describe("chat routes additional coverage", () => {
 
   it("emits an error chunk without a fabricated done chunk when SSE streaming fails", async () => {
     const agentSendChatMessageStream = vi.fn(async function* () {
+      yield* [];
       throw new Error("stream exploded");
     });
     app = Fastify();
@@ -177,10 +180,10 @@ describe("chat routes additional coverage", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toContain("\"type\":\"error\"");
+    expect(response.body).toContain('"type":"error"');
     expect(response.body).toContain("Check gateway diagnostics and retry");
     expect(response.body).not.toContain("stream exploded");
-    expect(response.body).not.toContain("\"type\":\"done\"");
+    expect(response.body).not.toContain('"type":"done"');
   });
 
   it("streams progressive delegation chunks over SSE", async () => {
@@ -235,9 +238,9 @@ describe("chat routes additional coverage", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/event-stream");
-    expect(response.body).toContain("\"type\":\"status\"");
-    expect(response.body).toContain("\"type\":\"step\"");
-    expect(response.body).toContain("\"type\":\"done\"");
+    expect(response.body).toContain('"type":"status"');
+    expect(response.body).toContain('"type":"step"');
+    expect(response.body).toContain('"type":"done"');
     expect(runChatDelegationStream).toHaveBeenCalledWith("sess-1", {
       objective: "Implement the fix",
       roles: ["Architect"],
@@ -247,6 +250,7 @@ describe("chat routes additional coverage", () => {
 
   it("sanitizes delegation SSE failures without a fabricated done chunk", async () => {
     const runChatDelegationStream = vi.fn(async function* () {
+      yield* [];
       throw new Error("delegate exploded");
     });
     app = Fastify();
@@ -266,10 +270,10 @@ describe("chat routes additional coverage", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toContain("\"type\":\"error\"");
+    expect(response.body).toContain('"type":"error"');
     expect(response.body).toContain("Check gateway diagnostics and retry");
     expect(response.body).not.toContain("delegate exploded");
-    expect(response.body).not.toContain("\"type\":\"done\"");
+    expect(response.body).not.toContain('"type":"done"');
   });
 
   it("rejects removed legacy chat write routes", async () => {
@@ -361,23 +365,25 @@ describe("chat routes additional coverage", () => {
 
   it("lists, creates, and updates specialist candidates through the gateway", async () => {
     const listChatSessionSpecialistCandidates = vi.fn(() => ({
-      items: [{
-        candidateId: "cand-1",
-        sessionId: "sess-1",
-        title: "Research Specialist",
-        role: "researcher",
-        summary: "Reusable researcher persona",
-        reason: "Repeated research gap",
-        source: "runtime_gap",
-        status: "drafted",
-        routingMode: "manual_only",
-        confidence: 0.74,
-        requiresApproval: true,
-        routingHints: { preferredModes: ["cowork"] },
-        evidence: [],
-        createdAt: "2026-03-12T00:00:00.000Z",
-        updatedAt: "2026-03-12T00:00:00.000Z",
-      }],
+      items: [
+        {
+          candidateId: "cand-1",
+          sessionId: "sess-1",
+          title: "Research Specialist",
+          role: "researcher",
+          summary: "Reusable researcher persona",
+          reason: "Repeated research gap",
+          source: "runtime_gap",
+          status: "drafted",
+          routingMode: "manual_only",
+          confidence: 0.74,
+          requiresApproval: true,
+          routingHints: { preferredModes: ["cowork"] },
+          evidence: [],
+          createdAt: "2026-03-12T00:00:00.000Z",
+          updatedAt: "2026-03-12T00:00:00.000Z",
+        },
+      ],
     }));
     const createChatSessionSpecialistCandidate = vi.fn(() => ({
       candidateId: "cand-2",
@@ -451,12 +457,15 @@ describe("chat routes additional coverage", () => {
       },
     });
     expect(createResponse.statusCode).toBe(201);
-    expect(createChatSessionSpecialistCandidate).toHaveBeenCalledWith("sess-1", expect.objectContaining({
-      turnId: "turn-1",
-      suggestion: expect.objectContaining({
-        title: "Research Specialist",
+    expect(createChatSessionSpecialistCandidate).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({
+        turnId: "turn-1",
+        suggestion: expect.objectContaining({
+          title: "Research Specialist",
+        }),
       }),
-    }));
+    );
 
     const patchResponse = await app.inject({
       method: "PATCH",
@@ -572,10 +581,7 @@ describe("chat routes additional coverage", () => {
         manifestId: "manifest-1",
         turnId: "turn-9",
       },
-      entries: [
-        { kind: "system_message" },
-        { kind: "memory_context" },
-      ],
+      entries: [{ kind: "system_message" }, { kind: "memory_context" }],
     });
   });
 

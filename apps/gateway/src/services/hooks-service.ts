@@ -6,7 +6,6 @@ import {
   type HookDecision,
   type HookDecisionBlock,
   type HookDispatchEnvelope,
-  type HookFailPolicy,
   type HookMode,
   type HookPatchSummary,
   type HookRecord,
@@ -179,13 +178,11 @@ export class HooksService {
         continue;
       }
 
-      const patch = input.parsePatch(result.responsePayload?.patch as Record<string, unknown> | undefined ?? {});
+      const patch = input.parsePatch((result.responsePayload?.patch as Record<string, unknown> | undefined) ?? {});
       if (!patch) {
         continue;
       }
-      mergedPatch = input.mergePatch
-        ? input.mergePatch(mergedPatch, patch)
-        : { ...(mergedPatch ?? {}), ...patch };
+      mergedPatch = input.mergePatch ? input.mergePatch(mergedPatch, patch) : { ...(mergedPatch ?? {}), ...patch };
     }
 
     return {
@@ -379,7 +376,10 @@ export class HooksService {
     };
     const body = JSON.stringify(envelope);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error(`Hook webhook timed out after ${hook.timeoutMs}ms`)), hook.timeoutMs);
+    const timeout = setTimeout(
+      () => controller.abort(new Error(`Hook webhook timed out after ${hook.timeoutMs}ms`)),
+      hook.timeoutMs,
+    );
     try {
       const timestamp = new Date().toISOString();
       const signature = signHookBody(timestamp, body, hook.action.webhook.secret);
@@ -399,9 +399,7 @@ export class HooksService {
         signal: controller.signal,
       });
       const raw = await response.text();
-      const parsed = raw.trim()
-        ? safeJsonParse(raw)
-        : {};
+      const parsed = raw.trim() ? safeJsonParse(raw) : {};
       if (!response.ok) {
         throw new Error(`Hook webhook responded with ${response.status}${raw ? `: ${raw}` : ""}`);
       }
@@ -432,11 +430,15 @@ export class HooksService {
       return;
     }
     const workspace = this.ctx.storage.workspaces.get(workspaceId);
-    const runtimeSettings = this.ctx.storage.systemSettings.get<HookRuntimeSettings>(HOOK_RUNTIME_SETTINGS_KEY)?.value ?? {};
-    const workspaceHooks = (workspace.workspacePrefs?.hooks as {
-      allowMutatingHooks?: boolean;
-      allowInterceptingHooks?: boolean;
-    } | undefined) ?? {};
+    const runtimeSettings =
+      this.ctx.storage.systemSettings.get<HookRuntimeSettings>(HOOK_RUNTIME_SETTINGS_KEY)?.value ?? {};
+    const workspaceHooks =
+      (workspace.workspacePrefs?.hooks as
+        | {
+            allowMutatingHooks?: boolean;
+            allowInterceptingHooks?: boolean;
+          }
+        | undefined) ?? {};
 
     if (mode === "mutate") {
       if (workspaceHooks.allowMutatingHooks || runtimeSettings.allowMutatingHooks) {
@@ -462,13 +464,13 @@ export class HooksService {
       return;
     }
     if (
-      trigger === "llm.response.after"
-      || trigger === "tool.call.after"
-      || trigger === "tool.call.error"
-      || trigger === "approval.resolve.after"
-      || trigger === "orchestration.phase.after"
-      || trigger === "orchestration.retry.scheduled"
-      || trigger === "orchestration.run.woken"
+      trigger === "llm.response.after" ||
+      trigger === "tool.call.after" ||
+      trigger === "tool.call.error" ||
+      trigger === "approval.resolve.after" ||
+      trigger === "orchestration.phase.after" ||
+      trigger === "orchestration.retry.scheduled" ||
+      trigger === "orchestration.run.woken"
     ) {
       throw new ValidationError({
         message: `Trigger ${trigger} only supports observe hooks in v1.`,
@@ -505,9 +507,7 @@ function normalizeDecision(value: unknown): HookDecision | undefined {
   if (candidate.type === "continue") {
     return {
       type: "continue",
-      ...(typeof candidate.reason === "string" && candidate.reason.trim()
-        ? { reason: candidate.reason.trim() }
-        : {}),
+      ...(typeof candidate.reason === "string" && candidate.reason.trim() ? { reason: candidate.reason.trim() } : {}),
       ...(candidate.metadata && typeof candidate.metadata === "object" && !Array.isArray(candidate.metadata)
         ? { metadata: candidate.metadata as Record<string, unknown> }
         : {}),
@@ -517,9 +517,7 @@ function normalizeDecision(value: unknown): HookDecision | undefined {
     return {
       type: "block",
       reason: candidate.reason.trim(),
-      ...(typeof candidate.code === "string" && candidate.code.trim()
-        ? { code: candidate.code.trim() }
-        : {}),
+      ...(typeof candidate.code === "string" && candidate.code.trim() ? { code: candidate.code.trim() } : {}),
       ...(candidate.metadata && typeof candidate.metadata === "object" && !Array.isArray(candidate.metadata)
         ? { metadata: candidate.metadata as Record<string, unknown> }
         : {}),
@@ -543,9 +541,7 @@ function signHookBody(timestamp: string, body: string, secret?: string): string 
   if (!secret) {
     return "unsigned";
   }
-  const digest = createHmac("sha256", secret)
-    .update(`${timestamp}.${body}`, "utf8")
-    .digest("hex");
+  const digest = createHmac("sha256", secret).update(`${timestamp}.${body}`, "utf8").digest("hex");
   return `sha256=${digest}`;
 }
 
@@ -560,6 +556,5 @@ function safeJsonParse(raw: string): unknown {
 }
 
 function isTimeoutError(error: unknown): boolean {
-  return error instanceof Error
-    && (error.name === "AbortError" || error.message.toLowerCase().includes("timed out"));
+  return error instanceof Error && (error.name === "AbortError" || error.message.toLowerCase().includes("timed out"));
 }

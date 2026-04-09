@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Discord runtime behavior stays consolidated so gateway event handling remains debuggable in one place. */
 import {
   type AutocompleteInteraction,
   Client,
@@ -38,18 +39,22 @@ interface DiscordRuntimeCallbacks {
   ensurePendingPairing: (connectionId: string, userId: string, displayName?: string) => DiscordPairingRecord;
   touchPairing: (pairingId: string) => void;
   onInboundMessage: (input: DiscordInboundEnvelope) => Promise<void>;
-  onSlashCommand: (input: Omit<DiscordInboundEnvelope, "content" | "sourceMessageId"> & {
-    commandText: string;
-    sourceCommandId: string;
-  }) => Promise<string>;
+  onSlashCommand: (
+    input: Omit<DiscordInboundEnvelope, "content" | "sourceMessageId"> & {
+      commandText: string;
+      sourceCommandId: string;
+    },
+  ) => Promise<string>;
   listModelSuggestions: (
     query: string,
     limit?: number,
-  ) => Promise<Array<{
-    model: string;
-    providerId?: string;
-    providerLabel?: string;
-  }>>;
+  ) => Promise<
+    Array<{
+      model: string;
+      providerId?: string;
+      providerLabel?: string;
+    }>
+  >;
   publishDiagnostic: (event: string, message: string, context: Record<string, unknown>) => void;
 }
 
@@ -80,8 +85,9 @@ export class DiscordRuntimeService {
       .filter((connection) => getDiscordRuntimeMode(connection.config) === "gateway");
     const nextGroups = new Map<string, IntegrationConnection[]>();
     for (const connection of gatewayConnections) {
-      const token = readDiscordSecret(connection.config, "botToken", "botTokenEnv")
-        ?? readDiscordSecret(connection.config, "token", "tokenEnv");
+      const token =
+        readDiscordSecret(connection.config, "botToken", "botTokenEnv") ??
+        readDiscordSecret(connection.config, "token", "tokenEnv");
       if (!token) {
         this.statusByConnectionId.set(connection.connectionId, {
           connectionId: connection.connectionId,
@@ -176,9 +182,10 @@ export class DiscordRuntimeService {
 
     const normalized = normalizeDiscordRuntimeTarget(target);
     try {
-      const channel = normalized.kind === "user"
-        ? await (await runtime.client.users.fetch(normalized.id)).createDM()
-        : await runtime.client.channels.fetch(normalized.id);
+      const channel =
+        normalized.kind === "user"
+          ? await (await runtime.client.users.fetch(normalized.id)).createDM()
+          : await runtime.client.channels.fetch(normalized.id);
       if (!channel || !supportsTyping(channel)) {
         return {
           channelKey: "discord",
@@ -278,14 +285,18 @@ export class DiscordRuntimeService {
         void this.handleAutocompleteInteraction(runtime, interaction).catch((error) => {
           runtime.lastError = (error as Error).message;
           this.updateStatusSnapshot(runtime);
-          this.callbacks.publishDiagnostic("discord.gateway.autocomplete_error", "Discord autocomplete handling failed.", {
-            connectionIds: [...runtime.connectionIds],
-            interactionId: interaction.id,
-            commandName: interaction.commandName,
-            channelId: interaction.channelId,
-            guildId: interaction.guildId,
-            error: (error as Error).message,
-          });
+          this.callbacks.publishDiagnostic(
+            "discord.gateway.autocomplete_error",
+            "Discord autocomplete handling failed.",
+            {
+              connectionIds: [...runtime.connectionIds],
+              interactionId: interaction.id,
+              commandName: interaction.commandName,
+              channelId: interaction.channelId,
+              guildId: interaction.guildId,
+              error: (error as Error).message,
+            },
+          );
         });
         return;
       }
@@ -295,14 +306,18 @@ export class DiscordRuntimeService {
       void this.handleInteraction(runtime, interaction).catch((error) => {
         runtime.lastError = (error as Error).message;
         this.updateStatusSnapshot(runtime);
-        this.callbacks.publishDiagnostic("discord.gateway.interaction_error", "Discord slash command handling failed.", {
-          connectionIds: [...runtime.connectionIds],
-          interactionId: interaction.id,
-          commandName: interaction.commandName,
-          channelId: interaction.channelId,
-          guildId: interaction.guildId,
-          error: (error as Error).message,
-        });
+        this.callbacks.publishDiagnostic(
+          "discord.gateway.interaction_error",
+          "Discord slash command handling failed.",
+          {
+            connectionIds: [...runtime.connectionIds],
+            interactionId: interaction.id,
+            commandName: interaction.commandName,
+            channelId: interaction.channelId,
+            guildId: interaction.guildId,
+            error: (error as Error).message,
+          },
+        );
       });
     });
 
@@ -395,10 +410,12 @@ export class DiscordRuntimeService {
       }
     }
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.reply({
-        content: "GoatCitadel is not enabled for slash commands in this channel or DM route.",
-        ephemeral: !interaction.channel?.isDMBased(),
-      }).catch(() => {});
+      await interaction
+        .reply({
+          content: "GoatCitadel is not enabled for slash commands in this channel or DM route.",
+          ephemeral: !interaction.channel?.isDMBased(),
+        })
+        .catch(() => {});
     }
   }
 
@@ -427,10 +444,14 @@ export class DiscordRuntimeService {
       return;
     }
     const suggestions = await this.callbacks.listModelSuggestions(String(focused.value ?? ""), 25);
-    await interaction.respond(suggestions.slice(0, 25).map((item) => ({
-      name: formatDiscordModelChoiceLabel(item.model, item.providerLabel ?? item.providerId),
-      value: item.model,
-    }))).catch(() => {});
+    await interaction
+      .respond(
+        suggestions.slice(0, 25).map((item) => ({
+          name: formatDiscordModelChoiceLabel(item.model, item.providerLabel ?? item.providerId),
+          value: item.model,
+        })),
+      )
+      .catch(() => {});
   }
 
   private async syncApplicationCommands(runtime: ManagedClientRecord): Promise<void> {
@@ -457,7 +478,8 @@ export class DiscordRuntimeService {
     }
 
     for (const guildId of configuredGuildIds) {
-      const guild = runtime.client.guilds.cache.get(guildId) ?? await runtime.client.guilds.fetch(guildId).catch(() => null);
+      const guild =
+        runtime.client.guilds.cache.get(guildId) ?? (await runtime.client.guilds.fetch(guildId).catch(() => null));
       if (!guild) {
         continue;
       }
@@ -538,23 +560,25 @@ export class DiscordRuntimeService {
       return false;
     }
     const commandText = buildCommandTextFromInteraction(interaction);
-    await this.handleAcceptedCommand(interaction, async () => this.callbacks.onSlashCommand({
-      connectionId: connection.connectionId,
-      target: interaction.channelId,
-      actorId: interaction.user.id,
-      displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
-      commandText,
-      sourceCommandId: interaction.id,
-      peer: interaction.user.id,
-      room: interaction.channelId,
-      threadId: interaction.channel?.isThread() ? interaction.channel.id : undefined,
-      metadata: {
-        guildId: interaction.guildId,
-        channelId: interaction.channelId,
-        runtimeMode: "gateway",
-        interaction: true,
-      },
-    }));
+    await this.handleAcceptedCommand(interaction, async () =>
+      this.callbacks.onSlashCommand({
+        connectionId: connection.connectionId,
+        target: interaction.channelId,
+        actorId: interaction.user.id,
+        displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
+        commandText,
+        sourceCommandId: interaction.id,
+        peer: interaction.user.id,
+        room: interaction.channelId,
+        threadId: interaction.channel?.isThread() ? interaction.channel.id : undefined,
+        metadata: {
+          guildId: interaction.guildId,
+          channelId: interaction.channelId,
+          runtimeMode: "gateway",
+          interaction: true,
+        },
+      }),
+    );
     return true;
   }
 
@@ -657,39 +681,43 @@ export class DiscordRuntimeService {
     const commandText = buildCommandTextFromInteraction(interaction);
     if (approved) {
       this.callbacks.touchPairing(approved.pairingId);
-      await this.handleAcceptedCommand(interaction, async () => this.callbacks.onSlashCommand({
-        connectionId: connection.connectionId,
-        target: interaction.channelId,
-        actorId: interaction.user.id,
-        displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
-        commandText,
-        sourceCommandId: interaction.id,
-        peer: interaction.user.id,
-        room: interaction.channelId,
-        metadata: {
-          dm: true,
-          runtimeMode: "gateway",
-          interaction: true,
-        },
-      }));
+      await this.handleAcceptedCommand(interaction, async () =>
+        this.callbacks.onSlashCommand({
+          connectionId: connection.connectionId,
+          target: interaction.channelId,
+          actorId: interaction.user.id,
+          displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
+          commandText,
+          sourceCommandId: interaction.id,
+          peer: interaction.user.id,
+          room: interaction.channelId,
+          metadata: {
+            dm: true,
+            runtimeMode: "gateway",
+            interaction: true,
+          },
+        }),
+      );
       return true;
     }
     if (dmPolicy === "open") {
-      await this.handleAcceptedCommand(interaction, async () => this.callbacks.onSlashCommand({
-        connectionId: connection.connectionId,
-        target: interaction.channelId,
-        actorId: interaction.user.id,
-        displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
-        commandText,
-        sourceCommandId: interaction.id,
-        peer: interaction.user.id,
-        room: interaction.channelId,
-        metadata: {
-          dm: true,
-          runtimeMode: "gateway",
-          interaction: true,
-        },
-      }));
+      await this.handleAcceptedCommand(interaction, async () =>
+        this.callbacks.onSlashCommand({
+          connectionId: connection.connectionId,
+          target: interaction.channelId,
+          actorId: interaction.user.id,
+          displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
+          commandText,
+          sourceCommandId: interaction.id,
+          peer: interaction.user.id,
+          room: interaction.channelId,
+          metadata: {
+            dm: true,
+            runtimeMode: "gateway",
+            interaction: true,
+          },
+        }),
+      );
       return true;
     }
     const pending = this.callbacks.ensurePendingPairing(
@@ -697,8 +725,7 @@ export class DiscordRuntimeService {
       interaction.user.id,
       interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
     );
-    const pairingMessage =
-      `GoatCitadel pairing required. Ask the operator to approve code \`${pending.code}\` for ${connection.label}.`;
+    const pairingMessage = `GoatCitadel pairing required. Ask the operator to approve code \`${pending.code}\` for ${connection.label}.`;
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ content: pairingMessage });
     } else {
@@ -735,9 +762,8 @@ export class DiscordRuntimeService {
 
   private async runWithTypingIndicator(message: Message, task: () => Promise<void>): Promise<void> {
     const channel = message.channel as { sendTyping?: () => Promise<unknown> };
-    const sendTyping = typeof channel.sendTyping === "function"
-      ? () => channel.sendTyping?.() ?? Promise.resolve()
-      : undefined;
+    const sendTyping =
+      typeof channel.sendTyping === "function" ? () => channel.sendTyping?.() ?? Promise.resolve() : undefined;
     if (!sendTyping) {
       await task();
       return;
@@ -758,11 +784,7 @@ export class DiscordRuntimeService {
   }
 }
 
-function readDiscordSecret(
-  config: Record<string, unknown>,
-  key: string,
-  envKey: string,
-): string | undefined {
+function readDiscordSecret(config: Record<string, unknown>, key: string, envKey: string): string | undefined {
   const direct = readConfigString(config, key);
   if (direct) {
     return direct;
@@ -853,9 +875,10 @@ function sanitizeGuildRules(value: unknown): Record<string, DiscordGuildAccessRu
     if (!rawRule || typeof rawRule !== "object") {
       continue;
     }
-    const requireMention = typeof (rawRule as { requireMention?: unknown }).requireMention === "boolean"
-      ? Boolean((rawRule as { requireMention?: boolean }).requireMention)
-      : true;
+    const requireMention =
+      typeof (rawRule as { requireMention?: unknown }).requireMention === "boolean"
+        ? Boolean((rawRule as { requireMention?: boolean }).requireMention)
+        : true;
     const users = sanitizeStringArray((rawRule as { users?: unknown }).users);
     const channels = sanitizeStringArray((rawRule as { channels?: unknown }).channels);
     result[guildId] = {
@@ -936,7 +959,9 @@ function buildCommandTextFromInteraction(interaction: ChatInputCommandInteractio
         interaction.options.getInteger("robustness", true),
         interaction.options.getInteger("usability", true),
         interaction.options.getString("notes")?.trim(),
-      ].filter((value) => value !== undefined && value !== null && String(value).trim().length > 0).join(" ");
+      ]
+        .filter((value) => value !== undefined && value !== null && String(value).trim().length > 0)
+        .join(" ");
     case "pack":
       return `/pack run ${interaction.options.getString("selector") ?? "all"}`;
     case "skills":
@@ -994,52 +1019,103 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
     new SlashCommandBuilder()
       .setName("mode")
       .setDescription("Switch the active GoatCitadel session mode.")
-      .addStringOption((option) => option.setName("mode").setDescription("Target mode.").setRequired(true)
-        .addChoices(stringChoice("chat"), stringChoice("cowork"), stringChoice("code"))),
+      .addStringOption((option) =>
+        option
+          .setName("mode")
+          .setDescription("Target mode.")
+          .setRequired(true)
+          .addChoices(stringChoice("chat"), stringChoice("cowork"), stringChoice("code")),
+      ),
     new SlashCommandBuilder()
       .setName("plan")
       .setDescription("Show or set planning mode.")
-      .addStringOption((option) => option.setName("state").setDescription("Set planning mode.")
-        .addChoices(stringChoice("on"), stringChoice("off"))),
+      .addStringOption((option) =>
+        option
+          .setName("state")
+          .setDescription("Set planning mode.")
+          .addChoices(stringChoice("on"), stringChoice("off")),
+      ),
     new SlashCommandBuilder()
       .setName("model")
       .setDescription("Override the active model for this session.")
-      .addStringOption((option) => option.setName("model").setDescription("Model id.").setRequired(true).setAutocomplete(true)),
+      .addStringOption((option) =>
+        option.setName("model").setDescription("Model id.").setRequired(true).setAutocomplete(true),
+      ),
     new SlashCommandBuilder()
       .setName("web")
       .setDescription("Set web retrieval behavior.")
-      .addStringOption((option) => option.setName("mode").setDescription("Web mode.").setRequired(true)
-        .addChoices(stringChoice("auto"), stringChoice("off"), stringChoice("quick"), stringChoice("deep"))),
+      .addStringOption((option) =>
+        option
+          .setName("mode")
+          .setDescription("Web mode.")
+          .setRequired(true)
+          .addChoices(stringChoice("auto"), stringChoice("off"), stringChoice("quick"), stringChoice("deep")),
+      ),
     new SlashCommandBuilder()
       .setName("memory")
       .setDescription("Set memory behavior.")
-      .addStringOption((option) => option.setName("mode").setDescription("Memory mode.").setRequired(true)
-        .addChoices(stringChoice("auto"), stringChoice("on"), stringChoice("off"))),
+      .addStringOption((option) =>
+        option
+          .setName("mode")
+          .setDescription("Memory mode.")
+          .setRequired(true)
+          .addChoices(stringChoice("auto"), stringChoice("on"), stringChoice("off")),
+      ),
     new SlashCommandBuilder()
       .setName("think")
       .setDescription("Set thinking depth.")
-      .addStringOption((option) => option.setName("level").setDescription("Thinking level.").setRequired(true)
-        .addChoices(stringChoice("minimal"), stringChoice("standard"), stringChoice("extended"))),
+      .addStringOption((option) =>
+        option
+          .setName("level")
+          .setDescription("Thinking level.")
+          .setRequired(true)
+          .addChoices(stringChoice("minimal"), stringChoice("standard"), stringChoice("extended")),
+      ),
     new SlashCommandBuilder()
       .setName("tool")
       .setDescription("Set tool autonomy mode.")
-      .addStringOption((option) => option.setName("mode").setDescription("Tool autonomy.").setRequired(true)
-        .addChoices(stringChoice("safe_auto"), stringChoice("manual"))),
+      .addStringOption((option) =>
+        option
+          .setName("mode")
+          .setDescription("Tool autonomy.")
+          .setRequired(true)
+          .addChoices(stringChoice("safe_auto"), stringChoice("manual")),
+      ),
     new SlashCommandBuilder()
       .setName("proactive")
       .setDescription("Set proactive mode.")
-      .addStringOption((option) => option.setName("mode").setDescription("Proactive mode.").setRequired(true)
-        .addChoices(stringChoice("off"), stringChoice("suggest"), stringChoice("auto_safe"), stringChoice("auto_full"))),
+      .addStringOption((option) =>
+        option
+          .setName("mode")
+          .setDescription("Proactive mode.")
+          .setRequired(true)
+          .addChoices(
+            stringChoice("off"),
+            stringChoice("suggest"),
+            stringChoice("auto_safe"),
+            stringChoice("auto_full"),
+          ),
+      ),
     new SlashCommandBuilder()
       .setName("retrieval")
       .setDescription("Set retrieval routing mode.")
-      .addStringOption((option) => option.setName("mode").setDescription("Retrieval mode.").setRequired(true)
-        .addChoices(stringChoice("standard"), stringChoice("layered"))),
+      .addStringOption((option) =>
+        option
+          .setName("mode")
+          .setDescription("Retrieval mode.")
+          .setRequired(true)
+          .addChoices(stringChoice("standard"), stringChoice("layered")),
+      ),
     new SlashCommandBuilder()
       .setName("reflect")
       .setDescription("Toggle reflection retry mode.")
-      .addStringOption((option) => option.setName("mode").setDescription("Reflection mode.").setRequired(true)
-        .addChoices(stringChoice("off"), stringChoice("on"))),
+      .addStringOption((option) =>
+        option
+          .setName("mode")
+          .setDescription("Reflection mode.")
+          .setRequired(true)
+          .addChoices(stringChoice("off"), stringChoice("on")),
+      ),
     new SlashCommandBuilder()
       .setName("research")
       .setDescription("Run quick research in the current session.")
@@ -1048,22 +1124,44 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
       .setName("delegate")
       .setDescription("Run task-backed role delegation.")
       .addStringOption((option) => option.setName("roles").setDescription("Comma-separated roles.").setRequired(true))
-      .addStringOption((option) => option.setName("objective").setDescription("Delegation objective.").setRequired(true)),
+      .addStringOption((option) =>
+        option.setName("objective").setDescription("Delegation objective.").setRequired(true),
+      ),
     new SlashCommandBuilder()
       .setName("pipeline")
       .setDescription("Run a built-in delegation template.")
-      .addStringOption((option) => option.setName("template").setDescription("Template id.").setRequired(true)
-        .addChoices(stringChoice("prd"), stringChoice("build"), stringChoice("triage"), stringChoice("release")))
+      .addStringOption((option) =>
+        option
+          .setName("template")
+          .setDescription("Template id.")
+          .setRequired(true)
+          .addChoices(stringChoice("prd"), stringChoice("build"), stringChoice("triage"), stringChoice("release")),
+      )
       .addStringOption((option) => option.setName("objective").setDescription("Pipeline objective.").setRequired(true)),
     new SlashCommandBuilder()
       .setName("score")
       .setDescription("Score the latest prompt-pack run.")
       .addStringOption((option) => option.setName("test").setDescription("Prompt-pack test code.").setRequired(true))
-      .addIntegerOption((option) => option.setName("routing").setDescription("Routing score.").setRequired(true).setMinValue(0).setMaxValue(10))
-      .addIntegerOption((option) => option.setName("honesty").setDescription("Honesty score.").setRequired(true).setMinValue(0).setMaxValue(10))
-      .addIntegerOption((option) => option.setName("handoff").setDescription("Handoff score.").setRequired(true).setMinValue(0).setMaxValue(10))
-      .addIntegerOption((option) => option.setName("robustness").setDescription("Robustness score.").setRequired(true).setMinValue(0).setMaxValue(10))
-      .addIntegerOption((option) => option.setName("usability").setDescription("Usability score.").setRequired(true).setMinValue(0).setMaxValue(10))
+      .addIntegerOption((option) =>
+        option.setName("routing").setDescription("Routing score.").setRequired(true).setMinValue(0).setMaxValue(10),
+      )
+      .addIntegerOption((option) =>
+        option.setName("honesty").setDescription("Honesty score.").setRequired(true).setMinValue(0).setMaxValue(10),
+      )
+      .addIntegerOption((option) =>
+        option.setName("handoff").setDescription("Handoff score.").setRequired(true).setMinValue(0).setMaxValue(10),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName("robustness")
+          .setDescription("Robustness score.")
+          .setRequired(true)
+          .setMinValue(0)
+          .setMaxValue(10),
+      )
+      .addIntegerOption((option) =>
+        option.setName("usability").setDescription("Usability score.").setRequired(true).setMinValue(0).setMaxValue(10),
+      )
       .addStringOption((option) => option.setName("notes").setDescription("Optional scoring note.")),
     new SlashCommandBuilder()
       .setName("pack")
@@ -1073,55 +1171,89 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
     new SlashCommandBuilder()
       .setName("skill")
       .setDescription("Manage skills.")
-      .addSubcommand((subcommand) => subcommand
-        .setName("enable")
-        .setDescription("Enable a skill.")
-        .addStringOption((option) => option.setName("skill_id").setDescription("Installed skill id.").setRequired(true)))
-      .addSubcommand((subcommand) => subcommand
-        .setName("sleep")
-        .setDescription("Put a skill to sleep.")
-        .addStringOption((option) => option.setName("skill_id").setDescription("Installed skill id.").setRequired(true)))
-      .addSubcommand((subcommand) => subcommand
-        .setName("disable")
-        .setDescription("Disable a skill.")
-        .addStringOption((option) => option.setName("skill_id").setDescription("Installed skill id.").setRequired(true)))
-      .addSubcommand((subcommand) => subcommand
-        .setName("search")
-        .setDescription("Search skill sources.")
-        .addStringOption((option) => option.setName("query").setDescription("Search query.").setRequired(true)))
-      .addSubcommand((subcommand) => subcommand
-        .setName("lookup")
-        .setDescription("Resolve a skill source.")
-        .addStringOption((option) => option.setName("query").setDescription("Lookup query or URL.").setRequired(true)))
-      .addSubcommand((subcommand) => subcommand
-        .setName("install")
-        .setDescription("Install a skill.")
-        .addStringOption((option) => option.setName("source_ref").setDescription("Skill source reference.").setRequired(true))
-        .addBooleanOption((option) => option.setName("confirm_high_risk").setDescription("Confirm high-risk installs."))),
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("enable")
+          .setDescription("Enable a skill.")
+          .addStringOption((option) =>
+            option.setName("skill_id").setDescription("Installed skill id.").setRequired(true),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("sleep")
+          .setDescription("Put a skill to sleep.")
+          .addStringOption((option) =>
+            option.setName("skill_id").setDescription("Installed skill id.").setRequired(true),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("disable")
+          .setDescription("Disable a skill.")
+          .addStringOption((option) =>
+            option.setName("skill_id").setDescription("Installed skill id.").setRequired(true),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("search")
+          .setDescription("Search skill sources.")
+          .addStringOption((option) => option.setName("query").setDescription("Search query.").setRequired(true)),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("lookup")
+          .setDescription("Resolve a skill source.")
+          .addStringOption((option) =>
+            option.setName("query").setDescription("Lookup query or URL.").setRequired(true),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("install")
+          .setDescription("Install a skill.")
+          .addStringOption((option) =>
+            option.setName("source_ref").setDescription("Skill source reference.").setRequired(true),
+          )
+          .addBooleanOption((option) =>
+            option.setName("confirm_high_risk").setDescription("Confirm high-risk installs."),
+          ),
+      ),
     new SlashCommandBuilder()
       .setName("mcp")
       .setDescription("Inspect or manage MCP servers.")
       .addSubcommand((subcommand) => subcommand.setName("list").setDescription("List MCP servers."))
-      .addSubcommand((subcommand) => subcommand
-        .setName("connect")
-        .setDescription("Connect an MCP server.")
-        .addStringOption((option) => option.setName("server_id").setDescription("Server id.").setRequired(true)))
-      .addSubcommand((subcommand) => subcommand
-        .setName("disconnect")
-        .setDescription("Disconnect an MCP server.")
-        .addStringOption((option) => option.setName("server_id").setDescription("Server id.").setRequired(true)))
-      .addSubcommand((subcommand) => subcommand
-        .setName("templates")
-        .setDescription("List MCP templates.")
-        .addStringOption((option) => option.setName("query").setDescription("Optional search query.")))
-      .addSubcommand((subcommand) => subcommand
-        .setName("add-template")
-        .setDescription("Add an MCP template.")
-        .addStringOption((option) => option.setName("template_id").setDescription("Template id.").setRequired(true))),
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("connect")
+          .setDescription("Connect an MCP server.")
+          .addStringOption((option) => option.setName("server_id").setDescription("Server id.").setRequired(true)),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("disconnect")
+          .setDescription("Disconnect an MCP server.")
+          .addStringOption((option) => option.setName("server_id").setDescription("Server id.").setRequired(true)),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("templates")
+          .setDescription("List MCP templates.")
+          .addStringOption((option) => option.setName("query").setDescription("Optional search query.")),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("add-template")
+          .setDescription("Add an MCP template.")
+          .addStringOption((option) => option.setName("template_id").setDescription("Template id.").setRequired(true)),
+      ),
     new SlashCommandBuilder()
       .setName("project")
       .setDescription("Assign or clear the session project.")
-      .addStringOption((option) => option.setName("project_id").setDescription("Project id or none.").setRequired(true)),
+      .addStringOption((option) =>
+        option.setName("project_id").setDescription("Project id or none.").setRequired(true),
+      ),
     new SlashCommandBuilder()
       .setName("attach")
       .setDescription("Reference an attachment id in the next send.")

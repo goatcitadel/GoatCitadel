@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
@@ -8,7 +7,7 @@ import type {
   GatewayAuthCredentialSource,
   GatewayInstallTokenResolution,
 } from "@goatcitadel/contracts";
-import type { AuthConfig, GatewayRuntimeConfig } from "../../config.js";
+import type { GatewayRuntimeConfig } from "../../config.js";
 import { detectEnvFilePath, upsertLocalEnvVar } from "../../env-file.js";
 
 type AssistantConfigAuthSnapshot = {
@@ -59,7 +58,7 @@ export function readAssistantAuthConfigSnapshotSync(rootDir: string): AssistantC
 export async function buildGatewayAuthCredentialPlan(params: PlannerParams): Promise<GatewayAuthCredentialPlan> {
   return createGatewayAuthCredentialPlan({
     ...params,
-    configAuth: params.configAuth ?? await readAssistantAuthConfigSnapshot(params.runtimeConfig.rootDir),
+    configAuth: params.configAuth ?? (await readAssistantAuthConfigSnapshot(params.runtimeConfig.rootDir)),
   });
 }
 
@@ -112,7 +111,9 @@ export function createGatewayAuthCredentialPlan(params: PlannerParams): GatewayA
     warnings.push("Token is configured only in runtime memory and will not survive restart unless persisted to .env.");
   }
   if (basicUsername.source === "runtime" || basicPassword.source === "runtime") {
-    warnings.push("Basic auth credentials are configured only in runtime memory and will not survive restart unless persisted to .env.");
+    warnings.push(
+      "Basic auth credentials are configured only in runtime memory and will not survive restart unless persisted to .env.",
+    );
   }
   if (runtimeAuth.mode === "token" && !token.configured) {
     warnings.push("Gateway auth mode is token, but no token is configured.");
@@ -135,7 +136,7 @@ export function createGatewayAuthCredentialPlan(params: PlannerParams): GatewayA
 
 export async function resolveGatewayInstallToken(params: InstallTokenParams): Promise<GatewayInstallTokenResolution> {
   const env = params.env ?? process.env;
-  const configAuth = params.configAuth ?? await readAssistantAuthConfigSnapshot(params.runtimeConfig.rootDir);
+  const configAuth = params.configAuth ?? (await readAssistantAuthConfigSnapshot(params.runtimeConfig.rootDir));
   const plan = createGatewayAuthCredentialPlan({
     runtimeConfig: params.runtimeConfig,
     env,
@@ -215,11 +216,7 @@ export async function resolveGatewayInstallToken(params: InstallTokenParams): Pr
   };
 }
 
-function classifyCredentialSource(params: {
-  envValue?: string;
-  fileValue?: string;
-  runtimeValue?: string;
-}): {
+function classifyCredentialSource(params: { envValue?: string; fileValue?: string; runtimeValue?: string }): {
   configured: boolean;
   source: GatewayAuthCredentialSource;
   warning?: string;

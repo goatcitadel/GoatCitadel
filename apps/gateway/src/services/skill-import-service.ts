@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Skill import policy, normalization, and filesystem writes remain intentionally grouped for operator traceability. */
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -135,7 +136,8 @@ const FALLBACK_SOURCE_ITEMS: SkillSourceResultRecord[] = [
     sourceProvider: "clawhub",
     sourceUrl: "https://clawhub.ai/aiwithabidi/chrome-devtools-mcp",
     name: "Chrome Devtools Mcp",
-    description: "Chrome DevTools MCP - official browser automation and testing server for controlling Chrome via the MCP protocol.",
+    description:
+      "Chrome DevTools MCP - official browser automation and testing server for controlling Chrome via the MCP protocol.",
     tags: ["clawhub", "browser", "devtools", "mcp", "playwright", "automation", "testing"],
     sourceKind: "marketplace_listing",
     installability: "review_only",
@@ -150,7 +152,8 @@ const FALLBACK_SOURCE_ITEMS: SkillSourceResultRecord[] = [
     tags: ["clawhub", "cloudflare", "dns", "api"],
     sourceKind: "marketplace_listing",
     installability: "review_only",
-    installHint: "Pick one primary Cloudflare or DNS skill for GoatCitadel and import only the validated upstream repository.",
+    installHint:
+      "Pick one primary Cloudflare or DNS skill for GoatCitadel and import only the validated upstream repository.",
     skillFamily: "cloudflare_dns",
   },
   {
@@ -161,14 +164,16 @@ const FALLBACK_SOURCE_ITEMS: SkillSourceResultRecord[] = [
     tags: ["clawhub", "cloudflare", "dns", "manager"],
     sourceKind: "marketplace_listing",
     installability: "review_only",
-    installHint: "Pick one primary Cloudflare or DNS skill for GoatCitadel and import only the validated upstream repository.",
+    installHint:
+      "Pick one primary Cloudflare or DNS skill for GoatCitadel and import only the validated upstream repository.",
     skillFamily: "cloudflare_dns",
   },
   {
     sourceProvider: "clawhub",
     sourceUrl: "https://clawhub.ai/steipete/domain-dns-ops",
     name: "Domain DNS Ops",
-    description: "Domain and DNS operations skill best treated as reference material unless it adds a unique workflow beyond the primary Cloudflare path.",
+    description:
+      "Domain and DNS operations skill best treated as reference material unless it adds a unique workflow beyond the primary Cloudflare path.",
     tags: ["clawhub", "dns", "domain", "ops"],
     sourceKind: "marketplace_listing",
     installability: "review_only",
@@ -256,7 +261,8 @@ const FALLBACK_SOURCE_ITEMS: SkillSourceResultRecord[] = [
     sourceProvider: "clawhub",
     sourceUrl: "https://clawhub.ai/maximeprades/auto-updater",
     name: "Auto Updater",
-    description: "Auto-updater workflow best treated as a pattern source because GoatCitadel should implement updates natively and review-first.",
+    description:
+      "Auto-updater workflow best treated as a pattern source because GoatCitadel should implement updates natively and review-first.",
     tags: ["clawhub", "updater", "automation"],
     sourceKind: "marketplace_listing",
     installability: "review_only",
@@ -282,7 +288,8 @@ const FALLBACK_SOURCE_ITEMS: SkillSourceResultRecord[] = [
     tags: ["clawhub", "swarm", "automation", "agents"],
     sourceKind: "reference",
     installability: "not_installable",
-    installHint: "Quarantine for now. Review manually before any future consideration because it can drive broad repo mutation and automation behavior.",
+    installHint:
+      "Quarantine for now. Review manually before any future consideration because it can drive broad repo mutation and automation behavior.",
     skillFamily: "multi_agent_swarm",
   },
   {
@@ -291,24 +298,35 @@ const FALLBACK_SOURCE_ITEMS: SkillSourceResultRecord[] = [
     repositoryUrl: "https://github.com/geeks-accelerator/animal-house-ai",
     upstreamUrl: "https://animalhouse.ai/skills/animal-house",
     name: "Animal House",
-    description: "Virtual creature game and REST API for AI agents. Join the house by following the hosted skill instructions rather than importing it as a normal GoatCitadel skill.",
+    description:
+      "Virtual creature game and REST API for AI agents. Join the house by following the hosted skill instructions rather than importing it as a normal GoatCitadel skill.",
     tags: ["game", "virtual-pet", "api", "creatures", "pixel-art", "animalhouse", "rest"],
     sourceKind: "reference",
     installability: "not_installable",
-    installHint: "Read the hosted instructions and interact with the live service directly. This is an external experience, not a normal installable GoatCitadel skill pack.",
+    installHint:
+      "Read the hosted instructions and interact with the live service directly. This is an external experience, not a normal installable GoatCitadel skill pack.",
   },
 ];
 
 const LOOKUP_FAMILY_TERMS: Array<{ family: string; tokens: string[] }> = [
-  { family: "browser_automation", tokens: ["browser", "playwright", "automation", "web", "e2e", "screenshot", "testing"] },
+  {
+    family: "browser_automation",
+    tokens: ["browser", "playwright", "automation", "web", "e2e", "screenshot", "testing"],
+  },
   { family: "cloudflare_dns", tokens: ["cloudflare", "dns", "domain", "zones"] },
   { family: "figma_design", tokens: ["figma", "design", "ui", "frontend", "implementation", "prototype"] },
   { family: "notebook_research", tokens: ["notebooklm", "notes", "research", "study", "knowledge", "source-grounded"] },
-  { family: "messaging_notifications", tokens: ["discord", "slack", "notification", "notifications", "alert", "messaging", "channel"] },
+  {
+    family: "messaging_notifications",
+    tokens: ["discord", "slack", "notification", "notifications", "alert", "messaging", "channel"],
+  },
   { family: "presentations", tokens: ["slides", "presentation", "deck", "ppt", "powerpoint"] },
   { family: "docs_authoring", tokens: ["docs", "documentation", "doc", "writing", "authoring"] },
   { family: "mcp_integrations", tokens: ["mcp", "integration", "server", "template", "connector"] },
-  { family: "games_and_experiments", tokens: ["game", "virtual", "pet", "creature", "pixel", "animalhouse", "tamagotchi"] },
+  {
+    family: "games_and_experiments",
+    tokens: ["game", "virtual", "pet", "creature", "pixel", "animalhouse", "tamagotchi"],
+  },
 ];
 
 const REVIEW_POLICY_HINTS: Array<{
@@ -327,13 +345,15 @@ const REVIEW_POLICY_HINTS: Array<{
     pattern: /\bskill[-\s]?vetter\b|\bvetter\b/i,
     duplicateFamily: "skill_vetting",
     reviewDisposition: "reject",
-    message: "GoatCitadel already has native skill import vetting and a bundled MCP vetter; keep this as reference only.",
+    message:
+      "GoatCitadel already has native skill import vetting and a bundled MCP vetter; keep this as reference only.",
   },
   {
     pattern: /\bai[-\s]?swarm\b/i,
     duplicateFamily: "multi_agent_swarm",
     reviewDisposition: "reject",
-    message: "This swarm automation should stay quarantined because it can drive broad repo mutation and automation behavior.",
+    message:
+      "This swarm automation should stay quarantined because it can drive broad repo mutation and automation behavior.",
   },
   {
     pattern: /\bproactive[-\s]?agent\b/i,
@@ -375,7 +395,8 @@ const REVIEW_POLICY_HINTS: Array<{
     pattern: /\bcloudflare\b|\bdns\b|\bdomain[-\s]?dns\b/i,
     duplicateFamily: "cloudflare_dns",
     reviewDisposition: "allow",
-    message: "Choose one primary Cloudflare or DNS skill for repo-managed installation and avoid overlapping installs in the same family.",
+    message:
+      "Choose one primary Cloudflare or DNS skill for repo-managed installation and avoid overlapping installs in the same family.",
   },
 ];
 
@@ -575,9 +596,10 @@ export class SkillImportService {
         sourceRef: validation.candidate.sourceRef,
       })?.reviewDisposition;
       const curatedEntry = findCuratedSourceByUrl(validation.candidate.sourceRef);
-      const resolvedUpstreamVersion = validation.candidate.sourceType === "git_url"
-        ? await resolveGitHeadRevision(materialized.sourceDir).catch(() => undefined)
-        : undefined;
+      const resolvedUpstreamVersion =
+        validation.candidate.sourceType === "git_url"
+          ? await resolveGitHeadRevision(materialized.sourceDir).catch(() => undefined)
+          : undefined;
       await fs.writeFile(
         sourceManifestPath,
         JSON.stringify(
@@ -588,13 +610,15 @@ export class SkillImportService {
             lastCheckedAt: installedAt,
             duplicateFamily,
             reviewDisposition,
-            marketplaceListingUrl: curatedEntry?.sourceProvider === "clawhub"
-              || curatedEntry?.sourceProvider === "skillsmp"
-              || curatedEntry?.sourceProvider === "agentskill"
-              ? curatedEntry.sourceUrl
-              : undefined,
+            marketplaceListingUrl:
+              curatedEntry?.sourceProvider === "clawhub" ||
+              curatedEntry?.sourceProvider === "skillsmp" ||
+              curatedEntry?.sourceProvider === "agentskill"
+                ? curatedEntry.sourceUrl
+                : undefined,
             resolvedUpstream: {
-              url: validation.candidate.repositoryUrl ?? validation.candidate.sourceUrl ?? validation.candidate.sourceRef,
+              url:
+                validation.candidate.repositoryUrl ?? validation.candidate.sourceUrl ?? validation.candidate.sourceRef,
               ref: validation.candidate.sourceType === "git_url" ? "HEAD" : undefined,
               version: resolvedUpstreamVersion,
             },
@@ -677,14 +701,8 @@ export class SkillImportService {
       this.searchProvider("skillsmp", boundedLimit),
     ]);
     return {
-      providers: [
-        ...providerResults.map((item) => item.providerStatus),
-        ...defaultLookupProviders(),
-      ],
-      items: [
-        ...providerResults.flatMap((item) => item.items),
-        ...FALLBACK_SOURCE_ITEMS,
-      ],
+      providers: [...providerResults.map((item) => item.providerStatus), ...defaultLookupProviders()],
+      items: [...providerResults.flatMap((item) => item.items), ...FALLBACK_SOURCE_ITEMS],
     };
   }
 
@@ -745,10 +763,15 @@ export class SkillImportService {
         }
         try {
           const parsed = JSON.parse(fsSync.readFileSync(sourceManifestPath, "utf8")) as InstalledSkillSourceManifest;
-          const manifestFamily = parsed.duplicateFamily
-            ?? deriveReviewPolicy({
+          const manifestFamily =
+            parsed.duplicateFamily ??
+            deriveReviewPolicy({
               inferredSkillName: entry.name,
-              sourceRef: parsed.candidate?.sourceRef ?? parsed.candidate?.repositoryUrl ?? parsed.candidate?.sourceUrl ?? entry.name,
+              sourceRef:
+                parsed.candidate?.sourceRef ??
+                parsed.candidate?.repositoryUrl ??
+                parsed.candidate?.sourceUrl ??
+                entry.name,
             })?.duplicateFamily;
           if (parsed.candidate?.canonicalKey && parsed.candidate.canonicalKey === input.canonicalKey) {
             matches.push({
@@ -807,7 +830,8 @@ export class SkillImportService {
           tags: deriveListingTags(url, provider),
           sourceKind: "marketplace_listing" as const,
           installability: "review_only" as const,
-          installHint: "Review the listing provenance and use the upstream repository or validated local source for installation.",
+          installHint:
+            "Review the listing provenance and use the upstream repository or validated local source for installation.",
           skillFamily: deriveSkillFamilyFromUrl(url),
         }))
         .slice(0, Math.max(1, Math.min(limit, 100)));
@@ -823,8 +847,10 @@ export class SkillImportService {
         items,
       };
     } catch (error) {
-      const fallbackItems = FALLBACK_SOURCE_ITEMS.filter((item) => item.sourceProvider === provider)
-        .slice(0, Math.max(1, Math.min(limit, 100)));
+      const fallbackItems = FALLBACK_SOURCE_ITEMS.filter((item) => item.sourceProvider === provider).slice(
+        0,
+        Math.max(1, Math.min(limit, 100)),
+      );
       return {
         providerStatus: {
           provider,
@@ -955,7 +981,7 @@ export class SkillImportService {
         windowsHide: true,
       });
     } catch (error) {
-      throw new Error(`Failed to clone git source: ${(error as Error).message}`);
+      throw new Error(`Failed to clone git source: ${(error as Error).message}`, { cause: error });
     }
     const skillDir = await resolveSkillDir(cloneDir);
     return {
@@ -991,17 +1017,17 @@ export class SkillImportService {
     let frontmatterValid = false;
     let descriptionQuality = false;
 
-    let rawSkill = "";
     try {
-      rawSkill = await fs.readFile(source.skillFilePath, "utf8");
+      const rawSkill = await fs.readFile(source.skillFilePath, "utf8");
       const parsed = parseSkillMarkdown(rawSkill);
       frontmatterValid = true;
       inferredSkillName = parsed.frontmatter.name.trim();
       inferredSkillId = normalizeSkillId(parsed.frontmatter.name);
       declaredTools = parsed.frontmatter.metadata?.tools ?? [];
       requires = parsed.frontmatter.metadata?.requires ?? [];
-      descriptionQuality = parsed.frontmatter.description.trim().length >= 24
-        && parsed.frontmatter.description.trim().split(/\s+/).length >= 4;
+      descriptionQuality =
+        parsed.frontmatter.description.trim().length >= 24 &&
+        parsed.frontmatter.description.trim().split(/\s+/).length >= 4;
       if (!descriptionQuality) {
         warnings.push("Description is very short; quality score reduced.");
       }
@@ -1123,9 +1149,11 @@ function rankSkillSourceItems(items: SkillMergedSourceResult[], query: string): 
     const matchedTerms = queryTokens.filter((token) => index.expandedTokens.has(token));
     let score = item.combinedScore * 100;
     let matchReason = "";
-    if ([item.sourceUrl, item.repositoryUrl, item.upstreamUrl]
-      .filter((value): value is string => Boolean(value))
-      .some((value) => normalizeLookupText(value) === normalizedQuery)) {
+    if (
+      [item.sourceUrl, item.repositoryUrl, item.upstreamUrl]
+        .filter((value): value is string => Boolean(value))
+        .some((value) => normalizeLookupText(value) === normalizedQuery)
+    ) {
       score += 1000;
       matchReason = "Direct source match";
     } else if (index.normalizedName === normalizedQuery || index.slug === normalizedQuery) {
@@ -1168,10 +1196,13 @@ function rankSkillSourceItems(items: SkillMergedSourceResult[], query: string): 
   });
 }
 
-async function resolveDirectSourceReference(query: string): Promise<{
-  parsedSource: SkillSourceLookupParsedSource;
-  item: SkillSourceResultRecord;
-} | undefined> {
+async function resolveDirectSourceReference(query: string): Promise<
+  | {
+      parsedSource: SkillSourceLookupParsedSource;
+      item: SkillSourceResultRecord;
+    }
+  | undefined
+> {
   const trimmed = query.trim();
   if (!trimmed) {
     return undefined;
@@ -1439,14 +1470,17 @@ function mergeSourceItems(items: SkillSourceResultRecord[]): SkillMergedSourceRe
       ...existing.alternateProviders,
       item.sourceProvider,
     ]);
-    const nextPrimary = existing.combinedScore >= combinedScore ? existing : {
-      ...existing,
-      ...item,
-      qualityScore,
-      freshnessScore,
-      trustScore,
-      combinedScore,
-    };
+    const nextPrimary =
+      existing.combinedScore >= combinedScore
+        ? existing
+        : {
+            ...existing,
+            ...item,
+            qualityScore,
+            freshnessScore,
+            trustScore,
+            combinedScore,
+          };
     nextPrimary.alternateProviders = [...nextProviders].filter((provider) => provider !== nextPrimary.sourceProvider);
     merged.set(canonicalKey, nextPrimary);
   }
@@ -1498,15 +1532,16 @@ function scoreFreshness(updatedAt: string | undefined): number {
 }
 
 function scoreTrust(provider: SkillSourceProvider, repositoryUrl?: string): number {
-  let score = provider === "local"
-    ? 0.95
-    : provider === "github"
-      ? 0.75
-      : provider === "clawhub"
-        ? 0.7
-        : provider === "external"
-          ? 0.6
-          : 0.65;
+  let score =
+    provider === "local"
+      ? 0.95
+      : provider === "github"
+        ? 0.75
+        : provider === "clawhub"
+          ? 0.7
+          : provider === "external"
+            ? 0.6
+            : 0.65;
   if (repositoryUrl && /github\.com/i.test(repositoryUrl)) {
     score += 0.1;
   }
@@ -1518,9 +1553,7 @@ function humanizeSkillName(url: string): string {
     const parsed = new URL(url);
     const pieces = parsed.pathname.split("/").filter(Boolean);
     const slug = pieces[pieces.length - 1] || "skill";
-    return slug
-      .replace(/[-_]+/g, " ")
-      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
   } catch {
     return "Skill";
   }
@@ -1548,7 +1581,12 @@ function deriveSkillFamilyFromUrl(url: string): string | undefined {
 }
 
 function normalizeLookupText(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function tokenizeLookupText(value: string): string[] {
@@ -1571,12 +1609,7 @@ function buildLookupIndex(item: SkillSourceResultRecord): {
     ...tokenizeLookupText(item.repositoryUrl ?? ""),
     ...tokenizeLookupText(item.upstreamUrl ?? ""),
   ];
-  const expandedTokens = new Set<string>([
-    ...nameTokens,
-    ...descriptionTokens,
-    ...tagTokens,
-    ...urlTokens,
-  ]);
+  const expandedTokens = new Set<string>([...nameTokens, ...descriptionTokens, ...tagTokens, ...urlTokens]);
   let skillFamily = item.skillFamily;
   for (const family of LOOKUP_FAMILY_TERMS) {
     if (family.tokens.some((token) => expandedTokens.has(token))) {
@@ -1596,14 +1629,13 @@ function buildLookupIndex(item: SkillSourceResultRecord): {
   };
 }
 
-function deriveReviewPolicy(input: {
-  inferredSkillName?: string;
-  sourceRef: string;
-}): {
-  duplicateFamily?: string;
-  reviewDisposition: "allow" | "conditional" | "reference_only" | "reject";
-  message: string;
-} | undefined {
+function deriveReviewPolicy(input: { inferredSkillName?: string; sourceRef: string }):
+  | {
+      duplicateFamily?: string;
+      reviewDisposition: "allow" | "conditional" | "reference_only" | "reject";
+      message: string;
+    }
+  | undefined {
   const haystack = `${input.inferredSkillName ?? ""} ${input.sourceRef}`.trim();
   for (const entry of REVIEW_POLICY_HINTS) {
     if (entry.pattern.test(haystack)) {
@@ -1617,10 +1649,7 @@ function deriveReviewPolicy(input: {
   return undefined;
 }
 
-function buildDuplicateInstallMessage(
-  matches: SkillInstallDuplicateMatch[],
-  duplicateFamily?: string,
-): string {
+function buildDuplicateInstallMessage(matches: SkillInstallDuplicateMatch[], duplicateFamily?: string): string {
   const locations = matches.map((match) => match.identifier).join(", ");
   if (duplicateFamily) {
     return `Duplicate skill family "${duplicateFamily}" is already present in ${locations}. Keep only one repo-managed install for that family.`;
@@ -1628,10 +1657,7 @@ function buildDuplicateInstallMessage(
   return `An equivalent repo-managed skill source is already present in ${locations}.`;
 }
 
-function findBundledDuplicateMatches(
-  rootDir: string,
-  duplicateFamily?: string,
-): SkillInstallDuplicateMatch[] {
+function findBundledDuplicateMatches(rootDir: string, duplicateFamily?: string): SkillInstallDuplicateMatch[] {
   if (!duplicateFamily) {
     return [];
   }
@@ -1719,7 +1745,9 @@ async function materializeHostedSkillBundle(sourceUrl: string, targetDir: string
       }
     } catch (error) {
       if (file.required) {
-        throw new Error(`Failed to fetch hosted skill bundle from ${fileUrl.toString()}: ${(error as Error).message}`);
+        throw new Error(`Failed to fetch hosted skill bundle from ${fileUrl.toString()}: ${(error as Error).message}`, {
+          cause: error,
+        });
       }
     }
   }
@@ -1767,11 +1795,20 @@ function findCuratedSourceByUrl(value: string): SkillSourceResultRecord | undefi
   return FALLBACK_SOURCE_ITEMS.find((item) =>
     [item.sourceUrl, item.upstreamUrl, item.repositoryUrl]
       .filter((candidate): candidate is string => Boolean(candidate))
-      .some((candidate) => normalizeLookupText(candidate) === normalized));
+      .some((candidate) => normalizeLookupText(candidate) === normalized),
+  );
 }
 
 function looksLikeLocalSource(value: string): boolean {
-  return value.endsWith(".zip") || /^[a-z]:\\/i.test(value) || value.startsWith("./") || value.startsWith(".\\") || value.startsWith("/") || value.startsWith("..\\") || value.startsWith("../");
+  return (
+    value.endsWith(".zip") ||
+    /^[a-z]:\\/i.test(value) ||
+    value.startsWith("./") ||
+    value.startsWith(".\\") ||
+    value.startsWith("/") ||
+    value.startsWith("..\\") ||
+    value.startsWith("../")
+  );
 }
 
 function extractMarketplaceLinks(provider: "agentskill" | "skillsmp", html: string): string[] {
@@ -1825,12 +1862,13 @@ async function resolveSkillDir(rootDir: string): Promise<string> {
       continue;
     }
     scannedDirs += 1;
-    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }> = [];
-    try {
-      entries = await fs.readdir(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
+    const entries = await (async (): Promise<Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>> => {
+      try {
+        return await fs.readdir(current, { withFileTypes: true });
+      } catch {
+        return [];
+      }
+    })();
 
     const hasSkill = entries.some((entry) => entry.isFile() && entry.name === "SKILL.md");
     if (hasSkill) {
@@ -1859,7 +1897,7 @@ async function extractZip(zipPath: string, targetDir: string): Promise<void> {
   }
 
   if (process.platform === "win32") {
-    const command = `Expand-Archive -Path "${zipPath.replaceAll("\"", "\"\"")}" -DestinationPath "${targetDir.replaceAll("\"", "\"\"")}" -Force`;
+    const command = `Expand-Archive -Path "${zipPath.replaceAll('"', '""')}" -DestinationPath "${targetDir.replaceAll('"', '""')}" -Force`;
     await execFileAsync("powershell", ["-NoProfile", "-Command", command], { windowsHide: true });
     return;
   }
@@ -1887,12 +1925,13 @@ async function scanSkillDirectory(dir: string): Promise<{
     if (!current) {
       continue;
     }
-    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }> = [];
-    try {
-      entries = await fs.readdir(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
+    const entries = await (async (): Promise<Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>> => {
+      try {
+        return await fs.readdir(current, { withFileTypes: true });
+      } catch {
+        return [];
+      }
+    })();
 
     for (const entry of entries) {
       const fullPath = path.join(current, entry.name);

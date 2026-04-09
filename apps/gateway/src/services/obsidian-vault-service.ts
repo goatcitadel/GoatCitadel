@@ -1,9 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  ObsidianIntegrationConfig,
-  ObsidianIntegrationStatus,
-} from "@goatcitadel/contracts";
+import type { ObsidianIntegrationConfig, ObsidianIntegrationStatus } from "@goatcitadel/contracts";
 import type { SystemSettingsRepository } from "@goatcitadel/storage";
 
 const OBSIDIAN_CONFIG_KEY = "obsidian_integration_v1";
@@ -31,9 +28,7 @@ export interface ObsidianSearchResult {
 }
 
 export class ObsidianVaultService {
-  public constructor(
-    private readonly systemSettings: SystemSettingsRepository,
-  ) {}
+  public constructor(private readonly systemSettings: SystemSettingsRepository) {}
 
   public getConfig(): ObsidianIntegrationConfig {
     const stored = this.systemSettings.get<Partial<ObsidianIntegrationConfig>>(OBSIDIAN_CONFIG_KEY)?.value;
@@ -81,18 +76,16 @@ export class ObsidianVaultService {
       const rel = path.relative(vaultRoot, filePath).replaceAll("\\", "/");
       const baseName = path.basename(filePath, ".md");
       let content = "";
-      let contentMatched = false;
-
-      if (baseName.toLowerCase().includes(normalizedQuery)) {
-        contentMatched = true;
-      } else {
-        try {
-          content = await fs.readFile(filePath, "utf8");
-          contentMatched = content.toLowerCase().includes(normalizedQuery);
-        } catch {
-          contentMatched = false;
-        }
-      }
+      const contentMatched =
+        baseName.toLowerCase().includes(normalizedQuery) ||
+        (await (async () => {
+          try {
+            content = await fs.readFile(filePath, "utf8");
+            return content.toLowerCase().includes(normalizedQuery);
+          } catch {
+            return false;
+          }
+        })());
 
       if (!contentMatched) {
         continue;
@@ -171,10 +164,7 @@ export class ObsidianVaultService {
     };
   }
 
-  private async collectMarkdownFiles(
-    roots: string[],
-    maxFiles: number,
-  ): Promise<string[]> {
+  private async collectMarkdownFiles(roots: string[], maxFiles: number): Promise<string[]> {
     const queue = [...roots];
     const out: string[] = [];
     while (queue.length > 0 && out.length < maxFiles) {
@@ -182,12 +172,13 @@ export class ObsidianVaultService {
       if (!current) {
         continue;
       }
-      let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }> = [];
-      try {
-        entries = await fs.readdir(current, { withFileTypes: true });
-      } catch {
-        continue;
-      }
+      const entries = await (async (): Promise<Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>> => {
+        try {
+          return await fs.readdir(current, { withFileTypes: true });
+        } catch {
+          return [];
+        }
+      })();
       for (const entry of entries) {
         const fullPath = path.join(current, entry.name);
         if (entry.isDirectory()) {
@@ -250,31 +241,31 @@ export class ObsidianVaultService {
     const now = new Date().toISOString();
     const previous = this.systemSettings.get<ObsidianStatusState>(OBSIDIAN_STATUS_KEY)?.value;
     let vaultReachable = false;
-    let lastError = previous?.lastError;
+    const statusError = await (async (): Promise<string | undefined> => {
+      if (!config.enabled) {
+        return undefined;
+      }
+      if (!config.vaultPath.trim()) {
+        return "Obsidian integration enabled but vault path is empty.";
+      }
 
-    if (config.enabled && config.vaultPath.trim()) {
       try {
         const stat = await fs.stat(path.resolve(config.vaultPath.trim()));
         if (!stat.isDirectory()) {
-          lastError = "Configured Obsidian vault path is not a directory.";
-        } else {
-          vaultReachable = true;
-          lastError = undefined;
+          return "Configured Obsidian vault path is not a directory.";
         }
+        vaultReachable = true;
+        return undefined;
       } catch (error) {
-        lastError = (error as Error).message;
+        return (error as Error).message;
       }
-    } else if (config.enabled && !config.vaultPath.trim()) {
-      lastError = "Obsidian integration enabled but vault path is empty.";
-    } else {
-      lastError = undefined;
-    }
+    })();
 
     const next: ObsidianStatusState = {
       vaultReachable,
       checkedAt: now,
       lastOperationAt: previous?.lastOperationAt,
-      lastError,
+      lastError: statusError,
     };
     this.systemSettings.set(OBSIDIAN_STATUS_KEY, next);
     return next;
@@ -294,9 +285,10 @@ export class ObsidianVaultService {
 
 function normalizeConfig(raw: Partial<ObsidianIntegrationConfig> | undefined): ObsidianIntegrationConfig {
   const mode = raw?.mode === "read_only" ? "read_only" : "read_append";
-  const allowedSubpaths = Array.isArray(raw?.allowedSubpaths) && raw?.allowedSubpaths.length > 0
-    ? raw.allowedSubpaths
-    : DEFAULT_ALLOWED_SUBPATHS;
+  const allowedSubpaths =
+    Array.isArray(raw?.allowedSubpaths) && raw?.allowedSubpaths.length > 0
+      ? raw.allowedSubpaths
+      : DEFAULT_ALLOWED_SUBPATHS;
   return {
     enabled: raw?.enabled ?? false,
     vaultPath: (raw?.vaultPath ?? "").trim(),

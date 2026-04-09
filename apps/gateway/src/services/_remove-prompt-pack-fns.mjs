@@ -1,3 +1,5 @@
+/* global console */
+
 import fs from "node:fs";
 
 const file = "F:/code/personal-ai/apps/gateway/src/services/gateway-service.ts";

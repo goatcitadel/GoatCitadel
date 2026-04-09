@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Live probe coverage stays in one file so probe heuristics and result shaping remain traceable together. */
 import { randomUUID } from "node:crypto";
 import type {
   ChannelProbeReport,
@@ -124,12 +125,14 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
   };
 
   try {
-    const auth = await readJsonResponse(await input.fetcher("https://slack.com/api/auth.test", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.token}`,
-      },
-    }));
+    const auth = await readJsonResponse(
+      await input.fetcher("https://slack.com/api/auth.test", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${input.token}`,
+        },
+      }),
+    );
     if (auth.status < 200 || auth.status >= 300 || auth.payload.ok === false) {
       probe.steps.push({
         key: "slack_token_auth",
@@ -172,18 +175,20 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
   }
 
   try {
-    const send = await readJsonResponse(await input.fetcher("https://slack.com/api/chat.postMessage", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.token}`,
-        "Content-Type": "application/json; charset=utf-8",
-      },
-      body: JSON.stringify({
-        channel: input.channel,
-        text: `[GoatCitadel Slack probe ${checkedAt}] Channel setup smoke check. Delete me if I remain.`,
-        ...(input.threadTs ? { thread_ts: input.threadTs } : {}),
+    const send = await readJsonResponse(
+      await input.fetcher("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${input.token}`,
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({
+          channel: input.channel,
+          text: `[GoatCitadel Slack probe ${checkedAt}] Channel setup smoke check. Delete me if I remain.`,
+          ...(input.threadTs ? { thread_ts: input.threadTs } : {}),
+        }),
       }),
-    }));
+    );
     if (send.status < 200 || send.status >= 300 || send.payload.ok === false) {
       probe.steps.push({
         key: "slack_sandbox_send",
@@ -213,17 +218,19 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
 
-    const cleanup = await readJsonResponse(await input.fetcher("https://slack.com/api/chat.delete", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.token}`,
-        "Content-Type": "application/json; charset=utf-8",
-      },
-      body: JSON.stringify({
-        channel: channelId,
-        ts: messageTs,
+    const cleanup = await readJsonResponse(
+      await input.fetcher("https://slack.com/api/chat.delete", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${input.token}`,
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({
+          channel: channelId,
+          ts: messageTs,
+        }),
       }),
-    }));
+    );
     if (cleanup.status < 200 || cleanup.status >= 300 || cleanup.payload.ok === false) {
       probe.steps.push({
         key: "slack_sandbox_cleanup",
@@ -306,14 +313,16 @@ export async function runTelegramBotLiveChecks(input: TelegramProbeInput): Promi
   }
 
   try {
-    const send = await readJsonResponse(await input.fetcher(`https://api.telegram.org/bot${input.token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: input.chatId,
-        text: `[GoatCitadel Telegram probe ${checkedAt}] Channel setup smoke check. Delete me if I remain.`,
+    const send = await readJsonResponse(
+      await input.fetcher(`https://api.telegram.org/bot${input.token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: input.chatId,
+          text: `[GoatCitadel Telegram probe ${checkedAt}] Channel setup smoke check. Delete me if I remain.`,
+        }),
       }),
-    }));
+    );
     if (send.status < 200 || send.status >= 300 || send.payload.ok === false) {
       probe.steps.push({
         key: "telegram_sandbox_send",
@@ -341,14 +350,16 @@ export async function runTelegramBotLiveChecks(input: TelegramProbeInput): Promi
       });
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
     }
-    const cleanup = await readJsonResponse(await input.fetcher(`https://api.telegram.org/bot${input.token}/deleteMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: input.chatId,
-        message_id: messageId,
+    const cleanup = await readJsonResponse(
+      await input.fetcher(`https://api.telegram.org/bot${input.token}/deleteMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: input.chatId,
+          message_id: messageId,
+        }),
       }),
-    }));
+    );
     if (cleanup.status < 200 || cleanup.status >= 300 || cleanup.payload.ok === false) {
       probe.steps.push({
         key: "telegram_sandbox_cleanup",
@@ -418,11 +429,13 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
   }
 
   try {
-    const auth = await readJsonResponse(await input.fetcher("https://discord.com/api/v10/users/@me", {
-      headers: {
-        Authorization: `Bot ${input.token}`,
-      },
-    }));
+    const auth = await readJsonResponse(
+      await input.fetcher("https://discord.com/api/v10/users/@me", {
+        headers: {
+          Authorization: `Bot ${input.token}`,
+        },
+      }),
+    );
     if (auth.status < 200 || auth.status >= 300) {
       probe.steps.push(buildDiscordProbeFailure("discord_token_auth", "Token auth", auth.status));
       if (input.runtimeMode === "gateway") {
@@ -474,14 +487,13 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
   }
 
   try {
-    const channel = await readJsonResponse(await input.fetcher(
-      `https://discord.com/api/v10/channels/${encodeURIComponent(input.channelId)}`,
-      {
+    const channel = await readJsonResponse(
+      await input.fetcher(`https://discord.com/api/v10/channels/${encodeURIComponent(input.channelId)}`, {
         headers: {
           Authorization: `Bot ${input.token}`,
         },
-      },
-    ));
+      }),
+    );
     if (channel.status < 200 || channel.status >= 300) {
       probe.steps.push(buildDiscordProbeFailure("discord_channel_access", "Channel access", channel.status));
       if (input.runtimeMode === "gateway") {
@@ -511,9 +523,8 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
 
   if (input.includeSandboxSend) {
     try {
-      const send = await readJsonResponse(await input.fetcher(
-        `https://discord.com/api/v10/channels/${encodeURIComponent(input.channelId)}/messages`,
-        {
+      const send = await readJsonResponse(
+        await input.fetcher(`https://discord.com/api/v10/channels/${encodeURIComponent(input.channelId)}/messages`, {
           method: "POST",
           headers: {
             Authorization: `Bot ${input.token}`,
@@ -522,8 +533,8 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
           body: JSON.stringify({
             content: `[GoatCitadel Discord probe ${checkedAt}] Bridge health check. Delete me if I remain.`,
           }),
-        },
-      ));
+        }),
+      );
       if (send.status < 200 || send.status >= 300) {
         probe.steps.push(buildDiscordProbeFailure("discord_sandbox_send", "Sandbox send", send.status));
         if (input.runtimeMode === "gateway") {
@@ -554,15 +565,17 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
         return { checks: mapProbeStepsToChecks(probe.steps), probe };
       }
 
-      const cleanup = await readJsonResponse(await input.fetcher(
-        `https://discord.com/api/v10/channels/${encodeURIComponent(input.channelId)}/messages/${encodeURIComponent(messageId)}`,
-        {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bot ${input.token}`,
+      const cleanup = await readJsonResponse(
+        await input.fetcher(
+          `https://discord.com/api/v10/channels/${encodeURIComponent(input.channelId)}/messages/${encodeURIComponent(messageId)}`,
+          {
+            method: "DELETE",
+            headers: {
+              Authorization: `Bot ${input.token}`,
+            },
           },
-        },
-      ));
+        ),
+      );
       if (cleanup.status < 200 || cleanup.status >= 300) {
         probe.steps.push({
           key: "discord_sandbox_cleanup",
@@ -614,14 +627,13 @@ export async function runMattermostBotLiveChecks(input: MattermostProbeInput): P
 
   let botUserId: string | undefined;
   try {
-    const auth = await readJsonResponse(await input.fetcher(
-      `${input.serverUrl.replace(/\/+$/, "")}/api/v4/users/me`,
-      {
+    const auth = await readJsonResponse(
+      await input.fetcher(`${input.serverUrl.replace(/\/+$/, "")}/api/v4/users/me`, {
         headers: {
           Authorization: `Bearer ${input.token}`,
         },
-      },
-    ));
+      }),
+    );
     if (auth.status < 200 || auth.status >= 300) {
       probe.steps.push({
         key: "mattermost_token_auth",
@@ -702,9 +714,8 @@ export async function runMattermostBotLiveChecks(input: MattermostProbeInput): P
   }
 
   try {
-    const send = await readJsonResponse(await input.fetcher(
-      `${input.serverUrl.replace(/\/+$/, "")}/api/v4/posts`,
-      {
+    const send = await readJsonResponse(
+      await input.fetcher(`${input.serverUrl.replace(/\/+$/, "")}/api/v4/posts`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${input.token}`,
@@ -714,8 +725,8 @@ export async function runMattermostBotLiveChecks(input: MattermostProbeInput): P
           channel_id: channelId,
           message: `[GoatCitadel Mattermost probe ${checkedAt}] Channel setup smoke check. Delete me if I remain.`,
         }),
-      },
-    ));
+      }),
+    );
     if (send.status < 200 || send.status >= 300) {
       probe.steps.push({
         key: "mattermost_sandbox_send",
@@ -795,11 +806,13 @@ export async function runWhatsAppCloudLiveChecks(input: WhatsAppProbeInput): Pro
   try {
     const authUrl = new URL(`${baseUrl}/${encodeURIComponent(input.phoneNumberId)}`);
     authUrl.searchParams.set("fields", "id,display_phone_number,verified_name");
-    const auth = await readJsonResponse(await input.fetcher(authUrl.toString(), {
-      headers: {
-        Authorization: `Bearer ${input.accessToken}`,
-      },
-    }));
+    const auth = await readJsonResponse(
+      await input.fetcher(authUrl.toString(), {
+        headers: {
+          Authorization: `Bearer ${input.accessToken}`,
+        },
+      }),
+    );
     if (auth.status < 200 || auth.status >= 300) {
       probe.steps.push({
         key: "whatsapp_token_auth",
@@ -844,9 +857,8 @@ export async function runWhatsAppCloudLiveChecks(input: WhatsAppProbeInput): Pro
   }
 
   try {
-    const send = await readJsonResponse(await input.fetcher(
-      `${baseUrl}/${encodeURIComponent(input.phoneNumberId)}/messages`,
-      {
+    const send = await readJsonResponse(
+      await input.fetcher(`${baseUrl}/${encodeURIComponent(input.phoneNumberId)}/messages`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${input.accessToken}`,
@@ -861,8 +873,8 @@ export async function runWhatsAppCloudLiveChecks(input: WhatsAppProbeInput): Pro
             body: `[GoatCitadel WhatsApp probe ${checkedAt}] Channel setup smoke check.`,
           },
         }),
-      },
-    ));
+      }),
+    );
     if (send.status < 200 || send.status >= 300) {
       probe.steps.push({
         key: "whatsapp_sandbox_send",
@@ -902,11 +914,13 @@ export async function runLineBotLiveChecks(input: LineProbeInput): Promise<BotPr
   };
 
   try {
-    const auth = await readJsonResponse(await input.fetcher("https://api.line.me/v2/bot/info", {
-      headers: {
-        Authorization: `Bearer ${input.channelAccessToken}`,
-      },
-    }));
+    const auth = await readJsonResponse(
+      await input.fetcher("https://api.line.me/v2/bot/info", {
+        headers: {
+          Authorization: `Bearer ${input.channelAccessToken}`,
+        },
+      }),
+    );
     if (auth.status < 200 || auth.status >= 300) {
       probe.steps.push({
         key: "line_token_auth",
@@ -959,10 +973,12 @@ export async function runLineBotLiveChecks(input: LineProbeInput): Promise<BotPr
       },
       body: JSON.stringify({
         to: target,
-        messages: [{
-          type: "text",
-          text: `[GoatCitadel LINE probe ${checkedAt}] Channel setup smoke check.`,
-        }],
+        messages: [
+          {
+            type: "text",
+            text: `[GoatCitadel LINE probe ${checkedAt}] Channel setup smoke check.`,
+          },
+        ],
       }),
     });
     if (send.status < 200 || send.status >= 300) {
@@ -1006,18 +1022,15 @@ export async function runIMessageBridgeLiveChecks(input: IMessageProbeInput): Pr
   };
 
   try {
-    const auth = await input.fetcher(
-      buildBlueBubblesProbeApiUrl(baseUrl, "/api/v1/chat/query", input.password),
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          limit: 1,
-          offset: 0,
-          with: ["participants"],
-        }),
-      },
-    );
+    const auth = await input.fetcher(buildBlueBubblesProbeApiUrl(baseUrl, "/api/v1/chat/query", input.password), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        limit: 1,
+        offset: 0,
+        with: ["participants"],
+      }),
+    });
     if (auth.status < 200 || auth.status >= 300) {
       const failure = await readJsonResponse(auth);
       probe.steps.push({
@@ -1076,13 +1089,13 @@ export async function runIMessageBridgeLiveChecks(input: IMessageProbeInput): Pr
         body: JSON.stringify(
           target.kind === "chat_guid"
             ? {
-              chatGuid: target.chatGuid,
-              message: probeText,
-            }
+                chatGuid: target.chatGuid,
+                message: probeText,
+              }
             : {
-              addresses: [target.address],
-              message: probeText,
-            },
+                addresses: [target.address],
+                message: probeText,
+              },
         ),
       },
     );
@@ -1192,16 +1205,22 @@ export async function runSignalBridgeLiveChecks(input: SignalProbeInput): Promis
   }
 
   try {
-    const send = await readJsonResponse(await input.fetcher(`${baseUrl}/api/v1/rpc`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "send",
-        params: buildSignalProbeParams(target, input.accountId, `[GoatCitadel Signal probe ${checkedAt}] Channel setup smoke check.`),
-        id: randomUUID(),
+    const send = await readJsonResponse(
+      await input.fetcher(`${baseUrl}/api/v1/rpc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "send",
+          params: buildSignalProbeParams(
+            target,
+            input.accountId,
+            `[GoatCitadel Signal probe ${checkedAt}] Channel setup smoke check.`,
+          ),
+          id: randomUUID(),
+        }),
       }),
-    }));
+    );
     if (send.status < 200 || send.status >= 300 || asRecord(send.payload).error) {
       probe.steps.push({
         key: "signal_sandbox_send",
@@ -1263,14 +1282,16 @@ export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotPr
   }
 
   try {
-    const send = await readJsonResponse(await input.fetcher(`https://bot-api.zaloplatforms.com/bot${encodeURIComponent(input.accessToken)}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: target,
-        text: `[GoatCitadel Zalo probe ${checkedAt}] Channel setup smoke check.`,
+    const send = await readJsonResponse(
+      await input.fetcher(`https://bot-api.zaloplatforms.com/bot${encodeURIComponent(input.accessToken)}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: target,
+          text: `[GoatCitadel Zalo probe ${checkedAt}] Channel setup smoke check.`,
+        }),
       }),
-    }));
+    );
     if (send.status < 200 || send.status >= 300 || asRecord(send.payload).ok === false) {
       probe.steps.push({
         key: "zalo_sandbox_send",
@@ -1338,15 +1359,17 @@ export async function runZaloUserBridgeLiveChecks(input: ZalouserProbeInput): Pr
   }
   const profilePrefix = input.profile ? `/${encodeURIComponent(input.profile)}` : "";
   try {
-    const send = await readJsonResponse(await input.fetcher(`${baseUrl}${profilePrefix}/messages/text`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        threadId: target.threadId,
-        message: `[GoatCitadel Zalo User probe ${checkedAt}] Channel setup smoke check.`,
-        isGroup: target.isGroup,
+    const send = await readJsonResponse(
+      await input.fetcher(`${baseUrl}${profilePrefix}/messages/text`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          threadId: target.threadId,
+          message: `[GoatCitadel Zalo User probe ${checkedAt}] Channel setup smoke check.`,
+          isGroup: target.isGroup,
+        }),
       }),
-    }));
+    );
     if (send.status < 200 || send.status >= 300) {
       probe.steps.push({
         key: "zalouser_sandbox_send",
@@ -1376,18 +1399,12 @@ export async function runZaloUserBridgeLiveChecks(input: ZalouserProbeInput): Pr
   }
 }
 
-function mapProbeStepsToChecks(
-  steps: ChannelProbeReport["steps"],
-): ConnectorDiagnosticReport["checks"] {
+function mapProbeStepsToChecks(steps: ChannelProbeReport["steps"]): ConnectorDiagnosticReport["checks"] {
   return steps
     .filter((step) => step.status !== "skipped")
     .map((step) => ({
       key: step.key,
-      status: step.status === "pass"
-        ? "pass"
-        : step.status === "fail"
-          ? "fail"
-          : "warn",
+      status: step.status === "pass" ? "pass" : step.status === "fail" ? "fail" : "warn",
       message: `${step.label}: ${step.message}`,
     }));
 }
@@ -1462,11 +1479,7 @@ function inferFailureCategory(statusCode: number): ChannelSetupFailureCategory {
   return "unknown";
 }
 
-function buildDiscordProbeFailure(
-  key: string,
-  label: string,
-  statusCode: number,
-): ChannelProbeReport["steps"][number] {
+function buildDiscordProbeFailure(key: string, label: string, statusCode: number): ChannelProbeReport["steps"][number] {
   return {
     key,
     label,
@@ -1518,7 +1531,7 @@ function asNumber(value: unknown): number | undefined {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
 function asRecordArray(value: unknown): Record<string, unknown>[] {
@@ -1572,7 +1585,10 @@ function normalizeLineProbeTarget(target: string | undefined): string | undefine
   if (!trimmed) {
     return undefined;
   }
-  return trimmed.replace(/^line:(?:user|group|room):/i, "").replace(/^line:/i, "").trim();
+  return trimmed
+    .replace(/^line:(?:user|group|room):/i, "")
+    .replace(/^line:/i, "")
+    .trim();
 }
 
 function normalizeSignalProbeTarget(target: string | undefined): string | undefined {
@@ -1583,7 +1599,11 @@ function normalizeSignalProbeTarget(target: string | undefined): string | undefi
   return trimmed.replace(/^signal:/i, "").trim();
 }
 
-function buildSignalProbeParams(target: string, accountId: string | undefined, message: string): Record<string, unknown> {
+function buildSignalProbeParams(
+  target: string,
+  accountId: string | undefined,
+  message: string,
+): Record<string, unknown> {
   return {
     ...buildSignalProbeTargetParams(target),
     message,
@@ -1611,7 +1631,11 @@ function normalizeZaloProbeTarget(target: string | undefined): string | undefine
   if (!trimmed) {
     return undefined;
   }
-  return trimmed.replace(/^zalo:(?:oa:)?/i, "").replace(/^oa:/i, "").replace(/^chat:/i, "").trim();
+  return trimmed
+    .replace(/^zalo:(?:oa:)?/i, "")
+    .replace(/^oa:/i, "")
+    .replace(/^chat:/i, "")
+    .trim();
 }
 
 function normalizeBridgeProbeBaseUrl(baseUrl: string | undefined): string {
@@ -1631,8 +1655,13 @@ function buildBlueBubblesProbeApiUrl(baseUrl: string, path: string, password: st
   return url.toString();
 }
 
-function parseIMessageProbeTarget(target: string): { kind: "handle"; address: string } | { kind: "chat_guid"; chatGuid: string } {
-  const trimmed = target.trim().replace(/^bluebubbles:/i, "").trim();
+function parseIMessageProbeTarget(
+  target: string,
+): { kind: "handle"; address: string } | { kind: "chat_guid"; chatGuid: string } {
+  const trimmed = target
+    .trim()
+    .replace(/^bluebubbles:/i, "")
+    .trim();
   const lowered = trimmed.toLowerCase();
   if (lowered.startsWith("chat_guid:") || lowered.startsWith("chatguid:") || lowered.startsWith("guid:")) {
     return {
@@ -1674,7 +1703,10 @@ function extractBlueBubblesProbeMessageId(payload: unknown): string | undefined 
 }
 
 function encodeBlueBubblesMessageId(messageId: string): string {
-  return messageId.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+  return messageId
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
 }
 
 function parseMattermostProbeTarget(target: string): MattermostProbeTarget {
@@ -1711,7 +1743,10 @@ function parseZalouserProbeTarget(target: string | undefined): { threadId: strin
   if (!trimmed) {
     return undefined;
   }
-  const normalized = trimmed.replace(/^zalouser:/i, "").replace(/^zca:/i, "").trim();
+  const normalized = trimmed
+    .replace(/^zalouser:/i, "")
+    .replace(/^zca:/i, "")
+    .trim();
   const lowered = normalized.toLowerCase();
   if (lowered.startsWith("group:")) {
     return {
@@ -1747,17 +1782,11 @@ async function resolveMattermostProbeChannelId(
     return target.id;
   }
   if (target.kind === "user") {
-    const userId = target.id ?? await resolveMattermostProbeUserId(serverUrl, token, target.username, fetcher);
-    const channel = await mattermostProbeRequest(
-      serverUrl,
-      token,
-      "/channels/direct",
-      fetcher,
-      {
-        method: "POST",
-        body: JSON.stringify([botUserId, userId]),
-      },
-    );
+    const userId = target.id ?? (await resolveMattermostProbeUserId(serverUrl, token, target.username, fetcher));
+    const channel = await mattermostProbeRequest(serverUrl, token, "/channels/direct", fetcher, {
+      method: "POST",
+      body: JSON.stringify([botUserId, userId]),
+    });
     return requiredString(asString(channel.id), "Mattermost DM channel id");
   }
 
@@ -1809,12 +1838,7 @@ async function resolveMattermostProbeTeamId(
   teamName: string,
   fetcher: MattermostProbeInput["fetcher"],
 ): Promise<string> {
-  const team = await mattermostProbeRequest(
-    serverUrl,
-    token,
-    `/teams/name/${encodeURIComponent(teamName)}`,
-    fetcher,
-  );
+  const team = await mattermostProbeRequest(serverUrl, token, `/teams/name/${encodeURIComponent(teamName)}`, fetcher);
   return requiredString(asString(team.id), "Mattermost team id");
 }
 

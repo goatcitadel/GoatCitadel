@@ -10,7 +10,14 @@ import { buildSlackSignature } from "../services/slack-webhook.js";
 import { verifyTelegramWebhookSecretToken } from "../services/telegram-webhook.js";
 import { buildWhatsAppWebhookSignature } from "../services/whatsapp-webhook.js";
 import { buildInstalledIntegrationPluginRecord } from "../services/integration-plugin-author-contract.js";
-import { integrationsRoutes } from "./integrations.js";
+import type { FastifyPluginAsync } from "fastify";
+import { integrationWebhookRoutes } from "./integration-webhooks.js";
+import { integrationsRoutes as baseIntegrationsRoutes } from "./integrations.js";
+
+const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
+  await fastify.register(baseIntegrationsRoutes);
+  await fastify.register(integrationWebhookRoutes);
+};
 
 describe("integrations inbound route guards", () => {
   let app: FastifyInstance | null = null;
@@ -111,11 +118,13 @@ describe("integrations inbound route guards", () => {
 
     expect(response.statusCode).toBe(200);
     expect(runIntegrationConnectionDiagnostics).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111");
-    expect(response.json()).toEqual(expect.objectContaining({
-      connectorType: "integration_connection",
-      connectorId: "11111111-1111-1111-1111-111111111111",
-      status: "warn",
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        connectorType: "integration_connection",
+        connectorId: "11111111-1111-1111-1111-111111111111",
+        status: "warn",
+      }),
+    );
   });
 
   it("lists Discord pairings through the integration route", async () => {
@@ -142,12 +151,14 @@ describe("integrations inbound route guards", () => {
 
     expect(response.statusCode).toBe(200);
     expect(listDiscordPairings).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111");
-    expect(response.json()).toEqual(expect.objectContaining({
-      runtime: expect.objectContaining({
-        connectionId: "11111111-1111-1111-1111-111111111111",
-        ready: true,
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        runtime: expect.objectContaining({
+          connectionId: "11111111-1111-1111-1111-111111111111",
+          ready: true,
+        }),
       }),
-    }));
+    );
   });
 
   it("approves and revokes Discord pairings through the integration routes", async () => {
@@ -220,10 +231,12 @@ describe("integrations inbound route guards", () => {
 
     expect(response.statusCode).toBe(200);
     expect(reconnectDiscordRuntime).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111");
-    expect(response.json()).toEqual(expect.objectContaining({
-      connectionId: "11111111-1111-1111-1111-111111111111",
-      lastReconnectAt: "2026-03-29T03:00:00.000Z",
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        lastReconnectAt: "2026-03-29T03:00:00.000Z",
+      }),
+    );
   });
 
   it("supports reference plugin install, list, and enable-disable lifecycle routes", async () => {
@@ -247,7 +260,7 @@ describe("integrations inbound route guards", () => {
       return created;
     });
     const setIntegrationPluginEnabled = vi.fn((pluginId: string, enabled: boolean) => {
-      plugins = plugins.map((plugin) => plugin.pluginId === pluginId ? { ...plugin, enabled } : plugin);
+      plugins = plugins.map((plugin) => (plugin.pluginId === pluginId ? { ...plugin, enabled } : plugin));
       return plugins.find((plugin) => plugin.pluginId === pluginId)!;
     });
     app = Fastify();
@@ -265,12 +278,14 @@ describe("integrations inbound route guards", () => {
     });
     expect(installResponse.statusCode).toBe(201);
     expect(installIntegrationPlugin).toHaveBeenCalledWith({ source });
-    expect(installResponse.json()).toEqual(expect.objectContaining({
-      pluginId: "reference-integration-plugin",
-      label: "Reference Integration Plugin",
-      source,
-      enabled: true,
-    }));
+    expect(installResponse.json()).toEqual(
+      expect.objectContaining({
+        pluginId: "reference-integration-plugin",
+        label: "Reference Integration Plugin",
+        source,
+        enabled: true,
+      }),
+    );
 
     const disableResponse = await app.inject({
       method: "POST",
@@ -278,10 +293,12 @@ describe("integrations inbound route guards", () => {
     });
     expect(disableResponse.statusCode).toBe(200);
     expect(setIntegrationPluginEnabled).toHaveBeenCalledWith("reference-integration-plugin", false);
-    expect(disableResponse.json()).toEqual(expect.objectContaining({
-      pluginId: "reference-integration-plugin",
-      enabled: false,
-    }));
+    expect(disableResponse.json()).toEqual(
+      expect.objectContaining({
+        pluginId: "reference-integration-plugin",
+        enabled: false,
+      }),
+    );
 
     const listResponse = await app.inject({
       method: "GET",
@@ -306,10 +323,12 @@ describe("integrations inbound route guards", () => {
     });
     expect(enableResponse.statusCode).toBe(200);
     expect(setIntegrationPluginEnabled).toHaveBeenCalledWith("reference-integration-plugin", true);
-    expect(enableResponse.json()).toEqual(expect.objectContaining({
-      pluginId: "reference-integration-plugin",
-      enabled: true,
-    }));
+    expect(enableResponse.json()).toEqual(
+      expect.objectContaining({
+        pluginId: "reference-integration-plugin",
+        enabled: true,
+      }),
+    );
   });
 
   it("accepts signed Nextcloud Talk webhooks without standard auth or idempotency headers", async () => {
@@ -369,7 +388,8 @@ describe("integrations inbound route guards", () => {
         type: "Note",
         id: "1567",
         name: "message",
-        content: "{\"message\":\"hi {mention-call1} !\",\"parameters\":{\"mention-call1\":{\"type\":\"call\",\"id\":\"room-42\",\"name\":\"world\"}}}",
+        content:
+          '{"message":"hi {mention-call1} !","parameters":{"mention-call1":{"type":"call","id":"room-42","name":"world"}}}',
         mediaType: "text/markdown",
       },
       target: {
@@ -406,21 +426,25 @@ describe("integrations inbound route guards", () => {
         displayName: "Ada Lovelace",
       }),
     );
-    expect(setChatSessionBinding).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: "sess-nextcloud",
-      transport: "integration",
-      connectionId: "11111111-1111-1111-1111-111111111111",
-      target: "room-42",
-      writable: true,
-    }));
+    expect(setChatSessionBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-nextcloud",
+        transport: "integration",
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        target: "room-42",
+        writable: true,
+      }),
+    );
     expect(respondToExistingChatMessage).toHaveBeenCalledWith("sess-nextcloud", "1567");
-    expect(response.json()).toEqual(expect.objectContaining({
-      accepted: true,
-      replied: true,
-      sessionId: "sess-nextcloud",
-      turnId: "turn-1",
-      eventType: "Create",
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        replied: true,
+        sessionId: "sess-nextcloud",
+        turnId: "turn-1",
+        eventType: "Create",
+      }),
+    );
   });
 
   it("accepts signed Slack webhooks without standard auth or idempotency headers", async () => {
@@ -512,25 +536,27 @@ describe("integrations inbound route guards", () => {
         content: "please help",
       }),
     );
-    expect(setChatSessionBinding).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: "sess-slack",
-      transport: "integration",
-      connectionId: "11111111-1111-1111-1111-111111111111",
-      target: "C111",
-      writable: true,
-    }));
-    expect(respondToExistingChatMessage).toHaveBeenCalledWith(
-      "sess-slack",
-      "1712109984.200000",
-      { deliveryReplyToMessageId: "1712109984.100000" },
+    expect(setChatSessionBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-slack",
+        transport: "integration",
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        target: "C111",
+        writable: true,
+      }),
     );
-    expect(response.json()).toEqual(expect.objectContaining({
-      accepted: true,
-      replied: true,
-      sessionId: "sess-slack",
-      turnId: "turn-slack-1",
-      eventType: "message",
-    }));
+    expect(respondToExistingChatMessage).toHaveBeenCalledWith("sess-slack", "1712109984.200000", {
+      deliveryReplyToMessageId: "1712109984.100000",
+    });
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        replied: true,
+        sessionId: "sess-slack",
+        turnId: "turn-slack-1",
+        eventType: "message",
+      }),
+    );
   });
 
   it("accepts Telegram webhooks without standard auth or idempotency headers", async () => {
@@ -622,25 +648,27 @@ describe("integrations inbound route guards", () => {
         content: "please help",
       }),
     );
-    expect(setChatSessionBinding).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: "sess-telegram",
-      transport: "integration",
-      connectionId: "11111111-1111-1111-1111-111111111111",
-      target: "-1001234567890",
-      writable: true,
-    }));
-    expect(respondToExistingChatMessage).toHaveBeenCalledWith(
-      "sess-telegram",
-      "456",
-      { deliveryReplyToMessageId: "456" },
+    expect(setChatSessionBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-telegram",
+        transport: "integration",
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        target: "-1001234567890",
+        writable: true,
+      }),
     );
-    expect(response.json()).toEqual(expect.objectContaining({
-      accepted: true,
-      replied: true,
-      sessionId: "sess-telegram",
-      turnId: "turn-telegram-1",
-      eventType: "message",
-    }));
+    expect(respondToExistingChatMessage).toHaveBeenCalledWith("sess-telegram", "456", {
+      deliveryReplyToMessageId: "456",
+    });
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        replied: true,
+        sessionId: "sess-telegram",
+        turnId: "turn-telegram-1",
+        eventType: "message",
+      }),
+    );
   });
 
   it("completes the WhatsApp webhook verification challenge", async () => {
@@ -788,25 +816,27 @@ describe("integrations inbound route guards", () => {
         displayName: "Ada Lovelace",
       }),
     );
-    expect(setChatSessionBinding).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: "sess-whatsapp",
-      transport: "integration",
-      connectionId: "11111111-1111-1111-1111-111111111111",
-      target: "15558675309",
-      writable: true,
-    }));
-    expect(respondToExistingChatMessage).toHaveBeenCalledWith(
-      "sess-whatsapp",
-      "wamid.HBgLNDU2",
-      { deliveryReplyToMessageId: "wamid.HBgLNDU2" },
+    expect(setChatSessionBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-whatsapp",
+        transport: "integration",
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        target: "15558675309",
+        writable: true,
+      }),
     );
-    expect(response.json()).toEqual(expect.objectContaining({
-      accepted: true,
-      replied: true,
-      sessionId: "sess-whatsapp",
-      turnId: "turn-whatsapp-1",
-      eventType: "text",
-    }));
+    expect(respondToExistingChatMessage).toHaveBeenCalledWith("sess-whatsapp", "wamid.HBgLNDU2", {
+      deliveryReplyToMessageId: "wamid.HBgLNDU2",
+    });
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        replied: true,
+        sessionId: "sess-whatsapp",
+        turnId: "turn-whatsapp-1",
+        eventType: "text",
+      }),
+    );
   });
 
   it("rejects unsigned WhatsApp webhooks", async () => {
@@ -952,25 +982,27 @@ describe("integrations inbound route guards", () => {
         content: "Please open the Office Lab view",
       }),
     );
-    expect(setChatSessionBinding).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: "sess-line",
-      transport: "integration",
-      connectionId: "11111111-1111-1111-1111-111111111111",
-      target: "Cgroup123",
-      writable: true,
-    }));
-    expect(respondToExistingChatMessage).toHaveBeenCalledWith(
-      "sess-line",
-      "325708",
-      { deliveryReplyToMessageId: "325708" },
+    expect(setChatSessionBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-line",
+        transport: "integration",
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        target: "Cgroup123",
+        writable: true,
+      }),
     );
-    expect(response.json()).toEqual(expect.objectContaining({
-      accepted: true,
-      replied: true,
-      sessionId: "sess-line",
-      turnId: "turn-line-1",
-      eventType: "message",
-    }));
+    expect(respondToExistingChatMessage).toHaveBeenCalledWith("sess-line", "325708", {
+      deliveryReplyToMessageId: "325708",
+    });
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        replied: true,
+        sessionId: "sess-line",
+        turnId: "turn-line-1",
+        eventType: "message",
+      }),
+    );
   });
 
   it("rejects unsigned LINE webhooks", async () => {
@@ -1244,7 +1276,7 @@ describe("integrations inbound route guards", () => {
     const payload = JSON.stringify({
       type: "Like",
       actor: { id: "users/ada-lovelace", name: "Ada Lovelace" },
-      object: { id: "1567", content: "{\"message\":\"hi\",\"parameters\":{}}" },
+      object: { id: "1567", content: '{"message":"hi","parameters":{}}' },
       target: { id: "room-42", name: "world" },
       content: "😆",
     });
@@ -1265,11 +1297,13 @@ describe("integrations inbound route guards", () => {
     expect(response.statusCode).toBe(200);
     expect(ingestChannelMessage).not.toHaveBeenCalled();
     expect(recordDevDiagnostic).toHaveBeenCalled();
-    expect(response.json()).toEqual(expect.objectContaining({
-      accepted: true,
-      handled: true,
-      eventType: "Like",
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        handled: true,
+        eventType: "Like",
+      }),
+    );
   });
 });
 
@@ -1302,18 +1336,20 @@ describe("channel setup routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(getChannelSetupDefinition).toHaveBeenCalledWith("channel.discord");
-    expect(response.json()).toEqual(expect.objectContaining({
-      catalog: expect.objectContaining({ catalogId: "channel.discord" }),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        catalog: expect.objectContaining({ catalogId: "channel.discord" }),
+      }),
+    );
   });
 
   it("lists available channel setup definitions", async () => {
-    const listChannelSetupDefinitions = vi.fn(() => ([
+    const listChannelSetupDefinitions = vi.fn(() => [
       {
         catalog: { catalogId: "channel.discord", label: "Discord" },
         wizard: { steps: [] },
       },
-    ]));
+    ]);
     app = Fastify();
     app.decorate("gateway", {
       listChannelSetupDefinitions,
@@ -1327,17 +1363,19 @@ describe("channel setup routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(listChannelSetupDefinitions).toHaveBeenCalledOnce();
-    expect(response.json()).toEqual(expect.objectContaining({
-      items: expect.arrayContaining([
-        expect.objectContaining({
-          catalog: expect.objectContaining({ catalogId: "channel.discord" }),
-        }),
-      ]),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            catalog: expect.objectContaining({ catalogId: "channel.discord" }),
+          }),
+        ]),
+      }),
+    );
   });
 
   it("lists channel setup drafts", async () => {
-    const listChannelSetupDrafts = vi.fn(() => ([
+    const listChannelSetupDrafts = vi.fn(() => [
       {
         draftId: "11111111-1111-1111-1111-111111111111",
         catalogId: "channel.discord",
@@ -1351,7 +1389,7 @@ describe("channel setup routes", () => {
         createdAt: "2026-03-29T00:00:00.000Z",
         updatedAt: "2026-03-29T00:10:00.000Z",
       },
-    ]));
+    ]);
     app = Fastify();
     app.decorate("gateway", {
       listChannelSetupDrafts,
@@ -1368,13 +1406,15 @@ describe("channel setup routes", () => {
       catalogId: "channel.discord",
       limit: 10,
     });
-    expect(response.json()).toEqual(expect.objectContaining({
-      items: expect.arrayContaining([
-        expect.objectContaining({
-          draftId: "11111111-1111-1111-1111-111111111111",
-        }),
-      ]),
-    }));
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            draftId: "11111111-1111-1111-1111-111111111111",
+          }),
+        ]),
+      }),
+    );
   });
 
   it("creates and updates channel setup drafts", async () => {
@@ -1437,14 +1477,11 @@ describe("channel setup routes", () => {
     });
 
     expect(updateResponse.statusCode).toBe(200);
-    expect(updateChannelSetupDraft).toHaveBeenCalledWith(
-      "11111111-1111-1111-1111-111111111111",
-      {
-        draft: {
-          defaultChannelId: "123456789012345678",
-        },
+    expect(updateChannelSetupDraft).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", {
+      draft: {
+        defaultChannelId: "123456789012345678",
       },
-    );
+    });
   });
 
   it("validates, tests, and finalizes channel setup drafts", async () => {
@@ -1519,11 +1556,13 @@ describe("channel setup routes", () => {
     });
     expect(finalizeResponse.statusCode).toBe(200);
     expect(finalizeChannelSetupDraft).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111");
-    expect(finalizeResponse.json()).toEqual(expect.objectContaining({
-      connection: expect.objectContaining({
-        connectionId: "22222222-2222-2222-2222-222222222222",
+    expect(finalizeResponse.json()).toEqual(
+      expect.objectContaining({
+        connection: expect.objectContaining({
+          connectionId: "22222222-2222-2222-2222-222222222222",
+        }),
       }),
-    }));
+    );
   });
 
   it("creates repair and rotate-secret drafts and supports re-test", async () => {

@@ -1,8 +1,5 @@
 import type { IntegrationPluginAuthorManifest, IntegrationPluginRecord } from "@goatcitadel/contracts";
-import {
-  INTEGRATION_PLUGIN_MANIFEST_FILENAME,
-  resolveIntegrationPluginAuthorManifestSource,
-} from "@goatcitadel/extensions-sdk";
+import { resolveIntegrationPluginAuthorManifestSource } from "@goatcitadel/extensions-sdk";
 export {
   INTEGRATION_PLUGIN_MANIFEST_FILENAME,
   validateIntegrationPluginAuthorManifest,
@@ -38,9 +35,10 @@ export function buildInstalledIntegrationPluginRecord(
     pluginId: input.pluginId,
     label: installMetadata.manifest?.label ?? input.existing?.label ?? toTitleCase(input.pluginId),
     version: installMetadata.manifest?.version ?? input.existing?.version ?? "0.1.0",
-    description: installMetadata.manifest?.description
-      ?? input.existing?.description
-      ?? `Installed from ${installMetadata.source}`,
+    description:
+      installMetadata.manifest?.description ??
+      input.existing?.description ??
+      `Installed from ${installMetadata.source}`,
     source: installMetadata.source,
     enabled: input.existing?.enabled ?? true,
     installedAt: input.existing?.installedAt ?? input.now,

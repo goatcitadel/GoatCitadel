@@ -7,12 +7,7 @@ import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
 import { createHash, createPublicKey, randomBytes, randomUUID, timingSafeEqual, verify } from "node:crypto";
 import { isVerboseLoggingEnabled } from "../runtime-ux.js";
-import {
-  EventIngestService,
-  describeChannelCapabilities,
-  resolveSessionRoute,
-  logger,
-} from "@goatcitadel/gateway-core";
+import { EventIngestService, logger } from "@goatcitadel/gateway-core";
 
 const log = logger.child("gateway-service");
 import { MeshService } from "@goatcitadel/mesh-core";
@@ -119,12 +114,9 @@ import type {
   ChannelSetupDraft,
   ChannelSetupDraftCreateInput,
   ChannelSetupDraftUpdateInput,
-  ChannelSetupFailureCategory,
   ChannelSetupFinalizeResult,
-  ChannelSetupIssue,
   ChannelProbeReport,
   ChannelSetupTestResult,
-  ChannelSetupValidationLevel,
   ChannelSetupValidationResult,
   ChannelTypingInput,
   ChannelTypingResult,
@@ -414,15 +406,7 @@ import {
   resolveIntegrationCatalogMaturity,
   resolveIntegrationCatalogRuntimeAvailability,
 } from "./integration-catalog.js";
-import { listChannelSetupDefinitions, requireChannelSetupDefinition } from "./channel-setup-definitions.js";
-import {
-  buildChannelSetupRecentTestSignature,
-  resolveReusableChannelSetupTestResult,
-  type ChannelSetupRecentTestCacheEntry,
-} from "./channel-setup-test-cache.js";
-import { resolveChannelConfigTarget } from "./channel-config.js";
-import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
-import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-diagnostic-checks.js";
+import { type ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cache.js";
 import { MemoryContextService } from "./memory-context-service.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
@@ -476,7 +460,9 @@ import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import * as discordPairingHelpers from "./discord-pairing-helpers.js";
-import * as channelSetupHelpers from "./channel-setup-helpers.js";
+import * as discordRuntimeBridgeService from "./discord-runtime-bridge-service.js";
+import * as channelSetupService from "./channel-setup-service.js";
+import * as integrationDiagnosticsService from "./integration-diagnostics-service.js";
 import * as memoryItemHelpers from "./memory-item-helpers.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import * as onboardingMarkerHelpers from "./onboarding-marker-helpers.js";
@@ -510,18 +496,6 @@ import { ReplayExecutionSkippedError } from "./replay-execution.js";
 import { evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
-import {
-  runDiscordBotLiveChecks,
-  runIMessageBridgeLiveChecks,
-  runLineBotLiveChecks,
-  runMattermostBotLiveChecks,
-  runSignalBridgeLiveChecks,
-  runSlackBotLiveChecks,
-  runTelegramBotLiveChecks,
-  runWhatsAppCloudLiveChecks,
-  runZaloBotLiveChecks,
-  runZaloUserBridgeLiveChecks,
-} from "./channel-bot-live-probes.js";
 import { resolveChannelSendAttachments } from "./channel-attachment-payload.js";
 import {
   commsSend as commsSendImpl,
@@ -559,7 +533,6 @@ import {
   installIntegrationPlugin as installIntegrationPluginImpl,
   setIntegrationPluginEnabled as setIntegrationPluginEnabledImpl,
 } from "./integration-channel-service.js";
-import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import {
   mergeLatestFollowOnParityArtifacts,
   readLatestFollowOnParityArtifactsByProfile,
@@ -613,15 +586,6 @@ export interface CompanionAccessValidationResult {
   deviceId: string;
   grantId: string;
   sessionId: string;
-}
-
-interface DiscordRouteSessionRecord {
-  connectionId: string;
-  target: string;
-  logicalSessionKey: string;
-  sessionId: string;
-  createdAt: string;
-  updatedAt: string;
 }
 
 export interface FileUploadResult {
@@ -731,7 +695,6 @@ const MCP_TOOLS_SETTING_KEY = "mcp_tools_v1";
 const MCP_TOOL_FIRST_APPROVAL_SETTING_KEY = "mcp_tool_first_approval_v1";
 const INTEGRATION_PLUGINS_SETTING_KEY = "integration_plugins_v1";
 const DISCORD_PAIRINGS_SETTING_KEY = "discord_pairings_v1";
-const DISCORD_ROUTE_SESSIONS_SETTING_KEY = "discord_route_sessions_v1";
 const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
 const DAEMON_LOG_TAIL_SETTING_KEY = "daemon_log_tail_v1";
 const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
@@ -1382,7 +1345,7 @@ export class GatewayService {
   /** @internal */ public readonly activeChatTurnWrites = new Map<string, string>();
   /** @internal */ public readonly activeChatTurns = new Map<string, ActiveChatTurnExecution>();
   private readonly activeChatTurnStreams = new Map<string, ActiveChatTurnStreamExecution>();
-  private readonly recentChannelSetupTests = new Map<string, ChannelSetupRecentTestCacheEntry>();
+  /** @internal */ public readonly recentChannelSetupTests = new Map<string, ChannelSetupRecentTestCacheEntry>();
   private lastChatStreamPurgeAt = 0;
   /** @internal */ public readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
   /** @internal */ public readonly onboardingMarkerPath: string;
@@ -4677,6 +4640,10 @@ export class GatewayService {
     return chatTurnPrepService.prepareAgentChatTurn(this, sessionId, input, options);
   }
 
+  /** @internal */ public isChatTurnWriteConflict(error: unknown): error is ChatTurnWriteConflictError {
+    return error instanceof ChatTurnWriteConflictError;
+  }
+
   /** @internal */ public resolvePreparedTurnOrchestration(
     prepared: chatTurnPrepService.PreparedAgentChatTurn,
   ): Promise<PreparedChatExecutionPlanResolution | undefined> {
@@ -7783,11 +7750,11 @@ export class GatewayService {
   }
 
   public getChannelSetupDefinition(catalogId: string): ChannelSetupDefinition {
-    return requireChannelSetupDefinition(catalogId).definition;
+    return channelSetupService.getChannelSetupDefinition(this, catalogId);
   }
 
   public listChannelSetupDefinitions(): ChannelSetupDefinition[] {
-    return listChannelSetupDefinitions();
+    return channelSetupService.listChannelSetupDefinitions(this);
   }
 
   public listChannelSetupDrafts(options?: {
@@ -7795,327 +7762,39 @@ export class GatewayService {
     connectionId?: string;
     limit?: number;
   }): ChannelSetupDraft[] {
-    const limit = Math.max(1, Math.min(options?.limit ?? 20, 100));
-    if (options?.connectionId) {
-      return this.storage.channelSetupDrafts.listByConnection(options.connectionId, limit);
-    }
-    if (options?.catalogId) {
-      return this.storage.channelSetupDrafts.listByCatalog(options.catalogId, limit);
-    }
-    return listChannelSetupDefinitions()
-      .flatMap((definition) => this.storage.channelSetupDrafts.listByCatalog(definition.catalog.catalogId, limit))
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .slice(0, limit);
+    return channelSetupService.listChannelSetupDrafts(this, options);
   }
 
   public createChannelSetupDraft(input: ChannelSetupDraftCreateInput): ChannelSetupDraft {
-    const runtime = requireChannelSetupDefinition(input.catalogId);
-    let seedDraft: Record<string, unknown> = this.buildDefaultChannelSetupDraft(runtime.definition);
-    let hydration = undefined;
-    let label = runtime.definition.catalog.label;
-    let enabled = true;
-
-    if (input.connectionId) {
-      const connection = this.getIntegrationConnection(input.connectionId);
-      if (connection.catalogId !== input.catalogId) {
-        throw new Error(`Connection ${input.connectionId} does not belong to ${input.catalogId}.`);
-      }
-      const hydrated = runtime.hydrate(connection);
-      seedDraft = {
-        ...seedDraft,
-        ...hydrated.draft,
-      };
-      hydration = hydrated.hydration;
-      label = connection.label;
-      enabled = connection.enabled;
-    }
-
-    const created = this.storage.channelSetupDrafts.create({
-      ...input,
-      lifecycleMode: input.lifecycleMode ?? (input.connectionId ? "edit" : "create"),
-      label,
-      enabled,
-      draft: seedDraft,
-      hydration,
-      contentVersion: runtime.definition.wizard.contentVersion,
-      adapterVersion: runtime.definition.adapter.adapterVersion,
-      validationVersion: runtime.definition.validation.validationVersion,
-      testVersion: runtime.definition.testing.testVersion,
-    });
-
-    this.recordDevDiagnostic({
-      level: "info",
-      category: "integrations",
-      event: "channel_setup.draft.created",
-      message: `Created ${created.lifecycleMode} draft for ${created.catalogId}.`,
-      context: {
-        draftId: created.draftId,
-        catalogId: created.catalogId,
-        lifecycleMode: created.lifecycleMode,
-        connectionId: created.connectionId,
-        archetype: runtime.definition.wizard.archetype,
-        tier: runtime.definition.telemetry.tier,
-        contentVersion: runtime.definition.wizard.contentVersion,
-        validationVersion: runtime.definition.validation.validationVersion,
-        testVersion: runtime.definition.testing.testVersion,
-      },
-    });
-
-    return created;
+    return channelSetupService.createChannelSetupDraft(this, input);
   }
 
   public updateChannelSetupDraft(draftId: string, input: ChannelSetupDraftUpdateInput): ChannelSetupDraft {
-    const current = this.storage.channelSetupDrafts.get(draftId);
-    const runtime = requireChannelSetupDefinition(current.catalogId);
-    this.recentChannelSetupTests.delete(draftId);
-    const updated = this.storage.channelSetupDrafts.update(draftId, {
-      ...input,
-      contentVersion: runtime.definition.wizard.contentVersion,
-      adapterVersion: runtime.definition.adapter.adapterVersion,
-      validationVersion: runtime.definition.validation.validationVersion,
-      testVersion: runtime.definition.testing.testVersion,
-    });
-
-    this.recordDevDiagnostic({
-      level: "info",
-      category: "integrations",
-      event: "channel_setup.draft.updated",
-      message: `Updated draft ${draftId}.`,
-      context: {
-        catalogId: updated.catalogId,
-        lifecycleMode: updated.lifecycleMode,
-        archetype: runtime.definition.wizard.archetype,
-        tier: runtime.definition.telemetry.tier,
-        contentVersion: runtime.definition.wizard.contentVersion,
-        validationVersion: runtime.definition.validation.validationVersion,
-        testVersion: runtime.definition.testing.testVersion,
-        lastFailureCategory: updated.lastFailureCategory,
-      },
-    });
-
-    return updated;
+    return channelSetupService.updateChannelSetupDraft(this, draftId, input);
   }
 
   public validateChannelSetupDraft(draftId: string): ChannelSetupValidationResult {
-    const draft = this.storage.channelSetupDrafts.get(draftId);
-    const runtime = requireChannelSetupDefinition(draft.catalogId);
-    const issues = runtime.validate(draft);
-    const result = this.buildChannelSetupValidationResult(draft, runtime.definition.validation.levels, issues);
-    this.storage.channelSetupDrafts.update(draftId, {
-      lastValidatedAt: result.checkedAt,
-      lastFailureCategory: firstFailureCategory(result.issues),
-    });
-    this.recordDevDiagnostic({
-      level: result.status === "error" ? "warn" : "info",
-      category: "integrations",
-      event: result.status === "error" ? "channel_setup.validation.failed" : "channel_setup.validation.succeeded",
-      message: `Validated draft ${draftId} for ${draft.catalogId}.`,
-      context: {
-        draftId,
-        status: result.status,
-        issueCount: result.issues.length,
-        catalogId: draft.catalogId,
-        lifecycleMode: draft.lifecycleMode,
-        archetype: runtime.definition.wizard.archetype,
-        tier: runtime.definition.telemetry.tier,
-        validationVersion: runtime.definition.validation.validationVersion,
-        failureCategory: firstFailureCategory(result.issues),
-      },
-    });
-    return result;
+    return channelSetupService.validateChannelSetupDraft(this, draftId);
   }
 
   public async testChannelSetupDraft(draftId: string): Promise<ChannelSetupTestResult> {
-    const draft = this.storage.channelSetupDrafts.get(draftId);
-    const validation = this.validateChannelSetupDraft(draftId);
-    if (validation.status === "error") {
-      this.recentChannelSetupTests.delete(draftId);
-      const blocked: ChannelSetupTestResult = {
-        draftId,
-        status: "error",
-        levels: ["structural", "semantic"],
-        issues: validation.issues,
-        checkedAt: new Date().toISOString(),
-        recommendedNextAction: "Resolve the required setup fields before running a live test.",
-      };
-      this.storage.channelSetupDrafts.update(draftId, {
-        lastTestedAt: blocked.checkedAt,
-        lastFailureCategory: firstFailureCategory(blocked.issues),
-      });
-      return blocked;
-    }
-
-    const runtime = requireChannelSetupDefinition(draft.catalogId);
-    const connection = this.buildEphemeralChannelConnection(draft, runtime.definition.adapter.secretFieldKeys);
-    const testSignature = buildChannelSetupRecentTestSignature(
-      draft,
-      connection,
-      runtime.definition.testing.testVersion,
-    );
-    const liveChecks = await this.runIntegrationConnectionLiveChecks(connection, { includeSandboxSend: true });
-    const checks = [...this.buildIntegrationConnectionChecks(connection), ...liveChecks.checks];
-    const issues = checks.flatMap((check) => mapDiagnosticCheckToChannelIssues(check));
-    const status = issues.some((issue) => issue.level === "error")
-      ? "error"
-      : issues.some((issue) => issue.level === "warn")
-        ? "warn"
-        : "ok";
-    const result: ChannelSetupTestResult = {
-      draftId,
-      status,
-      levels: runtime.definition.testing.levels,
-      issues,
-      checkedAt: new Date().toISOString(),
-      recommendedNextAction:
-        status === "error"
-          ? "Review the failing checks, correct the draft, then run the test again."
-          : "Finalize the connection and send a sandbox message to confirm destination access.",
-      probe: liveChecks.probe,
-    };
-    this.storage.channelSetupDrafts.update(draftId, {
-      lastTestedAt: result.checkedAt,
-      lastFailureCategory: firstFailureCategory(result.issues),
-    });
-    if (result.status === "error") {
-      this.recentChannelSetupTests.delete(draftId);
-    } else {
-      this.recentChannelSetupTests.set(draftId, {
-        signature: testSignature,
-        result,
-      });
-    }
-    this.recordDevDiagnostic({
-      level: status === "error" ? "warn" : "info",
-      category: "integrations",
-      event: status === "error" ? "channel_setup.test.failed" : "channel_setup.test.succeeded",
-      message: `Tested draft ${draftId} for ${draft.catalogId}.`,
-      context: {
-        draftId,
-        status,
-        issueCount: issues.length,
-        catalogId: draft.catalogId,
-        lifecycleMode: draft.lifecycleMode,
-        archetype: runtime.definition.wizard.archetype,
-        tier: runtime.definition.telemetry.tier,
-        testVersion: runtime.definition.testing.testVersion,
-        failureCategory: firstFailureCategory(result.issues),
-      },
-    });
-    return result;
+    return channelSetupService.testChannelSetupDraft(this, draftId);
   }
 
   public async finalizeChannelSetupDraft(draftId: string): Promise<ChannelSetupFinalizeResult> {
-    const draft = this.storage.channelSetupDrafts.get(draftId);
-    const runtime = requireChannelSetupDefinition(draft.catalogId);
-    const validation = this.validateChannelSetupDraft(draftId);
-    if (validation.status === "error") {
-      throw new Error("Channel setup draft still has validation errors.");
-    }
-    const reusableTest = this.getReusableChannelSetupTestResult(draft);
-    if (reusableTest) {
-      this.recordDevDiagnostic({
-        level: "info",
-        category: "integrations",
-        event: "channel_setup.test.reused",
-        message: `Reused the most recent live test result for draft ${draftId}.`,
-        context: {
-          draftId,
-          status: reusableTest.status,
-          issueCount: reusableTest.issues.length,
-          catalogId: draft.catalogId,
-          lifecycleMode: draft.lifecycleMode,
-          archetype: runtime.definition.wizard.archetype,
-          tier: runtime.definition.telemetry.tier,
-          testVersion: runtime.definition.testing.testVersion,
-          checkedAt: reusableTest.checkedAt,
-        },
-      });
-    }
-    const test = reusableTest ?? (await this.testChannelSetupDraft(draftId));
-    if (test.status !== "ok") {
-      throw new Error(
-        test.status === "warn"
-          ? "Channel setup draft still has warning-level live checks. Resolve warnings before finalizing."
-          : "Channel setup draft still has failing live checks.",
-      );
-    }
-
-    const payload = {
-      label: draft.label,
-      enabled: draft.enabled,
-      status: "connected" as const,
-      config: this.buildEphemeralChannelConnection(draft).config,
-      lastSyncAt: test.checkedAt,
-      lastError: null,
-    };
-
-    const connection = draft.connectionId
-      ? this.updateIntegrationConnection(draft.connectionId, payload)
-      : this.updateIntegrationConnection(
-          this.createIntegrationConnection({
-            catalogId: draft.catalogId,
-            label: payload.label,
-            enabled: payload.enabled,
-            status: payload.status,
-            config: payload.config,
-          }).connectionId,
-          {
-            lastSyncAt: payload.lastSyncAt,
-            lastError: payload.lastError,
-          },
-        );
-
-    this.recordDevDiagnostic({
-      level: "info",
-      category: "integrations",
-      event: "channel_setup.finalize.succeeded",
-      message: `Finalized channel setup for ${draft.catalogId}.`,
-      context: {
-        draftId,
-        connectionId: connection.connectionId,
-        lifecycleMode: draft.lifecycleMode,
-        catalogId: draft.catalogId,
-        archetype: runtime.definition.wizard.archetype,
-        tier: runtime.definition.telemetry.tier,
-        contentVersion: runtime.definition.wizard.contentVersion,
-      },
-    });
-
-    this.recentChannelSetupTests.delete(draftId);
-    this.storage.channelSetupDrafts.delete(draftId);
-
-    return {
-      connection,
-      validation,
-      test,
-    };
+    return channelSetupService.finalizeChannelSetupDraft(this, draftId);
   }
 
   public createChannelSetupRepairDraft(connectionId: string): ChannelSetupDraft {
-    const connection = this.getIntegrationConnection(connectionId);
-    return this.createChannelSetupDraft({
-      catalogId: connection.catalogId,
-      connectionId,
-      lifecycleMode: "repair",
-    });
+    return channelSetupService.createChannelSetupRepairDraft(this, connectionId);
   }
 
   public createChannelSetupRotateSecretDraft(connectionId: string): ChannelSetupDraft {
-    const connection = this.getIntegrationConnection(connectionId);
-    return this.createChannelSetupDraft({
-      catalogId: connection.catalogId,
-      connectionId,
-      lifecycleMode: "rotate_secret",
-    });
+    return channelSetupService.createChannelSetupRotateSecretDraft(this, connectionId);
   }
 
   public async retestChannelConnection(connectionId: string): Promise<ChannelSetupTestResult> {
-    const repairDraft = this.createChannelSetupDraft({
-      catalogId: this.getIntegrationConnection(connectionId).catalogId,
-      connectionId,
-      lifecycleMode: "retest",
-    });
-    return this.testChannelSetupDraft(repairDraft.draftId);
+    return channelSetupService.retestChannelConnection(this, connectionId);
   }
 
   public listConnectorRecords(connectorType?: ConnectorType): ConnectorRecord[] {
@@ -9127,559 +8806,8 @@ export class GatewayService {
     return llmCompletionService.createChatCompletion(this, request);
   }
 
-  private async _movedCreateChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
-    this.recordDevDiagnostic({
-      level: "debug",
-      category: "chat",
-      event: "chat.completion.start",
-      message: "Starting chat completion",
-      sessionId: request.memory?.sessionId,
-      providerId: request.providerId,
-      modelId: request.model,
-      context: {
-        messageCount: request.messages.length,
-        stream: request.stream ?? false,
-      },
-    });
-    let response: ChatCompletionResponse | undefined;
-    let memoryContext: MemoryContextPack | undefined;
-    const memoryInput = request.memory;
-    const useQmd =
-      this.config.assistant.memory.enabled &&
-      this.config.assistant.memory.qmd.enabled &&
-      this.config.assistant.memory.qmd.applyToChat &&
-      memoryInput?.mode !== "off" &&
-      (memoryInput?.enabled ?? true);
-
-    if (useQmd) {
-      const prompt = extractPromptFromMessages(request.messages);
-      if (prompt.trim()) {
-        memoryContext = await this.memoryContextService.compose({
-          scope: "chat",
-          prompt,
-          sessionId: memoryInput?.sessionId,
-          taskId: memoryInput?.taskId,
-          workspace: this.resolveMemoryWorkspaceRelativeDir(memoryInput?.workspace, memoryInput?.sessionId),
-          maxContextTokens: memoryInput?.maxContextTokens,
-          forceRefresh: memoryInput?.forceRefresh,
-        });
-      }
-    }
-
-    const withContext = memoryContext
-      ? {
-          ...request,
-          messages: [
-            {
-              role: "system" as const,
-              content: buildMemoryContextSystemMessage(memoryContext),
-            },
-            ...request.messages,
-          ],
-        }
-      : request;
-
-    const chatHookWorkspaceId = this.resolveChatCompletionHookWorkspaceId(request);
-    const chatHookEntityId = request.memory?.sessionId?.trim() || randomUUID();
-    let hookableRequest = withContext;
-
-    const modelSelectHook = await this.hooksService.runInlineHooks<{
-      providerId?: string;
-      model?: string;
-    }>({
-      workspaceId: chatHookWorkspaceId,
-      trigger: "llm.model.select.before",
-      entityType: "chat_completion",
-      entityId: chatHookEntityId,
-      payload: {
-        providerId: hookableRequest.providerId,
-        model: hookableRequest.model,
-        messageCount: hookableRequest.messages.length,
-      },
-      parsePatch: (value) => this.parseLlmModelSelectHookPatch(value),
-      mergePatch: (current, next) => ({
-        ...(current ?? {}),
-        ...next,
-      }),
-    });
-    if (modelSelectHook.blockedBy) {
-      throw new Error(modelSelectHook.blockedBy.reason);
-    }
-    if (modelSelectHook.patch) {
-      hookableRequest = {
-        ...hookableRequest,
-        ...modelSelectHook.patch,
-      };
-    }
-
-    const llmRequestHook = await this.hooksService.runInlineHooks<{
-      providerId?: string;
-      model?: string;
-      prependMessages?: typeof hookableRequest.messages;
-      appendMessages?: typeof hookableRequest.messages;
-      tools?: Array<Record<string, unknown>>;
-      toolChoice?: string | Record<string, unknown>;
-      metadata?: Record<string, unknown>;
-    }>({
-      workspaceId: chatHookWorkspaceId,
-      trigger: "llm.request.before",
-      entityType: "chat_completion",
-      entityId: chatHookEntityId,
-      payload: {
-        providerId: hookableRequest.providerId,
-        model: hookableRequest.model,
-        messages: hookableRequest.messages,
-        tools: hookableRequest.tools ?? [],
-        toolChoice: hookableRequest.tool_choice,
-        metadata: hookableRequest.metadata ?? {},
-      },
-      parsePatch: (value) => this.parseLlmRequestHookPatch(value),
-      mergePatch: (current, next) => this.mergeLlmRequestHookPatch(current, next),
-    });
-    if (llmRequestHook.blockedBy) {
-      throw new Error(llmRequestHook.blockedBy.reason);
-    }
-    if (llmRequestHook.patch) {
-      hookableRequest = this.applyLlmRequestHookPatch(hookableRequest, llmRequestHook.patch);
-    }
-    this.persistContextManifestForCompletionRequest({
-      request: hookableRequest,
-      memoryContext,
-    });
-
-    const runtime = this.llmService.getRuntimeConfig({
-      includeKeychainForActiveProvider: true,
-      useCache: true,
-    });
-    const primaryProviderId = hookableRequest.providerId ?? runtime.activeProviderId;
-    const primaryProvider = runtime.providers.find((item) => item.providerId === primaryProviderId);
-    const primaryModel = hookableRequest.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
-    const primaryApiStyle = this.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
-    const allowCrossProviderFallback = shouldAllowCrossProviderFallback(hookableRequest);
-    const routing: ChatTurnTraceRecord["routing"] = {
-      primaryProviderId,
-      primaryModel,
-      primaryApiStyle,
-      effectiveProviderId: primaryProviderId,
-      effectiveModel: primaryModel,
-      effectiveApiStyle: primaryApiStyle,
-      fallbackUsed: false,
-    };
-
-    const retryAttempts = [
-      hookableRequest,
-      normalizeToolProtocolRetryRequest(hookableRequest, 1),
-      normalizeToolProtocolRetryRequest(hookableRequest, 2),
-    ];
-    const completionDeadline = createChatCompletionDeadline(hookableRequest.timeoutMs);
-    let lastError: Error | undefined;
-
-    attemptLoop: for (let index = 0; index < retryAttempts.length; index += 1) {
-      const attemptRequest = retryAttempts[index]!;
-      for (
-        let transientRetryIndex = 0;
-        transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
-        transientRetryIndex += 1
-      ) {
-        try {
-          const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
-          response = await this.llmService.chatCompletions({
-            ...attemptRequest,
-            timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
-          });
-          routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
-          routing.effectiveModel = response.model ?? attemptRequest.model ?? primaryModel;
-          routing.effectiveApiStyle = this.llmService.resolveExecutionApiStyle(
-            routing.effectiveProviderId,
-            routing.effectiveModel,
-          );
-          if (index > 0) {
-            routing.fallbackUsed = true;
-            routing.fallbackProviderId = routing.effectiveProviderId;
-            routing.fallbackModel = routing.effectiveModel;
-            routing.fallbackApiStyle = routing.effectiveApiStyle;
-            routing.fallbackReason =
-              index === 1
-                ? "provider compatibility retry (normalized tool protocol)"
-                : "provider compatibility retry (minimal thinking metadata)";
-          }
-          break attemptLoop;
-        } catch (error) {
-          lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
-          this.recordDevDiagnostic({
-            level: "warn",
-            category: "chat",
-            event: "chat.completion.attempt_failed",
-            message: "Chat completion attempt failed",
-            sessionId: request.memory?.sessionId,
-            providerId: attemptRequest.providerId ?? primaryProviderId,
-            modelId: attemptRequest.model ?? primaryModel,
-            context: {
-              error: lastError.message,
-              retryIndex: index,
-              transientRetryIndex,
-            },
-          });
-
-          if (
-            transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
-            shouldRetryTransientProviderError(lastError)
-          ) {
-            await delayChatCompletionRetry(completionDeadline, hookableRequest.timeoutMs, transientRetryIndex);
-            continue;
-          }
-          if (index < retryAttempts.length - 1 && shouldRetryToolProtocolError(lastError)) {
-            continue attemptLoop;
-          }
-          if (index < retryAttempts.length - 1 && index === 0) {
-            continue attemptLoop;
-          }
-          break;
-        }
-      }
-    }
-
-    if (!response && allowCrossProviderFallback) {
-      const fallbacks = this.resolveFallbackTargets(runtime, primaryProviderId, primaryModel);
-      for (const fallback of fallbacks) {
-        for (
-          let transientRetryIndex = 0;
-          transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
-          transientRetryIndex += 1
-        ) {
-          try {
-            const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
-            response = await this.llmService.chatCompletions({
-              ...normalizeToolProtocolRetryRequest(hookableRequest, 2),
-              providerId: fallback.providerId,
-              model: fallback.model,
-              timeoutMs: attemptTimeoutMs ?? hookableRequest.timeoutMs,
-            });
-            this.recordDevDiagnostic({
-              level: "info",
-              category: "chat",
-              event: "chat.completion.fallback_applied",
-              message: "Applied cross-provider fallback",
-              sessionId: request.memory?.sessionId,
-              providerId: fallback.providerId,
-              modelId: fallback.model,
-              context: {
-                reason: lastError?.message,
-              },
-            });
-            routing.fallbackUsed = true;
-            routing.fallbackProviderId = fallback.providerId;
-            routing.fallbackModel = response.model ?? fallback.model;
-            routing.fallbackApiStyle = this.llmService.resolveExecutionApiStyle(
-              fallback.providerId,
-              routing.fallbackModel,
-            );
-            routing.fallbackReason = `primary failed (${lastError?.message ?? "unknown error"})`;
-            routing.effectiveProviderId = fallback.providerId;
-            routing.effectiveModel = routing.fallbackModel;
-            routing.effectiveApiStyle = routing.fallbackApiStyle;
-            break;
-          } catch (error) {
-            lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
-            if (
-              transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
-              shouldRetryTransientProviderError(lastError)
-            ) {
-              await delayChatCompletionRetry(completionDeadline, hookableRequest.timeoutMs, transientRetryIndex);
-              continue;
-            }
-          }
-        }
-        if (response) {
-          break;
-        }
-      }
-    }
-
-    if (!response) {
-      this.recordDevDiagnostic({
-        level: "error",
-        category: "chat",
-        event: "chat.completion.failed",
-        message: "Chat completion failed",
-        sessionId: request.memory?.sessionId,
-        providerId: primaryProviderId,
-        modelId: primaryModel,
-        context: {
-          error: lastError?.message,
-        },
-      });
-      throw lastError ?? new Error("chat completion failed");
-    }
-    this.recordDevDiagnostic({
-      level: "info",
-      category: "chat",
-      event: "chat.completion.complete",
-      message: "Chat completion completed",
-      sessionId: request.memory?.sessionId,
-      providerId: routing.effectiveProviderId ?? primaryProviderId,
-      modelId: routing.effectiveModel ?? primaryModel,
-      context: {
-        fallbackUsed: routing.fallbackUsed,
-      },
-    });
-
-    this.publishRealtime("system", "llm", {
-      type: "chat_completion",
-      providerId: routing.effectiveProviderId ?? primaryProviderId,
-      model: routing.effectiveModel ?? primaryModel,
-      messageCount: request.messages.length,
-      stream: request.stream ?? false,
-      memoryContextId: memoryContext?.contextId,
-      memoryQmdStatus: memoryContext?.quality.status,
-      fallbackUsed: routing.fallbackUsed,
-      fallbackProviderId: routing.fallbackProviderId,
-      fallbackModel: routing.fallbackModel,
-      fallbackReason: routing.fallbackReason,
-    });
-
-    if (memoryContext) {
-      response.memoryContext = {
-        contextId: memoryContext.contextId,
-        cacheHit: memoryContext.quality.status === "cache_hit",
-        originalTokenEstimate: memoryContext.originalTokenEstimate,
-        distilledTokenEstimate: memoryContext.distilledTokenEstimate,
-        savingsPercent: calculateSavings(memoryContext.originalTokenEstimate, memoryContext.distilledTokenEstimate),
-        citationsCount: memoryContext.citations.length,
-      };
-    }
-    response.routing = routing;
-    this.hooksService.enqueueAfterHooks({
-      workspaceId: chatHookWorkspaceId,
-      trigger: "llm.response.after",
-      entityType: "chat_completion",
-      entityId: chatHookEntityId,
-      payload: {
-        providerId: routing.effectiveProviderId ?? primaryProviderId,
-        model: routing.effectiveModel ?? primaryModel,
-        request: {
-          providerId: hookableRequest.providerId,
-          model: hookableRequest.model,
-          metadata: hookableRequest.metadata ?? {},
-          messageCount: hookableRequest.messages.length,
-        },
-        response,
-      },
-    });
-    return response;
-  }
-
   public async *createChatCompletionStream(request: ChatCompletionRequest): AsyncGenerator<Record<string, unknown>> {
     yield* llmCompletionService.createChatCompletionStream(this, request);
-  }
-
-  private async *_movedCreateChatCompletionStream(
-    request: ChatCompletionRequest,
-  ): AsyncGenerator<Record<string, unknown>> {
-    let memoryContext: MemoryContextPack | undefined;
-    const memoryInput = request.memory;
-    const useQmd =
-      this.config.assistant.memory.enabled &&
-      this.config.assistant.memory.qmd.enabled &&
-      this.config.assistant.memory.qmd.applyToChat &&
-      memoryInput?.mode !== "off" &&
-      (memoryInput?.enabled ?? true);
-
-    if (useQmd) {
-      const prompt = extractPromptFromMessages(request.messages);
-      if (prompt.trim()) {
-        memoryContext = await this.memoryContextService.compose({
-          scope: "chat",
-          prompt,
-          sessionId: memoryInput?.sessionId,
-          taskId: memoryInput?.taskId,
-          workspace: this.resolveMemoryWorkspaceRelativeDir(memoryInput?.workspace, memoryInput?.sessionId),
-          maxContextTokens: memoryInput?.maxContextTokens,
-          forceRefresh: memoryInput?.forceRefresh,
-        });
-      }
-    }
-
-    const withContext = memoryContext
-      ? {
-          ...request,
-          messages: [
-            {
-              role: "system" as const,
-              content: buildMemoryContextSystemMessage(memoryContext),
-            },
-            ...request.messages,
-          ],
-        }
-      : request;
-    this.persistContextManifestForCompletionRequest({
-      request: withContext,
-      memoryContext,
-    });
-
-    const runtime = this.llmService.getRuntimeConfig({
-      includeKeychainForActiveProvider: true,
-      useCache: true,
-    });
-    const primaryProviderId = withContext.providerId ?? runtime.activeProviderId;
-    const primaryProvider = runtime.providers.find((item) => item.providerId === primaryProviderId);
-    const primaryModel = withContext.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
-    const primaryApiStyle = this.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
-    const allowCrossProviderFallback = shouldAllowCrossProviderFallback(withContext);
-    const routing: ChatTurnTraceRecord["routing"] = {
-      primaryProviderId,
-      primaryModel,
-      primaryApiStyle,
-      effectiveProviderId: primaryProviderId,
-      effectiveModel: primaryModel,
-      effectiveApiStyle: primaryApiStyle,
-      fallbackUsed: false,
-    };
-
-    const retryAttempts = [
-      withContext,
-      normalizeToolProtocolRetryRequest(withContext, 1),
-      normalizeToolProtocolRetryRequest(withContext, 2),
-    ];
-    const completionDeadline = createChatCompletionDeadline(withContext.timeoutMs);
-    let streamed = false;
-    let lastError: Error | undefined;
-
-    attemptLoop: for (let index = 0; index < retryAttempts.length; index += 1) {
-      const attemptRequest = retryAttempts[index]!;
-      for (
-        let transientRetryIndex = 0;
-        transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
-        transientRetryIndex += 1
-      ) {
-        let attemptStreamed = false;
-        try {
-          const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
-          for await (const chunk of this.llmService.chatCompletionsStream({
-            ...attemptRequest,
-            stream: true,
-            timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
-          })) {
-            attemptStreamed = true;
-            streamed = true;
-            yield chunk;
-          }
-          routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
-          routing.effectiveModel = attemptRequest.model ?? primaryModel;
-          routing.effectiveApiStyle = this.llmService.resolveExecutionApiStyle(
-            routing.effectiveProviderId,
-            routing.effectiveModel,
-          );
-          if (index > 0) {
-            routing.fallbackUsed = true;
-            routing.fallbackProviderId = routing.effectiveProviderId;
-            routing.fallbackModel = routing.effectiveModel;
-            routing.fallbackApiStyle = routing.effectiveApiStyle;
-            routing.fallbackReason =
-              index === 1
-                ? "provider compatibility retry (normalized tool protocol)"
-                : "provider compatibility retry (minimal thinking metadata)";
-          }
-          break attemptLoop;
-        } catch (error) {
-          lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
-          if (
-            !attemptStreamed &&
-            transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
-            shouldRetryTransientProviderError(lastError)
-          ) {
-            await delayChatCompletionRetry(completionDeadline, withContext.timeoutMs, transientRetryIndex);
-            continue;
-          }
-          if (index < retryAttempts.length - 1 && shouldRetryToolProtocolError(lastError)) {
-            continue attemptLoop;
-          }
-          break;
-        }
-      }
-    }
-
-    if (!streamed && allowCrossProviderFallback) {
-      const fallbacks = this.resolveFallbackTargets(runtime, primaryProviderId, primaryModel);
-      for (const fallback of fallbacks) {
-        for (
-          let transientRetryIndex = 0;
-          transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
-          transientRetryIndex += 1
-        ) {
-          let attemptStreamed = false;
-          try {
-            const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
-            for await (const chunk of this.llmService.chatCompletionsStream({
-              ...normalizeToolProtocolRetryRequest(withContext, 2),
-              providerId: fallback.providerId,
-              model: fallback.model,
-              stream: true,
-              timeoutMs: attemptTimeoutMs ?? withContext.timeoutMs,
-            })) {
-              attemptStreamed = true;
-              streamed = true;
-              yield chunk;
-            }
-            routing.fallbackUsed = true;
-            routing.fallbackProviderId = fallback.providerId;
-            routing.fallbackModel = fallback.model;
-            routing.fallbackApiStyle = this.llmService.resolveExecutionApiStyle(fallback.providerId, fallback.model);
-            routing.fallbackReason = `primary failed (${lastError?.message ?? "unknown error"})`;
-            routing.effectiveProviderId = fallback.providerId;
-            routing.effectiveModel = fallback.model;
-            routing.effectiveApiStyle = routing.fallbackApiStyle;
-            break;
-          } catch (error) {
-            lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
-            if (
-              !attemptStreamed &&
-              transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
-              shouldRetryTransientProviderError(lastError)
-            ) {
-              await delayChatCompletionRetry(completionDeadline, withContext.timeoutMs, transientRetryIndex);
-              continue;
-            }
-          }
-        }
-        if (streamed) {
-          break;
-        }
-      }
-    }
-
-    if (!streamed) {
-      throw lastError ?? new Error("chat completion stream failed");
-    }
-
-    this.publishRealtime("system", "llm", {
-      type: "chat_completion_stream",
-      providerId: routing.effectiveProviderId ?? primaryProviderId,
-      model: routing.effectiveModel ?? primaryModel,
-      messageCount: request.messages.length,
-      stream: true,
-      memoryContextId: memoryContext?.contextId,
-      memoryQmdStatus: memoryContext?.quality.status,
-      fallbackUsed: routing.fallbackUsed,
-      fallbackProviderId: routing.fallbackProviderId,
-      fallbackModel: routing.fallbackModel,
-      fallbackReason: routing.fallbackReason,
-    });
-
-    const finalChunk: Record<string, unknown> = {
-      routing,
-    };
-    if (memoryContext) {
-      finalChunk.memoryContext = {
-        contextId: memoryContext.contextId,
-        cacheHit: memoryContext.quality.status === "cache_hit",
-        originalTokenEstimate: memoryContext.originalTokenEstimate,
-        distilledTokenEstimate: memoryContext.distilledTokenEstimate,
-        savingsPercent: calculateSavings(memoryContext.originalTokenEstimate, memoryContext.distilledTokenEstimate),
-        citationsCount: memoryContext.citations.length,
-      };
-    }
-    yield finalChunk;
   }
 
   /** @internal */ public resolveFallbackTargets(
@@ -9841,468 +8969,19 @@ export class GatewayService {
     return connectorDiagnosticsHelpers.pickConnectorDiagnosticAction(checks);
   }
 
-  private buildDefaultChannelSetupDraft(definition: ChannelSetupDefinition): Record<string, unknown> {
-    return channelSetupHelpers.buildDefaultChannelSetupDraft(definition);
+  /** @internal */ public buildIntegrationConnectionChecks(
+    connection: IntegrationConnection,
+  ): ConnectorDiagnosticReport["checks"] {
+    return integrationDiagnosticsService.buildIntegrationConnectionChecks(this, connection);
   }
 
-  private buildChannelSetupValidationResult(
-    draft: ChannelSetupDraft,
-    levels: ChannelSetupValidationLevel[],
-    issues: ChannelSetupIssue[],
-  ): ChannelSetupValidationResult {
-    return channelSetupHelpers.buildChannelSetupValidationResult(draft, levels, issues);
-  }
-
-  private getReusableChannelSetupTestResult(draft: ChannelSetupDraft): ChannelSetupTestResult | undefined {
-    return channelSetupHelpers.getReusableChannelSetupTestResult(this, this.recentChannelSetupTests, draft);
-  }
-
-  private buildEphemeralChannelConnection(draft: ChannelSetupDraft, secretFieldKeys?: string[]): IntegrationConnection {
-    return channelSetupHelpers.buildEphemeralChannelConnection(this, draft, secretFieldKeys);
-  }
-
-  public buildIntegrationConnectionChecks(connection: IntegrationConnection): ConnectorDiagnosticReport["checks"] {
-    const checks: ConnectorDiagnosticReport["checks"] = [];
-    const config = connection.config;
-    const channelFeatures =
-      connection.kind === "channel" ? describeChannelFeatureMetadata(connection.key, config) : undefined;
-    const channelCapabilities =
-      connection.kind === "channel" ? describeChannelCapabilities(connection.key, config) : undefined;
-    const requireSecretRef = (key: string, label: string, directKey: string, envKey: string) => {
-      const direct = this.readConnectionConfigValue(config, directKey);
-      const envName = this.readConnectionConfigValue(config, envKey);
-      const envPresent = envName ? Boolean(process.env[envName]) : false;
-      checks.push({
-        key,
-        status: direct || envPresent ? "pass" : "fail",
-        message:
-          direct || envPresent ? `${label} is configured${envName ? ` via ${envName}` : ""}.` : `${label} is missing.`,
-      });
-    };
-    const requireText = (key: string, label: string, value: string | undefined, status: "warn" | "fail" = "fail") => {
-      checks.push({
-        key,
-        status: value ? "pass" : status,
-        message: value ? `${label} is set.` : `${label} is missing.`,
-      });
-    };
-    const checkUrl = (key: string, label: string, urlValue: string | undefined, required = false) => {
-      if (!urlValue && !required) {
-        return;
-      }
-      const safeRemote = !urlValue || this.isConnectionUrlRemoteSafe(urlValue);
-      const allowlisted = !urlValue || this.isConnectionUrlAllowlisted(urlValue);
-      checks.push({
-        key,
-        status: !urlValue ? "fail" : !safeRemote ? "fail" : allowlisted ? "pass" : "warn",
-        message: !urlValue
-          ? `${label} is missing.`
-          : !safeRemote
-            ? `${label} uses non-local plain HTTP.`
-            : allowlisted
-              ? `${label} is reachable under current allowlist posture.`
-              : `${label} host is not in the current outbound allowlist.`,
-      });
-    };
-
-    if (connection.kind === "channel") {
-      checks.push({
-        key: "actions",
-        status: "pass",
-        message: `Supported delivery actions: ${(channelFeatures?.supportedDeliveryActions ?? ["channel.send"]).join(", ")}.`,
-      });
-      checks.push({
-        key: "attachments",
-        status: (channelFeatures?.supportedAttachmentSources.length ?? 0) > 0 ? "pass" : "warn",
-        message:
-          (channelFeatures?.supportedAttachmentSources.length ?? 0) > 0
-            ? `Supported attachment sources: ${channelFeatures?.supportedAttachmentSources.join(", ")}.`
-            : "No rich attachment source is advertised for this connector.",
-      });
-      if (channelCapabilities) {
-        checks.push(...buildChannelCapabilityDiagnosticChecks(channelCapabilities));
-      }
-      switch (connection.key) {
-        case "slack":
-          checks.push({
-            key: "auth",
-            status:
-              this.readConnectionConfigValue(config, "webhookUrl") ||
-              this.readConnectionConfigValue(config, "botToken") ||
-              this.hasConnectionEnvValue(config, "botTokenEnv")
-                ? "pass"
-                : "fail",
-            message:
-              this.readConnectionConfigValue(config, "webhookUrl") ||
-              this.readConnectionConfigValue(config, "botToken") ||
-              this.hasConnectionEnvValue(config, "botTokenEnv")
-                ? "Slack bot token or webhook is configured."
-                : "Slack bot token or webhook is missing.",
-          });
-          checkUrl("url", "Slack webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), false);
-          requireText("target", "Default Slack channel", resolveChannelConfigTarget(connection.key, config), "warn");
-          break;
-        case "discord":
-          checks.push({
-            key: "auth",
-            status:
-              this.readConnectionConfigValue(config, "webhookUrl") ||
-              this.readConnectionConfigValue(config, "botToken") ||
-              this.hasConnectionEnvValue(config, "botTokenEnv")
-                ? "pass"
-                : "fail",
-            message:
-              this.readConnectionConfigValue(config, "webhookUrl") ||
-              this.readConnectionConfigValue(config, "botToken") ||
-              this.hasConnectionEnvValue(config, "botTokenEnv")
-                ? "Discord bot token or webhook is configured."
-                : "Discord bot token or webhook is missing.",
-          });
-          checkUrl("url", "Discord webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), false);
-          requireText("target", "Default Discord channel", resolveChannelConfigTarget(connection.key, config), "warn");
-          break;
-        case "telegram":
-          requireSecretRef("auth", "Telegram bot token", "botToken", "botTokenEnv");
-          requireText("target", "Default Telegram chat", resolveChannelConfigTarget(connection.key, config), "warn");
-          checks.push({
-            key: "url",
-            status: this.isHostAllowlisted("api.telegram.org") ? "pass" : "warn",
-            message: this.isHostAllowlisted("api.telegram.org")
-              ? "Telegram API host is allowlisted."
-              : "Telegram API host is not allowlisted.",
-          });
-          break;
-        case "google-chat":
-          checkUrl("url", "Google Chat webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), true);
-          requireText(
-            "target",
-            "Default Google Chat thread key",
-            resolveChannelConfigTarget(connection.key, config),
-            "warn",
-          );
-          break;
-        case "teams":
-          checkUrl("url", "Teams webhook URL", this.readConnectionConfigValue(config, "webhookUrl"), true);
-          break;
-        case "whatsapp":
-          requireSecretRef("auth", "WhatsApp access token", "accessToken", "accessTokenEnv");
-          requireText(
-            "sender",
-            "WhatsApp phone number id",
-            this.readConnectionConfigValue(config, "phoneNumberId"),
-            "warn",
-          );
-          requireText(
-            "target",
-            "Default WhatsApp recipient",
-            resolveChannelConfigTarget(connection.key, config),
-            "warn",
-          );
-          break;
-        case "signal":
-          checkUrl(
-            "url",
-            "Signal bridge URL",
-            this.readConnectionConfigValue(config, "baseUrl") ?? this.readConnectionConfigValue(config, "bridgeUrl"),
-            true,
-          );
-          requireText("target", "Default Signal recipient", resolveChannelConfigTarget(connection.key, config), "warn");
-          break;
-        case "mattermost":
-          checkUrl("url", "Mattermost server URL", this.readConnectionConfigValue(config, "serverUrl"), true);
-          requireSecretRef("auth", "Mattermost bot token", "botToken", "botTokenEnv");
-          requireText(
-            "target",
-            "Default Mattermost channel",
-            resolveChannelConfigTarget(connection.key, config),
-            "warn",
-          );
-          break;
-        case "imessage":
-          checkUrl(
-            "url",
-            "iMessage bridge URL",
-            this.readConnectionConfigValue(config, "bridgeUrl") ?? this.readConnectionConfigValue(config, "baseUrl"),
-            true,
-          );
-          requireSecretRef("auth", "iMessage bridge password", "password", "passwordEnv");
-          requireText("target", "Default iMessage handle", resolveChannelConfigTarget(connection.key, config), "warn");
-          break;
-        case "nextcloud-talk":
-          checkUrl("url", "Nextcloud base URL", this.readConnectionConfigValue(config, "baseUrl"), true);
-          requireSecretRef("auth", "Nextcloud Talk token", "token", "tokenEnv");
-          requireText(
-            "target",
-            "Default Nextcloud Talk room",
-            resolveChannelConfigTarget(connection.key, config),
-            "warn",
-          );
-          break;
-        case "line":
-          requireSecretRef("auth", "LINE channel access token", "channelAccessToken", "channelAccessTokenEnv");
-          requireText("target", "Default LINE target", resolveChannelConfigTarget(connection.key, config), "warn");
-          break;
-        case "zalo":
-          requireSecretRef("auth", "Zalo access token", "accessToken", "accessTokenEnv");
-          requireText("target", "Default Zalo recipient", resolveChannelConfigTarget(connection.key, config), "warn");
-          break;
-        case "zalouser": {
-          const baseUrl =
-            this.readConnectionConfigValue(config, "baseUrl") ??
-            this.readConnectionConfigValue(config, "bridgeUrl") ??
-            this.readConnectionConfigValue(config, "serverUrl");
-          checkUrl("url", "Zalo User bridge URL", baseUrl, true);
-          const hasAuth = Boolean(
-            this.readConnectionConfigValue(config, "authToken") ||
-            this.hasConnectionEnvValue(config, "authTokenEnv") ||
-            this.readConnectionConfigValue(config, "authorization") ||
-            this.hasConnectionEnvValue(config, "authorizationEnv") ||
-            this.readConnectionConfigValue(config, "basicAuth") ||
-            this.hasConnectionEnvValue(config, "basicAuthEnv") ||
-            this.readConnectionConfigValue(config, "accessToken") ||
-            this.hasConnectionEnvValue(config, "accessTokenEnv"),
-          );
-          checks.push({
-            key: "auth",
-            status: this.isConnectionValueLocalUrl(baseUrl) || hasAuth ? "pass" : "warn",
-            message: this.isConnectionValueLocalUrl(baseUrl)
-              ? "Local zca bridge does not require authentication."
-              : hasAuth
-                ? "Zalo User bridge authentication is configured."
-                : "Bridge authentication is not configured.",
-          });
-          requireText(
-            "target",
-            "Default Zalo User recipient",
-            resolveChannelConfigTarget(connection.key, config),
-            "warn",
-          );
-          break;
-        }
-        default:
-          requireText("target", "Default target", resolveChannelConfigTarget(connection.key, config), "warn");
-          requireSecretRef("auth", "Channel token", "token", "tokenEnv");
-          break;
-      }
-    } else if (connection.kind === "model_provider") {
-      checkUrl("url", "Provider base URL", this.readConnectionConfigValue(config, "baseUrl"), true);
-      requireText("target", "Default model", this.readConnectionConfigValue(config, "model"), "warn");
-      const isLocal = this.isConnectionValueLocalUrl(this.readConnectionConfigValue(config, "baseUrl"));
-      checks.push({
-        key: "auth",
-        status:
-          isLocal || this.readConnectionConfigValue(config, "apiKey") || this.hasConnectionEnvValue(config, "apiKeyEnv")
-            ? "pass"
-            : "fail",
-        message: isLocal
-          ? "Local model endpoint does not require an API key."
-          : this.readConnectionConfigValue(config, "apiKey") || this.hasConnectionEnvValue(config, "apiKeyEnv")
-            ? "API key is configured."
-            : "API key is missing.",
-      });
-    } else if (connection.kind === "automation") {
-      if (connection.key === "webhooks") {
-        checkUrl("url", "Webhook base URL", this.readConnectionConfigValue(config, "baseUrl"), true);
-      }
-      if (connection.key === "gmail") {
-        requireText("auth", "Gmail refresh token handle", this.readConnectionConfigValue(config, "refreshTokenHandle"));
-      }
-    }
-
-    return checks;
-  }
-
-  public async runIntegrationConnectionLiveChecks(
+  /** @internal */ public async runIntegrationConnectionLiveChecks(
     connection: IntegrationConnection,
     options: {
       includeSandboxSend: boolean;
     },
   ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ChannelProbeReport }> {
-    if (connection.kind !== "channel") {
-      return { checks: [] };
-    }
-    const config = connection.config;
-    switch (connection.key) {
-      case "slack": {
-        const token =
-          this.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
-          this.resolveConnectionSecret(config, "token", "tokenEnv");
-        if (!token) {
-          return {
-            checks: [
-              {
-                key: "auth_live",
-                status: this.readConnectionConfigValue(config, "webhookUrl") ? "warn" : "fail",
-                message: this.readConnectionConfigValue(config, "webhookUrl")
-                  ? "Webhook-mode Slack connections cannot be probed non-destructively without a bot token."
-                  : "Slack live auth probe skipped because no bot token is configured.",
-              },
-            ],
-          };
-        }
-        return runSlackBotLiveChecks({
-          token,
-          channel: this.readConnectionConfigValue(config, "defaultChannel"),
-          threadTs: this.readConnectionConfigValue(config, "defaultThreadTs"),
-          includeSandboxSend: options.includeSandboxSend,
-          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-        });
-      }
-      case "discord":
-        return this.runDiscordConnectionLiveChecks(connection, options.includeSandboxSend);
-      case "telegram": {
-        const token =
-          this.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
-          this.resolveConnectionSecret(config, "token", "tokenEnv");
-        if (!token) {
-          return { checks: [] };
-        }
-        return runTelegramBotLiveChecks({
-          token,
-          chatId: this.readConnectionConfigValue(config, "defaultChatId"),
-          parseMode: this.readConnectionConfigValue(config, "parseMode"),
-          includeSandboxSend: options.includeSandboxSend,
-          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-        });
-      }
-      case "whatsapp": {
-        const accessToken =
-          this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
-          this.resolveConnectionSecret(config, "token", "tokenEnv");
-        const phoneNumberId =
-          this.readConnectionConfigValue(config, "phoneNumberId") ?? this.readConnectionConfigValue(config, "senderId");
-        if (!accessToken || !phoneNumberId) {
-          return { checks: [] };
-        }
-        return runWhatsAppCloudLiveChecks({
-          accessToken,
-          phoneNumberId,
-          defaultTarget: this.readConnectionConfigValue(config, "defaultTarget"),
-          baseUrl: this.readConnectionConfigValue(config, "baseUrl"),
-          apiVersion: this.readConnectionConfigValue(config, "apiVersion"),
-          includeSandboxSend: options.includeSandboxSend,
-          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-        });
-      }
-      case "signal": {
-        const baseUrl =
-          this.readConnectionConfigValue(config, "baseUrl") ?? this.readConnectionConfigValue(config, "bridgeUrl");
-        if (!baseUrl) {
-          return { checks: [] };
-        }
-        return runSignalBridgeLiveChecks({
-          baseUrl,
-          accountId:
-            this.readConnectionConfigValue(config, "accountId") ?? this.readConnectionConfigValue(config, "account"),
-          defaultTarget: resolveChannelConfigTarget(connection.key, config),
-          includeSandboxSend: options.includeSandboxSend,
-          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-        });
-      }
-      case "google-chat":
-        return runWebhookDestinationLiveChecks({
-          channelKey: "google-chat",
-          webhookUrl: this.readConnectionConfigValue(config, "webhookUrl"),
-          includeSandboxSend: options.includeSandboxSend,
-          defaultThreadKey: this.readConnectionConfigValue(config, "defaultThreadKey"),
-          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-        });
-      case "teams":
-        return runWebhookDestinationLiveChecks({
-          channelKey: "teams",
-          webhookUrl: this.readConnectionConfigValue(config, "webhookUrl"),
-          includeSandboxSend: options.includeSandboxSend,
-          cardTitle: this.readConnectionConfigValue(config, "cardTitle"),
-          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-        });
-      case "mattermost": {
-        const token =
-          this.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
-          this.resolveConnectionSecret(config, "token", "tokenEnv");
-        const serverUrl =
-          this.readConnectionConfigValue(config, "serverUrl") ?? this.readConnectionConfigValue(config, "baseUrl");
-        if (!token || !serverUrl) {
-          return { checks: [] };
-        }
-        return runMattermostBotLiveChecks({
-          serverUrl,
-          token,
-          defaultChannel: this.readConnectionConfigValue(config, "defaultChannel"),
-          defaultTeam: this.readConnectionConfigValue(config, "defaultTeam"),
-          includeSandboxSend: options.includeSandboxSend,
-          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-        });
-      }
-      case "imessage": {
-        const bridgeUrl =
-          this.readConnectionConfigValue(config, "bridgeUrl") ??
-          this.readConnectionConfigValue(config, "baseUrl") ??
-          this.readConnectionConfigValue(config, "serverUrl");
-        const password =
-          this.resolveConnectionSecret(config, "password", "passwordEnv") ??
-          this.resolveConnectionSecret(config, "apiPassword", "apiPasswordEnv");
-        if (!bridgeUrl || !password) {
-          return { checks: [] };
-        }
-        return runIMessageBridgeLiveChecks({
-          bridgeUrl,
-          password,
-          defaultHandle:
-            this.readConnectionConfigValue(config, "defaultHandle") ??
-            this.readConnectionConfigValue(config, "defaultTarget"),
-          includeSandboxSend: options.includeSandboxSend,
-          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-        });
-      }
-      case "line": {
-        const channelAccessToken =
-          this.resolveConnectionSecret(config, "channelAccessToken", "channelAccessTokenEnv") ??
-          this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
-          this.resolveConnectionSecret(config, "token", "tokenEnv");
-        if (!channelAccessToken) {
-          return { checks: [] };
-        }
-        return runLineBotLiveChecks({
-          channelAccessToken,
-          defaultTarget: this.readConnectionConfigValue(config, "defaultTarget"),
-          includeSandboxSend: options.includeSandboxSend,
-          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-        });
-      }
-      case "zalo": {
-        const accessToken =
-          this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
-          this.resolveConnectionSecret(config, "token", "tokenEnv");
-        if (!accessToken) {
-          return { checks: [] };
-        }
-        return runZaloBotLiveChecks({
-          accessToken,
-          defaultTarget: resolveChannelConfigTarget(connection.key, config),
-          includeSandboxSend: options.includeSandboxSend,
-          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-        });
-      }
-      case "zalouser": {
-        const baseUrl =
-          this.readConnectionConfigValue(config, "baseUrl") ??
-          this.readConnectionConfigValue(config, "bridgeUrl") ??
-          this.readConnectionConfigValue(config, "serverUrl");
-        if (!baseUrl) {
-          return { checks: [] };
-        }
-        return runZaloUserBridgeLiveChecks({
-          baseUrl,
-          authorizationHeader: this.resolveZaloUserConnectionAuthorizationHeader(config),
-          profile: this.readConnectionConfigValue(config, "profile"),
-          defaultTarget: resolveChannelConfigTarget(connection.key, config),
-          includeSandboxSend: options.includeSandboxSend,
-          fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-        });
-      }
-      default:
-        return { checks: [] };
-    }
+    return integrationDiagnosticsService.runIntegrationConnectionLiveChecks(this, connection, options);
   }
 
   public async syncDiscordRuntime(): Promise<void> {
@@ -10318,47 +8997,6 @@ export class GatewayService {
           error: (error as Error).message,
         },
       });
-    }
-  }
-
-  private async runDiscordConnectionLiveChecks(
-    connection: IntegrationConnection,
-    includeSandboxSend: boolean,
-  ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
-    const config = connection.config;
-    const token =
-      this.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
-      this.resolveConnectionSecret(config, "token", "tokenEnv");
-    const runtimeMode = this.readConnectionConfigValue(config, "runtimeMode") === "gateway" ? "gateway" : "bridge";
-    return runDiscordBotLiveChecks({
-      token,
-      channelId: this.readConnectionConfigValue(config, "defaultChannelId"),
-      runtimeMode,
-      webhookUrl: this.readConnectionConfigValue(config, "webhookUrl"),
-      includeSandboxSend,
-      runtimeStatus: runtimeMode === "gateway" ? this.getDiscordRuntimeStatus(connection.connectionId) : undefined,
-      fetcher: (url, init) => this.fetchWithDiagnosticsTimeout(url, init),
-    });
-  }
-
-  private async runLiveProbeCheck(
-    key: string,
-    label: string,
-    probe: () => Promise<void>,
-  ): Promise<ConnectorDiagnosticReport["checks"][number]> {
-    try {
-      await probe();
-      return {
-        key,
-        status: "pass",
-        message: `${label} succeeded.`,
-      };
-    } catch (error) {
-      return {
-        key,
-        status: "warn",
-        message: `${label} failed: ${(error as Error).message}`,
-      };
     }
   }
 
@@ -10397,24 +9035,6 @@ export class GatewayService {
     return envName ? process.env[envName] : undefined;
   }
 
-  private resolveZaloUserConnectionAuthorizationHeader(config: Record<string, unknown>): string | undefined {
-    const explicit = this.resolveConnectionSecret(config, "authorization", "authorizationEnv");
-    if (explicit) {
-      return explicit;
-    }
-    const bearer =
-      this.resolveConnectionSecret(config, "authToken", "authTokenEnv") ??
-      this.resolveConnectionSecret(config, "accessToken", "accessTokenEnv");
-    if (bearer) {
-      return `Bearer ${bearer}`;
-    }
-    const basic = this.resolveConnectionSecret(config, "basicAuth", "basicAuthEnv");
-    if (basic) {
-      return /^Basic\s+/i.test(basic) ? basic : `Basic ${Buffer.from(basic, "utf8").toString("base64")}`;
-    }
-    return undefined;
-  }
-
   public readDiscordPairings(): DiscordPairingRecord[] {
     return this.storage.systemSettings.get<DiscordPairingRecord[]>(DISCORD_PAIRINGS_SETTING_KEY)?.value ?? [];
   }
@@ -10439,26 +9059,17 @@ export class GatewayService {
     return discordPairingHelpers.touchDiscordPairing(this, pairingId);
   }
 
-  private readDiscordRouteSessions(): DiscordRouteSessionRecord[] {
-    return (
-      this.storage.systemSettings.get<DiscordRouteSessionRecord[]>(DISCORD_ROUTE_SESSIONS_SETTING_KEY)?.value ?? []
-    );
+  /** @internal */ public readDiscordRouteSessions(): discordRuntimeBridgeService.DiscordRouteSessionRecord[] {
+    return discordRuntimeBridgeService.readDiscordRouteSessions(this);
   }
 
-  private writeDiscordRouteSessions(records: DiscordRouteSessionRecord[]): void {
-    this.storage.systemSettings.set(DISCORD_ROUTE_SESSIONS_SETTING_KEY, records);
+  /** @internal */ public writeDiscordRouteSessions(
+    records: discordRuntimeBridgeService.DiscordRouteSessionRecord[],
+  ): void {
+    return discordRuntimeBridgeService.writeDiscordRouteSessions(this, records);
   }
 
-  private findDiscordRouteSession(input: {
-    connectionId: string;
-    target: string;
-  }): DiscordRouteSessionRecord | undefined {
-    return this.readDiscordRouteSessions().find(
-      (item) => item.connectionId === input.connectionId && item.target === input.target,
-    );
-  }
-
-  private resolveDiscordInboundRoute(input: {
+  /** @internal */ public resolveDiscordInboundRoute(input: {
     connectionId: string;
     target: string;
     peer?: string;
@@ -10469,23 +9080,10 @@ export class GatewayService {
     room?: string;
     threadId?: string;
   } {
-    const routeSession = this.findDiscordRouteSession(input);
-    if (!routeSession?.logicalSessionKey) {
-      return {
-        peer: input.peer,
-        room: input.room ?? input.target,
-        threadId: input.threadId,
-      };
-    }
-    const room = input.room ?? input.target;
-    const threadIdBase = input.threadId?.trim() ? `discord_${input.threadId.trim()}` : "discord";
-    return {
-      room,
-      threadId: `${threadIdBase}_${routeSession.logicalSessionKey}`,
-    };
+    return discordRuntimeBridgeService.resolveDiscordInboundRoute(this, input);
   }
 
-  private ensureDiscordChatSession(input: {
+  /** @internal */ public ensureDiscordChatSession(input: {
     connectionId: string;
     target: string;
     displayName?: string;
@@ -10493,60 +9091,14 @@ export class GatewayService {
     room?: string;
     threadId?: string;
   }): ChatSessionRecord {
-    const route = this.resolveDiscordInboundRoute(input);
-    const resolution = resolveSessionRoute({
-      channel: "discord",
-      account: input.connectionId,
-      peer: route.peer,
-      room: route.room,
-      threadId: route.threadId,
-    });
-    const now = new Date().toISOString();
-    this.storage.sessions.upsert({
-      sessionId: resolution.sessionId,
-      sessionKey: resolution.sessionKey,
-      kind: resolution.kind,
-      channel: "discord",
-      account: input.connectionId,
-      displayName: input.displayName?.trim() || undefined,
-      timestamp: now,
-    });
-    this.operatorSummaryCache.invalidate();
-    this.storage.chatSessionMeta.ensure(resolution.sessionId, now, DEFAULT_WORKSPACE_ID);
-    this.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
-    this.ensureChatSessionRuntimeGrants(resolution.sessionId);
-    this.storage.chatSessionBindings.upsert(
-      {
-        sessionId: resolution.sessionId,
-        workspaceId: DEFAULT_WORKSPACE_ID,
-        transport: "integration",
-        connectionId: input.connectionId,
-        target: input.target,
-        writable: true,
-      },
-      now,
-    );
-    return this.requireChatSession(resolution.sessionId);
+    return discordRuntimeBridgeService.ensureDiscordChatSession(this, input);
   }
 
-  private cloneChatSessionContext(sourceSessionId: string, targetSessionId: string): void {
-    if (sourceSessionId === targetSessionId) {
-      return;
-    }
-    const {
-      sessionId: _sourceSessionId,
-      createdAt: _sourceCreatedAt,
-      updatedAt: _sourceUpdatedAt,
-      ...prefsPatch
-    } = this.getChatSessionPrefs(sourceSessionId);
-    this.updateChatSessionPrefs(targetSessionId, prefsPatch);
-    const projectId = this.storage.chatSessionProjects.get(sourceSessionId)?.projectId;
-    if (projectId) {
-      this.assignChatSessionProject(targetSessionId, projectId);
-    }
+  /** @internal */ public cloneChatSessionContext(sourceSessionId: string, targetSessionId: string): void {
+    return discordRuntimeBridgeService.cloneChatSessionContext(this, sourceSessionId, targetSessionId);
   }
 
-  private startNewDiscordRouteSession(input: {
+  /** @internal */ public startNewDiscordRouteSession(input: {
     connectionId: string;
     target: string;
     displayName?: string;
@@ -10555,36 +9107,10 @@ export class GatewayService {
     threadId?: string;
     title?: string;
   }): ChatSessionRecord {
-    const sourceSession = this.ensureDiscordChatSession(input);
-    const records = this.readDiscordRouteSessions();
-    const now = new Date().toISOString();
-    const logicalSessionKey = randomUUID().replaceAll("-", "").slice(0, 12);
-    const nextRecord: DiscordRouteSessionRecord = {
-      connectionId: input.connectionId,
-      target: input.target,
-      logicalSessionKey,
-      sessionId: "",
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.writeDiscordRouteSessions([
-      nextRecord,
-      ...records.filter((item) => !(item.connectionId === input.connectionId && item.target === input.target)),
-    ]);
-    const createdSession = this.ensureDiscordChatSession(input);
-    nextRecord.sessionId = createdSession.sessionId;
-    this.writeDiscordRouteSessions([
-      nextRecord,
-      ...records.filter((item) => !(item.connectionId === input.connectionId && item.target === input.target)),
-    ]);
-    this.cloneChatSessionContext(sourceSession.sessionId, createdSession.sessionId);
-    if (input.title?.trim()) {
-      this.updateChatSession(createdSession.sessionId, { title: input.title.trim() });
-    }
-    return this.requireChatSession(createdSession.sessionId);
+    return discordRuntimeBridgeService.startNewDiscordRouteSession(this, input);
   }
 
-  private async handleDiscordRuntimeSlashCommand(input: {
+  /** @internal */ public async handleDiscordRuntimeSlashCommand(input: {
     connectionId: string;
     target: string;
     actorId: string;
@@ -10596,39 +9122,10 @@ export class GatewayService {
     threadId?: string;
     metadata?: Record<string, unknown>;
   }): Promise<string> {
-    const commandText = input.commandText.trim();
-    if (!commandText.startsWith("/")) {
-      return "Command must start with '/'.";
-    }
-    if (/^\/new(?:\s|$)/i.test(commandText)) {
-      const title = commandText.replace(/^\/new/i, "").trim();
-      const session = this.startNewDiscordRouteSession({
-        connectionId: input.connectionId,
-        target: input.target,
-        displayName: input.displayName,
-        peer: input.peer,
-        room: input.room,
-        threadId: input.threadId,
-        title,
-      });
-      return title
-        ? `Started a new session: ${title} (${session.sessionId.slice(-6)}).`
-        : `Started a new session (${session.sessionId.slice(-6)}).`;
-    }
-
-    const session = this.ensureDiscordChatSession({
-      connectionId: input.connectionId,
-      target: input.target,
-      displayName: input.displayName,
-      peer: input.peer,
-      room: input.room,
-      threadId: input.threadId,
-    });
-    const result = await this.parseChatCommand(session.sessionId, commandText);
-    return result.message;
+    return discordRuntimeBridgeService.handleDiscordRuntimeSlashCommand(this, input);
   }
 
-  private async handleDiscordRuntimeInbound(input: {
+  /** @internal */ public async handleDiscordRuntimeInbound(input: {
     connectionId: string;
     target: string;
     actorId: string;
@@ -10640,79 +9137,13 @@ export class GatewayService {
     threadId?: string;
     metadata?: Record<string, unknown>;
   }): Promise<void> {
-    const route = this.resolveDiscordInboundRoute(input);
-    const ingestResult = await this.ingestChannelMessage(
-      "discord",
-      `discord:${input.connectionId}:${input.sourceMessageId}`,
-      {
-        eventId: input.sourceMessageId,
-        account: input.connectionId,
-        peer: route.peer,
-        room: route.room,
-        threadId: route.threadId,
-        actorId: input.actorId,
-        actorType: "user",
-        content: input.content,
-        displayName: input.displayName,
-        metadata: input.metadata,
-      },
-    );
-    this.setChatSessionBinding({
-      sessionId: ingestResult.session.sessionId,
-      transport: "integration",
-      connectionId: input.connectionId,
-      target: input.target,
-      writable: true,
-    });
-    if (!ingestResult.deduped) {
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
-        try {
-          await this.respondToExistingChatMessage(ingestResult.session.sessionId, input.sourceMessageId);
-          return;
-        } catch (error) {
-          if (!(error instanceof ChatTurnWriteConflictError)) {
-            throw error;
-          }
-          if (attempt >= 3) {
-            this.recordDevDiagnostic({
-              level: "warn",
-              category: "channels",
-              event: "discord.gateway.reply_conflict",
-              message:
-                "Discord inbound message was ingested, but reply generation conflicted with an active chat turn.",
-              context: {
-                connectionId: input.connectionId,
-                sessionId: ingestResult.session.sessionId,
-                sourceMessageId: input.sourceMessageId,
-                attempt,
-                error: error.message,
-              },
-            });
-            return;
-          }
-          await wait(attempt * 750);
-        }
-      }
-    }
+    return discordRuntimeBridgeService.handleDiscordRuntimeInbound(this, input);
   }
 
   public assertDiscordConnection(connection: IntegrationConnection): void {
     if (connection.kind !== "channel" || connection.key !== "discord") {
       throw new Error("Integration connection is not a Discord channel");
     }
-  }
-
-  private hasConnectionEnvValue(config: Record<string, unknown>, key: string): boolean {
-    const envName = this.readConnectionConfigValue(config, key);
-    return Boolean(envName && process.env[envName]?.trim());
-  }
-
-  private isConnectionValueLocalUrl(urlValue: string | undefined): boolean {
-    return connectionUrlHelpers.isConnectionValueLocalUrl(urlValue);
-  }
-
-  private isConnectionUrlRemoteSafe(urlValue: string): boolean {
-    return connectionUrlHelpers.isConnectionUrlRemoteSafe(urlValue);
   }
 
   public isConnectionUrlAllowlisted(urlValue: string): boolean {
@@ -10733,13 +9164,6 @@ export class GatewayService {
 
   /** @internal */ public isUrlAllowlistedInList(urlValue: string, allowlist: string[]): boolean {
     return connectionUrlHelpers.isUrlAllowlistedInList(urlValue, allowlist);
-  }
-
-  private isHostAllowlisted(hostname: string): boolean {
-    if (!this.isNetworkAllowlistEnforced()) {
-      return true;
-    }
-    return this.isHostAllowlistedInList(hostname, this.config.toolPolicy.sandbox.networkAllowlist);
   }
 
   private isNetworkAllowlistEnforced(): boolean {
@@ -13459,62 +11883,6 @@ export function normalizeChatInputParts(
     },
     ...attachmentParts,
   ];
-}
-
-function mapDiagnosticCheckToChannelIssues(check: ConnectorDiagnosticReport["checks"][number]): ChannelSetupIssue[] {
-  if (check.status === "pass") {
-    return [];
-  }
-  const failureCategory = inferFailureCategoryFromDiagnosticKey(check.key);
-  return [
-    {
-      key: check.key,
-      level: check.status === "fail" ? "error" : "warn",
-      message: check.message,
-      failureCategory,
-      nextSteps: defaultNextStepsForFailureCategory(failureCategory),
-    },
-  ];
-}
-
-function inferFailureCategoryFromDiagnosticKey(key: string): ChannelSetupFailureCategory {
-  if (key.includes("token_auth") || key === "auth_live" || key.includes("auth")) {
-    return "credential_rejected";
-  }
-  if (key.includes("channel_access") || key.includes("sandbox_send") || key.includes("target")) {
-    return "destination_mismatch";
-  }
-  if (key.includes("runtime")) {
-    return "bridge_unavailable";
-  }
-  if (key.includes("cleanup")) {
-    return "permission_mismatch";
-  }
-  if (key.includes("url")) {
-    return "platform_unavailable";
-  }
-  return "unknown";
-}
-
-function defaultNextStepsForFailureCategory(category: ChannelSetupFailureCategory): string[] {
-  switch (category) {
-    case "credential_rejected":
-      return ["Replace the credential, then rerun the test."];
-    case "destination_mismatch":
-      return ["Confirm the destination id or handle, then rerun the test."];
-    case "permission_mismatch":
-      return ["Confirm the bot can view and send to the destination channel, then rerun the test."];
-    case "bridge_unavailable":
-      return ["Restart or reconnect the runtime, then rerun the test."];
-    case "platform_unavailable":
-      return ["Check the remote URL or platform availability, then retry."];
-    default:
-      return ["Review the warning details, update the draft, and retry."];
-  }
-}
-
-function firstFailureCategory(issues: ChannelSetupIssue[]): ChannelSetupFailureCategory | undefined {
-  return issues.find((issue) => issue.level === "error" || issue.level === "warn")?.failureCategory;
 }
 
 export function toTitleCase(value: string): string {

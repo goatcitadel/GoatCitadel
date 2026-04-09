@@ -10,7 +10,6 @@ import type {
   AddonHealthCheckRecord,
   AddonInstalledRecord,
   AddonInstallRequest,
-  AddonRuntimeStatus,
   AddonStatusRecord,
   AddonUninstallResponse,
 } from "@goatcitadel/contracts";
@@ -50,12 +49,6 @@ const ARENA_LAUNCH_URL = `http://127.0.0.1:${ARENA_SERVER_PORT}/`;
 const MANIFEST_VERSION: AddonManifestFile = {
   items: {},
 };
-
-interface ArenaHealthPayload {
-  status?: string;
-  uiReady?: boolean;
-  uiEntryPath?: string;
-}
 
 interface ArenaHealthProbe {
   ready: boolean;
@@ -251,17 +244,12 @@ export class AddonsService {
     }
     const alreadyRunning = typeof current.pid === "number" && isProcessRunning(current.pid);
     if (!alreadyRunning) {
-      const child = spawnDetachedCommand(
-        "corepack",
-        ["pnpm", "--filter", "@arena/server", "start"],
-        installedPath,
-        {
-          ARENA_HOST: "127.0.0.1",
-          ARENA_PORT: String(ARENA_SERVER_PORT),
-          CORS_ORIGIN: ARENA_LAUNCH_URL.replace(/\/$/, ""),
-          GOATCITADEL_BASE_URL: "http://127.0.0.1:8787",
-        },
-      );
+      const child = spawnDetachedCommand("corepack", ["pnpm", "--filter", "@arena/server", "start"], installedPath, {
+        ARENA_HOST: "127.0.0.1",
+        ARENA_PORT: String(ARENA_SERVER_PORT),
+        CORS_ORIGIN: ARENA_LAUNCH_URL.replace(/\/$/, ""),
+        GOATCITADEL_BASE_URL: "http://127.0.0.1:8787",
+      });
       current.pid = child.pid;
     }
 
@@ -274,9 +262,7 @@ export class AddonsService {
       launchUrl: current.launchUrl ?? addon.launchUrl,
       runtimeStatus: ready ? "running" : "error",
       updatedAt: new Date().toISOString(),
-      lastError: ready
-        ? undefined
-        : `Arena health check did not report uiReady at ${ARENA_SERVER_HEALTH_URL}.`,
+      lastError: ready ? undefined : `Arena health check did not report uiReady at ${ARENA_SERVER_HEALTH_URL}.`,
     };
     manifest.items[addonId] = updated;
     await this.writeManifest(manifest);
@@ -456,13 +442,16 @@ export class AddonsService {
           if (record.addonId !== addonId) {
             throw new Error(`Invalid add-on manifest at ${this.manifestPath}.`);
           }
-          return [addonId, { ...record, installedPath: assertAddonPathWithinRoot(record.installedPath, this.addonsRootDir) }];
+          return [
+            addonId,
+            { ...record, installedPath: assertAddonPathWithinRoot(record.installedPath, this.addonsRootDir) },
+          ];
         }),
       );
       return { items };
     } catch (error) {
       if (error instanceof SyntaxError || error instanceof z.ZodError || error instanceof Error) {
-        throw new Error(`Invalid add-on manifest at ${this.manifestPath}.`);
+        throw new Error(`Invalid add-on manifest at ${this.manifestPath}.`, { cause: error });
       }
       return structuredClone(MANIFEST_VERSION);
     }
@@ -473,10 +462,7 @@ export class AddonsService {
     await fs.writeFile(this.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   }
 
-  private hasInstalledRecordChanged(
-    previous: AddonInstalledRecord | undefined,
-    next: AddonInstalledRecord,
-  ): boolean {
+  private hasInstalledRecordChanged(previous: AddonInstalledRecord | undefined, next: AddonInstalledRecord): boolean {
     return JSON.stringify(previous) !== JSON.stringify(next);
   }
 }
@@ -521,7 +507,7 @@ function buildWindowsCommand(parts: string[]): string {
 
 function quoteWindowsCommandArg(value: string): string {
   if (value.length === 0) {
-    return "\"\"";
+    return '""';
   }
   if (!/[\s"&()^<>|]/.test(value)) {
     return value;

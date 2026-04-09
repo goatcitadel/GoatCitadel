@@ -7,11 +7,7 @@ import type {
   LearnedMemoryUpdateInput,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
-import { clampInt } from "@goatcitadel/contracts";
-import {
-  extractLearnedMemoryCandidates,
-  shouldExtractLearnedMemoryContent,
-} from "./learned-memory-utils.js";
+import { extractLearnedMemoryCandidates, shouldExtractLearnedMemoryContent } from "./learned-memory-utils.js";
 import type { ServiceContext } from "./service-context.js";
 
 // ── pure helpers (moved from gateway-service.ts bottom) ────────────
@@ -23,9 +19,9 @@ function clamp01(value: number): number {
 function looksSensitive(value: string): boolean {
   const normalized = value.toLowerCase();
   return (
-    /api[_-]?key|token|secret|password|private[_-]?key|bearer\s+[a-z0-9._-]+/i.test(normalized)
-    || /\bsk-[a-z0-9]{8,}\b/i.test(normalized)
-    || /\bghp_[a-z0-9]{10,}\b/i.test(normalized)
+    /api[_-]?key|token|secret|password|private[_-]?key|bearer\s+[a-z0-9._-]+/i.test(normalized) ||
+    /\bsk-[a-z0-9]{8,}\b/i.test(normalized) ||
+    /\bghp_[a-z0-9]{10,}\b/i.test(normalized)
   );
 }
 
@@ -104,13 +100,17 @@ export class ChatLearnedMemoryService {
   } {
     this.ctx.storage.sessions.getBySessionId(sessionId);
     const boundedLimit = Math.max(1, Math.min(limit, 1000));
-    const itemRows = this.ctx.gatewaySql.prepare(`
+    const itemRows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT *
       FROM learned_memory_items
       WHERE session_id = ?
       ORDER BY updated_at DESC, created_at DESC
       LIMIT ?
-    `).all(sessionId, boundedLimit) as Array<{
+    `,
+      )
+      .all(sessionId, boundedLimit) as Array<{
       item_id: string;
       session_id: string;
       item_type: LearnedMemoryItemType;
@@ -122,13 +122,17 @@ export class ChatLearnedMemoryService {
       created_at: string;
       updated_at: string;
     }>;
-    const conflictRows = this.ctx.gatewaySql.prepare(`
+    const conflictRows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT *
       FROM learned_memory_conflicts
       WHERE session_id = ?
       ORDER BY created_at DESC
       LIMIT ?
-    `).all(sessionId, boundedLimit) as Array<{
+    `,
+      )
+      .all(sessionId, boundedLimit) as Array<{
       conflict_id: string;
       session_id: string;
       item_type: LearnedMemoryItemType;
@@ -174,20 +178,26 @@ export class ChatLearnedMemoryService {
     input: LearnedMemoryUpdateInput,
   ): LearnedMemoryItemRecord {
     this.ctx.storage.sessions.getBySessionId(sessionId);
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT * FROM learned_memory_items WHERE item_id = ?
-    `).get(itemId) as {
-      item_id: string;
-      session_id: string;
-      item_type: LearnedMemoryItemType;
-      content: string;
-      confidence: number;
-      status: LearnedMemoryItemRecord["status"];
-      superseded_by_item_id: string | null;
-      redacted: number;
-      created_at: string;
-      updated_at: string;
-    } | undefined;
+    `,
+      )
+      .get(itemId) as
+      | {
+          item_id: string;
+          session_id: string;
+          item_type: LearnedMemoryItemType;
+          content: string;
+          confidence: number;
+          status: LearnedMemoryItemRecord["status"];
+          superseded_by_item_id: string | null;
+          redacted: number;
+          created_at: string;
+          updated_at: string;
+        }
+      | undefined;
     if (!row) {
       throw new Error(`Learned memory item ${itemId} not found.`);
     }
@@ -198,17 +208,21 @@ export class ChatLearnedMemoryService {
     const nextContent = input.content?.trim() || row.content;
     const nextConfidence = clamp01(typeof input.confidence === "number" ? input.confidence : row.confidence);
     const now = new Date().toISOString();
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       UPDATE learned_memory_items
       SET status = @status, content = @content, confidence = @confidence, updated_at = @updatedAt
       WHERE item_id = @itemId
-    `).run({
-      itemId,
-      status: nextStatus,
-      content: nextContent,
-      confidence: nextConfidence,
-      updatedAt: now,
-    });
+    `,
+      )
+      .run({
+        itemId,
+        status: nextStatus,
+        content: nextContent,
+        confidence: nextConfidence,
+        updatedAt: now,
+      });
     return {
       itemId: row.item_id,
       sessionId: row.session_id,
@@ -232,7 +246,11 @@ export class ChatLearnedMemoryService {
     conflicts: LearnedMemoryConflictRecord[];
   }> {
     this.ctx.storage.sessions.getBySessionId(sessionId);
-    this.ctx.gatewaySql.prepare("DELETE FROM learned_memory_sources WHERE item_id IN (SELECT item_id FROM learned_memory_items WHERE session_id = ?)").run(sessionId);
+    this.ctx.gatewaySql
+      .prepare(
+        "DELETE FROM learned_memory_sources WHERE item_id IN (SELECT item_id FROM learned_memory_items WHERE session_id = ?)",
+      )
+      .run(sessionId);
     this.ctx.gatewaySql.prepare("DELETE FROM learned_memory_conflicts WHERE session_id = ?").run(sessionId);
     this.ctx.gatewaySql.prepare("DELETE FROM learned_memory_items WHERE session_id = ?").run(sessionId);
 
@@ -255,7 +273,9 @@ export class ChatLearnedMemoryService {
         continue;
       }
       const role = event.type === "message.user" ? "user" : "assistant";
-      const content = extractStringFromUnknown((event.payload as { message?: { content?: unknown } })?.message?.content);
+      const content = extractStringFromUnknown(
+        (event.payload as { message?: { content?: unknown } })?.message?.content,
+      );
       if (!content.trim()) {
         continue;
       }
@@ -334,7 +354,9 @@ export class ChatLearnedMemoryService {
   }): LearnedMemoryItemRecord {
     const now = new Date().toISOString();
     const itemId = randomUUID();
-    this.ctx.gatewaySql.prepare(`
+    this.ctx.gatewaySql
+      .prepare(
+        `
       INSERT INTO learned_memory_items (
         item_id, session_id, item_type, content, confidence, status, superseded_by_item_id,
         redacted, disabled_reason, created_at, updated_at
@@ -342,28 +364,34 @@ export class ChatLearnedMemoryService {
         @itemId, @sessionId, @itemType, @content, @confidence, @status, NULL,
         @redacted, NULL, @createdAt, @updatedAt
       )
-    `).run({
-      itemId,
-      sessionId: input.sessionId,
-      itemType: input.itemType,
-      content: input.content,
-      confidence: clamp01(input.confidence),
-      status: input.status,
-      redacted: input.redacted ? 1 : 0,
-      createdAt: now,
-      updatedAt: now,
-    });
-    this.ctx.gatewaySql.prepare(`
+    `,
+      )
+      .run({
+        itemId,
+        sessionId: input.sessionId,
+        itemType: input.itemType,
+        content: input.content,
+        confidence: clamp01(input.confidence),
+        status: input.status,
+        redacted: input.redacted ? 1 : 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+    this.ctx.gatewaySql
+      .prepare(
+        `
       INSERT INTO learned_memory_sources (source_id, item_id, source_kind, source_ref, snippet, created_at)
       VALUES (@sourceId, @itemId, @sourceKind, @sourceRef, @snippet, @createdAt)
-    `).run({
-      sourceId: randomUUID(),
-      itemId,
-      sourceKind: input.sourceKind,
-      sourceRef: input.sourceRef,
-      snippet: input.snippet,
-      createdAt: now,
-    });
+    `,
+      )
+      .run({
+        sourceId: randomUUID(),
+        itemId,
+        sourceKind: input.sourceKind,
+        sourceRef: input.sourceRef,
+        snippet: input.snippet,
+        createdAt: now,
+      });
     return {
       itemId,
       sessionId: input.sessionId,
@@ -390,7 +418,9 @@ export class ChatLearnedMemoryService {
     if (!normalized) {
       return;
     }
-    const existing = this.ctx.gatewaySql.prepare(`
+    const existing = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT *
       FROM learned_memory_items
       WHERE session_id = @sessionId
@@ -398,10 +428,12 @@ export class ChatLearnedMemoryService {
         AND status IN ('active', 'conflict')
       ORDER BY updated_at DESC
       LIMIT 5
-    `).all({
-      sessionId: input.sessionId,
-      itemType: input.itemType,
-    }) as Array<{
+    `,
+      )
+      .all({
+        sessionId: input.sessionId,
+        itemType: input.itemType,
+      }) as Array<{
       item_id: string;
       content: string;
       confidence: number;
@@ -410,26 +442,34 @@ export class ChatLearnedMemoryService {
 
     const duplicate = existing.find((row) => normalizeMemoryText(row.content) === normalized);
     if (duplicate) {
-      this.ctx.gatewaySql.prepare(`
+      this.ctx.gatewaySql
+        .prepare(
+          `
         UPDATE learned_memory_items
         SET confidence = @confidence, updated_at = @updatedAt
         WHERE item_id = @itemId
-      `).run({
-        itemId: duplicate.item_id,
-        confidence: Math.max(clamp01(input.confidence), Number(duplicate.confidence || 0)),
-        updatedAt: new Date().toISOString(),
-      });
-      this.ctx.gatewaySql.prepare(`
+      `,
+        )
+        .run({
+          itemId: duplicate.item_id,
+          confidence: Math.max(clamp01(input.confidence), Number(duplicate.confidence || 0)),
+          updatedAt: new Date().toISOString(),
+        });
+      this.ctx.gatewaySql
+        .prepare(
+          `
         INSERT INTO learned_memory_sources (source_id, item_id, source_kind, source_ref, snippet, created_at)
         VALUES (@sourceId, @itemId, @sourceKind, @sourceRef, @snippet, @createdAt)
-      `).run({
-        sourceId: randomUUID(),
-        itemId: duplicate.item_id,
-        sourceKind: input.sourceKind,
-        sourceRef: input.sourceRef,
-        snippet: input.snippet,
-        createdAt: new Date().toISOString(),
-      });
+      `,
+        )
+        .run({
+          sourceId: randomUUID(),
+          itemId: duplicate.item_id,
+          sourceKind: input.sourceKind,
+          sourceRef: input.sourceRef,
+          snippet: input.snippet,
+          createdAt: new Date().toISOString(),
+        });
       return;
     }
 
@@ -452,7 +492,9 @@ export class ChatLearnedMemoryService {
             sourceRef: input.sourceRef,
             snippet: input.snippet,
           });
-          this.ctx.gatewaySql.prepare(`
+          this.ctx.gatewaySql
+            .prepare(
+              `
             INSERT INTO learned_memory_conflicts (
               conflict_id, session_id, item_type, existing_item_id, incoming_item_id, incoming_content,
               status, resolution_note, created_at, resolved_at
@@ -460,15 +502,17 @@ export class ChatLearnedMemoryService {
               @conflictId, @sessionId, @itemType, @existingItemId, @incomingItemId, @incomingContent,
               'open', NULL, @createdAt, NULL
             )
-          `).run({
-            conflictId: randomUUID(),
-            sessionId: input.sessionId,
-            itemType: input.itemType,
-            existingItemId: current.item_id,
-            incomingItemId: incomingItem.itemId,
-            incomingContent: input.content,
-            createdAt: new Date().toISOString(),
-          });
+          `,
+            )
+            .run({
+              conflictId: randomUUID(),
+              sessionId: input.sessionId,
+              itemType: input.itemType,
+              existingItemId: current.item_id,
+              incomingItemId: incomingItem.itemId,
+              incomingContent: input.content,
+              createdAt: new Date().toISOString(),
+            });
           return;
         }
         if (incomingConfidence > existingConfidence + 0.2) {
@@ -483,15 +527,19 @@ export class ChatLearnedMemoryService {
             sourceRef: input.sourceRef,
             snippet: input.snippet,
           });
-          this.ctx.gatewaySql.prepare(`
+          this.ctx.gatewaySql
+            .prepare(
+              `
             UPDATE learned_memory_items
             SET status = 'superseded', superseded_by_item_id = @supersededByItemId, updated_at = @updatedAt
             WHERE item_id = @itemId
-          `).run({
-            itemId: current.item_id,
-            supersededByItemId: next.itemId,
-            updatedAt: new Date().toISOString(),
-          });
+          `,
+            )
+            .run({
+              itemId: current.item_id,
+              supersededByItemId: next.itemId,
+              updatedAt: new Date().toISOString(),
+            });
           return;
         }
       }

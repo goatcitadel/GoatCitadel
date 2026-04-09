@@ -1,12 +1,11 @@
+/* eslint-disable max-lines -- Channel setup definitions are intentionally kept together as one canonical registry. */
 import type {
-  ChannelArchetype,
   ChannelSetupDefinition,
   ChannelSetupDraft,
   ChannelSetupFailureMapEntry,
   ChannelSetupHydrationResult,
   ChannelSetupIssue,
   ChannelSetupNoticeTone,
-  ChannelSetupValidationLevel,
   IntegrationCatalogEntry,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
@@ -96,7 +95,8 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
       estimatedMinutes: 10,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
-      introSummary: "Discord bot-token setups default to gateway mode so GoatCitadel behaves like a real online bot. Bridge remains available only as an advanced webhook-only fallback.",
+      introSummary:
+        "Discord bot-token setups default to gateway mode so GoatCitadel behaves like a real online bot. Bridge remains available only as an advanced webhook-only fallback.",
       prerequisites: [
         "A Discord account with access to the target server.",
         "Permission to install bots or create an incoming webhook if you want the legacy bridge-only fallback.",
@@ -108,8 +108,12 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           kind: "intro",
           title: "What this connection does",
           body: [
-            paragraph("GoatCitadel treats a Discord bot token as a first-class bot runtime. By default it logs the bot into the official Discord gateway so the bot can appear online, receive inbound DMs, and process allowlisted guild traffic."),
-            paragraph("Bridge mode still exists for advanced webhook-only or outbound-only cases, but it is no longer the default path."),
+            paragraph(
+              "GoatCitadel treats a Discord bot token as a first-class bot runtime. By default it logs the bot into the official Discord gateway so the bot can appear online, receive inbound DMs, and process allowlisted guild traffic.",
+            ),
+            paragraph(
+              "Bridge mode still exists for advanced webhook-only or outbound-only cases, but it is no longer the default path.",
+            ),
             note("warning", "If you want the bot to appear online, do not use webhook-only bridge mode."),
           ],
         },
@@ -135,7 +139,9 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           kind: "instruction",
           title: "Create the Discord application and bot",
           body: [
-            paragraph("Open the Discord Developer Portal, create a new application, then open the Bot tab and add a bot user."),
+            paragraph(
+              "Open the Discord Developer Portal, create a new application, then open the Bot tab and add a bot user.",
+            ),
             linkBlock("Discord Developer Portal", "https://discord.com/developers/applications"),
           ],
           checklist: [
@@ -149,7 +155,9 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           kind: "instruction",
           title: "Add the bot to your server",
           body: [
-            paragraph("Use the Installation section to generate an install link with the bot scope and the minimum permissions needed in your sandbox channel. Gateway mode also needs the bot installed wherever you want inbound routing."),
+            paragraph(
+              "Use the Installation section to generate an install link with the bot scope and the minimum permissions needed in your sandbox channel. Gateway mode also needs the bot installed wherever you want inbound routing.",
+            ),
           ],
           checklist: [
             check("bot-installed", "Install the bot into the target server"),
@@ -162,7 +170,9 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           kind: "instruction",
           title: "Optional legacy bridge-only webhook path",
           body: [
-            paragraph("If you intentionally want a webhook-only outbound connection, add a Discord webhook URL in advanced settings. That path stays on bridge mode and does not support reactions, inbound routing, or online presence."),
+            paragraph(
+              "If you intentionally want a webhook-only outbound connection, add a Discord webhook URL in advanced settings. That path stays on bridge mode and does not support reactions, inbound routing, or online presence.",
+            ),
           ],
         },
         {
@@ -176,10 +186,16 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               type: "text",
               required: false,
               explanation: "Preferred path. Name of the environment variable that stores your Discord bot token.",
-              whyNeeded: "Bot-token setups default to gateway mode so GoatCitadel can create the persistent online bot session.",
-              whereToFind: [paragraph("Create or reuse an env var such as DISCORD_BOT_TOKEN and store the actual token there.")],
+              whyNeeded:
+                "Bot-token setups default to gateway mode so GoatCitadel can create the persistent online bot session.",
+              whereToFind: [
+                paragraph("Create or reuse an env var such as DISCORD_BOT_TOKEN and store the actual token there."),
+              ],
               looksLike: "DISCORD_BOT_TOKEN",
-              commonMistakes: ["Pasting the token value here instead of the env var name.", "Using an env var that is not available to the gateway process."],
+              commonMistakes: [
+                "Pasting the token value here instead of the env var name.",
+                "Using an env var that is not available to the gateway process.",
+              ],
               canChangeLater: true,
               placeholder: "DISCORD_BOT_TOKEN",
             },
@@ -190,9 +206,14 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               required: false,
               explanation: "Optional direct token entry for manual fallback or temporary debugging.",
               whyNeeded: "Use only if you cannot supply an env reference right now.",
-              whereToFind: [paragraph("In the Discord Developer Portal, open your application, then open the Bot tab.")],
+              whereToFind: [
+                paragraph("In the Discord Developer Portal, open your application, then open the Bot tab."),
+              ],
               looksLike: "A long opaque token string.",
-              commonMistakes: ["Pasting the application id instead of the bot token.", "Leaving a temporary token here after you intended to switch to env-backed config."],
+              commonMistakes: [
+                "Pasting the application id instead of the bot token.",
+                "Leaving a temporary token here after you intended to switch to env-backed config.",
+              ],
               sensitive: true,
               canChangeLater: true,
               placeholder: "Paste token directly only if needed",
@@ -204,7 +225,9 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               required: true,
               explanation: "The channel GoatCitadel should use when no explicit target is provided.",
               whyNeeded: "Needed for diagnostics, default sends, and as the seed channel for gateway allowlisting.",
-              whereToFind: [paragraph("Enable Developer Mode in Discord, right-click the channel, then choose Copy Channel ID.")],
+              whereToFind: [
+                paragraph("Enable Developer Mode in Discord, right-click the channel, then choose Copy Channel ID."),
+              ],
               looksLike: "123456789012345678",
               commonMistakes: ["Copying a message id or server id instead of the channel id."],
               canChangeLater: true,
@@ -215,7 +238,9 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               type: "id",
               required: false,
               explanation: "An optional server id for advanced routing and troubleshooting.",
-              whereToFind: [paragraph("Enable Developer Mode in Discord, right-click the server, then choose Copy Server ID.")],
+              whereToFind: [
+                paragraph("Enable Developer Mode in Discord, right-click the server, then choose Copy Server ID."),
+              ],
               looksLike: "987654321098765432",
               canChangeLater: true,
             },
@@ -224,9 +249,15 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               label: "Optional bridge webhook URL",
               type: "url",
               required: false,
-              explanation: "Advanced legacy bridge path for outbound sends when you intentionally want webhook-only delivery.",
-              whyNeeded: "Used only when you explicitly want the older bridge behavior instead of the default gateway bot runtime.",
-              whereToFind: [paragraph("Open channel settings in Discord, then Integrations or Webhooks, then copy the webhook URL.")],
+              explanation:
+                "Advanced legacy bridge path for outbound sends when you intentionally want webhook-only delivery.",
+              whyNeeded:
+                "Used only when you explicitly want the older bridge behavior instead of the default gateway bot runtime.",
+              whereToFind: [
+                paragraph(
+                  "Open channel settings in Discord, then Integrations or Webhooks, then copy the webhook URL.",
+                ),
+              ],
               looksLike: "https://discord.com/api/webhooks/...",
               commonMistakes: ["Using the channel URL instead of the webhook URL."],
               sensitive: true,
@@ -238,7 +269,8 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               type: "select",
               required: false,
               defaultValue: "pairing",
-              explanation: "Gateway mode only. Pairing asks unknown DM senders to complete approval, open routes DMs immediately, and disabled ignores DMs.",
+              explanation:
+                "Gateway mode only. Pairing asks unknown DM senders to complete approval, open routes DMs immediately, and disabled ignores DMs.",
               options: [
                 { value: "pairing", label: "pairing" },
                 { value: "open", label: "open" },
@@ -252,7 +284,8 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
               type: "select",
               required: false,
               defaultValue: "allowlist",
-              explanation: "Gateway mode only. Allowlist processes only configured guilds and channels; off ignores guild traffic entirely.",
+              explanation:
+                "Gateway mode only. Allowlist processes only configured guilds and channels; off ignores guild traffic entirely.",
               options: [
                 { value: "allowlist", label: "allowlist" },
                 { value: "off", label: "off" },
@@ -266,7 +299,9 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate and test the connection",
           body: [
-            paragraph("Bridge mode runs a complete probe: token auth, channel access, and an optional sandbox send/delete check. Gateway mode also reports whether the persistent Discord runtime is ready."),
+            paragraph(
+              "Bridge mode runs a complete probe: token auth, channel access, and an optional sandbox send/delete check. Gateway mode also reports whether the persistent Discord runtime is ready.",
+            ),
           ],
           troubleshooting: definitionFailures("token"),
         },
@@ -275,7 +310,9 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           kind: "confirm",
           title: "Finish setup",
           body: [
-            paragraph("For the normal bot-token path, setup is complete when the runtime reports a live Discord session and your sandbox channel passes the probe."),
+            paragraph(
+              "For the normal bot-token path, setup is complete when the runtime reports a live Discord session and your sandbox channel passes the probe.",
+            ),
           ],
           successCriteria: [
             "Token auth succeeds or the advanced webhook-only bridge path is intentionally configured.",
@@ -329,9 +366,10 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
     hydrate(connection) {
       const config = connection.config;
       const explicitRuntimeMode = readString(config, "runtimeMode");
-      const hydratedRuntimeMode = explicitRuntimeMode === "bridge" || explicitRuntimeMode === "gateway"
-        ? explicitRuntimeMode
-        : inferDiscordConfigRuntimeMode(config);
+      const hydratedRuntimeMode =
+        explicitRuntimeMode === "bridge" || explicitRuntimeMode === "gateway"
+          ? explicitRuntimeMode
+          : inferDiscordConfigRuntimeMode(config);
       const hasConfiguredSecret = hasAnyConfiguredSecret(config, [
         ["botToken", "botTokenEnv", "token", "tokenEnv"],
         ["webhookUrl", "webhookUrlEnv"],
@@ -358,7 +396,9 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
             guildPolicy: "configured",
           },
           warnings: hasConfiguredSecret
-            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            ? [
+                "Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+              ]
             : [],
           rawLegacyConfig: config,
         },
@@ -371,12 +411,14 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
         botTokenEnv: readString(draft.draft, "botTokenEnv") ?? readLegacyString(draft, "botTokenEnv", "tokenEnv"),
         defaultChannelId: readString(draft.draft, "defaultChannelId"),
         defaultGuildId: readString(draft.draft, "defaultGuildId"),
-        inboundDmPolicy: runtimeMode === "gateway" ? readString(draft.draft, "inboundDmPolicy") ?? "pairing" : undefined,
-        guildPolicy: runtimeMode === "gateway" ? readString(draft.draft, "guildPolicy") ?? "allowlist" : undefined,
+        inboundDmPolicy:
+          runtimeMode === "gateway" ? (readString(draft.draft, "inboundDmPolicy") ?? "pairing") : undefined,
+        guildPolicy: runtimeMode === "gateway" ? (readString(draft.draft, "guildPolicy") ?? "allowlist") : undefined,
         botToken: readString(draft.draft, "botToken") ?? readLegacyString(draft, "botToken", "token"),
-        webhookUrl: runtimeMode === "bridge"
-          ? readString(draft.draft, "webhookUrl") ?? readLegacyString(draft, "webhookUrl", "webhookUrlEnv")
-          : undefined,
+        webhookUrl:
+          runtimeMode === "bridge"
+            ? (readString(draft.draft, "webhookUrl") ?? readLegacyString(draft, "webhookUrl", "webhookUrlEnv"))
+            : undefined,
       });
     },
     validate(draft) {
@@ -384,23 +426,26 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
       const runtimeMode = resolveDiscordRuntimeMode(draft);
       const defaultChannelId = readString(draft.draft, "defaultChannelId");
       const hasConfiguredBotToken = Boolean(
-        readString(draft.draft, "botToken")
-        || readString(draft.draft, "botTokenEnv")
-        || draft.hydration?.fieldState.botToken === "configured"
-        || draft.hydration?.fieldState.botTokenEnv === "configured",
+        readString(draft.draft, "botToken") ||
+        readString(draft.draft, "botTokenEnv") ||
+        draft.hydration?.fieldState.botToken === "configured" ||
+        draft.hydration?.fieldState.botTokenEnv === "configured",
       );
       const hasConfiguredWebhook = Boolean(
-        readString(draft.draft, "webhookUrl")
-        || draft.hydration?.fieldState.webhookUrl === "configured",
+        readString(draft.draft, "webhookUrl") || draft.hydration?.fieldState.webhookUrl === "configured",
       );
       if (!defaultChannelId) {
         issues.push(requiredFieldIssue("defaultChannelId", "Default channel ID is required."));
       } else if (!/^\d{10,}$/.test(defaultChannelId)) {
-        issues.push(malformedFieldIssue("defaultChannelId", "Default channel ID should look like a Discord numeric ID."));
+        issues.push(
+          malformedFieldIssue("defaultChannelId", "Default channel ID should look like a Discord numeric ID."),
+        );
       }
       if (runtimeMode === "gateway") {
         if (!hasConfiguredBotToken) {
-          issues.push(requiredFieldIssue("botTokenEnv", "Gateway mode requires a Discord bot token or bot token env var."));
+          issues.push(
+            requiredFieldIssue("botTokenEnv", "Gateway mode requires a Discord bot token or bot token env var."),
+          );
         }
       } else if (!hasConfiguredBotToken && !hasConfiguredWebhook) {
         issues.push({
@@ -408,7 +453,9 @@ function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
           level: "error",
           message: "Bridge mode requires either a Discord bot token/env var or a webhook URL.",
           failureCategory: "missing_input",
-          nextSteps: ["Add a bot token env var for the recommended bridge path, or provide a webhook URL for the legacy bridge-only path."],
+          nextSteps: [
+            "Add a bot token env var for the recommended bridge path, or provide a webhook URL for the legacy bridge-only path.",
+          ],
         });
       }
       if (readString(draft.draft, "webhookUrl")) {
@@ -432,7 +479,8 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       estimatedMinutes: 10,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
-      introSummary: "Connect Slack using a bot token for full workspace actions, with an optional incoming webhook fallback and a signing secret for inbound event parity.",
+      introSummary:
+        "Connect Slack using a bot token for full workspace actions, with an optional incoming webhook fallback and a signing secret for inbound event parity.",
       prerequisites: [
         "A Slack workspace where you can install apps.",
         "Permission to add scopes and install the app into the workspace.",
@@ -444,8 +492,13 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           kind: "intro",
           title: "What this connection does",
           body: [
-            paragraph("GoatCitadel can send messages into Slack and, with a bot token, can use richer workspace-aware behavior than a plain webhook."),
-            note("warning", "Use bot token mode for the best experience. Keep webhook mode only for simpler send-only routing."),
+            paragraph(
+              "GoatCitadel can send messages into Slack and, with a bot token, can use richer workspace-aware behavior than a plain webhook.",
+            ),
+            note(
+              "warning",
+              "Use bot token mode for the best experience. Keep webhook mode only for simpler send-only routing.",
+            ),
           ],
         },
         {
@@ -463,7 +516,9 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           kind: "instruction",
           title: "Create and install the Slack app",
           body: [
-            paragraph("Create a Slack app from scratch, add bot scopes such as chat:write, then install or reinstall it into the workspace."),
+            paragraph(
+              "Create a Slack app from scratch, add bot scopes such as chat:write, then install or reinstall it into the workspace.",
+            ),
             linkBlock("Slack OAuth v2", "https://api.slack.com/authentication/oauth-v2"),
             linkBlock("Slack first app tutorial", "https://api.slack.com/tutorials/first-bolt-app"),
           ],
@@ -486,9 +541,14 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
               required: false,
               explanation: "The Slack bot token used for workspace-aware API calls and live auth checks.",
               whyNeeded: "Used to validate the app installation and post as the bot.",
-              whereToFind: [paragraph("Open your Slack app, then OAuth & Permissions, then copy the Bot User OAuth Token.")],
+              whereToFind: [
+                paragraph("Open your Slack app, then OAuth & Permissions, then copy the Bot User OAuth Token."),
+              ],
               looksLike: "xoxb-...",
-              commonMistakes: ["Copying a user token instead of the bot token.", "Forgetting to reinstall the app after changing scopes."],
+              commonMistakes: [
+                "Copying a user token instead of the bot token.",
+                "Forgetting to reinstall the app after changing scopes.",
+              ],
               sensitive: true,
               canChangeLater: true,
             },
@@ -499,7 +559,11 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
               required: true,
               explanation: "The default Slack channel or id GoatCitadel should use.",
               whyNeeded: "Used for tests and default outbound sends.",
-              whereToFind: [paragraph("Use the channel name like #ops-sandbox or copy the channel id for private channels if needed.")],
+              whereToFind: [
+                paragraph(
+                  "Use the channel name like #ops-sandbox or copy the channel id for private channels if needed.",
+                ),
+              ],
               looksLike: "#ops-sandbox or C0123456789",
               commonMistakes: ["Using a display title instead of the actual channel reference."],
               canChangeLater: true,
@@ -520,7 +584,9 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
               required: false,
               explanation: "Optional webhook fallback for simpler outbound posting.",
               whyNeeded: "Useful when you need a lightweight send-only path or a fallback route.",
-              whereToFind: [paragraph("Enable Incoming Webhooks in your Slack app, then copy the generated webhook URL.")],
+              whereToFind: [
+                paragraph("Enable Incoming Webhooks in your Slack app, then copy the generated webhook URL."),
+              ],
               looksLike: "https://hooks.slack.com/services/...",
               commonMistakes: ["Pasting a workspace URL instead of the incoming webhook URL."],
               sensitive: true,
@@ -532,10 +598,18 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
               type: "secret",
               required: false,
               explanation: "Slack request signing secret for verified inbound event routing.",
-              whyNeeded: "Required if you want GoatCitadel to accept signed Slack Events API callbacks and reply inside Slack conversations.",
-              whereToFind: [paragraph("Open your Slack app, then Basic Information, then App Credentials, and copy the Signing Secret.")],
+              whyNeeded:
+                "Required if you want GoatCitadel to accept signed Slack Events API callbacks and reply inside Slack conversations.",
+              whereToFind: [
+                paragraph(
+                  "Open your Slack app, then Basic Information, then App Credentials, and copy the Signing Secret.",
+                ),
+              ],
               looksLike: "A short mixed-case secret value from Slack.",
-              commonMistakes: ["Pasting a bot token here instead of the signing secret.", "Forgetting to configure the Events API request URL after saving the secret."],
+              commonMistakes: [
+                "Pasting a bot token here instead of the signing secret.",
+                "Forgetting to configure the Events API request URL after saving the secret.",
+              ],
               sensitive: true,
               canChangeLater: true,
             },
@@ -546,7 +620,9 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate and test the connection",
           body: [
-            paragraph("GoatCitadel validates the bot token when present and sends a sandbox message plus cleanup probe for bot-token Slack connections."),
+            paragraph(
+              "GoatCitadel validates the bot token when present and sends a sandbox message plus cleanup probe for bot-token Slack connections.",
+            ),
             paragraph("Webhook-only Slack fallback connections still rely on manual confirmation after finalize."),
           ],
           troubleshooting: definitionFailures("token"),
@@ -621,18 +697,23 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
           fieldState: {
-            botToken: readString(config, "botToken") || readString(config, "botTokenEnv") || readString(config, "token") || readString(config, "tokenEnv")
-              ? "configured"
-              : "missing",
+            botToken:
+              readString(config, "botToken") ||
+              readString(config, "botTokenEnv") ||
+              readString(config, "token") ||
+              readString(config, "tokenEnv")
+                ? "configured"
+                : "missing",
             defaultChannel: readString(config, "defaultChannel") ? "configured" : "missing",
             defaultThreadTs: readString(config, "defaultThreadTs") ? "configured" : "unknown",
             webhookUrl: readString(config, "webhookUrl") ? "configured" : "unknown",
-            signingSecret: readString(config, "signingSecret") || readString(config, "signingSecretEnv")
-              ? "configured"
-              : "unknown",
+            signingSecret:
+              readString(config, "signingSecret") || readString(config, "signingSecretEnv") ? "configured" : "unknown",
           },
           warnings: hasConfiguredSecret
-            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            ? [
+                "Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+              ]
             : [],
           rawLegacyConfig: config,
         },
@@ -661,14 +742,9 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       const signingSecret = readString(draft.draft, "signingSecret");
       const defaultChannel = readString(draft.draft, "defaultChannel");
       const hasConfiguredToken = Boolean(
-        token
-        || readString(draft.draft, "botTokenEnv")
-        || draft.hydration?.fieldState.botToken === "configured",
+        token || readString(draft.draft, "botTokenEnv") || draft.hydration?.fieldState.botToken === "configured",
       );
-      const hasConfiguredWebhook = Boolean(
-        webhookUrl
-        || draft.hydration?.fieldState.webhookUrl === "configured",
-      );
+      const hasConfiguredWebhook = Boolean(webhookUrl || draft.hydration?.fieldState.webhookUrl === "configured");
       if (!hasConfiguredToken && !hasConfiguredWebhook) {
         issues.push({
           key: "slack_auth_missing",
@@ -705,7 +781,8 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
-      introSummary: "Connect Telegram by creating a bot with BotFather, choosing a default chat, and optionally configuring a webhook secret for inbound routing parity.",
+      introSummary:
+        "Connect Telegram by creating a bot with BotFather, choosing a default chat, and optionally configuring a webhook secret for inbound routing parity.",
       prerequisites: [
         "A Telegram account.",
         "Access to the target chat, group, or channel.",
@@ -739,9 +816,7 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
           id: "destination",
           kind: "instruction",
           title: "Prepare the destination chat",
-          body: [
-            paragraph("Add the bot to the target group or channel and grant it permission to send messages."),
-          ],
+          body: [paragraph("Add the bot to the target group or channel and grant it permission to send messages.")],
           checklist: [
             check("bot-added", "Add the bot to the target chat or channel"),
             check("permissions", "Confirm the bot can post"),
@@ -774,7 +849,10 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               whyNeeded: "Used for tests and default outbound sends.",
               whereToFind: [paragraph("Use a chat id lookup workflow or the @channel_name for public channels.")],
               looksLike: "123456789 or @channel_name",
-              commonMistakes: ["Copying a message id instead of the chat id.", "Using a display name instead of the @handle."],
+              commonMistakes: [
+                "Copying a message id instead of the chat id.",
+                "Using a display name instead of the @handle.",
+              ],
               canChangeLater: true,
             },
             {
@@ -796,11 +874,20 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               label: "Webhook secret ENV var",
               type: "text",
               required: false,
-              explanation: "Optional. Env var name for the Telegram webhook secret token used to verify inbound Bot API webhooks.",
-              whyNeeded: "Enables inbound Telegram message routing without storing the secret directly in the connection config.",
-              whereToFind: [paragraph("Create a random secret token, store it in an env var such as TELEGRAM_WEBHOOK_SECRET, and configure the same token in Telegram's setWebhook call.")],
+              explanation:
+                "Optional. Env var name for the Telegram webhook secret token used to verify inbound Bot API webhooks.",
+              whyNeeded:
+                "Enables inbound Telegram message routing without storing the secret directly in the connection config.",
+              whereToFind: [
+                paragraph(
+                  "Create a random secret token, store it in an env var such as TELEGRAM_WEBHOOK_SECRET, and configure the same token in Telegram's setWebhook call.",
+                ),
+              ],
               looksLike: "TELEGRAM_WEBHOOK_SECRET",
-              commonMistakes: ["Pasting the actual secret here instead of the env var name.", "Forgetting to use the same secret token when configuring the Telegram webhook."],
+              commonMistakes: [
+                "Pasting the actual secret here instead of the env var name.",
+                "Forgetting to use the same secret token when configuring the Telegram webhook.",
+              ],
               canChangeLater: true,
               placeholder: "TELEGRAM_WEBHOOK_SECRET",
             },
@@ -810,9 +897,13 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               type: "secret",
               required: false,
               explanation: "Optional direct secret-token entry for Telegram inbound webhook verification.",
-              whyNeeded: "Lets GoatCitadel verify Telegram webhook deliveries when env-backed secret storage is not available yet.",
+              whyNeeded:
+                "Lets GoatCitadel verify Telegram webhook deliveries when env-backed secret storage is not available yet.",
               looksLike: "A long random secret token.",
-              commonMistakes: ["Reusing the bot token instead of a separate webhook secret.", "Configuring a secret here but a different secret in Telegram."],
+              commonMistakes: [
+                "Reusing the bot token instead of a separate webhook secret.",
+                "Configuring a secret here but a different secret in Telegram.",
+              ],
               sensitive: true,
               canChangeLater: true,
               placeholder: "Paste only if you cannot use an env var",
@@ -824,7 +915,9 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate and test the connection",
           body: [
-            paragraph("GoatCitadel verifies the token with Telegram and sends a sandbox message plus cleanup probe before you finalize."),
+            paragraph(
+              "GoatCitadel verifies the token with Telegram and sends a sandbox message plus cleanup probe before you finalize.",
+            ),
           ],
           troubleshooting: definitionFailures("token"),
         },
@@ -832,13 +925,8 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
           id: "finish",
           kind: "confirm",
           title: "Finish setup",
-          body: [
-            paragraph("After finalizing, send a sandbox message to confirm the bot can reach the selected chat."),
-          ],
-          successCriteria: [
-            "The token validates successfully.",
-            "A default chat target is configured.",
-          ],
+          body: [paragraph("After finalizing, send a sandbox message to confirm the bot can reach the selected chat.")],
+          successCriteria: ["The token validates successfully.", "A default chat target is configured."],
         },
       ],
     },
@@ -884,9 +972,7 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
     definition,
     hydrate(connection) {
       const config = connection.config;
-      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [
-        ["botToken", "botTokenEnv", "token", "tokenEnv"],
-      ]);
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["botToken", "botTokenEnv", "token", "tokenEnv"]]);
       return {
         draft: {
           botTokenEnv: readString(config, "botTokenEnv") ?? readString(config, "tokenEnv"),
@@ -897,17 +983,25 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
           fieldState: {
-            botToken: readString(config, "botToken") || readString(config, "botTokenEnv") || readString(config, "token") || readString(config, "tokenEnv")
-              ? "configured"
-              : "missing",
+            botToken:
+              readString(config, "botToken") ||
+              readString(config, "botTokenEnv") ||
+              readString(config, "token") ||
+              readString(config, "tokenEnv")
+                ? "configured"
+                : "missing",
             botTokenEnv: readString(config, "botTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
             defaultChatId: readString(config, "defaultChatId") ? "configured" : "missing",
             parseMode: "configured",
-            webhookSecret: readString(config, "webhookSecret") || readString(config, "secretToken") ? "configured" : "unknown",
-            webhookSecretEnv: readString(config, "webhookSecretEnv") || readString(config, "secretTokenEnv") ? "configured" : "unknown",
+            webhookSecret:
+              readString(config, "webhookSecret") || readString(config, "secretToken") ? "configured" : "unknown",
+            webhookSecretEnv:
+              readString(config, "webhookSecretEnv") || readString(config, "secretTokenEnv") ? "configured" : "unknown",
           },
           warnings: hasConfiguredSecret
-            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            ? [
+                "Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+              ]
             : [],
           rawLegacyConfig: config,
         },
@@ -932,10 +1026,10 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
       const token = readString(draft.draft, "botToken");
       const chatId = readString(draft.draft, "defaultChatId");
       const hasConfiguredToken = Boolean(
-        token
-        || readString(draft.draft, "botTokenEnv")
-        || draft.hydration?.fieldState.botToken === "configured"
-        || draft.hydration?.fieldState.botTokenEnv === "configured",
+        token ||
+        readString(draft.draft, "botTokenEnv") ||
+        draft.hydration?.fieldState.botToken === "configured" ||
+        draft.hydration?.fieldState.botTokenEnv === "configured",
       );
       if (!hasConfiguredToken) {
         issues.push(requiredFieldIssue("botToken", "Bot token is required."));
@@ -971,7 +1065,9 @@ function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
           kind: "intro",
           title: "What this connection does",
           body: [
-            paragraph("GoatCitadel can send outbound operator messages to a Google Chat space through an incoming webhook."),
+            paragraph(
+              "GoatCitadel can send outbound operator messages to a Google Chat space through an incoming webhook.",
+            ),
             note("warning", "Incoming webhooks are effectively secrets. Treat the webhook URL like a token."),
           ],
         },
@@ -1022,8 +1118,12 @@ function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate the connection",
           body: [
-            paragraph("GoatCitadel validates the webhook shape and sends a sandbox webhook probe during guided test and retest flows."),
-            paragraph("You still need to confirm manually that the post landed in the intended Google Chat space or thread."),
+            paragraph(
+              "GoatCitadel validates the webhook shape and sends a sandbox webhook probe during guided test and retest flows.",
+            ),
+            paragraph(
+              "You still need to confirm manually that the post landed in the intended Google Chat space or thread.",
+            ),
           ],
         },
         {
@@ -1094,7 +1194,9 @@ function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
             defaultThreadKey: readString(config, "defaultThreadKey") ? "configured" : "unknown",
           },
           warnings: hasConfiguredSecret
-            ? ["Saved webhook URLs are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            ? [
+                "Saved webhook URLs are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+              ]
             : [],
           rawLegacyConfig: config,
         },
@@ -1112,7 +1214,9 @@ function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
       if (!webhookUrl) {
         issues.push(requiredFieldIssue("webhookUrl", "Webhook URL is required."));
       } else if (!/^https:\/\/chat\.googleapis\.com\/v1\/spaces\//.test(webhookUrl)) {
-        issues.push(malformedFieldIssue("webhookUrl", "Webhook URL should look like a Google Chat incoming webhook URL."));
+        issues.push(
+          malformedFieldIssue("webhookUrl", "Webhook URL should look like a Google Chat incoming webhook URL."),
+        );
       }
       return issues;
     },
@@ -1141,7 +1245,10 @@ function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph("GoatCitadel uses a Teams incoming webhook for outbound operator delivery."),
-            note("warning", "Webhook URLs are secrets. Treat them like tokens and keep them out of committed config when possible."),
+            note(
+              "warning",
+              "Webhook URLs are secrets. Treat them like tokens and keep them out of committed config when possible.",
+            ),
           ],
         },
         {
@@ -1149,7 +1256,9 @@ function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
           kind: "instruction",
           title: "Create the Teams webhook",
           body: [
-            paragraph("Open the target Teams channel, add the incoming webhook or approved connector, then copy the full webhook URL."),
+            paragraph(
+              "Open the target Teams channel, add the incoming webhook or approved connector, then copy the full webhook URL.",
+            ),
           ],
           checklist: [
             check("channel", "Open the target Teams channel"),
@@ -1169,7 +1278,9 @@ function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
               required: true,
               explanation: "The Teams incoming webhook URL GoatCitadel should call for outbound delivery.",
               whyNeeded: "Used for every outbound message to the configured Teams channel.",
-              whereToFind: [paragraph("Copy the full webhook URL from the Teams connector or incoming webhook setup flow.")],
+              whereToFind: [
+                paragraph("Copy the full webhook URL from the Teams connector or incoming webhook setup flow."),
+              ],
               looksLike: "https://outlook.office.com/webhook/...",
               commonMistakes: ["Copying the Teams channel URL instead of the webhook URL."],
               sensitive: true,
@@ -1192,7 +1303,9 @@ function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate the connection",
           body: [
-            paragraph("GoatCitadel validates the webhook shape and sends a sandbox webhook probe during guided test and retest flows."),
+            paragraph(
+              "GoatCitadel validates the webhook shape and sends a sandbox webhook probe during guided test and retest flows.",
+            ),
             paragraph("You still need to confirm manually that the card arrived in the intended Teams channel."),
           ],
         },
@@ -1201,12 +1314,11 @@ function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
           kind: "confirm",
           title: "Finish setup",
           body: [
-            paragraph("After finalizing, send a sandbox post and confirm the card arrives in the intended Teams channel."),
+            paragraph(
+              "After finalizing, send a sandbox post and confirm the card arrives in the intended Teams channel.",
+            ),
           ],
-          successCriteria: [
-            "The webhook URL is configured.",
-            "A sandbox Teams post is confirmed manually.",
-          ],
+          successCriteria: ["The webhook URL is configured.", "A sandbox Teams post is confirmed manually."],
         },
       ],
     },
@@ -1240,7 +1352,8 @@ function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
       supportsRetest: true,
     },
     volatility: {
-      officialDocsUrl: "https://learn.microsoft.com/microsoftteams/platform/webhooks-and-connectors/how-to/connectors-using",
+      officialDocsUrl:
+        "https://learn.microsoft.com/microsoftteams/platform/webhooks-and-connectors/how-to/connectors-using",
       lastReviewedAt: "2026-03-29",
       volatility: "medium",
       deprecationRisk: "medium",
@@ -1260,11 +1373,14 @@ function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
           fieldState: {
-            webhookUrl: readString(config, "webhookUrl") || readString(config, "webhookUrlEnv") ? "configured" : "missing",
+            webhookUrl:
+              readString(config, "webhookUrl") || readString(config, "webhookUrlEnv") ? "configured" : "missing",
             cardTitle: readString(config, "cardTitle") ? "configured" : "unknown",
           },
           warnings: hasConfiguredSecret
-            ? ["Saved webhook URLs are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            ? [
+                "Saved webhook URLs are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+              ]
             : [],
           rawLegacyConfig: config,
         },
@@ -1281,14 +1397,19 @@ function createTeamsDefinition(): ChannelSetupRuntimeDefinition {
       const issues: ChannelSetupIssue[] = [];
       const webhookUrl = readString(draft.draft, "webhookUrl");
       const hasConfiguredWebhook = Boolean(
-        webhookUrl
-        || readString(draft.draft, "webhookUrlEnv")
-        || draft.hydration?.fieldState.webhookUrl === "configured",
+        webhookUrl ||
+        readString(draft.draft, "webhookUrlEnv") ||
+        draft.hydration?.fieldState.webhookUrl === "configured",
       );
       if (!hasConfiguredWebhook) {
         issues.push(requiredFieldIssue("webhookUrl", "Webhook URL is required."));
-      } else if (webhookUrl && !/^https:\/\/(?:outlook\.office\.com|[\w.-]+\.webhook\.office\.com)\/webhook/i.test(webhookUrl)) {
-        issues.push(malformedFieldIssue("webhookUrl", "Webhook URL should look like a Microsoft Teams incoming webhook URL."));
+      } else if (
+        webhookUrl &&
+        !/^https:\/\/(?:outlook\.office\.com|[\w.-]+\.webhook\.office\.com)\/webhook/i.test(webhookUrl)
+      ) {
+        issues.push(
+          malformedFieldIssue("webhookUrl", "Webhook URL should look like a Microsoft Teams incoming webhook URL."),
+        );
       }
       return issues;
     },
@@ -1305,7 +1426,8 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
-      introSummary: "Connect a WhatsApp Cloud API sender identity with a phone-number id, access token, and a default direct recipient target.",
+      introSummary:
+        "Connect a WhatsApp Cloud API sender identity with a phone-number id, access token, and a default direct recipient target.",
       prerequisites: [
         "A Meta developer app with WhatsApp Cloud API access.",
         "A sender phone-number id that is already provisioned in your Meta app.",
@@ -1317,8 +1439,13 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
           kind: "intro",
           title: "What this connection does",
           body: [
-            paragraph("GoatCitadel uses the WhatsApp Cloud API for outbound sends, replies, reactions, and rich media delivery to direct recipients. It can also ingest signed inbound webhook events when you configure the webhook secret pair."),
-            note("warning", "WhatsApp Cloud API delivery is still treated as planned parity work. Guided setup now runs a live sender-auth probe and can post a sandbox message to the configured default recipient, but it does not change the maturity claim."),
+            paragraph(
+              "GoatCitadel uses the WhatsApp Cloud API for outbound sends, replies, reactions, and rich media delivery to direct recipients. It can also ingest signed inbound webhook events when you configure the webhook secret pair.",
+            ),
+            note(
+              "warning",
+              "WhatsApp Cloud API delivery is still treated as planned parity work. Guided setup now runs a live sender-auth probe and can post a sandbox message to the configured default recipient, but it does not change the maturity claim.",
+            ),
           ],
         },
         {
@@ -1331,9 +1458,15 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
               label: "Access token env var",
               type: "text",
               required: false,
-              explanation: "Preferred path. Name of the environment variable that stores your WhatsApp Cloud API access token.",
-              whyNeeded: "Used to authenticate outbound API calls without storing the raw token in the connection draft.",
-              whereToFind: [paragraph("Create or reuse an env var such as WHATSAPP_ACCESS_TOKEN and store the actual Cloud API token there.")],
+              explanation:
+                "Preferred path. Name of the environment variable that stores your WhatsApp Cloud API access token.",
+              whyNeeded:
+                "Used to authenticate outbound API calls without storing the raw token in the connection draft.",
+              whereToFind: [
+                paragraph(
+                  "Create or reuse an env var such as WHATSAPP_ACCESS_TOKEN and store the actual Cloud API token there.",
+                ),
+              ],
               looksLike: "WHATSAPP_ACCESS_TOKEN",
               commonMistakes: ["Pasting the actual token here instead of the env var name."],
               canChangeLater: true,
@@ -1357,7 +1490,11 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
               required: true,
               explanation: "The Cloud API sender phone-number id for this WhatsApp identity.",
               whyNeeded: "Required for all outbound Cloud API calls.",
-              whereToFind: [paragraph("Copy the phone-number id from the WhatsApp Cloud API sender configuration in the Meta developer console.")],
+              whereToFind: [
+                paragraph(
+                  "Copy the phone-number id from the WhatsApp Cloud API sender configuration in the Meta developer console.",
+                ),
+              ],
               looksLike: "123456789012345",
               commonMistakes: ["Copying the display phone number instead of the numeric phone-number id."],
               canChangeLater: true,
@@ -1380,8 +1517,13 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
               type: "text",
               required: false,
               explanation: "Optional but recommended if you want signed inbound webhook routing.",
-              whyNeeded: "Meta signs WhatsApp webhook deliveries with your app secret. Without it GoatCitadel stays outbound only.",
-              whereToFind: [paragraph("Copy the app secret from the Meta developer app settings and store it in an env var such as WHATSAPP_APP_SECRET.")],
+              whyNeeded:
+                "Meta signs WhatsApp webhook deliveries with your app secret. Without it GoatCitadel stays outbound only.",
+              whereToFind: [
+                paragraph(
+                  "Copy the app secret from the Meta developer app settings and store it in an env var such as WHATSAPP_APP_SECRET.",
+                ),
+              ],
               looksLike: "WHATSAPP_APP_SECRET",
               commonMistakes: ["Using the access token here instead of the app secret."],
               canChangeLater: true,
@@ -1402,9 +1544,15 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
               label: "Webhook verify-token env var",
               type: "text",
               required: false,
-              explanation: "Optional but recommended if you want GoatCitadel to answer the Meta webhook verification challenge.",
-              whyNeeded: "The verify token is compared during GET webhook subscription validation before Meta begins signed POST deliveries.",
-              whereToFind: [paragraph("Choose your own random token value, store it in an env var such as WHATSAPP_WEBHOOK_VERIFY_TOKEN, and use the same value when configuring the Meta webhook subscription.")],
+              explanation:
+                "Optional but recommended if you want GoatCitadel to answer the Meta webhook verification challenge.",
+              whyNeeded:
+                "The verify token is compared during GET webhook subscription validation before Meta begins signed POST deliveries.",
+              whereToFind: [
+                paragraph(
+                  "Choose your own random token value, store it in an env var such as WHATSAPP_WEBHOOK_VERIFY_TOKEN, and use the same value when configuring the Meta webhook subscription.",
+                ),
+              ],
               looksLike: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
               canChangeLater: true,
               placeholder: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
@@ -1426,7 +1574,9 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate the draft",
           body: [
-            paragraph("Guided test validates the sender identity live against the Cloud API and can post a sandbox message to the configured default recipient. If you also configure the app secret plus verify token, the runtime can answer the Meta webhook challenge and accept signed inbound deliveries, but operator proof is still manual after finalize."),
+            paragraph(
+              "Guided test validates the sender identity live against the Cloud API and can post a sandbox message to the configured default recipient. If you also configure the app secret plus verify token, the runtime can answer the Meta webhook challenge and accept signed inbound deliveries, but operator proof is still manual after finalize.",
+            ),
           ],
         },
       ],
@@ -1489,23 +1639,42 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
           fieldState: {
-            accessToken: readString(config, "accessToken") || readString(config, "accessTokenEnv") || readString(config, "token") || readString(config, "tokenEnv")
-              ? "configured"
-              : "missing",
-            accessTokenEnv: readString(config, "accessTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
-            appSecret: readString(config, "appSecret") || readString(config, "appSecretEnv") || readString(config, "webhookSecret") || readString(config, "webhookSecretEnv")
-              ? "configured"
-              : "unknown",
-            appSecretEnv: readString(config, "appSecretEnv") || readString(config, "webhookSecretEnv") ? "configured" : "unknown",
-            webhookVerifyToken: readString(config, "webhookVerifyToken") || readString(config, "webhookVerifyTokenEnv") || readString(config, "verifyToken") || readString(config, "verifyTokenEnv")
-              ? "configured"
-              : "unknown",
-            webhookVerifyTokenEnv: readString(config, "webhookVerifyTokenEnv") || readString(config, "verifyTokenEnv") ? "configured" : "unknown",
+            accessToken:
+              readString(config, "accessToken") ||
+              readString(config, "accessTokenEnv") ||
+              readString(config, "token") ||
+              readString(config, "tokenEnv")
+                ? "configured"
+                : "missing",
+            accessTokenEnv:
+              readString(config, "accessTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
+            appSecret:
+              readString(config, "appSecret") ||
+              readString(config, "appSecretEnv") ||
+              readString(config, "webhookSecret") ||
+              readString(config, "webhookSecretEnv")
+                ? "configured"
+                : "unknown",
+            appSecretEnv:
+              readString(config, "appSecretEnv") || readString(config, "webhookSecretEnv") ? "configured" : "unknown",
+            webhookVerifyToken:
+              readString(config, "webhookVerifyToken") ||
+              readString(config, "webhookVerifyTokenEnv") ||
+              readString(config, "verifyToken") ||
+              readString(config, "verifyTokenEnv")
+                ? "configured"
+                : "unknown",
+            webhookVerifyTokenEnv:
+              readString(config, "webhookVerifyTokenEnv") || readString(config, "verifyTokenEnv")
+                ? "configured"
+                : "unknown",
             phoneNumberId: readString(config, "phoneNumberId") ? "configured" : "missing",
             defaultTarget: readString(config, "defaultTarget") ? "configured" : "missing",
           },
           warnings: hasConfiguredSecret
-            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            ? [
+                "Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+              ]
             : [],
           rawLegacyConfig: config,
         },
@@ -1532,10 +1701,10 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
     validate(draft) {
       const issues: ChannelSetupIssue[] = [];
       const hasConfiguredToken = Boolean(
-        readString(draft.draft, "accessToken")
-        || readString(draft.draft, "accessTokenEnv")
-        || draft.hydration?.fieldState.accessToken === "configured"
-        || draft.hydration?.fieldState.accessTokenEnv === "configured",
+        readString(draft.draft, "accessToken") ||
+        readString(draft.draft, "accessTokenEnv") ||
+        draft.hydration?.fieldState.accessToken === "configured" ||
+        draft.hydration?.fieldState.accessTokenEnv === "configured",
       );
       const phoneNumberId = readString(draft.draft, "phoneNumberId");
       if (!hasConfiguredToken) {
@@ -1549,7 +1718,9 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
       if (!phoneNumberId) {
         issues.push(requiredFieldIssue("phoneNumberId", "Phone number ID is required."));
       } else if (!/^\d{6,}$/.test(phoneNumberId)) {
-        issues.push(malformedFieldIssue("phoneNumberId", "Phone number ID should look like a numeric WhatsApp sender id."));
+        issues.push(
+          malformedFieldIssue("phoneNumberId", "Phone number ID should look like a numeric WhatsApp sender id."),
+        );
       }
       if (!readString(draft.draft, "defaultTarget")) {
         issues.push(requiredFieldIssue("defaultTarget", "Default recipient is required."));
@@ -1569,7 +1740,8 @@ function createSignalDefinition(): ChannelSetupRuntimeDefinition {
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
-      introSummary: "Configure a Signal bridge endpoint, optional account id, and a default recipient for outbound sends.",
+      introSummary:
+        "Configure a Signal bridge endpoint, optional account id, and a default recipient for outbound sends.",
       prerequisites: [
         "A running Signal bridge endpoint that GoatCitadel can reach.",
         "A sandbox recipient or group for manual send confirmation.",
@@ -1580,8 +1752,13 @@ function createSignalDefinition(): ChannelSetupRuntimeDefinition {
           kind: "intro",
           title: "What this connection does",
           body: [
-            paragraph("GoatCitadel uses the configured Signal bridge for outbound sends to individual recipients or groups."),
-            note("warning", "Signal ships as a narrow outbound bridge. Guided setup now runs a live sandbox send against that exact send path, but it does not imply richer actions beyond the current bridge lane."),
+            paragraph(
+              "GoatCitadel uses the configured Signal bridge for outbound sends to individual recipients or groups.",
+            ),
+            note(
+              "warning",
+              "Signal ships as a narrow outbound bridge. Guided setup now runs a live sandbox send against that exact send path, but it does not imply richer actions beyond the current bridge lane.",
+            ),
           ],
         },
         {
@@ -1596,7 +1773,11 @@ function createSignalDefinition(): ChannelSetupRuntimeDefinition {
               required: true,
               explanation: "HTTP or HTTPS base URL for the Signal bridge GoatCitadel should call.",
               whyNeeded: "Required for every outbound send.",
-              whereToFind: [paragraph("Use the reachable base URL for your Signal bridge, such as a local signal-cli REST or JSON-RPC proxy.")],
+              whereToFind: [
+                paragraph(
+                  "Use the reachable base URL for your Signal bridge, such as a local signal-cli REST or JSON-RPC proxy.",
+                ),
+              ],
               looksLike: "http://127.0.0.1:8080",
               commonMistakes: ["Using a browser dashboard URL instead of the API base URL."],
               canChangeLater: true,
@@ -1626,7 +1807,9 @@ function createSignalDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate the draft",
           body: [
-            paragraph("Guided test posts a sandbox send through the configured Signal JSON-RPC bridge path against the default recipient or group target. Manual confirmation still closes the loop because the bridge does not expose a safe cleanup path."),
+            paragraph(
+              "Guided test posts a sandbox send through the configured Signal JSON-RPC bridge path against the default recipient or group target. Manual confirmation still closes the loop because the bridge does not expose a safe cleanup path.",
+            ),
           ],
         },
       ],
@@ -1736,7 +1919,10 @@ function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph("GoatCitadel uses Mattermost bot-token auth for outbound sends, replies, reactions, and unsend."),
-            note("warning", "Mattermost still counts as planned parity work. Guided setup now runs live auth, channel access, and sandbox send/delete probes before finalize, but it does not change the maturity claim."),
+            note(
+              "warning",
+              "Mattermost still counts as planned parity work. Guided setup now runs live auth, channel access, and sandbox send/delete probes before finalize, but it does not change the maturity claim.",
+            ),
           ],
         },
         {
@@ -1798,7 +1984,9 @@ function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate the draft",
           body: [
-            paragraph("Guided test authenticates the bot token live, resolves the configured channel target, and posts a sandbox message that is deleted automatically when cleanup permissions are available."),
+            paragraph(
+              "Guided test authenticates the bot token live, resolves the configured channel target, and posts a sandbox message that is deleted automatically when cleanup permissions are available.",
+            ),
           ],
         },
       ],
@@ -1857,15 +2045,21 @@ function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
           fieldState: {
             serverUrl: readString(config, "serverUrl") ? "configured" : "missing",
-            botToken: readString(config, "botToken") || readString(config, "botTokenEnv") || readString(config, "token") || readString(config, "tokenEnv")
-              ? "configured"
-              : "missing",
+            botToken:
+              readString(config, "botToken") ||
+              readString(config, "botTokenEnv") ||
+              readString(config, "token") ||
+              readString(config, "tokenEnv")
+                ? "configured"
+                : "missing",
             botTokenEnv: readString(config, "botTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
             defaultChannel: readString(config, "defaultChannel") ? "configured" : "missing",
             defaultTeam: readString(config, "defaultTeam") ? "configured" : "unknown",
           },
           warnings: hasConfiguredSecret
-            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            ? [
+                "Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+              ]
             : [],
           rawLegacyConfig: config,
         },
@@ -1886,10 +2080,10 @@ function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
       const issues: ChannelSetupIssue[] = [];
       const serverUrl = readString(draft.draft, "serverUrl");
       const hasConfiguredToken = Boolean(
-        readString(draft.draft, "botToken")
-        || readString(draft.draft, "botTokenEnv")
-        || draft.hydration?.fieldState.botToken === "configured"
-        || draft.hydration?.fieldState.botTokenEnv === "configured",
+        readString(draft.draft, "botToken") ||
+        readString(draft.draft, "botTokenEnv") ||
+        draft.hydration?.fieldState.botToken === "configured" ||
+        draft.hydration?.fieldState.botTokenEnv === "configured",
       );
       if (!serverUrl) {
         issues.push(requiredFieldIssue("serverUrl", "Server URL is required."));
@@ -1922,7 +2116,8 @@ function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
       estimatedMinutes: 10,
       difficulty: "advanced",
       manualModePolicy: "available-secondary",
-      introSummary: "Configure a BlueBubbles-compatible iMessage bridge URL, bridge password, and a default handle or chat target.",
+      introSummary:
+        "Configure a BlueBubbles-compatible iMessage bridge URL, bridge password, and a default handle or chat target.",
       prerequisites: [
         "A reachable BlueBubbles bridge with outbound send support.",
         "A Mac-side BlueBubbles installation already paired with the account you intend to send from.",
@@ -1934,8 +2129,13 @@ function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
           kind: "intro",
           title: "What this connection does",
           body: [
-            paragraph("GoatCitadel uses a BlueBubbles-compatible bridge for outbound iMessage sends, replies, reactions, and unsend."),
-            note("warning", "BlueBubbles-specific edge cases still apply. Guided setup now runs a live bridge query plus a sandbox send/unsend cycle, but new-handle attachment delivery can still require chat creation support and reactions or unsend still depend on Private API support."),
+            paragraph(
+              "GoatCitadel uses a BlueBubbles-compatible bridge for outbound iMessage sends, replies, reactions, and unsend.",
+            ),
+            note(
+              "warning",
+              "BlueBubbles-specific edge cases still apply. Guided setup now runs a live bridge query plus a sandbox send/unsend cycle, but new-handle attachment delivery can still require chat creation support and reactions or unsend still depend on Private API support.",
+            ),
           ],
         },
         {
@@ -1988,7 +2188,9 @@ function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate the draft",
           body: [
-            paragraph("Guided test queries the BlueBubbles bridge live, then sends and unsends a sandbox message against the configured default handle or chat target."),
+            paragraph(
+              "Guided test queries the BlueBubbles bridge live, then sends and unsends a sandbox message against the configured default handle or chat target.",
+            ),
           ],
         },
       ],
@@ -2035,27 +2237,38 @@ function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
     definition,
     hydrate(connection) {
       const config = connection.config;
-      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["password", "passwordEnv", "apiPassword", "apiPasswordEnv"]]);
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [
+        ["password", "passwordEnv", "apiPassword", "apiPasswordEnv"],
+      ]);
       return {
         draft: {
-          bridgeUrl: readString(config, "bridgeUrl") ?? readString(config, "baseUrl") ?? readString(config, "serverUrl"),
+          bridgeUrl:
+            readString(config, "bridgeUrl") ?? readString(config, "baseUrl") ?? readString(config, "serverUrl"),
           passwordEnv: readString(config, "passwordEnv") ?? readString(config, "apiPasswordEnv"),
           defaultHandle: readString(config, "defaultHandle"),
         },
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
           fieldState: {
-            bridgeUrl: readString(config, "bridgeUrl") || readString(config, "baseUrl") || readString(config, "serverUrl")
-              ? "configured"
-              : "missing",
-            password: readString(config, "password") || readString(config, "passwordEnv") || readString(config, "apiPassword") || readString(config, "apiPasswordEnv")
-              ? "configured"
-              : "missing",
-            passwordEnv: readString(config, "passwordEnv") || readString(config, "apiPasswordEnv") ? "configured" : "unknown",
+            bridgeUrl:
+              readString(config, "bridgeUrl") || readString(config, "baseUrl") || readString(config, "serverUrl")
+                ? "configured"
+                : "missing",
+            password:
+              readString(config, "password") ||
+              readString(config, "passwordEnv") ||
+              readString(config, "apiPassword") ||
+              readString(config, "apiPasswordEnv")
+                ? "configured"
+                : "missing",
+            passwordEnv:
+              readString(config, "passwordEnv") || readString(config, "apiPasswordEnv") ? "configured" : "unknown",
             defaultHandle: readString(config, "defaultHandle") ? "configured" : "missing",
           },
           warnings: hasConfiguredSecret
-            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            ? [
+                "Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+              ]
             : [],
           rawLegacyConfig: config,
         },
@@ -2073,12 +2286,13 @@ function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
     },
     validate(draft) {
       const issues: ChannelSetupIssue[] = [];
-      const bridgeUrl = readString(draft.draft, "bridgeUrl") ?? readLegacyString(draft, "bridgeUrl", "baseUrl", "serverUrl");
+      const bridgeUrl =
+        readString(draft.draft, "bridgeUrl") ?? readLegacyString(draft, "bridgeUrl", "baseUrl", "serverUrl");
       const hasConfiguredPassword = Boolean(
-        readString(draft.draft, "password")
-        || readString(draft.draft, "passwordEnv")
-        || draft.hydration?.fieldState.password === "configured"
-        || draft.hydration?.fieldState.passwordEnv === "configured",
+        readString(draft.draft, "password") ||
+        readString(draft.draft, "passwordEnv") ||
+        draft.hydration?.fieldState.password === "configured" ||
+        draft.hydration?.fieldState.passwordEnv === "configured",
       );
       if (!bridgeUrl) {
         issues.push(requiredFieldIssue("bridgeUrl", "Bridge URL is required."));
@@ -2111,7 +2325,8 @@ function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
-      introSummary: "Connect Nextcloud Talk using the public base URL, the shared bot token, and a default fallback room id.",
+      introSummary:
+        "Connect Nextcloud Talk using the public base URL, the shared bot token, and a default fallback room id.",
       prerequisites: [
         "A reachable Nextcloud Talk instance.",
         "A Talk bot token or shared webhook secret already provisioned for the integration.",
@@ -2123,8 +2338,13 @@ function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
           kind: "intro",
           title: "What this connection does",
           body: [
-            paragraph("GoatCitadel uses the Nextcloud Talk bot API plus signed webhooks for inbound events, outbound replies, and reactions."),
-            note("info", "Nextcloud Talk already has runtime support in the gateway. This guided definition brings its setup flow into parity with the other visible channel setup wizards."),
+            paragraph(
+              "GoatCitadel uses the Nextcloud Talk bot API plus signed webhooks for inbound events, outbound replies, and reactions.",
+            ),
+            note(
+              "info",
+              "Nextcloud Talk already has runtime support in the gateway. This guided definition brings its setup flow into parity with the other visible channel setup wizards.",
+            ),
           ],
         },
         {
@@ -2146,7 +2366,8 @@ function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
               label: "Token env var",
               type: "text",
               required: false,
-              explanation: "Preferred path. Name of the env var that stores the shared Nextcloud Talk bot token or webhook secret.",
+              explanation:
+                "Preferred path. Name of the env var that stores the shared Nextcloud Talk bot token or webhook secret.",
               looksLike: "NEXTCLOUD_TALK_TOKEN",
               canChangeLater: true,
               placeholder: "NEXTCLOUD_TALK_TOKEN",
@@ -2216,25 +2437,39 @@ function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
     definition,
     hydrate(connection) {
       const config = connection.config;
-      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["token", "tokenEnv", "botSecret", "botSecretEnv", "secret", "secretEnv"]]);
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [
+        ["token", "tokenEnv", "botSecret", "botSecretEnv", "secret", "secretEnv"],
+      ]);
       return {
         draft: {
           baseUrl: readString(config, "baseUrl"),
-          tokenEnv: readString(config, "tokenEnv") ?? readString(config, "botSecretEnv") ?? readString(config, "secretEnv"),
+          tokenEnv:
+            readString(config, "tokenEnv") ?? readString(config, "botSecretEnv") ?? readString(config, "secretEnv"),
           defaultRoomId: readString(config, "defaultRoomId"),
         },
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
           fieldState: {
             baseUrl: readString(config, "baseUrl") ? "configured" : "missing",
-            token: readString(config, "token") || readString(config, "tokenEnv") || readString(config, "botSecret") || readString(config, "botSecretEnv") || readString(config, "secret") || readString(config, "secretEnv")
-              ? "configured"
-              : "missing",
-            tokenEnv: readString(config, "tokenEnv") || readString(config, "botSecretEnv") || readString(config, "secretEnv") ? "configured" : "unknown",
+            token:
+              readString(config, "token") ||
+              readString(config, "tokenEnv") ||
+              readString(config, "botSecret") ||
+              readString(config, "botSecretEnv") ||
+              readString(config, "secret") ||
+              readString(config, "secretEnv")
+                ? "configured"
+                : "missing",
+            tokenEnv:
+              readString(config, "tokenEnv") || readString(config, "botSecretEnv") || readString(config, "secretEnv")
+                ? "configured"
+                : "unknown",
             defaultRoomId: readString(config, "defaultRoomId") ? "configured" : "missing",
           },
           warnings: hasConfiguredSecret
-            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            ? [
+                "Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+              ]
             : [],
           rawLegacyConfig: config,
         },
@@ -2254,10 +2489,10 @@ function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
       const issues: ChannelSetupIssue[] = [];
       const baseUrl = readString(draft.draft, "baseUrl");
       const hasConfiguredToken = Boolean(
-        readString(draft.draft, "token")
-        || readString(draft.draft, "tokenEnv")
-        || draft.hydration?.fieldState.token === "configured"
-        || draft.hydration?.fieldState.tokenEnv === "configured",
+        readString(draft.draft, "token") ||
+        readString(draft.draft, "tokenEnv") ||
+        draft.hydration?.fieldState.token === "configured" ||
+        draft.hydration?.fieldState.tokenEnv === "configured",
       );
       if (!baseUrl) {
         issues.push(requiredFieldIssue("baseUrl", "Base URL is required."));
@@ -2301,8 +2536,13 @@ function createLineDefinition(): ChannelSetupRuntimeDefinition {
           kind: "intro",
           title: "What this connection does",
           body: [
-            paragraph("GoatCitadel uses the LINE Messaging API for outbound sends and can accept signed inbound webhook events when you configure the channel secret."),
-            note("warning", "LINE still counts as planned parity work. Guided setup now runs a live token-auth probe and can post a sandbox push message to the configured default target, but it does not change the maturity claim."),
+            paragraph(
+              "GoatCitadel uses the LINE Messaging API for outbound sends and can accept signed inbound webhook events when you configure the channel secret.",
+            ),
+            note(
+              "warning",
+              "LINE still counts as planned parity work. Guided setup now runs a live token-auth probe and can post a sandbox push message to the configured default target, but it does not change the maturity claim.",
+            ),
           ],
         },
         {
@@ -2336,7 +2576,8 @@ function createLineDefinition(): ChannelSetupRuntimeDefinition {
               type: "text",
               required: false,
               explanation: "Optional but recommended if you want signed inbound webhook routing.",
-              whyNeeded: "LINE signs webhook deliveries with the channel secret. Without it GoatCitadel stays outbound only.",
+              whyNeeded:
+                "LINE signs webhook deliveries with the channel secret. Without it GoatCitadel stays outbound only.",
               looksLike: "LINE_CHANNEL_SECRET",
               canChangeLater: true,
               placeholder: "LINE_CHANNEL_SECRET",
@@ -2367,7 +2608,9 @@ function createLineDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate the draft",
           body: [
-            paragraph("Guided test validates the channel access token live and can post a sandbox push message to the configured default target. Inbound webhook routing still requires the optional channel secret."),
+            paragraph(
+              "Guided test validates the channel access token live and can post a sandbox push message to the configured default target. Inbound webhook routing still requires the optional channel secret.",
+            ),
           ],
         },
       ],
@@ -2420,25 +2663,46 @@ function createLineDefinition(): ChannelSetupRuntimeDefinition {
       ]);
       return {
         draft: {
-          channelAccessTokenEnv: readString(config, "channelAccessTokenEnv") ?? readString(config, "accessTokenEnv") ?? readString(config, "tokenEnv"),
+          channelAccessTokenEnv:
+            readString(config, "channelAccessTokenEnv") ??
+            readString(config, "accessTokenEnv") ??
+            readString(config, "tokenEnv"),
           channelSecretEnv: readString(config, "channelSecretEnv") ?? readString(config, "secretEnv"),
           defaultTarget: readString(config, "defaultTarget"),
         },
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
           fieldState: {
-            channelAccessToken: readString(config, "channelAccessToken") || readString(config, "channelAccessTokenEnv") || readString(config, "accessToken") || readString(config, "accessTokenEnv") || readString(config, "token") || readString(config, "tokenEnv")
-              ? "configured"
-              : "missing",
-            channelAccessTokenEnv: readString(config, "channelAccessTokenEnv") || readString(config, "accessTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
-            channelSecret: readString(config, "channelSecret") || readString(config, "channelSecretEnv") || readString(config, "secret") || readString(config, "secretEnv")
-              ? "configured"
-              : "unknown",
-            channelSecretEnv: readString(config, "channelSecretEnv") || readString(config, "secretEnv") ? "configured" : "unknown",
+            channelAccessToken:
+              readString(config, "channelAccessToken") ||
+              readString(config, "channelAccessTokenEnv") ||
+              readString(config, "accessToken") ||
+              readString(config, "accessTokenEnv") ||
+              readString(config, "token") ||
+              readString(config, "tokenEnv")
+                ? "configured"
+                : "missing",
+            channelAccessTokenEnv:
+              readString(config, "channelAccessTokenEnv") ||
+              readString(config, "accessTokenEnv") ||
+              readString(config, "tokenEnv")
+                ? "configured"
+                : "unknown",
+            channelSecret:
+              readString(config, "channelSecret") ||
+              readString(config, "channelSecretEnv") ||
+              readString(config, "secret") ||
+              readString(config, "secretEnv")
+                ? "configured"
+                : "unknown",
+            channelSecretEnv:
+              readString(config, "channelSecretEnv") || readString(config, "secretEnv") ? "configured" : "unknown",
             defaultTarget: readString(config, "defaultTarget") ? "configured" : "missing",
           },
           warnings: hasConfiguredSecret
-            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            ? [
+                "Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+              ]
             : [],
           rawLegacyConfig: config,
         },
@@ -2460,10 +2724,10 @@ function createLineDefinition(): ChannelSetupRuntimeDefinition {
     validate(draft) {
       const issues: ChannelSetupIssue[] = [];
       const hasConfiguredToken = Boolean(
-        readString(draft.draft, "channelAccessToken")
-        || readString(draft.draft, "channelAccessTokenEnv")
-        || draft.hydration?.fieldState.channelAccessToken === "configured"
-        || draft.hydration?.fieldState.channelAccessTokenEnv === "configured",
+        readString(draft.draft, "channelAccessToken") ||
+        readString(draft.draft, "channelAccessTokenEnv") ||
+        draft.hydration?.fieldState.channelAccessToken === "configured" ||
+        draft.hydration?.fieldState.channelAccessTokenEnv === "configured",
       );
       if (!hasConfiguredToken) {
         issues.push({
@@ -2492,18 +2756,20 @@ function createZaloDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
       introSummary: "Connect a Zalo Official Account sender with an access token and a default recipient id.",
-      prerequisites: [
-        "A Zalo Official Account bot token.",
-        "A sandbox Zalo recipient id for manual confirmation.",
-      ],
+      prerequisites: ["A Zalo Official Account bot token.", "A sandbox Zalo recipient id for manual confirmation."],
       steps: [
         {
           id: "overview",
           kind: "intro",
           title: "What this connection does",
           body: [
-            paragraph("GoatCitadel uses the Zalo Official Account send path for outbound text delivery to the configured recipient id."),
-            note("warning", "Zalo OA ships as a narrow outbound lane. Guided setup now runs a live sandbox send against the OA send endpoint, but it does not claim broader inbound or action parity."),
+            paragraph(
+              "GoatCitadel uses the Zalo Official Account send path for outbound text delivery to the configured recipient id.",
+            ),
+            note(
+              "warning",
+              "Zalo OA ships as a narrow outbound lane. Guided setup now runs a live sandbox send against the OA send endpoint, but it does not claim broader inbound or action parity.",
+            ),
           ],
         },
         {
@@ -2547,7 +2813,9 @@ function createZaloDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate the draft",
           body: [
-            paragraph("Guided test posts a sandbox message through the Zalo Official Account send endpoint using the configured default recipient id. Manual confirmation is still required because the API path does not expose safe cleanup here."),
+            paragraph(
+              "Guided test posts a sandbox message through the Zalo Official Account send endpoint using the configured default recipient id. Manual confirmation is still required because the API path does not expose safe cleanup here.",
+            ),
           ],
         },
       ],
@@ -2582,7 +2850,8 @@ function createZaloDefinition(): ChannelSetupRuntimeDefinition {
       supportsRetest: true,
     },
     volatility: {
-      officialDocsUrl: "https://developers.zalo.me/docs/api/official-account-api/thong-tin-chung-ve-official-account-api",
+      officialDocsUrl:
+        "https://developers.zalo.me/docs/api/official-account-api/thong-tin-chung-ve-official-account-api",
       lastReviewedAt: "2026-04-01",
       volatility: "medium",
       deprecationRisk: "medium",
@@ -2594,7 +2863,9 @@ function createZaloDefinition(): ChannelSetupRuntimeDefinition {
     definition,
     hydrate(connection) {
       const config = connection.config;
-      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["accessToken", "accessTokenEnv", "token", "tokenEnv"]]);
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [
+        ["accessToken", "accessTokenEnv", "token", "tokenEnv"],
+      ]);
       return {
         draft: {
           accessTokenEnv: readString(config, "accessTokenEnv") ?? readString(config, "tokenEnv"),
@@ -2603,14 +2874,21 @@ function createZaloDefinition(): ChannelSetupRuntimeDefinition {
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
           fieldState: {
-            accessToken: readString(config, "accessToken") || readString(config, "accessTokenEnv") || readString(config, "token") || readString(config, "tokenEnv")
-              ? "configured"
-              : "missing",
-            accessTokenEnv: readString(config, "accessTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
+            accessToken:
+              readString(config, "accessToken") ||
+              readString(config, "accessTokenEnv") ||
+              readString(config, "token") ||
+              readString(config, "tokenEnv")
+                ? "configured"
+                : "missing",
+            accessTokenEnv:
+              readString(config, "accessTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
             defaultRecipientId: readString(config, "defaultRecipientId") ? "configured" : "missing",
           },
           warnings: hasConfiguredSecret
-            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            ? [
+                "Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+              ]
             : [],
           rawLegacyConfig: config,
         },
@@ -2628,10 +2906,10 @@ function createZaloDefinition(): ChannelSetupRuntimeDefinition {
     validate(draft) {
       const issues: ChannelSetupIssue[] = [];
       const hasConfiguredToken = Boolean(
-        readString(draft.draft, "accessToken")
-        || readString(draft.draft, "accessTokenEnv")
-        || draft.hydration?.fieldState.accessToken === "configured"
-        || draft.hydration?.fieldState.accessTokenEnv === "configured",
+        readString(draft.draft, "accessToken") ||
+        readString(draft.draft, "accessTokenEnv") ||
+        draft.hydration?.fieldState.accessToken === "configured" ||
+        draft.hydration?.fieldState.accessTokenEnv === "configured",
       );
       if (!hasConfiguredToken) {
         issues.push({
@@ -2659,7 +2937,8 @@ function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
       estimatedMinutes: 8,
       difficulty: "advanced",
       manualModePolicy: "available-secondary",
-      introSummary: "Configure a zca bridge URL, optional bearer token, optional profile, and a default Zalo personal-session target.",
+      introSummary:
+        "Configure a zca bridge URL, optional bearer token, optional profile, and a default Zalo personal-session target.",
       prerequisites: [
         "A reachable zca bridge endpoint.",
         "A sandbox personal or group target for manual confirmation.",
@@ -2670,8 +2949,13 @@ function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
           kind: "intro",
           title: "What this connection does",
           body: [
-            paragraph("GoatCitadel uses a zca-compatible personal-session bridge for outbound text sends to direct or group targets."),
-            note("warning", "Zalo User remains a narrow bridge lane. Guided setup now runs a live sandbox send against the bridge text endpoint, but richer actions still depend on the separate bridge runtime and its current bounds."),
+            paragraph(
+              "GoatCitadel uses a zca-compatible personal-session bridge for outbound text sends to direct or group targets.",
+            ),
+            note(
+              "warning",
+              "Zalo User remains a narrow bridge lane. Guided setup now runs a live sandbox send against the bridge text endpoint, but richer actions still depend on the separate bridge runtime and its current bounds.",
+            ),
           ],
         },
         {
@@ -2733,7 +3017,9 @@ function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
           kind: "test",
           title: "Validate the draft",
           body: [
-            paragraph("Guided test posts a sandbox text message through the configured zca bridge profile and default target. Manual confirmation is still required because cleanup is bridge-dependent and not safely automatable here."),
+            paragraph(
+              "Guided test posts a sandbox text message through the configured zca bridge profile and default target. Manual confirmation is still required because cleanup is bridge-dependent and not safely automatable here.",
+            ),
           ],
         },
       ],
@@ -2779,31 +3065,60 @@ function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
     definition,
     hydrate(connection) {
       const config = connection.config;
-      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["authToken", "authTokenEnv", "authorization", "authorizationEnv", "accessToken", "accessTokenEnv", "basicAuth", "basicAuthEnv"]]);
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [
+        [
+          "authToken",
+          "authTokenEnv",
+          "authorization",
+          "authorizationEnv",
+          "accessToken",
+          "accessTokenEnv",
+          "basicAuth",
+          "basicAuthEnv",
+        ],
+      ]);
       return {
         draft: {
           baseUrl: readString(config, "baseUrl") ?? readString(config, "bridgeUrl") ?? readString(config, "serverUrl"),
-          authTokenEnv: readString(config, "authTokenEnv") ?? readString(config, "authorizationEnv") ?? readString(config, "accessTokenEnv"),
+          authTokenEnv:
+            readString(config, "authTokenEnv") ??
+            readString(config, "authorizationEnv") ??
+            readString(config, "accessTokenEnv"),
           profile: readString(config, "profile"),
           defaultTarget: readString(config, "defaultTarget"),
         },
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
           fieldState: {
-            baseUrl: readString(config, "baseUrl") || readString(config, "bridgeUrl") || readString(config, "serverUrl")
-              ? "configured"
-              : "missing",
-            authToken: readString(config, "authToken") || readString(config, "authTokenEnv") || readString(config, "authorization") || readString(config, "authorizationEnv") || readString(config, "accessToken") || readString(config, "accessTokenEnv") || readString(config, "basicAuth") || readString(config, "basicAuthEnv")
-              ? "configured"
-              : "unknown",
-            authTokenEnv: readString(config, "authTokenEnv") || readString(config, "authorizationEnv") || readString(config, "accessTokenEnv") || readString(config, "basicAuthEnv")
-              ? "configured"
-              : "unknown",
+            baseUrl:
+              readString(config, "baseUrl") || readString(config, "bridgeUrl") || readString(config, "serverUrl")
+                ? "configured"
+                : "missing",
+            authToken:
+              readString(config, "authToken") ||
+              readString(config, "authTokenEnv") ||
+              readString(config, "authorization") ||
+              readString(config, "authorizationEnv") ||
+              readString(config, "accessToken") ||
+              readString(config, "accessTokenEnv") ||
+              readString(config, "basicAuth") ||
+              readString(config, "basicAuthEnv")
+                ? "configured"
+                : "unknown",
+            authTokenEnv:
+              readString(config, "authTokenEnv") ||
+              readString(config, "authorizationEnv") ||
+              readString(config, "accessTokenEnv") ||
+              readString(config, "basicAuthEnv")
+                ? "configured"
+                : "unknown",
             profile: readString(config, "profile") ? "configured" : "unknown",
             defaultTarget: readString(config, "defaultTarget") ? "configured" : "missing",
           },
           warnings: hasConfiguredSecret
-            ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them."]
+            ? [
+                "Saved secrets are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+              ]
             : [],
           rawLegacyConfig: config,
         },
@@ -2812,12 +3127,18 @@ function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
     normalize(draft) {
       const explicitAuthToken = readString(draft.draft, "authToken");
       const explicitAuthTokenEnv = readString(draft.draft, "authTokenEnv");
-      const legacyAuthorization = !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "authorization") : undefined;
-      const legacyAuthorizationEnv = !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "authorizationEnv") : undefined;
-      const legacyAccessToken = !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "accessToken") : undefined;
-      const legacyAccessTokenEnv = !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "accessTokenEnv") : undefined;
-      const legacyBasicAuth = !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "basicAuth") : undefined;
-      const legacyBasicAuthEnv = !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "basicAuthEnv") : undefined;
+      const legacyAuthorization =
+        !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "authorization") : undefined;
+      const legacyAuthorizationEnv =
+        !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "authorizationEnv") : undefined;
+      const legacyAccessToken =
+        !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "accessToken") : undefined;
+      const legacyAccessTokenEnv =
+        !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "accessTokenEnv") : undefined;
+      const legacyBasicAuth =
+        !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "basicAuth") : undefined;
+      const legacyBasicAuthEnv =
+        !explicitAuthToken && !explicitAuthTokenEnv ? readLegacyString(draft, "basicAuthEnv") : undefined;
       return compactRecord({
         baseUrl: readString(draft.draft, "baseUrl") ?? readLegacyString(draft, "baseUrl", "bridgeUrl", "serverUrl"),
         authTokenEnv: explicitAuthTokenEnv ?? readLegacyString(draft, "authTokenEnv"),
@@ -2834,7 +3155,8 @@ function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
     },
     validate(draft) {
       const issues: ChannelSetupIssue[] = [];
-      const baseUrl = readString(draft.draft, "baseUrl") ?? readLegacyString(draft, "baseUrl", "bridgeUrl", "serverUrl");
+      const baseUrl =
+        readString(draft.draft, "baseUrl") ?? readLegacyString(draft, "baseUrl", "bridgeUrl", "serverUrl");
       if (!baseUrl) {
         issues.push(requiredFieldIssue("baseUrl", "Bridge URL is required."));
       } else if (!looksLikeHttpUrl(baseUrl)) {
@@ -2856,7 +3178,10 @@ function requireCatalog(catalogId: string): IntegrationCatalogEntry {
   return catalog;
 }
 
-function baseCatalogMeta(catalog: IntegrationCatalogEntry, supportedModes: string[]): ChannelSetupDefinition["catalog"] {
+function baseCatalogMeta(
+  catalog: IntegrationCatalogEntry,
+  supportedModes: string[],
+): ChannelSetupDefinition["catalog"] {
   return {
     catalogId: catalog.catalogId,
     key: catalog.key,
@@ -2908,10 +3233,7 @@ function looksLikeHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
 
-function hasAnyConfiguredSecret(
-  config: Record<string, unknown>,
-  keyGroups: string[][],
-): boolean {
+function hasAnyConfiguredSecret(config: Record<string, unknown>, keyGroups: string[][]): boolean {
   return keyGroups.some((keys) => keys.some((key) => Boolean(readString(config, key))));
 }
 
@@ -2941,15 +3263,12 @@ function resolveDiscordRuntimeMode(draft: ChannelSetupDraft): "bridge" | "gatewa
 
 function inferDiscordConfigRuntimeMode(config: Record<string, unknown>): "bridge" | "gateway" {
   const hasBotToken = Boolean(
-    readString(config, "botToken")
-    || readString(config, "botTokenEnv")
-    || readString(config, "token")
-    || readString(config, "tokenEnv"),
+    readString(config, "botToken") ||
+    readString(config, "botTokenEnv") ||
+    readString(config, "token") ||
+    readString(config, "tokenEnv"),
   );
-  const hasWebhook = Boolean(
-    readString(config, "webhookUrl")
-    || readString(config, "webhookUrlEnv"),
-  );
+  const hasWebhook = Boolean(readString(config, "webhookUrl") || readString(config, "webhookUrlEnv"));
   if (hasWebhook && !hasBotToken) {
     return "bridge";
   }

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Memory maintenance remains centralized so compaction, retention, and repair rules stay auditable together. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -86,10 +87,10 @@ export class MemoryMaintenanceService {
       return undefined;
     }
     if (
-      typeof payload.workspaceId !== "string"
-      || typeof payload.memoryMaintenanceRunId !== "string"
-      || typeof payload.triggerSource !== "string"
-      || typeof payload.requestedAt !== "string"
+      typeof payload.workspaceId !== "string" ||
+      typeof payload.memoryMaintenanceRunId !== "string" ||
+      typeof payload.triggerSource !== "string" ||
+      typeof payload.requestedAt !== "string"
     ) {
       return undefined;
     }
@@ -206,12 +207,16 @@ export class MemoryMaintenanceService {
     if (!this.isOperational()) {
       return;
     }
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT workspace_id
       FROM workspace_memory_maintenance_policies
       WHERE enabled = 1
       ORDER BY workspace_id ASC
-    `).all() as Array<{ workspace_id: string }>;
+    `,
+      )
+      .all() as Array<{ workspace_id: string }>;
     for (const row of rows) {
       await this.evaluateWorkspace(this.normalizeWorkspaceId(row.workspace_id), "scheduler");
     }
@@ -375,7 +380,11 @@ export class MemoryMaintenanceService {
       return;
     }
 
-    if (maintenanceRun.status === "completed" || maintenanceRun.status === "skipped" || maintenanceRun.status === "cancelled") {
+    if (
+      maintenanceRun.status === "completed" ||
+      maintenanceRun.status === "skipped" ||
+      maintenanceRun.status === "cancelled"
+    ) {
       if (run.status === "cancelled") {
         this.ctx.storage.memoryMaintenance.upsertState({
           ...this.ensureState(workspaceId),
@@ -411,8 +420,9 @@ export class MemoryMaintenanceService {
   }
 
   private isOperational(): boolean {
-    return this.ctx.isFeatureEnabled("memoryMaintenanceV1Enabled")
-      && this.ctx.isFeatureEnabled("durableKernelV1Enabled");
+    return (
+      this.ctx.isFeatureEnabled("memoryMaintenanceV1Enabled") && this.ctx.isFeatureEnabled("durableKernelV1Enabled")
+    );
   }
 
   private normalizeWorkspaceId(workspaceId?: string): string {
@@ -522,7 +532,9 @@ export class MemoryMaintenanceService {
   }
 
   private countChangedSessions(workspaceId: string, since?: string): number {
-    const row = this.ctx.gatewaySql.prepare(`
+    const row = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT COUNT(*) AS count
       FROM (
         SELECT meta.session_id
@@ -544,15 +556,23 @@ export class MemoryMaintenanceService {
           AND (@since IS NULL OR trace.finished_at > @since)
         GROUP BY meta.session_id
       ) AS changed_sessions
-    `).get({
-      workspaceId,
-      since: since ?? null,
-    }) as { count: number | null } | undefined;
+    `,
+      )
+      .get({
+        workspaceId,
+        since: since ?? null,
+      }) as { count: number | null } | undefined;
     return Number(row?.count ?? 0);
   }
 
-  private listEligibleSessions(workspaceId: string, since?: string, limit = MAX_TRANSCRIPT_SOURCES): EligibleWorkspaceSession[] {
-    const rows = this.ctx.gatewaySql.prepare(`
+  private listEligibleSessions(
+    workspaceId: string,
+    since?: string,
+    limit = MAX_TRANSCRIPT_SOURCES,
+  ): EligibleWorkspaceSession[] {
+    const rows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT meta.session_id AS session_id, MAX(trace.finished_at) AS modified_at
       FROM chat_session_meta AS meta
       INNER JOIN chat_session_bindings AS binding
@@ -573,11 +593,13 @@ export class MemoryMaintenanceService {
       GROUP BY meta.session_id
       ORDER BY modified_at DESC, meta.session_id DESC
       LIMIT @limit
-    `).all({
-      workspaceId,
-      since: since ?? null,
-      limit: Math.max(1, Math.min(limit, 200)),
-    }) as Array<{ session_id: string; modified_at: string | null }>;
+    `,
+      )
+      .all({
+        workspaceId,
+        since: since ?? null,
+        limit: Math.max(1, Math.min(limit, 200)),
+      }) as Array<{ session_id: string; modified_at: string | null }>;
     return rows.map((row) => ({
       sessionId: row.session_id,
       modifiedAt: row.modified_at ?? new Date(0).toISOString(),
@@ -593,12 +615,16 @@ export class MemoryMaintenanceService {
     if (!binding || binding.transport !== "llm" || !binding.writable) {
       return undefined;
     }
-    const subagent = this.ctx.gatewaySql.prepare(`
+    const subagent = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT 1
       FROM task_subagent_sessions
       WHERE agent_session_id = ?
       LIMIT 1
-    `).get(sessionId) as { 1: number } | undefined;
+    `,
+      )
+      .get(sessionId) as { 1: number } | undefined;
     if (subagent) {
       return undefined;
     }
@@ -626,10 +652,10 @@ export class MemoryMaintenanceService {
     const lastAttemptAt = lastRun?.createdAt ? Date.parse(lastRun.createdAt) : Number.NaN;
     const mostRecentScheduledMs = mostRecentScheduledAt ? Date.parse(mostRecentScheduledAt) : Number.NaN;
     const dueBySchedule = Boolean(
-      mostRecentScheduledAt
-      && Number.isFinite(mostRecentScheduledMs)
-      && mostRecentScheduledMs <= now.getTime()
-      && (!Number.isFinite(lastAttemptAt) || lastAttemptAt < mostRecentScheduledMs),
+      mostRecentScheduledAt &&
+      Number.isFinite(mostRecentScheduledMs) &&
+      mostRecentScheduledMs <= now.getTime() &&
+      (!Number.isFinite(lastAttemptAt) || lastAttemptAt < mostRecentScheduledMs),
     );
     return {
       nextDueAt: dueBySchedule ? mostRecentScheduledAt : nextScheduledAt,
@@ -656,10 +682,7 @@ export class MemoryMaintenanceService {
     return deltaMs >= policy.minHoursSinceLastSuccess * 60 * 60 * 1000;
   }
 
-  private async evaluateWorkspace(
-    workspaceId: string,
-    source: "scheduler" | "post_turn",
-  ): Promise<void> {
+  private async evaluateWorkspace(workspaceId: string, source: "scheduler" | "post_turn"): Promise<void> {
     const policy = this.ensurePolicy(workspaceId);
     const state = this.refreshState(workspaceId, { touchEligibility: true });
     await this.maybeCreateBacklogRecommendation(workspaceId, policy, state);
@@ -799,9 +822,10 @@ export class MemoryMaintenanceService {
     } catch (error) {
       return {
         available: false,
-        reason: error instanceof Error
-          ? `Configured local model ${providerId}/${model} is unavailable: ${error.message}`
-          : `Configured local model ${providerId}/${model} is unavailable.`,
+        reason:
+          error instanceof Error
+            ? `Configured local model ${providerId}/${model} is unavailable: ${error.message}`
+            : `Configured local model ${providerId}/${model} is unavailable.`,
       };
     }
     return { available: true };
@@ -839,11 +863,13 @@ export class MemoryMaintenanceService {
 
     const maintenanceSources = await this.readExistingMaintenanceArtifacts(workspaceId, runId);
     for (const maintenanceSource of maintenanceSources) {
-      markdownSections.push(renderExistingMaintenanceSection(
-        maintenanceSource.sourceRef,
-        maintenanceSource.modifiedAt,
-        maintenanceSource.excerpt,
-      ));
+      markdownSections.push(
+        renderExistingMaintenanceSection(
+          maintenanceSource.sourceRef,
+          maintenanceSource.modifiedAt,
+          maintenanceSource.excerpt,
+        ),
+      );
     }
 
     const memoryItemSources = this.readRelevantMemoryItems(workspaceId, runId);
@@ -852,7 +878,9 @@ export class MemoryMaintenanceService {
     }
 
     if (markdownSections.length === 0) {
-      markdownSections.push("## Signals\n\nNo eligible transcript, file, or memory-item sources were found for this workspace.");
+      markdownSections.push(
+        "## Signals\n\nNo eligible transcript, file, or memory-item sources were found for this workspace.",
+      );
     }
 
     return {
@@ -864,7 +892,10 @@ export class MemoryMaintenanceService {
     };
   }
 
-  private async readWorkspaceMemoryFiles(workspaceId: string, runId: string): Promise<MemoryMaintenanceRunSourceRecord[]> {
+  private async readWorkspaceMemoryFiles(
+    workspaceId: string,
+    runId: string,
+  ): Promise<MemoryMaintenanceRunSourceRecord[]> {
     const workspaceRoot = this.getWorkspaceRootDir();
     const memoryRelativeDir = getWorkspaceMemoryRelativeDir(workspaceId);
     const maintenanceRelativeDir = getWorkspaceMaintenanceRelativeDir(workspaceId);
@@ -888,13 +919,17 @@ export class MemoryMaintenanceService {
   }
 
   private readRelevantMemoryItems(workspaceId: string, runId: string): MemoryMaintenanceRunSourceRecord[] {
-    const rows = this.ctx.gatewaySql.prepare(`
+    const rows = this.ctx.gatewaySql
+      .prepare(
+        `
       SELECT item_id, namespace, title, content, metadata_json, updated_at
       FROM memory_items
       WHERE status = 'active'
       ORDER BY pinned DESC, updated_at DESC
       LIMIT 200
-    `).all() as Array<{
+    `,
+      )
+      .all() as Array<{
       item_id: string;
       namespace: string;
       title: string;
@@ -941,21 +976,20 @@ export class MemoryMaintenanceService {
       return [];
     }
     try {
-      const [stat, content] = await Promise.all([
-        fs.stat(latestAbs),
-        fs.readFile(latestAbs, "utf8"),
-      ]);
+      const [stat, content] = await Promise.all([fs.stat(latestAbs), fs.readFile(latestAbs, "utf8")]);
       const excerpt = truncateText(content, Math.min(MAX_FILE_BYTES, MAX_EXCERPT_CHARS));
-      return [{
-        sourceId: randomUUID(),
-        runId,
-        sourceKind: "file",
-        sourceRef: latestPath,
-        modifiedAt: stat.mtime.toISOString(),
-        excerpt,
-        tokenEstimate: estimateTokens(excerpt),
-        createdAt: new Date().toISOString(),
-      }];
+      return [
+        {
+          sourceId: randomUUID(),
+          runId,
+          sourceKind: "file",
+          sourceRef: latestPath,
+          modifiedAt: stat.mtime.toISOString(),
+          excerpt,
+          tokenEstimate: estimateTokens(excerpt),
+          createdAt: new Date().toISOString(),
+        },
+      ];
     } catch {
       return [];
     }
@@ -965,9 +999,8 @@ export class MemoryMaintenanceService {
     item: Pick<MemoryItemRecord, "namespace" | "metadata"> & { metadata: Record<string, unknown> },
     workspaceId: string,
   ): boolean {
-    const explicitWorkspaceId = typeof item.metadata.workspaceId === "string"
-      ? this.normalizeWorkspaceId(item.metadata.workspaceId)
-      : undefined;
+    const explicitWorkspaceId =
+      typeof item.metadata.workspaceId === "string" ? this.normalizeWorkspaceId(item.metadata.workspaceId) : undefined;
     if (explicitWorkspaceId) {
       return explicitWorkspaceId === workspaceId;
     }
@@ -1104,7 +1137,7 @@ export class MemoryMaintenanceService {
       {
         changeId: randomUUID(),
         runId: input.runId,
-        changeKind: latestExists ? "updated" as const : "created" as const,
+        changeKind: latestExists ? ("updated" as const) : ("created" as const),
         targetKind: "file" as const,
         targetRef: latestPath,
         beforeRef: latestExists ? (previousSnapshotPath ?? latestPath) : undefined,
@@ -1165,8 +1198,9 @@ export class MemoryMaintenanceService {
       const hour = getZonedParts(new Date(session.modifiedAt), policy.timeZone).hour;
       counts.set(hour, (counts.get(hour) ?? 0) + 1);
     }
-    const preferredHour = Array.from(counts.entries())
-      .sort((left, right) => right[1] - left[1] || left[0] - right[0])[0]?.[0];
+    const preferredHour = Array.from(counts.entries()).sort(
+      (left, right) => right[1] - left[1] || left[0] - right[0],
+    )[0]?.[0];
     if (preferredHour === undefined) {
       return;
     }
@@ -1176,7 +1210,8 @@ export class MemoryMaintenanceService {
     await this.maybeCreateRecommendation(workspaceId, {
       kind: "schedule_adjustment",
       summary: `Recent workspace activity clusters around ${preferredHour}:00 ${policy.timeZone}, away from the current Dream schedule.`,
-      rationale: "Recent transcript activity suggests that a different scheduled hour may be a better fit for maintenance windows.",
+      rationale:
+        "Recent transcript activity suggests that a different scheduled hour may be a better fit for maintenance windows.",
       proposedPatch: {
         schedule: {
           ...policy.schedule,
@@ -1191,9 +1226,8 @@ export class MemoryMaintenanceService {
     policy: MemoryMaintenancePolicyRecord,
     reason: string,
   ): Promise<void> {
-    const proposedPatch = policy.executionTarget === "local"
-      ? { executionTarget: "cloud" }
-      : { unavailableModelPolicy: "error" };
+    const proposedPatch =
+      policy.executionTarget === "local" ? { executionTarget: "cloud" } : { unavailableModelPolicy: "error" };
     await this.maybeCreateRecommendation(workspaceId, {
       kind: policy.executionTarget === "local" ? "execution_target_adjustment" : "model_adjustment",
       summary: reason,
@@ -1211,17 +1245,16 @@ export class MemoryMaintenanceService {
       proposedPatch: Record<string, unknown>;
     },
   ): Promise<MemoryMaintenanceRecommendationRecord | undefined> {
-    const existing = this.ctx.storage.memoryMaintenance.listRecommendations(workspaceId, 25)
-      .find((item) => {
-        if (item.kind !== input.kind || item.status === "rejected") {
-          return false;
-        }
-        const updatedAtMs = Date.parse(item.updatedAt);
-        if (Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs > RECOMMENDATION_DEDUP_WINDOW_MS) {
-          return false;
-        }
-        return JSON.stringify(item.proposedPatch) === JSON.stringify(input.proposedPatch);
-      });
+    const existing = this.ctx.storage.memoryMaintenance.listRecommendations(workspaceId, 25).find((item) => {
+      if (item.kind !== input.kind || item.status === "rejected") {
+        return false;
+      }
+      const updatedAtMs = Date.parse(item.updatedAt);
+      if (Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs > RECOMMENDATION_DEDUP_WINDOW_MS) {
+        return false;
+      }
+      return JSON.stringify(item.proposedPatch) === JSON.stringify(input.proposedPatch);
+    });
     if (existing) {
       return undefined;
     }
@@ -1303,15 +1336,11 @@ export class MemoryMaintenanceService {
 }
 
 function getWorkspaceMemoryRelativeDir(workspaceId: string): string {
-  return workspaceId === DEFAULT_WORKSPACE_ID
-    ? "memory"
-    : `workspaces/${workspaceId}/memory`;
+  return workspaceId === DEFAULT_WORKSPACE_ID ? "memory" : `workspaces/${workspaceId}/memory`;
 }
 
 function getWorkspaceMaintenanceRelativeDir(workspaceId: string): string {
-  return workspaceId === DEFAULT_WORKSPACE_ID
-    ? "memory/maintenance"
-    : `workspaces/${workspaceId}/memory/maintenance`;
+  return workspaceId === DEFAULT_WORKSPACE_ID ? "memory/maintenance" : `workspaces/${workspaceId}/memory/maintenance`;
 }
 
 function isProviderLikelyLocal(baseUrl: string): boolean {
@@ -1379,7 +1408,11 @@ function renderTranscriptSection(sessionId: string, modifiedAt: string, excerpt:
   ].join("\n");
 }
 
-function renderMemoryFileSection(sourceRef: string, modifiedAt: string | undefined, excerpt: string | undefined): string {
+function renderMemoryFileSection(
+  sourceRef: string,
+  modifiedAt: string | undefined,
+  excerpt: string | undefined,
+): string {
   return [
     `## Memory File ${sourceRef}`,
     ``,
@@ -1390,7 +1423,11 @@ function renderMemoryFileSection(sourceRef: string, modifiedAt: string | undefin
   ].join("\n");
 }
 
-function renderMemoryItemSection(sourceRef: string, modifiedAt: string | undefined, excerpt: string | undefined): string {
+function renderMemoryItemSection(
+  sourceRef: string,
+  modifiedAt: string | undefined,
+  excerpt: string | undefined,
+): string {
   return [
     `## Memory Item ${sourceRef}`,
     ``,
@@ -1401,7 +1438,11 @@ function renderMemoryItemSection(sourceRef: string, modifiedAt: string | undefin
   ].join("\n");
 }
 
-function renderExistingMaintenanceSection(sourceRef: string, modifiedAt: string | undefined, excerpt: string | undefined): string {
+function renderExistingMaintenanceSection(
+  sourceRef: string,
+  modifiedAt: string | undefined,
+  excerpt: string | undefined,
+): string {
   return [
     `## Prior Maintenance Artifact ${sourceRef}`,
     ``,
@@ -1450,17 +1491,20 @@ function buildMaintenanceConsolidationPrompt(input: {
     ...input.sources.maintenanceSources,
     ...input.sources.memoryItemSources,
   ];
-  const sourceCatalog = allSources.length > 0
-    ? allSources.map((source) => {
-      const details = [
-        source.sourceKind,
-        source.sourceRef,
-        source.modifiedAt ? `modified=${source.modifiedAt}` : undefined,
-        source.tokenEstimate ? `tokens=${source.tokenEstimate}` : undefined,
-      ].filter(Boolean);
-      return `- ${details.join(" | ")}`;
-    }).join("\n")
-    : "- none";
+  const sourceCatalog =
+    allSources.length > 0
+      ? allSources
+          .map((source) => {
+            const details = [
+              source.sourceKind,
+              source.sourceRef,
+              source.modifiedAt ? `modified=${source.modifiedAt}` : undefined,
+              source.tokenEstimate ? `tokens=${source.tokenEstimate}` : undefined,
+            ].filter(Boolean);
+            return `- ${details.join(" | ")}`;
+          })
+          .join("\n")
+      : "- none";
   const evidence = selectMaintenanceEvidenceSections(input.sources.markdownSections);
   return [
     `Workspace: ${input.workspaceId}`,
@@ -1488,7 +1532,9 @@ function selectMaintenanceEvidenceSections(sections: string[]): string {
   for (const section of sections) {
     const sectionTokens = estimateTokens(section);
     if (selected.length > 0 && usedTokens + sectionTokens > MAX_MODEL_EVIDENCE_TOKENS) {
-      selected.push("## Evidence Truncated\n\nAdditional evidence was omitted from the prompt after reaching the maintenance prompt budget.");
+      selected.push(
+        "## Evidence Truncated\n\nAdditional evidence was omitted from the prompt after reaching the maintenance prompt budget.",
+      );
       break;
     }
     selected.push(section);
@@ -1524,9 +1570,7 @@ function normalizeGeneratedMaintenanceMarkdown(generated: string, fallback: stri
   if (!trimmed) {
     return fallback;
   }
-  return trimmed.startsWith("# Workspace Memory")
-    ? trimmed
-    : `# Workspace Memory\n\n${trimmed}`;
+  return trimmed.startsWith("# Workspace Memory") ? trimmed : `# Workspace Memory\n\n${trimmed}`;
 }
 
 function buildFallbackMaintenanceMarkdown(workspaceId: string, sources: MaintenanceSourceBundle): string {
@@ -1635,7 +1679,10 @@ async function walkMemoryFiles(
   return files;
 }
 
-async function findPreviousSnapshotPath(maintenanceDir: string, maintenanceRelativeDir: string): Promise<string | undefined> {
+async function findPreviousSnapshotPath(
+  maintenanceDir: string,
+  maintenanceRelativeDir: string,
+): Promise<string | undefined> {
   let entries;
   try {
     entries = await fs.readdir(maintenanceDir, { withFileTypes: true });
@@ -1679,7 +1726,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
-function getZonedParts(date: Date, timeZone: string): {
+function getZonedParts(
+  date: Date,
+  timeZone: string,
+): {
   year: number;
   month: number;
   day: number;

@@ -30,7 +30,8 @@ export function createInternalMcpApprovalInboxTools(serverId: string): McpToolRe
     {
       serverId,
       toolName: MCP_APPROVAL_DELIVERY_TOOL_NAME,
-      description: "Receives durable approval delivery envelopes and stores them in the GoatCitadel MCP approval inbox.",
+      description:
+        "Receives durable approval delivery envelopes and stores them in the GoatCitadel MCP approval inbox.",
       enabled: true,
       updatedAt,
       inputSchema: {
@@ -46,7 +47,17 @@ export function createInternalMcpApprovalInboxTools(serverId: string): McpToolRe
           actionType: { type: "string" },
           expiresAt: { type: "string" },
         },
-        required: ["approvalId", "kind", "riskLevel", "status", "preview", "tokenId", "token", "actionType", "expiresAt"],
+        required: [
+          "approvalId",
+          "kind",
+          "riskLevel",
+          "status",
+          "preview",
+          "tokenId",
+          "token",
+          "actionType",
+          "expiresAt",
+        ],
       },
     },
     {
@@ -110,7 +121,9 @@ export async function handleInternalMcpApprovalInboxInvoke(
         return {
           ok: true,
           output: {
-            item: deps.approvalInbox.receiveMcpApprovalDelivery(parseDeliveryEnvelope(server.serverId, input.arguments)),
+            item: deps.approvalInbox.receiveMcpApprovalDelivery(
+              parseDeliveryEnvelope(server.serverId, input.arguments),
+            ),
           },
         };
 
@@ -184,13 +197,11 @@ function parseListArgs(args: Record<string, unknown> | undefined): {
   state?: ApprovalInboxItemState;
   limit?: number;
 } {
-  const state = optionalEnumValue(
-    args?.state,
-    ["pending", "approved", "rejected", "edited", "expired", "failed"],
-  );
-  const limit = typeof args?.limit === "number" && Number.isFinite(args.limit)
-    ? Math.max(1, Math.min(200, Math.trunc(args.limit)))
-    : undefined;
+  const state = optionalEnumValue(args?.state, ["pending", "approved", "rejected", "edited", "expired", "failed"]);
+  const limit =
+    typeof args?.limit === "number" && Number.isFinite(args.limit)
+      ? Math.max(1, Math.min(200, Math.trunc(args.limit)))
+      : undefined;
   return {
     state,
     limit,
@@ -254,11 +265,13 @@ async function resolveInboxItem(
     if (updated.state !== currentState) {
       return { item: updated };
     }
-    throw new Error(updated.lastError);
+    throw new Error(updated.lastError, { cause: error });
   }
 }
 
-function mapDecisionToInboxState(decision: "approve" | "reject" | "edit"): Extract<ApprovalInboxItemState, "approved" | "rejected" | "edited"> {
+function mapDecisionToInboxState(
+  decision: "approve" | "reject" | "edit",
+): Extract<ApprovalInboxItemState, "approved" | "rejected" | "edited"> {
   if (decision === "approve") {
     return "approved";
   }
