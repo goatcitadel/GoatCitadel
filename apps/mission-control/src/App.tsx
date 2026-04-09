@@ -1,5 +1,15 @@
 /* eslint-disable max-lines */
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type LazyExoticComponent,
+} from "react";
 import { CHAT_MODE_PRESETS } from "@goatcitadel/contracts";
 import {
   consumeGatewayAccessBootstrapFromLocation,
@@ -61,14 +71,26 @@ import {
   setDevDiagnosticsSseState,
 } from "./state/dev-diagnostics-store";
 
-function lazyPage(loader: () => Promise<Record<string, unknown>>, exportName: string) {
+type LazyPageExport<TModule, TExport extends keyof TModule> =
+  TModule[TExport] extends ComponentType<infer TProps> ? ComponentType<TProps> : never;
+type LazyPageComponent<TModule, TExport extends keyof TModule> = LazyExoticComponent<LazyPageExport<TModule, TExport>>;
+
+function lazyPage<TModule extends Record<string, unknown>, TExport extends keyof TModule>(
+  loader: () => Promise<TModule>,
+  exportName: TExport,
+): LazyPageComponent<TModule, TExport> {
   return lazy(async () => {
     const module = await loader();
+    const exportedComponent = module[exportName];
+
+    if (!exportedComponent) {
+      throw new Error(`Expected lazy page export "${String(exportName)}" to exist.`);
+    }
+
     return {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Lazy-loaded surfaces expose distinct prop contracts; the call sites remain the authoritative type check.
-      default: module[exportName] as ComponentType<any>,
+      default: exportedComponent as LazyPageExport<TModule, TExport>,
     };
-  });
+  }) as LazyPageComponent<TModule, TExport>;
 }
 
 const ActivityHubPage = lazyPage(() => import("./pages/ActivityHubPage"), "ActivityHubPage");
