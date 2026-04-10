@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: goatcitadel
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${GOATCITADEL_POSTGRES_PASSWORD:-change-this-postgres-password}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d goatcitadel"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - goatcitadel-postgres:/var/lib/postgresql/data
+
+  goatcitadel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GOATCITADEL_VITE_ALLOWED_HOSTS: ${GOATCITADEL_VITE_ALLOWED_HOSTS:-localhost,127.0.0.1}
+        VITE_GATEWAY_ALLOWED_HOSTS: ${VITE_GATEWAY_ALLOWED_HOSTS:-localhost,127.0.0.1}
+        VITE_GATEWAY_URL: ${VITE_GATEWAY_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /app/.tmp
+    environment:
+      NODE_ENV: production
+      GATEWAY_HOST: 0.0.0.0
+      GATEWAY_PORT: 8787
+      MISSION_CONTROL_HOST: 0.0.0.0
+      MISSION_CONTROL_PORT: 4173
+      GOATCITADEL_DATABASE_DRIVER: postgres
+      GOATCITADEL_POSTGRES_MODE: managed
+      GOATCITADEL_POSTGRES_HOST: postgres
+      GOATCITADEL_POSTGRES_PORT: 5432
+      GOATCITADEL_POSTGRES_DATABASE: goatcitadel
+      GOATCITADEL_POSTGRES_USER: postgres
+      GOATCITADEL_POSTGRES_PASSWORD: ${GOATCITADEL_POSTGRES_PASSWORD:-change-this-postgres-password}
+      GOATCITADEL_POSTGRES_SSL: disable
+      GOATCITADEL_BUNDLED_POSTGRES_ENABLED: "false"
+      GOATCITADEL_AUTH_MODE: token
+      GOATCITADEL_AUTH_TOKEN: ${GOATCITADEL_AUTH_TOKEN:-change-this-goatcitadel-token}
+      GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "false"
+      GOATCITADEL_ALLOWED_ORIGINS: ${GOATCITADEL_ALLOWED_ORIGINS:-http://localhost:4173,http://127.0.0.1:4173}
+      GOATCITADEL_VITE_ALLOWED_HOSTS: ${GOATCITADEL_VITE_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      VITE_GATEWAY_ALLOWED_HOSTS: ${VITE_GATEWAY_ALLOWED_HOSTS:-localhost,127.0.0.1}
+    ports:
+      - "4173:4173"
+      - "8787:8787"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:8787/health'').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"',
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    volumes:
+      - goatcitadel-data:/app/data
+      - goatcitadel-workspace:/app/workspace
+
+volumes:
+  goatcitadel-postgres:
+  goatcitadel-data:
+  goatcitadel-workspace:

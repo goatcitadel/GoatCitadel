@@ -8,6 +8,10 @@ The project uses semantic pre-release versions while the public surface is still
 
 ### Added
 
+- First-party container deployment support:
+  - multi-stage Linux `Dockerfile` for a non-root GoatCitadel runtime
+  - Postgres-first `docker-compose.yaml` example with healthchecks, named volumes, and safer shared-host defaults
+  - Docker install and hardening guidance in the README and install docs
 - Native capability system foundations:
   - shared capability contracts for tools, skills, candidate bundles, proposals, catalog snapshots, and Code Mode runs
   - SQLite-backed persistence for capability snapshots, skill lifecycle metadata, candidate versions, proposal records/events, and Code Mode run records
@@ -26,10 +30,11 @@ The project uses semantic pre-release versions while the public surface is still
 
 ### Changed
 
+- Fresh config defaults now prefer Postgres while keeping SQLite available as an explicit fallback.
 - Continued public repo cleanup, documentation tightening, and release prep.
 - Chat approvals no longer rely on the old status-lane flow or “send again to continue” behavior; blocking approvals now resume through the runtime-backed footer queue.
 - Capability planning/runtime plumbing now enforces a hard split between inspectable metadata and callable capabilities so unactivated proposals and candidates stay visible without becoming executable.
-- README now documents the capability system, governed Code Mode v1, and the sharper Skills Hub / inline approval behavior.
+- README now documents the capability system, governed Code Mode v1, the sharper Skills Hub / inline approval behavior, and the new Docker deployment path.
 
 ### Fixed
 

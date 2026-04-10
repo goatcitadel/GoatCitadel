@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { SseTokenIssueResponse } from "@goatcitadel/contracts";
-import { enterRequestAttribution } from "../../../../packages/storage/src/request-attribution.js";
+import { enterRequestAttribution } from "@goatcitadel/storage";
 import { isLineWebhookPath } from "../services/line-webhook.js";
 import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.js";
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
@@ -57,27 +57,26 @@ export const authPlugin = fp(async (fastify) => {
   fastify.decorateRequest("authGrantId", undefined);
   fastify.decorateRequest("authCompanionSessionId", undefined);
 
-  fastify.decorate("issueSseToken", (
-    scope: "events:stream" | "dev:diagnostics:stream",
-    ttlMs = 2 * 60 * 1000,
-    actorId = "anonymous",
-  ) => {
-    purgeExpiredSseTokens(sseTokens);
-    enforceSseTokenCapacity(sseTokens, MAX_ACTIVE_SSE_TOKENS, actorId, MAX_ACTIVE_SSE_TOKENS_PER_ACTOR);
-    const token = randomBytes(32).toString("base64url");
-    const expiresAt = Date.now() + Math.max(30_000, Math.min(10 * 60 * 1000, ttlMs));
-    sseTokens.set(token, {
-      token,
-      actorId,
-      scope,
-      expiresAt,
-    });
-    return {
-      token,
-      expiresAt: new Date(expiresAt).toISOString(),
-      scope,
-    };
-  });
+  fastify.decorate(
+    "issueSseToken",
+    (scope: "events:stream" | "dev:diagnostics:stream", ttlMs = 2 * 60 * 1000, actorId = "anonymous") => {
+      purgeExpiredSseTokens(sseTokens);
+      enforceSseTokenCapacity(sseTokens, MAX_ACTIVE_SSE_TOKENS, actorId, MAX_ACTIVE_SSE_TOKENS_PER_ACTOR);
+      const token = randomBytes(32).toString("base64url");
+      const expiresAt = Date.now() + Math.max(30_000, Math.min(10 * 60 * 1000, ttlMs));
+      sseTokens.set(token, {
+        token,
+        actorId,
+        scope,
+        expiresAt,
+      });
+      return {
+        token,
+        expiresAt: new Date(expiresAt).toISOString(),
+        scope,
+      };
+    },
+  );
 
   fastify.addHook("onRequest", async (request, reply) => {
     setAuthActor(request, "anonymous", "none");
@@ -97,11 +96,11 @@ export const authPlugin = fp(async (fastify) => {
       return;
     }
     if (
-      isLineWebhookPath(request.url)
-      || isNextcloudTalkWebhookPath(request.url)
-      || isSlackWebhookPath(request.url)
-      || isTelegramWebhookPath(request.url)
-      || isWhatsAppWebhookPath(request.url)
+      isLineWebhookPath(request.url) ||
+      isNextcloudTalkWebhookPath(request.url) ||
+      isSlackWebhookPath(request.url) ||
+      isTelegramWebhookPath(request.url) ||
+      isWhatsAppWebhookPath(request.url)
     ) {
       return;
     }
@@ -115,19 +114,16 @@ export const authPlugin = fp(async (fastify) => {
     const remoteAddress = request.raw.socket.remoteAddress ?? request.ip;
     const forwardedFor = request.headers["x-forwarded-for"];
     const loopbackRequest = !forwardedFor && isLoopbackAddress(remoteAddress);
-    if (
-      auth.allowLoopbackBypass
-      && loopbackRequest
-    ) {
+    if (auth.allowLoopbackBypass && loopbackRequest) {
       setAuthActor(request, `loopback:${normalizeActorSuffix(remoteAddress)}`, "loopback");
       return;
     }
 
     if (
-      loopbackRequest
-      && isOnboardingRecoveryRoute(request.url)
-      && isAuthMisconfigured(auth)
-      && !isOnboardingComplete(fastify)
+      loopbackRequest &&
+      isOnboardingRecoveryRoute(request.url) &&
+      isAuthMisconfigured(auth) &&
+      !isOnboardingComplete(fastify)
     ) {
       setAuthActor(request, `loopback:${normalizeActorSuffix(remoteAddress)}`, "loopback");
       return;
@@ -153,8 +149,7 @@ export const authPlugin = fp(async (fastify) => {
         });
       }
 
-      const provided = providedBearerToken
-        ?? readHeaderToken(request.headers["x-goatcitadel-token"]);
+      const provided = providedBearerToken ?? readHeaderToken(request.headers["x-goatcitadel-token"]);
 
       // Operator bearer tokens are the common path for Mission Control. Check
       // them before device/companion storage lookups so lightweight routes stay
@@ -203,8 +198,7 @@ export const authPlugin = fp(async (fastify) => {
         });
       }
 
-      const provided = providedBearerToken
-        ?? readHeaderToken(request.headers["x-goatcitadel-token"]);
+      const provided = providedBearerToken ?? readHeaderToken(request.headers["x-goatcitadel-token"]);
 
       if (!provided || !timingSafeStringEqual(provided, configuredToken)) {
         return reply.code(401).send({
@@ -227,9 +221,9 @@ export const authPlugin = fp(async (fastify) => {
 
       const credentials = readBasicCredentials(request.headers.authorization);
       if (
-        !credentials
-        || !timingSafeStringEqual(credentials.username, username)
-        || !timingSafeStringEqual(credentials.password, password)
+        !credentials ||
+        !timingSafeStringEqual(credentials.username, username) ||
+        !timingSafeStringEqual(credentials.password, password)
       ) {
         reply.header("WWW-Authenticate", 'Basic realm="GoatCitadel Gateway"');
         return reply.code(401).send({
@@ -285,11 +279,13 @@ export const authPlugin = fp(async (fastify) => {
 
 function isOnboardingRecoveryRoute(url: string): boolean {
   const pathname = url.split("?", 1)[0] ?? url;
-  return pathname === "/api/v1/onboarding/startup"
-    || pathname === "/api/v1/onboarding/state"
-    || pathname === "/api/v1/onboarding/bootstrap"
-    || pathname === "/api/v1/auth/plan"
-    || pathname === "/api/v1/auth/install-token";
+  return (
+    pathname === "/api/v1/onboarding/startup" ||
+    pathname === "/api/v1/onboarding/state" ||
+    pathname === "/api/v1/onboarding/bootstrap" ||
+    pathname === "/api/v1/auth/plan" ||
+    pathname === "/api/v1/auth/install-token"
+  );
 }
 
 function getSseTokenScopeForPath(url: string): "events:stream" | "dev:diagnostics:stream" | null {
@@ -371,7 +367,9 @@ function readBearerToken(header: string | string[] | undefined): string | undefi
   return token;
 }
 
-function readBasicCredentials(header: string | string[] | undefined): { username: string; password: string } | undefined {
+function readBasicCredentials(
+  header: string | string[] | undefined,
+): { username: string; password: string } | undefined {
   if (!header || Array.isArray(header)) {
     return undefined;
   }
@@ -416,10 +414,10 @@ function validateSseToken(
   purgeExpiredSseTokens(store);
   const record = store.get(provided);
   if (
-    record
-    && record.scope === scope
-    && record.expiresAt > Date.now()
-    && timingSafeStringEqual(record.token, provided)
+    record &&
+    record.scope === scope &&
+    record.expiresAt > Date.now() &&
+    timingSafeStringEqual(record.token, provided)
   ) {
     // One-time use token.
     store.delete(provided);
@@ -479,7 +477,10 @@ function findOldestSseTokenKey(store: Map<string, SseTokenRecord>, actorId: stri
 }
 
 function setAuthActor(
-  request: { authActorId?: string; authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" },
+  request: {
+    authActorId?: string;
+    authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion";
+  },
   actorId: string,
   source: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion",
 ): void {
