@@ -12,10 +12,7 @@ import type {
   DatabaseVerifyIssue,
   DatabaseVerifyResponse,
 } from "@goatcitadel/contracts";
-import {
-  PostgresDatabaseClient,
-  runPostgresMigrations,
-} from "@goatcitadel/storage";
+import { PostgresDatabaseClient, runPostgresMigrations } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { ensureBundledPostgresRuntime } from "../bundled-postgres-runtime.js";
 import { isBundledPostgresMode, resolveGatewayPostgresConnectionOptions } from "../postgres-runtime-config.js";
@@ -94,7 +91,7 @@ export class DatabaseCutoverService {
     let summary: SourceSummary = { sessions: 0, transcriptEvents: 0, auditEvents: 0 };
     let targetTranscriptEvents = 0;
     let targetAuditEvents = 0;
-    let status: DatabaseCutoverStatus = input.execute ? "failed" : "ready";
+    let status: DatabaseCutoverStatus;
     let runtimeFlipReady = false;
     let runtimeFlipBlockedReason: string | undefined;
 
@@ -107,15 +104,19 @@ export class DatabaseCutoverService {
       const source = await resolveSnapshotFromBackup(backup.outputPath);
       const sourceSchema = await inspectSqliteSnapshot(source.sqlitePath);
       summary = await summarizeSourceSnapshot(source);
-      const bundledRuntime = !input.execute || !isBundledPostgresMode(this.deps.config)
-        ? undefined
-        : await ensureBundledPostgresRuntime(this.deps.config);
+      const bundledRuntime =
+        !input.execute || !isBundledPostgresMode(this.deps.config)
+          ? undefined
+          : await ensureBundledPostgresRuntime(this.deps.config);
 
-      const postgres = new PostgresDatabaseClient(resolveGatewayPostgresConnectionOptions(this.deps.config, {
-        applicationName: "goatcitadel-cutover",
-      }), {
-        migrationsTable: this.deps.config.assistant.database.postgres.migrationsTable,
-      });
+      const postgres = new PostgresDatabaseClient(
+        resolveGatewayPostgresConnectionOptions(this.deps.config, {
+          applicationName: "goatcitadel-cutover",
+        }),
+        {
+          migrationsTable: this.deps.config.assistant.database.postgres.migrationsTable,
+        },
+      );
       try {
         const migrationRun = await runPostgresMigrations(postgres);
         completeStep(steps, "migrate", `Latest Postgres migration version ${migrationRun.latestVersion}`);
@@ -134,20 +135,11 @@ export class DatabaseCutoverService {
           skipStep(steps, "import", "Dry-run mode skipped the import stage.");
         }
 
-        const verification = await verifyAgainstSource(
-          source,
-          sourceSchema,
-          postgres,
-          backup.outputPath,
-        );
+        const verification = await verifyAgainstSource(source, sourceSchema, postgres, backup.outputPath);
         targetTranscriptEvents = verification.targetTranscriptEventCount ?? targetTranscriptEvents;
         targetAuditEvents = verification.targetAuditEventCount ?? targetAuditEvents;
         if (!verification.verified) {
-          failStep(
-            steps,
-            "verify",
-            verification.issues.map((issue) => issue.message).join(" "),
-          );
+          failStep(steps, "verify", verification.issues.map((issue) => issue.message).join(" "));
           status = "failed";
         } else {
           completeStep(
@@ -229,9 +221,10 @@ export class DatabaseCutoverService {
   public async verify(input: { source: string; target?: string }): Promise<DatabaseVerifyResponse> {
     const source = await resolveExplicitSnapshot(input.source);
     const sourceSchema = await inspectSqliteSnapshot(source.sqlitePath);
-    const bundledRuntime = !input.target && isBundledPostgresMode(this.deps.config)
-      ? await ensureBundledPostgresRuntime(this.deps.config)
-      : undefined;
+    const bundledRuntime =
+      !input.target && isBundledPostgresMode(this.deps.config)
+        ? await ensureBundledPostgresRuntime(this.deps.config)
+        : undefined;
     const postgres = new PostgresDatabaseClient(
       resolveGatewayPostgresConnectionOptions(this.deps.config, {
         connectionStringOverride: input.target,
@@ -266,11 +259,14 @@ export class DatabaseCutoverService {
       };
     }
 
-    const postgres = new PostgresDatabaseClient(resolveGatewayPostgresConnectionOptions(this.deps.config, {
-      applicationName: "goatcitadel-cutover",
-    }), {
-      migrationsTable: this.deps.config.assistant.database.postgres.migrationsTable,
-    });
+    const postgres = new PostgresDatabaseClient(
+      resolveGatewayPostgresConnectionOptions(this.deps.config, {
+        applicationName: "goatcitadel-cutover",
+      }),
+      {
+        migrationsTable: this.deps.config.assistant.database.postgres.migrationsTable,
+      },
+    );
     try {
       const health = await postgres.healthCheck();
       return {
@@ -348,9 +344,7 @@ async function verifyAgainstSource(
   const transcriptTarget = await postgres.queryOne<{ count: string }>(
     "SELECT COUNT(*)::text AS count FROM transcript_events",
   );
-  const auditTarget = await postgres.queryOne<{ count: string }>(
-    "SELECT COUNT(*)::text AS count FROM audit_events",
-  );
+  const auditTarget = await postgres.queryOne<{ count: string }>("SELECT COUNT(*)::text AS count FROM audit_events");
   const targetTranscriptEventCount = Number(transcriptTarget?.count ?? 0);
   const targetAuditEventCount = Number(auditTarget?.count ?? 0);
 
@@ -410,14 +404,18 @@ async function inspectSqliteSnapshot(sqlitePath: string): Promise<SqliteSnapshot
 
   const db = new DatabaseSync(sqlitePath, { readOnly: true });
   try {
-    const tableRows = db.prepare(`
+    const tableRows = db
+      .prepare(
+        `
       SELECT name, sql
       FROM sqlite_master
       WHERE type = 'table'
         AND sql IS NOT NULL
         AND name NOT LIKE 'sqlite_%'
       ORDER BY name ASC
-    `).all() as Array<{ name: string; sql: string }>;
+    `,
+      )
+      .all() as Array<{ name: string; sql: string }>;
 
     const tables = tableRows.map((row) => inspectSqliteTable(db, row.name, row.sql));
     return { tables };
@@ -443,7 +441,9 @@ function inspectSqliteTable(db: DatabaseSync, tableName: string, sql: string): S
     seq: number;
     table: string;
   }>;
-  const countRow = db.prepare(`SELECT COUNT(*) AS count FROM ${quotedTableName}`).get() as { count?: number } | undefined;
+  const countRow = db.prepare(`SELECT COUNT(*) AS count FROM ${quotedTableName}`).get() as
+    | { count?: number }
+    | undefined;
   return {
     name: tableName,
     sql,
@@ -485,9 +485,9 @@ async function importSqliteRuntimeTables(
       }
       await postgres.transaction(async (client) => {
         for (let offset = 0; offset < table.rowCount; offset += CUTOVER_IMPORT_BATCH_SIZE) {
-          const rows = sourceDb.prepare(
-            `SELECT * FROM ${quoteIdentifier(table.name)} LIMIT ? OFFSET ?`,
-          ).all(CUTOVER_IMPORT_BATCH_SIZE, offset) as Record<string, unknown>[];
+          const rows = sourceDb
+            .prepare(`SELECT * FROM ${quoteIdentifier(table.name)} LIMIT ? OFFSET ?`)
+            .all(CUTOVER_IMPORT_BATCH_SIZE, offset) as Record<string, unknown>[];
           if (rows.length === 0) {
             continue;
           }
@@ -519,7 +519,10 @@ async function importEventLogs(
   for (const filePath of transcriptFiles) {
     const sessionId = path.basename(filePath, ".jsonl");
     const content = await fs.readFile(filePath, "utf8");
-    const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const lines = content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
     if (lines.length === 0) {
       continue;
     }
@@ -583,7 +586,10 @@ async function importEventLogs(
       continue;
     }
     const content = await fs.readFile(filePath, "utf8");
-    const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const lines = content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
     if (lines.length === 0) {
       continue;
     }
@@ -779,7 +785,10 @@ async function listFilesWithExtension(dir: string, extension: string): Promise<s
 }
 
 function countNonEmptyLines(content: string): number {
-  return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).length;
+  return content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean).length;
 }
 
 function parseJsonLine(line: string, filePath: string, lineNumber: number): Record<string, unknown> | undefined {
@@ -791,6 +800,7 @@ function parseJsonLine(line: string, filePath: string, lineNumber: number): Reco
   } catch {
     // fall through
   }
+  // eslint-disable-next-line no-console -- malformed legacy lines should be visible while rehearsing cutover imports.
   console.warn("[goatcitadel] database cutover skipped malformed JSONL line", {
     filePath,
     lineNumber,
@@ -816,9 +826,9 @@ function topologicallySortTables(tables: readonly SqliteSnapshotTable[]): Sqlite
       .map((name) => byName.get(name))
       .filter((table): table is SqliteSnapshotTable => Boolean(table))
       .filter((table) =>
-        table.foreignKeys.every((foreignKey) =>
-          !remaining.has(foreignKey.referencedTable) || foreignKey.referencedTable === table.name
-        )
+        table.foreignKeys.every(
+          (foreignKey) => !remaining.has(foreignKey.referencedTable) || foreignKey.referencedTable === table.name,
+        ),
       )
       .sort((left, right) => left.name.localeCompare(right.name));
 
@@ -842,7 +852,7 @@ function topologicallySortTables(tables: readonly SqliteSnapshotTable[]): Sqlite
 }
 
 function quoteIdentifier(identifier: string): string {
-  return `"${identifier.replaceAll("\"", "\"\"")}"`;
+  return `"${identifier.replaceAll('"', '""')}"`;
 }
 
 async function statIfExists(targetPath: string) {

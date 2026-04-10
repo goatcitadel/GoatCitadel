@@ -25,18 +25,30 @@ interface SelectOrCustomProps {
 }
 
 export function SelectOrCustom(props: SelectOrCustomProps) {
-  const dedupedOptions = useMemo(() => dedupeOptions(props.options), [props.options]);
-  const isKnownValue = dedupedOptions.some((option) => option.value === props.value);
-  const allowCustom = props.allowCustom ?? true;
-  const autoSelectFirstOption = props.autoSelectFirstOption ?? false;
-  const [isCustomMode, setIsCustomMode] = useState<boolean>(Boolean(props.forceCustomMode));
-  const hasUnknownValue = Boolean(props.value) && !isKnownValue;
+  const {
+    allowCustom: allowCustomProp,
+    autoSelectFirstOption: autoSelectFirstOptionProp,
+    customLabel,
+    customModeLabel,
+    customPlaceholder,
+    disabled,
+    forceCustomMode,
+    id,
+    inputType,
+    onChange,
+    onCustomModeChange,
+    options,
+    suggestedModeLabel,
+    value,
+  } = props;
+  const dedupedOptions = useMemo(() => dedupeOptions(options), [options]);
+  const isKnownValue = dedupedOptions.some((option) => option.value === value);
+  const allowCustom = allowCustomProp ?? true;
+  const autoSelectFirstOption = autoSelectFirstOptionProp ?? false;
+  const [isCustomMode, setIsCustomMode] = useState<boolean>(Boolean(forceCustomMode));
+  const hasUnknownValue = Boolean(value) && !isKnownValue;
 
-  const selectValue = isKnownValue
-    ? props.value
-    : autoSelectFirstOption
-      ? dedupedOptions[0]?.value ?? ""
-      : "";
+  const selectValue = isKnownValue ? value : autoSelectFirstOption ? (dedupedOptions[0]?.value ?? "") : "";
 
   useEffect(() => {
     if (!autoSelectFirstOption) {
@@ -52,8 +64,8 @@ export function SelectOrCustom(props: SelectOrCustomProps) {
     if (!fallback) {
       return;
     }
-    props.onChange(fallback);
-  }, [autoSelectFirstOption, dedupedOptions, isCustomMode, isKnownValue, props.onChange]);
+    onChange(fallback);
+  }, [autoSelectFirstOption, dedupedOptions, isCustomMode, isKnownValue, onChange]);
 
   return (
     <div className="select-or-custom">
@@ -61,44 +73,42 @@ export function SelectOrCustom(props: SelectOrCustomProps) {
         <div className="mode-switch" role="tablist" aria-label="Input mode">
           <button
             type="button"
-            className={["gc-button", (!isCustomMode ? "active" : "")].filter(Boolean).join(" ")}
-            disabled={props.disabled}
+            className={["gc-button", !isCustomMode ? "active" : ""].filter(Boolean).join(" ")}
+            disabled={disabled}
             onClick={() => {
               setIsCustomMode(false);
-              props.onCustomModeChange?.(false);
+              onCustomModeChange?.(false);
               if (!isKnownValue && autoSelectFirstOption && dedupedOptions[0]) {
-                props.onChange(dedupedOptions[0].value);
+                onChange(dedupedOptions[0].value);
               }
             }}
           >
-            {props.suggestedModeLabel ?? globalCopy.selectOrCustom.suggested}
+            {suggestedModeLabel ?? globalCopy.selectOrCustom.suggested}
           </button>
           <button
             type="button"
-            className={["gc-button", (isCustomMode ? "active" : "")].filter(Boolean).join(" ")}
-            disabled={props.disabled}
+            className={["gc-button", isCustomMode ? "active" : ""].filter(Boolean).join(" ")}
+            disabled={disabled}
             onClick={() => {
               setIsCustomMode(true);
-              props.onCustomModeChange?.(true);
+              onCustomModeChange?.(true);
             }}
           >
-            {props.customModeLabel ?? globalCopy.selectOrCustom.custom}
+            {customModeLabel ?? globalCopy.selectOrCustom.custom}
           </button>
         </div>
       ) : null}
       <select
-        id={props.id}
-        value={isCustomMode ? (isKnownValue ? props.value : dedupedOptions[0]?.value ?? "") : selectValue}
-        disabled={props.disabled}
+        id={id}
+        value={isCustomMode ? (isKnownValue ? value : (dedupedOptions[0]?.value ?? "")) : selectValue}
+        disabled={disabled}
         onChange={(event) => {
           setIsCustomMode(false);
-          props.onCustomModeChange?.(false);
-          props.onChange(event.target.value);
+          onCustomModeChange?.(false);
+          onChange(event.target.value);
         }}
       >
-        {!isKnownValue ? (
-          <option value="">{props.customPlaceholder ?? globalCopy.selectOrCustom.selectValue}</option>
-        ) : null}
+        {!isKnownValue ? <option value="">{customPlaceholder ?? globalCopy.selectOrCustom.selectValue}</option> : null}
         {dedupedOptions.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
@@ -107,20 +117,18 @@ export function SelectOrCustom(props: SelectOrCustomProps) {
       </select>
 
       {hasUnknownValue && !isCustomMode && allowCustom ? (
-        <p className="office-subtitle">
-          {globalCopy.selectOrCustom.customValueHint}
-        </p>
+        <p className="office-subtitle">{globalCopy.selectOrCustom.customValueHint}</p>
       ) : null}
 
       {isCustomMode ? (
         <div className="controls-row select-custom-input">
-          {props.customLabel ? <label>{props.customLabel}</label> : null}
+          {customLabel ? <label>{customLabel}</label> : null}
           <input
-            type={props.inputType ?? "text"}
-            value={props.value}
-            placeholder={props.customPlaceholder ?? globalCopy.selectOrCustom.enterCustom}
-            disabled={props.disabled}
-            onChange={(event) => props.onChange(event.target.value)}
+            type={inputType ?? "text"}
+            value={value}
+            placeholder={customPlaceholder ?? globalCopy.selectOrCustom.enterCustom}
+            disabled={disabled}
+            onChange={(event) => onChange(event.target.value)}
           />
         </div>
       ) : null}

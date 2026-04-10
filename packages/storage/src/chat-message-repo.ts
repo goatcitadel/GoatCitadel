@@ -107,9 +107,19 @@ export class ChatMessageRepository {
     }
     const BATCH_SIZE = 50;
     const columns = [
-      "message_id", "session_id", "role", "actor_type", "actor_id",
-      "content", "parts_json", "attachments_json",
-      "timestamp", "token_input", "token_output", "cost_usd", "created_at",
+      "message_id",
+      "session_id",
+      "role",
+      "actor_type",
+      "actor_id",
+      "content",
+      "parts_json",
+      "attachments_json",
+      "timestamp",
+      "token_input",
+      "token_output",
+      "cost_usd",
+      "created_at",
     ];
     const savepointName = `chat_messages_upsert_many_${randomUUID().replaceAll("-", "_")}`;
     this.db.exec(`SAVEPOINT ${savepointName}`);
@@ -174,17 +184,15 @@ export class ChatMessageRepository {
 
   public list(sessionId: string, limit = 200, cursor?: string): ChatMessageRecord[] {
     const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
-    let rows: ChatMessageRow[] = [];
-    if (cursor) {
-      const cursorRow = toCursorRow(this.getCursorStmt.get(sessionId, cursor));
-      if (typeof cursorRow?.seq === "number") {
-        rows = toChatMessageRows(this.listBeforeSeqStmt.all(sessionId, cursorRow.seq, safeLimit));
-      } else {
-        rows = toChatMessageRows(this.listLatestStmt.all(sessionId, safeLimit));
-      }
-    } else {
-      rows = toChatMessageRows(this.listLatestStmt.all(sessionId, safeLimit));
-    }
+    const rows = cursor
+      ? (() => {
+          const cursorRow = toCursorRow(this.getCursorStmt.get(sessionId, cursor));
+          if (typeof cursorRow?.seq === "number") {
+            return toChatMessageRows(this.listBeforeSeqStmt.all(sessionId, cursorRow.seq, safeLimit));
+          }
+          return toChatMessageRows(this.listLatestStmt.all(sessionId, safeLimit));
+        })()
+      : toChatMessageRows(this.listLatestStmt.all(sessionId, safeLimit));
     rows.reverse();
     return rows.map((row) => mapRow(row));
   }
@@ -198,20 +206,22 @@ function isChatMessageRow(value: unknown): value is ChatMessageRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.seq === "number"
-    && typeof value.message_id === "string"
-    && typeof value.session_id === "string"
-    && typeof value.role === "string"
-    && typeof value.actor_type === "string"
-    && typeof value.actor_id === "string"
-    && typeof value.content === "string"
-    && (typeof value.parts_json === "string" || value.parts_json === null)
-    && (typeof value.attachments_json === "string" || value.attachments_json === null)
-    && typeof value.timestamp === "string"
-    && (typeof value.token_input === "number" || value.token_input === null)
-    && (typeof value.token_output === "number" || value.token_output === null)
-    && (typeof value.cost_usd === "number" || value.cost_usd === null)
-    && typeof value.created_at === "string";
+  return (
+    typeof value.seq === "number" &&
+    typeof value.message_id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.role === "string" &&
+    typeof value.actor_type === "string" &&
+    typeof value.actor_id === "string" &&
+    typeof value.content === "string" &&
+    (typeof value.parts_json === "string" || value.parts_json === null) &&
+    (typeof value.attachments_json === "string" || value.attachments_json === null) &&
+    typeof value.timestamp === "string" &&
+    (typeof value.token_input === "number" || value.token_input === null) &&
+    (typeof value.token_output === "number" || value.token_output === null) &&
+    (typeof value.cost_usd === "number" || value.cost_usd === null) &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isChatInputPart(value: unknown): value is ChatInputPart {
@@ -222,14 +232,17 @@ function isChatInputPart(value: unknown): value is ChatInputPart {
     case "text":
       return typeof value.text === "string";
     case "image_ref":
-      return typeof value.attachmentId === "string"
-        && (value.mimeType === undefined || typeof value.mimeType === "string")
-        && (value.detail === undefined || value.detail === "low" || value.detail === "high" || value.detail === "auto");
+      return (
+        typeof value.attachmentId === "string" &&
+        (value.mimeType === undefined || typeof value.mimeType === "string") &&
+        (value.detail === undefined || value.detail === "low" || value.detail === "high" || value.detail === "auto")
+      );
     case "audio_ref":
     case "video_ref":
     case "file_ref":
-      return typeof value.attachmentId === "string"
-        && (value.mimeType === undefined || typeof value.mimeType === "string");
+      return (
+        typeof value.attachmentId === "string" && (value.mimeType === undefined || typeof value.mimeType === "string")
+      );
     default:
       return false;
   }
@@ -306,9 +319,8 @@ function parseAttachments(raw: string | null): ChatMessageRecord["attachments"] 
       const attachmentId = typeof item.attachmentId === "string" ? item.attachmentId : undefined;
       const fileName = typeof item.fileName === "string" ? item.fileName : undefined;
       const mimeType = typeof item.mimeType === "string" ? item.mimeType : undefined;
-      const sizeBytes = typeof item.sizeBytes === "number" && Number.isFinite(item.sizeBytes)
-        ? item.sizeBytes
-        : undefined;
+      const sizeBytes =
+        typeof item.sizeBytes === "number" && Number.isFinite(item.sizeBytes) ? item.sizeBytes : undefined;
       if (!attachmentId || !fileName || !mimeType || sizeBytes === undefined) {
         return undefined;
       }
@@ -322,5 +334,3 @@ function parseAttachments(raw: string | null): ChatMessageRecord["attachments"] 
     .filter((item): item is NonNullable<ChatMessageRecord["attachments"]>[number] => Boolean(item));
   return attachments.length > 0 ? attachments : undefined;
 }
-
-

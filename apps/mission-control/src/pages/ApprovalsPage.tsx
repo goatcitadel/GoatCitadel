@@ -1,9 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
-import {
-  buildRouteSearch,
-  type ResolvedRoute,
-} from "../content/page-registry";
+import { buildRouteSearch, type ResolvedRoute } from "../content/page-registry";
 import {
   type ApprovalsResponse,
   fetchApprovalReplay,
@@ -277,7 +274,7 @@ export function ApprovalsPage() {
     }
   };
 
-  const allItems = data?.items ?? [];
+  const allItems = useMemo(() => data?.items ?? [], [data]);
   const pendingItems = useMemo(
     () => allItems.filter((item) => item.status === "pending" && !isExpiredApproval(item)),
     [allItems],
@@ -286,10 +283,10 @@ export function ApprovalsPage() {
     () =>
       allItems.filter(
         (item) =>
-          item.status === "approved"
-          || item.status === "rejected"
-          || item.status === "edited"
-          || isExpiredApproval(item),
+          item.status === "approved" ||
+          item.status === "rejected" ||
+          item.status === "edited" ||
+          isExpiredApproval(item),
       ),
     [allItems],
   );
@@ -301,8 +298,7 @@ export function ApprovalsPage() {
     event.preventDefault();
     const nextSearch = buildRouteSearch(route);
     window.history.pushState(null, "", nextSearch);
-    const routeEvent =
-      typeof PopStateEvent === "function" ? new PopStateEvent("popstate") : new Event("popstate");
+    const routeEvent = typeof PopStateEvent === "function" ? new PopStateEvent("popstate") : new Event("popstate");
     window.dispatchEvent(routeEvent);
   }, []);
 
@@ -321,7 +317,11 @@ export function ApprovalsPage() {
   const approvalsHeaderActions = (
     <div className="workflow-summary-strip">
       <StatusChip tone={view === "pending" ? "warning" : "muted"}>
-        {view === "pending" ? `${pendingItems.length} pending` : view === "history" ? `${historyItems.length} history` : `${recoveryItems.length} recovery-linked`}
+        {view === "pending"
+          ? `${pendingItems.length} pending`
+          : view === "history"
+            ? `${historyItems.length} history`
+            : `${recoveryItems.length} recovery-linked`}
       </StatusChip>
       {replayCount > 0 ? <StatusChip tone="muted">{replayCount} replay trails loaded</StatusChip> : null}
       {hasPendingApprovals ? (
@@ -358,15 +358,17 @@ export function ApprovalsPage() {
         <DataToolbar primary={approvalsHeaderActions} className="approvals-toolbar" />
       ) : null}
       <div className="workflow-summary-strip">
-        {([
-          { key: "pending", label: `Pending (${pendingItems.length})` },
-          { key: "history", label: `History (${historyItems.length})` },
-          { key: "recovery", label: `Recovery (${recoveryItems.length})` },
-        ] as Array<{ key: ApprovalView; label: string }>).map((item) => (
+        {(
+          [
+            { key: "pending", label: `Pending (${pendingItems.length})` },
+            { key: "history", label: `History (${historyItems.length})` },
+            { key: "recovery", label: `Recovery (${recoveryItems.length})` },
+          ] as Array<{ key: ApprovalView; label: string }>
+        ).map((item) => (
           <button
             key={item.key}
             type="button"
-            className={["gc-button", (view === item.key ? "active" : "")].filter(Boolean).join(" ")}
+            className={["gc-button", view === item.key ? "active" : ""].filter(Boolean).join(" ")}
             onClick={() => setView(item.key)}
           >
             {item.label}
@@ -607,7 +609,8 @@ export function ApprovalsPage() {
                       <button
                         type="button"
                         onClick={() => void loadTracePreview(approval.approvalId, traceMetadata.correlationId)}
-                       className="gc-button">
+                        className="gc-button"
+                      >
                         {tracePreview ? "Refresh trace detail" : "Load trace detail"}
                       </button>
                     </div>
@@ -627,14 +630,16 @@ export function ApprovalsPage() {
                       void loadDurableStatus(approval.approvalId);
                     }}
                     disabled={durableBusy}
-                   className="gc-button">
+                    className="gc-button"
+                  >
                     {durableBusy ? "Loading..." : "Load durable status"}
                   </button>
                   <button
                     type="button"
                     onClick={() => setPendingResumeApprovalId(approval.approvalId)}
                     disabled={durableBusy || !durable?.runId}
-                   className="gc-button">
+                    className="gc-button"
+                  >
                     Resume from checkpoint
                   </button>
                 </div>
@@ -815,15 +820,17 @@ function mergeApprovals(groups: ApprovalsResponse["items"][]): ApprovalsResponse
 
 function hasRecoveryLinkage(approval: ApprovalsResponse["items"][number]): boolean {
   return Boolean(
-    approval.linkage?.durableRunId
-      || approval.linkage?.proactiveRunId
-      || approval.linkage?.taskId
-      || approval.linkage?.correlationId
-      || approval.linkage?.traceId,
+    approval.linkage?.durableRunId ||
+    approval.linkage?.proactiveRunId ||
+    approval.linkage?.taskId ||
+    approval.linkage?.correlationId ||
+    approval.linkage?.traceId,
   );
 }
 
-function buildLiveLaneHref(approval: ApprovalsResponse["items"][number]): { href: string; route: ResolvedRoute } | null {
+function buildLiveLaneHref(
+  approval: ApprovalsResponse["items"][number],
+): { href: string; route: ResolvedRoute } | null {
   if (!approval.linkage?.sessionId) {
     return null;
   }

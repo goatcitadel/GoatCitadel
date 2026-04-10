@@ -11,10 +11,7 @@ interface PageErrorBoundaryState {
   hasError: boolean;
 }
 
-export class PageErrorBoundary extends Component<
-  PageErrorBoundaryProps,
-  PageErrorBoundaryState
-> {
+export class PageErrorBoundary extends Component<PageErrorBoundaryProps, PageErrorBoundaryState> {
   public override state: PageErrorBoundaryState = {
     hasError: false,
   };
@@ -24,6 +21,7 @@ export class PageErrorBoundary extends Component<
   }
 
   public override componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    // eslint-disable-next-line no-console -- page boundary failures should remain visible during local debugging.
     console.error("[PageErrorBoundary] page render failed", {
       pageLabel: this.props.pageLabel,
       error,
@@ -50,8 +48,12 @@ export class PageErrorBoundary extends Component<
             <h3>{this.props.pageLabel} hit a render failure.</h3>
             <p>Retry this surface or return to Chat while Mission Control recovers.</p>
             <div className="shell-page-error-actions">
-              <button type="button" onClick={this.handleRetry} className="gc-button">Retry page</button>
-              <button type="button" className="gc-button secondary" onClick={this.props.onReturnToChat}>Return to Chat</button>
+              <button type="button" onClick={this.handleRetry} className="gc-button">
+                Retry page
+              </button>
+              <button type="button" className="gc-button secondary" onClick={this.props.onReturnToChat}>
+                Return to Chat
+              </button>
             </div>
           </div>
         </section>

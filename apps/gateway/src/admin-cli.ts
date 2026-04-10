@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- CLI entrypoint intentionally writes structured output to stdout and stderr. */
 import path from "node:path";
 import process from "node:process";
 import type { BundledPostgresRuntimeHandle } from "./bundled-postgres-runtime.js";
@@ -51,11 +52,7 @@ async function main(): Promise<void> {
   }
 }
 
-async function runBackupCommand(
-  gateway: GatewayService,
-  action: string | undefined,
-  args: string[],
-): Promise<void> {
+async function runBackupCommand(gateway: GatewayService, action: string | undefined, args: string[]): Promise<void> {
   if (action === "create") {
     const name = readFlag(args, "--name");
     const outputPath = readFlag(args, "--output");
@@ -107,11 +104,7 @@ async function runBackupCommand(
   throw new Error("Unknown backup command");
 }
 
-async function runRetentionCommand(
-  gateway: GatewayService,
-  action: string | undefined,
-  args: string[],
-): Promise<void> {
+async function runRetentionCommand(gateway: GatewayService, action: string | undefined, args: string[]): Promise<void> {
   if (action === "show") {
     console.log(JSON.stringify(gateway.getRetentionPolicy(), null, 2));
     return;
@@ -143,11 +136,7 @@ async function runRetentionCommand(
   throw new Error("Unknown retention command");
 }
 
-async function runAuthCommand(
-  gateway: GatewayService,
-  action: string | undefined,
-  args: string[],
-): Promise<void> {
+async function runAuthCommand(gateway: GatewayService, action: string | undefined, args: string[]): Promise<void> {
   if (action === "plan") {
     console.log(JSON.stringify(gateway.getAuthCredentialPlan(), null, 2));
     return;
@@ -167,11 +156,7 @@ async function runAuthCommand(
   throw new Error("Unknown auth command");
 }
 
-async function runDatabaseCommand(
-  gateway: GatewayService,
-  action: string | undefined,
-  args: string[],
-): Promise<void> {
+async function runDatabaseCommand(gateway: GatewayService, action: string | undefined, args: string[]): Promise<void> {
   if (action === "cutover") {
     const profileRaw = readFlag(args, "--profile");
     if (profileRaw !== "local" && profileRaw !== "hosted") {
@@ -233,11 +218,7 @@ function resolveRootDir(): string {
     return path.resolve(envRoot);
   }
 
-  const candidates = [
-    process.cwd(),
-    path.resolve(process.cwd(), ".."),
-    path.resolve(process.cwd(), "../.."),
-  ];
+  const candidates = [process.cwd(), path.resolve(process.cwd(), ".."), path.resolve(process.cwd(), "../..")];
 
   for (const candidate of candidates) {
     if (repoHasConfigMarker(candidate)) {

@@ -1,6 +1,5 @@
 import fp from "fastify-plugin";
 import path from "node:path";
-import type { BundledPostgresRuntimeHandle } from "../bundled-postgres-runtime.js";
 import { ensureBundledPostgresRuntime } from "../bundled-postgres-runtime.js";
 import { repoHasConfigMarker } from "../config-files.js";
 import { loadGatewayConfig } from "../config.js";
@@ -17,8 +16,7 @@ declare module "fastify" {
 export const gatewayPlugin = fp(async (fastify) => {
   const rootDir = detectRootDir();
   const config = await loadGatewayConfig(rootDir);
-  let bundledPostgres: BundledPostgresRuntimeHandle | undefined;
-  bundledPostgres = await ensureBundledPostgresRuntime(config);
+  const bundledPostgres = await ensureBundledPostgresRuntime(config);
   const gateway = new GatewayService(config);
   gateway.attachDevDiagnosticsLogger(fastify.log);
   fastify.decorate("gateway", gateway);
@@ -41,11 +39,7 @@ function detectRootDir(): string {
     return path.resolve(envRoot);
   }
 
-  const candidates = [
-    process.cwd(),
-    path.resolve(process.cwd(), ".."),
-    path.resolve(process.cwd(), "../.."),
-  ];
+  const candidates = [process.cwd(), path.resolve(process.cwd(), ".."), path.resolve(process.cwd(), "../..")];
 
   for (const candidate of candidates) {
     if (repoHasConfigMarker(candidate)) {

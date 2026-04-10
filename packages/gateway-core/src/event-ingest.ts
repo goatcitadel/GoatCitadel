@@ -45,10 +45,7 @@ export class EventIngestService {
       sessionId: route.sessionId,
       sessionKey: route.sessionKey,
       timestamp: now,
-      type:
-        options.payload.message.role === "user"
-          ? "message.user"
-          : "message.assistant",
+      type: options.payload.message.role === "user" ? "message.user" : "message.assistant",
       actorType: options.payload.actor.type,
       actorId: options.payload.actor.id,
       payload: {
@@ -60,115 +57,94 @@ export class EventIngestService {
       costUsd: options.payload.usage?.costUsd,
     };
 
-    try {
-      const existing = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
-      if (existing) {
-        const session = this.storage.sessions.getBySessionKey(existing.sessionKey);
-        this.storage.idempotency.markProcessed(
-          options.endpoint,
-          options.idempotencyKey,
-          "deduped",
-          now,
-        );
-        return {
-          accepted: true,
-          deduped: true,
-          session,
-          transcriptOffset: 0,
-        };
-      }
+    const existing = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
+    if (existing) {
+      const session = this.storage.sessions.getBySessionKey(existing.sessionKey);
+      this.storage.idempotency.markProcessed(options.endpoint, options.idempotencyKey, "deduped", now);
+      return {
+        accepted: true,
+        deduped: true,
+        session,
+        transcriptOffset: 0,
+      };
+    }
 
-      const ingestResult = this.storage.runImmediateTransaction(() => {
-        const inserted = this.storage.idempotency.insertPendingIfAbsent(idempotencyRow);
-        if (!inserted) {
-          const concurrent = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
-          if (concurrent) {
-            const session = this.storage.sessions.getBySessionKey(concurrent.sessionKey);
-            this.storage.idempotency.markProcessed(
-              options.endpoint,
-              options.idempotencyKey,
-              "deduped",
-              now,
-            );
-            return {
-              accepted: true,
-              deduped: true,
-              session,
-              transcriptOffset: 0,
-            } satisfies GatewayEventResult;
-          }
+    const ingestResult = this.storage.runImmediateTransaction(() => {
+      const inserted = this.storage.idempotency.insertPendingIfAbsent(idempotencyRow);
+      if (!inserted) {
+        const concurrent = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
+        if (concurrent) {
+          const session = this.storage.sessions.getBySessionKey(concurrent.sessionKey);
+          this.storage.idempotency.markProcessed(options.endpoint, options.idempotencyKey, "deduped", now);
+          return {
+            accepted: true,
+            deduped: true,
+            session,
+            transcriptOffset: 0,
+          } satisfies GatewayEventResult;
         }
-
-        this.storage.sessions.upsert({
-          sessionId: route.sessionId,
-          sessionKey: route.sessionKey,
-          kind: route.kind,
-          channel: options.payload.route.channel,
-          account: options.payload.route.account,
-          timestamp: now,
-        });
-
-        this.storage.chatMessages.upsert(toChatMessageRecord(transcriptEvent));
-
-        this.storage.sessions.applyUsage({
-          sessionId: route.sessionId,
-          tokenInput: options.payload.usage?.inputTokens ?? 0,
-          tokenOutput: options.payload.usage?.outputTokens ?? 0,
-          tokenCachedInput: options.payload.usage?.cachedInputTokens ?? 0,
-          costUsd: options.payload.usage?.costUsd ?? 0,
-          timestamp: now,
-        });
-
-        this.tokenCostLedger.record({
-          sessionId: route.sessionId,
-          agentId: options.payload.actor.type === "agent" ? options.payload.actor.id : undefined,
-          taskId: options.payload.taskId,
-          tokenInput: options.payload.usage?.inputTokens,
-          tokenOutput: options.payload.usage?.outputTokens,
-          tokenCachedInput: options.payload.usage?.cachedInputTokens,
-          costUsd: options.payload.usage?.costUsd,
-          timestamp: now,
-        });
-        this.storage.transcriptOutbox.enqueue(transcriptEvent, now);
-
-        this.storage.idempotency.markProcessed(
-          options.endpoint,
-          options.idempotencyKey,
-          "accepted",
-          now,
-        );
-
-        return {
-          accepted: true,
-          deduped: false,
-          session: this.storage.sessions.getBySessionId(route.sessionId),
-          transcriptOffset: 0,
-        } satisfies GatewayEventResult;
-      });
-
-      if (ingestResult.deduped) {
-        return ingestResult;
       }
 
-      const { targetOffset: transcriptOffset } = await flushTranscriptOutboxSession(this.storage, {
+      this.storage.sessions.upsert({
         sessionId: route.sessionId,
-        targetEventId: transcriptEvent.eventId,
+        sessionKey: route.sessionKey,
+        kind: route.kind,
+        channel: options.payload.route.channel,
+        account: options.payload.route.account,
+        timestamp: now,
       });
+
+      this.storage.chatMessages.upsert(toChatMessageRecord(transcriptEvent));
+
+      this.storage.sessions.applyUsage({
+        sessionId: route.sessionId,
+        tokenInput: options.payload.usage?.inputTokens ?? 0,
+        tokenOutput: options.payload.usage?.outputTokens ?? 0,
+        tokenCachedInput: options.payload.usage?.cachedInputTokens ?? 0,
+        costUsd: options.payload.usage?.costUsd ?? 0,
+        timestamp: now,
+      });
+
+      this.tokenCostLedger.record({
+        sessionId: route.sessionId,
+        agentId: options.payload.actor.type === "agent" ? options.payload.actor.id : undefined,
+        taskId: options.payload.taskId,
+        tokenInput: options.payload.usage?.inputTokens,
+        tokenOutput: options.payload.usage?.outputTokens,
+        tokenCachedInput: options.payload.usage?.cachedInputTokens,
+        costUsd: options.payload.usage?.costUsd,
+        timestamp: now,
+      });
+      this.storage.transcriptOutbox.enqueue(transcriptEvent, now);
+
+      this.storage.idempotency.markProcessed(options.endpoint, options.idempotencyKey, "accepted", now);
+
       return {
         accepted: true,
         deduped: false,
-        session: ingestResult.session,
-        transcriptOffset,
-      };
-    } catch (error) {
-      throw error;
+        session: this.storage.sessions.getBySessionId(route.sessionId),
+        transcriptOffset: 0,
+      } satisfies GatewayEventResult;
+    });
+
+    if (ingestResult.deduped) {
+      return ingestResult;
     }
+
+    const { targetOffset: transcriptOffset } = await flushTranscriptOutboxSession(this.storage, {
+      sessionId: route.sessionId,
+      targetEventId: transcriptEvent.eventId,
+    });
+    return {
+      accepted: true,
+      deduped: false,
+      session: ingestResult.session,
+      transcriptOffset,
+    };
   }
 
   public async flushPendingTranscriptOutbox(limit = 200): Promise<number> {
-    const sessionIds = new Set(
-      this.storage.transcriptOutbox.listPending(limit).map((record) => record.sessionId),
-    );
+    const sessionIds = new Set(this.storage.transcriptOutbox.listPending(limit).map((record) => record.sessionId));
     let deliveredCount = 0;
     for (const sessionId of sessionIds) {
       const result = await flushTranscriptOutboxSession(this.storage, {
@@ -207,7 +183,9 @@ function toChatMessageRecord(event: TranscriptEvent): ChatMessageRecord {
     tokenOutput: event.tokenOutput,
     costUsd: event.costUsd,
     parts: Array.isArray(message?.parts) ? message.parts : undefined,
-    attachments: Array.isArray(message?.attachments) ? message.attachments as ChatMessageRecord["attachments"] : undefined,
+    attachments: Array.isArray(message?.attachments)
+      ? (message.attachments as ChatMessageRecord["attachments"])
+      : undefined,
   };
 }
 
@@ -240,6 +218,7 @@ async function flushTranscriptOutboxSession(
         lastAttemptAt: new Date().toISOString(),
         lastError: message,
       });
+      // eslint-disable-next-line no-console -- outbox failures need local diagnostics until transcript persistence is fully absorbed by Postgres.
       console.warn("[goatcitadel] transcript append failed after event commit", {
         sessionId: record.sessionId,
         eventId: record.eventId,

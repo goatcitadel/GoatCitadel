@@ -1,9 +1,14 @@
+/* eslint-disable no-console -- CLI entrypoint intentionally writes structured output to stdout and stderr. */
 import path from "node:path";
 import process from "node:process";
 import { loadLocalEnvFile } from "./env-file.js";
 import { loadGatewayConfig } from "./config.js";
 import { repoHasConfigMarker } from "./config-files.js";
-import { installManagedVoiceRuntime, removeManagedVoiceModel, selectManagedVoiceModel } from "./voice-runtime/installer.js";
+import {
+  installManagedVoiceRuntime,
+  removeManagedVoiceModel,
+  selectManagedVoiceModel,
+} from "./voice-runtime/installer.js";
 import { getManagedVoiceRuntimeStatus } from "./voice-runtime/status.js";
 import { MANAGED_VOICE_MODELS } from "./voice-runtime/catalog.js";
 import { createGatewayStorage } from "./storage-factory.js";
@@ -38,7 +43,13 @@ async function main(): Promise<void> {
     }
 
     if (action === "models") {
-      console.log(JSON.stringify({ items: MANAGED_VOICE_MODELS.map(({ url: _u, sha256: _s, fileName: _f, ...item }) => item) }, null, 2));
+      console.log(
+        JSON.stringify(
+          { items: MANAGED_VOICE_MODELS.map(({ url: _u, sha256: _s, fileName: _f, ...item }) => item) },
+          null,
+          2,
+        ),
+      );
       return;
     }
 
@@ -79,11 +90,7 @@ function resolveRootDir(): string {
   if (envRoot) {
     return path.resolve(envRoot);
   }
-  const candidates = [
-    process.cwd(),
-    path.resolve(process.cwd(), ".."),
-    path.resolve(process.cwd(), "../.."),
-  ];
+  const candidates = [process.cwd(), path.resolve(process.cwd(), ".."), path.resolve(process.cwd(), "../..")];
   for (const candidate of candidates) {
     if (repoHasConfigMarker(candidate)) {
       return candidate;

@@ -17,9 +17,6 @@ interface PageGuideCardProps {
 
 export function PageGuideCard(props: PageGuideCardProps) {
   const embedded = useEmbeddedPageChrome();
-  if (embedded) {
-    return null;
-  }
   const { mode } = useUiPreferences();
   const compact = props.compact ?? true;
   const storageKey = props.pageId ? `goatcitadel.page_guide.${props.pageId}.${props.preferenceVersion ?? "v2"}` : null;
@@ -36,12 +33,18 @@ export function PageGuideCard(props: PageGuideCardProps) {
     window.localStorage.setItem(storageKey, expanded ? "expanded" : "collapsed");
   }, [expanded, storageKey]);
 
+  if (embedded) {
+    return null;
+  }
+
   return (
     <article className={`page-guide-card${compact ? " compact" : ""}`}>
       <header className="page-guide-head">
         <div className="page-guide-copy">
           <p className="page-guide-kicker">{globalCopy.guideCard.title}</p>
-          <p className="page-guide-what"><strong>{globalCopy.guideCard.what}:</strong> {props.what}</p>
+          <p className="page-guide-what">
+            <strong>{globalCopy.guideCard.what}:</strong> {props.what}
+          </p>
         </div>
         <button type="button" className="gc-button page-guide-toggle" onClick={() => setExpanded((value) => !value)}>
           {expanded ? "Hide details" : "Show details"}
@@ -54,9 +57,13 @@ export function PageGuideCard(props: PageGuideCardProps) {
       </p>
       {!compact || expanded ? (
         <div className="page-guide-details">
-          <p className="page-guide-detail"><strong>{globalCopy.guideCard.when}:</strong> {props.when}</p>
+          <p className="page-guide-detail">
+            <strong>{globalCopy.guideCard.when}:</strong> {props.when}
+          </p>
           {props.mostCommonAction ? (
-            <p className="page-guide-detail"><strong>{globalCopy.guideCard.mostCommonAction}:</strong> {props.mostCommonAction}</p>
+            <p className="page-guide-detail">
+              <strong>{globalCopy.guideCard.mostCommonAction}:</strong> {props.mostCommonAction}
+            </p>
           ) : null}
           <div className="page-guide-grid">
             <div className="page-guide-group">

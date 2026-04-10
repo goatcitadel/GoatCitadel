@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { DevDiagnosticsCategory, DevDiagnosticsEvent, DevDiagnosticsLevel } from "@goatcitadel/contracts";
+import type { DevDiagnosticsEvent } from "@goatcitadel/contracts";
 import {
   buildDevDiagnosticsBundle,
   clearClientDiagnostics,
@@ -33,13 +33,7 @@ const LEVEL_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "error", label: "Error" },
 ];
 
-export function DevDiagnosticsPanel({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
+export function DevDiagnosticsPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const diagnosticsState = useDevDiagnosticsState();
   const [gatewayItems, setGatewayItems] = useState<DevDiagnosticsEvent[]>([]);
   const [category, setCategory] = useState<string>("");
@@ -52,11 +46,13 @@ export function DevDiagnosticsPanel({
       return;
     }
     let cancelled = false;
-    void fetchDevDiagnostics({ limit: 120 }).then((response) => {
-      if (!cancelled) {
-        setGatewayItems(response.items);
-      }
-    }).catch(() => undefined);
+    void fetchDevDiagnostics({ limit: 120 })
+      .then((response) => {
+        if (!cancelled) {
+          setGatewayItems(response.items);
+        }
+      })
+      .catch(() => undefined);
     const close = connectDevDiagnosticsStream((event) => {
       setGatewayItems((current) => [event, ...current].slice(0, 300));
     });
@@ -104,9 +100,11 @@ export function DevDiagnosticsPanel({
   };
 
   const handleCopySession = async () => {
-    const bundle = buildDevDiagnosticsBundle(gatewayItems.filter((item) => (
-      !diagnosticsState.activeChatSessionId || item.sessionId === diagnosticsState.activeChatSessionId
-    )));
+    const bundle = buildDevDiagnosticsBundle(
+      gatewayItems.filter(
+        (item) => !diagnosticsState.activeChatSessionId || item.sessionId === diagnosticsState.activeChatSessionId,
+      ),
+    );
     await navigator.clipboard.writeText(JSON.stringify(bundle, null, 2));
   };
 
@@ -117,13 +115,27 @@ export function DevDiagnosticsPanel({
           <p className="dev-diagnostics-kicker">Development</p>
           <h3>Diagnostics</h3>
         </div>
-        <button type="button" className="gc-button dev-diagnostics-close" onClick={onClose}>Close</button>
+        <button type="button" className="gc-button dev-diagnostics-close" onClick={onClose}>
+          Close
+        </button>
       </header>
       <div className="dev-diagnostics-status-grid">
-        <div><span>Gateway</span><strong>{diagnosticsState.gatewayReachable ? "Reachable" : "Unknown"}</strong></div>
-        <div><span>SSE</span><strong>{diagnosticsState.sseState ?? "n/a"}</strong></div>
-        <div><span>Session</span><strong>{diagnosticsState.activeChatSessionId ?? "n/a"}</strong></div>
-        <div><span>Effects</span><strong>{diagnosticsState.currentEffectsMode ?? "n/a"}</strong></div>
+        <div>
+          <span>Gateway</span>
+          <strong>{diagnosticsState.gatewayReachable ? "Reachable" : "Unknown"}</strong>
+        </div>
+        <div>
+          <span>SSE</span>
+          <strong>{diagnosticsState.sseState ?? "n/a"}</strong>
+        </div>
+        <div>
+          <span>Session</span>
+          <strong>{diagnosticsState.activeChatSessionId ?? "n/a"}</strong>
+        </div>
+        <div>
+          <span>Effects</span>
+          <strong>{diagnosticsState.currentEffectsMode ?? "n/a"}</strong>
+        </div>
       </div>
       {diagnosticsState.startupSummary ? (
         <div className="dev-diagnostics-startup">
@@ -157,12 +169,16 @@ export function DevDiagnosticsPanel({
       <div className="dev-diagnostics-toolbar">
         <select value={category} onChange={(event) => setCategory(event.target.value)}>
           {CATEGORY_OPTIONS.map((option) => (
-            <option key={option.value || "all"} value={option.value}>{option.label}</option>
+            <option key={option.value || "all"} value={option.value}>
+              {option.label}
+            </option>
           ))}
         </select>
         <select value={level} onChange={(event) => setLevel(event.target.value)}>
           {LEVEL_OPTIONS.map((option) => (
-            <option key={option.value || "all"} value={option.value}>{option.label}</option>
+            <option key={option.value || "all"} value={option.value}>
+              {option.label}
+            </option>
           ))}
         </select>
         <input
@@ -172,34 +188,48 @@ export function DevDiagnosticsPanel({
         />
       </div>
       <div className="dev-diagnostics-actions">
-        <button type="button" onClick={() => void handleCopyRecent()} className="gc-button">Copy last 100</button>
-        <button type="button" onClick={() => void handleCopySession()} className="gc-button">Copy session bundle</button>
-        <button type="button" onClick={() => {
-          clearClientDiagnostics();
-          setGatewayItems([]);
-        }} className="gc-button">Clear</button>
+        <button type="button" onClick={() => void handleCopyRecent()} className="gc-button">
+          Copy last 100
+        </button>
+        <button type="button" onClick={() => void handleCopySession()} className="gc-button">
+          Copy session bundle
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            clearClientDiagnostics();
+            setGatewayItems([]);
+          }}
+          className="gc-button"
+        >
+          Clear
+        </button>
       </div>
       <div className="dev-diagnostics-layout">
         <div className="dev-diagnostics-list" role="list">
           {mergedItems.length === 0 ? (
             <div className="dev-diagnostics-empty">No diagnostics captured yet.</div>
-          ) : mergedItems.map((item) => (
-            <button
-              type="button"
-              key={item.id}
-              className={["gc-button", (`dev-diagnostics-item${selectedEvent?.id === item.id ? " active" : ""}`)].filter(Boolean).join(" ")}
-              onClick={() => setSelectedEventId(item.id)}
-            >
-              <span className="dev-diagnostics-item-meta">
-                <span>{item.source}</span>
-                <span>{item.category}</span>
-                <span>{item.level}</span>
-              </span>
-              <strong>{item.event}</strong>
-              <span>{item.message}</span>
-              <span className="dev-diagnostics-item-time">{new Date(item.timestamp).toLocaleTimeString()}</span>
-            </button>
-          ))}
+          ) : (
+            mergedItems.map((item) => (
+              <button
+                type="button"
+                key={item.id}
+                className={["gc-button", `dev-diagnostics-item${selectedEvent?.id === item.id ? " active" : ""}`]
+                  .filter(Boolean)
+                  .join(" ")}
+                onClick={() => setSelectedEventId(item.id)}
+              >
+                <span className="dev-diagnostics-item-meta">
+                  <span>{item.source}</span>
+                  <span>{item.category}</span>
+                  <span>{item.level}</span>
+                </span>
+                <strong>{item.event}</strong>
+                <span>{item.message}</span>
+                <span className="dev-diagnostics-item-time">{new Date(item.timestamp).toLocaleTimeString()}</span>
+              </button>
+            ))
+          )}
         </div>
         <div className="dev-diagnostics-detail">
           {selectedEvent ? (

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { buildRouteSearch, readRouteFromLocation } from "./page-registry";
 
@@ -18,14 +18,16 @@ afterEach(() => {
 
 describe("page-registry route links", () => {
   it("preserves live-lane query params when building route search", () => {
-    expect(buildRouteSearch({
-      space: "operate",
-      page: "surface",
-      surface: "code",
-      sessionId: "sess-code",
-      turnId: "turn-code",
-      approvalId: "approval-code",
-    })).toBe("?space=operate&page=surface&surface=code&sessionId=sess-code&turnId=turn-code&approvalId=approval-code");
+    expect(
+      buildRouteSearch({
+        space: "operate",
+        page: "surface",
+        surface: "code",
+        sessionId: "sess-code",
+        turnId: "turn-code",
+        approvalId: "approval-code",
+      }),
+    ).toBe("?space=operate&page=surface&surface=code&sessionId=sess-code&turnId=turn-code&approvalId=approval-code");
   });
 
   it("reads live-lane query params back from the current location", () => {

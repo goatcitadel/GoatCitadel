@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- runtime config normalization stays together so env, file, and defaults remain aligned. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- policy evaluation rules remain co-located to keep branching behavior reviewable. */
 import type {
   FilesystemReadAccessMode,
   ToolGrantConstraints,
@@ -83,8 +84,8 @@ export class ToolPolicyEngine {
     this.runtimeOptions = {
       isBankrBuiltinEnabled: runtimeOptions.isBankrBuiltinEnabled ?? (() => false),
     };
-    this.registry = registry
-      ?? createDefaultToolRegistry({ bankrBuiltinEnabled: this.runtimeOptions.isBankrBuiltinEnabled() });
+    this.registry =
+      registry ?? createDefaultToolRegistry({ bankrBuiltinEnabled: this.runtimeOptions.isBankrBuiltinEnabled() });
     this.approvals = new ApprovalGate(storage);
   }
 
@@ -205,13 +206,7 @@ export class ToolPolicyEngine {
           reasonCodes: evaluation.reasonCodes,
         },
       };
-      await this.recordInvocation(
-        auditEventId,
-        request,
-        "executed",
-        `${evaluation.policyReason}; dry-run`,
-        result,
-      );
+      await this.recordInvocation(auditEventId, request, "executed", `${evaluation.policyReason}; dry-run`, result);
       const completedAt = new Date().toISOString();
       return {
         outcome: "executed",
@@ -424,13 +419,13 @@ export class ToolPolicyEngine {
       approvalId,
       eventType: "approved_action_executed",
       actorId: "system",
-        payload: {
-          toolName: approvedRequest.toolName,
-          outcome: result.outcome,
-          policyReason: result.policyReason,
-          auditEventId,
-        },
-      });
+      payload: {
+        toolName: approvedRequest.toolName,
+        outcome: result.outcome,
+        policyReason: result.policyReason,
+        auditEventId,
+      },
+    });
 
     return result;
   }
@@ -508,10 +503,10 @@ export class ToolPolicyEngine {
     const outsideRootsReadRequiresApproval = this.requiresApprovalForOutsideRootsRead(request, allowGrant);
 
     if (
-      riskLevel === "danger"
-      && grantDecision?.decision === "allow"
-      && isMutationTool(toolDef)
-      && this.isFirstMutationInScope(request, grantDecision.grant)
+      riskLevel === "danger" &&
+      grantDecision?.decision === "allow" &&
+      isMutationTool(toolDef) &&
+      this.isFirstMutationInScope(request, grantDecision.grant)
     ) {
       requiresApproval = true;
     }
@@ -570,7 +565,8 @@ export class ToolPolicyEngine {
     const scoped = buildScopeCandidates(request);
     const matchingGrants: ToolGrantRecord[] = [];
     for (const candidate of scoped) {
-      const grants = this.storage.toolGrants.list(candidate.scope, candidate.scopeRef, 500)
+      const grants = this.storage.toolGrants
+        .list(candidate.scope, candidate.scopeRef, 500)
         .filter((grant) => isGrantActive(grant))
         .filter((grant) => matchesToolPattern(grant.toolPattern, request.toolName));
 
@@ -647,7 +643,9 @@ export class ToolPolicyEngine {
     if (constraints.allowedPaths && constraints.allowedPaths.length > 0) {
       const candidates = extractPathCandidates(request.args);
       if (candidates.length > 0) {
-        const blocked = candidates.some((candidate) => !isPathWithinAnyRoot(candidate, constraints.allowedPaths as string[]));
+        const blocked = candidates.some(
+          (candidate) => !isPathWithinAnyRoot(candidate, constraints.allowedPaths as string[]),
+        );
         if (blocked) {
           return "grant path constraints blocked this action";
         }
@@ -666,14 +664,16 @@ export class ToolPolicyEngine {
   }
 
   private isFirstMutationInScope(request: ToolAccessEvaluateRequest, grant: ToolGrantRecord): boolean {
-    return this.storage.toolAccessDecisions.countToolCallsInLastHourInScope({
-      toolName: request.toolName,
-      scope: grant.scope,
-      agentId: request.agentId,
-      sessionId: request.sessionId,
-      workspaceId: request.workspaceId,
-      taskId: request.taskId,
-    }) === 0;
+    return (
+      this.storage.toolAccessDecisions.countToolCallsInLastHourInScope({
+        toolName: request.toolName,
+        scope: grant.scope,
+        agentId: request.agentId,
+        sessionId: request.sessionId,
+        workspaceId: request.workspaceId,
+        taskId: request.taskId,
+      }) === 0
+    );
   }
 
   private validateStructuralSafety(
@@ -686,7 +686,12 @@ export class ToolPolicyEngine {
         return readPathError;
       }
 
-      if (request.toolName === "fs.write" || request.toolName === "fs.move" || request.toolName === "fs.delete" || request.toolName === "artifacts.create") {
+      if (
+        request.toolName === "fs.write" ||
+        request.toolName === "fs.move" ||
+        request.toolName === "fs.delete" ||
+        request.toolName === "artifacts.create"
+      ) {
         const pathValue = String(request.args?.path ?? request.args?.to ?? request.args?.from ?? "");
         const referenceRoots = getReferenceRootPaths(allowGrant?.constraints);
         const targetsReferenceRoot = referenceRoots.length > 0 && isPathWithinAnyRoot(pathValue, referenceRoots);
@@ -735,10 +740,7 @@ export class ToolPolicyEngine {
     return undefined;
   }
 
-  private validateReadPaths(
-    request: ToolAccessEvaluateRequest,
-    allowGrant?: ToolGrantRecord,
-  ): string | undefined {
+  private validateReadPaths(request: ToolAccessEvaluateRequest, allowGrant?: ToolGrantRecord): string | undefined {
     const readAccessMode = this.getReadAccessMode();
     for (const target of extractReadPathCandidates(request)) {
       const access = resolveReadPathAccess(
@@ -910,19 +912,15 @@ export class ToolPolicyEngine {
     details: Record<string, unknown>,
   ): Promise<void> {
     const now = new Date().toISOString();
-    this.storage.db.prepare(`
+    this.storage.db
+      .prepare(
+        `
       INSERT INTO policy_blocks (
         audit_event_id, timestamp, agent_id, session_id, tool_name, reason, details_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      auditEventId,
-      now,
-      request.agentId,
-      request.sessionId,
-      request.toolName,
-      reason,
-      JSON.stringify(details),
-    );
+    `,
+      )
+      .run(auditEventId, now, request.agentId, request.sessionId, request.toolName, reason, JSON.stringify(details));
 
     await this.storage.audit.append("policy_blocks", {
       auditEventId,
@@ -945,24 +943,28 @@ export class ToolPolicyEngine {
     const now = new Date().toISOString();
     const sanitizedArgs = sanitizeForModel(request.args);
     const sanitizedResult = result ? sanitizeForModel(result) : undefined;
-    this.storage.db.prepare(`
+    this.storage.db
+      .prepare(
+        `
       INSERT INTO tool_invocations (
         audit_event_id, timestamp, agent_id, session_id, task_id, tool_name,
         outcome, policy_reason, args_json, result_json, approval_id
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      auditEventId,
-      now,
-      request.agentId,
-      request.sessionId,
-      request.taskId ?? null,
-      request.toolName,
-      outcome,
-      policyReason,
-      JSON.stringify(sanitizedArgs),
-      sanitizedResult ? JSON.stringify(sanitizedResult) : null,
-      approvalId ?? null,
-    );
+    `,
+      )
+      .run(
+        auditEventId,
+        now,
+        request.agentId,
+        request.sessionId,
+        request.taskId ?? null,
+        request.toolName,
+        outcome,
+        policyReason,
+        JSON.stringify(sanitizedArgs),
+        sanitizedResult ? JSON.stringify(sanitizedResult) : null,
+        approvalId ?? null,
+      );
 
     await this.storage.audit.append("tool_invocations", {
       auditEventId,
@@ -988,11 +990,13 @@ export class ToolPolicyEngine {
     const bypassedTargets = extractOutboundHostCandidates(request).flatMap((target) => {
       const decision = evaluateDangerousHostBypass(target, this.config.sandbox.networkAllowlist);
       return decision.shouldAudit
-        ? [{
-            target,
-            hostname: decision.hostname,
-            reason: decision.reason,
-          }]
+        ? [
+            {
+              target,
+              hostname: decision.hostname,
+              reason: decision.reason,
+            },
+          ]
         : [];
     });
     if (bypassedTargets.length === 0) {
@@ -1111,13 +1115,13 @@ function extractReadPathCandidates(request: ToolAccessEvaluateRequest): string[]
     return [];
   }
   if (
-    request.toolName === "fs.read"
-    || request.toolName === "file.read_range"
-    || request.toolName === "file.find"
-    || request.toolName === "code.search"
-    || request.toolName === "code.search_files"
-    || request.toolName === "fs.list"
-    || request.toolName === "fs.stat"
+    request.toolName === "fs.read" ||
+    request.toolName === "file.read_range" ||
+    request.toolName === "file.find" ||
+    request.toolName === "code.search" ||
+    request.toolName === "code.search_files" ||
+    request.toolName === "fs.list" ||
+    request.toolName === "fs.stat"
   ) {
     return typeof args.path === "string" ? [args.path] : [];
   }
@@ -1152,10 +1156,7 @@ function getAllowedReadPaths(constraints?: ToolGrantConstraints): string[] {
   if (!constraints) {
     return [];
   }
-  return [
-    ...(constraints.allowedPaths ?? []),
-    ...getReferenceRootPaths(constraints),
-  ];
+  return [...(constraints.allowedPaths ?? []), ...getReferenceRootPaths(constraints)];
 }
 
 function getReferenceRootPaths(constraints?: ToolGrantConstraints): string[] {
@@ -1200,17 +1201,20 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
   const sessionId = String(value.sessionId ?? "");
   const args = (value.args ?? {}) as Record<string, unknown>;
   const taskId = value.taskId ? String(value.taskId) : undefined;
-  const consentContext = value.consentContext && typeof value.consentContext === "object"
-    ? {
-      operatorId: typeof (value.consentContext as Record<string, unknown>).operatorId === "string"
-        ? String((value.consentContext as Record<string, unknown>).operatorId)
-        : undefined,
-      source: (value.consentContext as Record<string, unknown>).source as "ui" | "tui" | "agent" | undefined,
-      reason: typeof (value.consentContext as Record<string, unknown>).reason === "string"
-        ? String((value.consentContext as Record<string, unknown>).reason)
-        : undefined,
-    }
-    : undefined;
+  const consentContext =
+    value.consentContext && typeof value.consentContext === "object"
+      ? {
+          operatorId:
+            typeof (value.consentContext as Record<string, unknown>).operatorId === "string"
+              ? String((value.consentContext as Record<string, unknown>).operatorId)
+              : undefined,
+          source: (value.consentContext as Record<string, unknown>).source as "ui" | "tui" | "agent" | undefined,
+          reason:
+            typeof (value.consentContext as Record<string, unknown>).reason === "string"
+              ? String((value.consentContext as Record<string, unknown>).reason)
+              : undefined,
+        }
+      : undefined;
   const dryRun = typeof value.dryRun === "boolean" ? value.dryRun : undefined;
 
   if (!toolName || !agentId || !sessionId) {

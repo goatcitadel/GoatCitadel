@@ -35,22 +35,24 @@ export class AuditLog {
     try {
       line = JSON.stringify(sanitizedRecord) + "\n";
     } catch (error) {
+      // eslint-disable-next-line no-console -- degraded audit serialization should still surface in local runtime logs.
       console.warn("[goatcitadel] audit log payload could not be serialized; writing degraded record", {
         stream,
         error: error instanceof Error ? error.message : String(error),
       });
-      line = JSON.stringify({
-        timestamp: baseRecord.timestamp,
-        correlationId: baseRecord.correlationId,
-        traceId: baseRecord.traceId,
-        originSurface: baseRecord.originSurface,
-        actorId: baseRecord.actorId,
-        deviceId: baseRecord.deviceId,
-        grantId: baseRecord.grantId,
-        companionSessionId: baseRecord.companionSessionId,
-        serializationError: error instanceof Error ? error.message : String(error),
-        degraded: true,
-      }) + "\n";
+      line =
+        JSON.stringify({
+          timestamp: baseRecord.timestamp,
+          correlationId: baseRecord.correlationId,
+          traceId: baseRecord.traceId,
+          originSurface: baseRecord.originSurface,
+          actorId: baseRecord.actorId,
+          deviceId: baseRecord.deviceId,
+          grantId: baseRecord.grantId,
+          companionSessionId: baseRecord.companionSessionId,
+          serializationError: error instanceof Error ? error.message : String(error),
+          degraded: true,
+        }) + "\n";
     }
     await pruneAuditStreamIfNeeded(filePath);
     await fs.appendFile(filePath, line, { encoding: "utf8" });
@@ -99,7 +101,7 @@ async function pruneAuditStreamIfNeeded(filePath: string): Promise<void> {
     throw error;
   }
 
-  const cutoffMs = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
+  const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
   const retainedLines = content
     .split(/\r?\n/)
     .map((line) => line.trim())

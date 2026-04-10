@@ -939,7 +939,8 @@ export function App() {
 
   const configureAgentsTab =
     route.space === "configure" && route.page === "agents" ? ((route.tab ?? "overview") as AgentsTab) : "overview";
-  const activeWorkspaceName = workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId;
+  const activeWorkspaceName =
+    workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId;
 
   useEffect(() => {
     if (route.space !== "operate") {
@@ -1018,10 +1019,7 @@ export function App() {
       }
       if (route.page === "costs") {
         return (
-          <ShellPageFrame
-            title="Costs"
-            subtitle="Monitor spend, provider usage, and runtime cost posture."
-          >
+          <ShellPageFrame title="Costs" subtitle="Monitor spend, provider usage, and runtime cost posture.">
             <CostConsolePage />
           </ShellPageFrame>
         );
@@ -1074,10 +1072,7 @@ export function App() {
       );
     }
     return (
-      <ShellPageFrame
-        title="Tools"
-        subtitle="Manage tool access, grants, and operational safeguards."
-      >
+      <ShellPageFrame title="Tools" subtitle="Manage tool access, grants, and operational safeguards.">
         <ToolsPage />
       </ShellPageFrame>
     );
@@ -1092,12 +1087,9 @@ export function App() {
     observeActivityTab,
     observeArtifactsTab,
     operateApprovalsCount,
-    route.approvalId,
     route.page,
-    route.sessionId,
     route.space,
     route.surface,
-    route.turnId,
     setActiveWorkspaceId,
   ]);
 
