@@ -383,7 +383,7 @@ import type { ConnectorRecord, ConnectorType } from "@goatcitadel/contracts";
 import { BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
-import { getRequestAttribution } from "../../../../packages/storage/src/request-attribution.js";
+import { getRequestAttribution } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
 import { AssemblyService } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";

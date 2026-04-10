@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
-import { enterRequestAttribution } from "../../../packages/storage/src/request-attribution.js";
+import { enterRequestAttribution } from "@goatcitadel/storage";
 import { loadLocalEnvFile } from "./env-file.js";
 import { gatewayPlugin } from "./plugins/storage.js";
 import { authPlugin } from "./plugins/auth.js";

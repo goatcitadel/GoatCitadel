@@ -114,7 +114,7 @@
       }
     },
     "database": {
-      "driver": "sqlite",
+      "driver": "postgres",
       "postgres": {
         "mode": "bundled",
         "port": 5432,

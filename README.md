@@ -38,7 +38,7 @@ GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflo
 ### Shared packages
 
 - [packages/contracts](./packages/contracts): shared contracts and schemas
-- [packages/storage](./packages/storage): SQLite-backed repositories and persistence helpers
+- [packages/storage](./packages/storage): SQLite/Postgres repositories and persistence helpers
 - [packages/policy-engine](./packages/policy-engine): tool policy and runtime guardrails
 - [packages/orchestration](./packages/orchestration): agent and workflow primitives
 - [packages/memory-core](./packages/memory-core): context and memory composition utilities
@@ -73,6 +73,40 @@ pnpm -r build
 
 More setup details live in [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md).
 
+## Docker quickstart
+
+GoatCitadel now ships with a first-party container path for people who want a tighter local or shared-host runtime boundary than a raw host install.
+
+What Docker improves here:
+
+- isolates the GoatCitadel runtime from the host more cleanly
+- makes the Postgres-first deployment path repeatable
+- gives you safer defaults for non-loopback/shared-host runs
+
+What it does not guarantee:
+
+- it is not a complete hostile-code sandbox for Code Mode
+- it does not replace GoatCitadel's own auth, approvals, path jails, or network policy
+
+Primary Postgres-backed compose path:
+
+```bash
+docker compose up --build
+```
+
+Default container endpoints:
+
+- Mission Control: `http://localhost:4173`
+- Gateway health: `http://127.0.0.1:8787/health`
+
+Before exposing GoatCitadel beyond your own machine, replace the compose defaults for:
+
+- `GOATCITADEL_AUTH_TOKEN`
+- `GOATCITADEL_POSTGRES_PASSWORD`
+- `GOATCITADEL_ALLOWED_ORIGINS`
+
+If you need a non-local hostname in the Mission Control preview image, rebuild with matching `GOATCITADEL_VITE_ALLOWED_HOSTS` and `VITE_GATEWAY_ALLOWED_HOSTS` build args. Full setup notes live in [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md).
+
 ## Current status
 
 GoatCitadel is in late beta. The repo contains a real Mission Control shell, a working gateway, shared policy/orchestration packages, and extension scaffolding. It is already useful for local operator workflows, but the public surface is still being tightened and some contracts may continue to evolve before `1.0`.
@@ -84,6 +118,7 @@ Safe claims today:
 - the capability system now governs tools, runtime skills, generated candidates, proposals, and Code Mode runs on one native path
 - Code Mode v1 exists as a governed trusted-code surface with immutable run artifacts and explicit operator approval
 - Skills Hub and inline approvals now expose lifecycle, trust, provenance, and richer Code Mode inspection details
+- Docker can add a stronger runtime isolation boundary for local/shared-host deployment when paired with auth and policy configuration
 
 Not safe to over-claim yet:
 

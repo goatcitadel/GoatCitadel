@@ -10,10 +10,11 @@ Related guides:
 
 ## Install Paths
 
-GoatCitadel supports two valid install paths:
+GoatCitadel supports three valid install paths:
 
 1. Installer-first: best for most users and public beta testers.
 2. Manual/dev install: best for contributors and raw GitHub validation.
+3. Docker/Compose: best for a safer single-host or shared-host runtime boundary.
 
 Default installer home is under your user home directory:
 
@@ -49,6 +50,7 @@ Optional:
 
 - Python 3.10+ for the local NPU sidecar
 - Playwright Chromium if you plan to use browser automation or refresh screenshots from a raw source clone
+- Docker Engine with Compose if you want the containerized deployment path
 
 Quick checks:
 
@@ -220,6 +222,65 @@ Notes:
 
 Do not assume the `goatcitadel` launcher exists in a raw clone unless you installed it separately.
 
+## Path C: Docker / Compose
+
+This is the recommended first-party path when you want a stronger runtime boundary than a raw host install, especially for shared-host or remote-access setups.
+
+Important posture notes:
+
+- Docker is an extra isolation layer, not a claim of complete hostile-code sandboxing.
+- Keep GoatCitadel auth enabled for any non-loopback deployment.
+- The primary compose path uses Postgres by default.
+
+Primary stack:
+
+```bash
+docker compose up --build
+```
+
+Default endpoints:
+
+- Mission Control: `http://localhost:4173`
+- Gateway health: `http://127.0.0.1:8787/health`
+
+Change these before exposing the stack outside local-only use:
+
+- `GOATCITADEL_AUTH_TOKEN`
+- `GOATCITADEL_POSTGRES_PASSWORD`
+- `GOATCITADEL_ALLOWED_ORIGINS`
+
+The compose file already enables:
+
+- token auth by default
+- dedicated Postgres service healthchecks
+- non-root container runtime
+- dropped Linux capabilities and `no-new-privileges`
+
+### Hostname and browser allowlists
+
+Mission Control is served from a built Vite preview image. If you want to use a non-local hostname, set these at build time and rebuild:
+
+```bash
+GOATCITADEL_VITE_ALLOWED_HOSTS=your-host.example \
+VITE_GATEWAY_ALLOWED_HOSTS=your-host.example \
+docker compose up --build
+```
+
+For Tailnet-style hosts, the shipped frontend defaults already allow `.ts.net`.
+
+### SQLite fallback
+
+SQLite remains supported, but it is now a fallback rather than the default recommendation.
+
+To switch the container stack to SQLite, remove the `postgres` service and set:
+
+```env
+GOATCITADEL_DATABASE_DRIVER=sqlite
+GOATCITADEL_BUNDLED_POSTGRES_ENABLED=false
+```
+
+Keep the GoatCitadel `data/` volume mounted so `data/index.db` persists across restarts.
+
 ## Configure Providers and Auth
 
 Tracked repo config now ships as templates:
@@ -293,6 +354,7 @@ Important:
 - `GOATCITADEL_ALLOW_UNAUTH_NETWORK=1` is break-glass only
 - `GOATCITADEL_ALLOW_REMOTE_APPROVAL_CREATE=1` is break-glass only
 - `GOATCITADEL_WARN_UNAUTH_NON_LOOPBACK=false` only suppresses warnings; it does not make the deployment safer
+- for the Docker preview image, custom Mission Control host allowlists must be present at image build time, not just container runtime
 
 ## Start GoatCitadel
 

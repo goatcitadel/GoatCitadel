@@ -847,7 +847,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       },
     },
     database: {
-      driver: databaseInput.driver ?? "sqlite",
+      driver: databaseInput.driver ?? "postgres",
       postgres: {
         mode: postgresInput.mode ?? "bundled",
         connectionString: postgresInput.connectionString,
