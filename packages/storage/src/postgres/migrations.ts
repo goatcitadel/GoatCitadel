@@ -265,4 +265,29 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         WHERE payload_doc IS NOT NULL;
     `,
   },
+  {
+    version: 4,
+    name: "chat_session_workbench_schema",
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_session_workbench (
+        session_id TEXT PRIMARY KEY,
+        project_id TEXT,
+        base_ref TEXT,
+        worktree_path TEXT,
+        worktree_status TEXT NOT NULL DEFAULT 'uninitialized',
+        active_file_path TEXT,
+        diff_artifact_id TEXT,
+        output_artifact_id TEXT,
+        validation_status TEXT NOT NULL DEFAULT 'idle',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(project_id) REFERENCES chat_projects(project_id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_session_workbench_project
+        ON chat_session_workbench(project_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_session_workbench_status
+        ON chat_session_workbench(worktree_status, validation_status, updated_at DESC);
+    `,
+  },
 ];

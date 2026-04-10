@@ -35,6 +35,7 @@ import { CommsDeliveryRepository } from "./comms-delivery-repo.js";
 import { ChatProjectRepository } from "./chat-project-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { ChatSessionProjectRepository } from "./chat-session-project-repo.js";
+import { ChatSessionWorkbenchRepository } from "./chat-session-workbench-repo.js";
 import { ChatSessionBranchStateRepository } from "./chat-session-branch-state-repo.js";
 import { ChatSessionBindingRepository } from "./chat-session-binding-repo.js";
 import { ChatAttachmentRepository } from "./chat-attachment-repo.js";
@@ -123,6 +124,7 @@ export class Storage {
   public readonly chatProjects: ChatProjectRepository;
   public readonly chatSessionMeta: ChatSessionMetaRepository;
   public readonly chatSessionProjects: ChatSessionProjectRepository;
+  public readonly chatSessionWorkbench: ChatSessionWorkbenchRepository;
   public readonly chatSessionBranchState: ChatSessionBranchStateRepository;
   public readonly chatSessionBindings: ChatSessionBindingRepository;
   public readonly chatAttachments: ChatAttachmentRepository;
@@ -165,16 +167,20 @@ export class Storage {
   public readonly codeModeRuns: CodeModeRunRepository;
 
   public constructor(options: StorageOptions) {
-    this.db = options.db ?? createDatabase({
-      dbPath: options.dbPath ?? ":memory:",
-      tuning: options.tuning,
-    });
+    this.db =
+      options.db ??
+      createDatabase({
+        dbPath: options.dbPath ?? ":memory:",
+        tuning: options.tuning,
+      });
     this.sessions = new SessionRepository(this.db);
     this.idempotency = new IdempotencyRepository(this.db);
-    this.transcripts = options.transcripts
-      ?? (this.db.dialect === "postgres" ? new PostgresTranscriptLog(this.db) : new TranscriptLog(options.transcriptsDir));
-    this.audit = options.audit
-      ?? (this.db.dialect === "postgres" ? new PostgresAuditLog(this.db) : new AuditLog(options.auditDir));
+    this.transcripts =
+      options.transcripts ??
+      (this.db.dialect === "postgres" ? new PostgresTranscriptLog(this.db) : new TranscriptLog(options.transcriptsDir));
+    this.audit =
+      options.audit ??
+      (this.db.dialect === "postgres" ? new PostgresAuditLog(this.db) : new AuditLog(options.auditDir));
     this.approvals = new ApprovalRepository(this.db);
     this.approvalEvents = new ApprovalEventRepository(this.db);
     this.pendingApprovalActions = new PendingApprovalActionRepository(this.db);
@@ -202,6 +208,7 @@ export class Storage {
     this.chatProjects = new ChatProjectRepository(this.db);
     this.chatSessionMeta = new ChatSessionMetaRepository(this.db);
     this.chatSessionProjects = new ChatSessionProjectRepository(this.db);
+    this.chatSessionWorkbench = new ChatSessionWorkbenchRepository(this.db);
     this.chatSessionBranchState = new ChatSessionBranchStateRepository(this.db);
     this.chatSessionBindings = new ChatSessionBindingRepository(this.db);
     this.chatAttachments = new ChatAttachmentRepository(this.db);
@@ -268,13 +275,13 @@ export class Storage {
 
     const deleted = this.db.transaction("immediate", () => {
       const attachmentIds = attachments.map((record) => record.attachmentId);
-      const attachmentClause = attachmentIds.length > 0
-        ? ` OR attachment_id IN (${attachmentIds.map(() => "?").join(", ")})`
-        : "";
+      const attachmentClause =
+        attachmentIds.length > 0 ? ` OR attachment_id IN (${attachmentIds.map(() => "?").join(", ")})` : "";
 
       // Subquery-dependent deletes (must run before their parent tables)
-      this.db.prepare(
-        `
+      this.db
+        .prepare(
+          `
         DELETE FROM media_artifacts
         WHERE job_id IN (
           SELECT job_id
@@ -283,14 +290,17 @@ export class Storage {
              ${attachmentClause}
         )
       `,
-      ).run(normalizedSessionId, ...attachmentIds);
-      this.db.prepare(
-        `
+        )
+        .run(normalizedSessionId, ...attachmentIds);
+      this.db
+        .prepare(
+          `
         DELETE FROM media_jobs
         WHERE session_id = ?
            ${attachmentClause}
       `,
-      ).run(normalizedSessionId, ...attachmentIds);
+        )
+        .run(normalizedSessionId, ...attachmentIds);
       this.db
         .prepare(
           `
@@ -384,6 +394,7 @@ export class Storage {
         "chat_session_branch_state",
         "chat_session_bindings",
         "chat_session_projects",
+        "chat_session_workbench",
         "chat_attachments",
         "chat_session_meta",
       ];
@@ -412,9 +423,8 @@ export class Storage {
 
   private listMediaArtifactPathsForSession(sessionId: string, attachments: ChatAttachmentRecord[]): string[] {
     const attachmentIds = attachments.map((record) => record.attachmentId);
-    const attachmentClause = attachmentIds.length > 0
-      ? ` OR attachment_id IN (${attachmentIds.map(() => "?").join(", ")})`
-      : "";
+    const attachmentClause =
+      attachmentIds.length > 0 ? ` OR attachment_id IN (${attachmentIds.map(() => "?").join(", ")})` : "";
     const rows = this.db
       .prepare(
         `

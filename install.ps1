@@ -38,6 +38,33 @@ function Invoke-NativeOrThrow {
   }
 }
 
+function Write-InstallExplanation {
+  param(
+    [Parameter(Mandatory = $true)][string]$Title,
+    [Parameter(Mandatory = $true)][string]$What,
+    [Parameter(Mandatory = $true)][string]$Why
+  )
+
+  Write-Host $Title
+  Write-Host "  What: $What"
+  Write-Host "  Why: $Why"
+}
+
+function Invoke-PnpmInstallWithRecovery {
+  param([Parameter(Mandatory = $true)][string]$RepositoryPath)
+
+  Write-InstallExplanation -Title "Installing workspace dependencies..." `
+    -What "GoatCitadel's local package graph and command shims under node_modules/.bin" `
+    -Why "GoatCitadel build, doctor, and verification commands depend on local tools like tsc, tsx, vitest, and other workspace executables."
+  try {
+    Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $RepositoryPath, "install", "--frozen-lockfile") -FailureMessage "Failed to install GoatCitadel workspace dependencies"
+    return
+  } catch {
+    Write-Warning "Frozen-lockfile install failed. GoatCitadel will retry with --no-frozen-lockfile so it can refresh lock metadata and restore the local toolchain if manifests moved ahead of pnpm-lock.yaml."
+    Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $RepositoryPath, "install", "--no-frozen-lockfile") -FailureMessage "Failed to install GoatCitadel workspace dependencies after lockfile recovery retry"
+  }
+}
+
 function Get-DirtyTrackedPaths {
   param([Parameter(Mandatory = $true)][string]$RepositoryPath)
 
@@ -185,16 +212,17 @@ if (Test-Path (Join-Path $AppDir ".git")) {
   Invoke-NativeOrThrow -FilePath "git" -Arguments @("clone", $RepoUrl, $AppDir) -FailureMessage "Failed to clone GoatCitadel repository"
 }
 
-Write-Host "Preparing pnpm ($PnpmVersion)..."
+Write-InstallExplanation -Title "Preparing pnpm ($PnpmVersion)..." `
+  -What "the managed pnpm launcher for GoatCitadel's workspace" `
+  -Why "GoatCitadel uses pnpm to materialize local package binaries and run workspace build, doctor, and verification commands."
 Invoke-NativeOrThrow -FilePath "corepack" -Arguments @("enable") -FailureMessage "Failed to enable Corepack"
 Invoke-NativeOrThrow -FilePath "corepack" -Arguments @("prepare", "pnpm@$PnpmVersion", "--activate") -FailureMessage "Failed to activate pnpm $PnpmVersion"
 
-Write-Host "Installing workspace dependencies..."
 $lockfilePath = Join-Path $AppDir "pnpm-lock.yaml"
 if (-not (Test-Path $lockfilePath)) {
   throw "Install source is missing pnpm-lock.yaml; this build cannot be installed with --frozen-lockfile."
 }
-Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $AppDir, "install", "--frozen-lockfile") -FailureMessage "Failed to install GoatCitadel workspace dependencies"
+Invoke-PnpmInstallWithRecovery -RepositoryPath $AppDir
 foreach ($workspacePackage in $WorkspaceRuntimeBuildPackages) {
   Write-Host "Building runtime package $workspacePackage..."
   Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $AppDir, "--filter", $workspacePackage, "build") -FailureMessage "Failed to build required GoatCitadel workspace package $workspacePackage"
@@ -212,10 +240,14 @@ if ((Test-Path $envExamplePath) -and -not (Test-Path $envPath)) {
   Write-Host "Materializing local .env from .env.example..."
   Copy-Item -Path $envExamplePath -Destination $envPath -Force
 }
-Write-Host "Installing Playwright Chromium runtime..."
+Write-InstallExplanation -Title "Installing Playwright Chromium runtime..." `
+  -What "the managed Chromium browser used by GoatCitadel browser automation" `
+  -Why "Browser tools, screenshot capture, and Playwright-backed verification flows need a local browser runtime to run safely and predictably."
 Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $AppDir, "--filter", "@goatcitadel/policy-engine", "exec", "playwright", "install", "chromium") -FailureMessage "Failed to install required Playwright Chromium runtime"
 if (-not $SkipVoice) {
-  Write-Host "Installing managed local voice runtime ($VoiceModel)..."
+  Write-InstallExplanation -Title "Installing managed local voice runtime ($VoiceModel)..." `
+    -What "the managed local whisper.cpp voice runtime" `
+    -Why "Voice transcription and local speech features need a downloaded runtime before GoatCitadel can use them."
   try {
     Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $AppDir, "--filter", "@goatcitadel/gateway", "run", "voice:runtime", "install", "--model", $VoiceModel) -FailureMessage "Failed to install managed voice runtime"
   } catch {

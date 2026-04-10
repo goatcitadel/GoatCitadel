@@ -22,12 +22,18 @@ describe("doctor operator links", () => {
   it("emits a remote Mission Control bootstrap URL when token auth and origin are configured", async () => {
     const rootDir = await createDoctorFixture();
     process.env.MISSION_CONTROL_ORIGIN = "http://bld:5173";
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), {
-      status: 200,
-      headers: {
-        "content-type": "application/json",
-      },
-    })) as typeof fetch);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ status: "ok" }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          }),
+      ) as typeof fetch,
+    );
 
     const report = await runDoctor({
       rootDir,
@@ -45,12 +51,18 @@ describe("doctor operator links", () => {
 
   it("omits the bootstrap URL and reports a note when Mission Control origin is missing", async () => {
     const rootDir = await createDoctorFixture();
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), {
-      status: 200,
-      headers: {
-        "content-type": "application/json",
-      },
-    })) as typeof fetch);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ status: "ok" }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          }),
+      ) as typeof fetch,
+    );
 
     const report = await runDoctor({
       rootDir,
@@ -67,11 +79,34 @@ describe("doctor operator links", () => {
 });
 
 describe("doctor summary behavior", () => {
+  it("reports missing managed workspace tooling in audit-only mode", async () => {
+    const rootDir = await createDoctorFixture();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("connect ECONNREFUSED");
+      }) as typeof fetch,
+    );
+
+    const report = await runDoctor({
+      rootDir,
+      gatewayBaseUrl: "http://127.0.0.1:8787",
+      auditOnly: true,
+    });
+
+    const toolingCheck = report.checks.find((check) => check.id === "runtime.managed-workspace-tooling");
+    expect(toolingCheck?.status).toBe("warn");
+    expect(toolingCheck?.detail).toContain("Missing local workspace tooling");
+  });
+
   it("does not fail when the report only contains warnings", async () => {
     const rootDir = await createDoctorFixture();
-    vi.stubGlobal("fetch", vi.fn(async () => {
-      throw new Error("connect ECONNREFUSED");
-    }) as typeof fetch);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("connect ECONNREFUSED");
+      }) as typeof fetch,
+    );
 
     const report = await runDoctor({
       rootDir,
@@ -153,6 +188,7 @@ async function createDoctorFixture(): Promise<string> {
     name: "doctor-fixture",
     private: true,
   });
+  await writeFile(path.join(rootDir, "pnpm-workspace.yaml"), "packages:\n  - apps/*\n  - packages/*\n", "utf8");
 
   const assistant = {
     environment: "local",

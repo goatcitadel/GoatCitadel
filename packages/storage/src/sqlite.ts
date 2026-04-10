@@ -66,8 +66,7 @@ class SqliteDatabaseClient implements DatabaseClient {
   }
 
   public transaction<T>(mode: DbTransactionMode, callback: () => T): T {
-    const beginSql =
-      mode === "exclusive" ? "BEGIN EXCLUSIVE" : mode === "deferred" ? "BEGIN" : "BEGIN IMMEDIATE";
+    const beginSql = mode === "exclusive" ? "BEGIN EXCLUSIVE" : mode === "deferred" ? "BEGIN" : "BEGIN IMMEDIATE";
     this.db.exec(beginSql);
     try {
       const result = callback();
@@ -504,20 +503,29 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "capability_system_v1_schema",
     up: createCapabilitySystemV1Schema,
   },
+  {
+    version: 55,
+    name: "chat_session_workbench_schema",
+    up: createChatSessionWorkbenchSchema,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
   const db = new DatabaseSync(":memory:");
   try {
     migrate(db);
-    const tableRows = db.prepare(`
+    const tableRows = db
+      .prepare(
+        `
       SELECT name, sql
       FROM sqlite_master
       WHERE type = 'table'
         AND sql IS NOT NULL
         AND name NOT LIKE 'sqlite_%'
       ORDER BY name ASC
-    `).all() as Array<{ name: string; sql: string }>;
+    `,
+      )
+      .all() as Array<{ name: string; sql: string }>;
 
     const tables = tableRows.map((row) => buildTableBlueprint(db, row.name, row.sql));
     return { tables };
@@ -548,11 +556,13 @@ function buildTableBlueprint(db: DatabaseSync, tableName: string, sql: string): 
     on_update: string;
     on_delete: string;
   }>;
-  const indexes = (db.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{
-    name: string;
-    unique: number;
-    origin: string;
-  }>)
+  const indexes = (
+    db.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{
+      name: string;
+      unique: number;
+      origin: string;
+    }>
+  )
     .filter((index) => !index.name.startsWith("sqlite_autoindex_"))
     .map((index) => {
       const indexColumns = db.prepare(`PRAGMA index_info(${index.name})`).all() as Array<{
@@ -3560,6 +3570,30 @@ function createRealtimeEventSequenceCursorSchema(db: DatabaseSync): void {
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_realtime_events_sequence
       ON realtime_events(sequence DESC);
+  `);
+}
+
+function createChatSessionWorkbenchSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_session_workbench (
+      session_id TEXT PRIMARY KEY,
+      project_id TEXT,
+      base_ref TEXT,
+      worktree_path TEXT,
+      worktree_status TEXT NOT NULL DEFAULT 'uninitialized',
+      active_file_path TEXT,
+      diff_artifact_id TEXT,
+      output_artifact_id TEXT,
+      validation_status TEXT NOT NULL DEFAULT 'idle',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(project_id) REFERENCES chat_projects(project_id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_session_workbench_project
+      ON chat_session_workbench(project_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_workbench_status
+      ON chat_session_workbench(worktree_status, validation_status, updated_at DESC);
   `);
 }
 

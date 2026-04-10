@@ -209,7 +209,7 @@
     },
     "agents": {},
     "sandbox": {
-      "writeJailRoots": ["./workspace", "./data"],
+      "writeJailRoots": ["./workspace", "./data", "./.worktrees"],
       "readOnlyRoots": ["./skills"],
       "readAccessMode": "approval_required",
       "networkAllowlist": [

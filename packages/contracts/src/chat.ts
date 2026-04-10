@@ -142,6 +142,81 @@ export interface ChatSessionBindingRecord {
   updatedAt: string;
 }
 
+export type ChatSessionWorkbenchWorktreeStatus = "uninitialized" | "ready" | "missing" | "blocked";
+
+export type ChatSessionWorkbenchValidationStatus = "idle" | "pending" | "passed" | "failed";
+
+export interface ChatSessionWorkbenchRecord {
+  sessionId: string;
+  projectId?: string;
+  baseRef?: string;
+  worktreePath?: string;
+  worktreeStatus: ChatSessionWorkbenchWorktreeStatus;
+  activeFilePath?: string;
+  diffArtifactId?: string;
+  outputArtifactId?: string;
+  validationStatus: ChatSessionWorkbenchValidationStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatSessionWorkbenchTreeEntry {
+  path: string;
+  name: string;
+  kind: "file" | "directory";
+  changed: boolean;
+  depth: number;
+}
+
+export interface ChatSessionWorkbenchTreeResponse {
+  state: ChatSessionWorkbenchRecord;
+  rootPath: string;
+  changedFiles: string[];
+  items: ChatSessionWorkbenchTreeEntry[];
+}
+
+export interface ChatSessionWorkbenchFileResponse {
+  state: ChatSessionWorkbenchRecord;
+  path: string;
+  sizeBytes: number;
+  modifiedAt: string;
+  contentType: string;
+  language: string;
+  changed: boolean;
+  content: string;
+}
+
+export interface ChatSessionWorkbenchDiffSummary {
+  changedFiles: number;
+  additions: number;
+  deletions: number;
+}
+
+export interface ChatSessionWorkbenchDiffResponse {
+  state: ChatSessionWorkbenchRecord;
+  scopePath: string;
+  changedFiles: string[];
+  summary: ChatSessionWorkbenchDiffSummary;
+  diff: string;
+}
+
+export interface ChatSessionWorkbenchOutputRunSummary {
+  runId: string;
+  status: import("./capabilities.js").CodeModeRunRecord["status"];
+  language: import("./capabilities.js").CodeModeRunRecord["language"];
+  requestedOutputIntent?: string;
+  stdoutPreview?: string;
+  stderrPreview?: string;
+  createdAt: string;
+}
+
+export interface ChatSessionWorkbenchOutputResponse {
+  state: ChatSessionWorkbenchRecord;
+  helperRuns: ChatSessionWorkbenchOutputRunSummary[];
+  output: string;
+  lastUpdatedAt?: string;
+}
+
 export interface ChatAttachmentRecord {
   attachmentId: string;
   sessionId: string;

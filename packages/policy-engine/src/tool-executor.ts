@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Tool execution policy remains intentionally centralized so grants, approvals, and audit behavior stay in one authoritative path. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
@@ -10,14 +11,8 @@ import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail } from "./sandbox/path-jail.js";
 import { assertHostAllowed } from "./sandbox/network-guard.js";
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
-import {
-  collectLeakDetections,
-  sanitizeForModel,
-} from "./tool-security.js";
-import {
-  ingestDocumentViaBackend,
-  searchIngestedContext,
-} from "./ingestion-backends.js";
+import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
+import { ingestDocumentViaBackend, searchIngestedContext } from "./ingestion-backends.js";
 import { matchesToolPattern } from "./tool-patterns.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import {
@@ -77,10 +72,7 @@ export async function executeTool(
     });
     return finalizeToolResult(rawResult);
   }
-  if (
-    request.toolName.startsWith("bankr.")
-    && options.bankrBuiltinEnabled === false
-  ) {
+  if (request.toolName.startsWith("bankr.") && options.bankrBuiltinEnabled === false) {
     throw new Error(BANKR_OPTIONAL_MIGRATION_MESSAGE);
   }
 
@@ -225,11 +217,7 @@ async function bankrStatus(storage: Storage) {
   };
 }
 
-async function bankrPrompt(
-  request: ToolInvokeRequest,
-  storage: Storage,
-  mode: "read" | "write",
-) {
+async function bankrPrompt(request: ToolInvokeRequest, storage: Storage, mode: "read" | "write") {
   const preview = evaluateBankrActionPreview(storage, {
     ...(request.args as Record<string, unknown>),
     sessionId: request.sessionId,
@@ -248,9 +236,7 @@ async function bankrPrompt(
       policyReason: "bankr.read only supports read actions",
       details: { requestedMode: mode, normalized: preview.normalized },
     });
-    throw new Error(
-      "bankr.read only supports read actions. Use bankr.write for trade/transfer/sign/submit/deploy.",
-    );
+    throw new Error("bankr.read only supports read actions. Use bankr.write for trade/transfer/sign/submit/deploy.");
   }
 
   if (mode === "write" && preview.normalized.actionType === "read") {
@@ -303,11 +289,7 @@ async function bankrPrompt(
   let dailyUsageUsdAfter = preview.dailyUsageUsd;
   let reservedUsdEstimate = 0;
   if (mode === "write" && Number.isFinite(preview.normalized.usdEstimate)) {
-    const reservation = reserveBankrBudget(
-      storage,
-      Number(preview.normalized.usdEstimate),
-      preview.policy.dailyUsdCap,
-    );
+    const reservation = reserveBankrBudget(storage, Number(preview.normalized.usdEstimate), preview.policy.dailyUsdCap);
     if (!reservation.reserved) {
       const remaining = Math.max(0, preview.policy.dailyUsdCap - reservation.dailyTotal);
       appendBankrActionAudit(storage, {
@@ -321,18 +303,13 @@ async function bankrPrompt(
         policyReason: `daily_cap_exceeded: Estimated USD amount exceeds remaining daily cap ($${remaining}).`,
         details: { preview, reservationTotal: reservation.dailyTotal },
       });
-      throw new Error(
-        `Bankr policy blocked action: Estimated USD amount exceeds remaining daily cap ($${remaining}).`,
-      );
+      throw new Error(`Bankr policy blocked action: Estimated USD amount exceeds remaining daily cap ($${remaining}).`);
     }
     dailyUsageUsdAfter = reservation.dailyTotal;
     reservedUsdEstimate = Number(preview.normalized.usdEstimate);
   }
 
-  const prompt = required(
-    request.args.prompt ?? request.args.content ?? request.args.text,
-    "prompt",
-  );
+  const prompt = required(request.args.prompt ?? request.args.content ?? request.args.text, "prompt");
   const cliArgs = ["prompt"];
   if (asBoolean(request.args.continue, false)) {
     cliArgs.push("--continue");
@@ -403,7 +380,7 @@ async function bankrPrompt(
         dailyUsageUsdAfter,
       },
     });
-    throw new Error(`Bankr command failed: ${stderr ?? message}`);
+    throw new Error(`Bankr command failed: ${stderr ?? message}`, { cause: error });
   }
 }
 
@@ -636,11 +613,7 @@ async function httpPost(args: Record<string, unknown>, config: ToolPolicyConfig,
   };
 }
 
-async function shellExec(
-  request: ToolInvokeRequest,
-  config: ToolPolicyConfig,
-  storage: Storage,
-) {
+async function shellExec(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
   const args = request.args;
   const command = required(args.command, "command");
   const cwd = resolveOptionalCwd(args.cwd, request, config, storage);
@@ -686,11 +659,7 @@ async function shellExec(
   }
 }
 
-async function shellExecBackground(
-  request: ToolInvokeRequest,
-  config: ToolPolicyConfig,
-  storage: Storage,
-) {
+async function shellExecBackground(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
   const args = request.args;
   const command = required(args.command, "command");
   const cwd = resolveOptionalCwd(args.cwd, request, config, storage);
@@ -727,13 +696,20 @@ async function shellExecBackground(
 }
 
 async function gitStatus() {
-  const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "--branch"], { timeout: 15000, windowsHide: true });
+  const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "--branch"], {
+    timeout: 15000,
+    windowsHide: true,
+  });
   return { summary: stdout.slice(0, 10000) };
 }
 
 async function gitDiff(args: Record<string, unknown>) {
   const staged = asBoolean(args.staged, false);
-  const { stdout } = await execFileAsync("git", staged ? ["diff", "--cached"] : ["diff"], { timeout: 15000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+  const { stdout } = await execFileAsync("git", staged ? ["diff", "--cached"] : ["diff"], {
+    timeout: 15000,
+    windowsHide: true,
+    maxBuffer: 4 * 1024 * 1024,
+  });
   return { staged, diffSnippet: stdout.slice(0, 12000), truncated: stdout.length > 12000 };
 }
 
@@ -778,7 +754,7 @@ async function gitWorktreeCreate(args: Record<string, unknown>, config: ToolPoli
 async function gitWorktreeRemove(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const p = required(args.path, "path");
   assertWritePathInJail(p, config.sandbox.writeJailRoots);
-  await execFileAsync("git", ["worktree", "remove", p, "--force"], { timeout: 30000, windowsHide: true });
+  await execFileAsync("git", ["worktree", "remove", p], { timeout: 30000, windowsHide: true });
   return { removed: true, path: path.resolve(p) };
 }
 
@@ -798,9 +774,7 @@ async function runRestricted(
   if (manager !== "pnpm" && manager !== "npm") {
     throw new Error("Only pnpm/npm are allowed");
   }
-  const cmdArgs = manager === "pnpm"
-    ? [...(filter ? ["--filter", filter] : []), "run", kind]
-    : ["run", kind];
+  const cmdArgs = manager === "pnpm" ? [...(filter ? ["--filter", filter] : []), "run", kind] : ["run", kind];
   const command = resolveRestrictedCommand(manager, cmdArgs);
   const { stdout, stderr } = await execFileAsync(command.file, command.args, {
     timeout: 120000,
@@ -851,14 +825,17 @@ async function memoryWrite(args: Record<string, unknown>, storage: Storage, upse
     title,
     metadata: {
       tags: stringArray(args.tags),
-      ...(record(args.metadata)),
+      ...record(args.metadata),
     },
   });
   const chunks = chunkText(content, 1200, 180, 400);
-  storage.knowledge.appendChunks(doc.docId, chunks.map((chunk) => ({
-    content: chunk,
-    embedding: pseudoEmbedding(chunk),
-  })));
+  storage.knowledge.appendChunks(
+    doc.docId,
+    chunks.map((chunk) => ({
+      content: chunk,
+      embedding: pseudoEmbedding(chunk),
+    })),
+  );
   return {
     mode: upsert ? "upsert" : "write",
     document: doc,
@@ -911,13 +888,13 @@ async function memoryRead(args: Record<string, unknown>, storage: Storage) {
       const score = Math.max(titleScore, bestChunk?.score ?? 0);
       return score > 0
         ? {
-          docId: doc.docId,
-          title: doc.title,
-          sourceRef: doc.sourceRef,
-          metadata: doc.metadata,
-          score,
-          snippet: bestChunk?.chunk.content.slice(0, 320) ?? "",
-        }
+            docId: doc.docId,
+            title: doc.title,
+            sourceRef: doc.sourceRef,
+            metadata: doc.metadata,
+            score,
+            snippet: bestChunk?.chunk.content.slice(0, 320) ?? "",
+          }
         : undefined;
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
@@ -1095,9 +1072,8 @@ async function commsInvoke(
 ) {
   const connectionId = required(args.connectionId, "connectionId");
   const connection = storage.integrationConnections.get(connectionId);
-  const target = asString(args.target)
-    ?? resolveDefaultChannelTarget(connection.key, connection.config)
-    ?? connection.key;
+  const target =
+    asString(args.target) ?? resolveDefaultChannelTarget(connection.key, connection.config) ?? connection.key;
   const message = asString(args.message) ?? "";
   const queued = storage.commsDeliveries.createQueued({
     connectionId,
@@ -1188,15 +1164,17 @@ async function executeCommsTool(
     default:
       break;
   }
-  const webhookUrl = asString(args.url)
-    ?? secretFrom(connectionConfig, "webhookUrl", "webhookUrlEnv")
-    ?? secretFrom(connectionConfig, "url", "urlEnv");
+  const webhookUrl =
+    asString(args.url) ??
+    secretFrom(connectionConfig, "webhookUrl", "webhookUrlEnv") ??
+    secretFrom(connectionConfig, "url", "urlEnv");
   if (!webhookUrl) {
     throw new Error("Missing webhook URL");
   }
-  const payload = channelKey === "discord"
-    ? { content: renderedMessage }
-    : { text: renderedMessage, target, payload: record(args.payload) };
+  const payload =
+    channelKey === "discord"
+      ? { content: renderedMessage }
+      : { text: renderedMessage, target, payload: record(args.payload) };
   const res = await fetchAllowlisted(
     webhookUrl,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
@@ -1284,10 +1262,7 @@ function resolveChannelKey(toolName: string, connectionKey: string): string {
   return connectionKey;
 }
 
-function resolveDefaultChannelTarget(
-  connectionKey: string,
-  config: Record<string, unknown>,
-): string | undefined {
+function resolveDefaultChannelTarget(connectionKey: string, config: Record<string, unknown>): string | undefined {
   const keys = CHANNEL_TARGET_KEYS[connectionKey] ?? ["target", "defaultTarget"];
   for (const key of keys) {
     const value = asString(config[key]);
@@ -1298,34 +1273,33 @@ function resolveDefaultChannelTarget(
   return undefined;
 }
 
-function renderChannelMessage(
-  message: string,
-  attachmentsRaw: unknown,
-): string {
+function renderChannelMessage(message: string, attachmentsRaw: unknown): string {
   const attachments = normalizeChannelAttachments(attachmentsRaw);
   if (attachments.length === 0) {
     return message;
   }
-  const lines = attachments.map((attachment) => {
-    const title = attachment.title;
-    const url = attachment.url;
-    if (title && url) {
-      return `- ${title}: ${url}`;
-    }
-    if (url) {
-      return `- ${url}`;
-    }
-    if (title) {
-      return `- ${title}`;
-    }
-    if (attachment.attachmentId) {
-      return `- attachment ${attachment.attachmentId}`;
-    }
-    if (attachment.dataBase64) {
-      return "- inline attachment";
-    }
-    return null;
-  }).filter((line): line is string => Boolean(line));
+  const lines = attachments
+    .map((attachment) => {
+      const title = attachment.title;
+      const url = attachment.url;
+      if (title && url) {
+        return `- ${title}: ${url}`;
+      }
+      if (url) {
+        return `- ${url}`;
+      }
+      if (title) {
+        return `- ${title}`;
+      }
+      if (attachment.attachmentId) {
+        return `- attachment ${attachment.attachmentId}`;
+      }
+      if (attachment.dataBase64) {
+        return "- inline attachment";
+      }
+      return null;
+    })
+    .filter((line): line is string => Boolean(line));
   if (lines.length === 0) {
     return message;
   }
@@ -1354,7 +1328,10 @@ function normalizeChannelAttachments(attachmentsRaw: unknown): ChannelAttachment
       attachmentId: asString(attachment.attachmentId),
     }))
     .filter((attachment) =>
-      Boolean(attachment.url || attachment.title || attachment.mimeType || attachment.dataBase64 || attachment.attachmentId));
+      Boolean(
+        attachment.url || attachment.title || attachment.mimeType || attachment.dataBase64 || attachment.attachmentId,
+      ),
+    );
 }
 
 async function slackSend(
@@ -1373,7 +1350,9 @@ async function slackSend(
   const webhookUrl = secretFrom(config, "webhookUrl", "webhookUrlEnv");
   if (webhookUrl) {
     if (inlineAttachments.length > 0) {
-      throw new Error("Slack webhook connections do not support inline attachments; use a bot token connection instead");
+      throw new Error(
+        "Slack webhook connections do not support inline attachments; use a bot token connection instead",
+      );
     }
     const res = await fetchAllowlisted(
       webhookUrl,
@@ -1393,13 +1372,13 @@ async function slackSend(
     return `slack-webhook-${Date.now()}`;
   }
 
-  const token = secretFrom(config, "botToken", "botTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const channel = asString(args.target) ?? resolvedTarget ?? asString(config.defaultChannel);
-  const threadTs = asString(args.threadTs)
-    ?? asString(args.replyToMessageId)
-    ?? asString(args.replyTo)
-    ?? asString(config.defaultThreadTs);
+  const threadTs =
+    asString(args.threadTs) ??
+    asString(args.replyToMessageId) ??
+    asString(args.replyTo) ??
+    asString(config.defaultThreadTs);
   if (!token) {
     throw new Error("Missing Slack bot token");
   }
@@ -1436,7 +1415,9 @@ async function slackSend(
   }
 
   if (inlineAttachments.length > 0 && !isSlackConversationId(uploadChannelId)) {
-    throw new Error("Slack inline attachment uploads require a channel ID target or a text/url message that can resolve one");
+    throw new Error(
+      "Slack inline attachment uploads require a channel ID target or a text/url message that can resolve one",
+    );
   }
   let uploadedFileId: string | undefined;
   for (const [index, attachment] of inlineAttachments.entries()) {
@@ -1459,8 +1440,7 @@ async function slackReact(
   allowlist: string[],
   target: string,
 ): Promise<string> {
-  const token = secretFrom(config, "botToken", "botTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const channel = asString(args.target) ?? normalizeChannelTarget(target, "slack") ?? asString(config.defaultChannel);
   const timestamp = required(args.messageId, "Slack messageId");
   const reaction = normalizeSlackReaction(args.reaction);
@@ -1500,8 +1480,7 @@ async function slackUnsend(
   allowlist: string[],
   target: string,
 ): Promise<string> {
-  const token = secretFrom(config, "botToken", "botTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const channel = asString(args.target) ?? normalizeChannelTarget(target, "slack") ?? asString(config.defaultChannel);
   const timestamp = required(args.messageId, "Slack messageId");
   if (!token) {
@@ -1561,8 +1540,7 @@ async function discordSend(
     return asString(body.id) ?? `discord-webhook-${Date.now()}`;
   }
 
-  const token = secretFrom(config, "botToken", "botTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const channelId = asString(args.target) ?? resolvedTarget ?? asString(config.defaultChannelId);
   if (!token) {
     throw new Error("Missing Discord bot token");
@@ -1596,9 +1574,9 @@ async function discordReact(
   allowlist: string[],
   target: string,
 ): Promise<string> {
-  const token = secretFrom(config, "botToken", "botTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
-  const channelId = asString(args.target) ?? normalizeChannelTarget(target, "discord") ?? asString(config.defaultChannelId);
+  const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
+  const channelId =
+    asString(args.target) ?? normalizeChannelTarget(target, "discord") ?? asString(config.defaultChannelId);
   const messageId = required(args.messageId, "Discord messageId");
   const emoji = required(args.reaction, "Discord reaction");
   if (!token) {
@@ -1631,11 +1609,11 @@ async function discordUnsend(
   target: string,
 ): Promise<string> {
   const messageId = required(args.messageId, "Discord messageId");
-  const token = secretFrom(config, "botToken", "botTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const webhookUrl = secretFrom(config, "webhookUrl", "webhookUrlEnv");
   if (token) {
-    const channelId = asString(args.target) ?? normalizeChannelTarget(target, "discord") ?? asString(config.defaultChannelId);
+    const channelId =
+      asString(args.target) ?? normalizeChannelTarget(target, "discord") ?? asString(config.defaultChannelId);
     if (!channelId) {
       throw new Error("Missing Discord channel target");
     }
@@ -1659,11 +1637,7 @@ async function discordUnsend(
     throw new Error("Missing Discord bot token or webhook URL");
   }
   const deleteUrl = `${appendDiscordWebhookQuery(webhookUrl.replace(/\/+$/, ""), "wait", "true").replace(/\?wait=true$/, "")}/messages/${encodeURIComponent(messageId)}`;
-  const res = await fetchAllowlisted(
-    deleteUrl,
-    { method: "DELETE" },
-    allowlist,
-  );
+  const res = await fetchAllowlisted(deleteUrl, { method: "DELETE" }, allowlist);
   if (!res.response.ok) {
     const bodyText = await res.response.text();
     throw new Error(`discord.unsend failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
@@ -1786,9 +1760,7 @@ function buildTeamsWebhookPayload(
     throw new Error("Teams webhook connections only support URL-backed attachments");
   }
 
-  const body: Array<Record<string, unknown>> = [
-    { type: "TextBlock", text: title, weight: "Bolder", wrap: true },
-  ];
+  const body: Array<Record<string, unknown>> = [{ type: "TextBlock", text: title, weight: "Bolder", wrap: true }];
   if (message.trim()) {
     body.push({ type: "TextBlock", text: message, wrap: true });
   }
@@ -1831,10 +1803,7 @@ function buildTeamsWebhookPayload(
   };
 }
 
-function buildGoogleChatWebhookPayload(
-  message: string,
-  attachments: ChannelAttachment[],
-): Record<string, unknown> {
+function buildGoogleChatWebhookPayload(message: string, attachments: ChannelAttachment[]): Record<string, unknown> {
   const unsupportedInline = attachments.some((attachment) => Boolean(attachment.dataBase64));
   if (unsupportedInline) {
     throw new Error("Google Chat webhook connections only support URL-backed attachments");
@@ -1905,9 +1874,10 @@ async function lineSend(
   const resolvedTarget = normalizeLineTarget(
     asString(args.target) ?? normalizeChannelTarget(target, "line") ?? resolveDefaultChannelTarget("line", config),
   );
-  const channelAccessToken = secretFrom(config, "channelAccessToken", "channelAccessTokenEnv")
-    ?? secretFrom(config, "accessToken", "accessTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const channelAccessToken =
+    secretFrom(config, "channelAccessToken", "channelAccessTokenEnv") ??
+    secretFrom(config, "accessToken", "accessTokenEnv") ??
+    secretFrom(config, "token", "tokenEnv");
   if (!channelAccessToken) {
     throw new Error("Missing LINE channel access token");
   }
@@ -1956,8 +1926,7 @@ async function telegramSend(
   attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "telegram");
-  const token = secretFrom(config, "botToken", "botTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const chatId = asString(args.target) ?? resolvedTarget ?? asString(config.defaultChatId);
   const replyToMessageId = parseOptionalIntegerLike(args.replyToMessageId ?? args.replyTo);
   if (!token) {
@@ -1999,8 +1968,7 @@ async function telegramUnsend(
   allowlist: string[],
   target: string,
 ): Promise<string> {
-  const token = secretFrom(config, "botToken", "botTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const chatId = asString(args.target) ?? normalizeChannelTarget(target, "telegram") ?? asString(config.defaultChatId);
   const messageId = required(args.messageId, "Telegram messageId");
   if (!token) {
@@ -2024,7 +1992,9 @@ async function telegramUnsend(
   const bodyText = await res.response.text();
   const body = parseJsonRecord(bodyText);
   if (!res.response.ok || body.ok === false) {
-    throw new Error(`telegram.unsend failed (${res.response.status})${body.description ? `: ${body.description}` : ""}`);
+    throw new Error(
+      `telegram.unsend failed (${res.response.status})${body.description ? `: ${body.description}` : ""}`,
+    );
   }
   return messageId;
 }
@@ -2035,8 +2005,7 @@ async function telegramReact(
   allowlist: string[],
   target: string,
 ): Promise<string> {
-  const token = secretFrom(config, "botToken", "botTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const chatId = asString(args.target) ?? normalizeChannelTarget(target, "telegram") ?? asString(config.defaultChatId);
   const messageId = required(args.messageId, "Telegram messageId");
   const reaction = required(args.reaction, "Telegram reaction").trim();
@@ -2161,7 +2130,9 @@ async function telegramSendAttachment(
   const bodyText = await res.response.text();
   const payload = parseJsonRecord(bodyText);
   if (!res.response.ok || payload.ok === false) {
-    throw new Error(`telegram.send failed (${res.response.status})${payload.description ? `: ${payload.description}` : ""}`);
+    throw new Error(
+      `telegram.send failed (${res.response.status})${payload.description ? `: ${payload.description}` : ""}`,
+    );
   }
   const result = record(payload.result);
   return providerMessageIdFromValue(result.message_id) ?? `telegram-${Date.now()}`;
@@ -2185,9 +2156,8 @@ async function teamsSend(
   message: string,
   attachments: ChannelAttachment[] = [],
 ): Promise<string> {
-  const webhookUrl = asString(args.url)
-    ?? secretFrom(config, "webhookUrl", "webhookUrlEnv")
-    ?? secretFrom(config, "url", "urlEnv");
+  const webhookUrl =
+    asString(args.url) ?? secretFrom(config, "webhookUrl", "webhookUrlEnv") ?? secretFrom(config, "url", "urlEnv");
   if (!webhookUrl) {
     throw new Error("Missing Teams webhook URL");
   }
@@ -2217,9 +2187,8 @@ async function googleChatSend(
   attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "google-chat");
-  const webhookUrl = asString(args.url)
-    ?? secretFrom(config, "webhookUrl", "webhookUrlEnv")
-    ?? secretFrom(config, "url", "urlEnv");
+  const webhookUrl =
+    asString(args.url) ?? secretFrom(config, "webhookUrl", "webhookUrlEnv") ?? secretFrom(config, "url", "urlEnv");
   if (!webhookUrl) {
     throw new Error("Missing Google Chat webhook URL");
   }
@@ -2253,11 +2222,12 @@ async function whatsappSend(
   message: string,
   attachments: ChannelAttachment[] = [],
 ): Promise<string> {
-  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const phoneNumberId = asString(config.phoneNumberId) ?? asString(config.senderId);
   const resolvedTarget = normalizeWhatsAppTarget(
-    asString(args.target) ?? normalizeChannelTarget(target, "whatsapp") ?? resolveDefaultChannelTarget("whatsapp", config),
+    asString(args.target) ??
+      normalizeChannelTarget(target, "whatsapp") ??
+      resolveDefaultChannelTarget("whatsapp", config),
   );
   const baseUrl = normalizeWhatsAppBaseUrl(asString(config.baseUrl), asString(config.apiVersion));
   if (!accessToken) {
@@ -2323,11 +2293,12 @@ async function whatsappReact(
   allowlist: string[],
   target: string,
 ): Promise<string> {
-  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const phoneNumberId = asString(config.phoneNumberId) ?? asString(config.senderId);
   const resolvedTarget = normalizeWhatsAppTarget(
-    asString(args.target) ?? normalizeChannelTarget(target, "whatsapp") ?? resolveDefaultChannelTarget("whatsapp", config),
+    asString(args.target) ??
+      normalizeChannelTarget(target, "whatsapp") ??
+      resolveDefaultChannelTarget("whatsapp", config),
   );
   const messageId = required(asString(args.messageId), "WhatsApp messageId");
   const reaction = required(asString(args.reaction), "WhatsApp reaction").trim();
@@ -2372,11 +2343,11 @@ async function mattermostSend(
   attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const serverUrl = asString(config.serverUrl) ?? asString(config.baseUrl);
-  const botToken = secretFrom(config, "botToken", "botTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
-  const resolvedTarget = asString(args.target)
-    ?? normalizeChannelTarget(target, "mattermost")
-    ?? resolveDefaultChannelTarget("mattermost", config);
+  const botToken = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
+  const resolvedTarget =
+    asString(args.target) ??
+    normalizeChannelTarget(target, "mattermost") ??
+    resolveDefaultChannelTarget("mattermost", config);
   if (!serverUrl) {
     throw new Error("Missing Mattermost server URL");
   }
@@ -2388,12 +2359,7 @@ async function mattermostSend(
   }
 
   const parsedTarget = parseMattermostTarget(resolvedTarget);
-  const botUser = await mattermostApiRequest<Record<string, unknown>>(
-    serverUrl,
-    botToken,
-    "/users/me",
-    allowlist,
-  );
+  const botUser = await mattermostApiRequest<Record<string, unknown>>(serverUrl, botToken, "/users/me", allowlist);
   const botUserId = required(botUser.id, "Mattermost bot user id");
   const channelId = await resolveMattermostChannelId(
     serverUrl,
@@ -2408,32 +2374,19 @@ async function mattermostSend(
   if (attachments.length > 0) {
     fileIds = [];
     for (const [index, attachment] of attachments.entries()) {
-      const fileId = await mattermostUploadAttachment(
-        serverUrl,
-        botToken,
-        channelId,
-        attachment,
-        index,
-        allowlist,
-      );
+      const fileId = await mattermostUploadAttachment(serverUrl, botToken, channelId, attachment, index, allowlist);
       fileIds.push(fileId);
     }
   }
 
-  const post = await mattermostApiRequest<Record<string, unknown>>(
-    serverUrl,
-    botToken,
-    "/posts",
-    allowlist,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        channel_id: channelId,
-        message,
-        ...(fileIds && fileIds.length > 0 ? { file_ids: fileIds } : {}),
-      }),
-    },
-  );
+  const post = await mattermostApiRequest<Record<string, unknown>>(serverUrl, botToken, "/posts", allowlist, {
+    method: "POST",
+    body: JSON.stringify({
+      channel_id: channelId,
+      message,
+      ...(fileIds && fileIds.length > 0 ? { file_ids: fileIds } : {}),
+    }),
+  });
   return asString(post.id) ?? `mattermost-${Date.now()}`;
 }
 
@@ -2444,8 +2397,7 @@ async function mattermostReact(
   _target: string,
 ): Promise<string> {
   const serverUrl = asString(config.serverUrl) ?? asString(config.baseUrl);
-  const botToken = secretFrom(config, "botToken", "botTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const botToken = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const postId = required(args.messageId, "Mattermost messageId");
   const reaction = normalizeColonWrappedReaction(required(args.reaction, "Mattermost reaction"));
   if (!serverUrl) {
@@ -2454,27 +2406,16 @@ async function mattermostReact(
   if (!botToken) {
     throw new Error("Missing Mattermost bot token");
   }
-  const botUser = await mattermostApiRequest<Record<string, unknown>>(
-    serverUrl,
-    botToken,
-    "/users/me",
-    allowlist,
-  );
+  const botUser = await mattermostApiRequest<Record<string, unknown>>(serverUrl, botToken, "/users/me", allowlist);
   const botUserId = required(botUser.id, "Mattermost bot user id");
-  await mattermostApiRequest<Record<string, unknown>>(
-    serverUrl,
-    botToken,
-    "/reactions",
-    allowlist,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        user_id: botUserId,
-        post_id: postId,
-        emoji_name: reaction,
-      }),
-    },
-  );
+  await mattermostApiRequest<Record<string, unknown>>(serverUrl, botToken, "/reactions", allowlist, {
+    method: "POST",
+    body: JSON.stringify({
+      user_id: botUserId,
+      post_id: postId,
+      emoji_name: reaction,
+    }),
+  });
   return postId;
 }
 
@@ -2485,8 +2426,7 @@ async function mattermostUnsend(
   _target: string,
 ): Promise<string> {
   const serverUrl = asString(config.serverUrl) ?? asString(config.baseUrl);
-  const botToken = secretFrom(config, "botToken", "botTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const botToken = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const postId = required(args.messageId, "Mattermost messageId");
   if (!serverUrl) {
     throw new Error("Missing Mattermost server URL");
@@ -2494,15 +2434,9 @@ async function mattermostUnsend(
   if (!botToken) {
     throw new Error("Missing Mattermost bot token");
   }
-  await mattermostApiRequest<void>(
-    serverUrl,
-    botToken,
-    `/posts/${encodeURIComponent(postId)}`,
-    allowlist,
-    {
-      method: "DELETE",
-    },
-  );
+  await mattermostApiRequest<void>(serverUrl, botToken, `/posts/${encodeURIComponent(postId)}`, allowlist, {
+    method: "DELETE",
+  });
   return postId;
 }
 
@@ -2514,10 +2448,8 @@ async function signalSend(
   message: string,
 ): Promise<string> {
   const baseUrl = normalizeSignalBaseUrl(asString(config.baseUrl) ?? asString(config.bridgeUrl));
-  const account = asString(args.account)
-    ?? asString(args.accountId)
-    ?? asString(config.account)
-    ?? asString(config.accountId);
+  const account =
+    asString(args.account) ?? asString(args.accountId) ?? asString(config.account) ?? asString(config.accountId);
   const resolvedTarget = normalizeSignalTarget(
     asString(args.target) ?? normalizeChannelTarget(target, "signal") ?? resolveDefaultChannelTarget("signal", config),
   );
@@ -2552,11 +2484,11 @@ async function imessageSend(
   const baseUrl = normalizeBlueBubblesBaseUrl(
     asString(config.bridgeUrl) ?? asString(config.baseUrl) ?? asString(config.serverUrl),
   );
-  const password = secretFrom(config, "password", "passwordEnv")
-    ?? secretFrom(config, "apiPassword", "apiPasswordEnv");
-  const resolvedTarget = asString(args.target)
-    ?? normalizeChannelTarget(target, "imessage")
-    ?? resolveDefaultChannelTarget("imessage", config);
+  const password = secretFrom(config, "password", "passwordEnv") ?? secretFrom(config, "apiPassword", "apiPasswordEnv");
+  const resolvedTarget =
+    asString(args.target) ??
+    normalizeChannelTarget(target, "imessage") ??
+    resolveDefaultChannelTarget("imessage", config);
   if (!baseUrl) {
     throw new Error("Missing iMessage bridge URL");
   }
@@ -2602,13 +2534,18 @@ async function imessageSend(
   const subject = asString(args.subject);
 
   if (richAttachments.length === 0) {
-    return blueBubblesSendText(baseUrl, password, {
-      chatGuid,
-      message: required(inlineMessage, "iMessage message"),
-      replyToMessageGuid,
-      replyToPartIndex,
-      effectId,
-    }, allowlist);
+    return blueBubblesSendText(
+      baseUrl,
+      password,
+      {
+        chatGuid,
+        message: required(inlineMessage, "iMessage message"),
+        replyToMessageGuid,
+        replyToPartIndex,
+        effectId,
+      },
+      allowlist,
+    );
   }
 
   const uploadedAttachments: BlueBubblesMultipartAttachmentPart[] = [];
@@ -2617,24 +2554,23 @@ async function imessageSend(
     if (!attachment) {
       continue;
     }
-    uploadedAttachments.push(await blueBubblesUploadAttachment(
-      baseUrl,
-      password,
-      attachment,
-      allowlist,
-      index,
-    ));
+    uploadedAttachments.push(await blueBubblesUploadAttachment(baseUrl, password, attachment, allowlist, index));
   }
 
-  return blueBubblesSendMultipart(baseUrl, password, {
-    chatGuid,
-    message: inlineMessage.trim() ? inlineMessage : undefined,
-    attachments: uploadedAttachments,
-    replyToMessageGuid,
-    replyToPartIndex,
-    effectId,
-    subject,
-  }, allowlist);
+  return blueBubblesSendMultipart(
+    baseUrl,
+    password,
+    {
+      chatGuid,
+      message: inlineMessage.trim() ? inlineMessage : undefined,
+      attachments: uploadedAttachments,
+      replyToMessageGuid,
+      replyToPartIndex,
+      effectId,
+      subject,
+    },
+    allowlist,
+  );
 }
 
 async function imessageReact(
@@ -2652,13 +2588,18 @@ async function imessageReact(
   const messageId = asString(args.messageId) ?? asString(args.messageGuid) ?? asString(args.selectedMessageGuid);
   const reaction = asString(args.reaction);
   const partIndex = parseIntegerLike(args.partIndex);
-  return blueBubblesSendReaction(context.baseUrl, context.password, {
-    chatGuid,
-    messageId: required(messageId, "iMessage messageId"),
-    reaction: required(reaction, "iMessage reaction"),
-    partIndex,
-    messageText: asString(args.messageText) ?? asString(args.selectedMessageText),
-  }, allowlist);
+  return blueBubblesSendReaction(
+    context.baseUrl,
+    context.password,
+    {
+      chatGuid,
+      messageId: required(messageId, "iMessage messageId"),
+      reaction: required(reaction, "iMessage reaction"),
+      partIndex,
+      messageText: asString(args.messageText) ?? asString(args.selectedMessageText),
+    },
+    allowlist,
+  );
 }
 
 async function imessageUnsend(
@@ -2668,10 +2609,15 @@ async function imessageUnsend(
   target: string,
 ): Promise<string> {
   const context = resolveBlueBubblesContext(config, args, target, "");
-  return blueBubblesUnsendMessage(context.baseUrl, context.password, {
-    messageId: required(asString(args.messageId) ?? asString(args.messageGuid), "iMessage messageId"),
-    partIndex: parseIntegerLike(args.partIndex),
-  }, allowlist);
+  return blueBubblesUnsendMessage(
+    context.baseUrl,
+    context.password,
+    {
+      messageId: required(asString(args.messageId) ?? asString(args.messageGuid), "iMessage messageId"),
+      partIndex: parseIntegerLike(args.partIndex),
+    },
+    allowlist,
+  );
 }
 
 async function nextcloudTalkSend(
@@ -2683,13 +2629,14 @@ async function nextcloudTalkSend(
   attachments: ChannelAttachment[] = [],
 ): Promise<string> {
   const baseUrl = asString(config.baseUrl);
-  const secret = secretFrom(config, "token", "tokenEnv")
-    ?? secretFrom(config, "botSecret", "botSecretEnv")
-    ?? secretFrom(config, "secret", "secretEnv");
+  const secret =
+    secretFrom(config, "token", "tokenEnv") ??
+    secretFrom(config, "botSecret", "botSecretEnv") ??
+    secretFrom(config, "secret", "secretEnv");
   const roomToken = normalizeNextcloudTalkTarget(
-    asString(args.target)
-      ?? normalizeChannelTarget(target, "nextcloud-talk")
-      ?? resolveDefaultChannelTarget("nextcloud-talk", config),
+    asString(args.target) ??
+      normalizeChannelTarget(target, "nextcloud-talk") ??
+      resolveDefaultChannelTarget("nextcloud-talk", config),
   );
   const replyTo = asString(args.replyTo);
   const outboundMessage = required(message, "Nextcloud Talk message");
@@ -2745,13 +2692,14 @@ async function nextcloudTalkReact(
   target: string,
 ): Promise<string> {
   const baseUrl = asString(config.baseUrl);
-  const secret = secretFrom(config, "token", "tokenEnv")
-    ?? secretFrom(config, "botSecret", "botSecretEnv")
-    ?? secretFrom(config, "secret", "secretEnv");
+  const secret =
+    secretFrom(config, "token", "tokenEnv") ??
+    secretFrom(config, "botSecret", "botSecretEnv") ??
+    secretFrom(config, "secret", "secretEnv");
   const roomToken = normalizeNextcloudTalkTarget(
-    asString(args.target)
-      ?? normalizeChannelTarget(target, "nextcloud-talk")
-      ?? resolveDefaultChannelTarget("nextcloud-talk", config),
+    asString(args.target) ??
+      normalizeChannelTarget(target, "nextcloud-talk") ??
+      resolveDefaultChannelTarget("nextcloud-talk", config),
   );
   const messageId = required(asString(args.messageId), "Nextcloud Talk messageId");
   const reaction = required(asString(args.reaction), "Nextcloud Talk reaction");
@@ -2799,8 +2747,7 @@ async function zaloSend(
   target: string,
   message: string,
 ): Promise<string> {
-  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv")
-    ?? secretFrom(config, "token", "tokenEnv");
+  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const chatId = normalizeZaloTarget(
     asString(args.target) ?? normalizeChannelTarget(target, "zalo") ?? resolveDefaultChannelTarget("zalo", config),
   );
@@ -2855,13 +2802,12 @@ async function zalouserSend(
   const baseUrl = normalizeZcaBaseUrl(
     asString(config.baseUrl) ?? asString(config.bridgeUrl) ?? asString(config.serverUrl),
   );
-  const profile = asString(args.profile)
-    ?? asString(config.profile)
-    ?? asString(config.accountId)
-    ?? asString(config.account);
-  const resolvedTarget = asString(args.target)
-    ?? normalizeChannelTarget(target, "zalouser")
-    ?? resolveDefaultChannelTarget("zalouser", config);
+  const profile =
+    asString(args.profile) ?? asString(config.profile) ?? asString(config.accountId) ?? asString(config.account);
+  const resolvedTarget =
+    asString(args.target) ??
+    normalizeChannelTarget(target, "zalouser") ??
+    resolveDefaultChannelTarget("zalouser", config);
   const authorization = resolveZcaAuthorizationHeader(config);
   const outboundMessage = required(message, "Zalo User message");
   if (!baseUrl) {
@@ -2987,7 +2933,10 @@ function normalizeLineTarget(target: string | undefined): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  return trimmed.replace(/^line:(?:user|group|room):/i, "").replace(/^line:/i, "").trim();
+  return trimmed
+    .replace(/^line:(?:user|group|room):/i, "")
+    .replace(/^line:/i, "")
+    .trim();
 }
 
 function normalizeWhatsAppBaseUrl(baseUrl: string | undefined, apiVersion: string | undefined): string {
@@ -3061,8 +3010,7 @@ function normalizeWhatsAppTarget(target: string | undefined): string | undefined
     const localPart = candidate.slice(0, candidate.length - "@g.us".length);
     return /^[0-9]+(?:-[0-9]+)*$/u.test(localPart) ? `${localPart}@g.us` : undefined;
   }
-  const userMatch = candidate.match(/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i)
-    ?? candidate.match(/^(\d+)@lid$/i);
+  const userMatch = candidate.match(/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i) ?? candidate.match(/^(\d+)@lid$/i);
   if (userMatch) {
     return `+${userMatch[1]}`;
   }
@@ -3081,9 +3029,7 @@ function normalizeWhatsAppRecipient(target: string): string {
   return target.replace(/[^\d]/g, "");
 }
 
-function resolveWhatsAppAttachmentType(
-  attachment: ChannelAttachment,
-): "audio" | "document" | "image" | "video" {
+function resolveWhatsAppAttachmentType(attachment: ChannelAttachment): "audio" | "document" | "image" | "video" {
   const mimeType = attachment.mimeType?.trim().toLowerCase();
   if (mimeType?.startsWith("image/")) {
     return "image";
@@ -3131,7 +3077,10 @@ function normalizeZaloTarget(target: string | undefined): string | undefined {
 }
 
 function stripZalouserTargetPrefix(target: string): string {
-  return target.trim().replace(/^(zalouser|zlu):/i, "").trim();
+  return target
+    .trim()
+    .replace(/^(zalouser|zlu):/i, "")
+    .trim();
 }
 
 function normalizeZalouserTarget(target: string | undefined): string | undefined {
@@ -3210,8 +3159,7 @@ function resolveZcaAuthorizationHeader(config: Record<string, unknown>): string 
   if (explicit) {
     return explicit;
   }
-  const bearer = secretFrom(config, "authToken", "authTokenEnv")
-    ?? secretFrom(config, "accessToken", "accessTokenEnv");
+  const bearer = secretFrom(config, "authToken", "authTokenEnv") ?? secretFrom(config, "accessToken", "accessTokenEnv");
   if (bearer) {
     return `Bearer ${bearer}`;
   }
@@ -3425,7 +3373,11 @@ function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
   if (/^[^;]+;[+-];.+$/u.test(trimmed)) {
     return { kind: "chat_guid", chatGuid: trimmed };
   }
-  if (/^chat\d+$/i.test(trimmed) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed) || /^[0-9a-f]{24,64}$/i.test(trimmed)) {
+  if (
+    /^chat\d+$/i.test(trimmed) ||
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed) ||
+    /^[0-9a-f]{24,64}$/i.test(trimmed)
+  ) {
     return { kind: "chat_identifier", chatIdentifier: trimmed };
   }
   return {
@@ -3575,9 +3527,8 @@ async function resolveBlueBubblesChatGuid(
         if (guidIdentifier && guidIdentifier === target.chatIdentifier) {
           return guid;
         }
-        const directIdentifier = asString(chat.identifier)
-          ?? asString(chat.chatIdentifier)
-          ?? asString(chat.chat_identifier);
+        const directIdentifier =
+          asString(chat.identifier) ?? asString(chat.chatIdentifier) ?? asString(chat.chat_identifier);
         if (directIdentifier && directIdentifier === target.chatIdentifier) {
           return guid ?? directIdentifier;
         }
@@ -3590,7 +3541,7 @@ async function resolveBlueBubblesChatGuid(
         }
         if (!participantMatch && guid && guid.includes(";-;")) {
           const participants = extractBlueBubblesParticipantAddresses(chat).map((entry) =>
-            normalizeBlueBubblesHandle(entry)
+            normalizeBlueBubblesHandle(entry),
           );
           if (participants.includes(normalizedHandle)) {
             participantMatch = guid;
@@ -3651,11 +3602,11 @@ function resolveBlueBubblesContext(
   const baseUrl = normalizeBlueBubblesBaseUrl(
     asString(config.bridgeUrl) ?? asString(config.baseUrl) ?? asString(config.serverUrl),
   );
-  const password = secretFrom(config, "password", "passwordEnv")
-    ?? secretFrom(config, "apiPassword", "apiPasswordEnv");
-  const resolvedTarget = asString(args.target)
-    ?? normalizeChannelTarget(target, "imessage")
-    ?? resolveDefaultChannelTarget("imessage", config);
+  const password = secretFrom(config, "password", "passwordEnv") ?? secretFrom(config, "apiPassword", "apiPasswordEnv");
+  const resolvedTarget =
+    asString(args.target) ??
+    normalizeChannelTarget(target, "imessage") ??
+    resolveDefaultChannelTarget("imessage", config);
   if (!baseUrl) {
     throw new Error("Missing iMessage bridge URL");
   }
@@ -3700,7 +3651,7 @@ async function blueBubblesCreateChat(
   if (!res.response.ok) {
     throw new Error(`BlueBubbles create chat failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
   }
-  const parsed = bodyText ? JSON.parse(bodyText) as unknown : undefined;
+  const parsed = bodyText ? (JSON.parse(bodyText) as unknown) : undefined;
   return extractBlueBubblesMessageId(parsed);
 }
 
@@ -3745,7 +3696,7 @@ async function blueBubblesSendText(
   if (!res.response.ok) {
     throw new Error(`BlueBubbles send failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
   }
-  const parsed = bodyText ? JSON.parse(bodyText) as unknown : undefined;
+  const parsed = bodyText ? (JSON.parse(bodyText) as unknown) : undefined;
   return extractBlueBubblesMessageId(parsed);
 }
 
@@ -3785,7 +3736,7 @@ async function blueBubblesSendReaction(
   if (!res.response.ok) {
     throw new Error(`BlueBubbles react failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
   }
-  const parsed = bodyText ? JSON.parse(bodyText) as unknown : undefined;
+  const parsed = bodyText ? (JSON.parse(bodyText) as unknown) : undefined;
   const providerMessageId = extractBlueBubblesMessageId(parsed);
   return providerMessageId === "unknown" ? payload.messageId : providerMessageId;
 }
@@ -3803,7 +3754,10 @@ async function blueBubblesUnsendMessage(
   if (payload.partIndex != null) {
     requestBody.partIndex = payload.partIndex;
   }
-  const encodedMessageId = payload.messageId.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+  const encodedMessageId = payload.messageId
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
   const res = await fetchAllowlisted(
     buildBlueBubblesApiUrl(baseUrl, `/api/v1/message/${encodedMessageId}/unsend`, password),
     {
@@ -3817,7 +3771,7 @@ async function blueBubblesUnsendMessage(
   if (!res.response.ok) {
     throw new Error(`BlueBubbles unsend failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
   }
-  const parsed = bodyText ? JSON.parse(bodyText) as unknown : undefined;
+  const parsed = bodyText ? (JSON.parse(bodyText) as unknown) : undefined;
   const providerMessageId = bodyText ? extractBlueBubblesMessageId(parsed) : "unknown";
   return providerMessageId === "unknown" ? payload.messageId : providerMessageId;
 }
@@ -3859,7 +3813,7 @@ async function blueBubblesUploadAttachment(
       `BlueBubbles attachment upload failed (${uploadRes.response.status})${bodyText ? `: ${bodyText}` : ""}`,
     );
   }
-  const parsed = bodyText ? JSON.parse(bodyText) as unknown : undefined;
+  const parsed = bodyText ? (JSON.parse(bodyText) as unknown) : undefined;
   const hash = extractBlueBubblesAttachmentHash(parsed);
   if (!hash) {
     throw new Error("BlueBubbles attachment upload failed: missing attachment hash");
@@ -3952,19 +3906,14 @@ async function blueBubblesSendMultipart(
   if (!res.response.ok) {
     throw new Error(`BlueBubbles multipart send failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
   }
-  const parsed = bodyText ? JSON.parse(bodyText) as unknown : undefined;
+  const parsed = bodyText ? (JSON.parse(bodyText) as unknown) : undefined;
   return extractBlueBubblesMessageId(parsed);
 }
 
 function extractBlueBubblesAttachmentHash(payload: unknown): string | null {
   const body = record(payload);
   const directData = record(body.data);
-  for (const candidate of [
-    directData.hash,
-    directData.id,
-    body.hash,
-    body.id,
-  ]) {
+  for (const candidate of [directData.hash, directData.id, body.hash, body.id]) {
     if (typeof candidate === "string" && candidate.trim()) {
       return candidate.trim();
     }
@@ -4057,9 +4006,7 @@ function parseMattermostTarget(target: string): MattermostTarget {
   if (trimmed.startsWith("#")) {
     return { kind: "channel-name", name: required(trimmed.slice(1), "Mattermost channel name") };
   }
-  return looksLikeMattermostId(trimmed)
-    ? { kind: "channel", id: trimmed }
-    : { kind: "channel-name", name: trimmed };
+  return looksLikeMattermostId(trimmed) ? { kind: "channel", id: trimmed } : { kind: "channel-name", name: trimmed };
 }
 
 function looksLikeMattermostId(value: string): boolean {
@@ -4078,7 +4025,7 @@ async function resolveMattermostChannelId(
     return target.id;
   }
   if (target.kind === "user") {
-    const userId = target.id || await resolveMattermostUserId(serverUrl, botToken, target.username, allowlist);
+    const userId = target.id || (await resolveMattermostUserId(serverUrl, botToken, target.username, allowlist));
     const channel = await mattermostApiRequest<Record<string, unknown>>(
       serverUrl,
       botToken,
@@ -4162,9 +4109,7 @@ async function resolveMattermostTeamIds(
     `/users/${encodeURIComponent(botUserId)}/teams`,
     allowlist,
   );
-  return teams
-    .map((team) => asString(team.id))
-    .filter((teamId): teamId is string => Boolean(teamId));
+  return teams.map((team) => asString(team.id)).filter((teamId): teamId is string => Boolean(teamId));
 }
 
 async function mattermostApiRequest<T>(
@@ -4269,7 +4214,9 @@ async function slackUploadAttachment(
   const metadataBodyText = await metadataRes.response.text();
   const metadataBody = parseJsonRecord(metadataBodyText);
   if (!metadataRes.response.ok || metadataBody.ok === false) {
-    throw new Error(`slack.send failed (${metadataRes.response.status})${metadataBody.error ? `: ${metadataBody.error}` : ""}`);
+    throw new Error(
+      `slack.send failed (${metadataRes.response.status})${metadataBody.error ? `: ${metadataBody.error}` : ""}`,
+    );
   }
   const uploadUrl = required(metadataBody.upload_url, "Slack upload URL");
   const fileId = required(metadataBody.file_id, "Slack file id");
@@ -4297,10 +4244,12 @@ async function slackUploadAttachment(
         "Content-Type": "application/json; charset=utf-8",
       },
       body: JSON.stringify({
-        files: [{
-          id: fileId,
-          title: attachment.title?.trim() || fileName,
-        }],
+        files: [
+          {
+            id: fileId,
+            title: attachment.title?.trim() || fileName,
+          },
+        ],
         channel_id: channel,
         ...(threadTs ? { thread_ts: threadTs } : {}),
       }),
@@ -4310,7 +4259,9 @@ async function slackUploadAttachment(
   const completeBodyText = await completeRes.response.text();
   const completeBody = parseJsonRecord(completeBodyText);
   if (!completeRes.response.ok || completeBody.ok === false) {
-    throw new Error(`slack.send failed (${completeRes.response.status})${completeBody.error ? `: ${completeBody.error}` : ""}`);
+    throw new Error(
+      `slack.send failed (${completeRes.response.status})${completeBody.error ? `: ${completeBody.error}` : ""}`,
+    );
   }
   return fileId;
 }
@@ -4482,7 +4433,6 @@ async function signalRpcRequest<T>(
   return body.result as T;
 }
 
-
 async function gmailRead(config: Record<string, unknown>, args: Record<string, unknown>, allowlist: string[]) {
   const token = secretFrom(config, "accessToken", "accessTokenEnv");
   if (!token) {
@@ -4493,7 +4443,11 @@ async function gmailRead(config: Record<string, unknown>, args: Record<string, u
     url.searchParams.set("q", asString(args.query) as string);
   }
   url.searchParams.set("maxResults", String(clampInt(args.maxResults, 10, 1, 50)));
-  const res = await fetchAllowlisted(url.toString(), { method: "GET", headers: { Authorization: `Bearer ${token}` } }, allowlist);
+  const res = await fetchAllowlisted(
+    url.toString(),
+    { method: "GET", headers: { Authorization: `Bearer ${token}` } },
+    allowlist,
+  );
   const body = await res.response.text();
   if (!res.response.ok) {
     throw new Error(`gmail.read failed (${res.response.status})`);
@@ -4512,11 +4466,21 @@ async function gmailSend(config: Record<string, unknown>, args: Record<string, u
   }
   const subject = required(args.subject, "subject");
   const bodyText = required(args.bodyText, "bodyText");
-  const rawMessage = [`To: ${to.join(", ")}`, `Subject: ${subject}`, "Content-Type: text/plain; charset=\"UTF-8\"", "", bodyText].join("\r\n");
+  const rawMessage = [
+    `To: ${to.join(", ")}`,
+    `Subject: ${subject}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    "",
+    bodyText,
+  ].join("\r\n");
   const raw = Buffer.from(rawMessage).toString("base64url");
   const res = await fetchAllowlisted(
     "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-    { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ raw }) },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ raw }),
+    },
     allowlist,
   );
   const body = await res.response.text();
@@ -4538,7 +4502,11 @@ async function calendarList(config: Record<string, unknown>, args: Record<string
   url.searchParams.set("singleEvents", "true");
   url.searchParams.set("orderBy", "startTime");
   url.searchParams.set("maxResults", String(clampInt(args.maxResults, 10, 1, 100)));
-  const res = await fetchAllowlisted(url.toString(), { method: "GET", headers: { Authorization: `Bearer ${token}` } }, allowlist);
+  const res = await fetchAllowlisted(
+    url.toString(),
+    { method: "GET", headers: { Authorization: `Bearer ${token}` } },
+    allowlist,
+  );
   const body = await res.response.text();
   if (!res.response.ok) {
     throw new Error(`calendar.list failed (${res.response.status})`);
@@ -4561,7 +4529,11 @@ async function calendarCreate(config: Record<string, unknown>, args: Record<stri
   };
   const res = await fetchAllowlisted(
     `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events`,
-    { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    },
     allowlist,
   );
   const body = await res.response.text();
@@ -4649,7 +4621,7 @@ function cosine(a: number[], b: number[]): number {
     magA += av * av;
     magB += bv * bv;
   }
-  return dot / ((Math.sqrt(magA) * Math.sqrt(magB)) || 1);
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB) || 1);
 }
 
 function scoreLexical(query: string, candidate: string): number {
@@ -4707,7 +4679,6 @@ function stringArray(value: unknown): string[] {
   return value.map((entry) => asString(entry)).filter((entry): entry is string => Boolean(entry));
 }
 
-
 function parseExecFileCommand(command: string): { file: string; args: string[] } {
   const input = command.trim();
   if (!input) {
@@ -4732,7 +4703,7 @@ function parseExecFileCommand(command: string): { file: string; args: string[] }
     }
     if (char === "\\") {
       const next = input[index + 1] ?? "";
-      const escapable = next === "\"" || next === "'" || next === "\\" || /\s/.test(next);
+      const escapable = next === '"' || next === "'" || next === "\\" || /\s/.test(next);
       if (!escapable) {
         current += char;
         continue;
@@ -4744,7 +4715,7 @@ function parseExecFileCommand(command: string): { file: string; args: string[] }
       inSingle = !inSingle;
       continue;
     }
-    if (char === "\"" && !inSingle) {
+    if (char === '"' && !inSingle) {
       inDouble = !inDouble;
       continue;
     }
@@ -4895,7 +4866,8 @@ function resolveMatchingAllowGrants(request: ToolInvokeRequest, storage?: Storag
   }
   const grants: ToolGrantRecord[] = [];
   for (const candidate of buildGrantScopeCandidates(request)) {
-    const scoped = grantRepo.list(candidate.scope, candidate.scopeRef, 500)
+    const scoped = grantRepo
+      .list(candidate.scope, candidate.scopeRef, 500)
       .filter((grant) => isGrantActive(grant))
       .filter((grant) => grant.decision === "allow")
       .filter((grant) => matchesGrantToolPattern(grant.toolPattern, request.toolName));
@@ -4950,14 +4922,18 @@ function normalizePathForGrantMatch(candidate: string): string {
 }
 
 function shouldSkipSearchEntry(name: string): boolean {
-  return name === ".git"
-    || name === "node_modules"
-    || name === "dist"
-    || name === "build"
-    || name === "coverage"
-    || name === ".next";
+  return (
+    name === ".git" ||
+    name === "node_modules" ||
+    name === "dist" ||
+    name === "build" ||
+    name === "coverage" ||
+    name === ".next"
+  );
 }
 
 function looksLikeCodeFile(name: string): boolean {
-  return /\.(c|cc|cpp|cs|css|go|h|hpp|html|java|js|json|jsx|kt|md|mjs|mts|php|py|rb|rs|sh|sql|swift|toml|ts|tsx|vue|yaml|yml)$/i.test(name);
+  return /\.(c|cc|cpp|cs|css|go|h|hpp|html|java|js|json|jsx|kt|md|mjs|mts|php|py|rb|rs|sh|sql|swift|toml|ts|tsx|vue|yaml|yml)$/i.test(
+    name,
+  );
 }

@@ -47,6 +47,8 @@ GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflo
 
 ## Quickstart
 
+Windows note: use the PowerShell installer and setup flow in [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md). The shell commands below assume macOS, Linux, WSL, or another bash-compatible shell that can resolve the repo path correctly.
+
 ### Clone and boot
 
 ```bash

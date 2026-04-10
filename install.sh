@@ -107,6 +107,27 @@ require_cmd() {
   fi
 }
 
+announce_install_step() {
+  local title="$1"
+  local what="$2"
+  local why="$3"
+  echo "${title}"
+  echo "  What: ${what}"
+  echo "  Why: ${why}"
+}
+
+install_workspace_dependencies() {
+  announce_install_step \
+    "Installing workspace dependencies..." \
+    "GoatCitadel's local package graph and command shims under node_modules/.bin" \
+    "GoatCitadel build, doctor, and verification commands depend on local tools like tsc, tsx, vitest, and other workspace executables."
+  if pnpm --dir "${APP_DIR}" install --frozen-lockfile; then
+    return 0
+  fi
+  echo "Frozen-lockfile install failed. GoatCitadel will retry with --no-frozen-lockfile so it can refresh lock metadata and restore the local toolchain if manifests moved ahead of pnpm-lock.yaml." >&2
+  pnpm --dir "${APP_DIR}" install --no-frozen-lockfile
+}
+
 is_managed_mutable_path() {
   local path="$1"
   for managed in "${MANAGED_LOCAL_CONFIG_PATHS[@]}"; do
@@ -186,12 +207,14 @@ else
   git clone "${REPO_URL}" "${APP_DIR}"
 fi
 
-echo "Preparing pnpm (${PNPM_VERSION})..."
+announce_install_step \
+  "Preparing pnpm (${PNPM_VERSION})..." \
+  "the managed pnpm launcher for GoatCitadel's workspace" \
+  "GoatCitadel uses pnpm to materialize local package binaries and run workspace build, doctor, and verification commands."
 corepack enable >/dev/null 2>&1 || true
 corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
-echo "Installing workspace dependencies..."
-pnpm --dir "${APP_DIR}" install --frozen-lockfile
+install_workspace_dependencies
 for workspace_package in "${WORKSPACE_RUNTIME_BUILD_PACKAGES[@]}"; do
   echo "Building runtime package ${workspace_package}..."
   pnpm --dir "${APP_DIR}" --filter "${workspace_package}" build
@@ -201,10 +224,16 @@ pnpm --dir "${APP_DIR}" config:sync
 if [[ -f "${APP_DIR}/config/private-beta.profile.example.json" && ! -f "${APP_DIR}/config/private-beta.profile.json" ]]; then
   cp "${APP_DIR}/config/private-beta.profile.example.json" "${APP_DIR}/config/private-beta.profile.json"
 fi
-echo "Installing Playwright Chromium runtime..."
+announce_install_step \
+  "Installing Playwright Chromium runtime..." \
+  "the managed Chromium browser used by GoatCitadel browser automation" \
+  "Browser tools, screenshot capture, and Playwright-backed verification flows need a local browser runtime to run safely and predictably."
 pnpm --dir "${APP_DIR}" --filter "@goatcitadel/policy-engine" exec playwright install chromium
 if [[ "${SKIP_VOICE}" != "1" ]]; then
-  echo "Installing managed local voice runtime (${VOICE_MODEL})..."
+  announce_install_step \
+    "Installing managed local voice runtime (${VOICE_MODEL})..." \
+    "the managed local whisper.cpp voice runtime" \
+    "Voice transcription and local speech features need a downloaded runtime before GoatCitadel can use them."
   if ! pnpm --dir "${APP_DIR}" --filter "@goatcitadel/gateway" run voice:runtime install --model "${VOICE_MODEL}"; then
     echo "Managed voice runtime install failed. Core GoatCitadel install is complete. Repair later with 'goatcitadel voice install'." >&2
   fi

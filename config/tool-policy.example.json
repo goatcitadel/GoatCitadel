@@ -1,32 +1,9 @@
 {
   "profiles": {
-    "minimal": [
-      "session.status",
-      "memory.read"
-    ],
-    "standard": [
-      "session.status",
-      "memory.read",
-      "http.get",
-      "fs.read",
-      "fs.write"
-    ],
-    "coding": [
-      "session.status",
-      "memory.read",
-      "fs.read",
-      "fs.write",
-      "shell.exec",
-      "git.exec"
-    ],
-    "ops": [
-      "session.status",
-      "memory.read",
-      "http.get",
-      "http.post",
-      "process.control",
-      "logs.read"
-    ],
+    "minimal": ["session.status", "memory.read"],
+    "standard": ["session.status", "memory.read", "http.get", "fs.read", "fs.write"],
+    "coding": ["session.status", "memory.read", "fs.read", "fs.write", "shell.exec", "git.exec"],
+    "ops": ["session.status", "memory.read", "http.get", "http.post", "process.control", "logs.read"],
     "research": [
       "session.status",
       "time.now",
@@ -51,9 +28,7 @@
       "http.get",
       "citations.build"
     ],
-    "danger": [
-      "*"
-    ]
+    "danger": ["*"]
   },
   "tools": {
     "profile": "chat-agent",
@@ -62,13 +37,8 @@
   },
   "agents": {},
   "sandbox": {
-    "writeJailRoots": [
-      "./workspace",
-      "./data"
-    ],
-    "readOnlyRoots": [
-      "./skills"
-    ],
+    "writeJailRoots": ["./workspace", "./data", "./.worktrees"],
+    "readOnlyRoots": ["./skills"],
     "readAccessMode": "approval_required",
     "networkAllowlist": [
       "discord.com",
@@ -87,16 +57,7 @@
       "127.0.0.1",
       "localhost"
     ],
-    "riskyShellPatterns": [
-      "rm",
-      "rmdir",
-      "del",
-      "format",
-      "shutdown",
-      "reboot",
-      "git push",
-      "git reset --hard"
-    ],
+    "riskyShellPatterns": ["rm", "rmdir", "del", "format", "shutdown", "reboot", "git push", "git reset --hard"],
     "requireApprovalForRiskyShell": true
   }
 }

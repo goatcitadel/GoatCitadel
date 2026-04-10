@@ -20,6 +20,23 @@ const workspaceRuntimeBuildPackages = [
   "@goatcitadel/skills",
   "@goatcitadel/policy-engine",
 ];
+const managedWorkspaceTooling = [
+  {
+    bin: "tsc",
+    label: "TypeScript compiler",
+    purpose: "package builds and typechecks",
+  },
+  {
+    bin: "tsx",
+    label: "TSX runner",
+    purpose: "doctor, gateway, and script execution",
+  },
+  {
+    bin: "vitest",
+    label: "Vitest runner",
+    purpose: "targeted package verification",
+  },
+];
 const managedLocalConfigPaths = [
   "config/assistant.config.json",
   "config/tool-policy.json",
@@ -177,23 +194,34 @@ function installOrUpdate() {
     run(gitCmd, ["clone", repoUrl, appDir]);
   }
 
+  printManagedInstallNotice({
+    title: `Preparing pnpm (${pnpmVersion})...`,
+    what: `the managed pnpm launcher for GoatCitadel's workspace`,
+    why: "GoatCitadel uses pnpm to materialize local package binaries and run workspace build, doctor, and verification commands.",
+  });
   run(corepackCmd, ["enable"]);
   run(corepackCmd, ["prepare", `pnpm@${pnpmVersion}`, "--activate"]);
-  runPnpm(["--dir", appDir, "install", "--frozen-lockfile"], {
-    env: runtimeProcessEnv,
-  });
+  installWorkspaceDependencies("GoatCitadel needs its local workspace dependencies and command shims before it can build runtime packages and run diagnostics.");
   buildWorkspaceRuntimePackages();
   console.log("Materializing local config from tracked examples...");
   runPnpm(["--dir", appDir, "config:sync"], {
     env: runtimeProcessEnv,
   });
   materializeInstallerConfigExamples(appDir);
-  console.log("Installing Playwright Chromium runtime...");
+  printManagedInstallNotice({
+    title: "Installing Playwright Chromium runtime...",
+    what: "the managed Chromium browser used by GoatCitadel browser automation",
+    why: "Browser tools, screenshot capture, and Playwright-backed verification flows need a local browser runtime to run safely and predictably.",
+  });
   runPnpm(["--dir", appDir, "--filter", "@goatcitadel/policy-engine", "exec", "playwright", "install", "chromium"], {
     env: runtimeProcessEnv,
   });
   if (!installArgs.skipVoice) {
-    console.log(`Installing managed local voice runtime (${installArgs.voiceModel})...`);
+    printManagedInstallNotice({
+      title: `Installing managed local voice runtime (${installArgs.voiceModel})...`,
+      what: "the managed local whisper.cpp voice runtime",
+      why: "Voice transcription and local speech features need a downloaded runtime before GoatCitadel can use them.",
+    });
     try {
       runPnpm([
         "--dir",
@@ -390,6 +418,9 @@ function materializeInstallerConfigExamples(repositoryPath) {
 
 function doctor(extraArgs = []) {
   console.log("Running GoatCitadel doctor...");
+  ensureWorkspaceToolingReady(
+    "Doctor depends on GoatCitadel's local workspace tooling so it can run repair flows, type-aware scripts, and targeted package checks.",
+  );
   ensureWorkspaceRuntimeBuilds();
   runPnpm(["--dir", appDir, "--filter", "@goatcitadel/gateway", "run", "doctor", ...extraArgs], {
     env: runtimeProcessEnv,
@@ -536,6 +567,9 @@ function toPowershellSingleQuoted(value) {
 }
 
 function ensureWorkspaceRuntimeBuilds() {
+  ensureWorkspaceToolingReady(
+    "GoatCitadel needs local workspace tooling before it can build runtime packages for this command.",
+  );
   let builtAny = false;
   for (const workspacePackage of workspaceRuntimeBuildPackages) {
     if (workspacePackageNeedsBuild(workspacePackage)) {
@@ -554,6 +588,56 @@ function buildWorkspaceRuntimePackages() {
     console.log(`Building runtime package ${workspacePackage}...`);
     runPnpm(["--dir", appDir, "--filter", workspacePackage, "build"]);
   }
+}
+
+function ensureWorkspaceToolingReady(reason) {
+  const state = inspectWorkspaceTooling(appDir);
+  if (!state.needsInstall) {
+    return;
+  }
+  const detail = state.missing.map((item) => `${item.label} (${item.purpose})`).join(", ");
+  printManagedInstallNotice({
+    title: "Restoring GoatCitadel workspace tooling...",
+    what: detail || "local workspace dependencies and command shims",
+    why: reason,
+  });
+  installWorkspaceDependencies(reason);
+  const after = inspectWorkspaceTooling(appDir);
+  if (after.needsInstall) {
+    throw new Error(
+      `Workspace tooling is still incomplete after install: ${after.missing.map((item) => item.label).join(", ")}`,
+    );
+  }
+}
+
+function installWorkspaceDependencies(reason) {
+  printManagedInstallNotice({
+    title: "Installing workspace dependencies...",
+    what: "GoatCitadel's local package graph and command shims under node_modules/.bin",
+    why: reason,
+  });
+  const frozenResult = spawnPnpmCommand(["--dir", appDir, "install", "--frozen-lockfile"], {
+    env: runtimeProcessEnv,
+  });
+  if (!frozenResult.error && frozenResult.status === 0) {
+    return;
+  }
+  const combinedOutput = `${frozenResult.stdout || ""}\n${frozenResult.stderr || ""}`;
+  if (isOutdatedLockfileInstallFailure(combinedOutput)) {
+    printManagedInstallNotice({
+      title: "Refreshing workspace lock metadata...",
+      what: "a reconciled pnpm lockfile install",
+      why: "The package manifests moved ahead of pnpm-lock.yaml, so GoatCitadel needs to refresh lock metadata before it can restore the local toolchain cleanly.",
+    });
+    const relaxedResult = spawnPnpmCommand(["--dir", appDir, "install", "--no-frozen-lockfile"], {
+      env: runtimeProcessEnv,
+    });
+    if (!relaxedResult.error && relaxedResult.status === 0) {
+      return;
+    }
+    throw formatSpawnFailure("pnpm", ["--dir", appDir, "install", "--no-frozen-lockfile"], relaxedResult);
+  }
+  throw formatSpawnFailure("pnpm", ["--dir", appDir, "install", "--frozen-lockfile"], frozenResult);
 }
 
 function workspacePackageNeedsBuild(workspacePackage) {
@@ -635,6 +719,15 @@ function runPnpm(args, options = {}) {
   run(runner.cmd, [...runner.prefix, ...args], options);
 }
 
+function spawnPnpmCommand(args, options = {}) {
+  const runner = resolvePnpmRunner();
+  return spawnCommandSync(runner.cmd, [...runner.prefix, ...args], {
+    stdio: "pipe",
+    encoding: "utf8",
+    ...options,
+  });
+}
+
 function run(cmd, cmdArgs, options = {}) {
   const result = spawnCommandSync(cmd, cmdArgs, { stdio: "inherit", ...options });
   if (result.error) {
@@ -650,6 +743,57 @@ function spawnCommandSync(cmd, cmdArgs, options = {}) {
     return spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", buildWindowsCommand([cmd, ...cmdArgs])], options);
   }
   return spawnSync(cmd, cmdArgs, options);
+}
+
+function inspectWorkspaceTooling(rootDir) {
+  const missing = [];
+  const nodeModulesRoot = path.join(rootDir, "node_modules");
+  if (!fs.existsSync(nodeModulesRoot)) {
+    return {
+      needsInstall: true,
+      missing: [{
+        label: "workspace dependencies",
+        purpose: "GoatCitadel package commands and local tool binaries",
+      }],
+    };
+  }
+  for (const tool of managedWorkspaceTooling) {
+    if (!fs.existsSync(localWorkspaceBinPath(rootDir, tool.bin))) {
+      missing.push(tool);
+    }
+  }
+  return {
+    needsInstall: missing.length > 0,
+    missing,
+  };
+}
+
+function localWorkspaceBinPath(rootDir, binName) {
+  const fileName = process.platform === "win32" ? `${binName}.cmd` : binName;
+  return path.join(rootDir, "node_modules", ".bin", fileName);
+}
+
+function isOutdatedLockfileInstallFailure(output) {
+  return /ERR_PNPM_OUTDATED_LOCKFILE|Cannot install with "frozen-lockfile"/i.test(output);
+}
+
+function formatSpawnFailure(cmd, cmdArgs, result) {
+  if (result.error) {
+    return result.error;
+  }
+  const renderedArgs = cmdArgs.length > 0 ? ` ${cmdArgs.join(" ")}` : "";
+  const detail = `${result.stdout || ""}\n${result.stderr || ""}`.trim();
+  return new Error(
+    detail
+      ? `${cmd}${renderedArgs} exited with code ${result.status}: ${detail}`
+      : `${cmd}${renderedArgs} exited with code ${result.status}`,
+  );
+}
+
+function printManagedInstallNotice({ title, what, why }) {
+  console.log(title);
+  console.log(`  What: ${what}`);
+  console.log(`  Why: ${why}`);
 }
 
 function isWindowsBatchCommand(cmd) {

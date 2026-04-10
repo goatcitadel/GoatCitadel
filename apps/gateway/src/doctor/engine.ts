@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Doctor currently centralizes audit and repair checks in one engine while sharing internal helpers across the command flow. */
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -59,21 +60,24 @@ interface GatewayHealthResult {
 export async function runDoctor(options: DoctorRunOptions = {}): Promise<DoctorReport> {
   const startedAt = new Date().toISOString();
   const rootDir = resolveDoctorRootDir(options.rootDir);
+  const deep = options.deep ?? false;
+  const readOnly = options.readOnly ?? false;
+  const auditOnly = options.auditOnly ?? false;
+  const noRepair = options.noRepair ?? false;
+  const repairEnabled = !(readOnly || auditOnly || noRepair);
   const context: DoctorRuntimeContext = {
     rootDir,
     configDir: path.join(rootDir, "config"),
     gatewayBaseUrl: normalizeBaseUrl(
-      options.gatewayBaseUrl
-      ?? process.env.GOATCITADEL_GATEWAY_URL
-      ?? "http://127.0.0.1:8787",
+      options.gatewayBaseUrl ?? process.env.GOATCITADEL_GATEWAY_URL ?? "http://127.0.0.1:8787",
     ),
     profileName: options.profileName,
     profilePath: options.profilePath,
-    deep: Boolean(options.deep),
-    repairEnabled: !Boolean(options.readOnly) && !Boolean(options.auditOnly) && !Boolean(options.noRepair),
-    autoRepair: !Boolean(options.readOnly) && !Boolean(options.auditOnly) && !Boolean(options.noRepair),
-    yes: Boolean(options.yes),
-    readOnly: Boolean(options.readOnly),
+    deep,
+    repairEnabled,
+    autoRepair: repairEnabled,
+    yes: options.yes ?? false,
+    readOnly,
     authToken: options.authToken ?? process.env.GOATCITADEL_AUTH_TOKEN?.trim(),
     authMode: options.authMode,
     tokenQueryParam: options.tokenQueryParam,
@@ -85,6 +89,7 @@ export async function runDoctor(options: DoctorRunOptions = {}): Promise<DoctorR
   const repairs: DoctorRepairResult[] = [];
 
   checks.push(await checkPrerequisites(context, repairs));
+  checks.push(await checkManagedWorkspaceTooling(context, repairs));
   checks.push(await checkConfigIntegrity(context, repairs));
   checks.push(await checkAuthHostPosture(context, repairs));
   checks.push(await checkToolPolicyPaths(context, repairs));
@@ -264,6 +269,94 @@ async function checkPrerequisites(
     severity: hasHardFailure ? "error" : hasWarning ? "warning" : "info",
     detail: messages.join(" "),
     repairable: false,
+  };
+}
+
+async function checkManagedWorkspaceTooling(
+  context: DoctorRuntimeContext,
+  repairs: DoctorRepairResult[],
+): Promise<DoctorCheckResult> {
+  const id = "runtime.managed-workspace-tooling";
+  const tooling = inspectManagedWorkspaceTooling(context.rootDir);
+  if (!tooling.isWorkspace) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "Current root is not a GoatCitadel workspace checkout.",
+    });
+    return {
+      id,
+      group: "runtime",
+      title: "Managed workspace tooling",
+      status: "skipped",
+      severity: "info",
+      detail: "Skipped because the current root is not a pnpm workspace checkout.",
+      repairable: false,
+    };
+  }
+
+  if (tooling.missing.length === 0) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "Managed workspace tooling is already present.",
+    });
+    return {
+      id,
+      group: "runtime",
+      title: "Managed workspace tooling",
+      status: "ok",
+      severity: "info",
+      detail: "Local workspace tooling is present for build, doctor, and package verification commands.",
+      repairable: false,
+    };
+  }
+
+  const missingSummary = tooling.missing.map((item) => `${item.label} (${item.purpose})`).join(", ");
+  const pnpmRunner = resolveDoctorPnpmRunner();
+  let repaired = false;
+  const changes: string[] = [];
+  if (context.repairEnabled && pnpmRunner) {
+    const approved = await requestGuardedRepairApproval(
+      context,
+      `Install GoatCitadel workspace tooling now? This restores ${missingSummary} so doctor, build, and verification commands can run.`,
+    );
+    if (approved) {
+      changes.push(`Explained install: restoring ${missingSummary}.`);
+      const repairResult = installDoctorWorkspaceTooling(context.rootDir, pnpmRunner);
+      repaired = repairResult.ok;
+      changes.push(...repairResult.changes);
+    }
+  }
+
+  repairs.push({
+    checkId: id,
+    applied: repaired,
+    skipped: !repaired,
+    guarded: true,
+    reason: repaired
+      ? undefined
+      : pnpmRunner
+        ? "Guarded install skipped or not approved."
+        : "pnpm/corepack is unavailable, so GoatCitadel cannot repair local workspace tooling automatically.",
+    changes,
+  });
+
+  return {
+    id,
+    group: "runtime",
+    title: "Managed workspace tooling",
+    status: repaired ? "fixed" : "warn",
+    severity: repaired ? "info" : "warning",
+    detail: repaired
+      ? "Missing workspace tooling was restored."
+      : `Missing local workspace tooling: ${missingSummary}.`,
+    repairable: Boolean(pnpmRunner),
+    repairAction: pnpmRunner
+      ? "Allow doctor to run a workspace install so GoatCitadel can restore its local command shims."
+      : "Install pnpm via Corepack, then rerun doctor so GoatCitadel can repair local tooling.",
   };
 }
 
@@ -521,10 +614,7 @@ async function checkToolPolicyPaths(
   }
 
   const sandbox = asRecord(policyState.value.sandbox) ?? {};
-  const roots = [
-    ...toStringArray(sandbox.writeJailRoots),
-    ...toStringArray(sandbox.readOnlyRoots),
-  ];
+  const roots = [...toStringArray(sandbox.writeJailRoots), ...toStringArray(sandbox.readOnlyRoots)];
   const missingPaths: string[] = [];
   const outsideRoot: string[] = [];
   for (const root of roots) {
@@ -552,20 +642,14 @@ async function checkToolPolicyPaths(
     checkId: id,
     applied: repaired,
     skipped: !repaired,
-    reason: !repaired && missingPaths.length > 0 ? "Repair disabled; missing policy paths were not created." : undefined,
+    reason:
+      !repaired && missingPaths.length > 0 ? "Repair disabled; missing policy paths were not created." : undefined,
     changes,
   });
 
-  const status: DoctorStatus = outsideRoot.length > 0
-    ? "warn"
-    : missingPaths.length > 0
-      ? repaired ? "fixed" : "warn"
-      : "ok";
-  const severity: DoctorSeverity = outsideRoot.length > 0
-    ? "warning"
-    : status === "ok"
-      ? "info"
-      : "warning";
+  const status: DoctorStatus =
+    outsideRoot.length > 0 ? "warn" : missingPaths.length > 0 ? (repaired ? "fixed" : "warn") : "ok";
+  const severity: DoctorSeverity = outsideRoot.length > 0 ? "warning" : status === "ok" ? "info" : "warning";
 
   const notes: string[] = [];
   if (outsideRoot.length > 0) {
@@ -718,8 +802,8 @@ async function checkGatewayHealth(
       id,
       group: "runtime",
       title: "Gateway reachability and health",
-      status: result.reachable ? "ok" : (localLoopbackUnreachable ? "skipped" : "warn"),
-      severity: result.reachable ? "info" : (localLoopbackUnreachable ? "info" : "warning"),
+      status: result.reachable ? "ok" : localLoopbackUnreachable ? "skipped" : "warn",
+      severity: result.reachable ? "info" : localLoopbackUnreachable ? "info" : "warning",
       detail: localLoopbackUnreachable
         ? "Gateway is not running yet on the local loopback address. Start GoatCitadel with `goat up`, then rerun `goat doctor --deep` for runtime checks."
         : result.detail,
@@ -888,7 +972,8 @@ async function checkDeepRuntime(
 
   const runtimePayload = asRecord(voiceRuntime.payload);
   const voiceReadiness = typeof runtimePayload?.readiness === "string" ? runtimePayload.readiness : "missing";
-  const selectedModelId = typeof runtimePayload?.selectedModelId === "string" ? runtimePayload.selectedModelId : undefined;
+  const selectedModelId =
+    typeof runtimePayload?.selectedModelId === "string" ? runtimePayload.selectedModelId : undefined;
   if (voiceReadiness !== "ready") {
     const repairAction = selectedModelId
       ? `Run \`goatcitadel voice install --voice-model ${selectedModelId}\` or \`goatcitadel voice select ${selectedModelId}\`.`
@@ -939,7 +1024,7 @@ async function resolveDoctorOperatorLinks(context: DoctorRuntimeContext): Promis
     };
   }
 
-  let normalizedOrigin = "";
+  let normalizedOrigin: string;
   try {
     const url = new URL(origin);
     normalizedOrigin = url.toString();
@@ -949,7 +1034,9 @@ async function resolveDoctorOperatorLinks(context: DoctorRuntimeContext): Promis
     };
   }
 
-  const assistantState = await readJsonFile<Record<string, unknown>>(path.join(context.configDir, "assistant.config.json"));
+  const assistantState = await readJsonFile<Record<string, unknown>>(
+    path.join(context.configDir, "assistant.config.json"),
+  );
   if (!assistantState.valid || !assistantState.value) {
     return {
       notes: ["assistant.config.json is unavailable, so the remote Mission Control link was omitted."],
@@ -964,9 +1051,8 @@ async function resolveDoctorOperatorLinks(context: DoctorRuntimeContext): Promis
     };
   }
 
-  const configuredToken = context.authToken
-    ?? process.env.GOATCITADEL_AUTH_TOKEN?.trim()
-    ?? asString(asRecord(auth.token)?.value)?.trim();
+  const configuredToken =
+    context.authToken ?? process.env.GOATCITADEL_AUTH_TOKEN?.trim() ?? asString(asRecord(auth.token)?.value)?.trim();
   if (!configuredToken) {
     return {
       notes: ["Gateway token is not configured, so the remote Mission Control link was omitted."],
@@ -985,10 +1071,7 @@ function buildRemoteMissionControlUrl(origin: string, token: string): string {
   return `${url.toString()}#access_token=${encodeURIComponent(token)}`;
 }
 
-function collectConfigIssues(
-  unified: JsonFileState,
-  splitFiles: JsonFileState[],
-): string[] {
+function collectConfigIssues(unified: JsonFileState, splitFiles: JsonFileState[]): string[] {
   const issues: string[] = [];
   if (!unified.exists) {
     issues.push("Unified config is missing.");
@@ -1008,9 +1091,7 @@ function collectConfigIssues(
   return issues;
 }
 
-async function rebuildUnifiedFromSplit(
-  context: DoctorRuntimeContext,
-): Promise<{ rebuilt: boolean; message: string }> {
+async function rebuildUnifiedFromSplit(context: DoctorRuntimeContext): Promise<{ rebuilt: boolean; message: string }> {
   const entries: Record<string, unknown> = {};
   for (const filename of REQUIRED_SPLIT_CONFIG_FILES) {
     const fullPath = path.join(context.configDir, filename);
@@ -1095,9 +1176,7 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 function commandAvailable(command: string): boolean {
-  const candidates = process.platform === "win32"
-    ? [command, `${command}.cmd`, `${command}.exe`]
-    : [command];
+  const candidates = process.platform === "win32" ? [command, `${command}.cmd`, `${command}.exe`] : [command];
   for (const candidate of candidates) {
     const result = spawnSync(candidate, ["--version"], { stdio: "ignore" });
     if (!result.error && result.status === 0) {
@@ -1105,6 +1184,104 @@ function commandAvailable(command: string): boolean {
     }
   }
   return false;
+}
+
+function inspectManagedWorkspaceTooling(rootDir: string): {
+  isWorkspace: boolean;
+  missing: Array<{ label: string; purpose: string }>;
+} {
+  const packageJsonPath = path.join(rootDir, "package.json");
+  const workspaceFilePath = path.join(rootDir, "pnpm-workspace.yaml");
+  if (!existsSync(packageJsonPath) || !existsSync(workspaceFilePath)) {
+    return { isWorkspace: false, missing: [] };
+  }
+  const nodeModulesRoot = path.join(rootDir, "node_modules");
+  if (!existsSync(nodeModulesRoot)) {
+    return {
+      isWorkspace: true,
+      missing: [
+        {
+          label: "workspace dependencies",
+          purpose: "GoatCitadel package commands and local tool binaries",
+        },
+      ],
+    };
+  }
+  const requiredBins = [
+    {
+      label: "TypeScript compiler",
+      bin: "tsc",
+      purpose: "package builds and typechecks",
+    },
+    {
+      label: "TSX runner",
+      bin: "tsx",
+      purpose: "doctor, gateway, and script execution",
+    },
+    {
+      label: "Vitest runner",
+      bin: "vitest",
+      purpose: "targeted package verification",
+    },
+  ];
+  const extension = process.platform === "win32" ? ".cmd" : "";
+  return {
+    isWorkspace: true,
+    missing: requiredBins
+      .filter((tool) => !existsSync(path.join(rootDir, "node_modules", ".bin", `${tool.bin}${extension}`)))
+      .map(({ label, purpose }) => ({ label, purpose })),
+  };
+}
+
+function resolveDoctorPnpmRunner(): { command: string; prefix: string[] } | null {
+  if (commandAvailable("pnpm")) {
+    return { command: "pnpm", prefix: [] };
+  }
+  if (commandAvailable("corepack")) {
+    return { command: "corepack", prefix: ["pnpm"] };
+  }
+  return null;
+}
+
+function installDoctorWorkspaceTooling(
+  rootDir: string,
+  runner: { command: string; prefix: string[] },
+): { ok: boolean; changes: string[] } {
+  const changes: string[] = [
+    "What: GoatCitadel workspace dependencies and local command shims under node_modules/.bin.",
+    "Why: build, doctor, and package verification commands depend on local tools like tsc, tsx, and vitest.",
+  ];
+  const frozen = spawnSync(runner.command, [...runner.prefix, "--dir", rootDir, "install", "--frozen-lockfile"], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  if (!frozen.error && frozen.status === 0) {
+    changes.push("Applied `pnpm install --frozen-lockfile` successfully.");
+    return { ok: true, changes };
+  }
+  const combined = `${frozen.stdout ?? ""}\n${frozen.stderr ?? ""}`;
+  if (/ERR_PNPM_OUTDATED_LOCKFILE|Cannot install with "frozen-lockfile"/i.test(combined)) {
+    changes.push("Frozen lockfile install failed because package manifests moved ahead of pnpm-lock.yaml.");
+    changes.push(
+      "Retrying with `pnpm install --no-frozen-lockfile` so GoatCitadel can refresh lock metadata and restore tooling.",
+    );
+    const relaxed = spawnSync(runner.command, [...runner.prefix, "--dir", rootDir, "install", "--no-frozen-lockfile"], {
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+    if (!relaxed.error && relaxed.status === 0) {
+      changes.push("Applied `pnpm install --no-frozen-lockfile` successfully.");
+      return { ok: true, changes };
+    }
+    changes.push(
+      `Install retry failed: ${String(relaxed.stderr ?? relaxed.stdout ?? relaxed.error ?? `exit ${relaxed.status}`)}`.trim(),
+    );
+    return { ok: false, changes };
+  }
+  changes.push(
+    `Frozen install failed: ${String(frozen.stderr ?? frozen.stdout ?? frozen.error ?? `exit ${frozen.status}`)}`.trim(),
+  );
+  return { ok: false, changes };
 }
 
 function normalizeBaseUrl(input: string): string {
@@ -1119,11 +1296,7 @@ function resolveDoctorRootDir(rootDir?: string): string {
   if (envRoot) {
     return path.resolve(envRoot);
   }
-  const candidates = [
-    process.cwd(),
-    path.resolve(process.cwd(), ".."),
-    path.resolve(process.cwd(), "../.."),
-  ];
+  const candidates = [process.cwd(), path.resolve(process.cwd(), ".."), path.resolve(process.cwd(), "../..")];
   for (const candidate of candidates) {
     if (commandLooksLikeRepoRoot(candidate)) {
       return candidate;
@@ -1133,14 +1306,11 @@ function resolveDoctorRootDir(rootDir?: string): string {
 }
 
 function commandLooksLikeRepoRoot(candidate: string): boolean {
-  return repoHasConfigMarker(candidate)
-    && existsSync(path.join(candidate, "package.json"));
+  return repoHasConfigMarker(candidate) && existsSync(path.join(candidate, "package.json"));
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 function asString(value: unknown): string | undefined {
@@ -1156,10 +1326,7 @@ function toStringArray(value: unknown): string[] {
 
 function isLoopbackHost(host: string): boolean {
   const normalized = host.trim().toLowerCase();
-  return normalized === "127.0.0.1"
-    || normalized === "localhost"
-    || normalized === "::1"
-    || normalized === "[::1]";
+  return normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1" || normalized === "[::1]";
 }
 
 function isPathInsideRoot(rootDir: string, targetPath: string): boolean {
@@ -1175,10 +1342,7 @@ function cryptoRandomHex(bytes: number): string {
   }
 }
 
-async function requestGuardedRepairApproval(
-  context: DoctorRuntimeContext,
-  message: string,
-): Promise<boolean> {
+async function requestGuardedRepairApproval(context: DoctorRuntimeContext, message: string): Promise<boolean> {
   if (context.yes) {
     return true;
   }
@@ -1189,9 +1353,13 @@ async function requestGuardedRepairApproval(
 }
 
 async function probeGatewayHealth(baseUrl: string): Promise<GatewayHealthResult> {
-  const response = await fetchWithTimeout(`${baseUrl}/health`, {
-    method: "GET",
-  }, 4_000);
+  const response = await fetchWithTimeout(
+    `${baseUrl}/health`,
+    {
+      method: "GET",
+    },
+    4_000,
+  );
   if (!response.ok) {
     return {
       reachable: false,
@@ -1232,15 +1400,23 @@ async function fetchGatewayJson(
   if (authToken?.trim()) {
     headers.Authorization = `Bearer ${authToken.trim()}`;
   }
-  let result = await fetchWithTimeout(url.toString(), {
-    method: "GET",
-    headers,
-  }, 5_000);
-  if (!result.ok && result.aborted) {
-    result = await fetchWithTimeout(url.toString(), {
+  let result = await fetchWithTimeout(
+    url.toString(),
+    {
       method: "GET",
       headers,
-    }, 10_000);
+    },
+    5_000,
+  );
+  if (!result.ok && result.aborted) {
+    result = await fetchWithTimeout(
+      url.toString(),
+      {
+        method: "GET",
+        headers,
+      },
+      10_000,
+    );
   }
   if (!result.ok) {
     return {

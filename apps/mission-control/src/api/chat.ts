@@ -15,6 +15,11 @@ import type {
   ChatSendMessageRequest,
   ChatSendMessageResponse,
   ChatSessionBindingRecord,
+  ChatSessionWorkbenchDiffResponse,
+  ChatSessionWorkbenchFileResponse,
+  ChatSessionWorkbenchOutputResponse,
+  ChatSessionWorkbenchRecord,
+  ChatSessionWorkbenchTreeResponse,
   ChatSessionBulkArchiveResult,
   ChatSessionOrigin,
   ChatSessionPrefsPatch,
@@ -251,6 +256,53 @@ export async function setChatSessionBinding(
 export async function fetchChatSessionBinding(sessionId: string): Promise<{ item: ChatSessionBindingRecord | null }> {
   return request<{ item: ChatSessionBindingRecord | null }>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/binding`,
+  );
+}
+
+export async function fetchChatSessionWorkbench(sessionId: string): Promise<{ state: ChatSessionWorkbenchRecord }> {
+  return request<{ state: ChatSessionWorkbenchRecord }>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench`,
+  );
+}
+
+export async function createChatSessionWorkbenchWorktree(
+  sessionId: string,
+  input?: { baseRef?: string },
+): Promise<{ state: ChatSessionWorkbenchRecord }> {
+  return request<{ state: ChatSessionWorkbenchRecord }>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/worktree`,
+    {
+      method: "POST",
+      body: JSON.stringify(input ?? {}),
+    },
+  );
+}
+
+export async function fetchChatSessionWorkbenchTree(sessionId: string): Promise<ChatSessionWorkbenchTreeResponse> {
+  return request<ChatSessionWorkbenchTreeResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/tree`,
+  );
+}
+
+export async function fetchChatSessionWorkbenchFile(
+  sessionId: string,
+  relativePath: string,
+): Promise<ChatSessionWorkbenchFileResponse> {
+  const query = new URLSearchParams({ path: relativePath });
+  return request<ChatSessionWorkbenchFileResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file?${query.toString()}`,
+  );
+}
+
+export async function fetchChatSessionWorkbenchDiff(sessionId: string): Promise<ChatSessionWorkbenchDiffResponse> {
+  return request<ChatSessionWorkbenchDiffResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/diff`,
+  );
+}
+
+export async function fetchChatSessionWorkbenchOutput(sessionId: string): Promise<ChatSessionWorkbenchOutputResponse> {
+  return request<ChatSessionWorkbenchOutputResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/output`,
   );
 }
 
@@ -519,13 +571,10 @@ export async function approveChatTool(
     resumed?: boolean;
     resumedTurnId?: string;
     resumedRunId?: string;
-  }>(
-    "/api/v1/chat/tools/approve",
-    {
-      method: "POST",
-      body: JSON.stringify({ sessionId, approvalId, ...(options?.allowScope ? { allowScope: options.allowScope } : {}) }),
-    },
-  );
+  }>("/api/v1/chat/tools/approve", {
+    method: "POST",
+    body: JSON.stringify({ sessionId, approvalId, ...(options?.allowScope ? { allowScope: options.allowScope } : {}) }),
+  });
 }
 
 export async function denyChatTool(

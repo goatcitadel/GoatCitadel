@@ -21,8 +21,9 @@ export class WorktreeManager {
   }
 
   public async remove(worktreePath: string): Promise<void> {
-    throw new Error(
-      `Refusing to force-remove worktree ${worktreePath}. Remove it manually after confirming no uncommitted work would be lost.`,
-    );
+    const resolvedPath = path.resolve(worktreePath);
+    await execFileAsync("git", ["worktree", "remove", resolvedPath], {
+      cwd: this.options.repoRoot,
+    });
   }
 }

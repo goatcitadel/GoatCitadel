@@ -54,6 +54,7 @@ import {
 import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
 import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
+import * as chatWorkbenchService from "./chat-workbench-service.js";
 import type {
   DatabaseCutoverProfile,
   DatabaseCutoverResponse,
@@ -2427,6 +2428,44 @@ export class GatewayService {
 
   public getChatSessionBinding(sessionId: string): ChatSessionBindingRecord | undefined {
     return chatSessionService.getChatSessionBinding(this, sessionId);
+  }
+
+  public async getChatSessionWorkbench(
+    sessionId: string,
+  ): Promise<import("@goatcitadel/contracts").ChatSessionWorkbenchRecord> {
+    return chatWorkbenchService.getChatSessionWorkbench(this, sessionId);
+  }
+
+  public async createChatSessionWorkbenchWorktree(
+    sessionId: string,
+    input: { baseRef?: string } = {},
+  ): Promise<import("@goatcitadel/contracts").ChatSessionWorkbenchRecord> {
+    return chatWorkbenchService.createChatSessionWorkbenchWorktree(this, sessionId, input);
+  }
+
+  public async getChatSessionWorkbenchTree(
+    sessionId: string,
+  ): Promise<import("@goatcitadel/contracts").ChatSessionWorkbenchTreeResponse> {
+    return chatWorkbenchService.getChatSessionWorkbenchTree(this, sessionId);
+  }
+
+  public async getChatSessionWorkbenchFile(
+    sessionId: string,
+    relativePath: string,
+  ): Promise<import("@goatcitadel/contracts").ChatSessionWorkbenchFileResponse> {
+    return chatWorkbenchService.getChatSessionWorkbenchFile(this, sessionId, relativePath);
+  }
+
+  public async getChatSessionWorkbenchDiff(
+    sessionId: string,
+  ): Promise<import("@goatcitadel/contracts").ChatSessionWorkbenchDiffResponse> {
+    return chatWorkbenchService.getChatSessionWorkbenchDiff(this, sessionId);
+  }
+
+  public async getChatSessionWorkbenchOutput(
+    sessionId: string,
+  ): Promise<import("@goatcitadel/contracts").ChatSessionWorkbenchOutputResponse> {
+    return chatWorkbenchService.getChatSessionWorkbenchOutput(this, sessionId);
   }
 
   public setChatSessionBinding(input: {
@@ -5724,10 +5763,15 @@ export class GatewayService {
         auditEventId: randomUUID(),
       };
     }
-    const normalizedRequest = this.applyRuntimeBrowserBackendDefaults(this.resolveToolInvokeRequestPaths({
-      ...request,
-      workspaceId: request.workspaceId ?? this.storage.chatSessionMeta.get(request.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID,
-    }));
+    const normalizedRequest = this.applyRuntimeBrowserBackendDefaults(
+      this.resolveToolInvokeRequestPaths({
+        ...request,
+        workspaceId:
+          request.workspaceId ??
+          this.storage.chatSessionMeta.get(request.sessionId)?.workspaceId ??
+          DEFAULT_WORKSPACE_ID,
+      }),
+    );
     const toolHookWorkspaceId = this.resolveToolHookWorkspaceId(normalizedRequest);
     const toolHookEntityId = `${normalizedRequest.sessionId}:${randomUUID()}`;
     const deploymentGuard = evaluateDeploymentProfileToolAccess(
@@ -5928,7 +5972,8 @@ export class GatewayService {
   public evaluateToolAccess(input: ToolAccessEvaluateRequest): ToolAccessEvaluateResponse {
     return this.policyEngine.evaluateAccess({
       ...input,
-      workspaceId: input.workspaceId ?? this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID,
+      workspaceId:
+        input.workspaceId ?? this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID,
     });
   }
 
@@ -7659,9 +7704,7 @@ export class GatewayService {
       useCache: true,
     });
     const afterBaseLlm = Date.now();
-    const activeProviderQuick = baseLlm.providers.find(
-      (provider) => provider.providerId === baseLlm.activeProviderId,
-    );
+    const activeProviderQuick = baseLlm.providers.find((provider) => provider.providerId === baseLlm.activeProviderId);
     const activeProviderStatus =
       activeProviderQuick && !activeProviderQuick.hasApiKey
         ? this.llmService.getProviderSecretStatus(baseLlm.activeProviderId, {
@@ -7681,7 +7724,8 @@ export class GatewayService {
               apiKeySource: activeProviderStatus.apiKeySource,
               hasKeychainSecret: activeProviderStatus.hasKeychainSecret,
               apiKeyRef: activeProviderStatus.apiKeyRef,
-            }),
+            },
+      ),
     };
     const afterLlmMap = Date.now();
     const mesh = {
@@ -7696,9 +7740,7 @@ export class GatewayService {
     const defaultToolProfile = this.config.toolPolicy.tools.profile;
     const budgetMode = this.config.budgets.mode;
     const networkAllowlist = this.config.toolPolicy.sandbox.networkAllowlist;
-    const activeProvider = llm.providers.find(
-      (provider) => provider.providerId === llm.activeProviderId,
-    );
+    const activeProvider = llm.providers.find((provider) => provider.providerId === llm.activeProviderId);
     const authReady = this.isAuthConfiguredForMode(auth);
     const llmReady = Boolean(
       activeProvider &&

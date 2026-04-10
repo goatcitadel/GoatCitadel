@@ -23,6 +23,13 @@ Default installer home is under your user home directory:
 
 The installer also places a local `pnpm` shim in the launcher directory, so GoatCitadel runtime commands do not require a separate global pnpm install after setup.
 
+When GoatCitadel installs or repairs local tooling for you, it should describe:
+
+- what it is installing
+- why that component is needed
+
+Current first-party repair/install flows cover local workspace dependencies, Playwright Chromium, and the managed voice runtime.
+
 You can override the install root:
 
 - PowerShell installer: `-InstallDir <path>`
@@ -79,6 +86,13 @@ Skip the managed local voice runtime:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -SkipVoice
 ```
+
+Shell guidance:
+
+- On Windows, prefer PowerShell for install, doctor, update, and launcher commands.
+- Bash commands in this repo are intended for macOS, Linux, or Windows setups with WSL/Git Bash configured correctly.
+- If `bash` opens into a Linux home directory or cannot see your repo path, stay on the PowerShell path instead of mixing shells.
+- GoatCitadel should only ask Windows users to install or repair tooling through PowerShell unless the user is explicitly running under WSL or a working bash-compatible shell.
 
 ### macOS / Linux
 
@@ -171,6 +185,8 @@ Notes:
 - open a new shell after uninstall so PATH changes take effect
 
 ## Path B: Manual / Dev Install
+
+Windows contributors can run these repo commands from PowerShell. Use bash only if your shell is already WSL-backed or your Git Bash path translation is working for the repo checkout.
 
 ```bash
 git clone https://github.com/goatcitadel/GoatCitadel.git

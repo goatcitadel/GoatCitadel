@@ -107,6 +107,143 @@ describe("chat routes additional coverage", () => {
     });
   });
 
+  it("serves session-scoped workbench routes", async () => {
+    const getChatSessionWorkbench = vi.fn(async () => ({
+      sessionId: "sess-1",
+      projectId: "proj-1",
+      worktreeStatus: "uninitialized",
+      validationStatus: "idle",
+      createdAt: "2026-04-10T00:00:00.000Z",
+      updatedAt: "2026-04-10T00:00:00.000Z",
+    }));
+    const createChatSessionWorkbenchWorktree = vi.fn(async () => ({
+      sessionId: "sess-1",
+      projectId: "proj-1",
+      baseRef: "main",
+      worktreePath: "./.worktrees/sess-1",
+      worktreeStatus: "ready",
+      validationStatus: "idle",
+      createdAt: "2026-04-10T00:00:00.000Z",
+      updatedAt: "2026-04-10T00:01:00.000Z",
+    }));
+    const getChatSessionWorkbenchTree = vi.fn(async () => ({
+      state: {
+        sessionId: "sess-1",
+        projectId: "proj-1",
+        worktreeStatus: "ready",
+        validationStatus: "idle",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:01:00.000Z",
+      },
+      rootPath: "demo",
+      changedFiles: ["index.ts"],
+      items: [{ path: "index.ts", name: "index.ts", kind: "file", changed: true, depth: 0 }],
+    }));
+    const getChatSessionWorkbenchFile = vi.fn(async () => ({
+      state: {
+        sessionId: "sess-1",
+        projectId: "proj-1",
+        worktreeStatus: "ready",
+        validationStatus: "idle",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:01:00.000Z",
+      },
+      path: "index.ts",
+      sizeBytes: 32,
+      modifiedAt: "2026-04-10T00:01:00.000Z",
+      contentType: "text/typescript",
+      language: "ts",
+      changed: true,
+      content: "export const demo = true;",
+    }));
+    const getChatSessionWorkbenchDiff = vi.fn(async () => ({
+      state: {
+        sessionId: "sess-1",
+        projectId: "proj-1",
+        worktreeStatus: "ready",
+        validationStatus: "idle",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:01:00.000Z",
+      },
+      scopePath: "demo",
+      changedFiles: ["index.ts"],
+      summary: { changedFiles: 1, additions: 4, deletions: 1 },
+      diff: "diff --git a/index.ts b/index.ts",
+    }));
+    const getChatSessionWorkbenchOutput = vi.fn(async () => ({
+      state: {
+        sessionId: "sess-1",
+        projectId: "proj-1",
+        worktreeStatus: "ready",
+        validationStatus: "passed",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:01:00.000Z",
+      },
+      helperRuns: [],
+      output: "No validation output yet.",
+    }));
+
+    app = Fastify();
+    app.decorate("gateway", {
+      getChatSessionWorkbench,
+      createChatSessionWorkbenchWorktree,
+      getChatSessionWorkbenchTree,
+      getChatSessionWorkbenchFile,
+      getChatSessionWorkbenchDiff,
+      getChatSessionWorkbenchOutput,
+    } as never);
+    await app.register(chatRoutes);
+
+    const stateResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/workbench",
+    });
+    expect(stateResponse.statusCode).toBe(200);
+    expect(getChatSessionWorkbench).toHaveBeenCalledWith("sess-1");
+
+    const worktreeResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/workbench/worktree",
+      payload: { baseRef: "main" },
+    });
+    expect(worktreeResponse.statusCode).toBe(200);
+    expect(createChatSessionWorkbenchWorktree).toHaveBeenCalledWith("sess-1", { baseRef: "main" });
+
+    const treeResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/workbench/tree",
+    });
+    expect(treeResponse.statusCode).toBe(200);
+    expect(treeResponse.json()).toMatchObject({
+      changedFiles: ["index.ts"],
+    });
+
+    const fileResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/workbench/file?path=index.ts",
+    });
+    expect(fileResponse.statusCode).toBe(200);
+    expect(getChatSessionWorkbenchFile).toHaveBeenCalledWith("sess-1", "index.ts");
+
+    const diffResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/workbench/diff",
+    });
+    expect(diffResponse.statusCode).toBe(200);
+    expect(diffResponse.json()).toMatchObject({
+      summary: { changedFiles: 1 },
+    });
+
+    const outputResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/workbench/output",
+    });
+    expect(outputResponse.statusCode).toBe(200);
+    expect(outputResponse.json()).toMatchObject({
+      output: "No validation output yet.",
+    });
+  });
+
   it("deletes chat sessions through the gateway", async () => {
     const deleteChatSession = vi.fn(async () => ({
       deleted: true,

@@ -21,7 +21,7 @@ describe("worktree manager coverage", () => {
     vi.restoreAllMocks();
   });
 
-  it("creates worktrees and blocks force removal", async () => {
+  it("creates worktrees and removes them without force", async () => {
     await import("./index.js");
     const { WorktreeManager } = await import("./worktree-manager.js");
     const manager = new WorktreeManager({
@@ -30,12 +30,15 @@ describe("worktree manager coverage", () => {
     });
 
     const createdPath = await manager.create("wt-1", "main");
-    await expect(manager.remove(createdPath)).rejects.toThrow("Refusing to force-remove worktree");
+    await manager.remove(createdPath);
 
     const expectedPath = path.join("/repo/worktrees", "wt-1");
+    const expectedResolvedPath = path.resolve(expectedPath);
     expect(createdPath).toBe(expectedPath);
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
     expect(execFileMock.mock.calls[0]?.[0]).toBe("git");
     expect(execFileMock.mock.calls[0]?.[1]).toEqual(["worktree", "add", "--detach", expectedPath, "main"]);
+    expect(execFileMock.mock.calls[1]?.[0]).toBe("git");
+    expect(execFileMock.mock.calls[1]?.[1]).toEqual(["worktree", "remove", expectedResolvedPath]);
   });
 });
