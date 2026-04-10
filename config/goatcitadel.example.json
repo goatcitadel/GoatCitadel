@@ -113,6 +113,34 @@
         "alias": "gemma-4"
       }
     },
+    "database": {
+      "driver": "sqlite",
+      "postgres": {
+        "mode": "bundled",
+        "port": 5432,
+        "database": "goatcitadel",
+        "ssl": "prefer",
+        "pool": {
+          "min": 0,
+          "max": 10,
+          "idleTimeoutMs": 30000,
+          "connectionTimeoutMs": 10000
+        },
+        "migrationsTable": "schema_migrations"
+      },
+      "bundledPostgres": {
+        "enabled": true,
+        "dataDir": "./data/postgres",
+        "port": 55432,
+        "autoStart": true,
+        "startTimeoutMs": 20000
+      },
+      "sqlite": {
+        "cacheSizeKb": 65536,
+        "tempStoreMemory": true,
+        "walAutoCheckpointPages": 5000
+      }
+    },
     "sqlite": {
       "cacheSizeKb": 65536,
       "tempStoreMemory": true,

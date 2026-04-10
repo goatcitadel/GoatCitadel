@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ChatProactiveMode, ChatReflectionMode, ChatRetrievalMode } from "@goatcitadel/contracts";
 import { clampInt, NotFoundError } from "@goatcitadel/contracts";
 
@@ -58,7 +58,7 @@ export class SessionAutonomyPrefsRepository {
   private readonly upsertStmt;
   private readonly touchStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare(`
       SELECT *
       FROM session_autonomy_prefs
@@ -229,3 +229,5 @@ function isSessionAutonomyPrefsRow(value: unknown): value is SessionAutonomyPref
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

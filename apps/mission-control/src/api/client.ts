@@ -255,6 +255,7 @@ export type {
   ChatProjectsResponse,
   ChatProactiveStatusResponse,
   ChatSessionsResponse,
+  ChatToolArtifactResponse,
 } from "./chat.js";
 export {
   acceptChatDelegation,
@@ -286,6 +287,7 @@ export {
   fetchChatSessionPrefs,
   fetchChatSessions,
   fetchChatSpecialistCandidates,
+  fetchChatToolArtifact,
   fetchChatThread,
   hardDeleteChatProject,
   pinChatSession,

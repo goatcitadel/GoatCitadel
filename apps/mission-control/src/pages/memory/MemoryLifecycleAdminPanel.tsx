@@ -70,7 +70,7 @@ export function MemoryLifecycleAdminPanel(props: {
       ) : (
         <div className="split-grid">
           <div>
-            <table>
+            <table className="gc-data-table">
               <thead>
                 <tr>
                   <th>Title</th>
@@ -158,3 +158,4 @@ export function MemoryLifecycleAdminPanel(props: {
     </Panel>
   );
 }
+

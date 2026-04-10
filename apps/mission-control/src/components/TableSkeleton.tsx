@@ -1,6 +1,6 @@
 export function TableSkeleton({ rows = 5, cols = 5 }: { rows?: number; cols?: number }) {
   return (
-    <table className="skeleton-table" aria-busy="true" aria-label="Loading table">
+    <table className="skeleton-table gc-data-table" aria-busy="true" aria-label="Loading table">
       <thead>
         <tr>
           {Array.from({ length: cols }).map((_, index) => (
@@ -24,3 +24,5 @@ export function TableSkeleton({ rows = 5, cols = 5 }: { rows?: number; cols?: nu
     </table>
   );
 }
+
+

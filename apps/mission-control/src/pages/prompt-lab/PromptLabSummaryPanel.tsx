@@ -209,7 +209,7 @@ export function PromptLabSummaryPanel({
               {exportInfo.updatedAt ? ` (updated ${new Date(exportInfo.updatedAt).toLocaleTimeString()})` : ""}
               {exportInfo.exists ? ` • ${exportInfo.sizeBytes} bytes` : " • not generated yet"}
             </div>
-            <button type="button" onClick={onCopyExportPath}>
+            <button type="button" onClick={onCopyExportPath} className="gc-button">
               Copy path
             </button>
           </div>

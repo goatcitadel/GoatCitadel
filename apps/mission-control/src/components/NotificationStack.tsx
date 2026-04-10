@@ -77,7 +77,7 @@ function NotificationStackInner({ items, onDismiss }: NotificationStackProps) {
           </div>
           <button
             type="button"
-            className="notification-dismiss"
+            className="gc-button notification-dismiss"
             onClick={() => onDismiss(item.id)}
             aria-label="Dismiss notification"
           >

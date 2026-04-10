@@ -5,11 +5,12 @@ const accessEvaluateSchema = z.object({
   toolName: z.string().min(1),
   agentId: z.string().min(1),
   sessionId: z.string().min(1),
+  workspaceId: z.string().min(1).optional(),
   taskId: z.string().min(1).optional(),
   args: z.record(z.unknown()).optional(),
 });
 
-const grantScopeSchema = z.enum(["global", "session", "agent", "task"]);
+const grantScopeSchema = z.enum(["global", "session", "workspace", "agent", "task"]);
 
 const grantsQuerySchema = z.object({
   scope: grantScopeSchema.optional(),

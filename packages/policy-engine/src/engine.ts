@@ -97,7 +97,7 @@ export class ToolPolicyEngine {
   }
 
   public listGrants(
-    scope?: "global" | "session" | "agent" | "task",
+    scope?: "global" | "session" | "workspace" | "agent" | "task",
     scopeRef?: string,
     limit = 200,
   ): ToolGrantRecord[] {
@@ -118,6 +118,7 @@ export class ToolPolicyEngine {
       toolName: input.toolName,
       agentId: input.agentId,
       sessionId: input.sessionId,
+      workspaceId: input.workspaceId,
       taskId: input.taskId,
       allowed: evaluation.allowed,
       reasonCodes: evaluation.reasonCodes,
@@ -148,6 +149,7 @@ export class ToolPolicyEngine {
       toolName: request.toolName,
       agentId: request.agentId,
       sessionId: request.sessionId,
+      workspaceId: request.workspaceId,
       taskId: request.taskId,
       allowed: evaluation.allowed,
       reasonCodes: evaluation.reasonCodes,
@@ -611,6 +613,7 @@ export class ToolPolicyEngine {
         scope: grant.scope,
         agentId: request.agentId,
         sessionId: request.sessionId,
+        workspaceId: request.workspaceId,
         taskId: request.taskId,
       });
       if (count >= constraints.maxCallsPerHour) {
@@ -623,6 +626,7 @@ export class ToolPolicyEngine {
         scope: grant.scope,
         agentId: request.agentId,
         sessionId: request.sessionId,
+        workspaceId: request.workspaceId,
         taskId: request.taskId,
       });
       if (count >= constraints.maxWritesPerHour) {
@@ -667,6 +671,7 @@ export class ToolPolicyEngine {
       scope: grant.scope,
       agentId: request.agentId,
       sessionId: request.sessionId,
+      workspaceId: request.workspaceId,
       taskId: request.taskId,
     }) === 0;
   }
@@ -1005,13 +1010,18 @@ export class ToolPolicyEngine {
   }
 }
 
-function buildScopeCandidates(request: ToolAccessEvaluateRequest): Array<{ scope: "task" | "agent" | "session" | "global"; scopeRef: string }> {
-  const out: Array<{ scope: "task" | "agent" | "session" | "global"; scopeRef: string }> = [];
+function buildScopeCandidates(
+  request: ToolAccessEvaluateRequest,
+): Array<{ scope: "task" | "agent" | "session" | "workspace" | "global"; scopeRef: string }> {
+  const out: Array<{ scope: "task" | "agent" | "session" | "workspace" | "global"; scopeRef: string }> = [];
   if (request.taskId) {
     out.push({ scope: "task", scopeRef: request.taskId });
   }
   out.push({ scope: "agent", scopeRef: request.agentId });
   out.push({ scope: "session", scopeRef: request.sessionId });
+  if (request.workspaceId) {
+    out.push({ scope: "workspace", scopeRef: request.workspaceId });
+  }
   out.push({ scope: "global", scopeRef: "global" });
   return out;
 }

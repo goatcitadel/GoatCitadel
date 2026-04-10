@@ -57,7 +57,7 @@ export function ChatDockSuggestionsSection(
                 <p>{suggestion.summary}</p>
                 <p className="chat-v11-muted">{suggestion.reason}</p>
                 <div className="chat-v11-row-actions">
-                  <button type="button" onClick={() => onCapabilitySuggestionAction(suggestion)}>
+                  <button type="button" onClick={() => onCapabilitySuggestionAction(suggestion)} className="gc-button">
                     {suggestion.recommendedAction === "enable_skill"
                       ? "Enable skill"
                       : suggestion.recommendedAction === "install_skill_disabled"
@@ -90,7 +90,7 @@ export function ChatDockSuggestionsSection(
                 </p>
                 <p>{suggestion.summary}</p>
                 <div className="chat-v11-row-actions">
-                  <button type="button" disabled={sending} onClick={() => void onCreateSpecialistDraft(suggestion)}>
+                  <button type="button" disabled={sending} onClick={() => void onCreateSpecialistDraft(suggestion)} className="gc-button">
                     Draft dormant specialist
                   </button>
                 </div>
@@ -130,7 +130,7 @@ export function ChatDockSuggestionsSection(
                             `Approved ${candidate.title}.`,
                           )
                         }
-                      >
+                       className="gc-button">
                         Approve
                       </button>
                     ) : null}
@@ -145,7 +145,7 @@ export function ChatDockSuggestionsSection(
                             `Activated ${candidate.title} for strong-match routing.`,
                           )
                         }
-                      >
+                       className="gc-button">
                         Activate auto-match
                       </button>
                     ) : null}
@@ -162,7 +162,7 @@ export function ChatDockSuggestionsSection(
                             `Disabled ${candidate.title}.`,
                           )
                         }
-                      >
+                       className="gc-button">
                         Disable
                       </button>
                     ) : null}
@@ -176,7 +176,7 @@ export function ChatDockSuggestionsSection(
                           `Retired ${candidate.title}.`,
                         )
                       }
-                    >
+                     className="gc-button">
                       Retire
                     </button>
                   </div>
@@ -192,7 +192,7 @@ export function ChatDockSuggestionsSection(
           </p>
           <p>Roles: {delegationSuggestion.roles.join(" -> ")}</p>
           <div className="chat-v11-row-actions">
-            <button type="button" disabled={sending} onClick={() => void onAcceptDelegation()}>
+            <button type="button" disabled={sending} onClick={() => void onAcceptDelegation()} className="gc-button">
               Accept plan
             </button>
           </div>

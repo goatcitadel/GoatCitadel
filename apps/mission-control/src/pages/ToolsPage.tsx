@@ -34,7 +34,7 @@ import {
   type IdOption,
 } from "./tools/tools-page-helpers";
 
-type GrantScope = "global" | "session" | "agent" | "task";
+type GrantScope = "global" | "session" | "workspace" | "agent" | "task";
 type GrantType = "one_time" | "ttl" | "persistent";
 type GrantDecision = "allow" | "deny";
 type QuickPreset = "web" | "files-read" | "devops";
@@ -74,7 +74,7 @@ const TOOL_PROFILE_PRESETS: ToolProfilePreset[] = [
 ];
 
 export function ToolsPage() {
-  const { mode: uiMode, showTechnicalDetails, setShowTechnicalDetails } = useUiPreferences();
+  const { mode: uiMode, showTechnicalDetails, setShowTechnicalDetails, activeWorkspaceId } = useUiPreferences();
   const [catalog, setCatalog] = useState<ToolCatalogEntry[]>([]);
   const [grants, setGrants] = useState<ToolGrantRecord[]>([]);
   const [agentOptions, setAgentOptions] = useState<IdOption[]>([{ value: "operator", label: "operator (you)" }]);
@@ -159,6 +159,8 @@ export function ToolsPage() {
       ? "Global grants apply everywhere. Scope ref is not needed."
       : scope === "session"
         ? "Pick a session from the dropdown (scoped to one conversation)."
+        : scope === "workspace"
+          ? `Workspace grants apply across ${activeWorkspaceId} until you revoke them.`
         : scope === "agent"
           ? "Pick an agent from the dropdown."
           : "Task ID example: task_abc123... (most specific scope).";
@@ -260,6 +262,9 @@ export function ToolsPage() {
           if (scope === "session" && (current === "demo-session" || !current.trim()) && defaultSession) {
             return defaultSession;
           }
+          if (scope === "workspace" && (!current.trim() || current === "demo-session")) {
+            return activeWorkspaceId;
+          }
           if (scope === "agent" && (current === "demo-session" || !current.trim())) {
             return defaultAgent;
           }
@@ -304,7 +309,7 @@ export function ToolsPage() {
   async function onCreateGrant() {
     const normalizedScopeRef = scope === "global" ? undefined : scopeRef.trim();
     if (scope !== "global" && !normalizedScopeRef) {
-      setError("Scope ref is required for session, agent, and task grants.");
+      setError("Scope ref is required for session, workspace, agent, and task grants.");
       return;
     }
     if (!toolPattern.trim()) {
@@ -401,6 +406,7 @@ export function ToolsPage() {
         toolName: evaluateForm.toolName.trim(),
         agentId: evaluateForm.agentId.trim(),
         sessionId: evaluateForm.sessionId.trim(),
+        workspaceId: activeWorkspaceId,
         taskId: evaluateForm.taskId.trim() || undefined,
       });
       setEvaluateResult(result);
@@ -419,6 +425,7 @@ export function ToolsPage() {
         args,
         agentId: dryRunForm.agentId.trim(),
         sessionId: dryRunForm.sessionId.trim(),
+        workspaceId: activeWorkspaceId,
         taskId: dryRunForm.taskId.trim() || undefined,
         dryRun: true,
         consentContext: {
@@ -485,6 +492,10 @@ export function ToolsPage() {
       setScopeRef("");
       return;
     }
+    if (nextScope === "workspace") {
+      setScopeRef(activeWorkspaceId);
+      return;
+    }
     if (nextScope === "session") {
       if (sessionOptions.some((option) => option.value === scopeRef)) {
         return;
@@ -502,6 +513,9 @@ export function ToolsPage() {
   }
 
   const selectedScopeRefOptions = useMemo(() => {
+    if (scope === "workspace") {
+      return [{ value: activeWorkspaceId, label: `Workspace (${activeWorkspaceId})` }];
+    }
     if (scope === "session") {
       return ensureCurrentOption(sessionOptions, scopeRef, "Current session");
     }
@@ -509,7 +523,7 @@ export function ToolsPage() {
       return ensureCurrentOption(agentOptions, scopeRef, "Current agent");
     }
     return [];
-  }, [agentOptions, scope, scopeRef, sessionOptions]);
+  }, [activeWorkspaceId, agentOptions, scope, scopeRef, sessionOptions]);
 
   const evaluateAgentOptions = useMemo(
     () => ensureCurrentOption(agentOptions, evaluateForm.agentId, "Current agent"),
@@ -527,6 +541,12 @@ export function ToolsPage() {
     () => ensureCurrentOption(sessionOptions, dryRunForm.sessionId, "Current session"),
     [dryRunForm.sessionId, sessionOptions],
   );
+
+  useEffect(() => {
+    if (scope === "workspace") {
+      setScopeRef(activeWorkspaceId);
+    }
+  }, [activeWorkspaceId, scope]);
 
   return (
     <section className="workflow-page">
@@ -569,13 +589,13 @@ export function ToolsPage() {
           subtitle="Use this wizard for most cases. Turn on advanced settings only when you need wildcard patterns or custom duration."
         >
           <div className="tools-wizard-steps">
-            <button type="button" className={grantWizardStep === 1 ? "active" : ""} onClick={() => onWizardJump(1)}>
+            <button type="button" className={["gc-button", (grantWizardStep === 1 ? "active" : "")].filter(Boolean).join(" ")} onClick={() => onWizardJump(1)}>
               1. Who
             </button>
-            <button type="button" className={grantWizardStep === 2 ? "active" : ""} onClick={() => onWizardJump(2)}>
+            <button type="button" className={["gc-button", (grantWizardStep === 2 ? "active" : "")].filter(Boolean).join(" ")} onClick={() => onWizardJump(2)}>
               2. What
             </button>
-            <button type="button" className={grantWizardStep === 3 ? "active" : ""} onClick={() => onWizardJump(3)}>
+            <button type="button" className={["gc-button", (grantWizardStep === 3 ? "active" : "")].filter(Boolean).join(" ")} onClick={() => onWizardJump(3)}>
               3. How Long
             </button>
           </div>
@@ -602,7 +622,7 @@ export function ToolsPage() {
                   Scope
                   <HelpHint
                     label="Scope help"
-                    text="More specific scopes win. Order is task > agent > session > global."
+                    text="More specific scopes win. Order is task > agent > session > workspace > global."
                   />
                 </label>
                 <GCSelect
@@ -611,6 +631,7 @@ export function ToolsPage() {
                   options={[
                     { value: "global", label: "Global" },
                     { value: "session", label: "Session" },
+                    { value: "workspace", label: "Workspace" },
                     { value: "agent", label: "Agent" },
                     { value: "task", label: "Task" },
                   ]}
@@ -622,7 +643,7 @@ export function ToolsPage() {
                   while you test safely.
                 </p>
                 {!isRecommendedScope ? (
-                  <button type="button" onClick={onApplyRecommendedScope}>
+                  <button type="button" onClick={onApplyRecommendedScope} className="gc-button">
                     Use recommended scope
                   </button>
                 ) : (
@@ -634,10 +655,10 @@ export function ToolsPage() {
                   Scope ref
                   <HelpHint
                     label="Scope reference help"
-                    text="Choose exactly where this grant applies. Session and agent options are loaded for you."
+                    text="Choose exactly where this grant applies. Session, workspace, and agent options are loaded for you."
                   />
                 </label>
-                {scope === "session" || scope === "agent" ? (
+                {scope === "session" || scope === "workspace" || scope === "agent" ? (
                   <GCCombobox
                     value={scopeRef}
                     onChange={setScopeRef}
@@ -665,21 +686,21 @@ export function ToolsPage() {
           {grantWizardStep === 2 ? (
             <div className="advanced-block">
               <div className="actions">
-                <button type="button" disabled={workingPreset !== null} onClick={() => void onApplyQuickPreset("web")}>
+                <button type="button" disabled={workingPreset !== null} onClick={() => void onApplyQuickPreset("web")} className="gc-button">
                   {workingPreset === "web" ? "Applying..." : "Quick: Web Assistant"}
                 </button>
                 <button
                   type="button"
                   disabled={workingPreset !== null}
                   onClick={() => void onApplyQuickPreset("files-read")}
-                >
+                 className="gc-button">
                   {workingPreset === "files-read" ? "Applying..." : "Quick: File Read"}
                 </button>
                 <button
                   type="button"
                   disabled={workingPreset !== null}
                   onClick={() => void onApplyQuickPreset("devops")}
-                >
+                 className="gc-button">
                   {workingPreset === "devops" ? "Applying..." : "Quick: DevOps Read"}
                 </button>
               </div>
@@ -788,15 +809,15 @@ export function ToolsPage() {
           ) : null}
 
           <div className="actions tools-wizard-actions">
-            <button type="button" onClick={onWizardBack} disabled={grantWizardStep === 1}>
+            <button type="button" onClick={onWizardBack} disabled={grantWizardStep === 1} className="gc-button">
               Back
             </button>
             {grantWizardStep < 3 ? (
-              <button type="button" onClick={onWizardNext}>
+              <button type="button" onClick={onWizardNext} className="gc-button">
                 Next
               </button>
             ) : (
-              <button type="button" disabled={creatingGrant || !canCreateGrant} onClick={() => void onCreateGrant()}>
+              <button type="button" disabled={creatingGrant || !canCreateGrant} onClick={() => void onCreateGrant()} className="gc-button">
                 {creatingGrant ? "Creating..." : "Create Grant"}
               </button>
             )}
@@ -853,7 +874,7 @@ export function ToolsPage() {
             </div>
           </details>
           <div className="actions">
-            <button type="button" onClick={() => void onEvaluate()}>
+            <button type="button" onClick={() => void onEvaluate()} className="gc-button">
               Check Access
             </button>
           </div>
@@ -928,7 +949,7 @@ export function ToolsPage() {
             </div>
           </details>
           <div className="actions">
-            <button type="button" onClick={onUseDryRunExample}>
+            <button type="button" onClick={onUseDryRunExample} className="gc-button">
               Load Example Args
             </button>
           </div>
@@ -946,7 +967,7 @@ export function ToolsPage() {
             onChange={(event) => setDryRunForm((current) => ({ ...current, argsJson: event.target.value }))}
           />
           <div className="actions">
-            <button type="button" onClick={() => void onDryRun()}>
+            <button type="button" onClick={() => void onDryRun()} className="gc-button">
               Run Dry-Run
             </button>
           </div>

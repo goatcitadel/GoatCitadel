@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { CommsSendResult } from "@goatcitadel/contracts";
 
 interface CommsDeliveryRow {
@@ -19,8 +19,9 @@ export class CommsDeliveryRepository {
   private readonly insertStmt;
   private readonly updateStmt;
   private readonly listStmt;
+  private readonly listByConnectionStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO comms_deliveries (
         delivery_id, connection_id, channel_key, target, payload_hash, status,
@@ -37,7 +38,12 @@ export class CommsDeliveryRepository {
     `);
     this.listStmt = db.prepare(`
       SELECT * FROM comms_deliveries
-      WHERE (@connectionId IS NULL OR connection_id = @connectionId)
+      ORDER BY created_at DESC
+      LIMIT @limit
+    `);
+    this.listByConnectionStmt = db.prepare(`
+      SELECT * FROM comms_deliveries
+      WHERE connection_id = @connectionId
       ORDER BY created_at DESC
       LIMIT @limit
     `);
@@ -94,8 +100,8 @@ export class CommsDeliveryRepository {
   }
 
   public list(connectionId?: string, limit = 200): CommsSendResult[] {
-    const rows = toCommsDeliveryRows(this.listStmt.all({
-      connectionId: connectionId ?? null,
+    const rows = toCommsDeliveryRows((connectionId ? this.listByConnectionStmt : this.listStmt).all({
+      connectionId,
       limit,
     }));
     return rows.map((row) => ({
@@ -137,3 +143,5 @@ function isCommsDeliveryRow(value: unknown): value is CommsDeliveryRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

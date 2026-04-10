@@ -409,6 +409,54 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     expect(evaluation.requiresApproval).toBe(true);
   });
 
+  it("treats workspace-scoped grants as first mutation per workspace instead of global", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockImplementation((scope, scopeRef) => {
+      if (scope === "workspace" && scopeRef === "workspace-1") {
+        return [{
+          grantId: "grant-workspace-1",
+          toolPattern: "fs.write",
+          decision: "allow",
+          scope: "workspace",
+          scopeRef: "workspace-1",
+          grantType: "persistent",
+          createdBy: "test",
+          createdAt: new Date().toISOString(),
+        }];
+      }
+      if (scope === "global" && scopeRef === "global") {
+        return [{
+          grantId: "grant-global",
+          toolPattern: "fs.write",
+          decision: "allow",
+          scope: "global",
+          scopeRef: "global",
+          grantType: "persistent",
+          createdBy: "test",
+          createdAt: new Date().toISOString(),
+        }];
+      }
+      return [];
+    });
+    vi.mocked(storage.toolAccessDecisions.countToolCallsInLastHourInScope).mockImplementation((input) => {
+      expect(input.scope).toBe("workspace");
+      expect(input.workspaceId).toBe("workspace-1");
+      return 0;
+    });
+
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+    const evaluation = engine.evaluateAccess({
+      toolName: "fs.write",
+      args: { path: "./workspace/output.txt", content: "hello" },
+      agentId: "agent",
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.requiresApproval).toBe(true);
+  });
+
   it("lets matching denies beat allows across scopes", () => {
     const storage = createStorageStub();
     vi.mocked(storage.toolGrants.list).mockImplementation((scope, scopeRef) => {

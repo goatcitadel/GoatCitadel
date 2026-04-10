@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
 export interface KnowledgeDocumentRecord {
@@ -46,11 +46,13 @@ export class KnowledgeRepository {
   private readonly insertDocumentStmt;
   private readonly insertChunkStmt;
   private readonly listChunksByNamespaceStmt;
+  private readonly listChunksStmt;
   private readonly listChunksByDocStmt;
   private readonly listDocumentsStmt;
+  private readonly listDocumentsByNamespaceStmt;
   private readonly updateChunkEmbeddingStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertDocumentStmt = db.prepare(`
       INSERT INTO knowledge_documents (
         doc_id, namespace, source_type, source_ref, title, metadata_json, created_at
@@ -69,7 +71,14 @@ export class KnowledgeRepository {
       SELECT kc.*
       FROM knowledge_chunks kc
       INNER JOIN knowledge_documents kd ON kd.doc_id = kc.doc_id
-      WHERE (@namespace IS NULL OR kd.namespace = @namespace)
+      WHERE kd.namespace = @namespace
+      ORDER BY kc.created_at DESC, kc.seq ASC
+      LIMIT @limit
+    `);
+    this.listChunksStmt = db.prepare(`
+      SELECT kc.*
+      FROM knowledge_chunks kc
+      INNER JOIN knowledge_documents kd ON kd.doc_id = kc.doc_id
       ORDER BY kc.created_at DESC, kc.seq ASC
       LIMIT @limit
     `);
@@ -83,7 +92,13 @@ export class KnowledgeRepository {
     this.listDocumentsStmt = db.prepare(`
       SELECT *
       FROM knowledge_documents
-      WHERE (@namespace IS NULL OR namespace = @namespace)
+      ORDER BY created_at DESC
+      LIMIT @limit
+    `);
+    this.listDocumentsByNamespaceStmt = db.prepare(`
+      SELECT *
+      FROM knowledge_documents
+      WHERE namespace = @namespace
       ORDER BY created_at DESC
       LIMIT @limit
     `);
@@ -154,8 +169,8 @@ export class KnowledgeRepository {
   }
 
   public listDocuments(namespace?: string, limit = 100): KnowledgeDocumentRecord[] {
-    const rows = toKnowledgeDocumentRows(this.listDocumentsStmt.all({
-      namespace: namespace ?? null,
+    const rows = toKnowledgeDocumentRows((namespace ? this.listDocumentsByNamespaceStmt : this.listDocumentsStmt).all({
+      namespace,
       limit,
     }));
     return rows.map((row) => ({
@@ -170,8 +185,8 @@ export class KnowledgeRepository {
   }
 
   public listChunksByNamespace(namespace?: string, limit = 500): KnowledgeChunkRecord[] {
-    const rows = toKnowledgeChunkRows(this.listChunksByNamespaceStmt.all({
-      namespace: namespace ?? null,
+    const rows = toKnowledgeChunkRows((namespace ? this.listChunksByNamespaceStmt : this.listChunksStmt).all({
+      namespace,
       limit,
     }));
     return rows.map(mapChunkRow);
@@ -262,3 +277,5 @@ function estimateTokens(text: string): number {
   }
   return Math.ceil(chars / 4);
 }
+
+

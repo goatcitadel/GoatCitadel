@@ -70,14 +70,14 @@ export function OfficeStageControlBar<P extends OfficeOperatorPrefsLike>(props: 
           <div className="office-playback-actions">
             <button
               type="button"
-              className={playback.mode === "live" ? "active" : ""}
+              className={["gc-button", (playback.mode === "live" ? "active" : "")].filter(Boolean).join(" ")}
               onClick={() => onPlaybackModeChange("live")}
             >
               Live
             </button>
             <button
               type="button"
-              className={playback.mode === "replay" ? "active" : ""}
+              className={["gc-button", (playback.mode === "replay" ? "active" : "")].filter(Boolean).join(" ")}
               onClick={() => onPlaybackModeChange("replay")}
               disabled={replayWindow.replayableEvents.length === 0}
             >
@@ -94,7 +94,7 @@ export function OfficeStageControlBar<P extends OfficeOperatorPrefsLike>(props: 
                     current.mode === "replay" ? (current.cursorTime ?? replayWindow.startTime) : current.cursorTime,
                 }))
               }
-            >
+             className="gc-button">
               {playback.playing ? "Pause" : "Play"}
             </button>
           </div>

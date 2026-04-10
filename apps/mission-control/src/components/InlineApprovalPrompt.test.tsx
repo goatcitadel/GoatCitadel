@@ -21,7 +21,9 @@ describe("InlineApprovalPrompt", () => {
             toolName="shell.exec"
             reason="Approval required by policy."
             expiresAt="2026-03-22T12:00:05.000Z"
-            onApprove={() => undefined}
+            onApproveOnce={() => undefined}
+            onApproveInSession={() => undefined}
+            onApproveInWorkspace={() => undefined}
             onDeny={() => undefined}
           />,
         );

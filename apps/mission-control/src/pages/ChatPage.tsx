@@ -15,7 +15,9 @@ import {
   updateChatSessionPrefs,
 } from "../api/client";
 import { CardSkeleton } from "../components/CardSkeleton";
+import { CodeWorkbenchPanel } from "../components/CodeWorkbenchPanel";
 import { ConfirmModal } from "../components/ConfirmModal";
+import { CoworkCanvasPanel } from "../components/CoworkCanvasPanel";
 import { PageHeader } from "../components/PageHeader";
 import { StatusChip } from "../components/StatusChip";
 import type { ChatModelProviderOption } from "../components/ChatModelPicker";
@@ -32,6 +34,7 @@ import { buildModelCommandSuggestions, type CommandSuggestionItem } from "./chat
 import { ChatComposerShell } from "./chat/ChatComposerShell";
 import { ChatContextDockPanels } from "./chat/ChatContextDockPanels";
 import { ChatSessionSidebar } from "./chat/ChatSessionSidebar";
+import { ChatSurfaceLayout } from "./chat/ChatSurfaceLayout";
 import { ChatThreadShell } from "./chat/ChatThreadShell";
 import { MissionControlEmptyState } from "./chat/MissionControlEmptyState";
 import { MissionControlSurfaceHeader } from "./chat/MissionControlSurfaceHeader";
@@ -41,6 +44,7 @@ import { flattenThreadMessages } from "./chat/chat-page-normalizers";
 import {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
+  resolveSelectedTurnId,
   resolveChatRefreshPlan,
   resolveOptimisticChatPrefs,
   shouldApplyFetchedMessagesAfterStream,
@@ -85,6 +89,7 @@ export {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
   looksMachineSessionLabel,
+  resolveSelectedTurnId,
   resolveChatRefreshPlan,
   resolveOptimisticChatPrefs,
   shouldApplyFetchedMessagesAfterStream,
@@ -98,12 +103,24 @@ const STREAM_PREF_KEY = "goatcitadel.chat.agent.stream.enabled";
 
 export function ChatPage({
   workspaceId = "default",
+  workspaceName = workspaceId,
+  approvalsCount = 0,
   surface,
   lockSurface = false,
+  onOpenCowork = () => undefined,
+  onOpenCode = () => undefined,
+  onOpenTasks = () => undefined,
+  onOpenApprovals = () => undefined,
 }: {
   workspaceId?: string;
+  workspaceName?: string;
+  approvalsCount?: number;
   surface?: ChatMode;
   lockSurface?: boolean;
+  onOpenCowork?: () => void;
+  onOpenCode?: () => void;
+  onOpenTasks?: () => void;
+  onOpenApprovals?: () => void;
 }) {
   const [selectedProjectId, setSelectedProjectId] = useState<string>("all");
   const [historyView, setHistoryView] = useState<ChatHistoryView>("active");
@@ -132,6 +149,8 @@ export function ChatPage({
   const prefMutationSequenceRef = useRef(0);
   const lastShellSurfaceSyncKeyRef = useRef<string | null>(null);
   const lastLoadedShellSessionIdRef = useRef<string | null>(null);
+  const appliedRouteSelectionKeyRef = useRef<string | null>(null);
+  const pendingRouteTurnSelectionRef = useRef<string | null>(null);
   const executeOutboundItemRef = useRef<(item: OutboundQueueItem) => Promise<void>>(async () => undefined);
   const tryBeginOutboundExecutionRef = useRef<() => boolean>(() => false);
   const queuedOutboundSetterRef = useRef<React.Dispatch<React.SetStateAction<OutboundQueueItem[]>>>(() => []);
@@ -214,6 +233,34 @@ export function ChatPage({
     loadSidebar,
     loadSessionCoreState,
   } = sessionData;
+  const routeSearch = typeof window === "undefined" ? "" : window.location.search;
+
+  useEffect(() => {
+    if (!routeSearch) {
+      appliedRouteSelectionKeyRef.current = null;
+      pendingRouteTurnSelectionRef.current = null;
+      return;
+    }
+    const params = new URLSearchParams(routeSearch);
+    const routeSessionId = params.get("sessionId")?.trim() || "";
+    const routeTurnId = params.get("turnId")?.trim() || "";
+    if (!routeSessionId) {
+      appliedRouteSelectionKeyRef.current = null;
+      pendingRouteTurnSelectionRef.current = null;
+      return;
+    }
+    const routeSelectionKey = `${routeSessionId}:${routeTurnId}`;
+    if (appliedRouteSelectionKeyRef.current === routeSelectionKey) {
+      return;
+    }
+    if (!(sessions?.items ?? []).some((item) => item.sessionId === routeSessionId)) {
+      return;
+    }
+    appliedRouteSelectionKeyRef.current = routeSelectionKey;
+    pendingRouteTurnSelectionRef.current = routeTurnId || null;
+    setSelectedSessionId(routeSessionId);
+    setSelectedTurnId(routeTurnId || null);
+  }, [routeSearch, sessions?.items]);
 
   useEffect(() => {
     loadSessionCoreStateRef.current = loadSessionCoreState;
@@ -365,6 +412,11 @@ export function ChatPage({
     settings?.llm.activeModel,
   ]);
   const selectedModel = selectedProviderSelection.model;
+  const selectedProviderLabel = useMemo(
+    () => providerOptions.find((item) => item.providerId === selectedProviderId)?.label ?? "Provider auto",
+    [providerOptions, selectedProviderId],
+  );
+  const selectedModelLabel = selectedModel ?? "Model auto";
 
   useEffect(() => {
     if (!selectedProviderId) {
@@ -608,13 +660,12 @@ export function ChatPage({
 
   useEffect(() => {
     setSelectedTurnId((current) => {
-      if (!thread?.turns.length) {
-        return null;
+      const pendingRouteTurnId = pendingRouteTurnSelectionRef.current;
+      const nextTurnId = resolveSelectedTurnId(thread, current, pendingRouteTurnId);
+      if (thread?.turns.length && pendingRouteTurnId) {
+        pendingRouteTurnSelectionRef.current = null;
       }
-      if (current && thread.turns.some((turn) => turn.turnId === current)) {
-        return current;
-      }
-      return thread.selectedTurnId ?? thread.activeLeafTurnId ?? thread.turns.at(-1)?.turnId ?? null;
+      return nextTurnId;
     });
   }, [thread]);
 
@@ -956,6 +1007,19 @@ export function ChatPage({
   );
 
   const rootClassName = `chat-v11 mode-${messageMode}${lockSurface ? " shell-owned-surface" : ""}`;
+  const workflowColumn = selectedSession
+    ? isCoworkSurface
+      ? <CoworkCanvasPanel items={coworkItems} orchestration={latestOrchestration ?? undefined} />
+      : isCodeSurface
+        ? (
+          <CodeWorkbenchPanel
+            selectedTurn={selectedTurn}
+            projectName={selectedProject?.name ?? undefined}
+            needsProjectBinding={codeModeNeedsProjectBinding}
+          />
+        )
+        : undefined
+    : undefined;
 
   if (loading) {
     return (
@@ -1004,215 +1068,225 @@ export function ChatPage({
       {error ? <p className="error">{error}</p> : null}
       {isRefreshing ? <p className="status-banner">Refreshing chat context...</p> : null}
 
-      <div className="chat-v11-shell">
-        <ChatSessionSidebar
-          mode={messageMode}
-          showProjectCreate={showProjectCreate}
-          creatingSession={Boolean(creatingSessionMode)}
-          search={search}
-          projectName={projectName}
-          projectPath={projectPath}
-          historyView={historyView}
-          selectedProjectId={selectedProjectId}
-          missionSessions={missionSessions}
-          externalSessions={externalSessions}
-          selectedSessionId={selectedSessionId}
-          summaryTitle={selectedProject?.name ?? "Mission Control workspace"}
-          summaryCopy={workspaceSummaryText}
-          workspaceSummaryCards={workspaceSummaryCards}
-          archiveWorkspaceEnabled={isChatSurface && historyView === "active" && workspaceMissionSessionCount > 0}
-          archiveWorkspacePending={archiveWorkspacePending}
-          onToggleProjectCreate={() => setShowProjectCreate((current) => !current)}
-          onCreateSession={handleCreateCurrentModeSession}
-          onSearchChange={setSearch}
-          onProjectNameChange={setProjectName}
-          onProjectPathChange={setProjectPath}
-          onCreateProject={() => void handleCreateProject()}
-          onHistoryViewChange={setHistoryView}
-          onArchiveWorkspace={handleArchiveWorkspace}
-          onSelectProjectId={setSelectedProjectId}
-          onSelectSession={setSelectedSessionId}
-          renderSessionLabel={(sessionId) => visibleSessionLabelById.get(sessionId) ?? `Chat ${sessionId.slice(-6)}`}
-        />
-
-        <div className="chat-v11-main">
-          {selectedSession ? (
-            <div className={`chat-v11-conversation-shell surface-${messageMode}`}>
-              <MissionControlSurfaceHeader
-                mode={messageMode}
-                sessionTitle={selectedSessionLabel}
-                summary={workspaceSummaryText}
-                status={selectedTurn?.trace.status ?? null}
-                dockOpen={dockOpen}
-                onToggleDock={handleToggleDock}
-              />
-              <div
-                className={`chat-v11-main-grid${isCoworkSurface ? " with-cowork" : ""}${isCodeSurface ? " with-code" : ""}${dockOpen ? " with-dock-open" : " with-dock-collapsed"}`}
-              >
-                <article className={`card chat-v11-thread mode-${messageMode}`}>
-                  <ChatThreadShell
-                    mode={messageMode}
-                    loading={messagesLoading}
-                    thread={thread}
-                    selectedTurnId={selectedTurnId}
-                    notices={localNotices}
-                    followOutput={followThreadOutput}
-                    streamStatus={streamStatus as ChatStreamStatus}
-                    queuedCount={queuedOutbound.length}
-                    streamError={error}
-                    pendingApproval={pendingApproval}
-                    approvalPending={approvalPending}
-                    eventStreamStatus={eventStreamStatus}
-                    onBottomStateChange={setFollowThreadOutput}
-                    onSelectTurn={setSelectedTurnId}
-                    onSwitchBranch={(turnId) => void handleSelectBranchTurnAndSync(turnId)}
-                    onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
-                    onEditTurn={handleBeginEditTurn}
-                    onApprovePending={() => void handleApprovePending()}
-                    onDenyPending={() => void handleDenyPending()}
-                    onRefresh={() => void loadSessionCoreState(selectedSession.sessionId, { includeThread: true })}
-                  />
-
-                  <ChatComposerShell
-                    mode={messageMode}
-                    isDragActive={isDragActive}
-                    queueItems={queuedOutbound.map((item) => ({
-                      id: item.id,
-                      action: item.action,
-                      label: item.content.trim()
-                        ? item.content.trim().slice(0, 96)
-                        : `Turn ${item.targetTurnId?.slice(-6) ?? "queued"}`,
-                      createdAt: item.createdAt,
-                      paused: item.paused,
-                    }))}
-                    editingTurnId={editingTurnId}
-                    planningMode={planningMode}
-                    effectiveToolAutonomy={effectiveToolAutonomy}
-                    error={null}
-                    draft={draft}
-                    commandSuggestions={commandSuggestions}
-                    commandIndex={commandIndex}
-                    pendingAttachments={pendingAttachments}
-                    selectedTurnRecovery={selectedTurnRecovery}
-                    selectedTurn={selectedTurn}
-                    selectedSessionId={selectedSessionId}
-                    currentWebMode={prefs?.webMode ?? "auto"}
-                    sending={sending}
-                    canSend={canSend}
-                    hasActiveStream={Boolean(activeStreamRef.current)}
-                    activeStreamTurnAssigned={Boolean(activeStreamRef.current?.turnId)}
-                    composerRef={composerRef}
-                    fileInputRef={fileInputRef}
-                    onDragEnter={handleDragEnter}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                    onResumeAll={handleResumeQueue}
-                    onRemoveQueuedItem={handleRemoveQueuedItem}
-                    onCancelEdit={handleCancelEdit}
-                    onDismissError={handleDismissError}
-                    onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
-                    onSetDeepMode={handleSetDeepMode}
-                    onReviewRunDetails={handleRevealSelectedTurnDetails}
-                    onDraftChange={setDraft}
-                    onComposerKeyDown={handleComposerKeyDown}
-                    onComposerPaste={handleComposerPaste}
-                    onApplyDraftCommand={handleApplyDraftCommand}
-                    onRemoveAttachment={handleRemoveAttachment}
-                    onAttachFiles={() => fileInputRef.current?.click()}
-                    onUploadFiles={handleUploadFiles}
-                    onRunQuickResearch={() => void handleRunQuickResearch()}
-                    onStopActiveTurn={() => void handleStopActiveTurn()}
-                    onSend={() => void handleSend()}
-                  />
-                </article>
-
-                <ChatContextDockPanels
-                  mode={messageMode}
-                  dockOpen={dockOpen}
-                  dockSectionStyle={dockSectionStyle}
-                  isChatSurface={isChatSurface}
-                  isCoworkSurface={isCoworkSurface}
-                  isCodeSurface={isCodeSurface}
-                  activeModePreset={activeModePreset as ChatModePresetRecord}
-                  planningMode={planningMode}
-                  effectiveToolAutonomy={effectiveToolAutonomy}
-                  codeModeNeedsProjectBinding={codeModeNeedsProjectBinding}
-                  selectedSession={selectedSession}
-                  selectedProject={selectedProject}
-                  selectedProjectBindingCandidateId={selectedProjectBindingCandidateId}
-                  selectedProjectBindingCandidateName={selectedProjectBindingCandidateName}
-                  sending={sending}
-                  sessionControlPending={sessionControlPending}
-                  providerOptions={providerOptions}
-                  selectedProviderId={selectedProviderId}
-                  selectedModel={selectedModel}
-                  streamEnabled={streamEnabled}
-                  onStreamEnabledChange={setStreamEnabled}
-                  prefs={prefs}
-                  selectedSessionId={selectedSessionId}
-                  showTracePanel={showTracePanel}
-                  selectedTurn={selectedTurn}
-                  showSuggestionsPanel={showSuggestionsPanel}
-                  showLearnedMemoryPanel={showLearnedMemoryPanel}
-                  latestOrchestration={latestOrchestration}
-                  coworkItems={coworkItems}
-                  proactiveStatus={proactiveStatus}
-                  proactiveRuns={proactiveRuns}
-                  proactiveSuggestionCount={proactiveSuggestionCount}
-                  capabilitySuggestions={capabilitySuggestions}
-                  specialistSuggestions={specialistSuggestions}
-                  specialistCandidates={specialistCandidates}
-                  delegationSuggestion={delegationSuggestion}
-                  learnedMemory={learnedMemory}
-                  secondaryLoading={secondaryLoading}
-                  binding={binding}
-                  integrationConnectionId={integrationConnectionId}
-                  integrationTarget={integrationTarget}
-                  selectedSessionProjectValue={selectedSessionProjectValue}
-                  projectOptions={[
-                    { value: "none", label: "Unassigned" },
-                    ...(projects?.items ?? [])
-                      .filter((item) => item.lifecycleStatus === "active")
-                      .map((project) => ({ value: project.projectId, label: project.name })),
-                  ]}
-                  loadModelsForProvider={loadModelsForProvider}
-                  getCachedModels={getCachedModels}
-                  resolveProviderModelSelection={resolveProviderModelSelection}
-                  onPrefPatch={handlePrefPatch}
-                  onSuggestDelegation={handleSuggestDelegation}
-                  onTriggerProactive={handleTriggerProactive}
-                  onProactivePolicyPatch={handleProactivePolicyPatch}
-                  onRunCodeDelegation={handleRunCodeDelegation}
-                  onCapabilitySuggestionAction={handleCapabilitySuggestionAction}
-                  onCreateSpecialistDraft={handleCreateSpecialistDraft}
-                  onSpecialistCandidatePatch={handleSpecialistCandidatePatch}
-                  onAcceptDelegation={handleAcceptDelegation}
-                  onRebuildLearnedMemory={handleRebuildLearnedMemory}
-                  onUpdateMemoryStatus={handleMemoryStatusUpdate}
-                  onRenameTitleChange={setRenameTitle}
-                  renameTitle={renameTitle}
-                  onRenameSession={handleRenameSession}
-                  onTogglePinSession={handleTogglePinSession}
-                  onToggleArchiveSession={handleToggleArchiveSession}
-                  onDeleteSession={() => handleDeleteSession(formatSessionLabel(selectedSession))}
-                  onAssignProject={handleAssignProject}
-                  onIntegrationConnectionIdChange={setIntegrationConnectionId}
-                  onIntegrationTargetChange={setIntegrationTarget}
-                  onSaveExternalBinding={handleSaveExternalBinding}
-                />
-              </div>
-            </div>
-          ) : (
-            <MissionControlEmptyState
+      <ChatSurfaceLayout
+        mode={messageMode}
+        dockOpen={selectedSession ? dockOpen : false}
+        sessionRail={(
+          <ChatSessionSidebar
+            mode={messageMode}
+            showProjectCreate={showProjectCreate}
+            creatingSession={Boolean(creatingSessionMode)}
+            search={search}
+            projectName={projectName}
+            projectPath={projectPath}
+            historyView={historyView}
+            selectedProjectId={selectedProjectId}
+            missionSessions={missionSessions}
+            externalSessions={externalSessions}
+            selectedSessionId={selectedSessionId}
+            summaryTitle={selectedProject?.name ?? "Mission Control workspace"}
+            summaryCopy={workspaceSummaryText}
+            workspaceSummaryCards={workspaceSummaryCards}
+            archiveWorkspaceEnabled={isChatSurface && historyView === "active" && workspaceMissionSessionCount > 0}
+            archiveWorkspacePending={archiveWorkspacePending}
+            onToggleProjectCreate={() => setShowProjectCreate((current) => !current)}
+            onCreateSession={handleCreateCurrentModeSession}
+            onSearchChange={setSearch}
+            onProjectNameChange={setProjectName}
+            onProjectPathChange={setProjectPath}
+            onCreateProject={() => void handleCreateProject()}
+            onHistoryViewChange={setHistoryView}
+            onArchiveWorkspace={handleArchiveWorkspace}
+            onSelectProjectId={setSelectedProjectId}
+            onSelectSession={setSelectedSessionId}
+            renderSessionLabel={(sessionId) => visibleSessionLabelById.get(sessionId) ?? `Chat ${sessionId.slice(-6)}`}
+          />
+        )}
+        workflowColumn={workflowColumn}
+        primaryColumn={selectedSession ? (
+          <>
+            <MissionControlSurfaceHeader
               mode={messageMode}
-              sessionCount={missionSessions.length + externalSessions.length}
-              projectCount={projects?.items.length ?? 0}
-              onCreateSession={handleCreateCurrentModeSession}
+              sessionTitle={selectedSessionLabel}
+              summary={workspaceSummaryText}
+              status={selectedTurn?.trace.status ?? null}
+              providerLabel={selectedProviderLabel}
+              modelLabel={selectedModelLabel}
+              dockOpen={dockOpen}
+              onToggleDock={handleToggleDock}
             />
-          )}
-        </div>
-      </div>
+            <article className={`panel gc-surface-card chat-v11-thread mode-${messageMode}`}>
+              <ChatThreadShell
+                mode={messageMode}
+                loading={messagesLoading}
+                thread={thread}
+                selectedTurnId={selectedTurnId}
+                notices={localNotices}
+                followOutput={followThreadOutput}
+                streamStatus={streamStatus as ChatStreamStatus}
+                queuedCount={queuedOutbound.length}
+                streamError={error}
+                pendingApproval={pendingApproval}
+                workspaceId={selectedSession.workspaceId}
+                approvalPending={approvalPending}
+                eventStreamStatus={eventStreamStatus}
+                onBottomStateChange={setFollowThreadOutput}
+                onSelectTurn={setSelectedTurnId}
+                onSwitchBranch={(turnId) => void handleSelectBranchTurnAndSync(turnId)}
+                onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
+                onEditTurn={handleBeginEditTurn}
+                onApprovePending={(allowScope) => void handleApprovePending(allowScope)}
+                onDenyPending={() => void handleDenyPending()}
+                onRefresh={() => void loadSessionCoreState(selectedSession.sessionId, { includeThread: true })}
+              />
+
+              <ChatComposerShell
+                mode={messageMode}
+                isDragActive={isDragActive}
+                queueItems={queuedOutbound.map((item) => ({
+                  id: item.id,
+                  action: item.action,
+                  label: item.content.trim()
+                    ? item.content.trim().slice(0, 96)
+                    : `Turn ${item.targetTurnId?.slice(-6) ?? "queued"}`,
+                  createdAt: item.createdAt,
+                  paused: item.paused,
+                }))}
+                editingTurnId={editingTurnId}
+                planningMode={planningMode}
+                effectiveToolAutonomy={effectiveToolAutonomy}
+                error={null}
+                draft={draft}
+                commandSuggestions={commandSuggestions}
+                commandIndex={commandIndex}
+                pendingAttachments={pendingAttachments}
+                selectedTurnRecovery={selectedTurnRecovery}
+                selectedTurn={selectedTurn}
+                selectedSessionId={selectedSessionId}
+                currentWebMode={prefs?.webMode ?? "auto"}
+                sending={sending}
+                canSend={canSend}
+                hasActiveStream={Boolean(activeStreamRef.current)}
+                activeStreamTurnAssigned={Boolean(activeStreamRef.current?.turnId)}
+                composerRef={composerRef}
+                fileInputRef={fileInputRef}
+                onDragEnter={handleDragEnter}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onResumeAll={handleResumeQueue}
+                onRemoveQueuedItem={handleRemoveQueuedItem}
+                onCancelEdit={handleCancelEdit}
+                onDismissError={handleDismissError}
+                onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
+                onSetDeepMode={handleSetDeepMode}
+                onReviewRunDetails={handleRevealSelectedTurnDetails}
+                onDraftChange={setDraft}
+                onComposerKeyDown={handleComposerKeyDown}
+                onComposerPaste={handleComposerPaste}
+                onApplyDraftCommand={handleApplyDraftCommand}
+                onRemoveAttachment={handleRemoveAttachment}
+                onAttachFiles={() => fileInputRef.current?.click()}
+                onUploadFiles={handleUploadFiles}
+                onRunQuickResearch={() => void handleRunQuickResearch()}
+                onStopActiveTurn={() => void handleStopActiveTurn()}
+                onSend={() => void handleSend()}
+              />
+            </article>
+          </>
+        ) : (
+          <MissionControlEmptyState
+            mode={messageMode}
+            sessionCount={missionSessions.length + externalSessions.length}
+            projectCount={projects?.items.length ?? 0}
+            workspaceName={workspaceName}
+            approvalsCount={approvalsCount}
+            providerLabel={selectedProviderLabel}
+            modelLabel={selectedModelLabel}
+            onCreateSession={handleCreateCurrentModeSession}
+            onOpenCowork={onOpenCowork}
+            onOpenCode={onOpenCode}
+            onOpenTasks={onOpenTasks}
+            onOpenApprovals={onOpenApprovals}
+          />
+        )}
+        contextDock={selectedSession ? (
+          <ChatContextDockPanels
+            mode={messageMode}
+            dockOpen={dockOpen}
+            dockSectionStyle={dockSectionStyle}
+            isChatSurface={isChatSurface}
+            isCoworkSurface={isCoworkSurface}
+            isCodeSurface={isCodeSurface}
+            activeModePreset={activeModePreset as ChatModePresetRecord}
+            planningMode={planningMode}
+            effectiveToolAutonomy={effectiveToolAutonomy}
+            codeModeNeedsProjectBinding={codeModeNeedsProjectBinding}
+            selectedSession={selectedSession}
+            selectedProject={selectedProject}
+            selectedProjectBindingCandidateId={selectedProjectBindingCandidateId}
+            selectedProjectBindingCandidateName={selectedProjectBindingCandidateName}
+            sending={sending}
+            sessionControlPending={sessionControlPending}
+            providerOptions={providerOptions}
+            selectedProviderId={selectedProviderId}
+            selectedModel={selectedModel}
+            streamEnabled={streamEnabled}
+            onStreamEnabledChange={setStreamEnabled}
+            prefs={prefs}
+            selectedSessionId={selectedSessionId}
+            showTracePanel={showTracePanel}
+            selectedTurn={selectedTurn}
+            showSuggestionsPanel={showSuggestionsPanel}
+            showLearnedMemoryPanel={showLearnedMemoryPanel}
+            latestOrchestration={latestOrchestration}
+            coworkItems={coworkItems}
+            proactiveStatus={proactiveStatus}
+            proactiveRuns={proactiveRuns}
+            proactiveSuggestionCount={proactiveSuggestionCount}
+            capabilitySuggestions={capabilitySuggestions}
+            specialistSuggestions={specialistSuggestions}
+            specialistCandidates={specialistCandidates}
+            delegationSuggestion={delegationSuggestion}
+            learnedMemory={learnedMemory}
+            secondaryLoading={secondaryLoading}
+            binding={binding}
+            integrationConnectionId={integrationConnectionId}
+            integrationTarget={integrationTarget}
+            selectedSessionProjectValue={selectedSessionProjectValue}
+            projectOptions={[
+              { value: "none", label: "Unassigned" },
+              ...(projects?.items ?? [])
+                .filter((item) => item.lifecycleStatus === "active")
+                .map((project) => ({ value: project.projectId, label: project.name })),
+            ]}
+            loadModelsForProvider={loadModelsForProvider}
+            getCachedModels={getCachedModels}
+            resolveProviderModelSelection={resolveProviderModelSelection}
+            onPrefPatch={handlePrefPatch}
+            onSuggestDelegation={handleSuggestDelegation}
+            onTriggerProactive={handleTriggerProactive}
+            onProactivePolicyPatch={handleProactivePolicyPatch}
+            onRunCodeDelegation={handleRunCodeDelegation}
+            onCapabilitySuggestionAction={handleCapabilitySuggestionAction}
+            onCreateSpecialistDraft={handleCreateSpecialistDraft}
+            onSpecialistCandidatePatch={handleSpecialistCandidatePatch}
+            onAcceptDelegation={handleAcceptDelegation}
+            onRebuildLearnedMemory={handleRebuildLearnedMemory}
+            onUpdateMemoryStatus={handleMemoryStatusUpdate}
+            onRenameTitleChange={setRenameTitle}
+            renameTitle={renameTitle}
+            onRenameSession={handleRenameSession}
+            onTogglePinSession={handleTogglePinSession}
+            onToggleArchiveSession={handleToggleArchiveSession}
+            onDeleteSession={() => handleDeleteSession(formatSessionLabel(selectedSession))}
+            onAssignProject={handleAssignProject}
+            onIntegrationConnectionIdChange={setIntegrationConnectionId}
+            onIntegrationTargetChange={setIntegrationTarget}
+            onSaveExternalBinding={handleSaveExternalBinding}
+          />
+        ) : <></>}
+      />
       <ConfirmModal
         open={Boolean(capabilitySuggestionConfirm)}
         title={capabilityConfirmationCopy?.title ?? "Confirm capability action"}

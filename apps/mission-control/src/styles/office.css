@@ -41,7 +41,7 @@
 .office-stage-loading {
   display: grid;
   place-items: center;
-  color: var(--accent-soft);
+  color: var(--accent-muted);
   font-size: 0.92rem;
 }
 
@@ -302,7 +302,7 @@
 
 .office-stage-toolbar-group > label {
   font-size: 0.78rem;
-  color: var(--muted);
+  color: var(--text-muted);
   letter-spacing: 0.04em;
 }
 
@@ -686,7 +686,7 @@
 
 .office-playback-controls label {
   font-size: 0.78rem;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .office-playback-controls input[type="range"] {

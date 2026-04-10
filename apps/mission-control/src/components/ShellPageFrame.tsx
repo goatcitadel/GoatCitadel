@@ -3,7 +3,6 @@ import { EmbeddedPageChromeProvider } from "./EmbeddedPageChrome";
 import { SectionTitle } from "./SectionTitle";
 
 interface ShellPageFrameProps {
-  eyebrow: string;
   title: string;
   subtitle: ReactNode;
   actions?: ReactNode;

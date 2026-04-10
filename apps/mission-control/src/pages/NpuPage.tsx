@@ -377,7 +377,7 @@ export function NpuPage({ settings }: NpuPageProps) {
       ) : null}
 
       <Panel title="Models" subtitle="Discovered model catalog exposed by the sidecar.">
-        <table>
+        <table className="gc-data-table">
           <thead>
             <tr>
               <th>Model</th>
@@ -429,3 +429,4 @@ export function NpuPage({ settings }: NpuPageProps) {
 function canLoadNpuModels(status: NpuStatusRecord | null): boolean {
   return Boolean(status && status.processState === "running" && status.healthy);
 }
+

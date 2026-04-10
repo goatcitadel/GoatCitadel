@@ -437,11 +437,11 @@ export function AgentsPage() {
         }
         secondary={
           <>
-            <button type="button" onClick={onNew}>
+            <button type="button" onClick={onNew} className="gc-button">
               Create Custom Agent
             </button>
             {creating ? (
-              <button type="button" onClick={onCancelNew}>
+              <button type="button" onClick={onCancelNew} className="gc-button">
                 {globalCopy.common.cancel}
               </button>
             ) : null}
@@ -454,7 +454,7 @@ export function AgentsPage() {
           title="Role Directory"
           subtitle="Pick an agent profile from the directory to inspect lifecycle, runtime posture, and active session load."
         >
-          <table>
+          <table className="gc-data-table">
             <thead>
               <tr>
                 <th>Name</th>
@@ -627,26 +627,26 @@ export function AgentsPage() {
                   onClick={() => void onSave()}
                   disabled={saving || Boolean(createDisabledReason)}
                   title={createDisabledReason ?? undefined}
-                >
+                 className="gc-button">
                   {saving ? "Saving..." : creating ? "Create Agent" : "Save Changes"}
                 </button>
                 {creating && createDisabledReason ? (
                   <span className="office-subtitle">{createDisabledReason}</span>
                 ) : null}
                 {!creating && selected && selected.lifecycleStatus === "active" ? (
-                  <button type="button" onClick={() => setConfirmAction({ type: "archive", name: selected.name })}>
+                  <button type="button" onClick={() => setConfirmAction({ type: "archive", name: selected.name })} className="gc-button">
                     {globalCopy.common.archive}
                   </button>
                 ) : null}
                 {!creating && selected && selected.lifecycleStatus === "archived" ? (
-                  <button type="button" onClick={() => void onRestore()}>
+                  <button type="button" onClick={() => void onRestore()} className="gc-button">
                     {globalCopy.common.restore}
                   </button>
                 ) : null}
                 {!creating && selected && !selected.isBuiltin ? (
                   <button
                     type="button"
-                    className="danger"
+                    className="gc-button danger"
                     onClick={() => setConfirmAction({ type: "hardDelete", name: selected.name })}
                   >
                     {globalCopy.common.deletePermanently}
@@ -766,3 +766,4 @@ function buildFormChanges(
   }
   return changes;
 }
+

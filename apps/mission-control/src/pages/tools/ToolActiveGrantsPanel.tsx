@@ -28,7 +28,7 @@ export function ToolActiveGrantsPanel(props: ToolActiveGrantsPanelProps) {
         }
         secondary={<StatusChip>{visibleGrants.length} visible</StatusChip>}
       />
-      <table>
+      <table className="gc-data-table">
         <thead>
           <tr>
             <th>Tool</th>
@@ -53,7 +53,7 @@ export function ToolActiveGrantsPanel(props: ToolActiveGrantsPanelProps) {
                 {grant.revokedAt ? (
                   <span>revoked</span>
                 ) : (
-                  <button type="button" className="danger" onClick={() => void onRevoke(grant.grantId)}>
+                  <button type="button" className="gc-button danger" onClick={() => void onRevoke(grant.grantId)}>
                     Revoke
                   </button>
                 )}
@@ -70,3 +70,4 @@ export function ToolActiveGrantsPanel(props: ToolActiveGrantsPanelProps) {
     </Panel>
   );
 }
+

@@ -170,7 +170,7 @@ export function OfficeStagePanel<P extends OfficeOperatorPrefsLike>({
       <div className="office-desk-list">
         <button
           type="button"
-          className={selectedEntityId === "operator" ? "active" : ""}
+          className={["gc-button", (selectedEntityId === "operator" ? "active" : "")].filter(Boolean).join(" ")}
           onClick={() => onSelectEntity("operator")}
         >
           {operatorName}
@@ -179,7 +179,7 @@ export function OfficeStagePanel<P extends OfficeOperatorPrefsLike>({
           <button
             type="button"
             key={agent.roleId}
-            className={selectedEntityId === agent.roleId ? "active" : ""}
+            className={["gc-button", (selectedEntityId === agent.roleId ? "active" : "")].filter(Boolean).join(" ")}
             onClick={() => onSelectEntity(agent.roleId)}
           >
             {agent.name}

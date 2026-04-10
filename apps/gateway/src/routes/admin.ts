@@ -32,6 +32,17 @@ const backupVerifySchema = z.object({
   filePath: z.string().min(1),
 });
 
+const databaseCutoverSchema = z.object({
+  profile: z.enum(["local", "hosted"]),
+  execute: z.boolean().optional(),
+  confirm: z.boolean().optional(),
+});
+
+const databaseVerifySchema = z.object({
+  source: z.string().min(1),
+  target: z.string().optional(),
+});
+
 export const adminRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/admin/retention", async (_request, reply) => {
     return reply.send(fastify.gateway.getRetentionPolicy());
@@ -125,6 +136,35 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(await fastify.gateway.verifyBackup(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/admin/database/cutover", async (request, reply) => {
+    const parsed = databaseCutoverSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const result = await fastify.gateway.runDatabaseCutover({
+        profile: parsed.data.profile,
+        execute: parsed.data.execute ?? false,
+        confirm: parsed.data.confirm,
+      });
+      return reply.send(result);
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/admin/database/verify", async (request, reply) => {
+    const parsed = databaseVerifySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.gateway.verifyDatabaseCutover(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

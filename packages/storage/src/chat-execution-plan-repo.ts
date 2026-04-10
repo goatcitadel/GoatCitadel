@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   ChatExecutionPlanRecord,
   ChatExecutionPlanSource,
@@ -84,7 +84,7 @@ export class ChatExecutionPlanRepository {
   private readonly deleteStepsByPlanStmt;
   private readonly insertStepStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getPlanStmt = db.prepare("SELECT * FROM chat_execution_plans WHERE plan_id = ?");
     this.listPlansBySessionStmt = db.prepare(`
       SELECT * FROM chat_execution_plans
@@ -365,3 +365,5 @@ function toLogicalExecutionPlanStepId(planId: string, persistedStepId: string): 
     ? persistedStepId.slice(prefix.length)
     : persistedStepId;
 }
+
+

@@ -893,7 +893,7 @@ export function useChatOutboundExecution(input: {
     [commitThreadUpdate, selectedSessionId, setError],
   );
 
-  const handleApprovePending = useCallback(async () => {
+  const handleApprovePending = useCallback(async (allowScope: "once" | "session" | "workspace" = "once") => {
     if (!selectedSession || !pendingApproval) return;
     setApprovalPending(true);
     try {
@@ -902,15 +902,30 @@ export function useChatOutboundExecution(input: {
         sessionId: selectedSession.sessionId,
         approval: pendingApproval,
         source: "operator",
+        context: { allowScope },
       });
-      await approveChatTool(selectedSession.sessionId, pendingApproval.approvalId);
+      const result = await approveChatTool(selectedSession.sessionId, pendingApproval.approvalId, { allowScope });
       await refreshPendingApprovalQueue(selectedSession.sessionId);
-      pushLocalNotice(`Approved request ${pendingApproval.approvalId}. The runtime resumed immediately.`, "success");
+      const scopeLabel =
+        allowScope === "session"
+          ? "Session allow created."
+          : allowScope === "workspace"
+            ? "Workspace allow created."
+            : "Approved once.";
+      pushLocalNotice(
+        `Approved request ${pendingApproval.approvalId}. ${scopeLabel} ${
+          result.resumed
+            ? "The runtime resumed immediately."
+            : "If the run is no longer live, use Approvals & Recovery to continue from the persisted checkpoint."
+        }`,
+        "success",
+      );
       recordChatApprovalPhase({
         phase: "resolved",
         sessionId: selectedSession.sessionId,
         approval: pendingApproval,
         source: "operator",
+        context: { allowScope },
       });
     } catch (err) {
       setError((err as Error).message);

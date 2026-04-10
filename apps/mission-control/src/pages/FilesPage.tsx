@@ -355,7 +355,7 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
       >
         <div className="actions">
           {templates.map((template) => (
-            <button type="button" key={template.templateId} onClick={() => void onCreateTemplate(template.templateId)}>
+            <button type="button" key={template.templateId} onClick={() => void onCreateTemplate(template.templateId)} className="gc-button">
               {template.title}
             </button>
           ))}
@@ -384,7 +384,7 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
               itemContent={(_index, file) => (
                 <div className="virtual-list-item files-list-item" key={file.relativePath}>
                   <button type="button"
-                    className={selectedPath === file.relativePath ? "active" : ""}
+                    className={["gc-button", (selectedPath === file.relativePath ? "active" : "")].filter(Boolean).join(" ")}
                     onClick={() => setSelectedPath(file.relativePath)}
                   >
                     <span className="files-path">{file.relativePath}</span>
@@ -408,8 +408,8 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
             </p>
           ) : null}
           <div className="actions">
-            <button type="button" onClick={onUseSelectedPath} disabled={!selectedPath}>Use Selected Path</button>
-            <button type="button" onClick={onEditSelectedFile} disabled={!selectedPath || !selectedCanEdit}>Edit Selected File</button>
+            <button type="button" onClick={onUseSelectedPath} disabled={!selectedPath} className="gc-button">Use Selected Path</button>
+            <button type="button" onClick={onEditSelectedFile} disabled={!selectedPath || !selectedCanEdit} className="gc-button">Edit Selected File</button>
           </div>
           {selectedFile ? (
             selectedIsImage ? (
@@ -460,13 +460,13 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
         />
         <FieldHelp>Trail writing stays safest when you start from an existing file, a template, or a known workspace directory such as notes, docs, memory, or artifacts.</FieldHelp>
         <div className="actions">
-          <button type="button" onClick={() => void onSaveFile()}>Save File</button>
+          <button type="button" onClick={() => void onSaveFile()} className="gc-button">Save File</button>
         </div>
         <div className="controls-row">
           <ChangeBadge level={pathRisk.overall} />
           {autoPathEdited ? <span className="office-subtitle">Path edited after auto-populate.</span> : null}
         </div>
-        <button type="button" onClick={() => setShowAdvancedUpload((current) => !current)}>
+        <button type="button" onClick={() => setShowAdvancedUpload((current) => !current)} className="gc-button">
           {showAdvancedUpload ? "Hide advanced save details" : "Show advanced save details"}
         </button>
         {showAdvancedUpload ? (

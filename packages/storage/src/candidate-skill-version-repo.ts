@@ -1,7 +1,7 @@
 import type { CandidateSkillVersionRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import type { CapabilityArtifactRecord } from "@goatcitadel/contracts";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
 interface CandidateSkillVersionRow {
@@ -29,7 +29,7 @@ export class CandidateSkillVersionRepository {
   private readonly getStmt;
   private readonly listStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
       INSERT INTO candidate_skill_versions (
         candidate_id, version_id, source_kind, title, summary, bundle_root, originating_run_id, wrapper_manifest_hash,
@@ -130,3 +130,5 @@ function mapCandidateSkillVersionRow(row: CandidateSkillVersionRow): CandidateSk
     lastSuccessfulExecutionAt: row.last_successful_execution_at ?? undefined,
   } as CandidateSkillVersionRecord;
 }
+
+

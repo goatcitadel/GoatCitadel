@@ -36,6 +36,12 @@ function makeTrace(): ChatTurnTraceRecord {
           engineTier: "builtin",
           engineLabel: "Built-in browser",
           browserFailureClass: "remote_blocked",
+          storedAsArtifact: true,
+          virtualized: true,
+          artifactId: "artifact-1",
+          artifactPath: "tool-artifacts/ab/artifact-1.json",
+          artifactSummary: "Stored browser output as an artifact to keep live context compact.",
+          originalByteLength: 16384,
           fallbackChain: [
             {
               toolName: "browser.navigate",
@@ -119,10 +125,15 @@ describe("ChatTraceCard", () => {
     expect(text).toContain("URL: https://www.movieinsider.com/movies");
     expect(text).toContain("HTTP status: 403");
     expect(text).toContain("Browser failure: remote_blocked");
+    expect(text).toContain("Stored browser output as an artifact to keep live context compact.");
     expect(text).toContain("Next step: Retry with a narrower request");
     expect(text).toContain("Try the next viable source instead of retrying the blocked host.");
     expect(text).toContain("Check the top likely sources, skip blocked hosts, and summarize the confirmed release window.");
     expect(text).toContain("Open the best unblocked source and confirm release details.");
     expect(text).toContain("Status: pending");
+    expect(renderer.root.findAll((node) =>
+      typeof node.props.className === "string" && node.props.className.includes("chat-tool-artifact-badge"),
+    )).toHaveLength(2);
+    expect(renderer.root.findAllByType("button").some((button) => button.children.join("") === "Inspect raw artifact")).toBe(true);
   });
 });

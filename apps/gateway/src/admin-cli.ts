@@ -1,5 +1,7 @@
 import path from "node:path";
 import process from "node:process";
+import type { BundledPostgresRuntimeHandle } from "./bundled-postgres-runtime.js";
+import { ensureBundledPostgresRuntime } from "./bundled-postgres-runtime.js";
 import { repoHasConfigMarker } from "./config-files.js";
 import { loadLocalEnvFile } from "./env-file.js";
 import { loadGatewayConfig } from "./config.js";
@@ -15,13 +17,17 @@ async function main(): Promise<void> {
   }
 
   const [group, action, ...rest] = args;
-  if (group !== "backup" && group !== "retention" && group !== "auth") {
+  if (group !== "backup" && group !== "retention" && group !== "auth" && group !== "database") {
     printUsage();
     process.exitCode = 1;
     return;
   }
 
   const config = await loadGatewayConfig(resolveRootDir());
+  let bundledPostgres: BundledPostgresRuntimeHandle | undefined;
+  if (config.assistant.database.driver === "postgres") {
+    bundledPostgres = await ensureBundledPostgresRuntime(config);
+  }
   const gateway = new GatewayService(config);
   await gateway.init();
 
@@ -34,9 +40,14 @@ async function main(): Promise<void> {
       await runRetentionCommand(gateway, action, rest);
       return;
     }
-    await runAuthCommand(gateway, action, rest);
+    if (group === "auth") {
+      await runAuthCommand(gateway, action, rest);
+      return;
+    }
+    await runDatabaseCommand(gateway, action, rest);
   } finally {
     await gateway.close();
+    await bundledPostgres?.stop();
   }
 }
 
@@ -156,6 +167,47 @@ async function runAuthCommand(
   throw new Error("Unknown auth command");
 }
 
+async function runDatabaseCommand(
+  gateway: GatewayService,
+  action: string | undefined,
+  args: string[],
+): Promise<void> {
+  if (action === "cutover") {
+    const profileRaw = readFlag(args, "--profile");
+    if (profileRaw !== "local" && profileRaw !== "hosted") {
+      throw new Error("Database cutover requires --profile local|hosted");
+    }
+    const dryRun = args.includes("--dry-run");
+    const execute = args.includes("--execute");
+    if (dryRun === execute) {
+      throw new Error("Database cutover requires exactly one of --dry-run or --execute");
+    }
+    const result = await gateway.runDatabaseCutover({
+      profile: profileRaw,
+      execute,
+      confirm: args.includes("--confirm"),
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (action === "verify") {
+    const source = readFlag(args, "--source");
+    const target = readFlag(args, "--target");
+    if (!source) {
+      throw new Error("Database verify requires --source <sqlite-backup>");
+    }
+    const result = await gateway.verifyDatabaseCutover({
+      source,
+      target: target ?? undefined,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  throw new Error("Unknown database command");
+}
+
 function parseOptionalDays(value: string | null): number | undefined {
   if (!value) {
     return undefined;
@@ -204,6 +256,9 @@ function printUsage(): void {
   goat admin backup restore --file <path> --confirm
   goat admin auth plan
   goat admin auth install-token [--token <value>] [--generate] [--persist]
+  goat admin database cutover --profile local|hosted --dry-run
+  goat admin database cutover --profile local|hosted --execute --confirm
+  goat admin database verify --source <sqlite-backup> [--target <postgres-connection-string>]
   goat admin retention show
   goat admin retention set --realtime-days <n> --backup-keep <n> [--transcript-days <n>|off] [--audit-days <n>|off]
   goat admin retention prune [--dry-run|--apply]`);

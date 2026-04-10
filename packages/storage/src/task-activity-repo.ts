@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   TaskActivityCreateInput,
   TaskActivityRecord,
@@ -20,7 +20,7 @@ export class TaskActivityRepository {
   private readonly insertStmt;
   private readonly listByTaskStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO task_activities (
         activity_id, task_id, agent_id, activity_type, message, metadata_json, created_at
@@ -92,3 +92,5 @@ function isTaskActivityRow(value: unknown): value is TaskActivityRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

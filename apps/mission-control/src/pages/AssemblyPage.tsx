@@ -306,7 +306,7 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
                 <button
                   type="button"
                   onClick={() => setParticipants((current) => current.length >= 5 ? current : [...current, current[0] ?? buildDefaultParticipants(providers, modelsByProvider)[0]!])}
-                >
+                 className="gc-button">
                   Add model
                 </button>
               </div>
@@ -339,7 +339,7 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
                     type="button"
                     disabled={participants.length <= 2}
                     onClick={() => setParticipants((current) => current.filter((_, currentIndex) => currentIndex !== index))}
-                  >
+                   className="gc-button">
                     Remove
                   </button>
                 </div>
@@ -397,7 +397,7 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
             ) : null}
 
             <div className="assembly-actions">
-              <button type="button" onClick={handleSubmit} disabled={isSubmitting || participantModels.length < 2 || prompt.trim().length === 0}>
+              <button type="button" onClick={handleSubmit} disabled={isSubmitting || participantModels.length < 2 || prompt.trim().length === 0} className="gc-button">
                 {isSubmitting ? "Launching..." : "Start Assembly"}
               </button>
             </div>
@@ -410,7 +410,7 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
               <button
                 key={run.runId}
                 type="button"
-                className={`assembly-run-row${selectedRun?.runId === run.runId ? " active" : ""}`}
+                className={["gc-button", (`assembly-run-row${selectedRun?.runId === run.runId ? " active" : ""}`)].filter(Boolean).join(" ")}
                 onClick={() => {
                   setSelectedRunId(run.runId);
                   void fetchAssemblyRunDetail(run.runId).then(setSelectedRunDetail).catch((detailError) => setError((detailError as Error).message));

@@ -240,4 +240,24 @@ describe("OnboardingPage refresh discipline", () => {
       renderer.unmount();
     }
   });
+
+  it("renders the wizard after onboarding state resolves even when daemon status is still pending", async () => {
+    apiMocks.fetchDaemonStatus.mockImplementation(() => new Promise(() => undefined));
+
+    let renderer: ReactTestRenderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<OnboardingPage />);
+      });
+      await flush();
+
+      const text = renderer.toJSON();
+      const flattened = JSON.stringify(text);
+      expect(flattened).not.toContain("Loading Launch Wizard");
+      expect(flattened).toContain("Launch Readiness");
+      expect(flattened).toContain("Daemon status is unavailable right now.");
+    } finally {
+      renderer.unmount();
+    }
+  });
 });

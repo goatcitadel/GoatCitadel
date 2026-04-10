@@ -1,6 +1,6 @@
 import type { CapabilityProposalEventRecord, CapabilityProposalRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
 interface CapabilityProposalRow {
@@ -30,7 +30,7 @@ export class CapabilityProposalRepository {
   private readonly getStmt;
   private readonly listStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
       INSERT INTO capability_proposals (
         proposal_id, proposal_kind, status, title, summary, candidate_id, activation_target_id, payload_json, created_at, updated_at
@@ -117,7 +117,7 @@ export class CapabilityProposalEventRepository {
   private readonly insertStmt;
   private readonly listStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO capability_proposal_events (
         event_id, proposal_id, event_type, actor_id, payload_json, created_at
@@ -170,3 +170,5 @@ function mapCapabilityProposalRow(row: CapabilityProposalRow): CapabilityProposa
     updatedAt: row.updated_at,
   };
 }
+
+

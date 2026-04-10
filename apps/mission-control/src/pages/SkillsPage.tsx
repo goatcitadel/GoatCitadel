@@ -328,6 +328,10 @@ export function SkillsPage() {
       setError("Provide a source before install.");
       return;
     }
+    if (validationResult?.nativeOverlaps?.length) {
+      setError("This import is blocked because it overlaps a native GoatCitadel capability family.");
+      return;
+    }
     setImportBusy("install");
     try {
       const installed = await installSkillImport({
@@ -350,7 +354,7 @@ export function SkillsPage() {
     } finally {
       setImportBusy(null);
     }
-  }, [importSourceRef, importSourceType, importSourceProvider, confirmHighRiskImport, load]);
+  }, [confirmHighRiskImport, importSourceRef, importSourceProvider, importSourceType, load, validationResult]);
 
   if (isInitialLoading) {
     return <p>Loading Playbook skills...</p>;
@@ -432,7 +436,7 @@ export function SkillsPage() {
                 onChange={(event) => setSourceQuery(event.target.value)}
                 placeholder="browser, github, playwright..."
               />
-              <button type="button" onClick={() => void onLoadSources()} disabled={sourcesLoading}>
+              <button type="button" onClick={() => void onLoadSources()} disabled={sourcesLoading} className="gc-button">
                 {sourcesLoading ? "Searching..." : sourceQuery.trim() ? "Lookup" : "Browse"}
               </button>
             </div>
@@ -479,7 +483,7 @@ export function SkillsPage() {
                   <p>
                     <strong>{section.category}</strong> <span className="token-chip">{section.items.length}</span>
                   </p>
-                  <table>
+                  <table className="gc-data-table">
                     <thead>
                       <tr>
                         <th>Name</th>
@@ -568,10 +572,14 @@ export function SkillsPage() {
                   : "F:\\skills\\my-skill-folder"
             }
           />
-          <button type="button" onClick={() => void onValidateImport()} disabled={importBusy !== null}>
+          <button type="button" onClick={() => void onValidateImport()} disabled={importBusy !== null} className="gc-button">
             {importBusy === "validate" ? "Validating..." : "Validate import"}
           </button>
-          <button type="button" onClick={() => void onInstallImport()} disabled={importBusy !== null}>
+          <button
+            type="button"
+            onClick={() => void onInstallImport()}
+            disabled={importBusy !== null || Boolean(validationResult?.nativeOverlaps?.length)}
+           className="gc-button">
             {importBusy === "install" ? "Installing..." : "Install (disabled by default)"}
           </button>
         </div>
@@ -586,6 +594,9 @@ export function SkillsPage() {
               {validationResult.valid ? "Validation passed" : "Validation failed"}
             </span>
             <span className="token-chip">Risk: {validationResult.riskLevel}</span>
+            {validationResult.nativeOverlaps?.length ? (
+              <span className="token-chip">Blocked: native overlap</span>
+            ) : null}
             {validationResult.inferredSkillName ? (
               <span className="token-chip">Skill: {validationResult.inferredSkillName}</span>
             ) : null}
@@ -594,6 +605,19 @@ export function SkillsPage() {
         {validationResult ? (
           <div className="stack-md">
             <p className="field-help">Trust report: {describeValidationTrust(validationResult)}</p>
+            {validationResult.nativeOverlaps?.length ? (
+              <div className="replay-box">
+                <h4>Native alternative</h4>
+                <ul className="compact-list">
+                  {validationResult.nativeOverlaps.map((overlap) => (
+                    <li key={`${overlap.overlapFamily}:${overlap.nativeDestination}`}>
+                      <strong>{overlap.nativeAlternativeName}</strong>: {overlap.blockingReason} Go to{" "}
+                      {overlap.nativeDestination}.
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <ul className="improvement-simple-list">
               <li>Declared tools: {formatValidationList(validationResult.declaredTools, "none declared")}</li>
               <li>Network signals: {formatValidationList(validationResult.networkSignals, "none detected")}</li>
@@ -612,7 +636,7 @@ export function SkillsPage() {
           {importHistory.length === 0 ? (
             <p className="table-subtext">No import history yet.</p>
           ) : (
-            <table>
+            <table className="gc-data-table">
               <thead>
                 <tr>
                   <th>Time</th>
@@ -764,7 +788,7 @@ export function SkillsPage() {
             }
             label="Require first-use confirmation for sleep skills"
           />
-          <button type="button" onClick={() => void onSavePolicy()} disabled={savingPolicy}>
+          <button type="button" onClick={() => void onSavePolicy()} disabled={savingPolicy} className="gc-button">
             {savingPolicy ? "Saving..." : "Save policy"}
           </button>
         </div>
@@ -806,7 +830,7 @@ export function SkillsPage() {
             {candidateEntries.length === 0 ? (
               <p className="table-subtext">No generated candidates are staged yet.</p>
             ) : (
-              <table>
+              <table className="gc-data-table">
                 <thead>
                   <tr>
                     <th>Title</th>
@@ -835,7 +859,7 @@ export function SkillsPage() {
             {capabilityProposals.length === 0 ? (
               <p className="table-subtext">No capability proposals recorded yet.</p>
             ) : (
-              <table>
+              <table className="gc-data-table">
                 <thead>
                   <tr>
                     <th>Title</th>
@@ -867,7 +891,7 @@ export function SkillsPage() {
         <DataToolbar
           primary={
             <>
-              <button type="button" onClick={() => void onReload()}>
+              <button type="button" onClick={() => void onReload()} className="gc-button">
                 Reload Playbook
               </button>
             </>
@@ -899,7 +923,7 @@ export function SkillsPage() {
               <p>
                 <strong>{section.category}</strong> <span className="token-chip">{section.items.length}</span>
               </p>
-              <table>
+              <table className="gc-data-table">
                 <thead>
                   <tr>
                     <th>Name</th>
@@ -983,7 +1007,7 @@ export function SkillsPage() {
                             type="button"
                             disabled={!changed || busySkillId === skill.skillId}
                             onClick={() => void onSaveSkillState(skill)}
-                          >
+                           className="gc-button">
                             {busySkillId === skill.skillId ? "Saving..." : "Save"}
                           </button>
                         </td>
@@ -999,3 +1023,4 @@ export function SkillsPage() {
     </section>
   );
 }
+

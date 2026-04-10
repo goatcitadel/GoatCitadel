@@ -122,7 +122,7 @@ export function ChatComposerShell(props: {
       {editingTurnId ? (
         <div className="chat-v11-composer-banner">
           Editing branch from turn {editingTurnId.slice(-6)}.
-          <button type="button" onClick={onCancelEdit}>Cancel edit</button>
+          <button type="button" onClick={onCancelEdit} className="gc-button">Cancel edit</button>
         </div>
       ) : null}
       {planningMode === "advisory" ? (
@@ -134,7 +134,7 @@ export function ChatComposerShell(props: {
       {error ? (
         <div className="chat-v11-composer-banner error" role="alert">
           {error}
-          <button type="button" onClick={onDismissError}>Dismiss</button>
+          <button type="button" onClick={onDismissError} className="gc-button">Dismiss</button>
         </div>
       ) : null}
       {selectedTurnRecovery && selectedTurn && selectedTurn.trace.status !== "waiting_for_approval" ? (
@@ -150,17 +150,17 @@ export function ChatComposerShell(props: {
           </div>
           <div className="chat-v11-recovery-actions">
             {selectedTurnRecovery.action === "retry" || selectedTurnRecovery.action === "retry_narrower" ? (
-              <button type="button" disabled={sending} onClick={() => onRetryTurn(selectedTurn.turnId)}>
+              <button type="button" disabled={sending} onClick={() => onRetryTurn(selectedTurn.turnId)} className="gc-button">
                 Retry turn
               </button>
             ) : null}
             {selectedTurnRecovery.action === "switch_to_deep_mode" && currentWebMode !== "deep" ? (
-              <button type="button" disabled={!selectedSessionId || sending} onClick={onSetDeepMode}>
+              <button type="button" disabled={!selectedSessionId || sending} onClick={onSetDeepMode} className="gc-button">
                 Set Deep mode
               </button>
             ) : null}
             {onReviewRunDetails ? (
-              <button type="button" onClick={onReviewRunDetails}>
+              <button type="button" onClick={onReviewRunDetails} className="gc-button">
                 Review run details
               </button>
             ) : null}
@@ -183,7 +183,7 @@ export function ChatComposerShell(props: {
       {commandSuggestions.length > 0 ? (
         <div className="chat-v11-command-popover" role="listbox" aria-label="Slash command suggestions">
           {commandSuggestions.map((item, index) => (
-            <button key={item.key} type="button" className={index === commandIndex ? "active" : ""} onClick={() => onApplyDraftCommand(item.applyValue)}>
+            <button key={item.key} type="button" className={["gc-button", (index === commandIndex ? "active" : "")].filter(Boolean).join(" ")} onClick={() => onApplyDraftCommand(item.applyValue)}>
               <strong>{item.command}</strong>
               <span>{item.description}</span>
             </button>
@@ -193,7 +193,7 @@ export function ChatComposerShell(props: {
       {pendingAttachments.length > 0 ? (
         <div className="chat-v11-pending-attachments">
           {pendingAttachments.map((item) => (
-            <button key={item.attachmentId} type="button" className="chat-attachment-chip" onClick={() => onRemoveAttachment(item.attachmentId)}>
+            <button key={item.attachmentId} type="button" className="gc-button chat-attachment-chip" onClick={() => onRemoveAttachment(item.attachmentId)}>
               {item.fileName} ×
             </button>
           ))}
@@ -210,11 +210,11 @@ export function ChatComposerShell(props: {
         />
         <p>{helperCopy}</p>
         {sending && hasActiveStream ? (
-          <button type="button" onClick={onStopActiveTurn}>
+          <button type="button" onClick={onStopActiveTurn} className="gc-button">
             {activeStreamTurnAssigned ? "Stop turn" : "Stop stream"}
           </button>
         ) : (
-          <button type="button" disabled={!canSend} onClick={onSend}>
+          <button type="button" disabled={!canSend} onClick={onSend} className="gc-button">
             {sending ? "Sending..." : editingTurnId ? "Edit and resend" : "Send message"}
           </button>
         )}

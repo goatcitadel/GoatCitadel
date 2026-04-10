@@ -268,6 +268,11 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   const riskDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const riskAbortRef = useRef<AbortController | null>(null);
   const hasUnsavedDraftRef = useRef(false);
+  const stateRef = useRef<OnboardingRuntimeState | null>(null);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   const providerOptions = useMemo<SelectOption[]>(() => {
     const fromState = runtimeProviderCatalog.map((provider) => ({
@@ -435,15 +440,25 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   const load = useCallback(
     async (options: { preserveDrafts?: boolean } = {}) => {
       const preserveDrafts = options.preserveDrafts ?? false;
-      setLoading(true);
+      const shouldBlockRender = !stateRef.current && !preserveDrafts;
+      if (shouldBlockRender) {
+        setLoading(true);
+      }
       setError(null);
       try {
-        const [next, daemon] = await Promise.all([fetchOnboardingState(), fetchDaemonStatus().catch(() => null)]);
+        const next = await fetchOnboardingState();
         setState(next);
-        setDaemonStatus(daemon);
         if (!preserveDrafts || !hasUnsavedDraftRef.current) {
           hydrateFromState(next);
         }
+        setLoading(false);
+        void fetchDaemonStatus()
+          .then((daemon) => {
+            setDaemonStatus(daemon);
+          })
+          .catch(() => {
+            setDaemonStatus(null);
+          });
       } catch (err) {
         setError((err as Error).message);
       } finally {
@@ -893,7 +908,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
                   value={authToken}
                   onChange={(event) => setAuthToken(event.target.value)}
                 />
-                <button type="button" onClick={() => void handleResolveInstallToken()} disabled={installTokenBusy}>
+                <button type="button" onClick={() => void handleResolveInstallToken()} disabled={installTokenBusy} className="gc-button">
                   {installTokenBusy ? "Resolving..." : "Generate install token"}
                 </button>
               </div>

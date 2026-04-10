@@ -222,7 +222,7 @@ export function CommandPalette({ open, onClose, items }: CommandPaletteProps) {
               <button
                 id={`${listboxId}-option-${item.id}`}
                 type="button"
-                className={`command-palette-action${selectedIndex === index ? " active" : ""}`}
+                className={["gc-button", (`command-palette-action${selectedIndex === index ? " active" : ""}`)].filter(Boolean).join(" ")}
                 role="option"
                 aria-selected={selectedIndex === index}
                 onMouseEnter={() => setSelectedIndex(index)}

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   TaskDeliverableCreateInput,
   TaskDeliverableRecord,
@@ -20,7 +20,7 @@ export class TaskDeliverableRepository {
   private readonly listByTaskStmt;
   private readonly countByTaskStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO task_deliverables (
         deliverable_id, task_id, deliverable_type, title, path, description, created_at
@@ -103,3 +103,5 @@ function isTaskDeliverableRow(value: unknown): value is TaskDeliverableRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

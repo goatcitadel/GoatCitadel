@@ -23,7 +23,7 @@ export function SettingsSectionNav({ sections, onNavigate }: SettingsSectionNavP
           <button
             key={section.id}
             type="button"
-            className="settings-v2-nav-item"
+            className="gc-button settings-v2-nav-item"
             onClick={() => onNavigate(section.id)}
           >
             <strong>{section.label}</strong>

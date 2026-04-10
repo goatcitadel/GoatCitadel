@@ -209,12 +209,12 @@ export function GatewayAccessGate({
 
         <div className="gateway-access-meta">
           <div>
-            <span className="sidebar-footer-label">Gateway target</span>
+            <span className="gc-meta-label">Gateway target</span>
             <p className="gateway-access-mono">{gatewayBaseUrl}</p>
           </div>
           {!isChecking ? (
             <div>
-              <span className="sidebar-footer-label">Stored credentials</span>
+              <span className="gc-meta-label">Stored credentials</span>
               <p className="gateway-access-note">{storedAuthPresent ? "Present on this browser." : "None stored yet."}</p>
             </div>
           ) : null}
@@ -258,6 +258,7 @@ export function GatewayAccessGate({
               <div className="controls-row gateway-access-row">
                 <label htmlFor="gateway-access-token">Gateway token</label>
                 <input
+                  className="gc-input"
                   id="gateway-access-token"
                   type="password"
                   value={token}
@@ -270,6 +271,7 @@ export function GatewayAccessGate({
                 <div className="controls-row gateway-access-row">
                   <label htmlFor="gateway-access-username">Username</label>
                   <input
+                    className="gc-input"
                     id="gateway-access-username"
                     value={username}
                     onChange={(event) => setUsername(event.target.value)}
@@ -279,6 +281,7 @@ export function GatewayAccessGate({
                 <div className="controls-row gateway-access-row">
                   <label htmlFor="gateway-access-password">Password</label>
                   <input
+                    className="gc-input"
                     id="gateway-access-password"
                     type="password"
                     value={password}
@@ -301,6 +304,7 @@ export function GatewayAccessGate({
             <div className="controls-row gateway-access-row">
               <label htmlFor="gateway-access-device-label">Request label</label>
               <input
+                className="gc-input"
                 id="gateway-access-device-label"
                 value={deviceLabel}
                 onChange={(event) => setDeviceLabel(event.target.value)}
@@ -322,11 +326,12 @@ export function GatewayAccessGate({
         <div className="gateway-access-actions">
           {needsAuth ? (
             <>
-              <button type="button" onClick={() => void handleConnect()} disabled={busy || deviceApprovalBusy}>
+              <button type="button" className="gc-button" onClick={() => void handleConnect()} disabled={busy || deviceApprovalBusy}>
                 {busy ? "Connecting..." : "Connect to gateway"}
               </button>
               <button
                 type="button"
+                className="gc-button"
                 onClick={() => void handleRequestApproval()}
                 disabled={busy || deviceApprovalBusy || pendingDeviceApproval?.status === "pending"}
               >
@@ -338,7 +343,7 @@ export function GatewayAccessGate({
               </button>
             </>
           ) : (
-            <button type="button" onClick={() => void onRetry()} disabled={busy}>
+            <button type="button" className="gc-button" onClick={() => void onRetry()} disabled={busy}>
               {busy ? (isChecking ? "Checking..." : "Re-checking...") : "Retry gateway check"}
             </button>
           )}
@@ -346,6 +351,7 @@ export function GatewayAccessGate({
           {needsAuth && pendingDeviceApproval ? (
             <button
               type="button"
+              className="gc-button"
               onClick={() => {
                 setPendingDeviceApproval(null);
                 setDeviceApprovalError(null);
@@ -359,7 +365,7 @@ export function GatewayAccessGate({
           {storedAuthPresent && !isChecking ? (
             <button
               type="button"
-              className="danger"
+              className="gc-button danger"
               onClick={() => {
                 clearGatewayAuthState();
                 setToken("");

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { NotFoundError } from "@goatcitadel/contracts";
 
 export interface ChatToolArtifactRecord {
@@ -33,7 +33,7 @@ export class ChatToolArtifactRepository {
   private readonly listBySessionStmt;
   private readonly getStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO chat_tool_artifacts (
         artifact_id, session_id, turn_id, tool_run_id, tool_name, content_type, byte_length, snippet, storage_rel_path, created_at
@@ -141,3 +141,5 @@ function mapRow(row: ChatToolArtifactRow): ChatToolArtifactRecord {
     createdAt: row.created_at,
   };
 }
+
+

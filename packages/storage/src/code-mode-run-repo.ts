@@ -1,7 +1,7 @@
 import type { CodeModeRunRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import type { CapabilityArtifactRecord } from "@goatcitadel/contracts";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
 interface CodeModeRunRow {
@@ -38,7 +38,7 @@ export class CodeModeRunRepository {
   private readonly getStmt;
   private readonly listStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
       INSERT INTO code_mode_runs (
         run_id, status, language, requested_output_intent, save_candidate_on_success, capability_snapshot_id,
@@ -162,3 +162,5 @@ function mapCodeModeRunRow(row: CodeModeRunRow): CodeModeRunRecord {
     finishedAt: row.finished_at ?? undefined,
   };
 }
+
+

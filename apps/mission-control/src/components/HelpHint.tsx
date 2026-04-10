@@ -12,7 +12,7 @@ export function HelpHint({ label, text }: HelpHintProps) {
     <span className="help-hint-wrap">
       <button
         type="button"
-        className="help-hint"
+        className="gc-button help-hint"
         aria-label={label}
         aria-describedby={id}
         onMouseEnter={() => setOpen(true)}

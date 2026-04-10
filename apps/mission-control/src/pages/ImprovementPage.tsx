@@ -458,7 +458,7 @@ export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: s
             <li key={run.runId}>
               <button
                 type="button"
-                className={selectedRunId === run.runId ? "active" : ""}
+                className={["gc-button", (selectedRunId === run.runId ? "active" : "")].filter(Boolean).join(" ")}
                 onClick={() => setSelectedRunId(run.runId)}
               >
                 {new Date(run.startedAt).toLocaleString()}
@@ -488,7 +488,7 @@ export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: s
               <li key={report.reportId}>
                 <button
                   type="button"
-                  className={selectedReportId === report.reportId ? "active" : ""}
+                  className={["gc-button", (selectedReportId === report.reportId ? "active" : "")].filter(Boolean).join(" ")}
                   onClick={() => {
                     setSelectedReportId(report.reportId);
                     setSelectedRunId(report.runId);

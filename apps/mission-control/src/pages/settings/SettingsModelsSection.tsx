@@ -167,13 +167,13 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
             in your outbound allowlist.
           </p>
           <div className="controls-row">
-            <button type="button" onClick={() => applyLocalProviderPreset("lmstudio")}>
+            <button type="button" onClick={() => applyLocalProviderPreset("lmstudio")} className="gc-button">
               Use LM Studio Preset
             </button>
-            <button type="button" onClick={() => applyLocalProviderPreset("ollama")}>
+            <button type="button" onClick={() => applyLocalProviderPreset("ollama")} className="gc-button">
               Use Ollama Preset
             </button>
-            <button type="button" onClick={() => applyLocalProviderPreset("llamacpp")}>
+            <button type="button" onClick={() => applyLocalProviderPreset("llamacpp")} className="gc-button">
               Use llama.cpp Preset
             </button>
           </div>
@@ -213,7 +213,7 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
             customPlaceholder="Custom model id"
             customLabel="Custom active model"
           />
-          <button type="button" onClick={onLoadModels}>
+          <button type="button" onClick={onLoadModels} className="gc-button">
             {loadingModels ? "Loading..." : "Refresh Models"}
           </button>
         </div>
@@ -230,11 +230,11 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
             ))}
           </ul>
         ) : null}
-        <button type="button" onClick={onSaveActiveLlm} disabled={blockSaves}>
+        <button type="button" onClick={onSaveActiveLlm} disabled={blockSaves} className="gc-button">
           Save Active Provider/Model
         </button>
 
-        <button type="button" onClick={onToggleAdvanced}>
+        <button type="button" onClick={onToggleAdvanced} className="gc-button">
           {showAdvanced ? "Hide advanced provider settings" : "Show advanced provider settings"}
         </button>
         {showAdvanced ? (
@@ -342,10 +342,10 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
                 "none"}
             </p>
             <div className="controls-row">
-              <button type="button" onClick={onSaveProviderKeyToSecureStore} disabled={!providerApiKey.trim()}>
+              <button type="button" onClick={onSaveProviderKeyToSecureStore} disabled={!providerApiKey.trim()} className="gc-button">
                 Save Key to Secure Store
               </button>
-              <button type="button" onClick={onDeleteProviderKeyFromSecureStore}>
+              <button type="button" onClick={onDeleteProviderKeyFromSecureStore} className="gc-button">
                 Remove Secure Key
               </button>
             </div>
@@ -384,7 +384,7 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
               onChange={onProviderRequestDraftChange}
               error={providerRequestValidationError}
             />
-            <button type="button" onClick={onSaveProvider} disabled={blockSaves}>
+            <button type="button" onClick={onSaveProvider} disabled={blockSaves} className="gc-button">
               Save Provider Settings
             </button>
           </div>

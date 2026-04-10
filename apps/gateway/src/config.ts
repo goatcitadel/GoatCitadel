@@ -32,6 +32,7 @@ export interface AssistantConfig {
   mesh: MeshConfig;
   npu: NpuConfig;
   llamaCpp: LlamaCppConfig;
+  database: DatabaseRuntimeConfig;
   sqlite: SqliteTuningConfig;
   durable: DurableConfig;
   features: FeatureFlagsConfig;
@@ -211,6 +212,48 @@ export interface SqliteTuningConfig {
   walAutoCheckpointPages: number;
 }
 
+export type DatabaseDriver = "sqlite" | "postgres";
+export type PostgresRuntimeMode = "bundled" | "managed";
+export type PostgresSslMode = "disable" | "prefer" | "require";
+
+export interface PostgresPoolConfig {
+  min: number;
+  max: number;
+  idleTimeoutMs: number;
+  connectionTimeoutMs: number;
+}
+
+export interface PostgresRuntimeConfig {
+  mode: PostgresRuntimeMode;
+  connectionString?: string;
+  connectionStringEnv?: string;
+  host?: string;
+  port: number;
+  database: string;
+  user?: string;
+  password?: string;
+  passwordEnv?: string;
+  ssl: PostgresSslMode;
+  pool: PostgresPoolConfig;
+  migrationsTable: string;
+}
+
+export interface BundledPostgresConfig {
+  enabled: boolean;
+  dataDir: string;
+  port: number;
+  binDir?: string;
+  autoStart: boolean;
+  startTimeoutMs: number;
+}
+
+export interface DatabaseRuntimeConfig {
+  driver: DatabaseDriver;
+  postgres: PostgresRuntimeConfig;
+  bundledPostgres: BundledPostgresConfig;
+  sqlite: SqliteTuningConfig;
+}
+
 export interface BudgetConfig {
   mode: "saver" | "balanced" | "power";
   daily: {
@@ -279,7 +322,7 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
     budgets,
     llm,
     rootDir,
-    dbPath: path.join(rootDir, "data", "index.db"),
+    dbPath: path.join(rootDir, assistant.dataDir, "index.db"),
   };
 }
 
@@ -462,6 +505,118 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
       20_000,
     );
   }
+  const databaseDriver = process.env.GOATCITADEL_DATABASE_DRIVER?.trim().toLowerCase();
+  if (databaseDriver === "sqlite" || databaseDriver === "postgres") {
+    assistant.database.driver = databaseDriver;
+  }
+  const postgresMode = process.env.GOATCITADEL_POSTGRES_MODE?.trim().toLowerCase();
+  if (postgresMode === "bundled" || postgresMode === "managed") {
+    assistant.database.postgres.mode = postgresMode;
+  }
+  const postgresConnectionString = process.env.GOATCITADEL_POSTGRES_CONNECTION_STRING?.trim();
+  if (postgresConnectionString) {
+    assistant.database.postgres.connectionString = postgresConnectionString;
+  }
+  const postgresConnectionStringEnv = process.env.GOATCITADEL_POSTGRES_CONNECTION_STRING_ENV?.trim();
+  if (postgresConnectionStringEnv) {
+    assistant.database.postgres.connectionStringEnv = postgresConnectionStringEnv;
+    const resolvedConnectionString = process.env[postgresConnectionStringEnv]?.trim();
+    if (resolvedConnectionString) {
+      assistant.database.postgres.connectionString = resolvedConnectionString;
+    }
+  }
+  const postgresHost = process.env.GOATCITADEL_POSTGRES_HOST?.trim();
+  if (postgresHost) {
+    assistant.database.postgres.host = postgresHost;
+  }
+  const postgresPort = parseIntEnv(process.env.GOATCITADEL_POSTGRES_PORT);
+  if (postgresPort !== undefined) {
+    assistant.database.postgres.port = clampInt(postgresPort, assistant.database.postgres.port, 1, 65_535);
+  }
+  const postgresDatabase = process.env.GOATCITADEL_POSTGRES_DATABASE?.trim();
+  if (postgresDatabase) {
+    assistant.database.postgres.database = postgresDatabase;
+  }
+  const postgresUser = process.env.GOATCITADEL_POSTGRES_USER?.trim();
+  if (postgresUser) {
+    assistant.database.postgres.user = postgresUser;
+  }
+  const postgresPassword = process.env.GOATCITADEL_POSTGRES_PASSWORD;
+  if (postgresPassword) {
+    assistant.database.postgres.password = postgresPassword;
+  }
+  const postgresPasswordEnv = process.env.GOATCITADEL_POSTGRES_PASSWORD_ENV?.trim();
+  if (postgresPasswordEnv) {
+    assistant.database.postgres.passwordEnv = postgresPasswordEnv;
+    const resolvedPassword = process.env[postgresPasswordEnv];
+    if (resolvedPassword) {
+      assistant.database.postgres.password = resolvedPassword;
+    }
+  }
+  const postgresSsl = process.env.GOATCITADEL_POSTGRES_SSL?.trim().toLowerCase();
+  if (postgresSsl === "disable" || postgresSsl === "prefer" || postgresSsl === "require") {
+    assistant.database.postgres.ssl = postgresSsl;
+  }
+  const postgresPoolMin = parseIntEnv(process.env.GOATCITADEL_POSTGRES_POOL_MIN);
+  if (postgresPoolMin !== undefined) {
+    assistant.database.postgres.pool.min = clampInt(postgresPoolMin, assistant.database.postgres.pool.min, 0, 100);
+  }
+  const postgresPoolMax = parseIntEnv(process.env.GOATCITADEL_POSTGRES_POOL_MAX);
+  if (postgresPoolMax !== undefined) {
+    assistant.database.postgres.pool.max = clampInt(postgresPoolMax, assistant.database.postgres.pool.max, 1, 200);
+  }
+  const postgresIdleTimeoutMs = parseIntEnv(process.env.GOATCITADEL_POSTGRES_POOL_IDLE_TIMEOUT_MS);
+  if (postgresIdleTimeoutMs !== undefined) {
+    assistant.database.postgres.pool.idleTimeoutMs = clampInt(
+      postgresIdleTimeoutMs,
+      assistant.database.postgres.pool.idleTimeoutMs,
+      1_000,
+      300_000,
+    );
+  }
+  const postgresConnectionTimeoutMs = parseIntEnv(process.env.GOATCITADEL_POSTGRES_POOL_CONNECTION_TIMEOUT_MS);
+  if (postgresConnectionTimeoutMs !== undefined) {
+    assistant.database.postgres.pool.connectionTimeoutMs = clampInt(
+      postgresConnectionTimeoutMs,
+      assistant.database.postgres.pool.connectionTimeoutMs,
+      1_000,
+      120_000,
+    );
+  }
+  const bundledPostgresEnabled = parseBooleanEnv(process.env.GOATCITADEL_BUNDLED_POSTGRES_ENABLED);
+  if (bundledPostgresEnabled !== undefined) {
+    assistant.database.bundledPostgres.enabled = bundledPostgresEnabled;
+  }
+  const bundledPostgresDataDir = process.env.GOATCITADEL_BUNDLED_POSTGRES_DATA_DIR?.trim();
+  if (bundledPostgresDataDir) {
+    assistant.database.bundledPostgres.dataDir = bundledPostgresDataDir;
+  }
+  const bundledPostgresPort = parseIntEnv(process.env.GOATCITADEL_BUNDLED_POSTGRES_PORT);
+  if (bundledPostgresPort !== undefined) {
+    assistant.database.bundledPostgres.port = clampInt(
+      bundledPostgresPort,
+      assistant.database.bundledPostgres.port,
+      1,
+      65_535,
+    );
+  }
+  const bundledPostgresBinDir = process.env.GOATCITADEL_BUNDLED_POSTGRES_BIN_DIR?.trim();
+  if (bundledPostgresBinDir) {
+    assistant.database.bundledPostgres.binDir = bundledPostgresBinDir;
+  }
+  const bundledPostgresAutoStart = parseBooleanEnv(process.env.GOATCITADEL_BUNDLED_POSTGRES_AUTOSTART);
+  if (bundledPostgresAutoStart !== undefined) {
+    assistant.database.bundledPostgres.autoStart = bundledPostgresAutoStart;
+  }
+  const bundledPostgresStartTimeoutMs = parseIntEnv(process.env.GOATCITADEL_BUNDLED_POSTGRES_START_TIMEOUT_MS);
+  if (bundledPostgresStartTimeoutMs !== undefined) {
+    assistant.database.bundledPostgres.startTimeoutMs = clampInt(
+      bundledPostgresStartTimeoutMs,
+      assistant.database.bundledPostgres.startTimeoutMs,
+      1_000,
+      120_000,
+    );
+  }
   const firecrawlEnabled = parseBooleanEnv(process.env.GOATCITADEL_FIRECRAWL_ENABLED);
   if (firecrawlEnabled !== undefined) {
     assistant.web.firecrawl.enabled = firecrawlEnabled;
@@ -527,6 +682,10 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
   const llamaCppRestart = (llamaCppServer.restartBudget ?? {}) as Partial<LlamaCppConfig["server"]["restartBudget"]>;
   const llamaCppLaunch = (llamaCppInput.launch ?? {}) as Partial<LlamaCppConfig["launch"]>;
   const sqliteInput = (input.sqlite ?? {}) as Partial<SqliteTuningConfig>;
+  const databaseInput = (input.database ?? {}) as Partial<DatabaseRuntimeConfig>;
+  const postgresInput = (databaseInput.postgres ?? {}) as Partial<PostgresRuntimeConfig>;
+  const postgresPoolInput = (postgresInput.pool ?? {}) as Partial<PostgresPoolConfig>;
+  const bundledPostgresInput = (databaseInput.bundledPostgres ?? {}) as Partial<BundledPostgresConfig>;
   const durableInput = (input.durable ?? {}) as Partial<DurableConfig>;
   const capabilitiesInput = (input.capabilities ?? {}) as Partial<CapabilityRuntimeConfig>;
   const featuresInput = (input.features ?? {}) as Partial<FeatureFlagsConfig>;
@@ -535,6 +694,11 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
   const distillerInput = (qmdInput.distiller ?? {}) as Partial<MemoryConfig["qmd"]["distiller"]>;
   const webInput = (input.web ?? {}) as Partial<WebRuntimeConfig>;
   const firecrawlInput = (webInput.firecrawl ?? {}) as Partial<FirecrawlRuntimeConfig>;
+  const sqlite: SqliteTuningConfig = {
+    cacheSizeKb: clampInt(sqliteInput.cacheSizeKb, 65_536, 4_096, 262_144),
+    tempStoreMemory: sqliteInput.tempStoreMemory ?? true,
+    walAutoCheckpointPages: clampInt(sqliteInput.walAutoCheckpointPages, 5_000, 1_000, 20_000),
+  };
 
   return {
     environment: input.environment ?? "local",
@@ -681,11 +845,38 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
         flashAttention: llamaCppLaunch.flashAttention,
       },
     },
-    sqlite: {
-      cacheSizeKb: clampInt(sqliteInput.cacheSizeKb, 65_536, 4_096, 262_144),
-      tempStoreMemory: sqliteInput.tempStoreMemory ?? true,
-      walAutoCheckpointPages: clampInt(sqliteInput.walAutoCheckpointPages, 5_000, 1_000, 20_000),
+    database: {
+      driver: databaseInput.driver ?? "sqlite",
+      postgres: {
+        mode: postgresInput.mode ?? "bundled",
+        connectionString: postgresInput.connectionString,
+        connectionStringEnv: postgresInput.connectionStringEnv,
+        host: postgresInput.host,
+        port: clampInt(postgresInput.port, 5432, 1, 65_535),
+        database: postgresInput.database ?? "goatcitadel",
+        user: postgresInput.user,
+        password: postgresInput.password,
+        passwordEnv: postgresInput.passwordEnv,
+        ssl: postgresInput.ssl ?? "prefer",
+        pool: {
+          min: clampInt(postgresPoolInput.min, 0, 0, 100),
+          max: clampInt(postgresPoolInput.max, 10, 1, 200),
+          idleTimeoutMs: clampInt(postgresPoolInput.idleTimeoutMs, 30_000, 1_000, 300_000),
+          connectionTimeoutMs: clampInt(postgresPoolInput.connectionTimeoutMs, 10_000, 1_000, 120_000),
+        },
+        migrationsTable: postgresInput.migrationsTable ?? "schema_migrations",
+      },
+      bundledPostgres: {
+        enabled: bundledPostgresInput.enabled ?? true,
+        dataDir: bundledPostgresInput.dataDir ?? "./data/postgres",
+        port: clampInt(bundledPostgresInput.port, 55_432, 1, 65_535),
+        binDir: bundledPostgresInput.binDir,
+        autoStart: bundledPostgresInput.autoStart ?? true,
+        startTimeoutMs: clampInt(bundledPostgresInput.startTimeoutMs, 20_000, 1_000, 120_000),
+      },
+      sqlite,
     },
+    sqlite,
     durable: {
       enabled: durableInput.enabled ?? true,
       diagnosticsEnabled: durableInput.diagnosticsEnabled ?? false,

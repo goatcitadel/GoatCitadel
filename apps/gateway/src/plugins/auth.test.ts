@@ -198,6 +198,33 @@ describe("auth plugin", () => {
     });
   });
 
+  it("short-circuits device and companion lookups for the configured operator token", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const validateDeviceAccessToken = vi.fn(() => undefined);
+    const validateCompanionAccessToken = vi.fn(() => undefined);
+    app.gateway.validateDeviceAccessToken = validateDeviceAccessToken;
+    app.gateway.validateCompanionAccessToken = validateCompanionAccessToken;
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: {
+        Authorization: "Bearer alpha-token",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      actorSource: "token",
+    });
+    expect(validateDeviceAccessToken).not.toHaveBeenCalled();
+    expect(validateCompanionAccessToken).not.toHaveBeenCalled();
+  });
+
   it("rejects missing and oversized tokens in token mode", async () => {
     app = await buildApp({
       mode: "token",

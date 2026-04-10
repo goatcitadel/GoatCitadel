@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ChatProjectRecord } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 
@@ -33,7 +33,6 @@ export interface ChatProjectUpdateInput {
 }
 
 export class ChatProjectRepository {
-  private readonly listStmt;
   private readonly getStmt;
   private readonly insertStmt;
   private readonly updateStmt;
@@ -41,18 +40,7 @@ export class ChatProjectRepository {
   private readonly restoreStmt;
   private readonly deleteStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
-    this.listStmt = db.prepare(`
-      SELECT * FROM chat_projects
-      WHERE (
-        @view = 'all'
-        OR (@view = 'active' AND lifecycle_status = 'active')
-        OR (@view = 'archived' AND lifecycle_status = 'archived')
-      )
-      AND (@workspaceId IS NULL OR workspace_id = @workspaceId)
-      ORDER BY updated_at DESC, project_id ASC
-      LIMIT @limit
-    `);
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_projects WHERE project_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO chat_projects (
@@ -88,11 +76,28 @@ export class ChatProjectRepository {
   }
 
   public list(view: "active" | "archived" | "all" = "active", limit = 300, workspaceId?: string): ChatProjectRecord[] {
-    const rows = toChatProjectRows(this.listStmt.all({
+    const params: Record<string, unknown> = {
       view,
-      workspaceId: workspaceId ? sanitizeWorkspaceId(workspaceId) : null,
       limit: Math.max(1, Math.min(2000, Math.floor(limit))),
-    }));
+    };
+    const clauses = [
+      `(
+        @view = 'all'
+        OR (@view = 'active' AND lifecycle_status = 'active')
+        OR (@view = 'archived' AND lifecycle_status = 'archived')
+      )`,
+    ];
+    if (workspaceId) {
+      params.workspaceId = sanitizeWorkspaceId(workspaceId);
+      clauses.push("workspace_id = @workspaceId");
+    }
+    const sql = `
+      SELECT * FROM chat_projects
+      WHERE ${clauses.join("\n        AND ")}
+      ORDER BY updated_at DESC, project_id ASC
+      LIMIT @limit
+    `;
+    const rows = toChatProjectRows(this.db.prepare(sql).all(params));
     return rows.map(mapRow);
   }
 
@@ -261,3 +266,5 @@ function isChatProjectRow(value: unknown): value is ChatProjectRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

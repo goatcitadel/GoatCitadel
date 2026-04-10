@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { MemoryQmdRunRecord, MemoryQmdStatsResponse } from "@goatcitadel/contracts";
 
 interface MemoryQmdRunRow {
@@ -32,7 +32,7 @@ export class MemoryQmdRunRepository {
   private readonly statsStmt;
   private readonly pruneOlderThanStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO memory_qmd_runs (
         run_event_id, scope, session_id, task_id, run_id, phase_id, status, provider_id,
@@ -205,3 +205,5 @@ function isMemoryQmdRunRow(value: unknown): value is MemoryQmdRunRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

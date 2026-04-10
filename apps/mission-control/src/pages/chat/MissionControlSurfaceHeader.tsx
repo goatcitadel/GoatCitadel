@@ -7,6 +7,8 @@ export function MissionControlSurfaceHeader({
   sessionTitle,
   summary,
   status,
+  providerLabel,
+  modelLabel,
   dockOpen,
   onToggleDock,
 }: {
@@ -14,6 +16,8 @@ export function MissionControlSurfaceHeader({
   sessionTitle: string;
   summary: string;
   status?: string | null;
+  providerLabel?: string;
+  modelLabel?: string;
   dockOpen: boolean;
   onToggleDock: () => void;
 }) {
@@ -22,17 +26,18 @@ export function MissionControlSurfaceHeader({
   return (
     <header className={`mission-surface-header mode-${mode}`}>
       <div className="mission-surface-header-copy">
-        <p className="mission-surface-header-kicker">{config.shellEyebrow}</p>
+        <p className="mission-surface-header-kicker">{config.label}</p>
         <h2>{sessionTitle}</h2>
-        <p className="mission-surface-header-posture">{config.stageTitle}</p>
         <p>{summary}</p>
       </div>
       <div className="mission-surface-header-actions">
         <StatusChip tone={mode === "chat" ? "live" : mode === "cowork" ? "warning" : "critical"}>
-          {config.label}
+          {config.stageTitle}
         </StatusChip>
         {status ? <StatusChip tone="muted">{status}</StatusChip> : null}
-        <button type="button" className="mission-surface-dock-toggle" onClick={onToggleDock}>
+        {providerLabel ? <StatusChip tone="muted">{providerLabel}</StatusChip> : null}
+        {modelLabel ? <StatusChip tone="muted">{modelLabel}</StatusChip> : null}
+        <button type="button" className="gc-nav-pill mission-surface-dock-toggle" onClick={onToggleDock}>
           {dockOpen ? "Hide context" : "Show context"}
         </button>
       </div>

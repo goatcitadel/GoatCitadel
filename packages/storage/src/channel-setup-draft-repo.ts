@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   ChannelSetupDraft,
   ChannelSetupDraftCreateInput,
@@ -38,7 +38,7 @@ export class ChannelSetupDraftRepository {
   private readonly updateStmt;
   private readonly deleteStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM channel_setup_drafts WHERE draft_id = ?");
     this.listByCatalogStmt = db.prepare(`
       SELECT * FROM channel_setup_drafts
@@ -241,3 +241,5 @@ function isChannelSetupDraftRow(value: unknown): value is ChannelSetupDraftRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

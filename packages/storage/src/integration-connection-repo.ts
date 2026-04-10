@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   IntegrationConnection,
   IntegrationConnectionCreateInput,
@@ -30,15 +30,21 @@ interface IntegrationConnectionRow {
 
 export class IntegrationConnectionRepository {
   private readonly listStmt;
+  private readonly listByKindStmt;
   private readonly getStmt;
   private readonly insertStmt;
   private readonly updateStmt;
   private readonly deleteStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.listStmt = db.prepare(`
       SELECT * FROM integration_connections
-      WHERE (@kind IS NULL OR kind = @kind)
+      ORDER BY updated_at DESC, created_at DESC
+      LIMIT @limit
+    `);
+    this.listByKindStmt = db.prepare(`
+      SELECT * FROM integration_connections
+      WHERE kind = @kind
       ORDER BY updated_at DESC, created_at DESC
       LIMIT @limit
     `);
@@ -74,8 +80,8 @@ export class IntegrationConnectionRepository {
   }
 
   public list(kind?: IntegrationKind, limit = 200): IntegrationConnection[] {
-    const rows = toIntegrationConnectionRows(this.listStmt.all({
-      kind: kind ?? null,
+    const rows = toIntegrationConnectionRows((kind ? this.listByKindStmt : this.listStmt).all({
+      kind,
       limit,
     }));
     return rows.map(mapRow);
@@ -207,3 +213,5 @@ function isIntegrationConnectionRow(value: unknown): value is IntegrationConnect
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

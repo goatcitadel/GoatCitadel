@@ -80,7 +80,7 @@ export function SettingsTestsSection(props: SettingsTestsSectionProps) {
           />
         </div>
         <div className="controls-row">
-          <button type="button" onClick={onTestChat}>
+          <button type="button" onClick={onTestChat} className="gc-button">
             Run Test Prompt
           </button>
         </div>

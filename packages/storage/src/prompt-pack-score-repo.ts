@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { PromptPackJudgeRecord, PromptPackScoreRecord } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 
@@ -26,7 +26,7 @@ export class PromptPackScoreRepository {
   private readonly listByRunStmt;
   private readonly deleteByPackStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM prompt_pack_scores WHERE score_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO prompt_pack_scores (
@@ -242,3 +242,5 @@ function isPromptPackScoreRow(value: unknown): value is PromptPackScoreRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

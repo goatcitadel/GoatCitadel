@@ -378,7 +378,9 @@ describe("mission-control hardening", () => {
 
     const modal = renderer.root.findByProps({ "data-mock-modal": "true" });
     expect(modal.props["data-confirm-disabled"]).toBe("true");
-    const rejectButton = renderer.root.findAllByType("button").find((node) => node.props.className === "danger");
+    const rejectButton = renderer.root
+      .findAllByType("button")
+      .find((node) => typeof node.props.className === "string" && node.props.className.includes("danger"));
     expect(rejectButton?.props.disabled).toBe(true);
     expect(
       renderer.root.findAllByType("p").some((node) => textContent(node).includes("This approval token expired")),

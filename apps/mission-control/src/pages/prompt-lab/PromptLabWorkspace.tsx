@@ -137,7 +137,7 @@ export function PromptLabWorkspace(props: PromptLabWorkspaceProps) {
               <li key={test.testId}>
                 <button
                   type="button"
-                  className={selectedTestId === test.testId ? "active" : ""}
+                  className={["gc-button", (selectedTestId === test.testId ? "active" : "")].filter(Boolean).join(" ")}
                   onClick={() => onSelectedTestIdChange(test.testId)}
                 >
                   {test.code} - {test.title}
@@ -272,7 +272,7 @@ export function PromptLabWorkspace(props: PromptLabWorkspaceProps) {
             {selectedAutoScore ? (
               <details className="prompt-lab-breakdown">
                 <summary>Score evidence</summary>
-                <table className="prompt-lab-breakdown-table">
+                <table className="prompt-lab-breakdown-table gc-data-table">
                   <thead>
                     <tr>
                       <th>Dimension</th>
@@ -448,3 +448,5 @@ const PROMPT_PACK_V2_DIMENSION_LABELS = [
 function formatLegacyVerdict(totalScore: number): "pass" | "fail" {
   return totalScore >= 7 ? "pass" : "fail";
 }
+
+

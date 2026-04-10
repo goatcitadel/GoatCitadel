@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   HookActionConfig,
   HookCreateInput,
@@ -35,7 +35,7 @@ export class WorkspaceHookRepository {
   private readonly updateStmt;
   private readonly deleteStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.listStmt = db.prepare(`
       SELECT *
       FROM workspace_hooks
@@ -271,3 +271,5 @@ function isHookRow(value: unknown): value is HookRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

@@ -204,7 +204,7 @@ export function SessionsPage() {
           </>
         }
         secondary={
-          <button type="button" onClick={() => setViewMode((current) => (current === "split" ? "table" : "split"))}>
+          <button type="button" onClick={() => setViewMode((current) => (current === "split" ? "table" : "split"))} className="gc-button">
             {viewMode === "split" ? "Switch to table view" : "Switch to split view"}
           </button>
         }
@@ -258,7 +258,7 @@ export function SessionsPage() {
                   <div className="virtual-list-item">
                     <button
                       type="button"
-                      className={`session-list-button ${session.sessionId === selected?.sessionId ? "active" : ""}`}
+                      className={["gc-button", (`session-list-button ${session.sessionId === selected?.sessionId ? "active" : ""}`)].filter(Boolean).join(" ")}
                       onClick={() => setSelectedSessionId(session.sessionId)}
                     >
                       {session.sessionKey}

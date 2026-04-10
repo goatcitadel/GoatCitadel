@@ -10,6 +10,7 @@ const bodySchema = z.object({
   args: z.record(z.unknown()),
   agentId: z.string().min(1),
   sessionId: z.string().min(1),
+  workspaceId: z.string().min(1).optional(),
   taskId: z.string().optional(),
   trustLevel: z.enum(["trusted_operator", "trusted_workspace", "mixed_untrusted", "untrusted_external"]).optional(),
   sourceAttribution: z.array(z.object({

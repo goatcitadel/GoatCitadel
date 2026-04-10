@@ -697,7 +697,7 @@ export function McpPage() {
             Discovery metadata is unavailable right now. You can still install templates manually.
           </p>
         ) : (
-          <table>
+          <table className="gc-data-table">
             <thead>
               <tr>
                 <th>Template</th>
@@ -843,7 +843,7 @@ export function McpPage() {
                 <div className="virtual-list-item chat-list-item" key={server.serverId}>
                   <button
                     type="button"
-                    className={`chat-list-button${selectedServerId === server.serverId ? " active" : ""}`}
+                    className={["gc-button", (`chat-list-button${selectedServerId === server.serverId ? " active" : ""}`)].filter(Boolean).join(" ")}
                     onClick={() => setSelectedServerId(server.serverId)}
                   >
                     {server.label}
@@ -1061,3 +1061,4 @@ export function McpPage() {
     </section>
   );
 }
+

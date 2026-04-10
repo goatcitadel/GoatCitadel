@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 
 export interface ChatSessionProjectRecord {
   sessionId: string;
@@ -16,9 +16,8 @@ export class ChatSessionProjectRepository {
   private readonly getStmt;
   private readonly upsertStmt;
   private readonly deleteStmt;
-  private readonly listBySessionIdsStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_session_projects WHERE session_id = ?");
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_session_projects (session_id, project_id, assigned_at)
@@ -28,10 +27,6 @@ export class ChatSessionProjectRepository {
         assigned_at = excluded.assigned_at
     `);
     this.deleteStmt = db.prepare("DELETE FROM chat_session_projects WHERE session_id = ?");
-    this.listBySessionIdsStmt = db.prepare(`
-      SELECT * FROM chat_session_projects
-      WHERE session_id IN (SELECT value FROM json_each(@sessionIdsJson))
-    `);
   }
 
   public get(sessionId: string): ChatSessionProjectRecord | undefined {
@@ -65,9 +60,11 @@ export class ChatSessionProjectRepository {
     if (sessionIds.length === 0) {
       return new Map();
     }
-    const rows = this.listBySessionIdsStmt.all({
-      sessionIdsJson: JSON.stringify(sessionIds),
-    });
+    const placeholders = sessionIds.map(() => "?").join(", ");
+    const rows = this.db.prepare(`
+      SELECT * FROM chat_session_projects
+      WHERE session_id IN (${placeholders})
+    `).all(...sessionIds);
     const mappedRows = toChatSessionProjectRows(rows);
     return new Map(mappedRows.map((row) => [row.session_id, mapRow(row)]));
   }
@@ -101,3 +98,5 @@ function mapRow(row: ChatSessionProjectRow): ChatSessionProjectRecord {
     assignedAt: row.assigned_at,
   };
 }
+
+

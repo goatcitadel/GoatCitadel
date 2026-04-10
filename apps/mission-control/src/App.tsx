@@ -163,6 +163,10 @@ function PageLoadingFallback({ label }: { label: string }) {
   );
 }
 
+function deriveOperateStatusStripCollapsed(route: ResolvedRoute): boolean {
+  return route.space === "operate" && route.page === "surface";
+}
+
 const refreshTopicRules: Array<{ topic: RefreshTopic; keywords: string[] }> = [
   {
     topic: "surface",
@@ -277,6 +281,9 @@ export function App() {
   const [operateStatus, setOperateStatus] = useState<DashboardStateResponse | null>(null);
   const [operateStatusLastSuccessAt, setOperateStatusLastSuccessAt] = useState<number | null>(null);
   const [operateStatusLastError, setOperateStatusLastError] = useState<string | null>(null);
+  const [operateStatusStripCollapsed, setOperateStatusStripCollapsed] = useState(() =>
+    deriveOperateStatusStripCollapsed(readRouteFromLocation()),
+  );
   const [compactShellNav, setCompactShellNav] = useState(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
       return false;
@@ -751,6 +758,17 @@ export function App() {
     if (typeof window === "undefined") {
       return;
     }
+    const syncRouteFromLocation = () => {
+      setRoute(readRouteFromLocation());
+    };
+    window.addEventListener("popstate", syncRouteFromLocation);
+    return () => window.removeEventListener("popstate", syncRouteFromLocation);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
     const url = new URL(window.location.href);
     const search = buildRouteSearch(route);
     window.history.replaceState(null, "", `${url.pathname}${search}${url.hash}`);
@@ -921,20 +939,37 @@ export function App() {
 
   const configureAgentsTab =
     route.space === "configure" && route.page === "agents" ? ((route.tab ?? "overview") as AgentsTab) : "overview";
+  const activeWorkspaceName = workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId;
+
+  useEffect(() => {
+    if (route.space !== "operate") {
+      return;
+    }
+    setOperateStatusStripCollapsed(deriveOperateStatusStripCollapsed(route));
+  }, [route]);
 
   const content = useMemo(() => {
     if (route.space === "operate") {
       if (route.page === "surface") {
         return (
           <section className="space-page space-page-surface">
-            <ChatPage workspaceId={activeWorkspaceId} surface={route.surface} lockSurface />
+            <ChatPage
+              workspaceId={activeWorkspaceId}
+              workspaceName={activeWorkspaceName}
+              approvalsCount={operateApprovalsCount}
+              surface={route.surface}
+              lockSurface
+              onOpenCowork={() => navigate({ space: "operate", page: "surface", surface: "cowork" })}
+              onOpenCode={() => navigate({ space: "operate", page: "surface", surface: "code" })}
+              onOpenTasks={() => navigate({ space: "operate", page: "tasks" })}
+              onOpenApprovals={() => navigate({ space: "operate", page: "approvals" })}
+            />
           </section>
         );
       }
       if (route.page === "tasks") {
         return (
           <ShellPageFrame
-            eyebrow="Operate"
             title="Trailboard"
             subtitle="Track active work, blockers, and linked sessions without leaving the operator flow."
           >
@@ -944,9 +979,8 @@ export function App() {
       }
       return (
         <ShellPageFrame
-          eyebrow="Operate"
           title="Approvals"
-          subtitle="Review risky actions, device access prompts, and operator decisions in one queue."
+          subtitle="Persisted approval records, history, and runtime recovery for decisions that still need audit or intervention."
         >
           <ApprovalsPage />
         </ShellPageFrame>
@@ -966,7 +1000,6 @@ export function App() {
       if (route.page === "sessions") {
         return (
           <ShellPageFrame
-            eyebrow="Observe"
             title="Sessions"
             subtitle="Inspect completed and active runs, timelines, and outcome summaries."
           >
@@ -986,7 +1019,6 @@ export function App() {
       if (route.page === "costs") {
         return (
           <ShellPageFrame
-            eyebrow="Observe"
             title="Costs"
             subtitle="Monitor spend, provider usage, and runtime cost posture."
           >
@@ -997,7 +1029,6 @@ export function App() {
       if (route.page === "quality") {
         return (
           <ShellPageFrame
-            eyebrow="Observe"
             title="Quality"
             subtitle="Run prompt packs, inspect regressions, and benchmark reliability in one place."
           >
@@ -1007,7 +1038,6 @@ export function App() {
       }
       return (
         <ShellPageFrame
-          eyebrow="Observe"
           title="System"
           subtitle="Machine, runtime, and infrastructure health for this Mission Control node."
         >
@@ -1045,7 +1075,6 @@ export function App() {
     }
     return (
       <ShellPageFrame
-        eyebrow="Configure"
         title="Tools"
         subtitle="Manage tool access, grants, and operational safeguards."
       >
@@ -1054,6 +1083,7 @@ export function App() {
     );
   }, [
     activeWorkspaceId,
+    activeWorkspaceName,
     configureAgentsTab,
     configureIntegrationsTab,
     configureSettingsTab,
@@ -1061,9 +1091,13 @@ export function App() {
     navigate,
     observeActivityTab,
     observeArtifactsTab,
+    operateApprovalsCount,
+    route.approvalId,
     route.page,
+    route.sessionId,
     route.space,
     route.surface,
+    route.turnId,
     setActiveWorkspaceId,
   ]);
 
@@ -1116,7 +1150,7 @@ export function App() {
             <button
               key={space}
               type="button"
-              className={`space-nav-item${route.space === space ? " active" : ""}`}
+              className={`space-nav-item gc-nav-pill${route.space === space ? " active" : ""}`}
               onClick={() => handleSelectSpace(space)}
             >
               {SPACE_META[space].label}
@@ -1124,7 +1158,11 @@ export function App() {
           ))}
         </nav>
         <div className="shell-bar-actions">
-          <button type="button" className="shell-command-trigger-topbar" onClick={() => setPaletteOpen(true)}>
+          <button
+            type="button"
+            className="shell-command-trigger-topbar gc-nav-pill"
+            onClick={() => setPaletteOpen(true)}
+          >
             {appCopy.quickActionsButton}
           </button>
           <label className="shell-workspace-picker">
@@ -1133,7 +1171,7 @@ export function App() {
           </label>
           <button
             type="button"
-            className="shell-status-link"
+            className="shell-status-link gc-nav-pill"
             onClick={() => navigate({ space: "operate", page: "approvals" })}
           >
             <StatusChip
@@ -1168,7 +1206,7 @@ export function App() {
               <button
                 key={surface}
                 type="button"
-                className={`surface-nav-item${route.page === "surface" && operateSurfaceTab === surface ? " active" : ""}`}
+                className={`surface-nav-item gc-nav-pill${route.page === "surface" && operateSurfaceTab === surface ? " active" : ""}`}
                 onClick={() => handleSelectSurface(surface)}
               >
                 {CHAT_MODE_PRESETS[surface].label}
@@ -1176,14 +1214,14 @@ export function App() {
             ))}
             <button
               type="button"
-              className={`surface-nav-item${route.page === "tasks" ? " active" : ""}`}
+              className={`surface-nav-item gc-nav-pill${route.page === "tasks" ? " active" : ""}`}
               onClick={() => handleSelectPage("tasks")}
             >
               Tasks
             </button>
             <button
               type="button"
-              className={`surface-nav-item${route.page === "approvals" ? " active" : ""}`}
+              className={`surface-nav-item gc-nav-pill${route.page === "approvals" ? " active" : ""}`}
               onClick={() => handleSelectPage("approvals")}
             >
               Approvals
@@ -1195,7 +1233,7 @@ export function App() {
               <button
                 key={item.page}
                 type="button"
-                className={`secondary-page-nav-item${route.page === item.page ? " active" : ""}`}
+                className={`secondary-page-nav-item gc-nav-pill${route.page === item.page ? " active" : ""}`}
                 onClick={() => handleSelectPage(item.page)}
               >
                 {item.label}
@@ -1234,6 +1272,8 @@ export function App() {
             activeAgentsCount={operateActiveAgentsCount}
             dailyCostUsd={operateDailyCostUsd}
             openTasksCount={operateOpenTasksCount}
+            collapsed={operateStatusStripCollapsed}
+            onCollapsedChange={setOperateStatusStripCollapsed}
             onOpenApprovals={() => navigate({ space: "operate", page: "approvals" })}
             onOpenAgents={() => navigate({ space: "configure", page: "agents", tab: "herd-live" })}
             onOpenCosts={() => navigate({ space: "observe", page: "costs" })}

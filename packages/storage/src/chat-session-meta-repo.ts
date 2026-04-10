@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { ValidationError } from "@goatcitadel/contracts";
 import type { ChatSessionOrigin } from "@goatcitadel/contracts";
 
@@ -41,9 +41,8 @@ export interface ChatSessionMetaPatchInput {
 export class ChatSessionMetaRepository {
   private readonly getStmt;
   private readonly upsertStmt;
-  private readonly listBySessionIdsStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_session_meta WHERE session_id = ?");
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_session_meta (
@@ -60,11 +59,6 @@ export class ChatSessionMetaRepository {
         lifecycle_status = excluded.lifecycle_status,
         archived_at = excluded.archived_at,
         updated_at = excluded.updated_at
-    `);
-    this.listBySessionIdsStmt = db.prepare(`
-      SELECT * FROM chat_session_meta
-      WHERE session_id IN (SELECT value FROM json_each(@sessionIdsJson))
-      AND (@workspaceId IS NULL OR workspace_id = @workspaceId)
     `);
   }
 
@@ -122,10 +116,19 @@ export class ChatSessionMetaRepository {
     if (sessionIds.length === 0) {
       return new Map();
     }
-    const rows = toChatSessionMetaRows(this.listBySessionIdsStmt.all({
-      sessionIdsJson: JSON.stringify(sessionIds),
-      workspaceId: workspaceId ? sanitizeWorkspaceId(workspaceId) : null,
-    }));
+    const placeholders = sessionIds.map(() => "?").join(", ");
+    const workspace = workspaceId ? sanitizeWorkspaceId(workspaceId) : undefined;
+    const sql = workspace
+      ? `
+        SELECT * FROM chat_session_meta
+        WHERE session_id IN (${placeholders})
+          AND workspace_id = ?
+      `
+      : `
+        SELECT * FROM chat_session_meta
+        WHERE session_id IN (${placeholders})
+      `;
+    const rows = toChatSessionMetaRows(this.db.prepare(sql).all(...sessionIds, ...(workspace ? [workspace] : [])));
     return new Map(rows.map((row) => [row.session_id, mapRow(row)]));
   }
 }
@@ -208,3 +211,5 @@ function sanitizeWorkspaceId(value: string): string {
   }
   return trimmed;
 }
+
+

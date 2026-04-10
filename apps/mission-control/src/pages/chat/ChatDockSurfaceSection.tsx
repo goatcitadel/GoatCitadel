@@ -134,7 +134,7 @@ export function ChatDockSurfaceSection(
                 type="button"
                 disabled={sending || Boolean(sessionControlPending)}
                 onClick={() => void onAssignProject(selectedProjectBindingCandidateId)}
-              >
+               className="gc-button">
                 Bind {selectedProjectBindingCandidateName ?? "selected project"}
               </button>
             </>
@@ -216,16 +216,16 @@ export function ChatDockSurfaceSection(
             </div>
           </div>
           <div className="chat-v11-row-actions">
-            <button type="button" disabled={sending} onClick={() => void onRunCodeDelegation("implement")}>
+            <button type="button" disabled={sending} onClick={() => void onRunCodeDelegation("implement")} className="gc-button">
               Implement
             </button>
-            <button type="button" disabled={sending} onClick={() => void onRunCodeDelegation("review")}>
+            <button type="button" disabled={sending} onClick={() => void onRunCodeDelegation("review")} className="gc-button">
               Review
             </button>
-            <button type="button" disabled={sending} onClick={() => void onRunCodeDelegation("test")}>
+            <button type="button" disabled={sending} onClick={() => void onRunCodeDelegation("test")} className="gc-button">
               Test
             </button>
-            <button type="button" disabled={sending} onClick={() => void onRunCodeDelegation("ship")}>
+            <button type="button" disabled={sending} onClick={() => void onRunCodeDelegation("ship")} className="gc-button">
               Ship cycle
             </button>
           </div>
@@ -327,7 +327,7 @@ export function ChatDockSurfaceSection(
                       type="button"
                       disabled={!selectedSessionId || sending}
                       onClick={() => void onSuggestDelegation()}
-                    >
+                     className="gc-button">
                       Suggest delegation
                     </button>
                   ) : null}
@@ -335,7 +335,7 @@ export function ChatDockSurfaceSection(
                     type="button"
                     disabled={!selectedSessionId || sending}
                     onClick={() => void onTriggerProactive()}
-                  >
+                   className="gc-button">
                     Run proactive
                   </button>
                 </>

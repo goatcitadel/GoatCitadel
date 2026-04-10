@@ -78,7 +78,7 @@ export function DeviceAccessApprovalModal({
         </div>
       ) : null}
       <div className="gc-modal-actions" style={{ marginTop: "1rem" }}>
-        <button type="button" className="danger" disabled={busy} onClick={() => void onReject()}>
+        <button type="button" className="gc-button danger" disabled={busy} onClick={() => void onReject()}>
           {busy ? "Working..." : "Reject device"}
         </button>
       </div>

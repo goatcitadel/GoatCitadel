@@ -49,17 +49,17 @@ export function OnboardingReadinessPanel(props: OnboardingReadinessPanelProps) {
           type="button"
           onClick={() => void onDaemonAction("start")}
           disabled={daemonBusy !== null || daemonReady || !daemonControlSupported}
-        >
+         className="gc-button">
           {daemonBusy === "start" ? "Starting..." : daemonReady ? "Gateway running" : "Start daemon"}
         </button>
         <button
           type="button"
           onClick={() => void onDaemonAction("restart")}
           disabled={daemonBusy !== null || !daemonControlSupported}
-        >
+         className="gc-button">
           {daemonBusy === "restart" ? "Restarting..." : "Restart daemon"}
         </button>
-        <button type="button" onClick={() => void onRefresh()}>
+        <button type="button" onClick={() => void onRefresh()} className="gc-button">
           Refresh readiness
         </button>
       </div>

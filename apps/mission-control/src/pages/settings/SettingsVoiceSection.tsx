@@ -212,7 +212,7 @@ export function SettingsVoiceSection(props: SettingsVoiceSectionProps) {
                           void onInstallManagedVoiceRuntime(voiceRuntime?.selectedModelId ?? "base.en", true)
                         }
                         disabled={voiceBusy}
-                      >
+                       className="gc-button">
                         Repair Voice Runtime
                       </button>
                     ) : null}
@@ -221,7 +221,7 @@ export function SettingsVoiceSection(props: SettingsVoiceSectionProps) {
                         type="button"
                         onClick={() => void onInstallManagedVoiceRuntime("base.en", true)}
                         disabled={voiceBusy}
-                      >
+                       className="gc-button">
                         Install Starter Model
                       </button>
                     ) : null}
@@ -230,7 +230,7 @@ export function SettingsVoiceSection(props: SettingsVoiceSectionProps) {
                         type="button"
                         onClick={() => void onSelectManagedVoiceModel(action.modelId!)}
                         disabled={voiceBusy}
-                      >
+                       className="gc-button">
                         Activate {action.modelId}
                       </button>
                     ) : null}
@@ -239,17 +239,17 @@ export function SettingsVoiceSection(props: SettingsVoiceSectionProps) {
                         type="button"
                         onClick={onStopVoiceTalk}
                         disabled={voiceBusy || voiceStatus?.talk.state !== "running"}
-                      >
+                       className="gc-button">
                         Stop Talk Mode
                       </button>
                     ) : null}
                     {action.id === "stop-wake-listener" ? (
-                      <button type="button" onClick={onStopWake} disabled={voiceBusy || !voiceStatus?.wake.enabled}>
+                      <button type="button" onClick={onStopWake} disabled={voiceBusy || !voiceStatus?.wake.enabled} className="gc-button">
                         Disable Wake
                       </button>
                     ) : null}
                     {action.id === "refresh-runtime-state" ? (
-                      <button type="button" onClick={() => void refreshVoiceRuntime()} disabled={voiceBusy}>
+                      <button type="button" onClick={() => void refreshVoiceRuntime()} disabled={voiceBusy} className="gc-button">
                         Refresh Voice Status
                       </button>
                     ) : null}
@@ -314,10 +314,10 @@ export function SettingsVoiceSection(props: SettingsVoiceSectionProps) {
             type="button"
             onClick={() => void onInstallManagedVoiceRuntime(voiceRuntime?.selectedModelId ?? "base.en", true)}
             disabled={voiceBusy}
-          >
+           className="gc-button">
             {voiceRuntime?.readiness === "ready" ? "Repair Voice Runtime" : "Install Voice Runtime"}
           </button>
-          <button type="button" onClick={() => void refreshVoiceRuntime()} disabled={voiceBusy}>
+          <button type="button" onClick={() => void refreshVoiceRuntime()} disabled={voiceBusy} className="gc-button">
             Refresh Voice Status
           </button>
         </div>
@@ -351,17 +351,17 @@ export function SettingsVoiceSection(props: SettingsVoiceSectionProps) {
                       type="button"
                       onClick={() => void onInstallManagedVoiceRuntime(model.id, false)}
                       disabled={voiceBusy}
-                    >
+                     className="gc-button">
                       Download model
                     </button>
                   ) : null}
                   {installed && !active ? (
-                    <button type="button" onClick={() => void onSelectManagedVoiceModel(model.id)} disabled={voiceBusy}>
+                    <button type="button" onClick={() => void onSelectManagedVoiceModel(model.id)} disabled={voiceBusy} className="gc-button">
                       Activate model
                     </button>
                   ) : null}
                   {installed && !active ? (
-                    <button type="button" onClick={() => void onRemoveManagedVoiceModel(model.id)} disabled={voiceBusy}>
+                    <button type="button" onClick={() => void onRemoveManagedVoiceModel(model.id)} disabled={voiceBusy} className="gc-button">
                       Remove model
                     </button>
                   ) : null}
@@ -385,18 +385,18 @@ export function SettingsVoiceSection(props: SettingsVoiceSectionProps) {
             type="button"
             onClick={onStartVoiceTalk}
             disabled={voiceBusy || voiceStatus?.talk.state === "running"}
-          >
+           className="gc-button">
             Start Talk Mode
           </button>
-          <button type="button" onClick={onStopVoiceTalk} disabled={voiceBusy || voiceStatus?.talk.state !== "running"}>
+          <button type="button" onClick={onStopVoiceTalk} disabled={voiceBusy || voiceStatus?.talk.state !== "running"} className="gc-button">
             Stop Talk Mode
           </button>
         </div>
         <div className="controls-row">
-          <button type="button" onClick={onStartWake} disabled={voiceBusy || voiceStatus?.wake.enabled}>
+          <button type="button" onClick={onStartWake} disabled={voiceBusy || voiceStatus?.wake.enabled} className="gc-button">
             Enable Wake
           </button>
-          <button type="button" onClick={onStopWake} disabled={voiceBusy || !voiceStatus?.wake.enabled}>
+          <button type="button" onClick={onStopWake} disabled={voiceBusy || !voiceStatus?.wake.enabled} className="gc-button">
             Disable Wake
           </button>
         </div>
@@ -408,7 +408,7 @@ export function SettingsVoiceSection(props: SettingsVoiceSectionProps) {
             accept="audio/*"
             onChange={(event) => onVoiceFileChange(event.target.files?.[0] ?? null)}
           />
-          <button type="button" onClick={onRunVoiceTranscribeTest} disabled={voiceBusy || !voiceFile}>
+          <button type="button" onClick={onRunVoiceTranscribeTest} disabled={voiceBusy || !voiceFile} className="gc-button">
             Run Local Transcription
           </button>
         </div>

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { MemoryContextPack, MemoryContextScope, MemoryCitation, MemoryQmdStatus } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
@@ -62,7 +62,7 @@ export class MemoryContextRepository {
   private readonly pruneExpiredStmt;
   private readonly pruneOlderThanStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO memory_context_packs (
         context_id, cache_key, scope, session_id, task_id, run_id, phase_id,
@@ -271,3 +271,5 @@ function toScopedCacheKey(input: MemoryContextLookupInput): string {
     input.cacheKey,
   ].join("|");
 }
+
+

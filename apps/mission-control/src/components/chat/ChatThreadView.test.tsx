@@ -104,4 +104,45 @@ describe("ChatThreadView", () => {
     const selectableTurn = renderer.root.findAll((node) => node.props["aria-label"] === "Select turn turn-1");
     expect(selectableTurn).toHaveLength(1);
   });
+
+  it("surfaces artifact-backed tool output badges in turn details", () => {
+    const thread = createThread("plain content");
+    (thread.turns[0] as any).toolRuns = [{
+      toolRunId: "tool-1",
+      turnId: "turn-1",
+      sessionId: "sess-1",
+      toolName: "browser.extract",
+      status: "completed",
+      startedAt: "2026-04-04T00:00:01.000Z",
+      finishedAt: "2026-04-04T00:00:02.000Z",
+      result: {
+        storedAsArtifact: true,
+        virtualized: true,
+        artifactId: "artifact-1",
+        artifactPath: "tool-artifacts/aa/artifact-1.json",
+        artifactSummary: "Stored extraction output as an artifact to keep live context compact.",
+        originalByteLength: 18944,
+      },
+    }];
+
+    const renderer = TestRenderer.create(
+      <ChatThreadView
+        loading={false}
+        thread={thread}
+        selectedTurnId="turn-1"
+        notices={[]}
+        followOutput={false}
+        onBottomStateChange={vi.fn()}
+        onSelectTurn={vi.fn()}
+        onSwitchBranch={vi.fn()}
+        onRetryTurn={vi.fn()}
+        onEditTurn={vi.fn()}
+      />,
+    );
+
+    expect(renderer.root.findAll((node) =>
+      typeof node.props.className === "string" && node.props.className.includes("chat-tool-artifact-badge"),
+    )).toHaveLength(2);
+    expect(renderer.root.findAllByType("button").some((button) => button.children.join("") === "Inspect raw artifact")).toBe(true);
+  });
 });

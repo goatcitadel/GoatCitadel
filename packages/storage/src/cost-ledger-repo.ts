@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 
 export interface CostLedgerRecord {
   sessionId: string;
@@ -37,7 +37,7 @@ export class CostLedgerRepository {
   private readonly pruneStmt;
   private insertCount = 0;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO cost_ledger (
         session_id, agent_id, task_id, day,
@@ -216,3 +216,5 @@ function isSummaryRow(value: unknown): value is SummaryRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

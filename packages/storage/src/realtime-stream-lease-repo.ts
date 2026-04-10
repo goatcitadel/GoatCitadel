@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 
 interface RealtimeStreamLeaseRow {
   lease_id: string;
@@ -41,7 +41,7 @@ export class RealtimeStreamLeaseRepository {
   private readonly closeSupersededClientStmt;
   private readonly closeOpenNodeStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO realtime_stream_leases (
         lease_id,
@@ -216,3 +216,5 @@ function mapRow(row: RealtimeStreamLeaseRow): RealtimeStreamLeaseRecord {
     closeReason: row.close_reason ?? undefined,
   };
 }
+
+

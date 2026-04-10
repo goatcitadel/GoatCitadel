@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   ChatCitationRecord,
   ChatDelegationMode,
@@ -39,7 +39,7 @@ export class ChatDelegationRunRepository {
   private readonly patchStmt;
   private readonly listBySessionStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_delegation_runs WHERE run_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO chat_delegation_runs (
@@ -228,3 +228,5 @@ function mapRow(row: ChatDelegationRunRow): ChatDelegationRunRecord {
     trace: row.trace_json ? safeJsonParse<ChatTurnTraceRecord["routing"]>(row.trace_json, {}) : undefined,
   };
 }
+
+

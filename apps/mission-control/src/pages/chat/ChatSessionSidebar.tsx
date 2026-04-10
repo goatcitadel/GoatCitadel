@@ -95,7 +95,7 @@ export function ChatSessionSidebar(props: {
         <div className="chat-v11-left-actions">
           <button
             type="button"
-            className="chat-v11-project-toggle chat-v11-session-launch active"
+            className="gc-button chat-v11-project-toggle chat-v11-session-launch active"
             disabled={creatingSession}
             onClick={onCreateSession}
           >
@@ -103,7 +103,7 @@ export function ChatSessionSidebar(props: {
           </button>
           <button
             type="button"
-            className={`chat-v11-project-toggle${showProjectCreate ? " active" : ""}`}
+            className={["gc-button", (`chat-v11-project-toggle${showProjectCreate ? " active" : ""}`)].filter(Boolean).join(" ")}
             onClick={onToggleProjectCreate}
           >
             {showProjectCreate ? "Hide project form" : "New project"}
@@ -113,10 +113,10 @@ export function ChatSessionSidebar(props: {
       </div>
       <FieldHelp>{mode === "code" ? "Code sessions stay local-first and become safer once a project binding is in place. External chats can write back only when a binding is configured." : "Mission chats stay local. External chats can write back only when a binding is configured."}</FieldHelp>
       <div className="chat-v11-filter-row">
-        <button type="button" className={historyView === "active" ? "active" : ""} onClick={() => onHistoryViewChange("active")}>Active</button>
-        <button type="button" className={historyView === "archived" ? "active" : ""} onClick={() => onHistoryViewChange("archived")}>Archived</button>
+        <button type="button" className={["gc-button", (historyView === "active" ? "active" : "")].filter(Boolean).join(" ")} onClick={() => onHistoryViewChange("active")}>Active</button>
+        <button type="button" className={["gc-button", (historyView === "archived" ? "active" : "")].filter(Boolean).join(" ")} onClick={() => onHistoryViewChange("archived")}>Archived</button>
         {archiveWorkspaceEnabled && onArchiveWorkspace ? (
-          <button type="button" className="danger" disabled={archiveWorkspacePending} onClick={onArchiveWorkspace}>
+          <button type="button" className="gc-button danger" disabled={archiveWorkspacePending} onClick={onArchiveWorkspace}>
             {archiveWorkspacePending ? "Archiving..." : "Archive workspace chats"}
           </button>
         ) : null}
@@ -127,12 +127,12 @@ export function ChatSessionSidebar(props: {
           <input value={projectName} onChange={(event) => onProjectNameChange(event.target.value)} placeholder="New project name" />
           <input value={projectPath} onChange={(event) => onProjectPathChange(event.target.value)} placeholder="Project path (optional)" />
           <p className="chat-v11-muted">{projectHint}</p>
-          <button type="button" onClick={onCreateProject}>Create project</button>
+          <button type="button" onClick={onCreateProject} className="gc-button">Create project</button>
         </div>
       ) : null}
       <div className="chat-v11-filter-row">
-        <button type="button" className={selectedProjectId === "all" ? "active" : ""} onClick={() => onSelectProjectId("all")}>All projects</button>
-        <button type="button" className={selectedProjectId === "none" ? "active" : ""} onClick={() => onSelectProjectId("none")}>Unassigned</button>
+        <button type="button" className={["gc-button", (selectedProjectId === "all" ? "active" : "")].filter(Boolean).join(" ")} onClick={() => onSelectProjectId("all")}>All projects</button>
+        <button type="button" className={["gc-button", (selectedProjectId === "none" ? "active" : "")].filter(Boolean).join(" ")} onClick={() => onSelectProjectId("none")}>Unassigned</button>
       </div>
       <ChatSessionRail
         missionSessions={missionSessions}

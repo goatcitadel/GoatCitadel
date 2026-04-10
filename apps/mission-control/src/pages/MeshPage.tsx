@@ -162,7 +162,7 @@ export function MeshPage() {
 
       <div className="split-grid">
         <Panel title="Nodes" subtitle="Current node discovery and transport state.">
-          <table>
+          <table className="gc-data-table">
             <thead>
               <tr>
                 <th>Node</th>
@@ -187,7 +187,7 @@ export function MeshPage() {
         </Panel>
 
         <Panel title="Leases" subtitle="Short-lived ownership locks across nodes.">
-          <table>
+          <table className="gc-data-table">
             <thead>
               <tr>
                 <th>Lease</th>
@@ -214,7 +214,7 @@ export function MeshPage() {
 
       <div className="split-grid">
         <Panel title="Session Ownership" subtitle="Single-writer session claims by node.">
-          <table>
+          <table className="gc-data-table">
             <thead>
               <tr>
                 <th>Session</th>
@@ -239,7 +239,7 @@ export function MeshPage() {
         </Panel>
 
         <Panel title="Replication Offsets" subtitle="Latest observed replication positions by consumer/source pair.">
-          <table>
+          <table className="gc-data-table">
             <thead>
               <tr>
                 <th>Consumer</th>
@@ -266,3 +266,4 @@ export function MeshPage() {
     </section>
   );
 }
+

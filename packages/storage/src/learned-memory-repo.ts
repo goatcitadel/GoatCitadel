@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
@@ -109,7 +109,7 @@ export class LearnedMemoryRepository {
   private readonly deleteConflictsBySessionStmt;
   private readonly deleteItemsBySessionStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertItemStmt = db.prepare(`
       INSERT INTO learned_memory_items (
         item_id, session_id, item_type, content, confidence, status,
@@ -300,3 +300,5 @@ export class LearnedMemoryRepository {
     this.deleteItemsBySessionStmt.run(sessionId);
   }
 }
+
+

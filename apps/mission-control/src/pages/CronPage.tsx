@@ -461,7 +461,7 @@ export function CronPage() {
         subtitle="Current job catalog with edit, pause/start, run-now, and delete actions."
         actions={<ActionButton label="Refresh" onClick={handleRefresh} disabled={isBusy} />}
       >
-        <table>
+        <table className="gc-data-table">
           <thead>
             <tr>
               <th>Name</th>
@@ -519,7 +519,7 @@ export function CronPage() {
         ) : reviewQueueError ? <p className="error">{reviewQueueError}</p> : reviewQueue.length === 0 ? (
           <p className="office-subtitle">No review items recorded yet.</p>
         ) : (
-          <table>
+          <table className="gc-data-table">
             <thead>
               <tr>
                 <th>Job</th>
@@ -565,3 +565,4 @@ export function CronPage() {
     </section>
   );
 }
+

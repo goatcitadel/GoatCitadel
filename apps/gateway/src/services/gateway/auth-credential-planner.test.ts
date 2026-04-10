@@ -260,6 +260,34 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
         tempStoreMemory: true,
         walAutoCheckpointPages: 1000,
       },
+      database: {
+        driver: "sqlite",
+        postgres: {
+          mode: "bundled",
+          port: 5432,
+          database: "goatcitadel",
+          ssl: "prefer",
+          pool: {
+            min: 0,
+            max: 10,
+            idleTimeoutMs: 30000,
+            connectionTimeoutMs: 10000,
+          },
+          migrationsTable: "schema_migrations",
+        },
+        bundledPostgres: {
+          enabled: true,
+          dataDir: "./data/postgres",
+          port: 55432,
+          autoStart: true,
+          startTimeoutMs: 20000,
+        },
+        sqlite: {
+          cacheSizeKb: 1024,
+          tempStoreMemory: true,
+          walAutoCheckpointPages: 1000,
+        },
+      },
       durable: {
         enabled: false,
         diagnosticsEnabled: false,

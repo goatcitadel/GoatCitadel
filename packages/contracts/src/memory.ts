@@ -156,7 +156,7 @@ export type MemoryMaintenanceRunStatus =
   | "cancelled"
   | "skipped";
 export type MemoryMaintenanceRecommendationStatus = "queued" | "accepted" | "rejected" | "applied";
-export type MemoryMaintenanceSourceKind = "transcript" | "file" | "memory_item";
+export type MemoryMaintenanceSourceKind = "transcript" | "file" | "memory_item" | "artifact";
 export type MemoryMaintenanceChangeKind = "created" | "updated" | "mirrored";
 export type MemoryMaintenanceTargetKind = "file" | "memory_item";
 export type MemoryMaintenanceRecommendationKind =

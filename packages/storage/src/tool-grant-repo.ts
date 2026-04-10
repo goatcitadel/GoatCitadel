@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   ToolGrantCreateInput,
   ToolGrantRecord,
@@ -26,11 +26,10 @@ interface ToolGrantRow {
 export class ToolGrantRepository {
   private readonly createStmt;
   private readonly getStmt;
-  private readonly listStmt;
   private readonly revokeStmt;
   private readonly consumeStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.createStmt = db.prepare(`
       INSERT INTO tool_grants (
         grant_id, tool_pattern, decision, scope, scope_ref, grant_type, constraints_json,
@@ -41,13 +40,6 @@ export class ToolGrantRepository {
       )
     `);
     this.getStmt = db.prepare("SELECT * FROM tool_grants WHERE grant_id = ?");
-    this.listStmt = db.prepare(`
-      SELECT * FROM tool_grants
-      WHERE (@scope IS NULL OR scope = @scope)
-        AND (@scopeRef IS NULL OR scope_ref = @scopeRef)
-      ORDER BY created_at DESC
-      LIMIT @limit
-    `);
     this.revokeStmt = db.prepare(`
       UPDATE tool_grants
       SET revoked_at = @revokedAt
@@ -93,11 +85,23 @@ export class ToolGrantRepository {
   }
 
   public list(scope?: ToolGrantScope, scopeRef?: string, limit = 200): ToolGrantRecord[] {
-    const rows = this.listStmt.all({
-      scope: scope ?? null,
-      scopeRef: scopeRef ?? null,
-      limit,
-    });
+    const params: Record<string, unknown> = { limit };
+    const clauses: string[] = [];
+    if (scope) {
+      params.scope = scope;
+      clauses.push("scope = @scope");
+    }
+    if (scopeRef) {
+      params.scopeRef = scopeRef;
+      clauses.push("scope_ref = @scopeRef");
+    }
+    const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db.prepare(`
+      SELECT * FROM tool_grants
+      ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT @limit
+    `).all(params);
     assertToolGrantRows(rows);
     return rows.map(mapRow);
   }
@@ -179,3 +183,5 @@ function normalizeScopeRef(scope: ToolGrantScope, scopeRef?: string): string {
   }
   return value;
 }
+
+

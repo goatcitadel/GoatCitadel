@@ -129,7 +129,7 @@ export function SettingsAccessSection(props: SettingsAccessSectionProps) {
           Server status: token configured: {tokenConfigured ? "yes" : "no"} | basic configured:{" "}
           {basicConfigured ? "yes" : "no"}
         </p>
-        <button type="button" onClick={onSaveAuth} disabled={blockSaves}>
+        <button type="button" onClick={onSaveAuth} disabled={blockSaves} className="gc-button">
           Save Access Control
         </button>
         <div className="replay-box">
@@ -164,7 +164,7 @@ export function SettingsAccessSection(props: SettingsAccessSectionProps) {
                   <div className="actions">
                     <button
                       type="button"
-                      className="danger"
+                      className="gc-button danger"
                       disabled={Boolean(grant.revokedAt) || deviceGrantBusyId === grant.grantId}
                       onClick={() => {
                         void onRevokeDeviceGrant(grant.grantId);

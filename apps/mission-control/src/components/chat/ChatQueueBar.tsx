@@ -60,7 +60,7 @@ export function ChatQueueBar({
         <strong>Queue</strong>
         <span>{items.length} pending</span>
         {pausedCount > 0 ? (
-          <button type="button" onClick={onResumeAll}>Resume queue</button>
+          <button type="button" onClick={onResumeAll} className="gc-button">Resume queue</button>
         ) : null}
       </div>
       <ul className="chat-v11-queue-list">
@@ -75,7 +75,7 @@ export function ChatQueueBar({
               </p>
             </div>
             {item.id === "__overflow__" ? null : (
-              <button type="button" onClick={() => onRemove(item.id)}>Remove</button>
+              <button type="button" onClick={() => onRemove(item.id)} className="gc-button">Remove</button>
             )}
           </li>
         ))}

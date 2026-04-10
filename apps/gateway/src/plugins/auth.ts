@@ -144,6 +144,27 @@ export const authPlugin = fp(async (fastify) => {
     }
 
     const providedBearerToken = readBearerToken(request.headers.authorization);
+
+    if (auth.mode === "token") {
+      const configuredToken = auth.token.value?.trim();
+      if (!configuredToken) {
+        return reply.code(503).send({
+          error: "Gateway auth mode is token, but no token is configured",
+        });
+      }
+
+      const provided = providedBearerToken
+        ?? readHeaderToken(request.headers["x-goatcitadel-token"]);
+
+      // Operator bearer tokens are the common path for Mission Control. Check
+      // them before device/companion storage lookups so lightweight routes stay
+      // lightweight.
+      if (provided && timingSafeStringEqual(provided, configuredToken)) {
+        setAuthActor(request, `token:${tokenFingerprint(provided)}`, "token");
+        return;
+      }
+    }
+
     if (providedBearerToken) {
       const deviceGrant = fastify.gateway.validateDeviceAccessToken(providedBearerToken);
       if (deviceGrant) {

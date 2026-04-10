@@ -61,8 +61,6 @@ export class EventIngestService {
     };
 
     try {
-      this.storage.db.exec("BEGIN IMMEDIATE");
-
       const existing = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
       if (existing) {
         const session = this.storage.sessions.getBySessionKey(existing.sessionKey);
@@ -72,7 +70,6 @@ export class EventIngestService {
           "deduped",
           now,
         );
-        this.storage.db.exec("COMMIT");
         return {
           accepted: true,
           deduped: true,
@@ -81,66 +78,78 @@ export class EventIngestService {
         };
       }
 
-      const inserted = this.storage.idempotency.insertPendingIfAbsent(idempotencyRow);
-      if (!inserted) {
-        const concurrent = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
-        if (concurrent) {
-          const session = this.storage.sessions.getBySessionKey(concurrent.sessionKey);
-          this.storage.idempotency.markProcessed(
-            options.endpoint,
-            options.idempotencyKey,
-            "deduped",
-            now,
-          );
-          this.storage.db.exec("COMMIT");
-          return {
-            accepted: true,
-            deduped: true,
-            session,
-            transcriptOffset: 0,
-          };
+      const ingestResult = this.storage.runImmediateTransaction(() => {
+        const inserted = this.storage.idempotency.insertPendingIfAbsent(idempotencyRow);
+        if (!inserted) {
+          const concurrent = this.storage.idempotency.find(options.endpoint, options.idempotencyKey);
+          if (concurrent) {
+            const session = this.storage.sessions.getBySessionKey(concurrent.sessionKey);
+            this.storage.idempotency.markProcessed(
+              options.endpoint,
+              options.idempotencyKey,
+              "deduped",
+              now,
+            );
+            return {
+              accepted: true,
+              deduped: true,
+              session,
+              transcriptOffset: 0,
+            } satisfies GatewayEventResult;
+          }
         }
+
+        this.storage.sessions.upsert({
+          sessionId: route.sessionId,
+          sessionKey: route.sessionKey,
+          kind: route.kind,
+          channel: options.payload.route.channel,
+          account: options.payload.route.account,
+          timestamp: now,
+        });
+
+        this.storage.chatMessages.upsert(toChatMessageRecord(transcriptEvent));
+
+        this.storage.sessions.applyUsage({
+          sessionId: route.sessionId,
+          tokenInput: options.payload.usage?.inputTokens ?? 0,
+          tokenOutput: options.payload.usage?.outputTokens ?? 0,
+          tokenCachedInput: options.payload.usage?.cachedInputTokens ?? 0,
+          costUsd: options.payload.usage?.costUsd ?? 0,
+          timestamp: now,
+        });
+
+        this.tokenCostLedger.record({
+          sessionId: route.sessionId,
+          agentId: options.payload.actor.type === "agent" ? options.payload.actor.id : undefined,
+          taskId: options.payload.taskId,
+          tokenInput: options.payload.usage?.inputTokens,
+          tokenOutput: options.payload.usage?.outputTokens,
+          tokenCachedInput: options.payload.usage?.cachedInputTokens,
+          costUsd: options.payload.usage?.costUsd,
+          timestamp: now,
+        });
+        this.storage.transcriptOutbox.enqueue(transcriptEvent, now);
+
+        this.storage.idempotency.markProcessed(
+          options.endpoint,
+          options.idempotencyKey,
+          "accepted",
+          now,
+        );
+
+        return {
+          accepted: true,
+          deduped: false,
+          session: this.storage.sessions.getBySessionId(route.sessionId),
+          transcriptOffset: 0,
+        } satisfies GatewayEventResult;
+      });
+
+      if (ingestResult.deduped) {
+        return ingestResult;
       }
 
-      this.storage.sessions.upsert({
-        sessionId: route.sessionId,
-        sessionKey: route.sessionKey,
-        kind: route.kind,
-        channel: options.payload.route.channel,
-        account: options.payload.route.account,
-        timestamp: now,
-      });
-
-      this.storage.chatMessages.upsert(toChatMessageRecord(transcriptEvent));
-
-      this.storage.sessions.applyUsage({
-        sessionId: route.sessionId,
-        tokenInput: options.payload.usage?.inputTokens ?? 0,
-        tokenOutput: options.payload.usage?.outputTokens ?? 0,
-        tokenCachedInput: options.payload.usage?.cachedInputTokens ?? 0,
-        costUsd: options.payload.usage?.costUsd ?? 0,
-        timestamp: now,
-      });
-
-      this.tokenCostLedger.record({
-        sessionId: route.sessionId,
-        agentId: options.payload.actor.type === "agent" ? options.payload.actor.id : undefined,
-        taskId: options.payload.taskId,
-        tokenInput: options.payload.usage?.inputTokens,
-        tokenOutput: options.payload.usage?.outputTokens,
-        tokenCachedInput: options.payload.usage?.cachedInputTokens,
-        costUsd: options.payload.usage?.costUsd,
-        timestamp: now,
-      });
-      this.storage.transcriptOutbox.enqueue(transcriptEvent, now);
-
-      this.storage.idempotency.markProcessed(
-        options.endpoint,
-        options.idempotencyKey,
-        "accepted",
-        now,
-      );
-      this.storage.db.exec("COMMIT");
       const { targetOffset: transcriptOffset } = await flushTranscriptOutboxSession(this.storage, {
         sessionId: route.sessionId,
         targetEventId: transcriptEvent.eventId,
@@ -148,15 +157,10 @@ export class EventIngestService {
       return {
         accepted: true,
         deduped: false,
-        session: this.storage.sessions.getBySessionId(route.sessionId),
+        session: ingestResult.session,
         transcriptOffset,
       };
     } catch (error) {
-      try {
-        this.storage.db.exec("ROLLBACK");
-      } catch {
-        // ignore rollback failures
-      }
       throw error;
     }
   }

@@ -174,7 +174,7 @@ export function ChatSessionRail({
             <div className="chat-v11-session-row">
               <button
                 type="button"
-                className={isSelected ? "active" : ""}
+                className={["gc-button", (isSelected ? "active" : "")].filter(Boolean).join(" ")}
                 onClick={() => row.sessionId && onSelectSession(row.sessionId)}
               >
                 <span className="chat-v11-session-row-title">

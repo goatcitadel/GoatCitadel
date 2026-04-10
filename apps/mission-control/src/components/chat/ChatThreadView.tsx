@@ -15,6 +15,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { StatusChip } from "../StatusChip";
 import { ChatStreamStatusBar, type ChatStreamStatus } from "./ChatStreamStatusBar";
+import { ChatToolArtifactInspector } from "./ChatToolArtifactInspector";
 import { getChatToolRunDiagnostics } from "./chat-tool-diagnostics";
 import { ChatExecutionPlanSummary } from "./ChatExecutionPlanSummary";
 
@@ -155,7 +156,7 @@ function ChatBranchSwitcher({
         aria-label={`Show previous variant for turn ${turn.turnId}`}
         disabled={!previousTurnId}
         onClick={() => previousTurnId && onSwitch(previousTurnId)}
-      >
+       className="gc-button">
         Previous variant
       </button>
       <span>{currentIndex + 1} / {turn.branch.siblingCount}</span>
@@ -164,7 +165,7 @@ function ChatBranchSwitcher({
         aria-label={`Show next variant for turn ${turn.turnId}`}
         disabled={!nextTurnId}
         onClick={() => nextTurnId && onSwitch(nextTurnId)}
-      >
+       className="gc-button">
         Next variant
       </button>
     </div>
@@ -211,7 +212,7 @@ function ChatTurnDetails({
             type="button"
             aria-label={`Retry assistant answer for turn ${turn.turnId}`}
             onClick={() => onRetryTurn(turn.turnId)}
-          >
+           className="gc-button">
             Retry answer
           </button>
         ) : null}
@@ -219,7 +220,7 @@ function ChatTurnDetails({
           type="button"
           aria-label={`Edit and resend turn ${turn.turnId}`}
           onClick={() => onEditTurn(turn.turnId)}
-        >
+         className="gc-button">
           Edit and resend
         </button>
       </div>
@@ -235,11 +236,28 @@ function ChatTurnDetails({
                   {" · "}
                   {run.status}
                   {diagnostics.browserFailureClass ? ` · ${diagnostics.browserFailureClass}` : ""}
+                  {diagnostics.outputVirtualized || diagnostics.storedAsArtifact ? (
+                    <p className="chat-tool-artifact-row">
+                      {diagnostics.outputVirtualized ? (
+                        <span className="chat-tool-artifact-badge">Output summarized</span>
+                      ) : null}
+                      {diagnostics.storedAsArtifact ? (
+                        <span className="chat-tool-artifact-badge">Stored as artifact</span>
+                      ) : null}
+                    </p>
+                  ) : null}
                   {diagnostics.engineLabel ? <p>Engine: {diagnostics.engineLabel}{diagnostics.engineTier ? ` (${diagnostics.engineTier})` : ""}</p> : null}
                   {diagnostics.url ? <p>URL: {diagnostics.url}</p> : null}
                   {diagnostics.finalUrl && diagnostics.finalUrl !== diagnostics.url ? <p>Final URL: {diagnostics.finalUrl}</p> : null}
                   {diagnostics.httpStatus !== undefined ? <p>HTTP status: {diagnostics.httpStatus}</p> : null}
                   {diagnostics.summary ? <p>{diagnostics.summary}</p> : null}
+                  {diagnostics.artifactId ? (
+                    <ChatToolArtifactInspector
+                      artifactId={diagnostics.artifactId}
+                      artifactPath={diagnostics.artifactPath}
+                      originalByteLength={diagnostics.originalByteLength}
+                    />
+                  ) : null}
                   {run.error ? <p>Error: {run.error}</p> : null}
                   {run.failureGuidance ? <p>Next move: {run.failureGuidance}</p> : null}
                 </li>

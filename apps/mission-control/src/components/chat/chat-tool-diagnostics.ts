@@ -29,6 +29,14 @@ function readNumber(...values: unknown[]): number | undefined {
 }
 
 function summarizeResult(result: Record<string, unknown>): string | undefined {
+  const artifactSummary = readString(result.artifactSummary);
+  if (artifactSummary) {
+    return artifactSummary;
+  }
+  const artifactSnippet = readString(result.snippet);
+  if (artifactSnippet) {
+    return artifactSnippet;
+  }
   if (Array.isArray(result.results)) {
     const count = result.results.length;
     return count === 0 ? "No results returned." : `${count} result${count === 1 ? "" : "s"} returned.`;
@@ -44,6 +52,12 @@ export function getChatToolRunDiagnostics(run: ChatToolRunRecord): {
   engineLabel?: string;
   browserFailureClass?: string;
   summary?: string;
+  storedAsArtifact: boolean;
+  outputVirtualized: boolean;
+  artifactId?: string;
+  artifactPath?: string;
+  artifactSummary?: string;
+  originalByteLength?: number;
   fallbackAttemptCount: number;
   hasFailureSignal: boolean;
 } {
@@ -58,6 +72,12 @@ export function getChatToolRunDiagnostics(run: ChatToolRunRecord): {
     engineLabel: readString(result?.engineLabel),
     browserFailureClass,
     summary: result ? summarizeResult(result) : undefined,
+    storedAsArtifact: result?.storedAsArtifact === true,
+    outputVirtualized: result?.virtualized === true,
+    artifactId: readString(result?.artifactId),
+    artifactPath: readString(result?.artifactPath),
+    artifactSummary: readString(result?.artifactSummary),
+    originalByteLength: readNumber(result?.originalByteLength, result?.byteLength),
     fallbackAttemptCount: fallbackChain.length > 1 ? fallbackChain.length - 1 : 0,
     hasFailureSignal: run.status === "failed"
       || run.status === "blocked"

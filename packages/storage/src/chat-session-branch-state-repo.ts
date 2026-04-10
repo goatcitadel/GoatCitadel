@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { NotFoundError } from "@goatcitadel/contracts";
 
 export interface ChatSessionBranchStateRecord {
@@ -19,7 +19,7 @@ export class ChatSessionBranchStateRepository {
   private readonly compareAndSetStmt;
   private readonly insertIfMissingStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare(`
       SELECT *
       FROM chat_session_branch_state
@@ -117,3 +117,5 @@ function mapRow(row: ChatSessionBranchStateRow): ChatSessionBranchStateRecord {
     updatedAt: row.updated_at,
   };
 }
+
+

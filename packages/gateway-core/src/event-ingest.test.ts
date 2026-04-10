@@ -86,6 +86,17 @@ describe("EventIngestService", () => {
           }
         }),
       },
+      runImmediateTransaction: vi.fn((callback: () => unknown) => {
+        storage.db.exec("BEGIN IMMEDIATE");
+        try {
+          const result = callback();
+          storage.db.exec("COMMIT");
+          return result;
+        } catch (error) {
+          storage.db.exec("ROLLBACK");
+          throw error;
+        }
+      }),
       idempotency: {
         find: vi.fn(() => undefined),
         insertPendingIfAbsent: vi.fn((_row: InboundEventIndexRow) => true),
@@ -180,6 +191,7 @@ describe("EventIngestService", () => {
       db: {
         exec: vi.fn(),
       },
+      runImmediateTransaction: vi.fn((callback: () => unknown) => callback()),
       idempotency: {
         find: vi.fn(() => undefined),
         insertPendingIfAbsent: vi.fn((_row: InboundEventIndexRow) => true),

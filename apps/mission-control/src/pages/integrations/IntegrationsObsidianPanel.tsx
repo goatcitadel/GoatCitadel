@@ -100,10 +100,10 @@ export function IntegrationsObsidianPanel(props: IntegrationsObsidianPanelProps)
           onChange={(event) => onObsidianAllowedSubpathsChange(event.target.value)}
           placeholder="GoatCitadel, GoatCitadel/Inbox"
         />
-        <button type="button" disabled={obsidianBusy === "save"} onClick={() => onSaveObsidianConfig()}>
+        <button type="button" disabled={obsidianBusy === "save"} onClick={() => onSaveObsidianConfig()} className="gc-button">
           {obsidianBusy === "save" ? "Saving..." : "Save Obsidian config"}
         </button>
-        <button type="button" disabled={obsidianBusy === "test"} onClick={() => onTestObsidian()}>
+        <button type="button" disabled={obsidianBusy === "test"} onClick={() => onTestObsidian()} className="gc-button">
           {obsidianBusy === "test" ? "Testing..." : "Test connection"}
         </button>
       </div>
@@ -138,12 +138,12 @@ export function IntegrationsObsidianPanel(props: IntegrationsObsidianPanelProps)
             onChange={(event) => onObsidianQueryChange(event.target.value)}
             placeholder="Prompt Lab"
           />
-          <button type="button" disabled={obsidianBusy === "search"} onClick={() => onSearchObsidian()}>
+          <button type="button" disabled={obsidianBusy === "search"} onClick={() => onSearchObsidian()} className="gc-button">
             {obsidianBusy === "search" ? "Searching..." : "Search"}
           </button>
         </div>
         {obsidianSearchResults.length > 0 ? (
-          <table>
+          <table className="gc-data-table">
             <thead>
               <tr>
                 <th>Note</th>
@@ -170,7 +170,7 @@ export function IntegrationsObsidianPanel(props: IntegrationsObsidianPanelProps)
             onChange={(event) => onObsidianInboxRequestChange(event.target.value)}
             placeholder="Investigate score failures in Prompt Lab"
           />
-          <button type="button" disabled={obsidianBusy === "capture"} onClick={() => onCaptureObsidianInbox()}>
+          <button type="button" disabled={obsidianBusy === "capture"} onClick={() => onCaptureObsidianInbox()} className="gc-button">
             {obsidianBusy === "capture" ? "Capturing..." : "Capture to Obsidian inbox"}
           </button>
         </div>
@@ -178,3 +178,4 @@ export function IntegrationsObsidianPanel(props: IntegrationsObsidianPanelProps)
     </Panel>
   );
 }
+

@@ -260,7 +260,7 @@ export function CostConsolePage() {
       ) : null}
 
       <Panel title="Cost Rows" subtitle="Grouped usage totals for the selected scope.">
-        <table>
+        <table className="gc-data-table">
           <thead>
             <tr>
               <th>Scope Key</th>
@@ -329,4 +329,5 @@ function formatRecordedCost(costUsd: number, tokenTotal: number, showsMissingRec
   }
   return formatUsd(costUsd, 4);
 }
+
 

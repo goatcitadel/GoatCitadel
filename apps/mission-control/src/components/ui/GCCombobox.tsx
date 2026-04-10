@@ -173,7 +173,7 @@ export function GCCombobox({
                   id={`${listboxId}-option-${option.value}`}
                   role="option"
                   aria-selected={option.value === value}
-                  className={`gc-combobox-option${highlightedIndex === index || option.value === value ? " active" : ""}`}
+                  className={["gc-button", (`gc-combobox-option${highlightedIndex === index || option.value === value ? " active" : ""}`)].filter(Boolean).join(" ")}
                   tabIndex={-1}
                   onMouseEnter={() => setHighlightedIndex(index)}
                   onClick={() => {

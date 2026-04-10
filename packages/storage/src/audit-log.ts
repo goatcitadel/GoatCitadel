@@ -141,7 +141,7 @@ function getConfiguredRetentionDays(): number | undefined {
   return Math.floor(parsed);
 }
 
-function sanitizeForAudit<T>(value: T): T {
+export function sanitizeForAudit<T>(value: T): T {
   return sanitizeForAuditInternal(value, new WeakSet<object>());
 }
 

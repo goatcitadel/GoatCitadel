@@ -187,10 +187,10 @@ export function DashboardPage({ onNavigate }: { onNavigate?: (tab: DashboardTab)
             className="dashboard-hero-actions"
             primary={
               <div className="actions">
-                <button type="button" className="dashboard-hero-primary" onClick={heroPrimaryAction.action}>
+                <button type="button" className="gc-button dashboard-hero-primary" onClick={heroPrimaryAction.action}>
                   {heroPrimaryAction.label}
                 </button>
-                <button type="button" className="dashboard-hero-secondary" onClick={heroSecondaryAction.action}>
+                <button type="button" className="gc-button dashboard-hero-secondary" onClick={heroSecondaryAction.action}>
                   {heroSecondaryAction.label}
                 </button>
               </div>
@@ -221,7 +221,7 @@ export function DashboardPage({ onNavigate }: { onNavigate?: (tab: DashboardTab)
                     </StatusChip>
                     <p>{item.label}</p>
                   </div>
-                  <button type="button" onClick={item.action}>
+                  <button type="button" onClick={item.action} className="gc-button">
                     {item.actionLabel}
                   </button>
                 </li>
@@ -277,7 +277,7 @@ export function DashboardPage({ onNavigate }: { onNavigate?: (tab: DashboardTab)
             </div>
           </Panel>
           <Panel title="Task load" subtitle="Pressure by status bucket">
-            <table className="dashboard-data-table">
+            <table className="dashboard-data-table gc-data-table">
               <thead>
                 <tr>
                   <th>Status</th>
@@ -302,22 +302,22 @@ export function DashboardPage({ onNavigate }: { onNavigate?: (tab: DashboardTab)
           className="dashboard-quick-actions-panel"
         >
           <div className="dashboard-action-grid">
-            <button type="button" onClick={() => onNavigate?.("approvals")}>
+            <button type="button" onClick={() => onNavigate?.("approvals")} className="gc-button">
               Review approvals
             </button>
-            <button type="button" onClick={() => onNavigate?.("tasks")}>
+            <button type="button" onClick={() => onNavigate?.("tasks")} className="gc-button">
               Open Trailboard
             </button>
-            <button type="button" onClick={() => onNavigate?.("sessions")}>
+            <button type="button" onClick={() => onNavigate?.("sessions")} className="gc-button">
               Inspect runs
             </button>
-            <button type="button" onClick={() => onNavigate?.("office")}>
+            <button type="button" onClick={() => onNavigate?.("office")} className="gc-button">
               Open Herd HQ
             </button>
-            <button type="button" onClick={() => onNavigate?.("settings")}>
+            <button type="button" onClick={() => onNavigate?.("settings")} className="gc-button">
               Tune Forge
             </button>
-            <button type="button" onClick={() => onNavigate?.("integrations")}>
+            <button type="button" onClick={() => onNavigate?.("integrations")} className="gc-button">
               Configure connections
             </button>
           </div>
@@ -331,7 +331,7 @@ export function DashboardPage({ onNavigate }: { onNavigate?: (tab: DashboardTab)
             {cron.items.length === 0 ? (
               <FieldHelp>No scheduler jobs configured.</FieldHelp>
             ) : (
-              <table className="dashboard-data-table">
+              <table className="dashboard-data-table gc-data-table">
                 <thead>
                   <tr>
                     <th>Job</th>
@@ -359,7 +359,7 @@ export function DashboardPage({ onNavigate }: { onNavigate?: (tab: DashboardTab)
             {operators.items.length === 0 ? (
               <FieldHelp>No operators registered.</FieldHelp>
             ) : (
-              <table className="dashboard-data-table">
+              <table className="dashboard-data-table gc-data-table">
                 <thead>
                   <tr>
                     <th>Operator</th>
@@ -405,3 +405,5 @@ function formatBytes(bytes: number): string {
   }
   return `${bytes} B`;
 }
+
+

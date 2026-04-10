@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 
@@ -45,9 +45,9 @@ export class ChatAttachmentRepository {
   private readonly getStmt;
   private readonly insertStmt;
   private readonly listBySessionStmt;
-  private readonly listByIdsStmt;
+  private readonly listBySessionWorkspaceStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_attachments WHERE attachment_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO chat_attachments (
@@ -63,14 +63,15 @@ export class ChatAttachmentRepository {
     this.listBySessionStmt = db.prepare(`
       SELECT * FROM chat_attachments
       WHERE session_id = @sessionId
-      AND (@workspaceId IS NULL OR workspace_id = @workspaceId)
       ORDER BY created_at DESC
       LIMIT @limit
     `);
-    this.listByIdsStmt = db.prepare(`
+    this.listBySessionWorkspaceStmt = db.prepare(`
       SELECT * FROM chat_attachments
-      WHERE attachment_id IN (SELECT value FROM json_each(@idsJson))
-      AND (@workspaceId IS NULL OR workspace_id = @workspaceId)
+      WHERE session_id = @sessionId
+        AND workspace_id = @workspaceId
+      ORDER BY created_at DESC
+      LIMIT @limit
     `);
   }
 
@@ -99,9 +100,9 @@ export class ChatAttachmentRepository {
   }
 
   public listBySession(sessionId: string, limit = 200, workspaceId?: string): ChatAttachmentRecord[] {
-    const rows = toChatAttachmentRows(this.listBySessionStmt.all({
+    const rows = toChatAttachmentRows((workspaceId ? this.listBySessionWorkspaceStmt : this.listBySessionStmt).all({
       sessionId,
-      workspaceId: workspaceId ? sanitizeWorkspaceId(workspaceId) : null,
+      workspaceId: workspaceId ? sanitizeWorkspaceId(workspaceId) : undefined,
       limit: Math.max(1, Math.min(2000, Math.floor(limit))),
     }));
     return rows.map(mapRow);
@@ -111,10 +112,19 @@ export class ChatAttachmentRepository {
     if (ids.length === 0) {
       return [];
     }
-    const rows = toChatAttachmentRows(this.listByIdsStmt.all({
-      idsJson: JSON.stringify(ids),
-      workspaceId: workspaceId ? sanitizeWorkspaceId(workspaceId) : null,
-    }));
+    const placeholders = ids.map(() => "?").join(", ");
+    const workspace = workspaceId ? sanitizeWorkspaceId(workspaceId) : undefined;
+    const sql = workspace
+      ? `
+        SELECT * FROM chat_attachments
+        WHERE attachment_id IN (${placeholders})
+          AND workspace_id = ?
+      `
+      : `
+        SELECT * FROM chat_attachments
+        WHERE attachment_id IN (${placeholders})
+      `;
+    const rows = toChatAttachmentRows(this.db.prepare(sql).all(...ids, ...(workspace ? [workspace] : [])));
     return rows.map(mapRow);
   }
 }
@@ -201,3 +211,5 @@ function isChatAttachmentRow(value: unknown): value is ChatAttachmentRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

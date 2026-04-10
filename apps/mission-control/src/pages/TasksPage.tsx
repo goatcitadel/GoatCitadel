@@ -544,7 +544,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
           </>
         }
         secondary={
-          <button type="button" onClick={onCreateTask} disabled={!canCreateTask}>
+          <button type="button" onClick={onCreateTask} disabled={!canCreateTask} className="gc-button">
             Create Task
           </button>
         }
@@ -553,7 +553,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
       {loadingTasks ? <TableSkeleton rows={6} cols={5} /> : null}
       <div className="split-grid">
         <Panel title="Task Queue" subtitle="Switch views, then inspect the selected task.">
-          <table>
+          <table className="gc-data-table">
             <thead>
               <tr>
                 <th>Title</th>
@@ -573,7 +573,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                   <td>
                     <button
                       type="button"
-                      className="task-queue-select"
+                      className="gc-button task-queue-select"
                       aria-pressed={task.taskId === selectedTaskId}
                       onClick={() => setSelectedTaskId(task.taskId)}
                     >
@@ -588,17 +588,17 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                   <td>{new Date(task.updatedAt).toLocaleString()}</td>
                   <td className="actions">
                     {!task.deletedAt ? (
-                      <button type="button" onClick={() => setConfirmDelete({ task, mode: "soft" })}>
+                      <button type="button" onClick={() => setConfirmDelete({ task, mode: "soft" })} className="gc-button">
                         Move to Trash
                       </button>
                     ) : (
-                      <button type="button" onClick={() => void onRestore(task)}>
+                      <button type="button" onClick={() => void onRestore(task)} className="gc-button">
                         Restore
                       </button>
                     )}
                     <button
                       type="button"
-                      className="danger"
+                      className="gc-button danger"
                       onClick={() => setConfirmDelete({ task, mode: "hard" })}
                       disabled={deleteAction.pending}
                     >
@@ -645,7 +645,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     <button
                       type="button"
                       key={status}
-                      className={selectedTask.status === status ? "active" : ""}
+                      className={["gc-button", (selectedTask.status === status ? "active" : "")].filter(Boolean).join(" ")}
                       disabled={isSelectedTaskDeleted}
                       onClick={() => void onStatusChange(status)}
                     >
@@ -709,7 +709,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                       void loadDurableState(durableRunId);
                     }}
                     disabled={durableBusy !== null}
-                  >
+                   className="gc-button">
                     {durableBusy === "load" ? "Loading..." : "Load run"}
                   </button>
                   <button
@@ -718,7 +718,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                       void onResumeDurable();
                     }}
                     disabled={durableBusy !== null || !durableStatus}
-                  >
+                   className="gc-button">
                     {durableBusy === "resume" ? "Resuming..." : "Resume from checkpoint"}
                   </button>
                 </div>
@@ -737,7 +737,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                         void onWakeDurable();
                       }}
                       disabled={durableBusy !== null}
-                    >
+                     className="gc-button">
                       {durableBusy === "wake" ? "Waking..." : "Wake waiting run"}
                     </button>
                   </div>
@@ -787,7 +787,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     customLabel="Activity message"
                     autoSelectFirstOption
                   />
-                  <button type="button" disabled={!canAddActivity} onClick={() => void onAddActivity()}>
+                  <button type="button" disabled={!canAddActivity} onClick={() => void onAddActivity()} className="gc-button">
                     Add Activity
                   </button>
                 </div>
@@ -821,7 +821,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     customPlaceholder="Optional custom path"
                     customLabel="Deliverable path"
                   />
-                  <button type="button" disabled={!canAddDeliverable} onClick={() => void onAddDeliverable()}>
+                  <button type="button" disabled={!canAddDeliverable} onClick={() => void onAddDeliverable()} className="gc-button">
                     Add Deliverable
                   </button>
                 </div>
@@ -874,7 +874,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     customPlaceholder="Optional agent name"
                     customLabel="Agent name"
                   />
-                  <button type="button" disabled={!canAddSubagent} onClick={() => void onAddSubagent()}>
+                  <button type="button" disabled={!canAddSubagent} onClick={() => void onAddSubagent()} className="gc-button">
                     Add Subagent
                   </button>
                 </div>
@@ -885,7 +885,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     external session ID.
                   </p>
                 ) : null}
-                <button type="button" onClick={() => setShowAdvanced((current) => !current)}>
+                <button type="button" onClick={() => setShowAdvanced((current) => !current)} className="gc-button">
                   {showAdvanced ? "Hide advanced subagent details" : "Show advanced subagent details"}
                 </button>
                 {showAdvanced ? (
@@ -902,7 +902,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                           type="button"
                           disabled={isSelectedTaskDeleted}
                           onClick={() => void onCompleteSubagent(session.agentSessionId)}
-                        >
+                         className="gc-button">
                           Mark Completed
                         </button>
                       ) : null}
@@ -941,3 +941,4 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
     </section>
   );
 }
+

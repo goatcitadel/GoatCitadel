@@ -211,7 +211,7 @@ export function IntegrationsCreateConnectionPanel(props: IntegrationsCreateConne
               <button
                 type="button"
                 aria-pressed={!showAdvancedJson}
-                className={`integrations-setup-mode-button${!showAdvancedJson ? " active" : ""}`}
+                className={["gc-button", (`integrations-setup-mode-button${!showAdvancedJson ? " active" : ""}`)].filter(Boolean).join(" ")}
                 onClick={() => onShowAdvancedJsonChange(false)}
               >
                 <span className="integrations-setup-mode-label">{simpleFormLabel}</span>
@@ -220,7 +220,7 @@ export function IntegrationsCreateConnectionPanel(props: IntegrationsCreateConne
               <button
                 type="button"
                 aria-pressed={showAdvancedJson}
-                className={`integrations-setup-mode-button${showAdvancedJson ? " active" : ""}`}
+                className={["gc-button", (`integrations-setup-mode-button${showAdvancedJson ? " active" : ""}`)].filter(Boolean).join(" ")}
                 onClick={() => onShowAdvancedJsonChange(true)}
               >
                 <span className="integrations-setup-mode-label">Advanced JSON</span>
@@ -270,7 +270,7 @@ export function IntegrationsCreateConnectionPanel(props: IntegrationsCreateConne
             type="button"
             onClick={() => onCreate()}
             disabled={blockCreate || createPending || !selectedCatalogIsRunnable}
-          >
+           className="gc-button">
             {createPending ? "Saving..." : "Save Connection"}
           </button>
         </>

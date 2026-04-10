@@ -1,5 +1,5 @@
 import type { InboundEventIndexRow } from "@goatcitadel/contracts";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 
 interface InboundEventRow {
   endpoint: string;
@@ -18,7 +18,7 @@ export class IdempotencyRepository {
   private readonly insertIgnoreStmt;
   private readonly markProcessedStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.findStmt = db.prepare(
       "SELECT * FROM inbound_events WHERE endpoint = ? AND idempotency_key = ?",
     );
@@ -28,9 +28,10 @@ export class IdempotencyRepository {
       ) VALUES (@endpoint, @idempotencyKey, @eventId, @sessionKey, @payloadHash, @receivedAt, @status)
     `);
     this.insertIgnoreStmt = db.prepare(`
-      INSERT OR IGNORE INTO inbound_events (
+      INSERT INTO inbound_events (
         endpoint, idempotency_key, event_id, session_key, payload_hash, received_at, status
       ) VALUES (@endpoint, @idempotencyKey, @eventId, @sessionKey, @payloadHash, @receivedAt, @status)
+      ON CONFLICT DO NOTHING
     `);
     this.markProcessedStmt = db.prepare(`
       UPDATE inbound_events
@@ -91,3 +92,5 @@ export class IdempotencyRepository {
     });
   }
 }
+
+

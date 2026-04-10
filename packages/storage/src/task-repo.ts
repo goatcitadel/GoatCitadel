@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   TaskCreateInput,
   TaskProactiveContext,
@@ -44,14 +44,12 @@ export interface TaskStatusCount {
 export class TaskRepository {
   private readonly insertStmt;
   private readonly getStmt;
-  private readonly listStmt;
   private readonly updateStmt;
   private readonly hardDeleteStmt;
   private readonly softDeleteStmt;
   private readonly restoreStmt;
-  private readonly statusCountsStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO tasks (
         task_id, workspace_id, title, description, status, priority,
@@ -63,25 +61,6 @@ export class TaskRepository {
     `);
 
     this.getStmt = db.prepare("SELECT * FROM tasks WHERE task_id = ?");
-
-    this.listStmt = db.prepare(`
-      SELECT * FROM tasks
-      WHERE (@status IS NULL OR status = @status)
-        AND (@workspaceId IS NULL OR workspace_id = @workspaceId)
-        AND (
-          @view = 'all'
-          OR (@view = 'active' AND deleted_at IS NULL)
-          OR (@view = 'trash' AND deleted_at IS NOT NULL)
-        )
-        AND (
-          @cursorUpdatedAt IS NULL
-          OR updated_at < @cursorUpdatedAt
-          OR (updated_at = @cursorUpdatedAt AND task_id < @cursorTaskId)
-        )
-      ORDER BY updated_at DESC, task_id DESC
-      LIMIT @limit
-    `);
-
     this.updateStmt = db.prepare(`
       UPDATE tasks
       SET
@@ -117,14 +96,6 @@ export class TaskRepository {
         delete_reason = NULL,
         updated_at = @updatedAt
       WHERE task_id = @taskId
-    `);
-    this.statusCountsStmt = db.prepare(`
-      SELECT status, COUNT(*) AS count
-      FROM tasks
-      WHERE deleted_at IS NULL
-        AND (@workspaceId IS NULL OR workspace_id = @workspaceId)
-      GROUP BY status
-      ORDER BY status ASC
     `);
   }
 
@@ -166,14 +137,37 @@ export class TaskRepository {
 
   public list(query: TaskListQuery): TaskRecord[] {
     const parsedCursor = parseCompositeCursor(query.cursor);
-    const rows = toTaskRows(this.listStmt.all({
-      status: query.status ?? null,
-      workspaceId: query.workspaceId ? sanitizeWorkspaceId(query.workspaceId) : null,
+    const params: Record<string, unknown> = {
       view: query.view ?? "active",
-      cursorUpdatedAt: parsedCursor?.timestamp ?? null,
-      cursorTaskId: parsedCursor?.key ?? null,
       limit: query.limit,
-    }));
+    };
+    const clauses = [
+      `(
+        @view = 'all'
+        OR (@view = 'active' AND deleted_at IS NULL)
+        OR (@view = 'trash' AND deleted_at IS NOT NULL)
+      )`,
+    ];
+    if (query.status) {
+      params.status = query.status;
+      clauses.push("status = @status");
+    }
+    if (query.workspaceId) {
+      params.workspaceId = sanitizeWorkspaceId(query.workspaceId);
+      clauses.push("workspace_id = @workspaceId");
+    }
+    if (parsedCursor) {
+      params.cursorUpdatedAt = parsedCursor.timestamp;
+      params.cursorTaskId = parsedCursor.key;
+      clauses.push("(updated_at < @cursorUpdatedAt OR (updated_at = @cursorUpdatedAt AND task_id < @cursorTaskId))");
+    }
+    const sql = `
+      SELECT * FROM tasks
+      WHERE ${clauses.join("\n        AND ")}
+      ORDER BY updated_at DESC, task_id DESC
+      LIMIT @limit
+    `;
+    const rows = toTaskRows(this.db.prepare(sql).all(params));
     return rows.map(mapTaskRow);
   }
 
@@ -239,9 +233,13 @@ export class TaskRepository {
   }
 
   public statusCounts(): TaskStatusCount[] {
-    const rows = toTaskStatusCountRows(this.statusCountsStmt.all({
-      workspaceId: null,
-    }));
+    const rows = toTaskStatusCountRows(this.db.prepare(`
+      SELECT status, COUNT(*) AS count
+      FROM tasks
+      WHERE deleted_at IS NULL
+      GROUP BY status
+      ORDER BY status ASC
+    `).all());
     return rows.map((row) => ({
       status: row.status,
       count: Number(row.count ?? 0),
@@ -249,7 +247,14 @@ export class TaskRepository {
   }
 
   public statusCountsByWorkspace(workspaceId: string): TaskStatusCount[] {
-    const rows = toTaskStatusCountRows(this.statusCountsStmt.all({
+    const rows = toTaskStatusCountRows(this.db.prepare(`
+      SELECT status, COUNT(*) AS count
+      FROM tasks
+      WHERE deleted_at IS NULL
+        AND workspace_id = @workspaceId
+      GROUP BY status
+      ORDER BY status ASC
+    `).all({
       workspaceId: sanitizeWorkspaceId(workspaceId),
     }));
     return rows.map((row) => ({
@@ -363,3 +368,5 @@ function isTaskRow(value: unknown): value is TaskRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

@@ -61,7 +61,7 @@ export function SelectOrCustom(props: SelectOrCustomProps) {
         <div className="mode-switch" role="tablist" aria-label="Input mode">
           <button
             type="button"
-            className={!isCustomMode ? "active" : ""}
+            className={["gc-button", (!isCustomMode ? "active" : "")].filter(Boolean).join(" ")}
             disabled={props.disabled}
             onClick={() => {
               setIsCustomMode(false);
@@ -75,7 +75,7 @@ export function SelectOrCustom(props: SelectOrCustomProps) {
           </button>
           <button
             type="button"
-            className={isCustomMode ? "active" : ""}
+            className={["gc-button", (isCustomMode ? "active" : "")].filter(Boolean).join(" ")}
             disabled={props.disabled}
             onClick={() => {
               setIsCustomMode(true);

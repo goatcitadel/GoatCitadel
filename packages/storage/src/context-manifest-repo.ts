@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   ContextManifestDetail,
   ContextManifestEntryKind,
@@ -60,7 +60,7 @@ export class ContextManifestRepository {
   private readonly insertEntryStmt;
   private readonly touchStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.ensureStmt = db.prepare(`
       INSERT INTO context_manifests (
         manifest_id, scope, turn_id, session_id, task_id, created_at, updated_at
@@ -98,13 +98,14 @@ export class ContextManifestRepository {
       ORDER BY entry_index ASC, created_at ASC
     `);
     this.insertEntryStmt = db.prepare(`
-      INSERT OR IGNORE INTO context_manifest_entries (
+      INSERT INTO context_manifest_entries (
         entry_id, manifest_id, kind, entry_index, title, source_ref,
         content_text, content_hash, metadata_json, created_at
       ) VALUES (
         @entryId, @manifestId, @kind, @entryIndex, @title, @sourceRef,
         @contentText, @contentHash, @metadataJson, @createdAt
       )
+      ON CONFLICT DO NOTHING
     `);
     this.touchStmt = db.prepare(`
       UPDATE context_manifests
@@ -280,3 +281,5 @@ function isContextManifestEntryRow(value: unknown): value is ContextManifestEntr
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

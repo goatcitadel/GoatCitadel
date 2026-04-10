@@ -349,11 +349,11 @@ const REVIEW_POLICY_HINTS: Array<{
       "GoatCitadel already has native skill import vetting and a bundled MCP vetter; keep this as reference only.",
   },
   {
-    pattern: /\bai[-\s]?swarm\b/i,
+    pattern: /\b(ai[-\s]?swarm|swarm|council)\b/i,
     duplicateFamily: "multi_agent_swarm",
     reviewDisposition: "reject",
     message:
-      "This swarm automation should stay quarantined because it can drive broad repo mutation and automation behavior.",
+      "GoatCitadel already has a native orchestration direction for this swarm or council family; keep this as reference only.",
   },
   {
     pattern: /\bproactive[-\s]?agent\b/i,
@@ -399,6 +399,28 @@ const REVIEW_POLICY_HINTS: Array<{
       "Choose one primary Cloudflare or DNS skill for repo-managed installation and avoid overlapping installs in the same family.",
   },
 ];
+
+const NATIVE_OVERLAP_HINTS: Record<string, {
+  nativeAlternativeName: string;
+  nativeDestination: string;
+  blockingReason: string;
+}> = {
+  safe_self_improvement: {
+    nativeAlternativeName: "Native memory maintenance",
+    nativeDestination: "Observe > Artifacts > Memory",
+    blockingReason: "GoatCitadel already has a native bounded memory-maintenance path for this family.",
+  },
+  skill_vetting: {
+    nativeAlternativeName: "Native skill import trust posture",
+    nativeDestination: "Configure > Agents > Skills",
+    blockingReason: "GoatCitadel already ships native skill vetting and trust-governance for this family.",
+  },
+  multi_agent_swarm: {
+    nativeAlternativeName: "Native orchestration and Herd surfaces",
+    nativeDestination: "Operate > Cowork / Configure > Agents",
+    blockingReason: "GoatCitadel already has a native orchestration direction for this family.",
+  },
+};
 
 export class SkillImportService {
   public constructor(
@@ -1062,6 +1084,7 @@ export class SkillImportService {
       inferredSkillName,
       sourceRef: source.candidate.sourceRef,
     });
+    const nativeOverlaps = buildNativeOverlapRecords(reviewPolicy?.duplicateFamily);
     if (reviewPolicy?.message) {
       if (reviewPolicy.reviewDisposition === "reject") {
         errors.push(reviewPolicy.message);
@@ -1076,6 +1099,13 @@ export class SkillImportService {
     });
     if (duplicateMatches.length > 0) {
       errors.push(buildDuplicateInstallMessage(duplicateMatches, reviewPolicy?.duplicateFamily));
+    } else if (nativeOverlaps?.length) {
+      const nativeOverlap = nativeOverlaps[0];
+      if (nativeOverlap) {
+        errors.push(
+          `${nativeOverlap.blockingReason} Use ${nativeOverlap.nativeAlternativeName} at ${nativeOverlap.nativeDestination} instead.`,
+        );
+      }
     }
     const riskLevel = deriveRiskLevel({
       suspiciousScripts,
@@ -1107,6 +1137,7 @@ export class SkillImportService {
       suspiciousSignals: scan.suspiciousSignals,
       licenseFiles: scan.licenseFiles,
       instructionPreview,
+      nativeOverlaps,
     };
   }
 }
@@ -1651,6 +1682,10 @@ function deriveReviewPolicy(input: { inferredSkillName?: string; sourceRef: stri
 
 function buildDuplicateInstallMessage(matches: SkillInstallDuplicateMatch[], duplicateFamily?: string): string {
   const locations = matches.map((match) => match.identifier).join(", ");
+  const nativeOverlap = duplicateFamily ? NATIVE_OVERLAP_HINTS[duplicateFamily] : undefined;
+  if (nativeOverlap) {
+    return `${nativeOverlap.blockingReason} Use ${nativeOverlap.nativeAlternativeName} at ${nativeOverlap.nativeDestination} instead of importing this family from ${locations}.`;
+  }
   if (duplicateFamily) {
     return `Duplicate skill family "${duplicateFamily}" is already present in ${locations}. Keep only one repo-managed install for that family.`;
   }
@@ -1678,6 +1713,22 @@ function findBundledDuplicateMatches(rootDir: string, duplicateFamily?: string):
       identifier: item.identifier,
       duplicateFamily: item.family,
     }));
+}
+
+function buildNativeOverlapRecords(duplicateFamily?: string) {
+  if (!duplicateFamily) {
+    return undefined;
+  }
+  const overlap = NATIVE_OVERLAP_HINTS[duplicateFamily];
+  if (!overlap) {
+    return undefined;
+  }
+  return [{
+    overlapFamily: duplicateFamily,
+    nativeAlternativeName: overlap.nativeAlternativeName,
+    nativeDestination: overlap.nativeDestination,
+    blockingReason: overlap.blockingReason,
+  }];
 }
 
 async function resolveGitHeadRevision(repoDir: string): Promise<string | undefined> {

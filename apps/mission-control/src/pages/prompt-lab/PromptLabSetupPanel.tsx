@@ -110,7 +110,7 @@ export function PromptLabSetupPanel({
             <li key={pack.packId}>
               <button
                 type="button"
-                className={selectedPackId === pack.packId ? "active" : ""}
+                className={["gc-button", (selectedPackId === pack.packId ? "active" : "")].filter(Boolean).join(" ")}
                 onClick={() => onSelectedPackIdChange(pack.packId)}
               >
                 {pack.name}

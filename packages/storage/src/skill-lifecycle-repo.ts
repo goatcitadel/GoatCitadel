@@ -1,6 +1,6 @@
 import type { SkillLifecycleRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
 interface SkillLifecycleRow {
@@ -19,7 +19,7 @@ export class SkillLifecycleRepository {
   private readonly getStmt;
   private readonly listStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
       INSERT INTO skill_lifecycle (
         skill_id, capability_category, lifecycle_state, trust_label, review_warning, provenance_json, created_at, updated_at
@@ -82,3 +82,5 @@ function mapSkillLifecycleRow(row: SkillLifecycleRow): SkillLifecycleRecord {
     updatedAt: row.updated_at,
   };
 }
+
+

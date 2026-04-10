@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
+const onboardingTimingEnabled = process.env.GOATCITADEL_DEBUG_ONBOARDING_TIMING === "1";
+
 const llmApiStyleSchema = z.enum([
   "openai-chat-completions",
   "openai-responses",
@@ -128,8 +130,18 @@ export const onboardingRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(fastify.gateway.getOnboardingStartupState());
   });
 
-  fastify.get("/api/v1/onboarding/state", async (_request, reply) => {
-    return reply.send(fastify.gateway.getOnboardingState());
+  fastify.get("/api/v1/onboarding/state", async (request, reply) => {
+    const startedAt = Date.now();
+    const state = fastify.gateway.getOnboardingState();
+    const afterState = Date.now();
+    if (onboardingTimingEnabled) {
+      request.log.info({
+        route: "onboarding.state",
+        totalMs: afterState - startedAt,
+        gatewayMs: afterState - startedAt,
+      }, "onboarding route timing");
+    }
+    return reply.send(state);
   });
 
   fastify.post("/api/v1/onboarding/bootstrap", async (request, reply) => {

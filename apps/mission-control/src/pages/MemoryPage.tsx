@@ -856,7 +856,7 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
               <li key={area.area}>
                 <button
                   type="button"
-                  className={selectedArea === area.area ? "active" : ""}
+                  className={["gc-button", (selectedArea === area.area ? "active" : "")].filter(Boolean).join(" ")}
                   onClick={() => setSelectedArea(area.area)}
                 >
                   <strong>{area.area}</strong>
@@ -872,7 +872,7 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
           title={`Files ${selectedArea !== "all" ? `(${selectedArea})` : "(all areas)"}`}
           subtitle="Preview the indexed file inventory before drilling into memory-specific areas."
         >
-          <table>
+          <table className="gc-data-table">
             <thead>
               <tr>
                 <th>Path</th>
@@ -899,7 +899,7 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
       </div>
 
       <Panel title="memory/ Breakdown" subtitle="Subspaces discovered under memory/ and their relative footprint.">
-        <table>
+        <table className="gc-data-table">
           <thead>
             <tr>
               <th>Memory Workspace</th>
@@ -928,7 +928,7 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
       </Panel>
 
       <Panel title="Recent Distilled Context Packs" subtitle="Recent QMD outputs and their current quality status.">
-        <table>
+        <table className="gc-data-table">
           <thead>
             <tr>
               <th>Context ID</th>
@@ -1030,3 +1030,4 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
     </section>
   );
 }
+

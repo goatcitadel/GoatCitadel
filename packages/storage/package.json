@@ -11,7 +11,8 @@
     }
   },
   "dependencies": {
-    "@goatcitadel/contracts": "workspace:*"
+    "@goatcitadel/contracts": "workspace:*",
+    "pg": "^8.20.0"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",
@@ -19,5 +20,8 @@
     "test": "tsx --test src/*.test.ts",
     "test:coverage": "c8 --report-dir=coverage --reporter=json --reporter=text-summary tsx --test src/*.test.ts",
     "lint": "tsc -b tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0"
   }
 }

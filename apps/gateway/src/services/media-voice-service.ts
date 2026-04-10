@@ -264,15 +264,21 @@ export class MediaVoiceService {
     const rows = toMediaJobRows(
       this.deps.gatewaySql
         .prepare(
-          `
+          sessionId
+            ? `
       SELECT * FROM media_jobs
-      WHERE (@sessionId IS NULL OR session_id = @sessionId)
+      WHERE session_id = @sessionId
+      ORDER BY created_at DESC
+      LIMIT 500
+    `
+            : `
+      SELECT * FROM media_jobs
       ORDER BY created_at DESC
       LIMIT 500
     `,
         )
         .all({
-          sessionId: sessionId ?? null,
+          sessionId,
         }),
     );
     return rows.map(mapMediaJobRow);

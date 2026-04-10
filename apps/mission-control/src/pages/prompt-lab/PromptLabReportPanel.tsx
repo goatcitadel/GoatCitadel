@@ -82,7 +82,7 @@ export function PromptLabReportPanel(props: PromptLabReportPanelProps) {
             {benchmarkStatus.progress.completedItems}/{benchmarkStatus.progress.totalItems})
           </p>
           {benchmarkStatus.modelSummaries.length > 0 ? (
-            <table className="prompt-lab-benchmark-table">
+            <table className="prompt-lab-benchmark-table gc-data-table">
               <thead>
                 <tr>
                   <th>Model</th>
@@ -126,7 +126,7 @@ export function PromptLabReportPanel(props: PromptLabReportPanelProps) {
           </p>
           {regressionStatus.run.error ? <p className="error">{regressionStatus.run.error}</p> : null}
           {regressionStatus.results.length > 0 ? (
-            <table className="prompt-lab-benchmark-table">
+            <table className="prompt-lab-benchmark-table gc-data-table">
               <thead>
                 <tr>
                   <th>Test</th>
@@ -170,3 +170,5 @@ export function PromptLabReportPanel(props: PromptLabReportPanelProps) {
     </article>
   );
 }
+
+

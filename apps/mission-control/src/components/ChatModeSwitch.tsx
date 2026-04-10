@@ -17,7 +17,7 @@ export function ChatModeSwitch({
           type="button"
           role="tab"
           aria-selected={value === mode}
-          className={value === mode ? "active" : ""}
+          className={["gc-button", (value === mode ? "active" : "")].filter(Boolean).join(" ")}
           disabled={disabled}
           onClick={() => onChange(mode)}
         >

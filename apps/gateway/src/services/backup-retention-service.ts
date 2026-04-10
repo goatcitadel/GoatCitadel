@@ -14,8 +14,10 @@ import type {
 } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import { buildBundledDockerContainerName } from "../bundled-postgres-runtime.js";
 import { verifyBackupAtPath } from "./gateway/backup-verify.js";
 import type { GatewayRuntimeConfig } from "../config.js";
+import { resolveGatewayPostgresConnectionString } from "../postgres-runtime-config.js";
 
 const RETENTION_SETTINGS_KEY = "retention_policy";
 
@@ -84,11 +86,20 @@ export class BackupRetentionService {
     await fs.rm(tempDir, { recursive: true, force: true });
     await fs.mkdir(payloadDir, { recursive: true });
 
-    const includePaths = this.buildBackupIncludePaths();
-    for (const includePath of includePaths) {
-      const source = path.resolve(this.config.rootDir, includePath);
-      const target = path.join(payloadDir, includePath);
-      await copyPathIfExists(source, target);
+    if (this.config.assistant.database.driver === "postgres") {
+      await this.exportPostgresDump(payloadDir);
+      for (const includePath of this.buildBackupIncludePaths()) {
+        const source = path.resolve(this.config.rootDir, includePath);
+        const target = path.join(payloadDir, includePath);
+        await copyPathIfExists(source, target);
+      }
+    } else {
+      const includePaths = this.buildBackupIncludePaths();
+      for (const includePath of includePaths) {
+        const source = path.resolve(this.config.rootDir, includePath);
+        const target = path.join(payloadDir, includePath);
+        await copyPathIfExists(source, target);
+      }
     }
 
     const files = await collectBackupFileRecords(payloadDir);
@@ -135,6 +146,9 @@ export class BackupRetentionService {
 
     const payloadDir = path.join(backupPath, "payload");
     const manifest = verification.manifest;
+    if (manifest.files.some((file) => file.path === "database/postgres.dump")) {
+      throw new Error("Postgres backups must be restored with pg_restore; file-copy restore is only available for SQLite backups.");
+    }
 
     for (const file of manifest.files) {
       const source = path.resolve(payloadDir, file.path);
@@ -247,13 +261,41 @@ export class BackupRetentionService {
 
   private buildBackupIncludePaths(): string[] {
     const paths = new Set<string>();
-    paths.add(path.relative(this.config.rootDir, this.config.dbPath).replaceAll("\\", "/"));
-    paths.add(`${path.relative(this.config.rootDir, this.config.dbPath).replaceAll("\\", "/")}-wal`);
-    paths.add(`${path.relative(this.config.rootDir, this.config.dbPath).replaceAll("\\", "/")}-shm`);
-    paths.add(this.config.assistant.transcriptsDir.replaceAll("\\", "/"));
-    paths.add(this.config.assistant.auditDir.replaceAll("\\", "/"));
+    if (this.config.assistant.database.driver === "sqlite") {
+      paths.add(path.relative(this.config.rootDir, this.config.dbPath).replaceAll("\\", "/"));
+      paths.add(`${path.relative(this.config.rootDir, this.config.dbPath).replaceAll("\\", "/")}-wal`);
+      paths.add(`${path.relative(this.config.rootDir, this.config.dbPath).replaceAll("\\", "/")}-shm`);
+      paths.add(this.config.assistant.transcriptsDir.replaceAll("\\", "/"));
+      paths.add(this.config.assistant.auditDir.replaceAll("\\", "/"));
+    }
     paths.add("config");
     return [...paths];
+  }
+
+  private async exportPostgresDump(payloadDir: string): Promise<void> {
+    const connectionString = resolveGatewayPostgresConnectionString(this.config);
+    if (!connectionString) {
+      throw new Error("Postgres backup requested but no connection string could be resolved.");
+    }
+    const databaseDir = path.join(payloadDir, "database");
+    await fs.mkdir(databaseDir, { recursive: true });
+    const dumpPath = path.join(databaseDir, "postgres.dump");
+    if (this.config.assistant.database.postgres.mode === "bundled") {
+      const bundledDump = tryDumpViaBundledDocker(this.config, connectionString);
+      if (bundledDump) {
+        await fs.writeFile(dumpPath, bundledDump);
+        return;
+      }
+    }
+    const pgDumpCommand = resolvePgDumpCommand(this.config);
+    execFileSync(
+      pgDumpCommand,
+      ["--format=custom", "--file", dumpPath, connectionString],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
   }
 }
 
@@ -471,4 +513,100 @@ function ensurePathWithinRoot(targetPath: string, rootDir: string): void {
     return;
   }
   throw new Error("Path escapes allowed root");
+}
+
+function resolvePgDumpCommand(config: GatewayRuntimeConfig): string {
+  const explicitPath = process.env.GOATCITADEL_PG_DUMP_PATH?.trim();
+  if (explicitPath) {
+    return explicitPath;
+  }
+
+  const configuredBinDir = config.assistant.database.bundledPostgres.binDir?.trim();
+  if (configuredBinDir) {
+    const baseDir = path.isAbsolute(configuredBinDir)
+      ? configuredBinDir
+      : path.resolve(config.rootDir, configuredBinDir);
+    const configuredCommand = path.join(baseDir, process.platform === "win32" ? "pg_dump.exe" : "pg_dump");
+    if (fsSync.existsSync(configuredCommand)) {
+      return configuredCommand;
+    }
+  }
+
+  const resolvedOnPath = resolveCommandOnPath(process.platform === "win32" ? "pg_dump.exe" : "pg_dump");
+  if (resolvedOnPath) {
+    return resolvedOnPath;
+  }
+
+  throw new Error(
+    "Postgres backup requested but pg_dump is unavailable. Set GOATCITADEL_PG_DUMP_PATH or assistant.database.bundledPostgres.binDir.",
+  );
+}
+
+function resolveCommandOnPath(command: string): string | undefined {
+  try {
+    const locator = process.platform === "win32" ? "where.exe" : "which";
+    const output = execFileSync(locator, [command], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const first = output.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+    return first || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function tryDumpViaBundledDocker(config: GatewayRuntimeConfig, connectionString: string): Buffer | undefined {
+  if (!canUseDockerCli()) {
+    return undefined;
+  }
+  const containerName = buildBundledDockerContainerName(config.rootDir);
+  if (!isDockerContainerRunning(containerName)) {
+    return undefined;
+  }
+  try {
+    return execFileSync(
+      "docker",
+      ["exec", containerName, "pg_dump", "--format=custom", "--dbname", normalizeBundledDockerConnectionString(connectionString)],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeBundledDockerConnectionString(connectionString: string): string {
+  return connectionString.replace("@127.0.0.1:55432/", "@127.0.0.1:5432/");
+}
+
+function canUseDockerCli(): boolean {
+  try {
+    execFileSync("docker", ["info"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isDockerContainerRunning(containerName: string): boolean {
+  try {
+    const output = execFileSync("docker", [
+      "ps",
+      "--filter",
+      `name=^/${containerName}$`,
+      "--format",
+      "{{.Names}}",
+    ], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return output === containerName;
+  } catch {
+    return false;
+  }
 }

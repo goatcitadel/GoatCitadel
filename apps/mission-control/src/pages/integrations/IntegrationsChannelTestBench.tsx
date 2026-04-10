@@ -146,7 +146,7 @@ export function IntegrationsChannelTestBench(props: IntegrationsChannelTestBench
               onChange={(event) => onChannelTestTargetChange(event.target.value)}
               placeholder="channel / room / chat id / thread key"
             />
-            <button type="button" onClick={() => onSendChannelTest()} disabled={channelTestBusy}>
+            <button type="button" onClick={() => onSendChannelTest()} disabled={channelTestBusy} className="gc-button">
               {channelTestBusy ? "Sending..." : "Send test"}
             </button>
           </div>
@@ -258,7 +258,7 @@ export function IntegrationsChannelTestBench(props: IntegrationsChannelTestBench
                       type="button"
                       onClick={() => onReconnectDiscordRuntime(selectedChannelConnection.connectionId)}
                       disabled={discordPairingBusyId === `reconnect:${selectedChannelConnection.connectionId}`}
-                    >
+                     className="gc-button">
                       {discordPairingBusyId === `reconnect:${selectedChannelConnection.connectionId}`
                         ? "Reconnecting..."
                         : "Reconnect Discord runtime"}
@@ -288,7 +288,7 @@ export function IntegrationsChannelTestBench(props: IntegrationsChannelTestBench
                                 onApproveDiscordPairing(selectedChannelConnection.connectionId, pairing.pairingId)
                               }
                               disabled={discordPairingBusyId === `approve:${pairing.pairingId}`}
-                            >
+                             className="gc-button">
                               {discordPairingBusyId === `approve:${pairing.pairingId}` ? "Approving..." : "Approve"}
                             </button>
                           ) : null}{" "}
@@ -299,7 +299,7 @@ export function IntegrationsChannelTestBench(props: IntegrationsChannelTestBench
                                 onRevokeDiscordPairing(selectedChannelConnection.connectionId, pairing.pairingId)
                               }
                               disabled={discordPairingBusyId === `revoke:${pairing.pairingId}`}
-                            >
+                             className="gc-button">
                               {discordPairingBusyId === `revoke:${pairing.pairingId}` ? "Revoking..." : "Revoke"}
                             </button>
                           ) : null}
@@ -394,7 +394,7 @@ export function IntegrationsChannelTestBench(props: IntegrationsChannelTestBench
                   <code>{attachment.attachmentId}</code>
                   {" · "}
                   {attachment.mimeType}{" "}
-                  <button type="button" onClick={() => onRemoveUploadedChannelAttachment(attachment.attachmentId)}>
+                  <button type="button" onClick={() => onRemoveUploadedChannelAttachment(attachment.attachmentId)} className="gc-button">
                     Remove
                   </button>
                 </li>
@@ -437,7 +437,7 @@ export function IntegrationsChannelTestBench(props: IntegrationsChannelTestBench
                     channelActionBusy !== null ||
                     !connectorSupportsDeliveryAction(selectedChannelConnector, "channel.react")
                   }
-                >
+                 className="gc-button">
                   {channelActionBusy === "react" ? "Reacting..." : "Send reaction"}
                 </button>
               </div>
@@ -456,7 +456,7 @@ export function IntegrationsChannelTestBench(props: IntegrationsChannelTestBench
                     channelActionBusy !== null ||
                     !connectorSupportsDeliveryAction(selectedChannelConnector, "channel.unsend")
                   }
-                >
+                 className="gc-button">
                   {channelActionBusy === "unsend" ? "Unsending..." : "Unsend message"}
                 </button>
               </div>

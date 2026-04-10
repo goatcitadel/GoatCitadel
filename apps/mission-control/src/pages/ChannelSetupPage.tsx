@@ -679,7 +679,7 @@ function ChannelSetupContent(props: {
                 <button
                   key={item.catalogId}
                   type="button"
-                  className={`channel-setup-catalog-item${selected ? " selected" : ""}`}
+                  className={["gc-button", (`channel-setup-catalog-item${selected ? " selected" : ""}`)].filter(Boolean).join(" ")}
                   onClick={() => props.onSelectCatalog(item.catalogId)}
                 >
                   <div className="channel-setup-catalog-top">
@@ -868,7 +868,7 @@ function WizardShell(props: Parameters<typeof ChannelSetupContent>[0]) {
                 <li key={step.id}>
                   <button
                     type="button"
-                    className={`channel-setup-step-button${step.id === props.currentStepId ? " active" : ""}${getStepCompletionState(step, props.draft, props.validation, props.testResult) === "complete" ? " complete" : ""}`}
+                    className={["gc-button", (`channel-setup-step-button${step.id === props.currentStepId ? " active" : ""}${getStepCompletionState(step, props.draft, props.validation, props.testResult) === "complete" ? " complete" : ""}`)].filter(Boolean).join(" ")}
                     onClick={() => props.setCurrentStepId(step.id)}
                   >
                     <span>
@@ -894,7 +894,7 @@ function WizardShell(props: Parameters<typeof ChannelSetupContent>[0]) {
             <ol className="channel-setup-step-list">
               {props.visibleSteps.map((step, index) => (
                 <li key={step.id}>
-                  <button type="button" className={`channel-setup-step-button${index === 0 ? " active" : ""}`} disabled>
+                  <button type="button" className={["gc-button", (`channel-setup-step-button${index === 0 ? " active" : ""}`)].filter(Boolean).join(" ")} disabled>
                     <span>{index + 1}</span>
                     <div>
                       <strong>{step.title}</strong>

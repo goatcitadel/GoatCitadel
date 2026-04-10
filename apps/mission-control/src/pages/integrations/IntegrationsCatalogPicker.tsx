@@ -98,7 +98,7 @@ export function IntegrationsCatalogPicker<K extends string>(props: IntegrationsC
               <button
                 key={entry.catalogId}
                 type="button"
-                className={`channel-setup-catalog-item${selected ? " selected" : ""}`}
+                className={["gc-button", (`channel-setup-catalog-item${selected ? " selected" : ""}`)].filter(Boolean).join(" ")}
                 onClick={() => onSelectCatalogId(entry.catalogId)}
               >
                 <div className="channel-setup-catalog-top">

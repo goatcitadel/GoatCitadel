@@ -59,6 +59,7 @@ export interface InternalToolCallV1 {
   args: Record<string, unknown>;
   agentId: string;
   sessionId: string;
+  workspaceId?: string;
   taskId?: string;
   trustLevel: ToolExecutionTrustLevel;
   capabilityPolicy: ToolCapabilityPolicy;
@@ -91,6 +92,7 @@ export interface ToolAuditRecord {
   toolName: string;
   agentId: string;
   sessionId: string;
+  workspaceId?: string;
   taskId?: string;
   trustLevel: ToolExecutionTrustLevel;
   outcome: "executed" | "approval_required" | "blocked";

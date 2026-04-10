@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   DurableCheckpointRecord,
   DurableDeadLetterRecord,
@@ -67,7 +67,7 @@ export class DurableRunRepository {
   private readonly listDeadLettersStmt;
   private readonly getDeadLetterByRunStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertRunStmt = db.prepare(`
       INSERT INTO durable_runs (
         run_id, workflow_key, status, attempt_count, max_attempts,
@@ -539,3 +539,5 @@ function normalizeOptionalObject(value: Record<string, unknown> | undefined): Re
   }
   return value;
 }
+
+

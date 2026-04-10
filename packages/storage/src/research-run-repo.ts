@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ResearchRunRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 
@@ -20,7 +20,7 @@ export class ResearchRunRepository {
   private readonly patchStmt;
   private readonly listBySessionStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM research_runs WHERE run_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO research_runs (
@@ -148,3 +148,5 @@ function isResearchRunRow(value: unknown): value is ResearchRunRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

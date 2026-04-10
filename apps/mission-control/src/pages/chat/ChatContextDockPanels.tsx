@@ -1,5 +1,3 @@
-import { CodeWorkbenchPanel } from "../../components/CodeWorkbenchPanel";
-import { CoworkCanvasPanel } from "../../components/CoworkCanvasPanel";
 import { MissionControlContextDock } from "./MissionControlContextDock";
 import { ChatDockMemorySection } from "./ChatDockMemorySection";
 import { ChatDockRunTraceSection } from "./ChatDockRunTraceSection";
@@ -14,12 +12,7 @@ export function ChatContextDockPanels(props: ChatContextDockPanelsProps) {
     dockOpen,
     dockSectionStyle,
     isCodeSurface,
-    isCoworkSurface,
-    selectedProject,
-    codeModeNeedsProjectBinding,
     selectedTurn,
-    coworkItems,
-    latestOrchestration,
     showTracePanel,
     showSuggestionsPanel,
     showLearnedMemoryPanel,
@@ -27,21 +20,6 @@ export function ChatContextDockPanels(props: ChatContextDockPanelsProps) {
 
   return (
     <MissionControlContextDock mode={mode} open={dockOpen}>
-      {isCoworkSurface ? (
-        <div className="mission-dock-section" style={dockSectionStyle("workflow")}>
-          <CoworkCanvasPanel items={coworkItems} orchestration={latestOrchestration ?? undefined} />
-        </div>
-      ) : null}
-      {isCodeSurface ? (
-        <div className="mission-dock-section" style={dockSectionStyle("workflow")}>
-          <CodeWorkbenchPanel
-            selectedTurn={selectedTurn}
-            projectName={selectedProject?.name}
-            needsProjectBinding={codeModeNeedsProjectBinding}
-          />
-        </div>
-      ) : null}
-
       <div className="mission-dock-section" style={dockSectionStyle("surface")}>
         <ChatDockSurfaceSection {...props} />
       </div>

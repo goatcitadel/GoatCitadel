@@ -50,8 +50,8 @@ export class PageErrorBoundary extends Component<
             <h3>{this.props.pageLabel} hit a render failure.</h3>
             <p>Retry this surface or return to Chat while Mission Control recovers.</p>
             <div className="shell-page-error-actions">
-              <button type="button" onClick={this.handleRetry}>Retry page</button>
-              <button type="button" className="secondary" onClick={this.props.onReturnToChat}>Return to Chat</button>
+              <button type="button" onClick={this.handleRetry} className="gc-button">Retry page</button>
+              <button type="button" className="gc-button secondary" onClick={this.props.onReturnToChat}>Return to Chat</button>
             </div>
           </div>
         </section>

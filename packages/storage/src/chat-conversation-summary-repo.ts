@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ChatConversationSummaryRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
@@ -38,7 +38,7 @@ export class ChatConversationSummaryRepository {
   private readonly listByBranchStmt;
   private readonly listBySessionStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_conversation_summaries WHERE summary_id = ?");
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_conversation_summaries (
@@ -173,3 +173,5 @@ function isChatConversationSummaryRow(value: unknown): value is ChatConversation
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

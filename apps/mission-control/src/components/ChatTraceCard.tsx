@@ -4,6 +4,7 @@ import {
   getChatTurnRecoveryActionSummary,
   type ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
+import { ChatToolArtifactInspector } from "./chat/ChatToolArtifactInspector";
 import { getChatToolRunDiagnostics, getTraceFallbackAttemptCount } from "./chat/chat-tool-diagnostics";
 import { ChatExecutionPlanSummary } from "./chat/ChatExecutionPlanSummary";
 
@@ -36,7 +37,7 @@ export function ChatTraceCard({
             {trace.status} · {trace.model ?? "model n/a"} · {formatTime(trace.startedAt)}
           </p>
         </div>
-        <button type="button" onClick={() => setCollapsed((value) => !value)}>
+        <button type="button" onClick={() => setCollapsed((value) => !value)} className="gc-button">
           {collapsed ? "Show trace" : "Hide trace"}
         </button>
       </header>
@@ -99,12 +100,29 @@ export function ChatTraceCard({
                     <span>{run.toolName}</span>
                     <span>{run.status}</span>
                     <span>{formatTime(run.startedAt)}</span>
+                    {diagnostics.outputVirtualized || diagnostics.storedAsArtifact ? (
+                      <p className="chat-tool-artifact-row">
+                        {diagnostics.outputVirtualized ? (
+                          <span className="chat-tool-artifact-badge">Output summarized</span>
+                        ) : null}
+                        {diagnostics.storedAsArtifact ? (
+                          <span className="chat-tool-artifact-badge">Stored as artifact</span>
+                        ) : null}
+                      </p>
+                    ) : null}
                     {diagnostics.engineLabel ? <p>Engine: {diagnostics.engineLabel}{diagnostics.engineTier ? ` (${diagnostics.engineTier})` : ""}</p> : null}
                     {diagnostics.url ? <p>URL: {diagnostics.url}</p> : null}
                     {diagnostics.finalUrl && diagnostics.finalUrl !== diagnostics.url ? <p>Final URL: {diagnostics.finalUrl}</p> : null}
                     {diagnostics.httpStatus !== undefined ? <p>HTTP status: {diagnostics.httpStatus}</p> : null}
                     {diagnostics.browserFailureClass ? <p>Browser failure: {diagnostics.browserFailureClass}</p> : null}
                     {diagnostics.summary ? <p>{diagnostics.summary}</p> : null}
+                    {diagnostics.artifactId ? (
+                      <ChatToolArtifactInspector
+                        artifactId={diagnostics.artifactId}
+                        artifactPath={diagnostics.artifactPath}
+                        originalByteLength={diagnostics.originalByteLength}
+                      />
+                    ) : null}
                     {run.error ? <p>Error: {run.error}</p> : null}
                     {run.failureGuidance ? <p>Next move: {run.failureGuidance}</p> : null}
                   </li>

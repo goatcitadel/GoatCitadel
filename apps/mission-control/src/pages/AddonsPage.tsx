@@ -161,7 +161,7 @@ export function AddonsPage() {
       {error ? (
         <div className="status-banner warning">
           <span>{error}</span>
-          <button type="button" onClick={() => void refresh()} disabled={isLoading}>
+          <button type="button" onClick={() => void refresh()} disabled={isLoading} className="gc-button">
             {isLoading ? "Retrying..." : "Retry"}
           </button>
         </div>

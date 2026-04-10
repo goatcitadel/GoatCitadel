@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   PromptPackPolicySource,
   PromptPackPolicyV2,
@@ -42,7 +42,7 @@ export class PromptPackRepository {
   private readonly listTestsStmt;
   private readonly getTestStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getPackStmt = db.prepare("SELECT * FROM prompt_packs WHERE pack_id = ?");
     this.listPacksStmt = db.prepare(`
       SELECT * FROM prompt_packs
@@ -281,3 +281,5 @@ function normalizePolicySource(value?: string | null): PromptPackPolicySource | 
 function hashPolicy(policy: PromptPackPolicyV2): string {
   return createHash("sha256").update(JSON.stringify(policy)).digest("hex");
 }
+
+

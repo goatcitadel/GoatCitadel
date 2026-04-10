@@ -383,6 +383,48 @@ export const AssistantConfigInputSchema = z
       })
       .passthrough()
       .optional(),
+    database: z
+      .object({
+        driver: z.enum(["sqlite", "postgres"]).optional(),
+        postgres: z
+          .object({
+            mode: z.enum(["bundled", "managed"]).optional(),
+            connectionString: z.string().optional(),
+            connectionStringEnv: z.string().optional(),
+            host: z.string().optional(),
+            port: z.number().optional(),
+            database: z.string().optional(),
+            user: z.string().optional(),
+            password: z.string().optional(),
+            passwordEnv: z.string().optional(),
+            ssl: z.enum(["disable", "prefer", "require"]).optional(),
+            pool: z
+              .object({
+                min: z.number().optional(),
+                max: z.number().optional(),
+                idleTimeoutMs: z.number().optional(),
+                connectionTimeoutMs: z.number().optional(),
+              })
+              .passthrough()
+              .optional(),
+            migrationsTable: z.string().optional(),
+          })
+          .passthrough()
+          .optional(),
+        bundledPostgres: z
+          .object({
+            enabled: z.boolean().optional(),
+            dataDir: z.string().optional(),
+            port: z.number().optional(),
+            binDir: z.string().optional(),
+            autoStart: z.boolean().optional(),
+            startTimeoutMs: z.number().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
     sqlite: z
       .object({
         cacheSizeKb: z.number().optional(),

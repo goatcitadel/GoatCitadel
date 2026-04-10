@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { NotFoundError } from "@goatcitadel/contracts";
 import type {
   ChatCodeAutoApplyPosture,
@@ -79,7 +79,7 @@ export class ChatSessionPrefsRepository {
   private readonly getStmt;
   private readonly upsertStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_session_prefs WHERE session_id = ?");
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_session_prefs (
@@ -248,3 +248,5 @@ function isChatSessionPrefsRow(value: unknown): value is ChatSessionPrefsRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

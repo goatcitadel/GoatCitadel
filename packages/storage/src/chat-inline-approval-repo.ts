@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -40,7 +40,7 @@ export class ChatInlineApprovalRepository {
   private readonly listByTurnStmt;
   private readonly listBySessionStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_inline_approvals WHERE approval_id = ?");
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_inline_approvals (
@@ -194,3 +194,5 @@ function isChatInlineApprovalRow(row: unknown): row is ChatInlineApprovalRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

@@ -248,7 +248,7 @@ export function SettingsRuntimeSection(props: SettingsRuntimeSectionProps) {
             onChange={(event) => onNetworkAllowlistTextChange(event.target.value)}
           />
         </details>
-        <button type="button" onClick={onSaveRuntime} disabled={blockSaves}>
+        <button type="button" onClick={onSaveRuntime} disabled={blockSaves} className="gc-button">
           Save Runtime Controls
         </button>
       </Panel>

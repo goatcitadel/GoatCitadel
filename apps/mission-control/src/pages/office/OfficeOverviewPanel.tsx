@@ -61,10 +61,10 @@ export function OfficeOverviewPanel({
         actions={
           <div className="office-page-actions">
             <div className="office-surface-switch" role="tablist" aria-label="Office surface views">
-              <button type="button" className="active" aria-pressed="true">
+              <button type="button" className="gc-button active" aria-pressed="true">
                 Immersive
               </button>
-              <button type="button" onClick={onOpenLab} aria-pressed="false">
+              <button type="button" onClick={onOpenLab} aria-pressed="false" className="gc-button">
                 Pixel Lab
               </button>
             </div>

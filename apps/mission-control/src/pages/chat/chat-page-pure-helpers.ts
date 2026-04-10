@@ -196,6 +196,27 @@ export function resolveOptimisticChatPrefs(
   };
 }
 
+export function resolveSelectedTurnId(
+  thread: {
+    selectedTurnId?: string | null;
+    activeLeafTurnId?: string | null;
+    turns: Array<{ turnId: string }>;
+  } | null,
+  currentTurnId: string | null,
+  pendingRouteTurnId: string | null = null,
+): string | null {
+  if (!thread?.turns.length) {
+    return null;
+  }
+  if (pendingRouteTurnId && thread.turns.some((turn) => turn.turnId === pendingRouteTurnId)) {
+    return pendingRouteTurnId;
+  }
+  if (currentTurnId && thread.turns.some((turn) => turn.turnId === currentTurnId)) {
+    return currentTurnId;
+  }
+  return thread.selectedTurnId ?? thread.activeLeafTurnId ?? thread.turns.at(-1)?.turnId ?? null;
+}
+
 export function shouldApplyFetchedMessagesAfterStream(
   currentMessages: ChatMessagesResponse["items"],
   fetchedMessages: ChatMessagesResponse["items"],

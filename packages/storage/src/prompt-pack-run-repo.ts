@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   ChatCitationRecord,
   ChatTurnTraceRecord,
@@ -38,7 +38,7 @@ export class PromptPackRunRepository {
   private readonly listByTestStmt;
   private readonly deleteByPackStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM prompt_pack_runs WHERE run_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO prompt_pack_runs (
@@ -291,3 +291,5 @@ function isPromptPackRunRow(value: unknown): value is PromptPackRunRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

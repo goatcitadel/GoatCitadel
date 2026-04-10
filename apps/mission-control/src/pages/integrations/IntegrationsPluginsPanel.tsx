@@ -39,12 +39,12 @@ export function IntegrationsPluginsPanel(props: IntegrationsPluginsPanelProps) {
             onChange={(event) => onPluginSourceChange(event.target.value)}
             placeholder="Plugin source (file path, URL, or package id)"
           />
-          <button type="button" onClick={() => onInstallPlugin()} disabled={pluginBusyId === "install"}>
+          <button type="button" onClick={() => onInstallPlugin()} disabled={pluginBusyId === "install"} className="gc-button">
             {pluginBusyId === "install" ? "Installing..." : "Install Plugin"}
           </button>
         </div>
       </details>
-      <table>
+      <table className="gc-data-table">
         <thead>
           <tr>
             <th>Plugin</th>
@@ -77,7 +77,7 @@ export function IntegrationsPluginsPanel(props: IntegrationsPluginsPanelProps) {
                     type="button"
                     onClick={() => onTogglePlugin(plugin.pluginId, plugin.enabled)}
                     disabled={pluginBusyId === plugin.pluginId}
-                  >
+                   className="gc-button">
                     {pluginBusyId === plugin.pluginId
                       ? plugin.enabled
                         ? "Disabling..."
@@ -95,3 +95,4 @@ export function IntegrationsPluginsPanel(props: IntegrationsPluginsPanelProps) {
     </Panel>
   );
 }
+

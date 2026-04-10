@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   HookDecision,
   HookDeliveryStatus,
@@ -42,7 +42,7 @@ export class HookRunRepository {
   private readonly updateOutcomeStmt;
   private readonly attachDurableStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO hook_runs (
         run_id,
@@ -300,3 +300,5 @@ function isHookRunRow(value: unknown): value is HookRunRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

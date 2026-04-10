@@ -46,7 +46,7 @@
 }
 
 .settings-v2-nav-item span {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 0.8rem;
   line-height: 1.45;
 }
@@ -92,7 +92,7 @@
   font-size: 0.82rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 @media (max-width: 1180px) {

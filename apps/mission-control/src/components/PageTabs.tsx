@@ -61,7 +61,7 @@ export function PageTabs({ items, activeId, onSelect, vertical = false, classNam
         <button
           type="button"
           key={item.id}
-          className={`page-tab${item.id === activeId ? " active" : ""}`}
+          className={`page-tab gc-nav-pill${item.id === activeId ? " active" : ""}`}
           onClick={() => onSelect(item.id)}
         >
           {item.label}

@@ -62,6 +62,8 @@ export interface ApprovalLifecycleHost {
     | "remoteActionTokens"
     | "audit"
     | "chatInlineApprovals"
+    | "chatSessionMeta"
+    | "chatTurnTraces"
     | "chatToolRuns"
     | "runImmediateTransaction"
   >;
@@ -131,7 +133,7 @@ export interface ApprovalLifecycleHost {
 
 export function listToolGrants(
   host: ApprovalLifecycleHost,
-  scope?: "global" | "session" | "agent" | "task",
+  scope?: "global" | "session" | "workspace" | "agent" | "task",
   scopeRef?: string,
   limit = 200,
 ): ToolGrantRecord[] {
@@ -593,7 +595,16 @@ export async function resolveChatToolApproval(
   sessionId: string,
   approvalId: string,
   decision: "approve" | "reject",
-): Promise<void> {
+  options?: {
+    allowScope?: "once" | "session" | "workspace";
+  },
+): Promise<{
+  allowScope: "once" | "session" | "workspace";
+  grant?: ToolGrantRecord;
+  resumed: boolean;
+  resumedTurnId?: string;
+  resumedRunId?: string;
+}> {
   const approval = host.storage.approvals.get(approvalId);
   const approvalSessionId = typeof approval.payload.sessionId === "string" ? approval.payload.sessionId : undefined;
   if (approvalSessionId && approvalSessionId !== sessionId) {
@@ -611,13 +622,39 @@ export async function resolveChatToolApproval(
     throw new Error(`Approval ${approvalId} is not attached to session ${sessionId}.`);
   }
   if (approval.status !== "pending") {
-    return;
+    return {
+      allowScope: options?.allowScope ?? "once",
+      resumed: false,
+    };
   }
-  await host.resolveApproval(approvalId, {
+  const allowScope = decision === "approve" ? (options?.allowScope ?? "once") : "once";
+  const toolPattern = turn?.toolName ?? existingInlineApproval?.toolName ?? approval.kind;
+  let grant: ToolGrantRecord | undefined;
+  if (decision === "approve" && allowScope !== "once") {
+    if (!toolPattern?.trim()) {
+      throw new Error(`Approval ${approvalId} does not expose a tool pattern for persistent allow.`);
+    }
+    const scope = allowScope === "workspace" ? "workspace" : "session";
+    const scopeRef = allowScope === "workspace"
+      ? resolveChatApprovalWorkspaceScopeRef(host, approval, sessionId)
+      : sessionId;
+    grant = findExistingGrant(host, scope, scopeRef, toolPattern) ?? createToolGrant(host, {
+      toolPattern,
+      decision: "allow",
+      scope,
+      scopeRef,
+      grantType: "persistent",
+      createdBy: "chat-operator",
+    });
+  }
+  const resolution = await host.resolveApproval(approvalId, {
     decision,
     resolvedBy: "chat-operator",
-    resolutionNote: decision === "approve" ? "Approved from chat inline control." : "Denied from chat inline control.",
+    resolutionNote: buildChatApprovalResolutionNote(decision, allowScope),
   });
+  const resume = decision === "approve"
+    ? resumeLinkedChatTurnIfPossible(host, resolution.approval, turnId)
+    : { resumed: false as const };
   host.storage.chatInlineApprovals.upsert({
     approvalId,
     sessionId,
@@ -626,5 +663,124 @@ export async function resolveChatToolApproval(
     status: decision === "approve" ? "approved" : "denied",
     reason: decision === "approve" ? "approved by operator" : "denied by operator",
     resolvedBy: "chat-operator",
+    details: {
+      ...(existingInlineApproval?.details ?? {}),
+      allowScope,
+      grantId: grant?.grantId,
+      grantScope: grant?.scope,
+      grantScopeRef: grant?.scopeRef,
+    },
   });
+  return {
+    allowScope,
+    grant,
+    resumed: resume.resumed,
+    resumedTurnId: resume.turnId,
+    resumedRunId: resume.durableRunId,
+  };
+}
+
+function buildChatApprovalResolutionNote(
+  decision: "approve" | "reject",
+  allowScope: "once" | "session" | "workspace",
+): string {
+  if (decision === "reject") {
+    return "Denied from chat inline control.";
+  }
+  if (allowScope === "session") {
+    return "Approved from chat inline control and allowed for this session.";
+  }
+  if (allowScope === "workspace") {
+    return "Approved from chat inline control and allowed for this workspace.";
+  }
+  return "Approved from chat inline control.";
+}
+
+function resolveChatApprovalWorkspaceScopeRef(
+  host: ApprovalLifecycleHost,
+  approval: ApprovalRequest,
+  sessionId: string,
+): string {
+  const payload = approval.payload ?? {};
+  const linkageWorkspaceId =
+    typeof approval.linkage?.workspaceId === "string" && approval.linkage.workspaceId.trim()
+      ? approval.linkage.workspaceId.trim()
+      : undefined;
+  const metaWorkspaceId = host.storage.chatSessionMeta.get(sessionId)?.workspaceId?.trim();
+  const workspaceId = linkageWorkspaceId
+    ?? (typeof payload.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim() : undefined)
+    ?? metaWorkspaceId;
+  if (!workspaceId) {
+    throw new Error(`Approval ${approval.approvalId} is not linked to a workspace.`);
+  }
+  return host.resolveApprovalHookWorkspaceId({
+    ...(payload as Record<string, unknown>),
+    workspaceId,
+    sessionId,
+  });
+}
+
+function findExistingGrant(
+  host: ApprovalLifecycleHost,
+  scope: "session" | "workspace",
+  scopeRef: string,
+  toolPattern: string,
+): ToolGrantRecord | undefined {
+  const now = Date.now();
+  return host.policyEngine.listGrants(scope, scopeRef, 500).find((grant) =>
+    grant.decision === "allow"
+    && grant.toolPattern === toolPattern
+    && !grant.revokedAt
+    && (!grant.expiresAt || Date.parse(grant.expiresAt) > now)
+  );
+}
+
+function resumeLinkedChatTurnIfPossible(
+  host: ApprovalLifecycleHost,
+  approval: ApprovalRequest,
+  turnId: string,
+): { resumed: boolean; turnId?: string; durableRunId?: string } {
+  let trace: { durable?: { runId?: string } } | undefined;
+  try {
+    trace = host.storage.chatTurnTraces.get(turnId);
+  } catch {
+    return {
+      resumed: false,
+      turnId,
+    };
+  }
+  const durableRunId = trace.durable?.runId;
+  if (!durableRunId) {
+    return {
+      resumed: false,
+      turnId,
+    };
+  }
+  try {
+    host.wakeDurableRun(durableRunId, {
+      eventKey: "approval.resolved",
+      correlationId: approval.approvalId,
+      payload: {
+        approvalId: approval.approvalId,
+        status: approval.status,
+        decision: "approve",
+        resolvedBy: approval.resolvedBy,
+      },
+    });
+    return {
+      resumed: true,
+      turnId,
+      durableRunId,
+    };
+  } catch (error) {
+    const msg = String((error as Error).message ?? "");
+    if (!msg.includes("not waiting/paused")) {
+      throw error;
+    }
+    return {
+      resumed: false,
+      turnId,
+      durableRunId,
+    };
+  }
 }

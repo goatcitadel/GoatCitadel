@@ -73,7 +73,7 @@ export function CodeWorkbenchPanel({
               <button
                 key={block.id}
                 type="button"
-                className={index === activeBlockIndex ? "active" : ""}
+                className={["gc-button", (index === activeBlockIndex ? "active" : "")].filter(Boolean).join(" ")}
                 onClick={() => setActiveBlockIndex(index)}
               >
                 {block.language || "snippet"} {index + 1}

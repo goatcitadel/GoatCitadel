@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ApprovalReplayEvent } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -24,7 +24,7 @@ export class ApprovalEventRepository {
   private readonly insertStmt;
   private readonly listByApprovalStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO approval_events (
         event_id, approval_id, event_type, actor_id, timestamp, payload_json
@@ -96,3 +96,5 @@ function isApprovalEventRow(row: unknown): row is ApprovalEventRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

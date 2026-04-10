@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { NotFoundError } from "@goatcitadel/contracts";
 import type {
   ChatCapabilityUpgradeSuggestion,
@@ -107,7 +107,7 @@ export class ChatTurnTraceRepository {
   private readonly patchStmt;
   private readonly listBySessionStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_turn_traces WHERE turn_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO chat_turn_traces (
@@ -391,3 +391,5 @@ function isChatTurnTraceRow(value: unknown): value is ChatTurnTraceRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

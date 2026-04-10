@@ -1,5 +1,5 @@
 import type { CronJobRecord } from "@goatcitadel/contracts";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 
 interface CronJobRow {
   job_id: string;
@@ -17,7 +17,7 @@ export class CronJobRepository {
   private readonly listStmt;
   private readonly deleteStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
       INSERT INTO cron_jobs (
         job_id, name, schedule, enabled, last_run_at, next_run_at, updated_at
@@ -134,3 +134,5 @@ function isCronJobRow(row: unknown): row is CronJobRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

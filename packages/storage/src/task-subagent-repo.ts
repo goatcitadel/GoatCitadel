@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   TaskSubagentCreateInput,
   TaskSubagentSession,
@@ -26,7 +26,7 @@ export class TaskSubagentRepository {
   private readonly updateByAgentSessionStmt;
   private readonly countActiveStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO task_subagent_sessions (
         subagent_session_id, task_id, agent_session_id, agent_name,
@@ -167,3 +167,5 @@ function isTaskSubagentRow(value: unknown): value is TaskSubagentRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

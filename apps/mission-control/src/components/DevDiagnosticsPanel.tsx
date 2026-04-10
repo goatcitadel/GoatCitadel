@@ -117,7 +117,7 @@ export function DevDiagnosticsPanel({
           <p className="dev-diagnostics-kicker">Development</p>
           <h3>Diagnostics</h3>
         </div>
-        <button type="button" className="dev-diagnostics-close" onClick={onClose}>Close</button>
+        <button type="button" className="gc-button dev-diagnostics-close" onClick={onClose}>Close</button>
       </header>
       <div className="dev-diagnostics-status-grid">
         <div><span>Gateway</span><strong>{diagnosticsState.gatewayReachable ? "Reachable" : "Unknown"}</strong></div>
@@ -172,12 +172,12 @@ export function DevDiagnosticsPanel({
         />
       </div>
       <div className="dev-diagnostics-actions">
-        <button type="button" onClick={() => void handleCopyRecent()}>Copy last 100</button>
-        <button type="button" onClick={() => void handleCopySession()}>Copy session bundle</button>
+        <button type="button" onClick={() => void handleCopyRecent()} className="gc-button">Copy last 100</button>
+        <button type="button" onClick={() => void handleCopySession()} className="gc-button">Copy session bundle</button>
         <button type="button" onClick={() => {
           clearClientDiagnostics();
           setGatewayItems([]);
-        }}>Clear</button>
+        }} className="gc-button">Clear</button>
       </div>
       <div className="dev-diagnostics-layout">
         <div className="dev-diagnostics-list" role="list">
@@ -187,7 +187,7 @@ export function DevDiagnosticsPanel({
             <button
               type="button"
               key={item.id}
-              className={`dev-diagnostics-item${selectedEvent?.id === item.id ? " active" : ""}`}
+              className={["gc-button", (`dev-diagnostics-item${selectedEvent?.id === item.id ? " active" : ""}`)].filter(Boolean).join(" ")}
               onClick={() => setSelectedEventId(item.id)}
             >
               <span className="dev-diagnostics-item-meta">

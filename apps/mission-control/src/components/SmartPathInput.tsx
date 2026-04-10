@@ -83,7 +83,7 @@ export function SmartPathInput({
             onChange(suggested);
           }}
           disabled={loading || options.length === 0}
-        >
+         className="gc-button">
           {globalCopy.smartPathInput.browse}
         </button>
       </div>

@@ -24,7 +24,7 @@ export function ChatComposerPlusMenu({
         <Popover.Trigger asChild>
           <button
             type="button"
-            className="chat-plus-trigger"
+            className="gc-button chat-plus-trigger"
             disabled={disabled}
             aria-expanded={open}
             aria-label="Open chat actions"
@@ -46,7 +46,7 @@ export function ChatComposerPlusMenu({
                 setOpen(false);
                 onAttachFiles();
               }}
-            >
+             className="gc-button">
               Add files or photos
             </button>
             <button
@@ -55,7 +55,7 @@ export function ChatComposerPlusMenu({
                 setOpen(false);
                 onRunQuickResearch();
               }}
-            >
+             className="gc-button">
               Quick web research
             </button>
           </Popover.Content>

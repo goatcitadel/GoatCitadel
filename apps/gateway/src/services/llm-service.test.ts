@@ -1532,6 +1532,38 @@ describe("LlmService", () => {
     expect(explicitMoonshot.apiKeySource).toBe("keychain");
   });
 
+  it("does not probe the keychain when resolving execution api style", () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+        {
+          providerId: "moonshot",
+          label: "Moonshot",
+          baseUrl: "https://api.moonshot.ai/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "kimi-k2.5",
+        },
+      ],
+    };
+
+    const secretStore = createTrackedSecretStore({
+      openai: "openai-secret",
+      moonshot: "moonshot-secret",
+    });
+    const service = new LlmService(config, process.env, { secretStore });
+
+    expect(service.resolveExecutionApiStyle("openai", "gpt-5.4-mini")).toBe("openai-responses");
+    expect(service.resolveExecutionApiStyle("moonshot", "kimi-k2.5")).toBe("openai-chat-completions");
+    expect(secretStore.getCalls()).toBe(0);
+  });
+
   it("adds reasoning_content for kimi assistant tool-call history messages", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "moonshot",

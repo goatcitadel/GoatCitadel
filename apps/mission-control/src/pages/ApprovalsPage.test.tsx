@@ -88,30 +88,35 @@ describe("ApprovalsPage", () => {
       clearTimeout,
       setInterval,
       clearInterval,
+      location: {
+        search: "",
+      },
     });
-    apiMocks.fetchApprovals.mockResolvedValue({
-      items: [
-        {
-          approvalId: "approval-1",
-          kind: "shell.exec",
-          riskLevel: "danger",
-          status: "pending",
-          preview: {
-            toolName: "shell.exec",
-            sessionId: "sess-1",
-          },
-          payload: {
-            toolName: "shell.exec",
-            sessionId: "sess-1",
-          },
-          explanationStatus: "not_requested",
-          explanation: null,
-          explanationError: null,
-          createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-          updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-        },
-      ],
-    });
+    apiMocks.fetchApprovals.mockImplementation(async (status?: string) => ({
+      items: status === "pending"
+        ? [
+            {
+              approvalId: "approval-1",
+              kind: "shell.exec",
+              riskLevel: "danger",
+              status: "pending",
+              preview: {
+                toolName: "shell.exec",
+                sessionId: "sess-1",
+              },
+              payload: {
+                toolName: "shell.exec",
+                sessionId: "sess-1",
+              },
+              explanationStatus: "not_requested",
+              explanation: null,
+              explanationError: null,
+              createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+              updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+            },
+          ]
+        : [],
+    }));
   });
 
   it("keeps the bulk reject action visible when rendered inside shell chrome", async () => {
@@ -137,9 +142,7 @@ describe("ApprovalsPage", () => {
   });
 
   it("switches to a clean empty state when no pending approvals remain", async () => {
-    apiMocks.fetchApprovals.mockResolvedValueOnce({
-      items: [],
-    });
+    apiMocks.fetchApprovals.mockImplementation(async () => ({ items: [] }));
 
     let renderer = create(<div />);
     try {
@@ -213,33 +216,35 @@ describe("ApprovalsPage", () => {
   });
 
   it("surfaces inline operator evidence for code-heavy approvals before the raw payload", async () => {
-    apiMocks.fetchApprovals.mockResolvedValueOnce({
-      items: [
-        {
-          approvalId: "approval-code",
-          kind: "files.apply_patch",
-          riskLevel: "danger",
-          status: "pending",
-          preview: {
-            files: ["apps/mission-control/src/pages/ChatPage.tsx"],
-            patch: "*** Begin Patch\n*** Update File: apps/mission-control/src/pages/ChatPage.tsx\n+const nextValue = true;\n*** End Patch",
-          },
-          payload: {
-            command: "apply patch to ChatPage",
-          },
-          explanationStatus: "completed",
-          explanation: {
-            summary: "Apply a patch to the Chat page.",
-            riskExplanation: "This changes production UI code.",
-            saferAlternative: "Review the patch before approving.",
-            generatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-          },
-          explanationError: null,
-          createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-          updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-        },
-      ],
-    });
+    apiMocks.fetchApprovals.mockImplementation(async (status?: string) => ({
+      items: status === "pending"
+        ? [
+            {
+              approvalId: "approval-code",
+              kind: "files.apply_patch",
+              riskLevel: "danger",
+              status: "pending",
+              preview: {
+                files: ["apps/mission-control/src/pages/ChatPage.tsx"],
+                patch: "*** Begin Patch\n*** Update File: apps/mission-control/src/pages/ChatPage.tsx\n+const nextValue = true;\n*** End Patch",
+              },
+              payload: {
+                command: "apply patch to ChatPage",
+              },
+              explanationStatus: "completed",
+              explanation: {
+                summary: "Apply a patch to the Chat page.",
+                riskExplanation: "This changes production UI code.",
+                saferAlternative: "Review the patch before approving.",
+                generatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+              },
+              explanationError: null,
+              createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+              updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+            },
+          ]
+        : [],
+    }));
 
     let renderer = create(<div />);
     try {
@@ -259,6 +264,148 @@ describe("ApprovalsPage", () => {
       expect(text).toContain("Raw request and preview payload");
       expect(text).toContain("Raw request payload");
       expect(text).toContain("Preview payload");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("opens the matching live lane for persisted approvals that came from code", async () => {
+    apiMocks.fetchApprovals.mockImplementation(async (status?: string) => ({
+      items: status === "pending"
+        ? [
+            {
+              approvalId: "approval-code-lane",
+              kind: "shell.exec",
+              riskLevel: "danger",
+              status: "pending",
+              preview: {
+                toolName: "shell.exec",
+                sessionId: "sess-code",
+              },
+              payload: {
+                toolName: "shell.exec",
+                sessionId: "sess-code",
+              },
+              linkage: {
+                sessionId: "sess-code",
+                turnId: "turn-code",
+                originSurface: "code",
+              },
+              explanationStatus: "not_requested",
+              explanation: null,
+              explanationError: null,
+              createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+              updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+            },
+          ]
+        : [],
+    }));
+
+    let renderer = create(<div />);
+    const originalHistory = window.history;
+    const originalDispatchEvent = window.dispatchEvent;
+    const pushStateSpy = vi.fn();
+    const dispatchEventSpy = vi.fn();
+    Object.defineProperty(window, "history", {
+      configurable: true,
+      value: {
+        ...originalHistory,
+        pushState: pushStateSpy,
+      },
+    });
+    Object.defineProperty(window, "dispatchEvent", {
+      configurable: true,
+      value: dispatchEventSpy,
+    });
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      const liveLaneLink = renderer.root.findAll(
+        (node) =>
+          node.type === "a"
+          && typeof node.props.href === "string"
+          && node.props.href.includes("surface=code")
+          && node.props.href.includes("sessionId=sess-code")
+          && node.props.href.includes("turnId=turn-code"),
+      )[0];
+
+      expect(liveLaneLink).toBeTruthy();
+      const preventDefault = vi.fn();
+
+      await act(async () => {
+        liveLaneLink?.props.onClick?.({ preventDefault });
+      });
+
+      expect(preventDefault).toHaveBeenCalledTimes(1);
+      expect(pushStateSpy).toHaveBeenCalledWith(
+        null,
+        "",
+        expect.stringContaining("surface=code"),
+      );
+      expect(dispatchEventSpy).toHaveBeenCalledWith(expect.objectContaining({ type: "popstate" }));
+    } finally {
+      Object.defineProperty(window, "history", {
+        configurable: true,
+        value: originalHistory,
+      });
+      Object.defineProperty(window, "dispatchEvent", {
+        configurable: true,
+        value: originalDispatchEvent,
+      });
+      renderer.unmount();
+    }
+  });
+
+  it("moves expired pending approvals into history instead of leaving them in the pending queue", async () => {
+    apiMocks.fetchApprovals.mockImplementation(async (status?: string) => ({
+      items: status === "pending"
+        ? [
+            {
+              approvalId: "approval-expired",
+              kind: "shell.exec",
+              riskLevel: "danger",
+              status: "pending",
+              preview: {},
+              payload: {},
+              expiresAt: new Date("2026-03-01T00:00:00.000Z").toISOString(),
+              explanationStatus: "not_requested",
+              explanation: null,
+              explanationError: null,
+              createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+              updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+            },
+          ]
+        : [],
+    }));
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      let text = rendererText(renderer);
+      expect(text).toContain("Pending (0)");
+      expect(text).toContain("History (1)");
+
+      await clickButton(renderer, "History (1)");
+      await flush();
+
+      text = rendererText(renderer);
+      expect(text).toContain("expired");
+      expect(text).not.toContain("Approve now");
     } finally {
       renderer.unmount();
     }

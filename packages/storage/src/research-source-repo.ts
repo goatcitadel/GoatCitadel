@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ResearchSourceRecord } from "@goatcitadel/contracts";
 
 interface ResearchSourceRow {
@@ -16,7 +16,7 @@ export class ResearchSourceRepository {
   private readonly listByRunStmt;
   private readonly deleteByRunStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO research_sources (
         source_id, run_id, title, url, snippet, rank, created_at
@@ -98,3 +98,5 @@ function mapRow(row: ResearchSourceRow): ResearchSourceRecord {
     createdAt: row.created_at,
   };
 }
+
+

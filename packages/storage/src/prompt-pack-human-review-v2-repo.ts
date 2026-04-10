@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { PromptPackHumanReviewRecordV2 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 
@@ -22,7 +22,7 @@ export class PromptPackHumanReviewV2Repository {
   private readonly listByRunStmt;
   private readonly deleteByPackStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM prompt_pack_human_reviews_v2 WHERE review_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO prompt_pack_human_reviews_v2 (
@@ -152,3 +152,5 @@ function isPromptPackHumanReviewV2Row(value: unknown): value is PromptPackHumanR
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

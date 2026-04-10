@@ -10,6 +10,7 @@ import { isVerboseLoggingEnabled } from "../runtime-ux.js";
 import { EventIngestService, logger } from "@goatcitadel/gateway-core";
 
 const log = logger.child("gateway-service");
+const onboardingTimingEnabled = process.env.GOATCITADEL_DEBUG_ONBOARDING_TIMING === "1";
 import { MeshService } from "@goatcitadel/mesh-core";
 import { estimateTokensFromText, truncateByTokenEstimate } from "@goatcitadel/memory-core";
 import {
@@ -30,7 +31,7 @@ import {
 import { SkillsService } from "@goatcitadel/skills";
 import {
   DEFAULT_SESSION_AUTONOMY_PREFS,
-  Storage,
+  type Storage,
   type SessionAutonomyPrefsPatchInput,
   type SessionAutonomyPrefsRecord,
 } from "@goatcitadel/storage";
@@ -51,6 +52,14 @@ import {
   ValidationError,
 } from "@goatcitadel/contracts";
 import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
+import { createGatewayStorage } from "../storage-factory.js";
+import { DatabaseCutoverService } from "./database-cutover-service.js";
+import type {
+  DatabaseCutoverProfile,
+  DatabaseCutoverResponse,
+  DatabaseHealthSnapshot,
+  DatabaseVerifyResponse,
+} from "@goatcitadel/contracts";
 import type {
   AddonActionResponse,
   AddonCatalogEntry,
@@ -1375,6 +1384,7 @@ export class GatewayService {
   /** @internal */ public readonly memoryMaintenanceService: MemoryMaintenanceService;
   private readonly capabilitySystemService: CapabilitySystemService;
   private readonly backupRetentionService: BackupRetentionService;
+  private readonly databaseCutoverService: DatabaseCutoverService;
   private readonly mediaVoiceService: MediaVoiceService;
   private readonly realtime = new EventEmitter();
   /** @internal */ public readonly backgroundTasks = new Set<Promise<void>>();
@@ -1398,16 +1408,7 @@ export class GatewayService {
   }
 
   public constructor(/** @internal */ public readonly config: GatewayRuntimeConfig) {
-    this.storage = new Storage({
-      dbPath: config.dbPath,
-      transcriptsDir: path.resolve(config.rootDir, config.assistant.transcriptsDir),
-      auditDir: path.resolve(config.rootDir, config.assistant.auditDir),
-      tuning: {
-        cacheSizeKb: config.assistant.sqlite.cacheSizeKb,
-        tempStoreMemory: config.assistant.sqlite.tempStoreMemory,
-        walAutoCheckpointPages: config.assistant.sqlite.walAutoCheckpointPages,
-      },
-    });
+    this.storage = createGatewayStorage(config);
     this.onboardingMarkerPath = path.resolve(config.rootDir, config.assistant.dataDir, "onboarding-state.json");
     this.devDiagnostics = new GatewayDevDiagnosticsService(
       resolveDevDiagnosticsEnabled(),
@@ -1419,6 +1420,11 @@ export class GatewayService {
     this.backupRetentionService = new BackupRetentionService({
       storage: this.storage,
       config,
+    });
+    this.databaseCutoverService = new DatabaseCutoverService({
+      config,
+      createBackup: (input) => this.backupRetentionService.createBackup(input),
+      persistAssistantConfig: () => this.persistAssistantConfig(),
     });
     this.mediaVoiceService = new MediaVoiceService({
       gatewaySql: this.gatewaySql,
@@ -1687,6 +1693,35 @@ export class GatewayService {
       byteLength: record.byteLength,
       contentType: record.contentType,
       snippet: record.snippet,
+    };
+  }
+
+  public async getChatToolArtifactContent(artifactId: string): Promise<{
+    artifact: {
+      artifactId: string;
+      sessionId: string;
+      turnId: string;
+      toolRunId: string;
+      toolName: string;
+      contentType?: string;
+      byteLength: number;
+      snippet?: string;
+      storageRelPath: string;
+      createdAt: string;
+    };
+    content: string;
+  }> {
+    const artifact = this.storage.chatToolArtifacts.get(artifactId);
+    const artifactRoot = path.resolve(this.config.rootDir, this.config.assistant.dataDir);
+    const absolutePath = path.resolve(artifactRoot, artifact.storageRelPath);
+    const normalizedRoot = `${artifactRoot}${path.sep}`;
+    if (absolutePath !== artifactRoot && !absolutePath.startsWith(normalizedRoot)) {
+      throw new ValidationError({ message: "Artifact path escapes the configured data directory." });
+    }
+    const content = await fs.readFile(absolutePath, "utf8");
+    return {
+      artifact,
+      content,
     };
   }
 
@@ -4598,8 +4633,17 @@ export class GatewayService {
     sessionId: string,
     approvalId: string,
     decision: "approve" | "reject",
-  ): Promise<void> {
-    return approvalLifecycleService.resolveChatToolApproval(this, sessionId, approvalId, decision);
+    options?: {
+      allowScope?: "once" | "session" | "workspace";
+    },
+  ): Promise<{
+    allowScope: "once" | "session" | "workspace";
+    grant?: ToolGrantRecord;
+    resumed: boolean;
+    resumedTurnId?: string;
+    resumedRunId?: string;
+  }> {
+    return approvalLifecycleService.resolveChatToolApproval(this, sessionId, approvalId, decision, options);
   }
 
   /** @internal */ public async requireChatTurnContext(
@@ -5656,6 +5700,22 @@ export class GatewayService {
     return this.backupRetentionService.pruneRetention(options);
   }
 
+  public async runDatabaseCutover(input: {
+    profile: DatabaseCutoverProfile;
+    execute: boolean;
+    confirm?: boolean;
+  }): Promise<DatabaseCutoverResponse> {
+    return this.databaseCutoverService.runCutover(input);
+  }
+
+  public async verifyDatabaseCutover(input: { source: string; target?: string }): Promise<DatabaseVerifyResponse> {
+    return this.databaseCutoverService.verify(input);
+  }
+
+  public async getDatabaseHealthSnapshot(): Promise<DatabaseHealthSnapshot> {
+    return this.databaseCutoverService.getHealthSnapshot();
+  }
+
   public async invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
     if (!isValidToolName(request.toolName)) {
       return {
@@ -5664,7 +5724,10 @@ export class GatewayService {
         auditEventId: randomUUID(),
       };
     }
-    const normalizedRequest = this.applyRuntimeBrowserBackendDefaults(this.resolveToolInvokeRequestPaths(request));
+    const normalizedRequest = this.applyRuntimeBrowserBackendDefaults(this.resolveToolInvokeRequestPaths({
+      ...request,
+      workspaceId: request.workspaceId ?? this.storage.chatSessionMeta.get(request.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID,
+    }));
     const toolHookWorkspaceId = this.resolveToolHookWorkspaceId(normalizedRequest);
     const toolHookEntityId = `${normalizedRequest.sessionId}:${randomUUID()}`;
     const deploymentGuard = evaluateDeploymentProfileToolAccess(
@@ -5863,11 +5926,14 @@ export class GatewayService {
   }
 
   public evaluateToolAccess(input: ToolAccessEvaluateRequest): ToolAccessEvaluateResponse {
-    return this.policyEngine.evaluateAccess(input);
+    return this.policyEngine.evaluateAccess({
+      ...input,
+      workspaceId: input.workspaceId ?? this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID,
+    });
   }
 
   public listToolGrants(
-    scope?: "global" | "session" | "agent" | "task",
+    scope?: "global" | "session" | "workspace" | "agent" | "task",
     scopeRef?: string,
     limit = 200,
   ): ToolGrantRecord[] {
@@ -7585,20 +7651,65 @@ export class GatewayService {
   }
 
   public getOnboardingState(): OnboardingState {
-    const settings = this.getSettings();
-    const activeProvider = settings.llm.providers.find(
-      (provider) => provider.providerId === settings.llm.activeProviderId,
+    const startedAt = Date.now();
+    const auth = this.getAuthRuntimeSettings();
+    const afterAuth = Date.now();
+    const baseLlm = this.llmService.getRuntimeConfig({
+      includeKeychainForActiveProvider: false,
+      useCache: true,
+    });
+    const afterBaseLlm = Date.now();
+    const activeProviderQuick = baseLlm.providers.find(
+      (provider) => provider.providerId === baseLlm.activeProviderId,
     );
-    const authReady = this.isAuthConfiguredForMode(settings.auth);
+    const activeProviderStatus =
+      activeProviderQuick && !activeProviderQuick.hasApiKey
+        ? this.llmService.getProviderSecretStatus(baseLlm.activeProviderId, {
+            includeKeychain: true,
+            useCache: true,
+          })
+        : undefined;
+    const afterActiveProviderStatus = Date.now();
+    const llm = {
+      ...baseLlm,
+      providers: baseLlm.providers.map((provider) =>
+        provider.providerId !== activeProviderStatus?.providerId
+          ? provider
+          : {
+              ...provider,
+              hasApiKey: activeProviderStatus.hasApiKey,
+              apiKeySource: activeProviderStatus.apiKeySource,
+              hasKeychainSecret: activeProviderStatus.hasKeychainSecret,
+              apiKeyRef: activeProviderStatus.apiKeyRef,
+            }),
+    };
+    const afterLlmMap = Date.now();
+    const mesh = {
+      enabled: this.config.assistant.mesh.enabled,
+      mode: this.config.assistant.mesh.mode,
+      nodeId: this.config.assistant.mesh.nodeId,
+      mdns: this.config.assistant.mesh.discovery.mdns,
+      staticPeers: this.config.assistant.mesh.discovery.staticPeers,
+      requireMtls: this.config.assistant.mesh.security.requireMtls,
+      tailnetEnabled: this.config.assistant.mesh.security.tailnet.enabled,
+    };
+    const defaultToolProfile = this.config.toolPolicy.tools.profile;
+    const budgetMode = this.config.budgets.mode;
+    const networkAllowlist = this.config.toolPolicy.sandbox.networkAllowlist;
+    const activeProvider = llm.providers.find(
+      (provider) => provider.providerId === llm.activeProviderId,
+    );
+    const authReady = this.isAuthConfiguredForMode(auth);
     const llmReady = Boolean(
       activeProvider &&
-      settings.llm.activeModel.trim() &&
+      llm.activeModel.trim() &&
       (activeProvider.hasApiKey || this.isProviderLikelyLocal(activeProvider.baseUrl)),
     );
-    const runtimeReady = Boolean(settings.defaultToolProfile.trim()) && Boolean(settings.budgetMode.trim());
-    const meshReady = settings.mesh.enabled
-      ? Boolean(settings.mesh.nodeId.trim()) && (settings.mesh.mode !== "tailnet" || settings.mesh.tailnetEnabled)
+    const runtimeReady = Boolean(defaultToolProfile.trim()) && Boolean(budgetMode.trim());
+    const meshReady = mesh.enabled
+      ? Boolean(mesh.nodeId.trim()) && (mesh.mode !== "tailnet" || mesh.tailnetEnabled)
       : true;
+    const afterReadiness = Date.now();
 
     const checklist: OnboardingChecklistItem[] = [
       {
@@ -7606,7 +7717,7 @@ export class GatewayService {
         label: "Gateway access control",
         status: authReady ? "complete" : "needs_input",
         detail: authReady
-          ? `Mode ${settings.auth.mode} is configured.`
+          ? `Mode ${auth.mode} is configured.`
           : "Configure token/basic credentials or explicitly choose none for local trusted use.",
       },
       {
@@ -7614,7 +7725,7 @@ export class GatewayService {
         label: "LLM provider",
         status: llmReady ? "complete" : "needs_input",
         detail: llmReady
-          ? `Provider ${settings.llm.activeProviderId} with model ${settings.llm.activeModel} is ready.`
+          ? `Provider ${llm.activeProviderId} with model ${llm.activeModel} is ready.`
           : "Select an active provider/model and configure an API key (or use a local endpoint).",
       },
       {
@@ -7622,48 +7733,71 @@ export class GatewayService {
         label: "Runtime defaults",
         status: runtimeReady ? "complete" : "needs_input",
         detail: runtimeReady
-          ? `Profile ${settings.defaultToolProfile} / budget ${settings.budgetMode}.`
+          ? `Profile ${defaultToolProfile} / budget ${budgetMode}.`
           : "Choose a default tool profile and budget mode.",
       },
       {
         id: "mesh",
         label: "Mesh (optional)",
-        status: settings.mesh.enabled ? (meshReady ? "complete" : "needs_input") : "optional",
-        detail: settings.mesh.enabled
-          ? `Mesh ${settings.mesh.mode} on node ${settings.mesh.nodeId}.`
+        status: mesh.enabled ? (meshReady ? "complete" : "needs_input") : "optional",
+        detail: mesh.enabled
+          ? `Mesh ${mesh.mode} on node ${mesh.nodeId}.`
           : "Mesh disabled. You can enable this later.",
       },
     ];
+    const afterChecklist = Date.now();
+    const projectedProviders = llm.providers.map((provider) => ({
+      providerId: provider.providerId,
+      label: provider.label,
+      baseUrl: provider.baseUrl,
+      apiStyle: provider.apiStyle,
+      resolvedApiStyle: this.llmService.resolveExecutionApiStyle(provider.providerId, provider.defaultModel),
+      defaultModel: provider.defaultModel,
+      hasApiKey: provider.hasApiKey,
+      apiKeySource: provider.apiKeySource,
+      hasKeychainSecret: provider.hasKeychainSecret,
+      apiKeyRef: provider.apiKeyRef,
+    }));
+    const afterProviderProjection = Date.now();
 
-    return {
+    const response: OnboardingState = {
       completed: Boolean(this.onboardingMarker.completedAt),
       completedAt: this.onboardingMarker.completedAt,
       completedBy: this.onboardingMarker.completedBy,
       checklist,
       settings: {
-        defaultToolProfile: settings.defaultToolProfile,
-        budgetMode: settings.budgetMode,
-        networkAllowlist: settings.networkAllowlist,
-        auth: settings.auth,
+        defaultToolProfile,
+        budgetMode,
+        networkAllowlist,
+        auth,
         llm: {
-          activeProviderId: settings.llm.activeProviderId,
-          activeModel: settings.llm.activeModel,
-          providers: settings.llm.providers.map((provider) => ({
-            providerId: provider.providerId,
-            label: provider.label,
-            baseUrl: provider.baseUrl,
-            apiStyle: provider.apiStyle,
-            resolvedApiStyle: this.llmService.resolveExecutionApiStyle(provider.providerId, provider.defaultModel),
-            defaultModel: provider.defaultModel,
-            hasApiKey: provider.hasApiKey,
-            apiKeySource: provider.apiKeySource,
-            hasKeychainSecret: provider.hasKeychainSecret,
-            apiKeyRef: provider.apiKeyRef,
-          })),
+          activeProviderId: llm.activeProviderId,
+          activeModel: llm.activeModel,
+          providers: projectedProviders,
         },
-        mesh: settings.mesh,
+        mesh,
       },
     };
+    const completedAt = Date.now();
+    if (onboardingTimingEnabled) {
+      log.info("onboarding state timing", {
+        totalMs: completedAt - startedAt,
+        authMs: afterAuth - startedAt,
+        baseLlmMs: afterBaseLlm - afterAuth,
+        activeProviderStatusMs: afterActiveProviderStatus - afterBaseLlm,
+        llmMapMs: afterLlmMap - afterActiveProviderStatus,
+        readinessMs: afterReadiness - afterLlmMap,
+        checklistMs: afterChecklist - afterReadiness,
+        providerProjectionMs: afterProviderProjection - afterChecklist,
+        responseWrapMs: completedAt - afterProviderProjection,
+        assembleMs: completedAt - afterLlmMap,
+        providerCount: llm.providers.length,
+        activeProviderId: llm.activeProviderId,
+        activeProviderQuickHasApiKey: activeProviderQuick?.hasApiKey ?? null,
+        activeProviderStatusSource: activeProviderStatus?.apiKeySource ?? null,
+      });
+    }
+    return response;
   }
 
   public bootstrapOnboarding(input: OnboardingBootstrapInput): OnboardingBootstrapResult {
@@ -9526,8 +9660,9 @@ export class GatewayService {
     const unique = [...new Set(skillIds)];
     const now = new Date().toISOString();
     const insert = this.gatewaySql.prepare(`
-      INSERT OR IGNORE INTO skill_state (skill_id, state, note, updated_at, first_auto_approved_at)
+      INSERT INTO skill_state (skill_id, state, note, updated_at, first_auto_approved_at)
       VALUES (@skillId, @state, @note, @updatedAt, NULL)
+      ON CONFLICT (skill_id) DO NOTHING
     `);
     for (const skillId of unique) {
       insert.run({
@@ -10318,6 +10453,9 @@ export class GatewayService {
   }
 
   private resolveToolHookWorkspaceId(request: ToolInvokeRequest): string {
+    if (request.workspaceId?.trim()) {
+      return this.normalizeWorkspaceId(request.workspaceId);
+    }
     const meta = this.storage.chatSessionMeta.get(request.sessionId);
     return this.normalizeWorkspaceId(meta?.workspaceId ?? DEFAULT_WORKSPACE_ID);
   }
@@ -11385,6 +11523,7 @@ export class GatewayService {
       mesh: this.config.assistant.mesh,
       npu: this.config.assistant.npu,
       llamaCpp: this.config.assistant.llamaCpp,
+      database: this.config.assistant.database,
       sqlite: this.config.assistant.sqlite,
       durable: this.config.assistant.durable,
       features: this.readFeatureFlags(),
@@ -11430,6 +11569,7 @@ export class GatewayService {
       mesh: this.config.assistant.mesh,
       npu: this.config.assistant.npu,
       llamaCpp: this.config.assistant.llamaCpp,
+      database: this.config.assistant.database,
       sqlite: this.config.assistant.sqlite,
       durable: this.config.assistant.durable,
       features: this.readFeatureFlags(),

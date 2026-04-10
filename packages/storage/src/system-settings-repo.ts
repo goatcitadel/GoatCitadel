@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -18,7 +18,7 @@ export class SystemSettingsRepository {
   private readonly getStmt;
   private readonly upsertStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM system_settings WHERE setting_key = ?");
     this.upsertStmt = db.prepare(`
       INSERT INTO system_settings (setting_key, value_json, updated_at)
@@ -58,3 +58,5 @@ export class SystemSettingsRepository {
 function parseValue(raw: string): unknown {
   return safeJsonParse<unknown>(raw, raw);
 }
+
+

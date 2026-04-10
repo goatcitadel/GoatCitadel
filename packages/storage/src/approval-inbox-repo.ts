@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ApprovalInboxItemRecord, ApprovalInboxItemState, ApprovalRequest } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
@@ -33,11 +33,12 @@ export class ApprovalInboxRepository {
   private readonly getStmt;
   private readonly getByReceiverAndTokenStmt;
   private readonly listStmt;
+  private readonly listByStateStmt;
   private readonly updateOnRedeliveryStmt;
   private readonly updateResolutionStmt;
   private readonly deleteByReceiverStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO approval_inbox_items (
         inbox_item_id, approval_id, connector_id, receiver_kind, receiver_id, token_id, token,
@@ -61,7 +62,14 @@ export class ApprovalInboxRepository {
       SELECT * FROM approval_inbox_items
       WHERE receiver_kind = @receiverKind
         AND receiver_id = @receiverId
-        AND (@state IS NULL OR state = @state)
+      ORDER BY created_at DESC
+      LIMIT @limit
+    `);
+    this.listByStateStmt = db.prepare(`
+      SELECT * FROM approval_inbox_items
+      WHERE receiver_kind = @receiverKind
+        AND receiver_id = @receiverId
+        AND state = @state
       ORDER BY created_at DESC
       LIMIT @limit
     `);
@@ -218,10 +226,10 @@ export class ApprovalInboxRepository {
       limit?: number;
     },
   ): ApprovalInboxItemRecord[] {
-    const rows = toApprovalInboxRows(this.listStmt.all({
+    const rows = toApprovalInboxRows((input?.state ? this.listByStateStmt : this.listStmt).all({
       receiverKind,
       receiverId,
-      state: input?.state ?? null,
+      state: input?.state,
       limit: input?.limit ?? 100,
     }));
     return rows.map(mapRow);
@@ -340,3 +348,5 @@ function isApprovalInboxRow(value: unknown): value is ApprovalInboxRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

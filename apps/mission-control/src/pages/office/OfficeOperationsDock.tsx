@@ -63,7 +63,7 @@ export function OfficeOperationsDock(props: OfficeOperationsDockProps) {
             <button
               type="button"
               key={tab}
-              className={dockTab === tab ? "active" : ""}
+              className={["gc-button", (dockTab === tab ? "active" : "")].filter(Boolean).join(" ")}
               onClick={() => onDockTabChange(tab)}
             >
               {tab === "inspector" && "Inspector"}

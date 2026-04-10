@@ -49,7 +49,7 @@ describe("ChatSessionRail", () => {
     expect(markup).toContain("Atlas ·");
     expect(markup).toContain("Coordination source");
     expect(markup).toContain("Pinned");
-    expect(markup).toContain("class=\"active\"");
+    expect(markup).toContain("class=\"gc-button active\"");
   });
 
   it("surfaces code-mode binding hints when sessions are unbound", () => {

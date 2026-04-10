@@ -68,7 +68,7 @@ export function ChatLearnedMemoryPanel(props: ChatLearnedMemoryPanelProps) {
                 title="Keep this memory active so it continues influencing future turns."
                 disabled={sending}
                 onClick={() => onUpdateStatus(item.itemId, "active")}
-              >
+               className="gc-button">
                 Keep
               </button>
               <button
@@ -76,7 +76,7 @@ export function ChatLearnedMemoryPanel(props: ChatLearnedMemoryPanelProps) {
                 title="Mark this memory as replaced by a newer or better one."
                 disabled={sending}
                 onClick={() => onUpdateStatus(item.itemId, "superseded")}
-              >
+               className="gc-button">
                 Supersede
               </button>
               <button
@@ -84,7 +84,7 @@ export function ChatLearnedMemoryPanel(props: ChatLearnedMemoryPanelProps) {
                 title="Stop using this memory without deleting its history."
                 disabled={sending}
                 onClick={() => onUpdateStatus(item.itemId, "disabled")}
-              >
+               className="gc-button">
                 Disable
               </button>
             </div>

@@ -23,7 +23,7 @@ export function OnboardingQuickstartProfilesPanel(props: OnboardingQuickstartPro
           <li key={preset.id}>
             <strong>{preset.title}</strong> {preset.summary}
             <div className="actions" style={{ marginTop: 8 }}>
-              <button type="button" onClick={() => onApplyQuickstartPreset(preset.id)}>
+              <button type="button" onClick={() => onApplyQuickstartPreset(preset.id)} className="gc-button">
                 Load profile
               </button>
             </div>

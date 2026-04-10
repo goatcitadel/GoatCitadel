@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ChatInputPart, ChatMessageRecord, ChatMessageRole } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -28,7 +28,7 @@ export class ChatMessageRepository {
   private readonly getStmt;
   private readonly getCursorStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_messages (
         message_id, session_id, role, actor_type, actor_id, content, parts_json, attachments_json,
@@ -118,8 +118,21 @@ export class ChatMessageRepository {
         const chunk = messages.slice(offset, offset + BATCH_SIZE);
         const rowPlaceholder = `(${columns.map(() => "?").join(", ")})`;
         const sql = `
-          INSERT OR REPLACE INTO chat_messages (${columns.join(", ")})
+          INSERT INTO chat_messages (${columns.join(", ")})
           VALUES ${chunk.map(() => rowPlaceholder).join(", ")}
+          ON CONFLICT(message_id) DO UPDATE SET
+            session_id = excluded.session_id,
+            role = excluded.role,
+            actor_type = excluded.actor_type,
+            actor_id = excluded.actor_id,
+            content = excluded.content,
+            parts_json = excluded.parts_json,
+            attachments_json = excluded.attachments_json,
+            timestamp = excluded.timestamp,
+            token_input = excluded.token_input,
+            token_output = excluded.token_output,
+            cost_usd = excluded.cost_usd,
+            created_at = excluded.created_at
         `;
         const params: (string | number | null)[] = [];
         for (const message of chunk) {
@@ -309,3 +322,5 @@ function parseAttachments(raw: string | null): ChatMessageRecord["attachments"] 
     .filter((item): item is NonNullable<ChatMessageRecord["attachments"]>[number] => Boolean(item));
   return attachments.length > 0 ? attachments : undefined;
 }
+
+

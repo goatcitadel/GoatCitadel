@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   AgentLifecycleStatus,
   AgentProfileArchiveInput,
@@ -40,7 +40,7 @@ export class AgentProfileRepository {
   private readonly deleteStmt;
   private readonly seedStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.listStmt = db.prepare(`
       SELECT * FROM agent_profiles
       WHERE (
@@ -109,7 +109,7 @@ export class AgentProfileRepository {
     this.deleteStmt = db.prepare("DELETE FROM agent_profiles WHERE agent_id = ?");
 
     this.seedStmt = db.prepare(`
-      INSERT OR IGNORE INTO agent_profiles (
+      INSERT INTO agent_profiles (
         agent_id, role_id, name, title, summary,
         specialties_json, default_tools_json, aliases_json,
         is_builtin, lifecycle_status,
@@ -120,6 +120,7 @@ export class AgentProfileRepository {
         1, 'active',
         @createdAt, @updatedAt
       )
+      ON CONFLICT DO NOTHING
     `);
   }
 
@@ -362,3 +363,5 @@ function isAgentProfileRow(value: unknown): value is AgentProfileRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

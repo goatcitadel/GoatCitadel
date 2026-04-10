@@ -74,7 +74,7 @@ export function SurfaceReconnectBanner(props: {
         <p className="surface-reconnect-banner-body">{banner.message}</p>
       </div>
       {banner.actionable ? (
-        <button type="button" className="surface-reconnect-banner-action" onClick={props.onRefresh}>
+        <button type="button" className="gc-button surface-reconnect-banner-action" onClick={props.onRefresh}>
           Refresh
         </button>
       ) : null}

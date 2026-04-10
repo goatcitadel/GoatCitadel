@@ -1,7 +1,38 @@
 import { useEffect, useState } from "react";
 import { connectEventStream, fetchDevDiagnostics, fetchRealtimeEvents, type RealtimeEvent } from "../api/client";
+import { EventCard } from "../components/EventCard";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { pageCopy } from "../content/copy";
+
+function formatEventType(eventType: string): string {
+  return eventType.replace(/_/g, " ");
+}
+
+function readPayloadString(payload: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+export function buildRealtimeEventSummary(event: RealtimeEvent): string {
+  const detail =
+    readPayloadString(event.payload, ["summary", "message", "title", "name", "status", "action", "kind"]) ??
+    (event.links?.sessionId ? `session ${event.links.sessionId.slice(-6)}` : null) ??
+    (event.links?.taskId ? `task ${event.links.taskId.slice(-6)}` : null) ??
+    null;
+
+  const prefix = event.source === "system"
+    ? "System"
+    : event.source.charAt(0).toUpperCase() + event.source.slice(1);
+
+  return detail
+    ? `${prefix} reported ${formatEventType(event.eventType)}: ${detail}.`
+    : `${prefix} reported ${formatEventType(event.eventType)}.`;
+}
 
 export function LiveFeedPage() {
   const [events, setEvents] = useState<RealtimeEvent[]>([]);
@@ -63,34 +94,26 @@ export function LiveFeedPage() {
         terms={pageCopy.liveFeed.guide?.terms}
       />
       {error ? <p className="error">{error}</p> : null}
-      <ul className="compact-list">
+      <div className="event-card-list">
         {events.map((event) => {
           const tracePreview = tracePreviewByEventId[event.eventId];
           return (
-          <li key={event.eventId}>
-            <strong>{event.eventType}</strong> #{event.sequence} from {event.source} at {new Date(event.timestamp).toLocaleString()}
-            {event.traceId ? <div>trace: {event.traceId}</div> : null}
-            {event.correlationId ? <div>correlation: {event.correlationId}</div> : null}
-            {event.correlationId ? (
-              <div className="actions">
-                <button type="button" onClick={() => void loadTracePreview(event)}>
-                  {tracePreview ? "Refresh trace detail" : "Load trace detail"}
-                </button>
-              </div>
-            ) : null}
-            {tracePreview?.length ? (
-              <div>
-                <strong>Trace detail</strong>
-                <ul className="compact-list">
-                  {tracePreview.map((item) => <li key={`${event.eventId}-${item}`}>{item}</li>)}
-                </ul>
-              </div>
-            ) : null}
-            <pre>{JSON.stringify(event.payload, null, 2)}</pre>
-          </li>
+            <EventCard
+              key={event.eventId}
+              event={event}
+              summary={buildRealtimeEventSummary(event)}
+              tracePreview={tracePreview}
+              onLoadTracePreview={
+                event.correlationId
+                  ? () => {
+                    void loadTracePreview(event);
+                  }
+                  : undefined
+              }
+            />
           );
         })}
-      </ul>
+      </div>
     </section>
   );
 }

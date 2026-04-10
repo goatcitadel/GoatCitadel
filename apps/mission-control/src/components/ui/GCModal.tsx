@@ -49,7 +49,7 @@ export function GCModal({
           <div className="gc-modal-actions">
             <button
               type="button"
-              className="gc-action-button gc-action-tertiary"
+              className="gc-button gc-action-button gc-action-tertiary"
               disabled={dismissDisabled}
               onClick={() => onOpenChange(false)}
             >
@@ -58,7 +58,7 @@ export function GCModal({
             {onConfirm ? (
               <button
                 type="button"
-                className={`gc-action-button ${danger ? "gc-action-danger" : "gc-action-primary"}`}
+                className={["gc-button", (`gc-action-button ${danger ? "gc-action-danger" : "gc-action-primary"}`)].filter(Boolean).join(" ")}
                 disabled={confirmPending || confirmDisabled}
                 onClick={() => void onConfirm()}
               >

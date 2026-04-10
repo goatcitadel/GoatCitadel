@@ -17,7 +17,7 @@ export function OnboardingProgressPanel(props: OnboardingProgressPanelProps) {
       <div className="controls-row">
         <strong>Progress</strong>
         <span>{stepTitle}</span>
-        <button type="button" onClick={() => void onRefresh()}>
+        <button type="button" onClick={() => void onRefresh()} className="gc-button">
           Refresh
         </button>
       </div>

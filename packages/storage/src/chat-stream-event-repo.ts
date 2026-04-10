@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
 export interface ChatStreamEventRecord {
@@ -31,13 +31,21 @@ export class ChatStreamEventRepository {
   private readonly getLatestSequenceStmt;
   private readonly purgeBeforeStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
-      INSERT OR REPLACE INTO chat_stream_events (
+      INSERT INTO chat_stream_events (
         event_id, session_id, turn_id, sequence, run_id, chunk_type, payload_json, created_at
       ) VALUES (
         @eventId, @sessionId, @turnId, @sequence, @runId, @chunkType, @payloadJson, @createdAt
       )
+      ON CONFLICT(event_id) DO UPDATE SET
+        session_id = excluded.session_id,
+        turn_id = excluded.turn_id,
+        sequence = excluded.sequence,
+        run_id = excluded.run_id,
+        chunk_type = excluded.chunk_type,
+        payload_json = excluded.payload_json,
+        created_at = excluded.created_at
     `);
     this.listByTurnStmt = db.prepare(`
       SELECT *
@@ -164,3 +172,5 @@ function mapRow(row: ChatStreamEventRow): ChatStreamEventRecord {
     createdAt: row.created_at,
   };
 }
+
+

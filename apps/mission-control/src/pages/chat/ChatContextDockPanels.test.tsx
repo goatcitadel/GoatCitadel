@@ -103,6 +103,8 @@ describe("ChatContextDockPanels", () => {
     expect(text).toContain("Run status");
     expect(text).toContain("Session management");
     expect(text).not.toContain("External connection binding");
+    expect(text).not.toContain("Cowork Canvas");
+    expect(text).not.toContain("Code Workbench");
   });
 
   it("routes suggestion actions through the composed dock sections", async () => {
@@ -171,6 +173,7 @@ describe("ChatContextDockPanels", () => {
     expect(onCapabilitySuggestionAction).toHaveBeenCalledTimes(1);
     expect(onCreateSpecialistDraft).toHaveBeenCalledTimes(1);
     expect(onAcceptDelegation).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("Cowork Canvas");
   });
 
   it("renders the external binding panel for external sessions inside the session grouping", () => {

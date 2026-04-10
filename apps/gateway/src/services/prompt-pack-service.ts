@@ -1143,8 +1143,7 @@ export class PromptPackService {
 
     let deletedRuns = 0;
     let deletedScores = 0;
-    this.ctx.gatewaySql.exec("BEGIN IMMEDIATE");
-    try {
+    this.ctx.gatewaySql.runImmediateTransaction(() => {
       if (clearScores) {
         deletedScores =
           this.ctx.storage.promptPackScores.deleteByPack(packId) +
@@ -1154,11 +1153,7 @@ export class PromptPackService {
       if (clearRuns) {
         deletedRuns = this.ctx.storage.promptPackRuns.deleteByPack(packId);
       }
-      this.ctx.gatewaySql.exec("COMMIT");
-    } catch (error) {
-      this.ctx.gatewaySql.exec("ROLLBACK");
-      throw error;
-    }
+    });
 
     const exportPath = this.resolvePromptPackExportPath(pack);
     if (clearRuns) {

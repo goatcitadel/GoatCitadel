@@ -29,6 +29,9 @@ workspace/chat/
 .assistant/
 .claude/settings.local.json
 apps/gateway/backups/
+backups/
+data/postgres/
+output/
 assets/source/**/*.zip
 assets/source/**/*.7z
 assets/source/**/*.rar

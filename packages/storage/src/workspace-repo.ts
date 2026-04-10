@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { WorkspaceCreateInput, WorkspacePrefs, WorkspaceRecord, WorkspaceUpdateInput } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
@@ -25,7 +25,7 @@ export class WorkspaceRepository {
   private readonly archiveStmt;
   private readonly restoreStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.listStmt = db.prepare(`
       SELECT * FROM workspaces
       WHERE (
@@ -255,3 +255,5 @@ function isWorkspaceRow(value: unknown): value is WorkspaceRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

@@ -3,10 +3,10 @@ import process from "node:process";
 import { loadLocalEnvFile } from "./env-file.js";
 import { loadGatewayConfig } from "./config.js";
 import { repoHasConfigMarker } from "./config-files.js";
-import { Storage } from "@goatcitadel/storage";
 import { installManagedVoiceRuntime, removeManagedVoiceModel, selectManagedVoiceModel } from "./voice-runtime/installer.js";
 import { getManagedVoiceRuntimeStatus } from "./voice-runtime/status.js";
 import { MANAGED_VOICE_MODELS } from "./voice-runtime/catalog.js";
+import { createGatewayStorage } from "./storage-factory.js";
 
 loadLocalEnvFile();
 
@@ -18,12 +18,7 @@ async function main(): Promise<void> {
   }
 
   const config = await loadGatewayConfig(resolveRootDir());
-  const storage = new Storage({
-    dbPath: config.dbPath,
-    transcriptsDir: config.assistant.transcriptsDir,
-    auditDir: config.assistant.auditDir,
-    tuning: config.assistant.sqlite,
-  });
+  const storage = createGatewayStorage(config);
 
   try {
     if (action === "install") {

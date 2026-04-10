@@ -35,7 +35,7 @@ export function ConfigFormBuilder({ schema, value, onChange }: ConfigFormBuilder
       <h4>{schema.title}</h4>
       {schema.description ? <p className="office-subtitle">{schema.description}</p> : null}
       {schema.fields.some((field) => field.advanced) ? (
-        <button type="button" onClick={() => setShowAdvanced((current) => !current)}>
+        <button type="button" onClick={() => setShowAdvanced((current) => !current)} className="gc-button">
           {showAdvanced ? globalCopy.configFormBuilder.hideAdvanced : globalCopy.configFormBuilder.showAdvanced}
         </button>
       ) : null}

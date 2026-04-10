@@ -574,9 +574,16 @@ export class LlmService {
   }
 
   public resolveExecutionApiStyle(providerId?: string, model?: string): LlmApiStyle {
-    const resolved = this.resolveProvider(providerId);
-    const resolvedModel = this.resolveRequestModel(resolved.provider, model);
-    return resolveProviderExecutionApiStyle(resolved.provider, resolvedModel);
+    const selectedId = normalizeConfiguredProviderId(providerId) ?? this.activeProviderId;
+    if (!selectedId) {
+      throw new Error("No active LLM provider is configured. Select a provider first.");
+    }
+    const provider = this.providers.get(selectedId);
+    if (!provider) {
+      throw new Error(`Unknown LLM provider: ${selectedId}`);
+    }
+    const resolvedModel = this.resolveRequestModel(provider, model);
+    return resolveProviderExecutionApiStyle(provider, resolvedModel);
   }
 
   private async executeChatCompletions(

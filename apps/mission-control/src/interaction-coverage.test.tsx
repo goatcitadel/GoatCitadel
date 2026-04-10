@@ -53,7 +53,7 @@ vi.mock("react-virtuoso", () => {
       itemContent?: (index: number, item: unknown) => React.ReactNode;
       totalCount?: number;
     }) => (
-      <table>
+      <table className="gc-data-table">
         <tbody>{renderItems(props.data ?? [], props.itemContent, props.totalCount)}</tbody>
       </table>
     ),
@@ -814,3 +814,4 @@ describe("mission-control interaction coverage", () => {
     expect(failures).toEqual([]);
   });
 });
+

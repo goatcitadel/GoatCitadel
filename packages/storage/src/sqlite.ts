@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { clampInt, DEFAULT_PROMPT_PACK_POLICY_V2 } from "@goatcitadel/contracts";
+import type { DatabaseClient, DbStatement, DbTransactionMode } from "./db.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const DEFAULT_PROMPT_PACK_POLICY_V2_JSON = JSON.stringify(DEFAULT_PROMPT_PACK_POLICY_V2);
@@ -25,7 +26,61 @@ export function ensureParentDir(filePath: string): void {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-export function createDatabase(options: SqliteOptions): DatabaseSync {
+type SqliteStatement = ReturnType<DatabaseSync["prepare"]>;
+
+class SqliteStatementAdapter implements DbStatement {
+  public constructor(private readonly statement: SqliteStatement) {}
+
+  public run(...params: unknown[]): { changes: number; lastInsertRowid?: number | bigint } {
+    const result = this.statement.run(...(params as Parameters<SqliteStatement["run"]>));
+    return {
+      changes: typeof result.changes === "number" ? result.changes : 0,
+      lastInsertRowid: result.lastInsertRowid,
+    };
+  }
+
+  public get<T = unknown>(...params: unknown[]): T | undefined {
+    return this.statement.get(...(params as Parameters<SqliteStatement["get"]>)) as T | undefined;
+  }
+
+  public all<T = unknown>(...params: unknown[]): T[] {
+    return this.statement.all(...(params as Parameters<SqliteStatement["all"]>)) as T[];
+  }
+}
+
+class SqliteDatabaseClient implements DatabaseClient {
+  public readonly dialect = "sqlite" as const;
+
+  public constructor(private readonly db: DatabaseSync) {}
+
+  public prepare(sql: string): DbStatement {
+    return new SqliteStatementAdapter(this.db.prepare(sql));
+  }
+
+  public exec(sql: string): void {
+    this.db.exec(sql);
+  }
+
+  public close(): void {
+    this.db.close();
+  }
+
+  public transaction<T>(mode: DbTransactionMode, callback: () => T): T {
+    const beginSql =
+      mode === "exclusive" ? "BEGIN EXCLUSIVE" : mode === "deferred" ? "BEGIN" : "BEGIN IMMEDIATE";
+    this.db.exec(beginSql);
+    try {
+      const result = callback();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+}
+
+export function createDatabase(options: SqliteOptions): DatabaseClient {
   ensureParentDir(options.dbPath);
   const db = new DatabaseSync(options.dbPath, {
     timeout: SQLITE_BUSY_TIMEOUT_MS,
@@ -44,7 +99,7 @@ export function createDatabase(options: SqliteOptions): DatabaseSync {
     db.exec(`PRAGMA wal_autocheckpoint = ${clampInt(options.tuning.walAutoCheckpointPages, 1_000, 1_000, 20_000)};`);
   }
   migrate(db);
-  return db;
+  return new SqliteDatabaseClient(db);
 }
 
 function migrate(db: DatabaseSync): void {
@@ -90,6 +145,45 @@ interface SchemaMigration {
   version: number;
   name: string;
   up: (db: DatabaseSync) => void;
+}
+
+export interface SqliteSchemaColumnBlueprint {
+  name: string;
+  type: string;
+  notNull: boolean;
+  defaultValue: string | null;
+  primaryKeyPosition: number;
+  autoIncrement: boolean;
+}
+
+export interface SqliteSchemaForeignKeyBlueprint {
+  id: number;
+  seq: number;
+  from: string;
+  to: string;
+  referencedTable: string;
+  onUpdate: string;
+  onDelete: string;
+}
+
+export interface SqliteSchemaIndexBlueprint {
+  name: string;
+  unique: boolean;
+  origin: string;
+  columns: string[];
+}
+
+export interface SqliteSchemaTableBlueprint {
+  name: string;
+  sql: string;
+  columns: SqliteSchemaColumnBlueprint[];
+  foreignKeys: SqliteSchemaForeignKeyBlueprint[];
+  indexes: SqliteSchemaIndexBlueprint[];
+  seedRows: Record<string, unknown>[];
+}
+
+export interface SqliteSchemaBlueprint {
+  tables: SqliteSchemaTableBlueprint[];
 }
 
 const SCHEMA_MIGRATIONS: SchemaMigration[] = [
@@ -411,6 +505,98 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     up: createCapabilitySystemV1Schema,
   },
 ];
+
+export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
+  const db = new DatabaseSync(":memory:");
+  try {
+    migrate(db);
+    const tableRows = db.prepare(`
+      SELECT name, sql
+      FROM sqlite_master
+      WHERE type = 'table'
+        AND sql IS NOT NULL
+        AND name NOT LIKE 'sqlite_%'
+      ORDER BY name ASC
+    `).all() as Array<{ name: string; sql: string }>;
+
+    const tables = tableRows.map((row) => buildTableBlueprint(db, row.name, row.sql));
+    return { tables };
+  } finally {
+    db.close();
+  }
+}
+
+function buildTableBlueprint(db: DatabaseSync, tableName: string, sql: string): SqliteSchemaTableBlueprint {
+  const autoIncrementColumns = new Set(
+    [...sql.matchAll(/\b([a-zA-Z_][a-zA-Z0-9_]*)\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b/gi)]
+      .map((match) => match[1])
+      .filter((value): value is string => typeof value === "string"),
+  );
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
+    name: string;
+    type: string;
+    notnull: number;
+    dflt_value: string | null;
+    pk: number;
+  }>;
+  const foreignKeys = db.prepare(`PRAGMA foreign_key_list(${tableName})`).all() as Array<{
+    id: number;
+    seq: number;
+    table: string;
+    from: string;
+    to: string;
+    on_update: string;
+    on_delete: string;
+  }>;
+  const indexes = (db.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{
+    name: string;
+    unique: number;
+    origin: string;
+  }>)
+    .filter((index) => !index.name.startsWith("sqlite_autoindex_"))
+    .map((index) => {
+      const indexColumns = db.prepare(`PRAGMA index_info(${index.name})`).all() as Array<{
+        name: string;
+      }>;
+      return {
+        name: index.name,
+        unique: index.unique === 1,
+        origin: index.origin,
+        columns: indexColumns
+          .map((column) => column.name)
+          .filter((name): name is string => typeof name === "string" && name.length > 0),
+      } satisfies SqliteSchemaIndexBlueprint;
+    });
+
+  const seedRows =
+    tableName === "workspaces" || tableName === "realtime_event_sequence_state"
+      ? (db.prepare(`SELECT * FROM ${tableName}`).all() as Record<string, unknown>[])
+      : [];
+
+  return {
+    name: tableName,
+    sql,
+    columns: columns.map((column) => ({
+      name: column.name,
+      type: column.type,
+      notNull: column.notnull === 1,
+      defaultValue: column.dflt_value,
+      primaryKeyPosition: column.pk,
+      autoIncrement: autoIncrementColumns.has(column.name),
+    })),
+    foreignKeys: foreignKeys.map((foreignKey) => ({
+      id: foreignKey.id,
+      seq: foreignKey.seq,
+      from: foreignKey.from,
+      to: foreignKey.to,
+      referencedTable: foreignKey.table,
+      onUpdate: foreignKey.on_update,
+      onDelete: foreignKey.on_delete,
+    })),
+    indexes,
+    seedRows,
+  };
+}
 
 function createBaseSchema(db: DatabaseSync): void {
   db.exec(`

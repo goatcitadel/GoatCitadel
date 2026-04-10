@@ -53,6 +53,22 @@ export interface ChatMessagesResponse {
   items: ChatMessageRecord[];
 }
 
+export interface ChatToolArtifactResponse {
+  artifact: {
+    artifactId: string;
+    sessionId: string;
+    turnId: string;
+    toolRunId: string;
+    toolName: string;
+    contentType?: string;
+    byteLength: number;
+    snippet?: string;
+    storageRelPath: string;
+    createdAt: string;
+  };
+  content: string;
+}
+
 export async function fetchChatProjects(
   view: "active" | "archived" | "all" = "active",
   limit = 300,
@@ -487,11 +503,29 @@ export async function cancelChatTurn(
 export async function approveChatTool(
   sessionId: string,
   approvalId: string,
-): Promise<{ ok: boolean; approvalId: string }> {
-  return request<{ ok: boolean; approvalId: string }>("/api/v1/chat/tools/approve", {
-    method: "POST",
-    body: JSON.stringify({ sessionId, approvalId }),
-  });
+  options?: { allowScope?: "once" | "session" | "workspace" },
+): Promise<{
+  ok: boolean;
+  approvalId: string;
+  allowScope?: "once" | "session" | "workspace";
+  resumed?: boolean;
+  resumedTurnId?: string;
+  resumedRunId?: string;
+}> {
+  return request<{
+    ok: boolean;
+    approvalId: string;
+    allowScope?: "once" | "session" | "workspace";
+    resumed?: boolean;
+    resumedTurnId?: string;
+    resumedRunId?: string;
+  }>(
+    "/api/v1/chat/tools/approve",
+    {
+      method: "POST",
+      body: JSON.stringify({ sessionId, approvalId, ...(options?.allowScope ? { allowScope: options.allowScope } : {}) }),
+    },
+  );
 }
 
 export async function denyChatTool(
@@ -502,6 +536,10 @@ export async function denyChatTool(
     method: "POST",
     body: JSON.stringify({ sessionId, approvalId }),
   });
+}
+
+export async function fetchChatToolArtifact(artifactId: string): Promise<ChatToolArtifactResponse> {
+  return request<ChatToolArtifactResponse>(`/api/v1/chat/tools/artifacts/${encodeURIComponent(artifactId)}`);
 }
 
 export async function uploadChatAttachment(input: {

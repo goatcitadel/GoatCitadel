@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ChatCitationRecord, ChatDelegationStepRecord, ChatDelegationStepStatus } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
@@ -29,7 +29,7 @@ export class ChatDelegationStepRepository {
   private readonly patchStmt;
   private readonly listByRunStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_delegation_steps WHERE step_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO chat_delegation_steps (
@@ -210,3 +210,5 @@ function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
     citations: row.citations_json ? safeJsonParse<ChatCitationRecord[]>(row.citations_json, []) : undefined,
   };
 }
+
+

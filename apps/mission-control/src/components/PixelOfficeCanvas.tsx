@@ -659,7 +659,7 @@ export function PixelOfficeCanvas({
             <button
               key={zone.zoneId}
               type="button"
-              className={`pixel-office-deck-chip${zone.zoneId === selectedZoneId ? " is-selected" : ""}`}
+              className={["gc-button", (`pixel-office-deck-chip${zone.zoneId === selectedZoneId ? " is-selected" : ""}`)].filter(Boolean).join(" ")}
               onClick={() => onSelectZone(zone.zoneId)}
             >
               {zone.label}

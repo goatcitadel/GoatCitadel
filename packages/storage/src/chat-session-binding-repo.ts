@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ChatSessionBindingRecord } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
@@ -26,9 +26,8 @@ export interface ChatSessionBindingUpsertInput {
 export class ChatSessionBindingRepository {
   private readonly getStmt;
   private readonly upsertStmt;
-  private readonly listBySessionIdsStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_session_bindings WHERE session_id = ?");
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_session_bindings (
@@ -43,11 +42,6 @@ export class ChatSessionBindingRepository {
         target_json = excluded.target_json,
         writable = excluded.writable,
         updated_at = excluded.updated_at
-    `);
-    this.listBySessionIdsStmt = db.prepare(`
-      SELECT * FROM chat_session_bindings
-      WHERE session_id IN (SELECT value FROM json_each(@sessionIdsJson))
-      AND (@workspaceId IS NULL OR workspace_id = @workspaceId)
     `);
   }
 
@@ -80,10 +74,19 @@ export class ChatSessionBindingRepository {
     if (sessionIds.length === 0) {
       return new Map();
     }
-    const rows = toChatSessionBindingRows(this.listBySessionIdsStmt.all({
-      sessionIdsJson: JSON.stringify(sessionIds),
-      workspaceId: workspaceId ? sanitizeWorkspaceId(workspaceId) : null,
-    }));
+    const placeholders = sessionIds.map(() => "?").join(", ");
+    const workspace = workspaceId ? sanitizeWorkspaceId(workspaceId) : undefined;
+    const sql = workspace
+      ? `
+        SELECT * FROM chat_session_bindings
+        WHERE session_id IN (${placeholders})
+          AND workspace_id = ?
+      `
+      : `
+        SELECT * FROM chat_session_bindings
+        WHERE session_id IN (${placeholders})
+      `;
+    const rows = toChatSessionBindingRows(this.db.prepare(sql).all(...sessionIds, ...(workspace ? [workspace] : [])));
     return new Map(rows.map((row) => [row.session_id, mapRow(row)]));
   }
 }
@@ -151,3 +154,5 @@ function sanitizeWorkspaceId(value: string): string {
   }
   return trimmed;
 }
+
+

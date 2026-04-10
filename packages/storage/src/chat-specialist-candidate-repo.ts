@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   ChatMode,
   ChatSpecialistCandidateCreateInput,
@@ -39,7 +39,7 @@ export class ChatSpecialistCandidateRepository {
   private readonly insertStmt;
   private readonly patchStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_specialist_candidates WHERE candidate_id = ?");
     this.listBySessionStmt = db.prepare(`
       SELECT *
@@ -297,3 +297,5 @@ function isChatSpecialistCandidateRow(value: unknown): value is ChatSpecialistCa
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

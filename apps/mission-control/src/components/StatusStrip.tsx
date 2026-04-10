@@ -8,6 +8,8 @@ interface StatusStripProps {
   activeAgentsCount: number;
   dailyCostUsd: number;
   openTasksCount: number;
+  collapsed: boolean;
+  onCollapsedChange: (next: boolean) => void;
   onOpenApprovals: () => void;
   onOpenAgents: () => void;
   onOpenCosts: () => void;
@@ -38,13 +40,14 @@ export function StatusStrip({
   activeAgentsCount,
   dailyCostUsd,
   openTasksCount,
+  collapsed,
+  onCollapsedChange,
   onOpenApprovals,
   onOpenAgents,
   onOpenCosts,
   onOpenTasks,
 }: StatusStripProps) {
   const [compactViewport, setCompactViewport] = useState(readCompactViewport);
-  const [expanded, setExpanded] = useState(() => !readCompactViewport());
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -54,9 +57,6 @@ export function StatusStrip({
     const media = window.matchMedia("(max-width: 767px)");
     const handleChange = (event: MediaQueryListEvent | MediaQueryList) => {
       setCompactViewport(event.matches);
-      if (!event.matches) {
-        setExpanded(true);
-      }
     };
 
     handleChange(media);
@@ -76,24 +76,23 @@ export function StatusStrip({
 
   return (
     <section
-      className={`status-strip-shell${compactViewport ? " compact" : ""}${expanded ? " expanded" : " collapsed"}`}
+      className={`status-strip-shell${compactViewport ? " compact" : ""}${collapsed ? " collapsed" : " expanded"}`}
       aria-label="Operator status"
     >
-      {compactViewport ? (
-        <button
-          type="button"
-          className="status-strip-summary"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((current) => !current)}
-        >
-          <span className="status-strip-summary-copy">
-            <span className="status-strip-summary-label">Operator status</span>
-            <span className="status-strip-summary-value">{compactSummary}</span>
-          </span>
-          <span className="status-strip-summary-caret" aria-hidden>{expanded ? "▴" : "▾"}</span>
-        </button>
-      ) : null}
-      <div className="status-strip">
+      <button
+        type="button"
+        className="gc-button status-strip-summary"
+        aria-expanded={!collapsed}
+        onClick={() => onCollapsedChange(!collapsed)}
+      >
+        <span className="status-strip-summary-copy">
+          <span className="status-strip-summary-label">Operator status</span>
+          <span className="status-strip-summary-value">{compactSummary}</span>
+        </span>
+        <span className="status-strip-summary-caret" aria-hidden>{collapsed ? "▾" : "▴"}</span>
+      </button>
+      {!collapsed ? (
+        <div className="status-strip">
         <div className="status-strip-tier status-strip-tier-primary" aria-label="Critical operator priorities">
           <StatCard
             label={approvalsLabel}
@@ -138,7 +137,8 @@ export function StatusStrip({
             onClick={onOpenTasks}
           />
         </div>
-      </div>
+        </div>
+      ) : null}
     </section>
   );
 }

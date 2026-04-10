@@ -41,7 +41,7 @@ export function ToolCatalogPanel(props: ToolCatalogPanelProps) {
       {(["core", "devops", "knowledge", "comms"] as const).map((pack) => (
         <div key={pack}>
           <h4>{pack.toUpperCase()}</h4>
-          <table>
+          <table className="gc-data-table">
             <thead>
               <tr>
                 <th>Tool</th>
@@ -73,3 +73,4 @@ export function ToolCatalogPanel(props: ToolCatalogPanelProps) {
     </Panel>
   );
 }
+

@@ -4,7 +4,7 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import { enterRequestAttribution } from "../../../packages/storage/src/request-attribution.js";
 import { loadLocalEnvFile } from "./env-file.js";
-import { gatewayPlugin } from "./plugins/sqlite.js";
+import { gatewayPlugin } from "./plugins/storage.js";
 import { authPlugin } from "./plugins/auth.js";
 import { idempotencyHeaderPlugin } from "./plugins/idempotency.js";
 import { healthRoute } from "./routes/health.js";

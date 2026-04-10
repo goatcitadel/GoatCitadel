@@ -41,7 +41,7 @@ type HarnessState = {
   execute: (item: any) => Promise<void>;
   applyFetchedThread: (thread: ChatThreadResponse, requestVersion: number | null) => boolean;
   setPendingApproval: (value: any) => void;
-  approvePending: () => Promise<void>;
+  approvePending: (allowScope?: "once" | "session" | "workspace") => Promise<void>;
   denyPending: () => Promise<void>;
 };
 
@@ -189,6 +189,12 @@ describe("useChatOutboundExecution", () => {
     streamAgentChatMessageMock.mockReset();
     streamEditChatTurnMock.mockReset();
     streamRetryChatTurnMock.mockReset();
+    approveChatToolMock.mockResolvedValue({
+      ok: true,
+      approvalId: "approval-default",
+      allowScope: "once",
+      resumed: true,
+    });
     fetchChatPendingApprovalsMock.mockResolvedValue({
       items: [],
       activeApprovalId: null,
@@ -233,7 +239,33 @@ describe("useChatOutboundExecution", () => {
       await latest?.approvePending();
     });
 
-    expect(approveChatToolMock).toHaveBeenCalledWith("session-1", "approval-1");
+    expect(approveChatToolMock).toHaveBeenCalledWith("session-1", "approval-1", { allowScope: "once" });
+    expect(latest?.pendingApproval).toBeNull();
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+  });
+
+  it("can escalate a pending tool request into a session grant", async () => {
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+
+    act(() => {
+      latest?.setPendingApproval({
+        approvalId: "approval-2",
+        toolName: "shell_command",
+        reason: "Needs approval",
+      });
+    });
+
+    await act(async () => {
+      await latest?.approvePending("session");
+    });
+
+    expect(approveChatToolMock).toHaveBeenCalledWith("session-1", "approval-2", { allowScope: "session" });
     expect(latest?.pendingApproval).toBeNull();
 
     await act(async () => {

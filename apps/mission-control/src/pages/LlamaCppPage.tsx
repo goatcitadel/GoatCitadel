@@ -658,7 +658,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
       </Panel>
 
       <Panel title="Models" subtitle="Discovered model ids from the current llama.cpp server.">
-        <table>
+        <table className="gc-data-table">
           <thead>
             <tr>
               <th>Model</th>
@@ -761,3 +761,4 @@ function createEmptyStatus(baseUrl: string): LlamaCppStatusRecord {
     updatedAt: new Date().toISOString(),
   };
 }
+

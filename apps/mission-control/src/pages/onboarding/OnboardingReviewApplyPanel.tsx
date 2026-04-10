@@ -48,7 +48,7 @@ export function OnboardingReviewApplyPanel(props: OnboardingReviewApplyPanelProp
         />
       </div>
       <pre>{JSON.stringify(summary, null, 2)}</pre>
-      <button type="button" onClick={() => void onSubmit()} disabled={applying}>
+      <button type="button" onClick={() => void onSubmit()} disabled={applying} className="gc-button">
         {applying ? "Applying..." : "Apply onboarding"}
       </button>
       <p className="office-subtitle">

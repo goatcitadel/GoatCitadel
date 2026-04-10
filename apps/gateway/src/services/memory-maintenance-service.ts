@@ -29,6 +29,7 @@ const MEMORY_MAINTENANCE_WORKFLOW_VERSION = "memory.maintenance.v1";
 const MAX_TRANSCRIPT_SOURCES = 24;
 const MAX_MEMORY_FILE_SOURCES = 24;
 const MAX_MEMORY_ITEM_SOURCES = 24;
+const MAX_TOOL_ARTIFACT_SOURCES = 16;
 const MAX_FILE_BYTES = 12_000;
 const MAX_EXCERPT_CHARS = 1_400;
 const MAX_MODEL_EVIDENCE_TOKENS = 7_000;
@@ -66,6 +67,7 @@ interface MaintenanceSourceBundle {
   fileSources: MemoryMaintenanceRunSourceRecord[];
   maintenanceSources: MemoryMaintenanceRunSourceRecord[];
   memoryItemSources: MemoryMaintenanceRunSourceRecord[];
+  artifactSources: MemoryMaintenanceRunSourceRecord[];
   markdownSections: string[];
 }
 
@@ -308,6 +310,7 @@ export class MemoryMaintenanceService {
         ...sources.fileSources,
         ...sources.maintenanceSources,
         ...sources.memoryItemSources,
+        ...sources.artifactSources,
       ];
       const sourceSessionCount = sources.transcriptSources.length;
       this.ctx.storage.memoryMaintenance.replaceRunSources(maintenanceRun.runId, allSources);
@@ -532,6 +535,7 @@ export class MemoryMaintenanceService {
   }
 
   private countChangedSessions(workspaceId: string, since?: string): number {
+    const sinceClause = since ? "AND trace.finished_at > @since" : "";
     const row = this.ctx.gatewaySql
       .prepare(
         `
@@ -553,14 +557,14 @@ export class MemoryMaintenanceService {
           AND subagent.agent_session_id IS NULL
           AND trace.status = 'completed'
           AND trace.assistant_message_id IS NOT NULL
-          AND (@since IS NULL OR trace.finished_at > @since)
+          ${sinceClause}
         GROUP BY meta.session_id
       ) AS changed_sessions
     `,
       )
       .get({
         workspaceId,
-        since: since ?? null,
+        since,
       }) as { count: number | null } | undefined;
     return Number(row?.count ?? 0);
   }
@@ -570,6 +574,7 @@ export class MemoryMaintenanceService {
     since?: string,
     limit = MAX_TRANSCRIPT_SOURCES,
   ): EligibleWorkspaceSession[] {
+    const sinceClause = since ? "AND trace.finished_at > @since" : "";
     const rows = this.ctx.gatewaySql
       .prepare(
         `
@@ -589,7 +594,7 @@ export class MemoryMaintenanceService {
         AND subagent.agent_session_id IS NULL
         AND trace.status = 'completed'
         AND trace.assistant_message_id IS NOT NULL
-        AND (@since IS NULL OR trace.finished_at > @since)
+        ${sinceClause}
       GROUP BY meta.session_id
       ORDER BY modified_at DESC, meta.session_id DESC
       LIMIT @limit
@@ -597,7 +602,7 @@ export class MemoryMaintenanceService {
       )
       .all({
         workspaceId,
-        since: since ?? null,
+        since,
         limit: Math.max(1, Math.min(limit, 200)),
       }) as Array<{ session_id: string; modified_at: string | null }>;
     return rows.map((row) => ({
@@ -877,9 +882,14 @@ export class MemoryMaintenanceService {
       markdownSections.push(renderMemoryItemSection(memoryItem.sourceRef, memoryItem.modifiedAt, memoryItem.excerpt));
     }
 
+    const artifactSources = this.readRecentToolArtifacts(workspaceId, since, runId);
+    for (const artifactSource of artifactSources) {
+      markdownSections.push(renderToolArtifactSection(artifactSource.sourceRef, artifactSource.modifiedAt, artifactSource.excerpt));
+    }
+
     if (markdownSections.length === 0) {
       markdownSections.push(
-        "## Signals\n\nNo eligible transcript, file, or memory-item sources were found for this workspace.",
+        "## Signals\n\nNo eligible transcript, file, memory-item, or retained artifact sources were found for this workspace.",
       );
     }
 
@@ -888,6 +898,7 @@ export class MemoryMaintenanceService {
       fileSources: memoryFileSources,
       maintenanceSources,
       memoryItemSources,
+      artifactSources,
       markdownSections,
     };
   }
@@ -993,6 +1004,59 @@ export class MemoryMaintenanceService {
     } catch {
       return [];
     }
+  }
+
+  private readRecentToolArtifacts(
+    workspaceId: string,
+    since: string | undefined,
+    runId: string,
+  ): MemoryMaintenanceRunSourceRecord[] {
+    const sinceClause = since ? "AND artifact.created_at > @since" : "";
+    const rows = this.ctx.gatewaySql.prepare(
+      `
+      SELECT
+        artifact.artifact_id AS artifact_id,
+        artifact.tool_name AS tool_name,
+        artifact.session_id AS session_id,
+        artifact.byte_length AS byte_length,
+        artifact.snippet AS snippet,
+        artifact.content_type AS content_type,
+        artifact.created_at AS created_at
+      FROM chat_tool_artifacts AS artifact
+      INNER JOIN chat_session_meta AS meta
+        ON meta.session_id = artifact.session_id
+      WHERE meta.workspace_id = @workspaceId
+        ${sinceClause}
+      ORDER BY artifact.created_at DESC
+      LIMIT @limit
+    `,
+    ).all({
+      workspaceId,
+      since,
+      limit: MAX_TOOL_ARTIFACT_SOURCES,
+    }) as Array<{
+      artifact_id: string;
+      tool_name: string;
+      session_id: string;
+      byte_length: number;
+      snippet: string | null;
+      content_type: string | null;
+      created_at: string;
+    }>;
+    return rows.map((row) => {
+      const header = `${row.tool_name} (${row.session_id}, ${row.byte_length} bytes${row.content_type ? `, ${row.content_type}` : ""})`;
+      const excerpt = truncateText(`${header}\n${row.snippet ?? "Artifact retained without inline snippet."}`, MAX_EXCERPT_CHARS);
+      return {
+        sourceId: randomUUID(),
+        runId,
+        sourceKind: "artifact",
+        sourceRef: row.artifact_id,
+        modifiedAt: row.created_at,
+        excerpt,
+        tokenEstimate: estimateTokens(excerpt),
+        createdAt: new Date().toISOString(),
+      } satisfies MemoryMaintenanceRunSourceRecord;
+    });
   }
 
   private memoryItemMatchesWorkspace(
@@ -1438,6 +1502,21 @@ function renderMemoryItemSection(
   ].join("\n");
 }
 
+function renderToolArtifactSection(
+  sourceRef: string,
+  modifiedAt: string | undefined,
+  excerpt: string | undefined,
+): string {
+  return [
+    `## Retained Tool Artifact ${sourceRef}`,
+    ``,
+    `Last changed: ${modifiedAt ?? "unknown"}`,
+    ``,
+    excerpt || "No retained artifact excerpt.",
+    ``,
+  ].join("\n");
+}
+
 function renderExistingMaintenanceSection(
   sourceRef: string,
   modifiedAt: string | undefined,
@@ -1490,6 +1569,7 @@ function buildMaintenanceConsolidationPrompt(input: {
     ...input.sources.fileSources,
     ...input.sources.maintenanceSources,
     ...input.sources.memoryItemSources,
+    ...input.sources.artifactSources,
   ];
   const sourceCatalog =
     allSources.length > 0
@@ -1579,6 +1659,7 @@ function buildFallbackMaintenanceMarkdown(workspaceId: string, sources: Maintena
     ...sources.fileSources.map((source) => `- file: ${source.sourceRef}`),
     ...sources.maintenanceSources.map((source) => `- prior-maintenance: ${source.sourceRef}`),
     ...sources.memoryItemSources.map((source) => `- memory-item: ${source.sourceRef}`),
+    ...sources.artifactSources.map((source) => `- artifact: ${source.sourceRef}`),
   ];
   return [
     `# Workspace Memory`,

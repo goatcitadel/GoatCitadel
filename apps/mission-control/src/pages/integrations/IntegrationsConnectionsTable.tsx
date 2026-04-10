@@ -61,7 +61,7 @@ export function IntegrationsConnectionsTable(props: IntegrationsConnectionsTable
         }
         secondary={<StatusChip>{filteredConnections.length} visible</StatusChip>}
       />
-      <table>
+      <table className="gc-data-table">
         <thead>
           <tr>
             <th>Label</th>
@@ -102,7 +102,7 @@ export function IntegrationsConnectionsTable(props: IntegrationsConnectionsTable
                 <td>{connection.enabled ? "yes" : "no"}</td>
                 <td>{new Date(connection.updatedAt).toLocaleString()}</td>
                 <td className="actions">
-                  <button type="button" onClick={() => onToggle(connection)}>
+                  <button type="button" onClick={() => onToggle(connection)} className="gc-button">
                     {connection.enabled ? "Pause" : "Enable"}
                   </button>
                   {connectorDiagnosticsEnabled ? (
@@ -110,7 +110,7 @@ export function IntegrationsConnectionsTable(props: IntegrationsConnectionsTable
                       type="button"
                       onClick={() => onRunDiagnostics(connection.connectionId)}
                       disabled={pluginBusyId === `diag:${connection.connectionId}`}
-                    >
+                     className="gc-button">
                       {pluginBusyId === `diag:${connection.connectionId}` ? "Running..." : "Diagnose"}
                     </button>
                   ) : (
@@ -118,7 +118,7 @@ export function IntegrationsConnectionsTable(props: IntegrationsConnectionsTable
                   )}
                   <button
                     type="button"
-                    className="danger"
+                    className="gc-button danger"
                     onClick={() => onSetDeleteTarget(connection)}
                     disabled={deleteActionPending}
                   >
@@ -176,3 +176,4 @@ export function IntegrationsConnectionsTable(props: IntegrationsConnectionsTable
     </Panel>
   );
 }
+

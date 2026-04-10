@@ -454,7 +454,7 @@ export function MemoryMaintenancePanel(props: MemoryMaintenancePanelProps) {
               <div className="split-grid">
                 <div>
                   <h4>Run history</h4>
-                  <table>
+                  <table className="gc-data-table">
                     <thead>
                       <tr>
                         <th>Run</th>
@@ -635,3 +635,4 @@ export function MemoryMaintenancePanel(props: MemoryMaintenancePanelProps) {
     </Panel>
   );
 }
+

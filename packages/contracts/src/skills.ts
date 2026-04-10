@@ -236,6 +236,12 @@ export interface SkillImportValidationResult {
   suspiciousSignals: string[];
   licenseFiles: string[];
   instructionPreview?: string;
+  nativeOverlaps?: Array<{
+    overlapFamily: string;
+    nativeAlternativeName: string;
+    nativeDestination: string;
+    blockingReason: string;
+  }>;
 }
 
 export interface SkillImportHistoryRecord {

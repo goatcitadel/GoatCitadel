@@ -18,6 +18,9 @@ export interface ResolvedRoute {
   page: SpacePage;
   surface?: WorkSurface;
   tab?: NestedHostTab;
+  sessionId?: string;
+  turnId?: string;
+  approvalId?: string;
 }
 
 interface RouteInfo {
@@ -59,7 +62,7 @@ export const PAGE_META: Record<SpacePage, RouteInfo> = {
     space: "operate",
     page: "approvals",
     label: "Approvals",
-    description: "Review and resolve risky actions waiting on you.",
+    description: "Persisted approval history, audit context, and recovery.",
   },
   activity: {
     space: "observe",
@@ -298,6 +301,9 @@ export function readRouteFromLocation(): ResolvedRoute {
   const page = url.searchParams.get("page");
   const surface = url.searchParams.get("surface");
   const nestedTab = url.searchParams.get("tab");
+  const sessionId = url.searchParams.get("sessionId")?.trim() || undefined;
+  const turnId = url.searchParams.get("turnId")?.trim() || undefined;
+  const approvalId = url.searchParams.get("approvalId")?.trim() || undefined;
 
   if (isSpace(space)) {
     if (space === "operate" && isOperatePage(page)) {
@@ -305,6 +311,9 @@ export function readRouteFromLocation(): ResolvedRoute {
         space,
         page,
         surface: isWorkSurface(surface) ? surface : undefined,
+        sessionId,
+        turnId,
+        approvalId,
       });
     }
     if (space === "observe" && isObservePage(page)) {
@@ -336,6 +345,15 @@ export function buildRouteSearch(route: ResolvedRoute): string {
   }
   if (next.tab) {
     params.set("tab", next.tab);
+  }
+  if (next.sessionId) {
+    params.set("sessionId", next.sessionId);
+  }
+  if (next.turnId) {
+    params.set("turnId", next.turnId);
+  }
+  if (next.approvalId) {
+    params.set("approvalId", next.approvalId);
   }
   return `?${params.toString()}`;
 }

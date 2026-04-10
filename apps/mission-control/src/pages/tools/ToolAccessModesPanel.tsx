@@ -43,7 +43,7 @@ export function ToolAccessModesPanel(props: ToolAccessModesPanelProps) {
           <button
             type="button"
             key={preset.id}
-            className={`tool-profile-card ${currentToolProfile === preset.id ? "active" : ""}`}
+            className={["gc-button", (`tool-profile-card ${currentToolProfile === preset.id ? "active" : ""}`)].filter(Boolean).join(" ")}
             onClick={() => void onApplyToolProfile(preset.id)}
             disabled={profileSwitchBusy !== null}
           >

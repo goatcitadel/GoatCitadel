@@ -24,7 +24,11 @@ export function InlineApprovalPrompt({
   affectedResources,
   codePreview,
   pending,
-  onApprove,
+  approvalsHref,
+  workspaceAllowAvailable,
+  onApproveOnce,
+  onApproveInSession,
+  onApproveInWorkspace,
   onDeny,
 }: {
   approvalId: string;
@@ -43,10 +47,15 @@ export function InlineApprovalPrompt({
   affectedResources?: string[];
   codePreview?: string;
   pending?: boolean;
-  onApprove: () => void;
+  approvalsHref?: string;
+  workspaceAllowAvailable?: boolean;
+  onApproveOnce: () => void;
+  onApproveInSession: () => void;
+  onApproveInWorkspace: () => void;
   onDeny: () => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
+  const [confirmWorkspaceAllow, setConfirmWorkspaceAllow] = useState(false);
 
   useEffect(() => {
     if (!expiresAt) {
@@ -85,6 +94,12 @@ export function InlineApprovalPrompt({
   const remainingMs = expiresAt ? Date.parse(expiresAt) - now : Infinity;
   const isLowTime = remainingMs > 0 && remainingMs < 120_000;
 
+  useEffect(() => {
+    if (actionsDisabled || !workspaceAllowAvailable) {
+      setConfirmWorkspaceAllow(false);
+    }
+  }, [actionsDisabled, workspaceAllowAvailable]);
+
   return (
     <div
       className={`chat-approval-card${expiryState.expired ? " is-expired" : ""}${isLowTime ? " is-low-time" : ""}`}
@@ -116,14 +131,49 @@ export function InlineApprovalPrompt({
       {saveCandidateOnSuccess ? (
         <p className="chat-approval-reason">Candidate skill will be staged on success.</p>
       ) : null}
+      <p className="chat-approval-reason">
+        Allow once resumes just this request. Session and workspace allows create a narrow grant for this exact tool.
+      </p>
       <div className="chat-approval-actions">
-        <button type="button" className="chat-approval-allow" disabled={actionsDisabled} onClick={onApprove}>
+        <button type="button" className="gc-button chat-approval-allow" disabled={actionsDisabled} onClick={onApproveOnce}>
           Allow once
         </button>
-        <button type="button" className="chat-approval-deny" disabled={actionsDisabled} onClick={onDeny}>
+        <button type="button" className="gc-button chat-approval-allow" disabled={actionsDisabled} onClick={onApproveInSession}>
+          Allow in session
+        </button>
+        <button
+          type="button"
+          className="gc-button chat-approval-allow"
+          disabled={actionsDisabled || !workspaceAllowAvailable}
+          onClick={() => setConfirmWorkspaceAllow(true)}
+          title={workspaceAllowAvailable ? "Allow this exact tool for the current workspace." : "Workspace context is required."}
+        >
+          Allow in workspace
+        </button>
+        <button type="button" className="gc-button chat-approval-deny" disabled={actionsDisabled} onClick={onDeny}>
           Deny
         </button>
       </div>
+      {confirmWorkspaceAllow ? (
+        <div className="chat-approval-confirm">
+          <p className="chat-approval-reason">
+            Workspace allow is broader than session allow and stays active until you revoke it.
+          </p>
+          <div className="chat-approval-actions">
+            <button type="button" className="gc-button chat-approval-allow" disabled={actionsDisabled} onClick={onApproveInWorkspace}>
+              Confirm workspace allow
+            </button>
+            <button type="button" className="gc-button chat-approval-deny" disabled={actionsDisabled} onClick={() => setConfirmWorkspaceAllow(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {approvalsHref ? (
+        <p className="chat-approval-id">
+          <a href={approvalsHref}>Open persisted approval record</a>
+        </p>
+      ) : null}
       <p className="chat-approval-id">{approvalId}</p>
     </div>
   );

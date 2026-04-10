@@ -6,7 +6,7 @@ import type {
   ApprovalResolveInput,
 } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { randomUUID } from "node:crypto";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -34,6 +34,7 @@ interface ApprovalRow {
 export class ApprovalRepository {
   private readonly createStmt;
   private readonly listStmt;
+  private readonly listByStatusStmt;
   private readonly getStmt;
   private readonly resolveStmt;
   private readonly updatePayloadStmt;
@@ -41,7 +42,7 @@ export class ApprovalRepository {
   private readonly setExplanationStmt;
   private readonly setExplanationFailedStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.createStmt = db.prepare(`
       INSERT INTO approvals (
         approval_id, kind, risk_level, status, linkage_json, payload_json, preview_json,
@@ -51,7 +52,8 @@ export class ApprovalRepository {
         @explanationStatus, @createdAt, @expiresAt
       )
     `);
-    this.listStmt = db.prepare("SELECT * FROM approvals WHERE (@status IS NULL OR status = @status) ORDER BY created_at DESC LIMIT @limit");
+    this.listStmt = db.prepare("SELECT * FROM approvals ORDER BY created_at DESC LIMIT @limit");
+    this.listByStatusStmt = db.prepare("SELECT * FROM approvals WHERE status = @status ORDER BY created_at DESC LIMIT @limit");
     this.getStmt = db.prepare("SELECT * FROM approvals WHERE approval_id = ?");
     this.resolveStmt = db.prepare(`
       UPDATE approvals SET
@@ -124,7 +126,10 @@ export class ApprovalRepository {
   }
 
   public list(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
-    const rows = toApprovalRows(this.listStmt.all({ status: status ?? null, limit }));
+    const rows = toApprovalRows((status ? this.listByStatusStmt : this.listStmt).all({
+      status,
+      limit,
+    }));
     return rows.map(mapRow);
   }
 
@@ -329,3 +334,5 @@ function normalizeApprovalLinkage(candidate: unknown): ApprovalRequest["linkage"
   );
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
+
+

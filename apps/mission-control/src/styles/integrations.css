@@ -68,12 +68,12 @@
 }
 
 .integrations-setup-mode-card p {
-  color: var(--text-secondary, var(--muted));
+  color: var(--text-secondary);
 }
 
 .integrations-setup-mode-card span {
   font-size: 0.78rem;
-  color: var(--text-muted, var(--muted));
+  color: var(--text-muted);
 }
 
 .integrations-setup-mode-card.selected {

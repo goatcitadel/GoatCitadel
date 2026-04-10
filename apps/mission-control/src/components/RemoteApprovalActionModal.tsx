@@ -92,7 +92,7 @@ export function RemoteApprovalActionModal({
         </>
       ) : null}
       <div className="gc-modal-actions" style={{ marginTop: "1rem" }}>
-        <button type="button" className="danger" disabled={busy || tokenExpired} onClick={() => void onReject()}>
+        <button type="button" className="gc-button danger" disabled={busy || tokenExpired} onClick={() => void onReject()}>
           {busy ? "Working..." : "Reject action"}
         </button>
       </div>

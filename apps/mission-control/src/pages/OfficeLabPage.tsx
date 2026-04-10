@@ -237,10 +237,10 @@ export function OfficeLabPage({ onOpenImmersive }: OfficeLabPageProps) {
         actions={(
           <div className="workflow-summary-strip">
             <div className="office-surface-switch" role="tablist" aria-label="Office surface views">
-              <button type="button" onClick={onOpenImmersive} aria-pressed="false">
+              <button type="button" onClick={onOpenImmersive} aria-pressed="false" className="gc-button">
                 Immersive
               </button>
-              <button type="button" className="active" aria-pressed="true">
+              <button type="button" className="gc-button active" aria-pressed="true">
                 Pixel Lab
               </button>
             </div>
@@ -248,7 +248,7 @@ export function OfficeLabPage({ onOpenImmersive }: OfficeLabPageProps) {
             <StatusChip tone={pendingApprovals.length > 0 ? "critical" : "muted"}>{pendingApprovals.length} pending</StatusChip>
             <StatusChip tone={totalActiveAgents > 0 ? "live" : "muted"}>{totalActiveAgents} active</StatusChip>
             <StatusChip tone="muted">{operators.length} operators</StatusChip>
-            <button type="button" className="office-lab-button" onClick={() => void refresh()}>Reload office</button>
+            <button type="button" className="gc-button office-lab-button" onClick={() => void refresh()}>Reload office</button>
           </div>
         )}
       />

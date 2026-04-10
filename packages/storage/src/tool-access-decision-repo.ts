@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ToolGrantScope, ToolRiskLevel } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -9,6 +9,7 @@ export interface ToolAccessDecisionRecord {
   toolName: string;
   agentId: string;
   sessionId: string;
+  workspaceId?: string;
   taskId?: string;
   allowed: boolean;
   reasonCodes: string[];
@@ -36,13 +37,15 @@ export class ToolAccessDecisionRepository {
   private readonly countByToolGlobalSinceStmt;
   private readonly countByToolAgentSinceStmt;
   private readonly countByToolSessionSinceStmt;
+  private readonly countByToolWorkspaceSinceStmt;
   private readonly countByToolTaskSinceStmt;
   private readonly countWritesGlobalSinceStmt;
   private readonly countWritesAgentSinceStmt;
   private readonly countWritesSessionSinceStmt;
+  private readonly countWritesWorkspaceSinceStmt;
   private readonly countWritesTaskSinceStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO tool_access_decisions (
         decision_id, timestamp, tool_name, agent_id, session_id, task_id,
@@ -72,6 +75,15 @@ export class ToolAccessDecisionRepository {
         AND agent_id = @agentId
         AND session_id = @sessionId
         AND timestamp >= @since
+    `);
+    this.countByToolWorkspaceSinceStmt = db.prepare(`
+      SELECT COUNT(*) as count
+      FROM tool_access_decisions AS decision
+      INNER JOIN chat_session_meta AS meta
+        ON meta.session_id = decision.session_id
+      WHERE decision.tool_name = @toolName
+        AND meta.workspace_id = @workspaceId
+        AND decision.timestamp >= @since
     `);
     this.countByToolTaskSinceStmt = db.prepare(`
       SELECT COUNT(*) as count
@@ -103,6 +115,16 @@ export class ToolAccessDecisionRepository {
         AND allowed = 1
         AND tool_name IN ('fs.write', 'fs.move', 'fs.delete', 'git.add', 'git.commit', 'git.branch.switch', 'git.worktree.create', 'git.worktree.remove', 'gmail.send', 'calendar.create_event')
         AND timestamp >= @since
+    `);
+    this.countWritesWorkspaceSinceStmt = db.prepare(`
+      SELECT COUNT(*) as count
+      FROM tool_access_decisions AS decision
+      INNER JOIN chat_session_meta AS meta
+        ON meta.session_id = decision.session_id
+      WHERE meta.workspace_id = @workspaceId
+        AND decision.allowed = 1
+        AND decision.tool_name IN ('fs.write', 'fs.move', 'fs.delete', 'git.add', 'git.commit', 'git.branch.switch', 'git.worktree.create', 'git.worktree.remove', 'gmail.send', 'calendar.create_event')
+        AND decision.timestamp >= @since
     `);
     this.countWritesTaskSinceStmt = db.prepare(`
       SELECT COUNT(*) as count
@@ -158,6 +180,7 @@ export class ToolAccessDecisionRepository {
     scope: ToolGrantScope;
     agentId: string;
     sessionId: string;
+    workspaceId?: string;
     taskId?: string;
   }): number {
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
@@ -173,6 +196,16 @@ export class ToolAccessDecisionRepository {
         row = this.countByToolAgentSinceStmt.get({
           toolName: input.toolName,
           agentId: input.agentId,
+          since,
+        }) as { count: number };
+        break;
+      case "workspace":
+        if (!input.workspaceId) {
+          return 0;
+        }
+        row = this.countByToolWorkspaceSinceStmt.get({
+          toolName: input.toolName,
+          workspaceId: input.workspaceId,
           since,
         }) as { count: number };
         break;
@@ -203,6 +236,7 @@ export class ToolAccessDecisionRepository {
     scope: ToolGrantScope;
     agentId: string;
     sessionId: string;
+    workspaceId?: string;
     taskId?: string;
   }): number {
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
@@ -216,6 +250,15 @@ export class ToolAccessDecisionRepository {
       case "agent":
         row = this.countWritesAgentSinceStmt.get({
           agentId: input.agentId,
+          since,
+        }) as { count: number };
+        break;
+      case "workspace":
+        if (!input.workspaceId) {
+          return 0;
+        }
+        row = this.countWritesWorkspaceSinceStmt.get({
+          workspaceId: input.workspaceId,
           since,
         }) as { count: number };
         break;
@@ -256,3 +299,5 @@ export function mapToolAccessDecisionRow(row: ToolAccessDecisionRow): ToolAccess
     riskLevel: row.risk_level,
   };
 }
+
+

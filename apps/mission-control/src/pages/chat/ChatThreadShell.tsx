@@ -19,6 +19,7 @@ export function ChatThreadShell(props: {
   queuedCount: number;
   streamError: string | null;
   pendingApproval: ChatPendingApprovalState | null;
+  workspaceId?: string;
   approvalPending: boolean;
   eventStreamStatus: EventStreamStatus;
   onBottomStateChange: (atBottom: boolean) => void;
@@ -26,7 +27,7 @@ export function ChatThreadShell(props: {
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;
-  onApprovePending: () => void;
+  onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
   onRefresh: () => void;
 }) {
@@ -41,6 +42,7 @@ export function ChatThreadShell(props: {
     queuedCount,
     streamError,
     pendingApproval,
+    workspaceId,
     approvalPending,
     eventStreamStatus,
     onBottomStateChange,
@@ -79,6 +81,7 @@ export function ChatThreadShell(props: {
 
       <ChatPendingApprovalPanel
         pendingApproval={pendingApproval}
+        workspaceId={workspaceId}
         pending={approvalPending}
         onApprove={onApprovePending}
         onDeny={onDenyPending}

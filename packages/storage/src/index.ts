@@ -1,10 +1,13 @@
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
 import { createDatabase, type SqliteOptions } from "./sqlite.js";
+import type { DatabaseClient } from "./db.js";
 import { SessionRepository } from "./session-repo.js";
 import { IdempotencyRepository } from "./idempotency-repo.js";
 import { TranscriptLog } from "./transcript-log.js";
 import { AuditLog } from "./audit-log.js";
+import { PostgresTranscriptLog } from "./postgres-transcript-log.js";
+import { PostgresAuditLog } from "./postgres-audit-log.js";
 import { ApprovalRepository } from "./approval-repo.js";
 import { CostLedgerRepository } from "./cost-ledger-repo.js";
 import { ApprovalEventRepository } from "./approval-event-repo.js";
@@ -72,9 +75,12 @@ import { CandidateSkillVersionRepository } from "./candidate-skill-version-repo.
 import { CapabilityProposalEventRepository, CapabilityProposalRepository } from "./capability-proposal-repo.js";
 import { CodeModeRunRepository } from "./code-mode-run-repo.js";
 
-export interface StorageOptions extends SqliteOptions {
+export interface StorageOptions extends Partial<SqliteOptions> {
   transcriptsDir: string;
   auditDir: string;
+  db?: DatabaseClient;
+  transcripts?: TranscriptLog | PostgresTranscriptLog;
+  audit?: AuditLog | PostgresAuditLog;
 }
 
 export interface DeleteChatSessionDataResult {
@@ -85,11 +91,11 @@ export interface DeleteChatSessionDataResult {
 }
 
 export class Storage {
-  public readonly db: ReturnType<typeof createDatabase>;
+  public readonly db: DatabaseClient;
   public readonly sessions: SessionRepository;
   public readonly idempotency: IdempotencyRepository;
-  public readonly transcripts: TranscriptLog;
-  public readonly audit: AuditLog;
+  public readonly transcripts: TranscriptLog | PostgresTranscriptLog;
+  public readonly audit: AuditLog | PostgresAuditLog;
   public readonly approvals: ApprovalRepository;
   public readonly approvalEvents: ApprovalEventRepository;
   public readonly pendingApprovalActions: PendingApprovalActionRepository;
@@ -159,14 +165,16 @@ export class Storage {
   public readonly codeModeRuns: CodeModeRunRepository;
 
   public constructor(options: StorageOptions) {
-    this.db = createDatabase({
-      dbPath: options.dbPath,
+    this.db = options.db ?? createDatabase({
+      dbPath: options.dbPath ?? ":memory:",
       tuning: options.tuning,
     });
     this.sessions = new SessionRepository(this.db);
     this.idempotency = new IdempotencyRepository(this.db);
-    this.transcripts = new TranscriptLog(options.transcriptsDir);
-    this.audit = new AuditLog(options.auditDir);
+    this.transcripts = options.transcripts
+      ?? (this.db.dialect === "postgres" ? new PostgresTranscriptLog(this.db) : new TranscriptLog(options.transcriptsDir));
+    this.audit = options.audit
+      ?? (this.db.dialect === "postgres" ? new PostgresAuditLog(this.db) : new AuditLog(options.auditDir));
     this.approvals = new ApprovalRepository(this.db);
     this.approvalEvents = new ApprovalEventRepository(this.db);
     this.pendingApprovalActions = new PendingApprovalActionRepository(this.db);
@@ -241,15 +249,7 @@ export class Storage {
   }
 
   public runImmediateTransaction<T>(callback: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const result = callback();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    return this.db.transaction("immediate", callback);
   }
 
   public deleteChatSessionData(sessionId: string): DeleteChatSessionDataResult {
@@ -266,33 +266,31 @@ export class Storage {
       ...this.chatToolArtifacts.listBySession(normalizedSessionId, 10_000).map((record) => record.storageRelPath),
     ]);
 
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const attachmentIdsJson = JSON.stringify(attachments.map((record) => record.attachmentId));
+    const deleted = this.db.transaction("immediate", () => {
+      const attachmentIds = attachments.map((record) => record.attachmentId);
+      const attachmentClause = attachmentIds.length > 0
+        ? ` OR attachment_id IN (${attachmentIds.map(() => "?").join(", ")})`
+        : "";
 
       // Subquery-dependent deletes (must run before their parent tables)
-      this.db
-        .prepare(
-          `
+      this.db.prepare(
+        `
         DELETE FROM media_artifacts
         WHERE job_id IN (
           SELECT job_id
           FROM media_jobs
-          WHERE session_id = @sessionId
-             OR attachment_id IN (SELECT value FROM json_each(@attachmentIdsJson))
+          WHERE session_id = ?
+             ${attachmentClause}
         )
       `,
-        )
-        .run({ sessionId: normalizedSessionId, attachmentIdsJson });
-      this.db
-        .prepare(
-          `
+      ).run(normalizedSessionId, ...attachmentIds);
+      this.db.prepare(
+        `
         DELETE FROM media_jobs
-        WHERE session_id = @sessionId
-           OR attachment_id IN (SELECT value FROM json_each(@attachmentIdsJson))
+        WHERE session_id = ?
+           ${attachmentClause}
       `,
-        )
-        .run({ sessionId: normalizedSessionId, attachmentIdsJson });
+      ).run(normalizedSessionId, ...attachmentIds);
       this.db
         .prepare(
           `
@@ -402,21 +400,21 @@ export class Storage {
       `,
         )
         .run(sid);
-      const deleted = Number(this.db.prepare("DELETE FROM sessions WHERE session_id = ?").run(sid).changes ?? 0) > 0;
-      this.db.exec("COMMIT");
-      return {
-        sessionId: normalizedSessionId,
-        deleted,
-        cleanupRelPaths,
-        attachments,
-      };
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+      return Number(this.db.prepare("DELETE FROM sessions WHERE session_id = ?").run(sid).changes ?? 0) > 0;
+    });
+    return {
+      sessionId: normalizedSessionId,
+      deleted,
+      cleanupRelPaths,
+      attachments,
+    };
   }
 
   private listMediaArtifactPathsForSession(sessionId: string, attachments: ChatAttachmentRecord[]): string[] {
+    const attachmentIds = attachments.map((record) => record.attachmentId);
+    const attachmentClause = attachmentIds.length > 0
+      ? ` OR attachment_id IN (${attachmentIds.map(() => "?").join(", ")})`
+      : "";
     const rows = this.db
       .prepare(
         `
@@ -426,15 +424,12 @@ export class Storage {
         AND job_id IN (
           SELECT job_id
           FROM media_jobs
-          WHERE session_id = @sessionId
-             OR attachment_id IN (SELECT value FROM json_each(@attachmentIdsJson))
+          WHERE session_id = ?
+             ${attachmentClause}
         )
     `,
       )
-      .all({
-        sessionId,
-        attachmentIdsJson: JSON.stringify(attachments.map((record) => record.attachmentId)),
-      }) as Array<{ storage_rel_path?: string | null }>;
+      .all(sessionId, ...attachmentIds) as Array<{ storage_rel_path?: string | null }>;
     return rows.map((row) => row.storage_rel_path?.trim()).filter((value): value is string => Boolean(value));
   }
 }
@@ -454,6 +449,7 @@ function dedupeStrings(values: Array<string | undefined>): string[] {
 }
 
 export * from "./sqlite.js";
+export * from "./db.js";
 export * from "./session-repo.js";
 export * from "./idempotency-repo.js";
 export * from "./transcript-log.js";
@@ -517,3 +513,4 @@ export * from "./remote-action-token-repo.js";
 export * from "./approval-inbox-repo.js";
 export * from "./transcript-outbox-repo.js";
 export * from "./realtime-stream-lease-repo.js";
+export * from "./postgres/index.js";

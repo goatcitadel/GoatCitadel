@@ -43,7 +43,7 @@ export function PageGuideCard(props: PageGuideCardProps) {
           <p className="page-guide-kicker">{globalCopy.guideCard.title}</p>
           <p className="page-guide-what"><strong>{globalCopy.guideCard.what}:</strong> {props.what}</p>
         </div>
-        <button type="button" className="page-guide-toggle" onClick={() => setExpanded((value) => !value)}>
+        <button type="button" className="gc-button page-guide-toggle" onClick={() => setExpanded((value) => !value)}>
           {expanded ? "Hide details" : "Show details"}
         </button>
       </header>

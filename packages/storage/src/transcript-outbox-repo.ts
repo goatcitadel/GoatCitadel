@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { TranscriptEvent } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -34,7 +34,7 @@ export class TranscriptOutboxRepository {
   private readonly markFailedStmt;
   private readonly markDeliveredStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO transcript_outbox (
         event_id,
@@ -233,3 +233,5 @@ function isTranscriptEvent(value: unknown): value is TranscriptEvent {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

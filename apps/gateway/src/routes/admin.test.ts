@@ -130,4 +130,80 @@ describe("admin routes", () => {
     });
     expect(verifyBackup).not.toHaveBeenCalled();
   });
+
+  it("forwards database cutover requests to the gateway", async () => {
+    const runDatabaseCutover = vi.fn(async () => ({
+      cutoverId: "cut-1",
+      profile: "local",
+      mode: "dry_run",
+      status: "ready",
+      startedAt: "2026-04-09T12:00:00.000Z",
+      finishedAt: "2026-04-09T12:00:01.000Z",
+      runtimeFlipReady: false,
+      summary: {
+        sourceSessionCount: 2,
+        sourceTranscriptEventCount: 4,
+        sourceAuditEventCount: 1,
+      },
+      steps: [],
+    }));
+    app = Fastify();
+    app.decorate("gateway", { runDatabaseCutover } as never);
+    await app.register(adminRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/database/cutover",
+      payload: {
+        profile: "local",
+        execute: false,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runDatabaseCutover).toHaveBeenCalledWith({
+      profile: "local",
+      execute: false,
+      confirm: undefined,
+    });
+    expect(response.json()).toMatchObject({
+      cutoverId: "cut-1",
+      status: "ready",
+    });
+  });
+
+  it("forwards database verify requests to the gateway", async () => {
+    const verifyDatabaseCutover = vi.fn(async () => ({
+      source: "example.backup",
+      verified: true,
+      sourceSessionCount: 1,
+      sourceTranscriptEventCount: 2,
+      sourceAuditEventCount: 1,
+      targetTranscriptEventCount: 2,
+      targetAuditEventCount: 1,
+      issues: [],
+    }));
+    app = Fastify();
+    app.decorate("gateway", { verifyDatabaseCutover } as never);
+    await app.register(adminRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/database/verify",
+      payload: {
+        source: "example.backup",
+        target: "postgresql://localhost/goat",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(verifyDatabaseCutover).toHaveBeenCalledWith({
+      source: "example.backup",
+      target: "postgresql://localhost/goat",
+    });
+    expect(response.json()).toMatchObject({
+      verified: true,
+      targetTranscriptEventCount: 2,
+    });
+  });
 });

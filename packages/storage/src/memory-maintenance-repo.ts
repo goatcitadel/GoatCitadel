@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   MemoryMaintenanceChangeRecord,
   MemoryMaintenancePolicyPatchInput,
@@ -116,7 +116,7 @@ export class MemoryMaintenanceRepository {
   private readonly updateRecommendationStmt;
   private readonly listRecommendationsStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getPolicyStmt = db.prepare(`
       SELECT *
       FROM workspace_memory_maintenance_policies
@@ -868,3 +868,5 @@ function isMemoryMaintenanceRecommendationRow(value: unknown): value is MemoryMa
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

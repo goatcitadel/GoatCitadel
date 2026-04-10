@@ -1,6 +1,6 @@
 import type { OperatorSummary, SessionMeta } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
 interface SessionRow {
@@ -57,7 +57,7 @@ export class SessionRepository {
   private readonly listStmt;
   private readonly listOperatorSummariesStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getByKeyStmt = db.prepare("SELECT * FROM sessions WHERE session_key = ?");
     this.getByIdStmt = db.prepare("SELECT * FROM sessions WHERE session_id = ?");
     this.upsertStmt = db.prepare(`
@@ -277,3 +277,5 @@ function mapSessionRow(row: SessionRow): SessionMeta {
     budgetState: row.budget_state,
   };
 }
+
+

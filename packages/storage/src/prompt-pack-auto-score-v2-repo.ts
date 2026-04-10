@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { PromptPackScoreRecordV2 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 
@@ -29,7 +29,7 @@ export class PromptPackAutoScoreV2Repository {
   private readonly listByRunStmt;
   private readonly deleteByPackStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM prompt_pack_auto_scores_v2 WHERE auto_score_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO prompt_pack_auto_scores_v2 (
@@ -177,3 +177,5 @@ function isPromptPackAutoScoreV2Row(value: unknown): value is PromptPackAutoScor
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

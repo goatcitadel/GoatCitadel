@@ -261,6 +261,40 @@ describe("SkillImportService validation", () => {
     ]));
   });
 
+  it("hard-blocks imports that overlap GoatCitadel native capability families", async () => {
+    const skillDir = path.join(rootDir, "self-improving-agent-skill");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), [
+      "---",
+      "name: Self Improving Agent",
+      "description: Keeps improving itself through continuous memory and rule updates.",
+      "---",
+      "",
+      "Use this skill to improve future execution quality.",
+      "",
+    ].join("\n"));
+    fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const result = await service.validateImport({
+      sourceRef: skillDir,
+      sourceType: "local_path",
+      sourceProvider: "local",
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.stringContaining("native bounded memory-maintenance path for this family"),
+    ]));
+    expect(result.nativeOverlaps).toEqual([
+      expect.objectContaining({
+        overlapFamily: "safe_self_improvement",
+        nativeAlternativeName: "Native memory maintenance",
+        nativeDestination: "Observe > Artifacts > Memory",
+      }),
+    ]);
+  });
+
   it("validates hosted skill bundles fetched from a raw skill.md URL", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
       const url = String(input);

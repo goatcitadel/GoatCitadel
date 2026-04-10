@@ -3,7 +3,7 @@ import type {
   RemoteActionTokenState,
 } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { randomUUID } from "node:crypto";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -27,7 +27,7 @@ export class RemoteActionTokenRepository {
   private readonly getByHashStmt;
   private readonly setStateStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO remote_action_tokens (
         token_id, token_hash, action_type, approval_id, connector_id, mutation_json,
@@ -141,3 +141,5 @@ function normalizeObject(value: Record<string, unknown> | undefined): Record<str
   }
   return value;
 }
+
+

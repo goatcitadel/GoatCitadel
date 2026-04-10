@@ -1,6 +1,6 @@
 import type { CapabilityCatalogSnapshotRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
 interface CapabilityCatalogSnapshotRow {
@@ -14,7 +14,7 @@ export class CapabilityCatalogSnapshotRepository {
   private readonly insertStmt;
   private readonly getStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
       INSERT INTO capability_catalog_snapshots (
         snapshot_id, inspectable_json, callable_json, created_at
@@ -58,3 +58,5 @@ function mapSnapshotRow(row: CapabilityCatalogSnapshotRow): CapabilityCatalogSna
     createdAt: row.created_at,
   };
 }
+
+

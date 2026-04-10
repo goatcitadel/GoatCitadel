@@ -27,7 +27,7 @@ export function ActionButton({
   return (
     <button
       type={type}
-      className={`gc-action-button gc-action-${resolvedVariant}${resolvedVariant === "danger" ? " danger" : ""}${className ? ` ${className}` : ""}`}
+      className={["gc-button", (`gc-action-button gc-action-${resolvedVariant}${resolvedVariant === "danger" ? " danger" : ""}${className ? ` ${className}` : ""}`)].filter(Boolean).join(" ")}
       disabled={disabled || pending}
       onClick={() => void onClick()}
     >

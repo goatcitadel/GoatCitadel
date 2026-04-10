@@ -4,10 +4,15 @@ import { z } from "zod";
 const chatToolDecisionSchema = z.object({
   sessionId: z.string().min(1),
   approvalId: z.string().min(1),
+  allowScope: z.enum(["once", "session", "workspace"]).optional(),
 });
 
 const chatToolApprovalsQuerySchema = z.object({
   sessionId: z.string().min(1),
+});
+
+const chatToolArtifactParamsSchema = z.object({
+  artifactId: z.string().uuid(),
 });
 
 export function registerChatToolRoutes(fastify: FastifyInstance): void {
@@ -25,17 +30,40 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
     });
   });
 
+  fastify.get("/api/v1/chat/tools/artifacts/:artifactId", async (request, reply) => {
+    const params = chatToolArtifactParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      const result = await fastify.gateway.getChatToolArtifactContent(params.data.artifactId);
+      return reply.send(result);
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
   fastify.post("/api/v1/chat/tools/approve", async (request, reply) => {
     const body = chatToolDecisionSchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      await fastify.gateway.resolveChatToolApproval(body.data.sessionId, body.data.approvalId, "approve");
-      return reply.send({ ok: true, approvalId: body.data.approvalId });
-    } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
-    }
+      const result = await fastify.gateway.resolveChatToolApproval(body.data.sessionId, body.data.approvalId, "approve", {
+        allowScope: body.data.allowScope ?? "once",
+      });
+        return reply.send({
+          ok: true,
+          approvalId: body.data.approvalId,
+          allowScope: result.allowScope,
+          grant: result.grant,
+          resumed: result.resumed,
+          resumedTurnId: result.resumedTurnId,
+          resumedRunId: result.resumedRunId,
+        });
+      } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message });
+      }
   });
 
   fastify.post("/api/v1/chat/tools/deny", async (request, reply) => {

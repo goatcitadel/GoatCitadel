@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   AdversarialReview,
   AssemblyArtifactRecord,
@@ -91,10 +91,11 @@ export class AssemblyRepository {
   private readonly listRoundsStmt;
   private readonly createArtifactStmt;
   private readonly listArtifactsStmt;
+  private readonly listArtifactsByTypeStmt;
   private readonly upsertReputationStmt;
   private readonly listReputationsStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getRunStmt = db.prepare("SELECT * FROM assembly_runs WHERE run_id = ?");
     this.createRunStmt = db.prepare(`
       INSERT INTO assembly_runs (
@@ -216,7 +217,7 @@ export class AssemblyRepository {
       ORDER BY round_index ASC, started_at ASC
     `);
     this.createArtifactStmt = db.prepare(`
-      INSERT OR REPLACE INTO assembly_artifacts (
+      INSERT INTO assembly_artifacts (
         artifact_id,
         run_id,
         round_index,
@@ -237,11 +238,25 @@ export class AssemblyRepository {
         @payloadJson,
         @createdAt
       )
+      ON CONFLICT(artifact_id) DO UPDATE SET
+        run_id = excluded.run_id,
+        round_index = excluded.round_index,
+        stage = excluded.stage,
+        artifact_type = excluded.artifact_type,
+        participant_model_ref = excluded.participant_model_ref,
+        blinded_author_token = excluded.blinded_author_token,
+        payload_json = excluded.payload_json,
+        created_at = excluded.created_at
     `);
     this.listArtifactsStmt = db.prepare(`
       SELECT * FROM assembly_artifacts
       WHERE run_id = @runId
-        AND (@artifactType IS NULL OR artifact_type = @artifactType)
+      ORDER BY round_index ASC, created_at ASC, artifact_id ASC
+    `);
+    this.listArtifactsByTypeStmt = db.prepare(`
+      SELECT * FROM assembly_artifacts
+      WHERE run_id = @runId
+        AND artifact_type = @artifactType
       ORDER BY round_index ASC, created_at ASC, artifact_id ASC
     `);
     this.upsertReputationStmt = db.prepare(`
@@ -384,9 +399,9 @@ export class AssemblyRepository {
   }
 
   public listArtifacts(runId: string, artifactType?: AssemblyArtifactType): AssemblyArtifactRecord[] {
-    const rows = toAssemblyArtifactRows(this.listArtifactsStmt.all({
+    const rows = toAssemblyArtifactRows((artifactType ? this.listArtifactsByTypeStmt : this.listArtifactsStmt).all({
       runId,
-      artifactType: artifactType ?? null,
+      artifactType,
     }));
     return rows.map(mapArtifactRow);
   }
@@ -836,3 +851,5 @@ function isAssemblyReputationRow(value: unknown): value is AssemblyReputationRow
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

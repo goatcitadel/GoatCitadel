@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
@@ -47,10 +47,10 @@ export class ChatToolRunRepository {
   private readonly insertStmt;
   private readonly listByTurnStmt;
   private readonly listBySessionStmt;
-  private readonly listByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseSync["prepare"]>>();
+  private readonly listByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly patchStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_tool_runs WHERE tool_run_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO chat_tool_runs (
@@ -242,3 +242,5 @@ function mapRow(row: ChatToolRunRow): ChatToolRunRecord {
     finishedAt: row.finished_at ?? undefined,
   };
 }
+
+

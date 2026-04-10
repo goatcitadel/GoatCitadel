@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type {
   MeshJoinRequest,
   MeshLeaseRecord,
@@ -73,6 +73,7 @@ export class MeshRepository {
   private readonly listSessionOwnersStmt;
   private readonly appendReplicationStmt;
   private readonly listReplicationStmt;
+  private readonly listReplicationSinceStmt;
   private readonly setOffsetStmt;
   private readonly listOffsetsStmt;
   private readonly getOffsetStmt;
@@ -80,7 +81,7 @@ export class MeshRepository {
   private readonly consumeJoinTokenStmt;
   private readonly statusCountsStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.upsertNodeStmt = db.prepare(`
       INSERT INTO mesh_nodes (
         node_id, label, advertise_address, transport, status, capabilities_json,
@@ -151,15 +152,21 @@ export class MeshRepository {
     `);
 
     this.appendReplicationStmt = db.prepare(`
-      INSERT OR IGNORE INTO mesh_replication_log (
+      INSERT INTO mesh_replication_log (
         replication_id, source_node_id, event_type, payload_json, idempotency_key, created_at
       ) VALUES (
         @replicationId, @sourceNodeId, @eventType, @payloadJson, @idempotencyKey, @createdAt
       )
+      ON CONFLICT DO NOTHING
     `);
     this.listReplicationStmt = db.prepare(`
       SELECT * FROM mesh_replication_log
-      WHERE (@cursor IS NULL OR created_at > @cursor)
+      ORDER BY created_at ASC
+      LIMIT @limit
+    `);
+    this.listReplicationSinceStmt = db.prepare(`
+      SELECT * FROM mesh_replication_log
+      WHERE created_at > @cursor
       ORDER BY created_at ASC
       LIMIT @limit
     `);
@@ -186,11 +193,16 @@ export class MeshRepository {
     `);
 
     this.insertJoinTokenStmt = db.prepare(`
-      INSERT OR REPLACE INTO mesh_join_tokens (
+      INSERT INTO mesh_join_tokens (
         token_hash, created_at, expires_at, used_at, used_by_node_id
       ) VALUES (
         @tokenHash, @createdAt, @expiresAt, NULL, NULL
       )
+      ON CONFLICT(token_hash) DO UPDATE SET
+        created_at = excluded.created_at,
+        expires_at = excluded.expires_at,
+        used_at = NULL,
+        used_by_node_id = NULL
     `);
     this.consumeJoinTokenStmt = db.prepare(`
       UPDATE mesh_join_tokens
@@ -415,9 +427,9 @@ export class MeshRepository {
   }
 
   public listReplicationEvents(limit = 200, cursor?: string): MeshReplicationRecord[] {
-    const rows = toMeshReplicationRows(this.listReplicationStmt.all({
+    const rows = toMeshReplicationRows((cursor ? this.listReplicationSinceStmt : this.listReplicationStmt).all({
       limit,
-      cursor: cursor ?? null,
+      cursor,
     }));
     return rows.map(mapReplicationRow);
   }
@@ -663,3 +675,5 @@ function isMeshReplicationOffsetRow(value: unknown): value is MeshReplicationOff
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

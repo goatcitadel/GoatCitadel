@@ -40,6 +40,7 @@ export interface ToolInvokeRequest {
   args: Record<string, unknown>;
   agentId: string;
   sessionId: string;
+  workspaceId?: string;
   taskId?: string;
   signal?: AbortSignal;
   trustLevel?: ToolExecutionTrustLevel;

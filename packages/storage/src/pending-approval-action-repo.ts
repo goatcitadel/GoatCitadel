@@ -1,6 +1,6 @@
 import type { PendingApprovalAction } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
 interface PendingActionRow {
@@ -18,7 +18,7 @@ export class PendingApprovalActionRepository {
   private readonly getStmt;
   private readonly resolveStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
       INSERT INTO pending_approval_actions (
         approval_id, action_type, request_json, created_at, resolution_status
@@ -109,3 +109,5 @@ function mapPendingRow(row: PendingActionRow): PendingApprovalAction {
     result: row.result_json ? safeJsonParse<Record<string, unknown>>(row.result_json, {}) : undefined,
   };
 }
+
+

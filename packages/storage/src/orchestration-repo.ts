@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
@@ -58,7 +58,7 @@ export class OrchestrationRepository {
   private readonly listCheckpointsAfterStmt;
   private readonly insertEventStmt;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.upsertPlanStmt = db.prepare(`
       INSERT INTO orchestration_plans (
         plan_id, plan_json, created_at, updated_at
@@ -298,3 +298,5 @@ function isOrchestrationCheckpointRow(value: unknown): value is OrchestrationChe
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+

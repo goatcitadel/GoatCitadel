@@ -11,8 +11,14 @@ import type {
 import type { ApprovalReplayResponse, ApprovalResolveResponse, ApprovalsResponse } from "./types.js";
 import { request } from "./client-core.js";
 
-export async function fetchApprovals(status = "pending"): Promise<ApprovalsResponse> {
-  return request<ApprovalsResponse>(`/api/v1/approvals?status=${encodeURIComponent(status)}`);
+export async function fetchApprovals(
+  status?: "pending" | "approved" | "rejected" | "edited",
+): Promise<ApprovalsResponse> {
+  const query = new URLSearchParams();
+  if (status) {
+    query.set("status", status);
+  }
+  return request<ApprovalsResponse>(`/api/v1/approvals${query.size > 0 ? `?${query.toString()}` : ""}`);
 }
 
 export async function resolveApproval(
@@ -72,7 +78,7 @@ export async function evaluateToolAccess(input: ToolAccessEvaluateRequest): Prom
 }
 
 export async function fetchToolGrants(input?: {
-  scope?: "global" | "session" | "agent" | "task";
+  scope?: "global" | "session" | "workspace" | "agent" | "task";
   scopeRef?: string;
   limit?: number;
 }): Promise<{ items: ToolGrantRecord[] }> {
@@ -106,6 +112,7 @@ export async function invokeTool(input: {
   args: Record<string, unknown>;
   agentId: string;
   sessionId: string;
+  workspaceId?: string;
   taskId?: string;
   dryRun?: boolean;
   consentContext?: {

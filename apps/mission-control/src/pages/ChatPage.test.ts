@@ -5,6 +5,7 @@ import {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
   looksMachineSessionLabel,
+  resolveSelectedTurnId,
   resolveChatRefreshPlan,
   resolveOptimisticChatPrefs,
   shouldExecuteLocalChatCommand,
@@ -191,6 +192,36 @@ describe("resolveChatRefreshPlan", () => {
       refreshSidebar: true,
       refreshSession: "none",
     });
+  });
+});
+
+describe("resolveSelectedTurnId", () => {
+  it("prefers a route-selected turn over the current selection when the linked turn exists", () => {
+    expect(
+      resolveSelectedTurnId(
+        {
+          selectedTurnId: "turn-2",
+          activeLeafTurnId: "turn-3",
+          turns: [{ turnId: "turn-1" }, { turnId: "turn-2" }, { turnId: "turn-3" }],
+        },
+        "turn-2",
+        "turn-1",
+      ),
+    ).toBe("turn-1");
+  });
+
+  it("falls back to the thread defaults when the route-selected turn is stale", () => {
+    expect(
+      resolveSelectedTurnId(
+        {
+          selectedTurnId: null,
+          activeLeafTurnId: "turn-3",
+          turns: [{ turnId: "turn-1" }, { turnId: "turn-2" }, { turnId: "turn-3" }],
+        },
+        null,
+        "turn-missing",
+      ),
+    ).toBe("turn-3");
   });
 });
 

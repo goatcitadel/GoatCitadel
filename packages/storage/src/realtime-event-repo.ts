@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseClient } from "./db.js";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 import { getRequestAttribution } from "./request-attribution.js";
@@ -29,7 +29,7 @@ export class RealtimeEventRepository {
   private readonly pruneOlderThanStmt;
   private appendCount = 0;
 
-  public constructor(private readonly db: DatabaseSync) {
+  public constructor(private readonly db: DatabaseClient) {
     this.allocateSequenceStmt = db.prepare(`
       UPDATE realtime_event_sequence_state
       SET last_sequence = last_sequence + 1
@@ -115,24 +115,19 @@ export class RealtimeEventRepository {
       grantId: payload.grantId ?? attribution?.grantId,
     };
     const eventId = randomUUID();
-    let sequence: number;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    const sequence = this.db.transaction("immediate", () => {
       const nextSequenceRow = toSequenceStateRow(this.allocateSequenceStmt.get());
-      sequence = Number(nextSequenceRow?.last_sequence ?? 1);
+      const allocatedSequence = Number(nextSequenceRow?.last_sequence ?? 1);
       this.insertStmt.run({
         eventId,
-        sequence,
+        sequence: allocatedSequence,
         eventType,
         source,
         payloadJson: JSON.stringify(attributedPayload),
         createdAt,
       });
-      this.db.exec("COMMIT");
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+      return allocatedSequence;
+    });
     this.appendCount += 1;
     if (this.appendCount % 100 === 0) {
       this.pruneStmt.run({ maxRows: 10000 });
@@ -479,3 +474,5 @@ function pickString(payload: Record<string, unknown>, keys: string[]): string | 
   }
   return undefined;
 }
+
+
