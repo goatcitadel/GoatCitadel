@@ -59,6 +59,11 @@ describe("capabilities routes", () => {
     app.decorate("gateway", {
       createCapabilityProposal,
       listCapabilityCatalog: vi.fn(() => []),
+      getCapabilityCandidateDetail: vi.fn(),
+      getCapabilityProposalDetail: vi.fn(),
+      promoteCapabilityCandidate: vi.fn(),
+      revokeCapabilityCandidate: vi.fn(),
+      rollbackCapabilityCandidate: vi.fn(),
       listCapabilityProposals: vi.fn(() => []),
       listCodeModeRuns: vi.fn(() => []),
       getCodeModeRun: vi.fn(),
@@ -134,6 +139,11 @@ describe("capabilities routes", () => {
     app.decorate("gateway", {
       createCodeModeRun,
       listCapabilityCatalog: vi.fn(() => []),
+      getCapabilityCandidateDetail: vi.fn(),
+      getCapabilityProposalDetail: vi.fn(),
+      promoteCapabilityCandidate: vi.fn(),
+      revokeCapabilityCandidate: vi.fn(),
+      rollbackCapabilityCandidate: vi.fn(),
       createCapabilityProposal: vi.fn(),
       listCapabilityProposals: vi.fn(() => []),
       listCodeModeRuns: vi.fn(() => []),
@@ -166,6 +176,95 @@ describe("capabilities routes", () => {
       runId: "code-run-1",
       status: "approval_pending",
       capabilitySnapshotId: "cap-snap-1",
+    });
+  });
+
+  it("returns candidate detail through the gateway", async () => {
+    const getCapabilityCandidateDetail = vi.fn((candidateId: string) => ({
+      candidateId,
+      versions: [],
+      relatedProposals: [],
+      activationBlocked: true,
+      activationBlockers: ["No candidate version has been promoted into an approved or trusted lifecycle state."],
+    }));
+
+    app = Fastify();
+    app.decorate("gateway", {
+      listCapabilityCatalog: vi.fn(() => []),
+      getCapabilityCatalogSnapshot: vi.fn(),
+      getCapabilityCandidateDetail,
+      getCapabilityProposalDetail: vi.fn(),
+      promoteCapabilityCandidate: vi.fn(),
+      revokeCapabilityCandidate: vi.fn(),
+      rollbackCapabilityCandidate: vi.fn(),
+      createCapabilityProposal: vi.fn(),
+      listCapabilityProposals: vi.fn(() => []),
+      listCodeModeRuns: vi.fn(() => []),
+      getCodeModeRun: vi.fn(),
+      createCodeModeRun: vi.fn(),
+    } as never);
+    await app.register(capabilitiesRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/candidates/candidate-1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getCapabilityCandidateDetail).toHaveBeenCalledWith("candidate-1");
+    expect(response.json()).toMatchObject({
+      candidateId: "candidate-1",
+      activationBlocked: true,
+    });
+  });
+
+  it("promotes a candidate through the gateway", async () => {
+    const promoteCapabilityCandidate = vi.fn((candidateId: string, versionId?: string) => ({
+      action: "promote",
+      candidateId,
+      selectedVersionId: versionId,
+      changedVersionIds: [versionId],
+      occurredAt: "2026-04-10T01:00:00.000Z",
+      detail: {
+        candidateId,
+        versions: [],
+        relatedProposals: [],
+        activationBlocked: false,
+        activationBlockers: [],
+      },
+    }));
+
+    app = Fastify();
+    app.decorate("gateway", {
+      listCapabilityCatalog: vi.fn(() => []),
+      getCapabilityCatalogSnapshot: vi.fn(),
+      getCapabilityCandidateDetail: vi.fn(),
+      getCapabilityProposalDetail: vi.fn(),
+      promoteCapabilityCandidate,
+      revokeCapabilityCandidate: vi.fn(),
+      rollbackCapabilityCandidate: vi.fn(),
+      createCapabilityProposal: vi.fn(),
+      listCapabilityProposals: vi.fn(() => []),
+      listCodeModeRuns: vi.fn(() => []),
+      getCodeModeRun: vi.fn(),
+      createCodeModeRun: vi.fn(),
+    } as never);
+    await app.register(capabilitiesRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/candidates/candidate-1/promote",
+      payload: {
+        versionId: "version-2",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(promoteCapabilityCandidate).toHaveBeenCalledWith("candidate-1", "version-2");
+    expect(response.json()).toMatchObject({
+      action: "promote",
+      candidateId: "candidate-1",
+      selectedVersionId: "version-2",
     });
   });
 });

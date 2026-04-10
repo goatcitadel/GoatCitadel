@@ -17,6 +17,7 @@ interface CodeModeRunRow {
   approval_id: string | null;
   session_id: string | null;
   turn_id: string | null;
+  sandbox_json: string | null;
   code_artifact_json: string;
   wrapper_manifest_artifact_json: string;
   policy_snapshot_artifact_json: string;
@@ -42,13 +43,13 @@ export class CodeModeRunRepository {
     this.upsertStmt = db.prepare(`
       INSERT INTO code_mode_runs (
         run_id, status, language, requested_output_intent, save_candidate_on_success, capability_snapshot_id,
-        wrapper_manifest_hash, policy_snapshot_hash, code_hash, approval_id, session_id, turn_id, code_artifact_json,
+        wrapper_manifest_hash, policy_snapshot_hash, code_hash, approval_id, session_id, turn_id, sandbox_json, code_artifact_json,
         wrapper_manifest_artifact_json, policy_snapshot_artifact_json, stdout_artifact_json, stderr_artifact_json,
         stdout_preview, stderr_preview, stdout_truncated, stderr_truncated, result_json, error_text, created_at,
         started_at, finished_at
       ) VALUES (
         @runId, @status, @language, @requestedOutputIntent, @saveCandidateOnSuccess, @capabilitySnapshotId,
-        @wrapperManifestHash, @policySnapshotHash, @codeHash, @approvalId, @sessionId, @turnId, @codeArtifactJson,
+        @wrapperManifestHash, @policySnapshotHash, @codeHash, @approvalId, @sessionId, @turnId, @sandboxJson, @codeArtifactJson,
         @wrapperManifestArtifactJson, @policySnapshotArtifactJson, @stdoutArtifactJson, @stderrArtifactJson,
         @stdoutPreview, @stderrPreview, @stdoutTruncated, @stderrTruncated, @resultJson, @errorText, @createdAt,
         @startedAt, @finishedAt
@@ -57,6 +58,7 @@ export class CodeModeRunRepository {
         status = excluded.status,
         requested_output_intent = excluded.requested_output_intent,
         approval_id = excluded.approval_id,
+        sandbox_json = excluded.sandbox_json,
         stdout_artifact_json = excluded.stdout_artifact_json,
         stderr_artifact_json = excluded.stderr_artifact_json,
         stdout_preview = excluded.stdout_preview,
@@ -90,6 +92,7 @@ export class CodeModeRunRepository {
       approvalId: input.approvalId ?? null,
       sessionId: input.sessionId ?? null,
       turnId: input.turnId ?? null,
+      sandboxJson: input.sandbox ? JSON.stringify(input.sandbox) : null,
       codeArtifactJson: JSON.stringify(input.codeArtifact),
       wrapperManifestArtifactJson: JSON.stringify(input.wrapperManifestArtifact),
       policySnapshotArtifactJson: JSON.stringify(input.policySnapshotArtifact),
@@ -140,6 +143,7 @@ function mapCodeModeRunRow(row: CodeModeRunRow): CodeModeRunRecord {
     approvalId: row.approval_id ?? undefined,
     sessionId: row.session_id ?? undefined,
     turnId: row.turn_id ?? undefined,
+    sandbox: row.sandbox_json ? safeJsonParse(row.sandbox_json, undefined) : undefined,
     codeArtifact: safeJsonParse<CapabilityArtifactRecord>(row.code_artifact_json, {} as CapabilityArtifactRecord),
     wrapperManifestArtifact: safeJsonParse<CapabilityArtifactRecord>(
       row.wrapper_manifest_artifact_json,
@@ -162,5 +166,3 @@ function mapCodeModeRunRow(row: CodeModeRunRow): CodeModeRunRecord {
     finishedAt: row.finished_at ?? undefined,
   };
 }
-
-

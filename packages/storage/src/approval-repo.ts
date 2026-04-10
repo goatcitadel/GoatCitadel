@@ -53,7 +53,9 @@ export class ApprovalRepository {
       )
     `);
     this.listStmt = db.prepare("SELECT * FROM approvals ORDER BY created_at DESC LIMIT @limit");
-    this.listByStatusStmt = db.prepare("SELECT * FROM approvals WHERE status = @status ORDER BY created_at DESC LIMIT @limit");
+    this.listByStatusStmt = db.prepare(
+      "SELECT * FROM approvals WHERE status = @status ORDER BY created_at DESC LIMIT @limit",
+    );
     this.getStmt = db.prepare("SELECT * FROM approvals WHERE approval_id = ?");
     this.resolveStmt = db.prepare(`
       UPDATE approvals SET
@@ -126,10 +128,16 @@ export class ApprovalRepository {
   }
 
   public list(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
-    const rows = toApprovalRows((status ? this.listByStatusStmt : this.listStmt).all({
-      status,
-      limit,
-    }));
+    const rows = toApprovalRows(
+      status
+        ? this.listByStatusStmt.all({
+            status,
+            limit,
+          })
+        : this.listStmt.all({
+            limit,
+          }),
+    );
     return rows.map(mapRow);
   }
 
@@ -137,11 +145,7 @@ export class ApprovalRepository {
     const current = this.get(approvalId);
 
     const status: ApprovalRequest["status"] =
-      input.decision === "approve"
-        ? "approved"
-        : input.decision === "reject"
-          ? "rejected"
-          : "edited";
+      input.decision === "approve" ? "approved" : input.decision === "reject" ? "rejected" : "edited";
 
     const changed = this.resolveStmt.run({
       approvalId,
@@ -160,10 +164,7 @@ export class ApprovalRepository {
     return this.get(approvalId);
   }
 
-  public mergeLinkage(
-    approvalId: string,
-    linkagePatch: NonNullable<ApprovalRequest["linkage"]>,
-  ): ApprovalRequest {
+  public mergeLinkage(approvalId: string, linkagePatch: NonNullable<ApprovalRequest["linkage"]>): ApprovalRequest {
     const row = toApprovalRow(this.getStmt.get(approvalId));
     if (!row) {
       throw new NotFoundError({ entity: "Approval", id: approvalId });
@@ -216,9 +217,8 @@ function mapRow(row: ApprovalRow): ApprovalRequest {
   const explanation = safeJsonParse<ApprovalExplanation | undefined>(row.explanation_json, undefined);
   const rawPayload = safeJsonParse<Record<string, unknown>>(row.payload_json, {});
   const rawPreview = safeJsonParse<Record<string, unknown>>(row.preview_json, {});
-  const linkage = deserializeApprovalLinkage(row.linkage_json)
-    ?? readApprovalLinkage(rawPayload)
-    ?? readApprovalLinkage(rawPreview);
+  const linkage =
+    deserializeApprovalLinkage(row.linkage_json) ?? readApprovalLinkage(rawPayload) ?? readApprovalLinkage(rawPreview);
 
   return {
     approvalId: row.approval_id,
@@ -258,22 +258,24 @@ function isApprovalRow(value: unknown): value is ApprovalRow {
     return false;
   }
 
-  return typeof value.approval_id === "string"
-    && typeof value.kind === "string"
-    && typeof value.risk_level === "string"
-    && typeof value.status === "string"
-    && (typeof value.linkage_json === "string" || value.linkage_json === null)
-    && typeof value.payload_json === "string"
-    && typeof value.preview_json === "string"
-    && typeof value.explanation_status === "string"
-    && (typeof value.explanation_json === "string" || value.explanation_json === null)
-    && (typeof value.explanation_error === "string" || value.explanation_error === null)
-    && (typeof value.explanation_updated_at === "string" || value.explanation_updated_at === null)
-    && typeof value.created_at === "string"
-    && (typeof value.expires_at === "string" || value.expires_at === null)
-    && (typeof value.resolved_at === "string" || value.resolved_at === null)
-    && (typeof value.resolved_by === "string" || value.resolved_by === null)
-    && (typeof value.resolution_note === "string" || value.resolution_note === null);
+  return (
+    typeof value.approval_id === "string" &&
+    typeof value.kind === "string" &&
+    typeof value.risk_level === "string" &&
+    typeof value.status === "string" &&
+    (typeof value.linkage_json === "string" || value.linkage_json === null) &&
+    typeof value.payload_json === "string" &&
+    typeof value.preview_json === "string" &&
+    typeof value.explanation_status === "string" &&
+    (typeof value.explanation_json === "string" || value.explanation_json === null) &&
+    (typeof value.explanation_error === "string" || value.explanation_error === null) &&
+    (typeof value.explanation_updated_at === "string" || value.explanation_updated_at === null) &&
+    typeof value.created_at === "string" &&
+    (typeof value.expires_at === "string" || value.expires_at === null) &&
+    (typeof value.resolved_at === "string" || value.resolved_at === null) &&
+    (typeof value.resolved_by === "string" || value.resolved_by === null) &&
+    (typeof value.resolution_note === "string" || value.resolution_note === null)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -334,5 +336,3 @@ function normalizeApprovalLinkage(candidate: unknown): ApprovalRequest["linkage"
   );
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
-
-

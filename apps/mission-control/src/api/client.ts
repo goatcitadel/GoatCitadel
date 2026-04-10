@@ -379,11 +379,16 @@ export {
 export {
   createCapabilityProposal,
   createCodeModeRun,
+  fetchCapabilityCandidate,
   fetchCapabilityCatalog,
   fetchCapabilityCatalogSnapshot,
+  fetchCapabilityProposal,
   fetchCapabilityProposals,
   fetchCodeModeRun,
   fetchCodeModeRuns,
+  promoteCapabilityCandidate,
+  revokeCapabilityCandidate,
+  rollbackCapabilityCandidate,
 } from "./capabilities.js";
 export {
   archiveAgentProfile,

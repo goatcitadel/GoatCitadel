@@ -2,15 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatSessionPrefsRecord } from "@goatcitadel/contracts";
 import { GatewayService } from "./gateway-service.js";
 
-vi.mock("sqlite", () => ({}));
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
   StatementSync: class StatementSync {},
 }));
 
-function createPrefs(
-  overrides: Partial<ChatSessionPrefsRecord> = {},
-): ChatSessionPrefsRecord {
+function createPrefs(overrides: Partial<ChatSessionPrefsRecord> = {}): ChatSessionPrefsRecord {
   return {
     sessionId: "sess-1",
     mode: "chat",
@@ -43,8 +40,15 @@ describe("GatewayService chat session provider normalization", () => {
       },
     };
 
-    expect((GatewayService.prototype as any).isUrlAllowlisted.call(gateway, "https://lite.duckduckgo.com/lite/?q=test")).toBe(true);
-    expect((GatewayService.prototype as any).isHostAllowlisted.call(gateway, "www.google.com")).toBe(true);
+    expect(
+      (GatewayService.prototype as any).isUrlAllowlisted.call(gateway, "https://lite.duckduckgo.com/lite/?q=test"),
+    ).toBe(true);
+    expect(
+      (GatewayService.prototype as any).isConnectionUrlAllowlisted.call(
+        gateway,
+        "https://www.google.com/search?q=test",
+      ),
+    ).toBe(true);
   });
 
   it("defaults browser tools to Firecrawl and keeps native fallback enabled", () => {

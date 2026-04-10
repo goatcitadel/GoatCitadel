@@ -57,6 +57,7 @@ export class DurableRunRepository {
   private readonly getRunStmt;
   private readonly updateRunStmt;
   private readonly listRunsStmt;
+  private readonly listRunIdsByStatusStmt;
   private readonly countRunsStmt;
   private readonly statusCountsStmt;
   private readonly insertCheckpointStmt;
@@ -66,6 +67,8 @@ export class DurableRunRepository {
   private readonly upsertDeadLetterStmt;
   private readonly listDeadLettersStmt;
   private readonly getDeadLetterByRunStmt;
+  private readonly getDeadLetterByIdStmt;
+  private readonly resolveDeadLetterStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertRunStmt = db.prepare(`
@@ -94,6 +97,13 @@ export class DurableRunRepository {
     this.listRunsStmt = db.prepare(`
       SELECT * FROM durable_runs
       ORDER BY created_at DESC
+      LIMIT ?
+    `);
+    this.listRunIdsByStatusStmt = db.prepare(`
+      SELECT run_id
+      FROM durable_runs
+      WHERE status = ?
+      ORDER BY created_at ASC
       LIMIT ?
     `);
     this.countRunsStmt = db.prepare("SELECT COUNT(1) AS count FROM durable_runs");
@@ -152,6 +162,17 @@ export class DurableRunRepository {
       SELECT * FROM durable_dead_letters
       WHERE run_id = ?
       LIMIT 1
+    `);
+    this.getDeadLetterByIdStmt = db.prepare(`
+      SELECT * FROM durable_dead_letters
+      WHERE dead_letter_id = ?
+      LIMIT 1
+    `);
+    this.resolveDeadLetterStmt = db.prepare(`
+      UPDATE durable_dead_letters
+      SET resolved_at = @resolvedAt,
+          resolution_note = @resolutionNote
+      WHERE dead_letter_id = @deadLetterId
     `);
   }
 
@@ -226,12 +247,13 @@ export class DurableRunRepository {
     const next: DurableRunRecord = {
       ...current,
       status: input.status,
-      attemptCount: input.attemptCount !== undefined ? Math.max(0, Math.floor(input.attemptCount)) : current.attemptCount,
+      attemptCount:
+        input.attemptCount !== undefined ? Math.max(0, Math.floor(input.attemptCount)) : current.attemptCount,
       maxAttempts: input.maxAttempts !== undefined ? Math.max(1, Math.floor(input.maxAttempts)) : current.maxAttempts,
       metadata: input.metadata !== undefined ? normalizeOptionalObject(input.metadata) : current.metadata,
       startedAt: input.startedAt !== undefined ? input.startedAt : current.startedAt,
       finishedAt: input.finishedAt !== undefined ? input.finishedAt : current.finishedAt,
-      lastError: input.lastError !== undefined ? (input.lastError?.trim() || undefined) : current.lastError,
+      lastError: input.lastError !== undefined ? input.lastError?.trim() || undefined : current.lastError,
       updatedAt: input.updatedAt ?? new Date().toISOString(),
     };
     this.updateRunStmt.run({
@@ -252,6 +274,12 @@ export class DurableRunRepository {
     const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
     const rows = toDurableRunRows(this.listRunsStmt.all(safeLimit));
     return rows.map(mapRunRow);
+  }
+
+  public listRunIdsByStatus(status: DurableRunStatus, limit = 500): string[] {
+    const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
+    const rows = this.listRunIdsByStatusStmt.all(status, safeLimit) as Array<{ run_id: string }>;
+    return rows.map((row) => row.run_id);
   }
 
   public countRuns(): number {
@@ -401,16 +429,44 @@ export class DurableRunRepository {
     if (!row) {
       return undefined;
     }
-    return {
-      deadLetterId: row.dead_letter_id,
-      runId: row.run_id,
-      reason: row.reason,
-      payload: safeJsonParse<Record<string, unknown>>(row.payload_json, {}),
-      createdAt: row.created_at,
-      resolvedAt: row.resolved_at ?? undefined,
-      resolutionNote: row.resolution_note ?? undefined,
-    };
+    return mapDeadLetterRow(row);
   }
+
+  public getDeadLetterById(deadLetterId: string): DurableDeadLetterRecord {
+    const row = toDurableDeadLetterRow(this.getDeadLetterByIdStmt.get(deadLetterId));
+    if (!row) {
+      throw new NotFoundError({ entity: "Durable dead letter", id: deadLetterId });
+    }
+    return mapDeadLetterRow(row);
+  }
+
+  public resolveDeadLetter(
+    deadLetterId: string,
+    input: {
+      resolvedAt?: string;
+      resolutionNote?: string;
+    } = {},
+  ): DurableDeadLetterRecord {
+    const existing = this.getDeadLetterById(deadLetterId);
+    this.resolveDeadLetterStmt.run({
+      deadLetterId,
+      resolvedAt: input.resolvedAt ?? new Date().toISOString(),
+      resolutionNote: input.resolutionNote?.trim() || null,
+    });
+    return this.getDeadLetterById(existing.deadLetterId);
+  }
+}
+
+function mapDeadLetterRow(row: DurableDeadLetterRow): DurableDeadLetterRecord {
+  return {
+    deadLetterId: row.dead_letter_id,
+    runId: row.run_id,
+    reason: row.reason,
+    payload: safeJsonParse<Record<string, unknown>>(row.payload_json, {}),
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at ?? undefined,
+    resolutionNote: row.resolution_note ?? undefined,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -421,54 +477,62 @@ function isDurableRunRow(value: unknown): value is DurableRunRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.run_id === "string"
-    && typeof value.workflow_key === "string"
-    && typeof value.status === "string"
-    && typeof value.attempt_count === "number"
-    && typeof value.max_attempts === "number"
-    && typeof value.payload_json === "string"
-    && (typeof value.metadata_json === "string" || value.metadata_json === null)
-    && (typeof value.started_at === "string" || value.started_at === null)
-    && (typeof value.finished_at === "string" || value.finished_at === null)
-    && (typeof value.last_error === "string" || value.last_error === null)
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.run_id === "string" &&
+    typeof value.workflow_key === "string" &&
+    typeof value.status === "string" &&
+    typeof value.attempt_count === "number" &&
+    typeof value.max_attempts === "number" &&
+    typeof value.payload_json === "string" &&
+    (typeof value.metadata_json === "string" || value.metadata_json === null) &&
+    (typeof value.started_at === "string" || value.started_at === null) &&
+    (typeof value.finished_at === "string" || value.finished_at === null) &&
+    (typeof value.last_error === "string" || value.last_error === null) &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isDurableCheckpointRow(value: unknown): value is DurableCheckpointRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.checkpoint_id === "string"
-    && typeof value.run_id === "string"
-    && typeof value.checkpoint_kind === "string"
-    && typeof value.state_json === "string"
-    && typeof value.created_at === "string";
+  return (
+    typeof value.checkpoint_id === "string" &&
+    typeof value.run_id === "string" &&
+    typeof value.checkpoint_kind === "string" &&
+    typeof value.state_json === "string" &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isDurableRetryRow(value: unknown): value is DurableRetryRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.retry_id === "string"
-    && typeof value.run_id === "string"
-    && typeof value.attempt_no === "number"
-    && typeof value.reason === "string"
-    && (typeof value.next_retry_at === "string" || value.next_retry_at === null)
-    && typeof value.created_at === "string";
+  return (
+    typeof value.retry_id === "string" &&
+    typeof value.run_id === "string" &&
+    typeof value.attempt_no === "number" &&
+    typeof value.reason === "string" &&
+    (typeof value.next_retry_at === "string" || value.next_retry_at === null) &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isDurableDeadLetterRow(value: unknown): value is DurableDeadLetterRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.dead_letter_id === "string"
-    && typeof value.run_id === "string"
-    && typeof value.reason === "string"
-    && typeof value.payload_json === "string"
-    && typeof value.created_at === "string"
-    && (typeof value.resolved_at === "string" || value.resolved_at === null)
-    && (typeof value.resolution_note === "string" || value.resolution_note === null);
+  return (
+    typeof value.dead_letter_id === "string" &&
+    typeof value.run_id === "string" &&
+    typeof value.reason === "string" &&
+    typeof value.payload_json === "string" &&
+    typeof value.created_at === "string" &&
+    (typeof value.resolved_at === "string" || value.resolved_at === null) &&
+    (typeof value.resolution_note === "string" || value.resolution_note === null)
+  );
 }
 
 function toDurableRunRow(value: unknown): DurableRunRow | undefined {
@@ -539,5 +603,3 @@ function normalizeOptionalObject(value: Record<string, unknown> | undefined): Re
   }
   return value;
 }
-
-

@@ -22,6 +22,18 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   const proposalsQuerySchema = z.object({
     limit: z.coerce.number().int().min(1).max(500).optional(),
   });
+  const proposalParamsSchema = z.object({
+    proposalId: z.string().min(1),
+  });
+  const candidateParamsSchema = z.object({
+    candidateId: z.string().min(1),
+  });
+  const candidateActionBodySchema = z.object({
+    versionId: z.string().trim().min(1).optional(),
+  });
+  const candidateRollbackBodySchema = z.object({
+    targetVersionId: z.string().trim().min(1),
+  });
 
   const codeModeRunBodySchema = z.object({
     language: z.enum(["javascript", "typescript"]),
@@ -82,6 +94,86 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.code(201).send(fastify.gateway.createCapabilityProposal(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/capabilities/proposals/:proposalId", async (request, reply) => {
+    const parsed = proposalParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.getCapabilityProposalDetail(parsed.data.proposalId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/capabilities/candidates/:candidateId", async (request, reply) => {
+    const parsed = candidateParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.getCapabilityCandidateDetail(parsed.data.candidateId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/capabilities/candidates/:candidateId/promote", async (request, reply) => {
+    const params = candidateParamsSchema.safeParse(request.params);
+    const body = candidateActionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(fastify.gateway.promoteCapabilityCandidate(params.data.candidateId, body.data.versionId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/capabilities/candidates/:candidateId/revoke", async (request, reply) => {
+    const params = candidateParamsSchema.safeParse(request.params);
+    const body = candidateActionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(fastify.gateway.revokeCapabilityCandidate(params.data.candidateId, body.data.versionId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/capabilities/candidates/:candidateId/rollback", async (request, reply) => {
+    const params = candidateParamsSchema.safeParse(request.params);
+    const body = candidateRollbackBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(
+        fastify.gateway.rollbackCapabilityCandidate(params.data.candidateId, body.data.targetVersionId),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

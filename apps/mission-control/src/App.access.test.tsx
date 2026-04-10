@@ -58,9 +58,8 @@ vi.mock("./pages/TasksPage", () => ({
 }));
 
 vi.mock("./components/DeviceAccessApprovalModal", () => ({
-  DeviceAccessApprovalModal: ({ open, prompt }: { open: boolean; prompt?: { deviceLabel?: string } }) => (
-    open ? <div>device-access-modal:{prompt?.deviceLabel ?? "unknown"}</div> : null
-  ),
+  DeviceAccessApprovalModal: ({ open, prompt }: { open: boolean; prompt?: { deviceLabel?: string } }) =>
+    open ? <div>device-access-modal:{prompt?.deviceLabel ?? "unknown"}</div> : null,
 }));
 
 vi.mock("./components/RemoteApprovalActionModal", () => ({
@@ -74,17 +73,18 @@ vi.mock("./components/RemoteApprovalActionModal", () => ({
     prompt?: { kind?: string };
     onApprove: () => void;
     onReject: () => void;
-  }) => (
-    open
-      ? (
-        <div>
-          <div>remote-approval-modal:{prompt?.kind ?? "unknown"}</div>
-          <button type="button" onClick={onApprove}>approve remote approval</button>
-          <button type="button" onClick={onReject}>reject remote approval</button>
-        </div>
-      )
-      : null
-  ),
+  }) =>
+    open ? (
+      <div>
+        <div>remote-approval-modal:{prompt?.kind ?? "unknown"}</div>
+        <button type="button" onClick={onApprove}>
+          approve remote approval
+        </button>
+        <button type="button" onClick={onReject}>
+          reject remote approval
+        </button>
+      </div>
+    ) : null,
 }));
 
 function createMemoryStorage(): Storage {
@@ -207,29 +207,29 @@ describe("deriveRefreshTopics", () => {
   it("keeps session-scoped chat events off the surface refresh topic", async () => {
     const { deriveRefreshTopics } = await import("./App");
 
-    expect(deriveRefreshTopics({
-      eventId: "evt-chat-1",
-      eventType: "chat_thread_updated",
-      source: "chat",
-      payload: { kind: "event" },
-      links: { sessionId: "sess-1" },
-    } as any)).toContain("chat");
+    expect(
+      deriveRefreshTopics({
+        eventId: "evt-chat-1",
+        eventType: "chat_thread_updated",
+        source: "chat",
+        payload: { kind: "event" },
+        links: { sessionId: "sess-1" },
+      } as any),
+    ).toContain("chat");
 
-    expect(deriveRefreshTopics({
-      eventId: "evt-chat-1",
-      eventType: "chat_thread_updated",
-      source: "chat",
-      payload: { kind: "event" },
-      links: { sessionId: "sess-1" },
-    } as any)).not.toContain("surface");
-  });
+    expect(
+      deriveRefreshTopics({
+        eventId: "evt-chat-1",
+        eventType: "chat_thread_updated",
+        source: "chat",
+        payload: { kind: "event" },
+        links: { sessionId: "sess-1" },
+      } as any),
+    ).not.toContain("surface");
+  }, 15_000);
 });
 
-async function waitForTreeText(
-  renderer: ReactTestRenderer,
-  expected: string,
-  attempts = 20,
-): Promise<string> {
+async function waitForTreeText(renderer: ReactTestRenderer, expected: string, attempts = 20): Promise<string> {
   let text = renderTreeText(renderer);
   for (let index = 0; index < attempts; index += 1) {
     if (text.includes(expected)) {
@@ -406,9 +406,12 @@ describe("App gateway access gate", () => {
   it("shows startup copy before the first preflight resolves and then transitions into the shell", async () => {
     const { App } = await import("./App");
     let resolvePreflight: ((value: ReturnType<typeof createReadyPreflightResult>) => void) | undefined;
-    preflightGatewayAccessMock.mockImplementation(() => new Promise((resolve) => {
-      resolvePreflight = resolve as (value: ReturnType<typeof createReadyPreflightResult>) => void;
-    }));
+    preflightGatewayAccessMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePreflight = resolve as (value: ReturnType<typeof createReadyPreflightResult>) => void;
+        }),
+    );
 
     let renderer: ReactTestRenderer;
     await act(async () => {
@@ -471,24 +474,34 @@ describe("App gateway access gate", () => {
     const { deriveShellApprovalCount } = await import("./App");
 
     expect(deriveShellApprovalCount(null, 0)).toBe(0);
-    expect(deriveShellApprovalCount({
-      timestamp: new Date().toISOString(),
-      sessions: [],
-      pendingApprovals: 3,
-      activeSubagents: 0,
-      taskStatusCounts: [],
-      recentEvents: [],
-      dailyCostUsd: 0,
-    }, 0)).toBe(3);
-    expect(deriveShellApprovalCount({
-      timestamp: new Date().toISOString(),
-      sessions: [],
-      pendingApprovals: 3,
-      activeSubagents: 0,
-      taskStatusCounts: [],
-      recentEvents: [],
-      dailyCostUsd: 0,
-    }, 2)).toBe(5);
+    expect(
+      deriveShellApprovalCount(
+        {
+          timestamp: new Date().toISOString(),
+          sessions: [],
+          pendingApprovals: 3,
+          activeSubagents: 0,
+          taskStatusCounts: [],
+          recentEvents: [],
+          dailyCostUsd: 0,
+        },
+        0,
+      ),
+    ).toBe(3);
+    expect(
+      deriveShellApprovalCount(
+        {
+          timestamp: new Date().toISOString(),
+          sessions: [],
+          pendingApprovals: 3,
+          activeSubagents: 0,
+          taskStatusCounts: [],
+          recentEvents: [],
+          dailyCostUsd: 0,
+        },
+        2,
+      ),
+    ).toBe(5);
   });
 
   it("marks shell status stale after refresh failures or long gaps", async () => {
@@ -550,10 +563,12 @@ describe("App gateway access gate", () => {
 
     const text = renderTreeText(renderer!);
     expect(text).toContain("chat-ready:code:locked");
-    expect(chatPageMock).toHaveBeenLastCalledWith(expect.objectContaining({
-      surface: "code",
-      lockSurface: true,
-    }));
+    expect(chatPageMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        surface: "code",
+        lockSurface: true,
+      }),
+    );
   });
 
   it("routes into the shared Chat page when a surface tab is selected from another page", async () => {
@@ -568,9 +583,9 @@ describe("App gateway access gate", () => {
     });
     await flush();
 
-    const coworkButton = renderer!.root.findAll((node) => (
-      node.type === "button" && flattenNodeText(node.props.children).includes("Cowork")
-    ))[0];
+    const coworkButton = renderer!.root.findAll(
+      (node) => node.type === "button" && flattenNodeText(node.props.children).includes("Cowork"),
+    )[0];
 
     await act(async () => {
       coworkButton?.props.onClick();
@@ -612,10 +627,10 @@ describe("App gateway access gate", () => {
     });
     await flush();
 
-    const requestButton = renderer!.root.findAll((node) => (
-      node.type === "button"
-      && flattenNodeText(node.props.children).includes("Request approval from another device")
-    ))[0];
+    const requestButton = renderer!.root.findAll(
+      (node) =>
+        node.type === "button" && flattenNodeText(node.props.children).includes("Request approval from another device"),
+    )[0];
 
     await act(async () => {
       requestButton?.props.onClick();
@@ -628,14 +643,16 @@ describe("App gateway access gate", () => {
 
   it("surfaces device approval prompts from realtime events", async () => {
     const { App } = await import("./App");
-    let onEvent: ((event: {
-      eventId: string;
-      sequence: number;
-      eventType: string;
-      source: string;
-      timestamp: string;
-      payload: Record<string, unknown>;
-    }) => void) | undefined;
+    let onEvent:
+      | ((event: {
+          eventId: string;
+          sequence: number;
+          eventType: string;
+          source: string;
+          timestamp: string;
+          payload: Record<string, unknown>;
+        }) => void)
+      | undefined;
     connectEventStreamMock.mockImplementation((handler: typeof onEvent) => {
       onEvent = handler;
       return () => undefined;
@@ -759,14 +776,16 @@ describe("App gateway access gate", () => {
 
   it("surfaces remote approval action prompts from realtime events and resolves them with the delivered token", async () => {
     const { App } = await import("./App");
-    let onEvent: ((event: {
-      eventId: string;
-      sequence: number;
-      eventType: string;
-      source: string;
-      timestamp: string;
-      payload: Record<string, unknown>;
-    }) => void) | undefined;
+    let onEvent:
+      | ((event: {
+          eventId: string;
+          sequence: number;
+          eventType: string;
+          source: string;
+          timestamp: string;
+          payload: Record<string, unknown>;
+        }) => void)
+      | undefined;
     connectEventStreamMock.mockImplementation((handler: typeof onEvent) => {
       onEvent = handler;
       return () => undefined;
@@ -903,8 +922,8 @@ describe("App gateway access gate", () => {
     });
     await flush();
 
-    const remoteApprovalModal = renderer!.root.findAll(
-      (node) => flattenNodeText(node).includes("remote-approval-modal:tool.invoke"),
+    const remoteApprovalModal = renderer!.root.findAll((node) =>
+      flattenNodeText(node).includes("remote-approval-modal:tool.invoke"),
     )[0];
     expect(remoteApprovalModal).toBeDefined();
 

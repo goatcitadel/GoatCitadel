@@ -178,6 +178,8 @@ function createContext(
         countRuns: () => runs.size,
         listDeadLetters: () => [],
         listRuns: () => [...runs.values()],
+        listRunIdsByStatus: (status: DurableRunRecord["status"]) =>
+          [...runs.values()].filter((run) => run.status === status).map((run) => run.runId),
         listCheckpoints: () => [],
         listRetries: (runId: string) => retries.get(runId) ?? [],
         getRun: (runId: string) => {
@@ -232,6 +234,58 @@ function createContext(
           });
           return input;
         },
+        getDeadLetterById: (deadLetterId: string) => {
+          const row = deadLetters.get(deadLetterId);
+          if (!row) {
+            throw new Error(`Unknown dead letter ${deadLetterId}`);
+          }
+          return {
+            deadLetterId: row.dead_letter_id,
+            runId: row.run_id,
+            reason: row.reason,
+            payload: {},
+            createdAt: "2026-03-14T00:00:00.000Z",
+            resolvedAt: row.resolved_at,
+            resolutionNote: row.resolution_note,
+          };
+        },
+        resolveDeadLetter: (
+          deadLetterId: string,
+          input: {
+            resolvedAt?: string;
+            resolutionNote?: string;
+          },
+        ) => {
+          const current = deadLetters.get(deadLetterId);
+          if (!current) {
+            throw new Error(`Unknown dead letter ${deadLetterId}`);
+          }
+          const next = {
+            ...current,
+            resolved_at: input.resolvedAt,
+            resolution_note: input.resolutionNote,
+          };
+          deadLetters.set(deadLetterId, next);
+          return {
+            deadLetterId: next.dead_letter_id,
+            runId: next.run_id,
+            reason: next.reason,
+            payload: {},
+            createdAt: "2026-03-14T00:00:00.000Z",
+            resolvedAt: next.resolved_at,
+            resolutionNote: next.resolution_note,
+          };
+        },
+      },
+      durableRunEvents: {
+        append: (input: { runId: string; eventType: string }) => {
+          timeline.push({
+            runId: input.runId,
+            eventType: input.eventType,
+          });
+          return input;
+        },
+        listByRun: (runId: string) => timeline.filter((entry) => entry.runId === runId),
       },
       runImmediateTransaction: <T>(callback: () => T): T => callback(),
     },
@@ -245,54 +299,7 @@ function createContext(
     },
     llmService: {},
     policyEngine: {},
-    gatewaySql: {
-      prepare: (sql: string) => ({
-        all: () => {
-          if (sql.includes("WHERE status = 'running'")) {
-            return [...runs.values()].filter((run) => run.status === "running").map((run) => ({ run_id: run.runId }));
-          }
-          if (sql.includes("WHERE status = 'queued'")) {
-            return [...runs.values()].filter((run) => run.status === "queued").map((run) => ({ run_id: run.runId }));
-          }
-          return [];
-        },
-        get: (arg?: string) => {
-          if (sql.includes("FROM durable_dead_letters") && sql.includes("WHERE dead_letter_id = ?")) {
-            return arg ? deadLetters.get(arg) : undefined;
-          }
-          return undefined;
-        },
-        run: (
-          params:
-            | {
-                runId?: string;
-                eventType?: string;
-                entryId?: string;
-                resolvedAt?: string;
-                note?: string;
-              }
-            | undefined,
-        ) => {
-          if (sql.includes("INSERT INTO durable_run_events") && params?.runId && params?.eventType) {
-            timeline.push({
-              runId: params.runId,
-              eventType: params.eventType,
-            });
-          }
-          if (sql.includes("UPDATE durable_dead_letters") && params?.entryId) {
-            const current = deadLetters.get(params.entryId);
-            if (current) {
-              deadLetters.set(params.entryId, {
-                ...current,
-                resolved_at: params.resolvedAt,
-                resolution_note: params.note,
-              });
-            }
-          }
-          return { changes: 1 };
-        },
-      }),
-    },
+    gatewaySql: {} as never,
     publishRealtime: () => undefined,
     requireFeatureEnabled: () => undefined,
     isFeatureEnabled: () => true,

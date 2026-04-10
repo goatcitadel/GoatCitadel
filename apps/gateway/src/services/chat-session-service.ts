@@ -268,7 +268,7 @@ export async function deleteChatSession(
 ): Promise<{ deleted: boolean; sessionId: string }> {
   host.getSession(sessionId);
   const result = host.storage.deleteChatSessionData(sessionId);
-  host.activeChatTurnWrites.delete(sessionId);
+  host.clearChatTurnWriteLease(sessionId);
   host.operatorSummaryCache.invalidate();
   const cleanupResults = await Promise.allSettled([
     host.storage.transcripts.delete(sessionId),

@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set "SCRIPT_URL=https://raw.githubusercontent.com/spurnout/GoatCitadel/main/install.ps1"
+set "SCRIPT_URL=https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1"
 set "TEMP_SCRIPT=%TEMP%\goatcitadel-install-%RANDOM%.ps1"
 
 echo Downloading GoatCitadel installer...

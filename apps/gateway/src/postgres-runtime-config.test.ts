@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayRuntimeConfig } from "./config.js";
-import { resolveGatewayPostgresConnectionOptions, resolveGatewayPostgresConnectionString } from "./postgres-runtime-config.js";
+import {
+  resolveGatewayPostgresConnectionOptions,
+  resolveGatewayPostgresConnectionString,
+} from "./postgres-runtime-config.js";
 
 function buildConfig(): GatewayRuntimeConfig {
   return {
@@ -207,6 +210,11 @@ function buildConfig(): GatewayRuntimeConfig {
         candidateRoot: "./data/candidates",
         codeModeArtifactRoot: "./data/artifacts",
         tempRoot: "./data/temp",
+        codeModeSandbox: {
+          mode: "best_effort_host",
+          required: true,
+          bestEffortHostEnabled: false,
+        },
       },
     },
   };

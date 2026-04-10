@@ -17,14 +17,6 @@ const DURABLE_RETRY_POLICY_DEFAULT: DurableRetryPolicy = {
   backoffMultiplier: 2,
 };
 
-function safeJsonParse<T>(raw: string, fallback: T): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
 /**
  * Encapsulates all durable-run lifecycle operations previously inlined
  * in GatewayService.
@@ -82,33 +74,7 @@ export class DurableRunService {
 
   listDurableRunTimeline(runId: string, limit = 300): DurableRunTimelineEvent[] {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
-    const safeLimit = Math.max(1, Math.min(2_000, Math.floor(limit)));
-    const rows = this.ctx.gatewaySql
-      .prepare(
-        `
-      SELECT event_id, run_id, event_type, step_key, payload_json, created_at
-      FROM durable_run_events
-      WHERE run_id = ?
-      ORDER BY created_at ASC
-      LIMIT ?
-    `,
-      )
-      .all(runId, safeLimit) as Array<{
-      event_id: string;
-      run_id: string;
-      event_type: DurableRunTimelineEvent["eventType"];
-      step_key: string | null;
-      payload_json: string | null;
-      created_at: string;
-    }>;
-    return rows.map((row) => ({
-      eventId: row.event_id,
-      runId: row.run_id,
-      eventType: row.event_type,
-      stepKey: row.step_key ?? undefined,
-      payload: safeJsonParse<Record<string, unknown>>(row.payload_json ?? "", {}),
-      createdAt: row.created_at,
-    }));
+    return this.ctx.storage.durableRunEvents.listByRun(runId, limit);
   }
 
   startWorker(): void {
@@ -409,46 +375,26 @@ export class DurableRunService {
     options?: { maxAttempts?: number },
   ): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
-    const row = this.ctx.gatewaySql
-      .prepare(
-        `
-      SELECT dead_letter_id, run_id, reason
-      FROM durable_dead_letters
-      WHERE dead_letter_id = ?
-    `,
-      )
-      .get(entryId) as { dead_letter_id: string; run_id: string; reason: string } | undefined;
-    if (!row) {
-      throw new Error(`Durable dead-letter entry not found: ${entryId}`);
-    }
-    const current = this.ctx.storage.durableRuns.getRun(row.run_id);
+    const deadLetter = this.ctx.storage.durableRuns.getDeadLetterById(entryId);
+    const current = this.ctx.storage.durableRuns.getRun(deadLetter.runId);
     const newMaxAttempts = options?.maxAttempts
       ? Math.max(current.attemptCount + 1, Math.min(20, Math.floor(options.maxAttempts)))
       : undefined;
     let next!: DurableRunRecord;
     this.ctx.storage.runImmediateTransaction(() => {
-      this.ctx.gatewaySql
-        .prepare(
-          `
-        UPDATE durable_dead_letters
-        SET resolved_at = @resolvedAt, resolution_note = @note
-        WHERE dead_letter_id = @entryId
-      `,
-        )
-        .run({
-          entryId,
-          resolvedAt: new Date().toISOString(),
-          note: `recovered by ${actorId}${newMaxAttempts ? `, maxAttempts raised to ${newMaxAttempts}` : ""}`,
-        });
+      this.ctx.storage.durableRuns.resolveDeadLetter(entryId, {
+        resolvedAt: new Date().toISOString(),
+        resolutionNote: `recovered by ${actorId}${newMaxAttempts ? `, maxAttempts raised to ${newMaxAttempts}` : ""}`,
+      });
       next = this.ctx.storage.durableRuns.updateRun({
-        runId: row.run_id,
+        runId: deadLetter.runId,
         status: "queued",
         updatedAt: new Date().toISOString(),
         finishedAt: undefined,
         lastError: undefined,
         ...(newMaxAttempts ? { maxAttempts: newMaxAttempts } : {}),
       });
-      this.recordDurableTimelineEvent(row.run_id, "dead_letter_recovered", {
+      this.recordDurableTimelineEvent(deadLetter.runId, "dead_letter_recovered", {
         actorId,
         deadLetterId: entryId,
         ...(newMaxAttempts ? { maxAttemptsOverride: newMaxAttempts } : {}),
@@ -456,10 +402,10 @@ export class DurableRunService {
     });
     this.ctx.publishRealtime("system", "durable", {
       type: "durable_dead_letter_recovered",
-      runId: row.run_id,
+      runId: deadLetter.runId,
       deadLetterId: entryId,
     });
-    this.requestRunProcessing(row.run_id);
+    this.requestRunProcessing(deadLetter.runId);
     return next;
   }
 
@@ -515,44 +461,19 @@ export class DurableRunService {
       payload: payload ?? {},
       createdAt: new Date().toISOString(),
     };
-    this.ctx.gatewaySql
-      .prepare(
-        `
-      INSERT INTO durable_run_events (event_id, run_id, event_type, step_key, payload_json, created_at)
-      VALUES (@eventId, @runId, @eventType, @stepKey, @payloadJson, @createdAt)
-    `,
-      )
-      .run({
-        eventId: event.eventId,
-        runId: event.runId,
-        eventType: event.eventType,
-        stepKey: event.stepKey ?? null,
-        payloadJson: JSON.stringify(event.payload ?? {}),
-        createdAt: event.createdAt,
-      });
-    return event;
+    return this.ctx.storage.durableRunEvents.append(event);
   }
 
   private async reconcileRecoverableRuns(): Promise<void> {
     if (!this.deps) {
       return;
     }
-    const runningRows = this.ctx.gatewaySql
-      .prepare(
-        `
-      SELECT run_id
-      FROM durable_runs
-      WHERE status = 'running'
-      ORDER BY created_at ASC
-    `,
-      )
-      .all() as Array<{ run_id: string }>;
-
-    for (const row of runningRows) {
-      if (this.activeRunIds.has(row.run_id)) {
+    const runningRunIds = this.ctx.storage.durableRuns.listRunIdsByStatus("running");
+    for (const runId of runningRunIds) {
+      if (this.activeRunIds.has(runId)) {
         continue;
       }
-      const run = this.ctx.storage.durableRuns.getRun(row.run_id);
+      const run = this.ctx.storage.durableRuns.getRun(runId);
       const recoverability = this.deps.isWorkflowRecoverable?.(run) ?? { recoverable: true };
       if (!recoverability.recoverable) {
         await this.failWorkflowRun(run, recoverability.reason ?? "Run could not be recovered after restart.");
@@ -616,27 +537,18 @@ export class DurableRunService {
   }
 
   private claimNextQueuedRun(): DurableRunRecord | undefined {
-    const rows = this.ctx.gatewaySql
-      .prepare(
-        `
-      SELECT run_id
-      FROM durable_runs
-      WHERE status = 'queued'
-      ORDER BY created_at ASC
-    `,
-      )
-      .all() as Array<{ run_id: string }>;
-    if (rows.length === 0) {
+    const queuedRunIds = this.ctx.storage.durableRuns.listRunIdsByStatus("queued");
+    if (queuedRunIds.length === 0) {
       return undefined;
     }
     const now = new Date().toISOString();
-    const row = rows.find((candidate) => !this.hasFutureRetryGate(candidate.run_id, now));
-    if (!row) {
+    const runId = queuedRunIds.find((candidate) => !this.hasFutureRetryGate(candidate, now));
+    if (!runId) {
       return undefined;
     }
-    const current = this.ctx.storage.durableRuns.getRun(row.run_id);
+    const current = this.ctx.storage.durableRuns.getRun(runId);
     const run = this.ctx.storage.durableRuns.updateRun({
-      runId: row.run_id,
+      runId,
       status: "running",
       startedAt: current.startedAt ?? now,
       finishedAt: undefined,

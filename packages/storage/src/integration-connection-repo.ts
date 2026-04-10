@@ -40,13 +40,13 @@ export class IntegrationConnectionRepository {
     this.listStmt = db.prepare(`
       SELECT * FROM integration_connections
       ORDER BY updated_at DESC, created_at DESC
-      LIMIT @limit
+      LIMIT ?
     `);
     this.listByKindStmt = db.prepare(`
       SELECT * FROM integration_connections
-      WHERE kind = @kind
+      WHERE kind = ?
       ORDER BY updated_at DESC, created_at DESC
-      LIMIT @limit
+      LIMIT ?
     `);
     this.getStmt = db.prepare("SELECT * FROM integration_connections WHERE connection_id = ?");
     this.insertStmt = db.prepare(`
@@ -80,10 +80,7 @@ export class IntegrationConnectionRepository {
   }
 
   public list(kind?: IntegrationKind, limit = 200): IntegrationConnection[] {
-    const rows = toIntegrationConnectionRows((kind ? this.listByKindStmt : this.listStmt).all({
-      kind,
-      limit,
-    }));
+    const rows = toIntegrationConnectionRows(kind ? this.listByKindStmt.all(kind, limit) : this.listStmt.all(limit));
     return rows.map(mapRow);
   }
 
@@ -126,19 +123,21 @@ export class IntegrationConnectionRepository {
     return this.get(connectionId);
   }
 
-  public update(connectionId: string, input: IntegrationConnectionUpdateInput, now = new Date().toISOString()): IntegrationConnection {
+  public update(
+    connectionId: string,
+    input: IntegrationConnectionUpdateInput,
+    now = new Date().toISOString(),
+  ): IntegrationConnection {
     const current = this.get(connectionId);
     this.updateStmt.run({
       connectionId,
       label: input.label ?? current.label,
-      enabled: input.enabled === undefined ? (current.enabled ? 1 : 0) : (input.enabled ? 1 : 0),
+      enabled: input.enabled === undefined ? (current.enabled ? 1 : 0) : input.enabled ? 1 : 0,
       status: input.status ?? current.status,
       configJson: JSON.stringify(input.config ?? current.config),
       pluginId: input.pluginId ?? current.pluginId ?? null,
       pluginVersion: input.pluginVersion ?? current.pluginVersion ?? null,
-      pluginEnabled: input.pluginEnabled === undefined
-        ? (current.pluginEnabled ? 1 : 0)
-        : (input.pluginEnabled ? 1 : 0),
+      pluginEnabled: input.pluginEnabled === undefined ? (current.pluginEnabled ? 1 : 0) : input.pluginEnabled ? 1 : 0,
       pluginMetaJson: null,
       updatedAt: now,
       lastSyncAt: input.lastSyncAt ?? current.lastSyncAt ?? null,
@@ -192,26 +191,26 @@ function isIntegrationConnectionRow(value: unknown): value is IntegrationConnect
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.connection_id === "string"
-    && typeof value.catalog_id === "string"
-    && typeof value.kind === "string"
-    && typeof value.integration_key === "string"
-    && typeof value.label === "string"
-    && typeof value.enabled === "number"
-    && typeof value.status === "string"
-    && typeof value.config_json === "string"
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string"
-    && (typeof value.last_sync_at === "string" || value.last_sync_at === null)
-    && (typeof value.last_error === "string" || value.last_error === null)
-    && (typeof value.plugin_id === "string" || value.plugin_id === null)
-    && (typeof value.plugin_version === "string" || value.plugin_version === null)
-    && (typeof value.plugin_enabled === "number" || value.plugin_enabled === null)
-    && (typeof value.plugin_meta_json === "string" || value.plugin_meta_json === null);
+  return (
+    typeof value.connection_id === "string" &&
+    typeof value.catalog_id === "string" &&
+    typeof value.kind === "string" &&
+    typeof value.integration_key === "string" &&
+    typeof value.label === "string" &&
+    typeof value.enabled === "number" &&
+    typeof value.status === "string" &&
+    typeof value.config_json === "string" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string" &&
+    (typeof value.last_sync_at === "string" || value.last_sync_at === null) &&
+    (typeof value.last_error === "string" || value.last_error === null) &&
+    (typeof value.plugin_id === "string" || value.plugin_id === null) &&
+    (typeof value.plugin_version === "string" || value.plugin_version === null) &&
+    (typeof value.plugin_enabled === "number" || value.plugin_enabled === null) &&
+    (typeof value.plugin_meta_json === "string" || value.plugin_meta_json === null)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

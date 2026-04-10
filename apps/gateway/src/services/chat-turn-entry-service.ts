@@ -152,27 +152,16 @@ async function runAgentSendChatMessageLlmPath(
         reason: retryReason,
         outcome: "still_failed",
       };
-      host.gatewaySql
-        .prepare(
-          `
-    INSERT INTO chat_reflection_attempts (
-      attempt_id, turn_id, session_id, reason, outcome, attempt_count, strategy, error, created_at
-    ) VALUES (
-      @attemptId, @turnId, @sessionId, @reason, @outcome, @attemptCount, @strategy, @error, @createdAt
-    )
-      `,
-        )
-        .run({
-          attemptId: randomUUID(),
-          turnId: retryTurnId,
-          sessionId,
-          reason: retryReason,
-          outcome: "still_failed",
-          attemptCount: 1,
-          strategy: "single retry with alternate tool/query strategy",
-          error: turnResult.turnTrace.status === "failed" ? turnResult.assistantContent.slice(0, 500) : null,
-          createdAt: new Date().toISOString(),
-        });
+      host.storage.chatReflectionAttempts.create({
+        attemptId: randomUUID(),
+        turnId: retryTurnId,
+        sessionId,
+        reason: retryReason,
+        outcome: "still_failed",
+        attemptCount: 1,
+        strategy: "single retry with alternate tool/query strategy",
+        error: turnResult.turnTrace.status === "failed" ? turnResult.assistantContent.slice(0, 500) : null,
+      });
 
       const retryHistory = prepared.history;
       const retryPrompt = `${prepared.content}\n\nRetry guidance: last attempt was incomplete. Use a different approach or tool and be explicit about limits.`;
@@ -681,7 +670,7 @@ export async function cancelChatTurn(
   if (current.sessionId !== sessionId) {
     throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
   }
-  const active = host.activeChatTurns.get(turnId);
+  const active = host.getActiveChatTurnExecution(turnId);
   if (active?.sessionId === sessionId && !active.controller.signal.aborted) {
     active.controller.abort(new ChatTurnCancelledError(turnId));
   }

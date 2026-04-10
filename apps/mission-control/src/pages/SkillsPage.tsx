@@ -1,7 +1,9 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-unused-vars, max-lines -- Skills remains a single operator surface while capability detail, proposal, and lifecycle controls settle. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  CandidateSkillDetailRecord,
   CapabilityCatalogEntry,
+  CapabilityProposalDetailRecord,
   CapabilityProposalRecord,
   SkillMergedSourceResult,
   SkillListItem,
@@ -11,14 +13,19 @@ import type {
   SkillSourceSearchRecord,
 } from "@goatcitadel/contracts";
 import {
+  fetchCapabilityCandidate,
   fetchCapabilityCatalog,
+  fetchCapabilityProposal,
   fetchCapabilityProposals,
   fetchSkillLookup,
   fetchSkillImportHistory,
   fetchSkillSources,
   fetchSkills,
   installSkillImport,
+  promoteCapabilityCandidate,
   reloadSkills,
+  revokeCapabilityCandidate,
+  rollbackCapabilityCandidate,
   validateSkillImport,
   updateSkillState,
   fetchSkillActivationPolicies,
@@ -71,6 +78,8 @@ export function SkillsPage() {
   const [skills, setSkills] = useState<SkillListItem[]>([]);
   const [capabilityCatalog, setCapabilityCatalog] = useState<CapabilityCatalogEntry[]>([]);
   const [capabilityProposals, setCapabilityProposals] = useState<CapabilityProposalRecord[]>([]);
+  const [candidateDetail, setCandidateDetail] = useState<CandidateSkillDetailRecord | null>(null);
+  const [proposalDetail, setProposalDetail] = useState<CapabilityProposalDetailRecord | null>(null);
   const [policy, setPolicy] = useState<SkillActivationPolicyState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -98,6 +107,7 @@ export function SkillsPage() {
   const [importHistory, setImportHistory] = useState<Awaited<ReturnType<typeof fetchSkillImportHistory>>["items"]>([]);
   const [importBusy, setImportBusy] = useState<null | "validate" | "install">(null);
   const [confirmHighRiskImport, setConfirmHighRiskImport] = useState(false);
+  const [reviewBusyKey, setReviewBusyKey] = useState<string | null>(null);
 
   const load = useCallback(async (options?: { background?: boolean; includeStatic?: boolean }) => {
     const background = options?.background ?? false;
@@ -356,6 +366,65 @@ export function SkillsPage() {
     }
   }, [confirmHighRiskImport, importSourceRef, importSourceProvider, importSourceType, load, validationResult]);
 
+  const onInspectCandidate = useCallback(async (candidateId: string) => {
+    setReviewBusyKey(`candidate:${candidateId}`);
+    try {
+      const detail = await fetchCapabilityCandidate(candidateId);
+      setCandidateDetail(detail);
+      setProposalDetail(null);
+      setStatus(`Loaded candidate ${candidateId}.`);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setReviewBusyKey(null);
+    }
+  }, []);
+
+  const onInspectProposal = useCallback(async (proposalId: string) => {
+    setReviewBusyKey(`proposal:${proposalId}`);
+    try {
+      const detail = await fetchCapabilityProposal(proposalId);
+      setProposalDetail(detail);
+      setCandidateDetail(detail.candidate ?? null);
+      setStatus(`Loaded proposal ${proposalId}.`);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setReviewBusyKey(null);
+    }
+  }, []);
+
+  const onCandidateAction = useCallback(
+    async (action: "promote" | "revoke" | "rollback", candidateId: string, versionId: string) => {
+      setReviewBusyKey(`${action}:${candidateId}:${versionId}`);
+      try {
+        const result =
+          action === "promote"
+            ? await promoteCapabilityCandidate(candidateId, versionId)
+            : action === "revoke"
+              ? await revokeCapabilityCandidate(candidateId, versionId)
+              : await rollbackCapabilityCandidate(candidateId, versionId);
+        setCandidateDetail(result.detail);
+        const proposalId = proposalDetail?.proposal.proposalId;
+        if (proposalId) {
+          setProposalDetail(await fetchCapabilityProposal(proposalId));
+        }
+        await load({ background: true, includeStatic: false });
+        setStatus(
+          `${action === "promote" ? "Promoted" : action === "revoke" ? "Revoked" : "Rolled back"} ${candidateId}.`,
+        );
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setReviewBusyKey(null);
+      }
+    },
+    [load, proposalDetail?.proposal.proposalId],
+  );
+
   if (isInitialLoading) {
     return <p>Loading Playbook skills...</p>;
   }
@@ -436,7 +505,12 @@ export function SkillsPage() {
                 onChange={(event) => setSourceQuery(event.target.value)}
                 placeholder="browser, github, playwright..."
               />
-              <button type="button" onClick={() => void onLoadSources()} disabled={sourcesLoading} className="gc-button">
+              <button
+                type="button"
+                onClick={() => void onLoadSources()}
+                disabled={sourcesLoading}
+                className="gc-button"
+              >
                 {sourcesLoading ? "Searching..." : sourceQuery.trim() ? "Lookup" : "Browse"}
               </button>
             </div>
@@ -572,14 +646,20 @@ export function SkillsPage() {
                   : "F:\\skills\\my-skill-folder"
             }
           />
-          <button type="button" onClick={() => void onValidateImport()} disabled={importBusy !== null} className="gc-button">
+          <button
+            type="button"
+            onClick={() => void onValidateImport()}
+            disabled={importBusy !== null}
+            className="gc-button"
+          >
             {importBusy === "validate" ? "Validating..." : "Validate import"}
           </button>
           <button
             type="button"
             onClick={() => void onInstallImport()}
             disabled={importBusy !== null || Boolean(validationResult?.nativeOverlaps?.length)}
-           className="gc-button">
+            className="gc-button"
+          >
             {importBusy === "install" ? "Installing..." : "Install (disabled by default)"}
           </button>
         </div>
@@ -837,6 +917,7 @@ export function SkillsPage() {
                     <th>Lifecycle</th>
                     <th>Trust</th>
                     <th>Capability ID</th>
+                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -846,6 +927,16 @@ export function SkillsPage() {
                       <td>{entry.lifecycleState ?? "candidate"}</td>
                       <td>{entry.trustLabel ?? "Candidate"}</td>
                       <td>{entry.capabilityId}</td>
+                      <td>
+                        <button
+                          type="button"
+                          onClick={() => entry.candidateId && void onInspectCandidate(entry.candidateId)}
+                          disabled={!entry.candidateId || reviewBusyKey === `candidate:${entry.candidateId}`}
+                          className="gc-button"
+                        >
+                          {reviewBusyKey === `candidate:${entry.candidateId}` ? "Loading..." : "Inspect"}
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -866,6 +957,7 @@ export function SkillsPage() {
                     <th>Kind</th>
                     <th>Status</th>
                     <th>Summary</th>
+                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -875,12 +967,167 @@ export function SkillsPage() {
                       <td>{proposal.proposalKind}</td>
                       <td>{proposal.status}</td>
                       <td>{proposal.summary}</td>
+                      <td>
+                        <button
+                          type="button"
+                          onClick={() => void onInspectProposal(proposal.proposalId)}
+                          disabled={reviewBusyKey === `proposal:${proposal.proposalId}`}
+                          className="gc-button"
+                        >
+                          {reviewBusyKey === `proposal:${proposal.proposalId}` ? "Loading..." : "Inspect"}
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
           </div>
+          {candidateDetail ? (
+            <div className="stack-sm">
+              <p>
+                <strong>Candidate detail</strong> <span className="token-chip">{candidateDetail.candidateId}</span>
+              </p>
+              <div className="token-row">
+                <span className="token-chip">
+                  {candidateDetail.activeVersion
+                    ? `Active: ${candidateDetail.activeVersion.versionId}`
+                    : "No active version"}
+                </span>
+                {candidateDetail.originatingRun ? (
+                  <span className="token-chip">Run: {candidateDetail.originatingRun.runId}</span>
+                ) : null}
+                {candidateDetail.originatingRun?.sandbox ? (
+                  <span className="token-chip">
+                    Sandbox: {candidateDetail.originatingRun.sandbox.available ? "available" : "failed closed"}
+                  </span>
+                ) : null}
+              </div>
+              {candidateDetail.activationBlocked ? (
+                <p className="table-subtext">{candidateDetail.activationBlockers.join(" ")}</p>
+              ) : null}
+              {candidateDetail.originatingRun?.sandbox?.failClosedReason ? (
+                <p className="table-subtext">{candidateDetail.originatingRun.sandbox.failClosedReason}</p>
+              ) : null}
+              <table className="gc-data-table">
+                <thead>
+                  <tr>
+                    <th>Version</th>
+                    <th>Lifecycle</th>
+                    <th>Updated</th>
+                    <th>Artifacts</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {candidateDetail.versions.map((version) => (
+                    <tr key={version.versionId}>
+                      <td>
+                        {version.title}
+                        <div className="table-subtext">{version.versionId}</div>
+                      </td>
+                      <td>{version.lifecycleState}</td>
+                      <td>{new Date(version.updatedAt).toLocaleString()}</td>
+                      <td>
+                        <div className="table-subtext">{version.proofArtifact.relPath}</div>
+                        <div className="table-subtext">
+                          {version.programArtifact?.relPath ?? version.manifestArtifact.relPath}
+                        </div>
+                      </td>
+                      <td>
+                        <div className="controls-row">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void onCandidateAction("promote", candidateDetail.candidateId, version.versionId)
+                            }
+                            disabled={reviewBusyKey === `promote:${candidateDetail.candidateId}:${version.versionId}`}
+                            className="gc-button"
+                          >
+                            {reviewBusyKey === `promote:${candidateDetail.candidateId}:${version.versionId}`
+                              ? "Working..."
+                              : "Promote"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void onCandidateAction("rollback", candidateDetail.candidateId, version.versionId)
+                            }
+                            disabled={reviewBusyKey === `rollback:${candidateDetail.candidateId}:${version.versionId}`}
+                            className="gc-button"
+                          >
+                            {reviewBusyKey === `rollback:${candidateDetail.candidateId}:${version.versionId}`
+                              ? "Working..."
+                              : "Rollback"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void onCandidateAction("revoke", candidateDetail.candidateId, version.versionId)
+                            }
+                            disabled={reviewBusyKey === `revoke:${candidateDetail.candidateId}:${version.versionId}`}
+                            className="gc-button"
+                          >
+                            {reviewBusyKey === `revoke:${candidateDetail.candidateId}:${version.versionId}`
+                              ? "Working..."
+                              : "Revoke"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {candidateDetail.relatedProposals.length > 0 ? (
+                <div className="stack-sm">
+                  <p>
+                    <strong>Related proposals</strong>
+                  </p>
+                  <ul className="compact-list">
+                    {candidateDetail.relatedProposals.map((proposal) => (
+                      <li key={proposal.proposalId}>
+                        {proposal.title} · {proposal.status}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {proposalDetail ? (
+            <div className="stack-sm">
+              <p>
+                <strong>Proposal detail</strong>{" "}
+                <span className="token-chip">{proposalDetail.proposal.proposalId}</span>
+              </p>
+              <p className="table-subtext">{proposalDetail.proposal.summary}</p>
+              <div className="token-row">
+                <span className="token-chip">Status: {proposalDetail.proposal.status}</span>
+                <span className="token-chip">Kind: {proposalDetail.proposal.proposalKind}</span>
+                {proposalDetail.proposal.candidateId ? (
+                  <span className="token-chip">Candidate: {proposalDetail.proposal.candidateId}</span>
+                ) : null}
+              </div>
+              <table className="gc-data-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Event</th>
+                    <th>Actor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {proposalDetail.events.map((event) => (
+                    <tr key={event.eventId}>
+                      <td>{new Date(event.createdAt).toLocaleString()}</td>
+                      <td>{event.eventType}</td>
+                      <td>{event.actorId}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
         </div>
       </Panel>
 
@@ -1007,7 +1254,8 @@ export function SkillsPage() {
                             type="button"
                             disabled={!changed || busySkillId === skill.skillId}
                             onClick={() => void onSaveSkillState(skill)}
-                           className="gc-button">
+                            className="gc-button"
+                          >
                             {busySkillId === skill.skillId ? "Saving..." : "Save"}
                           </button>
                         </td>
@@ -1023,4 +1271,3 @@ export function SkillsPage() {
     </section>
   );
 }
-

@@ -288,12 +288,13 @@ export class MeshRepository {
     }
 
     if (current.holder_node_id !== holderNodeId && Date.parse(current.expires_at) > Date.parse(now)) {
-      throw new ConflictError({ code: "STATE_CONFLICT", message: `Lease ${leaseKey} is currently held by ${current.holder_node_id}` });
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Lease ${leaseKey} is currently held by ${current.holder_node_id}`,
+      });
     }
 
-    const nextToken = current.holder_node_id === holderNodeId
-      ? current.fencing_token
-      : current.fencing_token + 1;
+    const nextToken = current.holder_node_id === holderNodeId ? current.fencing_token : current.fencing_token + 1;
 
     this.updateLeaseStmt.run({
       leaseKey,
@@ -370,12 +371,16 @@ export class MeshRepository {
       return this.getSessionOwner(sessionId);
     }
 
-    const canTakeOver = input.force
-      || current.owner_node_id === input.ownerNodeId
-      || (input.expectedEpoch !== undefined && input.expectedEpoch === current.epoch);
+    const canTakeOver =
+      input.force ||
+      current.owner_node_id === input.ownerNodeId ||
+      (input.expectedEpoch !== undefined && input.expectedEpoch === current.epoch);
 
     if (!canTakeOver) {
-      throw new ConflictError({ code: "STATE_CONFLICT", message: `Session ${sessionId} is owned by ${current.owner_node_id} at epoch ${current.epoch}` });
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Session ${sessionId} is owned by ${current.owner_node_id} at epoch ${current.epoch}`,
+      });
     }
 
     this.updateSessionOwnerStmt.run({
@@ -412,13 +417,19 @@ export class MeshRepository {
       createdAt: now,
     });
 
-    const row = toMeshReplicationRow(this.db.prepare(`
+    const row = toMeshReplicationRow(
+      this.db
+        .prepare(
+          `
       SELECT * FROM mesh_replication_log
       WHERE source_node_id = @sourceNodeId AND idempotency_key = @idempotencyKey
-    `).get({
-      sourceNodeId: input.sourceNodeId,
-      idempotencyKey: input.idempotencyKey,
-    }));
+    `,
+        )
+        .get({
+          sourceNodeId: input.sourceNodeId,
+          idempotencyKey: input.idempotencyKey,
+        }),
+    );
 
     if (!row) {
       throw new NotFoundError("Unable to persist replication event");
@@ -427,10 +438,16 @@ export class MeshRepository {
   }
 
   public listReplicationEvents(limit = 200, cursor?: string): MeshReplicationRecord[] {
-    const rows = toMeshReplicationRows((cursor ? this.listReplicationSinceStmt : this.listReplicationStmt).all({
-      limit,
-      cursor,
-    }));
+    const rows = toMeshReplicationRows(
+      cursor
+        ? this.listReplicationSinceStmt.all({
+            limit,
+            cursor,
+          })
+        : this.listReplicationStmt.all({
+            limit,
+          }),
+    );
     return rows.map(mapReplicationRow);
   }
 
@@ -450,10 +467,12 @@ export class MeshRepository {
   }
 
   public getReplicationOffset(consumerNodeId: string, sourceNodeId: string): MeshReplicationOffset {
-    const row = toMeshReplicationOffsetRow(this.getOffsetStmt.get({
-      consumerNodeId,
-      sourceNodeId,
-    }));
+    const row = toMeshReplicationOffsetRow(
+      this.getOffsetStmt.get({
+        consumerNodeId,
+        sourceNodeId,
+      }),
+    );
     if (!row) {
       throw new NotFoundError(`Replication offset not found for ${consumerNodeId} <= ${sourceNodeId}`);
     }
@@ -556,7 +575,7 @@ function mapOffsetRow(row: MeshReplicationOffsetRow): MeshReplicationOffset {
 }
 
 function addSeconds(isoTimestamp: string, seconds: number): string {
-  return new Date(Date.parse(isoTimestamp) + (seconds * 1000)).toISOString();
+  return new Date(Date.parse(isoTimestamp) + seconds * 1000).toISOString();
 }
 
 function hashJoinToken(rawToken: string): string {
@@ -617,63 +636,71 @@ function isMeshNodeRow(value: unknown): value is MeshNodeRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.node_id === "string"
-    && (typeof value.label === "string" || value.label === null)
-    && (typeof value.advertise_address === "string" || value.advertise_address === null)
-    && typeof value.transport === "string"
-    && typeof value.status === "string"
-    && typeof value.capabilities_json === "string"
-    && (typeof value.tls_fingerprint === "string" || value.tls_fingerprint === null)
-    && typeof value.joined_at === "string"
-    && typeof value.last_seen_at === "string";
+  return (
+    typeof value.node_id === "string" &&
+    (typeof value.label === "string" || value.label === null) &&
+    (typeof value.advertise_address === "string" || value.advertise_address === null) &&
+    typeof value.transport === "string" &&
+    typeof value.status === "string" &&
+    typeof value.capabilities_json === "string" &&
+    (typeof value.tls_fingerprint === "string" || value.tls_fingerprint === null) &&
+    typeof value.joined_at === "string" &&
+    typeof value.last_seen_at === "string"
+  );
 }
 
 function isMeshLeaseRow(value: unknown): value is MeshLeaseRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.lease_key === "string"
-    && typeof value.holder_node_id === "string"
-    && typeof value.fencing_token === "number"
-    && typeof value.expires_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.lease_key === "string" &&
+    typeof value.holder_node_id === "string" &&
+    typeof value.fencing_token === "number" &&
+    typeof value.expires_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isMeshSessionOwnerRow(value: unknown): value is MeshSessionOwnerRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.session_id === "string"
-    && typeof value.owner_node_id === "string"
-    && typeof value.epoch === "number"
-    && typeof value.claimed_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.session_id === "string" &&
+    typeof value.owner_node_id === "string" &&
+    typeof value.epoch === "number" &&
+    typeof value.claimed_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isMeshReplicationRow(value: unknown): value is MeshReplicationRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.replication_id === "string"
-    && typeof value.source_node_id === "string"
-    && typeof value.event_type === "string"
-    && typeof value.payload_json === "string"
-    && typeof value.idempotency_key === "string"
-    && typeof value.created_at === "string";
+  return (
+    typeof value.replication_id === "string" &&
+    typeof value.source_node_id === "string" &&
+    typeof value.event_type === "string" &&
+    typeof value.payload_json === "string" &&
+    typeof value.idempotency_key === "string" &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isMeshReplicationOffsetRow(value: unknown): value is MeshReplicationOffsetRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.consumer_node_id === "string"
-    && typeof value.source_node_id === "string"
-    && (typeof value.last_replication_id === "string" || value.last_replication_id === null)
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.consumer_node_id === "string" &&
+    typeof value.source_node_id === "string" &&
+    (typeof value.last_replication_id === "string" || value.last_replication_id === null) &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

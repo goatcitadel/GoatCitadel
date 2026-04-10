@@ -109,13 +109,16 @@ export class KnowledgeRepository {
     `);
   }
 
-  public createDocument(input: {
-    namespace: string;
-    sourceType: "file" | "url" | "text" | "memory";
-    sourceRef: string;
-    title: string;
-    metadata?: Record<string, unknown>;
-  }, now = new Date().toISOString()): KnowledgeDocumentRecord {
+  public createDocument(
+    input: {
+      namespace: string;
+      sourceType: "file" | "url" | "text" | "memory";
+      sourceRef: string;
+      title: string;
+      metadata?: Record<string, unknown>;
+    },
+    now = new Date().toISOString(),
+  ): KnowledgeDocumentRecord {
     const docId = randomUUID();
     this.insertDocumentStmt.run({
       docId,
@@ -169,10 +172,16 @@ export class KnowledgeRepository {
   }
 
   public listDocuments(namespace?: string, limit = 100): KnowledgeDocumentRecord[] {
-    const rows = toKnowledgeDocumentRows((namespace ? this.listDocumentsByNamespaceStmt : this.listDocumentsStmt).all({
-      namespace,
-      limit,
-    }));
+    const rows = toKnowledgeDocumentRows(
+      namespace
+        ? this.listDocumentsByNamespaceStmt.all({
+            namespace,
+            limit,
+          })
+        : this.listDocumentsStmt.all({
+            limit,
+          }),
+    );
     return rows.map((row) => ({
       docId: row.doc_id,
       namespace: row.namespace,
@@ -185,18 +194,26 @@ export class KnowledgeRepository {
   }
 
   public listChunksByNamespace(namespace?: string, limit = 500): KnowledgeChunkRecord[] {
-    const rows = toKnowledgeChunkRows((namespace ? this.listChunksByNamespaceStmt : this.listChunksStmt).all({
-      namespace,
-      limit,
-    }));
+    const rows = toKnowledgeChunkRows(
+      namespace
+        ? this.listChunksByNamespaceStmt.all({
+            namespace,
+            limit,
+          })
+        : this.listChunksStmt.all({
+            limit,
+          }),
+    );
     return rows.map(mapChunkRow);
   }
 
   public listChunksByDocument(docId: string, limit = 500): KnowledgeChunkRecord[] {
-    const rows = toKnowledgeChunkRows(this.listChunksByDocStmt.all({
-      docId,
-      limit,
-    }));
+    const rows = toKnowledgeChunkRows(
+      this.listChunksByDocStmt.all({
+        docId,
+        limit,
+      }),
+    );
     return rows.map(mapChunkRow);
   }
 
@@ -227,9 +244,7 @@ function parseKnowledgeMetadata(value: string): Record<string, unknown> {
 
 function parseKnowledgeEmbedding(value: string | null): number[] | undefined {
   const parsed = safeJsonParse<unknown>(value, undefined);
-  return Array.isArray(parsed) && parsed.every((entry) => typeof entry === "number")
-    ? parsed
-    : undefined;
+  return Array.isArray(parsed) && parsed.every((entry) => typeof entry === "number") ? parsed : undefined;
 }
 
 function toKnowledgeDocumentRows(value: unknown): KnowledgeDocumentRow[] {
@@ -244,26 +259,33 @@ function isKnowledgeDocumentRow(value: unknown): value is KnowledgeDocumentRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.doc_id === "string"
-    && typeof value.namespace === "string"
-    && (value.source_type === "file" || value.source_type === "url" || value.source_type === "text" || value.source_type === "memory")
-    && typeof value.source_ref === "string"
-    && typeof value.title === "string"
-    && typeof value.metadata_json === "string"
-    && typeof value.created_at === "string";
+  return (
+    typeof value.doc_id === "string" &&
+    typeof value.namespace === "string" &&
+    (value.source_type === "file" ||
+      value.source_type === "url" ||
+      value.source_type === "text" ||
+      value.source_type === "memory") &&
+    typeof value.source_ref === "string" &&
+    typeof value.title === "string" &&
+    typeof value.metadata_json === "string" &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isKnowledgeChunkRow(value: unknown): value is KnowledgeChunkRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.chunk_id === "string"
-    && typeof value.doc_id === "string"
-    && typeof value.seq === "number"
-    && typeof value.content === "string"
-    && (typeof value.embedding_json === "string" || value.embedding_json === null)
-    && typeof value.token_estimate === "number"
-    && typeof value.created_at === "string";
+  return (
+    typeof value.chunk_id === "string" &&
+    typeof value.doc_id === "string" &&
+    typeof value.seq === "number" &&
+    typeof value.content === "string" &&
+    (typeof value.embedding_json === "string" || value.embedding_json === null) &&
+    typeof value.token_estimate === "number" &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -277,5 +299,3 @@ function estimateTokens(text: string): number {
   }
   return Math.ceil(chars / 4);
 }
-
-

@@ -16,6 +16,7 @@ export type CapabilityProposalStatus =
 export type CapabilityCatalogScope = "inspectable" | "callable";
 export type CapabilityProposalKind = "skill" | "tool";
 export type CodeModeLanguage = "javascript" | "typescript";
+export type CandidateLifecycleAction = "promote" | "revoke" | "rollback";
 
 export type CodeModeRunStatus =
   | "approval_pending"
@@ -124,6 +125,18 @@ export interface CapabilityProposalEventRecord {
   createdAt: string;
 }
 
+export interface CodeModeSandboxMetadata {
+  runnerId: string;
+  runnerVersion: string;
+  platform: "linux" | "darwin" | "win32" | "unknown";
+  isolationProfile: string;
+  required: boolean;
+  available: boolean;
+  checksPassed: string[];
+  checksFailed: string[];
+  failClosedReason?: string;
+}
+
 export interface CodeModeRunRecord {
   runId: string;
   status: CodeModeRunStatus;
@@ -137,6 +150,7 @@ export interface CodeModeRunRecord {
   approvalId?: string;
   sessionId?: string;
   turnId?: string;
+  sandbox?: CodeModeSandboxMetadata;
   codeArtifact: CapabilityArtifactRecord;
   wrapperManifestArtifact: CapabilityArtifactRecord;
   policySnapshotArtifact: CapabilityArtifactRecord;
@@ -161,4 +175,30 @@ export interface CodeModeRunRequest {
   saveCandidateOnSuccess?: boolean;
   sessionId?: string;
   turnId?: string;
+}
+
+export interface CandidateSkillDetailRecord {
+  candidateId: string;
+  versions: CandidateSkillVersionRecord[];
+  latestVersion?: CandidateSkillVersionRecord;
+  activeVersion?: CandidateSkillVersionRecord;
+  relatedProposals: CapabilityProposalRecord[];
+  originatingRun?: CodeModeRunRecord;
+  activationBlocked: boolean;
+  activationBlockers: string[];
+}
+
+export interface CapabilityProposalDetailRecord {
+  proposal: CapabilityProposalRecord;
+  events: CapabilityProposalEventRecord[];
+  candidate?: CandidateSkillDetailRecord;
+}
+
+export interface CandidateLifecycleActionResult {
+  action: CandidateLifecycleAction;
+  candidateId: string;
+  selectedVersionId: string;
+  changedVersionIds: string[];
+  occurredAt: string;
+  detail: CandidateSkillDetailRecord;
 }

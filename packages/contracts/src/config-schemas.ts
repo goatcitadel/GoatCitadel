@@ -448,6 +448,13 @@ export const AssistantConfigInputSchema = z
         candidateRoot: z.string().optional(),
         codeModeArtifactRoot: z.string().optional(),
         tempRoot: z.string().optional(),
+        codeModeSandbox: z
+          .object({
+            required: z.boolean().optional(),
+            bestEffortHostEnabled: z.boolean().optional(),
+          })
+          .passthrough()
+          .optional(),
       })
       .passthrough()
       .optional(),

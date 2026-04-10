@@ -1,6 +1,6 @@
 # Canonical Runtime State Model
 
-Last updated: 2026-04-02
+Last updated: 2026-04-10
 
 This document defines the repo-native authority model for the core runtime nouns that appear across Gateway, Mission Control, storage, and replay.
 
@@ -56,14 +56,14 @@ Authority:
 Implementation status:
 - Schema and storage repository: complete (migration v21).
 - Read-only diagnostics API: complete.
-- Execution-engine adoption: **not yet complete** — no background worker loop auto-executes queued runs.
+- Execution-engine adoption: **in progress** — `DurableRunService` now starts a background worker loop and auto-drains eligible queued runs, but not every critical runtime flow is durably owned yet.
 - Queue consumers / idempotent worker runtime: **not yet complete**.
 - DLQ operator actions: **not yet complete**.
 - See `docs/DURABLE_RUNS_REPLAY_FOUNDATION.md` for the full activation checklist.
 
 Notes:
 - A run records execution intent and outcome; it is not yet the default execution path.
-- Most chat-turn and approval execution still runs synchronously inside `GatewayService`. Durable runs currently serve as an audit trail and coordination record, not as the primary execution runtime.
+- Durable execution now owns worker startup, retry scheduling, wake/resume, and dead-letter recovery mechanics, but most core chat-turn execution still begins from gateway-owned synchronous entry paths before promoting into durable flow.
 - Runs may be linked to sessions, turns, tasks, and approvals.
 - The `durableKernelV1Enabled` feature flag gates durable-run APIs. The `replayOverridesV1Enabled` flag (default: off) gates replay-with-overrides.
 
@@ -164,7 +164,7 @@ A distilled or composed context pack drawn from memory items, learned memory, an
 Authority:
 - Context pack cache: `packages/storage/src/memory-context-repo.ts`
 - Memory items: `packages/storage/src/memory-item-repo.ts`
-- Learned memory: `apps/gateway/src/services/chat-learned-memory-service.ts` (direct SQL, not yet in a storage repo)
+- Learned memory: `apps/gateway/src/services/chat-learned-memory-service.ts` via `packages/storage/src/chat-learned-memory-repo.ts`
 
 Implementation status:
 - QMD composition, distillation, and caching: complete.
@@ -173,7 +173,8 @@ Implementation status:
 
 Notes:
 - Memory ownership is currently distributed across `MemoryContextService`, `MemoryMaintenanceService`, `ChatLearnedMemoryService`, `memory-facade-service.ts`, and `memory-item-helpers.ts`. There is no single service that owns the full memory lifecycle.
-- `ChatLearnedMemoryService` uses `ctx.gatewaySql.prepare()` directly instead of a storage repository, which is a known migration target.
+- `ChatLearnedMemoryService` is storage-repo backed for learned-memory item persistence.
+- Remaining direct-SQL owners in core runtime-adjacent code still include `GatewayService`, `MemoryMaintenanceService`, `ImprovementService`, `PromptPackService`, `ChatProactiveService`, and selected migration/ops services such as `database-cutover-service.ts` and `gateway/cron-automation-service.ts`.
 
 ## Derived Views
 

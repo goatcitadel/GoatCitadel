@@ -300,6 +300,11 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
         candidateRoot: "./data/capability-candidates",
         codeModeArtifactRoot: "./data/code-mode-artifacts",
         tempRoot: "./data/code-mode-temp",
+        codeModeSandbox: {
+          mode: "best_effort_host",
+          required: true,
+          bestEffortHostEnabled: false,
+        },
       },
       features: {
         durableKernelV1Enabled: false,

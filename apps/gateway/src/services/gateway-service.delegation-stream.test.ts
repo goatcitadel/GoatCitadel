@@ -2,15 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatDelegateRequest, ChatDelegateResponse, ChatDelegationStepRecord } from "@goatcitadel/contracts";
 import { GatewayService } from "./gateway-service.js";
 
-vi.mock("sqlite", () => ({}));
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
   StatementSync: class StatementSync {},
 }));
 
-function createStep(
-  overrides: Partial<ChatDelegationStepRecord> = {},
-): ChatDelegationStepRecord {
+function createStep(overrides: Partial<ChatDelegationStepRecord> = {}): ChatDelegationStepRecord {
   return {
     stepId: "step-1",
     runId: "run-1",
@@ -27,40 +24,42 @@ describe("GatewayService delegation stream bridge", () => {
     const gateway = Object.create(GatewayService.prototype) as GatewayService & {
       runChatDelegation: ReturnType<typeof vi.fn>;
     };
-    gateway.runChatDelegation = vi.fn(async (
-      _sessionId: string,
-      _input: ChatDelegateRequest,
-      callbacks?: {
-        onStatus?: (event: { runId: string; taskId: string; message: string }) => Promise<void> | void;
-        onStep?: (step: ChatDelegationStepRecord) => Promise<void> | void;
+    gateway.runChatDelegation = vi.fn(
+      async (
+        _sessionId: string,
+        _input: ChatDelegateRequest,
+        callbacks?: {
+          onStatus?: (event: { runId: string; taskId: string; message: string }) => Promise<void> | void;
+          onStep?: (step: ChatDelegationStepRecord) => Promise<void> | void;
+        },
+      ): Promise<ChatDelegateResponse> => {
+        const runningStep = createStep();
+        const completedStep = createStep({
+          status: "completed",
+          finishedAt: "2026-03-31T00:00:01.000Z",
+          durationMs: 1000,
+          output: "Done",
+        });
+
+        await callbacks?.onStatus?.({
+          runId: "run-1",
+          taskId: "task-1",
+          message: "Delegation started.",
+        });
+        await Promise.resolve();
+        await callbacks?.onStep?.(runningStep);
+        await Promise.resolve();
+        await callbacks?.onStep?.(completedStep);
+
+        return {
+          runId: "run-1",
+          taskId: "task-1",
+          steps: [completedStep],
+          stitchedOutput: "### Architect\nDone",
+          citations: [],
+        };
       },
-    ): Promise<ChatDelegateResponse> => {
-      const runningStep = createStep();
-      const completedStep = createStep({
-        status: "completed",
-        finishedAt: "2026-03-31T00:00:01.000Z",
-        durationMs: 1000,
-        output: "Done",
-      });
-
-      await callbacks?.onStatus?.({
-        runId: "run-1",
-        taskId: "task-1",
-        message: "Delegation started.",
-      });
-      await Promise.resolve();
-      await callbacks?.onStep?.(runningStep);
-      await Promise.resolve();
-      await callbacks?.onStep?.(completedStep);
-
-      return {
-        runId: "run-1",
-        taskId: "task-1",
-        steps: [completedStep],
-        stitchedOutput: "### Architect\nDone",
-        citations: [],
-      };
-    });
+    );
 
     const chunks: Array<{
       type: "status" | "step" | "done" | "error";

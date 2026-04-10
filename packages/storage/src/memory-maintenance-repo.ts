@@ -1,6 +1,8 @@
+/* eslint-disable max-lines -- Memory maintenance SQL ownership stays co-located while gateway direct-SQL callers are being migrated behind repositories. */
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type {
+  MemoryItemRecord,
   MemoryMaintenanceChangeRecord,
   MemoryMaintenancePolicyPatchInput,
   MemoryMaintenancePolicyRecord,
@@ -95,6 +97,47 @@ interface MemoryMaintenanceRecommendationRow {
   applied_at: string | null;
 }
 
+interface EligibleWorkspaceSessionRow {
+  session_id: string;
+  modified_at: string | null;
+}
+
+interface WorkspaceMemoryItemRow {
+  item_id: string;
+  namespace: string;
+  title: string;
+  content: string;
+  metadata_json: string | null;
+  pinned: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface WorkspaceToolArtifactRow {
+  artifact_id: string;
+  tool_name: string;
+  session_id: string;
+  byte_length: number;
+  snippet: string | null;
+  content_type: string | null;
+  created_at: string;
+}
+
+export interface EligibleWorkspaceSessionRecord {
+  sessionId: string;
+  modifiedAt: string;
+}
+
+export interface WorkspaceToolArtifactRecord {
+  artifactId: string;
+  toolName: string;
+  sessionId: string;
+  byteLength: number;
+  snippet?: string;
+  contentType?: string;
+  createdAt: string;
+}
+
 export class MemoryMaintenanceRepository {
   private readonly getPolicyStmt;
   private readonly upsertPolicyStmt;
@@ -115,6 +158,14 @@ export class MemoryMaintenanceRepository {
   private readonly insertRecommendationStmt;
   private readonly updateRecommendationStmt;
   private readonly listRecommendationsStmt;
+  private readonly listEnabledPolicyWorkspaceIdsStmt;
+  private readonly countChangedSessionsStmt;
+  private readonly countChangedSessionsSinceStmt;
+  private readonly listEligibleSessionsStmt;
+  private readonly listEligibleSessionsSinceStmt;
+  private readonly listActiveMemoryItemsStmt;
+  private readonly listRecentToolArtifactsStmt;
+  private readonly listRecentToolArtifactsSinceStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.getPolicyStmt = db.prepare(`
@@ -385,6 +436,197 @@ export class MemoryMaintenanceRepository {
       ORDER BY created_at DESC, recommendation_id DESC
       LIMIT @limit
     `);
+    this.listEnabledPolicyWorkspaceIdsStmt = db.prepare(`
+      SELECT workspace_id
+      FROM workspace_memory_maintenance_policies
+      WHERE enabled = 1
+      ORDER BY workspace_id ASC
+    `);
+    this.countChangedSessionsStmt = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM (
+        SELECT meta.session_id
+        FROM chat_session_meta AS meta
+        INNER JOIN chat_session_bindings AS binding
+          ON binding.session_id = meta.session_id
+        INNER JOIN chat_turn_traces AS trace
+          ON trace.session_id = meta.session_id
+        LEFT JOIN task_subagent_sessions AS subagent
+          ON subagent.agent_session_id = meta.session_id
+        WHERE meta.workspace_id = @workspaceId
+          AND meta.include_in_history = 1
+          AND (meta.origin IS NULL OR meta.origin = 'operator')
+          AND binding.transport = 'llm'
+          AND binding.writable = 1
+          AND subagent.agent_session_id IS NULL
+          AND trace.status = 'completed'
+          AND trace.assistant_message_id IS NOT NULL
+        GROUP BY meta.session_id
+      ) AS changed_sessions
+    `);
+    this.countChangedSessionsSinceStmt = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM (
+        SELECT meta.session_id
+        FROM chat_session_meta AS meta
+        INNER JOIN chat_session_bindings AS binding
+          ON binding.session_id = meta.session_id
+        INNER JOIN chat_turn_traces AS trace
+          ON trace.session_id = meta.session_id
+        LEFT JOIN task_subagent_sessions AS subagent
+          ON subagent.agent_session_id = meta.session_id
+        WHERE meta.workspace_id = @workspaceId
+          AND meta.include_in_history = 1
+          AND (meta.origin IS NULL OR meta.origin = 'operator')
+          AND binding.transport = 'llm'
+          AND binding.writable = 1
+          AND subagent.agent_session_id IS NULL
+          AND trace.status = 'completed'
+          AND trace.assistant_message_id IS NOT NULL
+          AND trace.finished_at > @since
+        GROUP BY meta.session_id
+      ) AS changed_sessions
+    `);
+    this.listEligibleSessionsStmt = db.prepare(`
+      SELECT meta.session_id AS session_id, MAX(trace.finished_at) AS modified_at
+      FROM chat_session_meta AS meta
+      INNER JOIN chat_session_bindings AS binding
+        ON binding.session_id = meta.session_id
+      INNER JOIN chat_turn_traces AS trace
+        ON trace.session_id = meta.session_id
+      LEFT JOIN task_subagent_sessions AS subagent
+        ON subagent.agent_session_id = meta.session_id
+      WHERE meta.workspace_id = @workspaceId
+        AND meta.include_in_history = 1
+        AND (meta.origin IS NULL OR meta.origin = 'operator')
+        AND binding.transport = 'llm'
+        AND binding.writable = 1
+        AND subagent.agent_session_id IS NULL
+        AND trace.status = 'completed'
+        AND trace.assistant_message_id IS NOT NULL
+      GROUP BY meta.session_id
+      ORDER BY modified_at DESC, meta.session_id DESC
+      LIMIT @limit
+    `);
+    this.listEligibleSessionsSinceStmt = db.prepare(`
+      SELECT meta.session_id AS session_id, MAX(trace.finished_at) AS modified_at
+      FROM chat_session_meta AS meta
+      INNER JOIN chat_session_bindings AS binding
+        ON binding.session_id = meta.session_id
+      INNER JOIN chat_turn_traces AS trace
+        ON trace.session_id = meta.session_id
+      LEFT JOIN task_subagent_sessions AS subagent
+        ON subagent.agent_session_id = meta.session_id
+      WHERE meta.workspace_id = @workspaceId
+        AND meta.include_in_history = 1
+        AND (meta.origin IS NULL OR meta.origin = 'operator')
+        AND binding.transport = 'llm'
+        AND binding.writable = 1
+        AND subagent.agent_session_id IS NULL
+        AND trace.status = 'completed'
+        AND trace.assistant_message_id IS NOT NULL
+        AND trace.finished_at > @since
+      GROUP BY meta.session_id
+      ORDER BY modified_at DESC, meta.session_id DESC
+      LIMIT @limit
+    `);
+    this.listActiveMemoryItemsStmt = db.prepare(`
+      SELECT item_id, namespace, title, content, metadata_json, pinned, created_at, updated_at
+      FROM memory_items
+      WHERE status = 'active'
+      ORDER BY pinned DESC, updated_at DESC
+      LIMIT ?
+    `);
+    this.listRecentToolArtifactsStmt = db.prepare(`
+      SELECT
+        artifact.artifact_id AS artifact_id,
+        artifact.tool_name AS tool_name,
+        artifact.session_id AS session_id,
+        artifact.byte_length AS byte_length,
+        artifact.snippet AS snippet,
+        artifact.content_type AS content_type,
+        artifact.created_at AS created_at
+      FROM chat_tool_artifacts AS artifact
+      INNER JOIN chat_session_meta AS meta
+        ON meta.session_id = artifact.session_id
+      WHERE meta.workspace_id = @workspaceId
+      ORDER BY artifact.created_at DESC
+      LIMIT @limit
+    `);
+    this.listRecentToolArtifactsSinceStmt = db.prepare(`
+      SELECT
+        artifact.artifact_id AS artifact_id,
+        artifact.tool_name AS tool_name,
+        artifact.session_id AS session_id,
+        artifact.byte_length AS byte_length,
+        artifact.snippet AS snippet,
+        artifact.content_type AS content_type,
+        artifact.created_at AS created_at
+      FROM chat_tool_artifacts AS artifact
+      INNER JOIN chat_session_meta AS meta
+        ON meta.session_id = artifact.session_id
+      WHERE meta.workspace_id = @workspaceId
+        AND artifact.created_at > @since
+      ORDER BY artifact.created_at DESC
+      LIMIT @limit
+    `);
+  }
+
+  public listEnabledPolicyWorkspaceIds(): string[] {
+    const rows = this.listEnabledPolicyWorkspaceIdsStmt.all() as Array<{ workspace_id: string }>;
+    return rows.map((row) => row.workspace_id);
+  }
+
+  public countChangedSessions(workspaceId: string, since?: string): number {
+    const stmt = since ? this.countChangedSessionsSinceStmt : this.countChangedSessionsStmt;
+    const row = stmt.get({ workspaceId, since }) as { count: number | null } | undefined;
+    return Number(row?.count ?? 0);
+  }
+
+  public listEligibleSessions(workspaceId: string, since?: string, limit = 100): EligibleWorkspaceSessionRecord[] {
+    const stmt = since ? this.listEligibleSessionsSinceStmt : this.listEligibleSessionsStmt;
+    const rows = stmt.all({
+      workspaceId,
+      since,
+      limit: clampLimit(limit, 200),
+    }) as EligibleWorkspaceSessionRow[];
+    return rows.map((row) => ({
+      sessionId: row.session_id,
+      modifiedAt: row.modified_at ?? new Date(0).toISOString(),
+    }));
+  }
+
+  public listActiveMemoryItems(limit = 200): MemoryItemRecord[] {
+    const rows = this.listActiveMemoryItemsStmt.all(clampLimit(limit, 500)) as WorkspaceMemoryItemRow[];
+    return rows.map((row) => ({
+      itemId: row.item_id,
+      namespace: row.namespace,
+      title: row.title,
+      content: row.content,
+      metadata: parseObjectJson(row.metadata_json),
+      pinned: row.pinned === 1,
+      status: "active",
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  public listRecentToolArtifacts(workspaceId: string, since?: string, limit = 100): WorkspaceToolArtifactRecord[] {
+    const stmt = since ? this.listRecentToolArtifactsSinceStmt : this.listRecentToolArtifactsStmt;
+    const rows = stmt.all({
+      workspaceId,
+      since,
+      limit: clampLimit(limit, 500),
+    }) as WorkspaceToolArtifactRow[];
+    return rows.map((row) => ({
+      artifactId: row.artifact_id,
+      toolName: row.tool_name,
+      sessionId: row.session_id,
+      byteLength: row.byte_length,
+      snippet: row.snippet ?? undefined,
+      contentType: row.content_type ?? undefined,
+      createdAt: row.created_at,
+    }));
   }
 
   public findPolicy(workspaceId: string): MemoryMaintenancePolicyRecord | undefined {
@@ -424,12 +666,12 @@ export class MemoryMaintenanceRepository {
       enabled: patch.enabled ?? current.enabled,
       runMode: patch.runMode ?? current.runMode,
       timingStrategy: patch.timingStrategy ?? current.timingStrategy,
-      schedule: patch.schedule === undefined ? current.schedule : patch.schedule ?? undefined,
+      schedule: patch.schedule === undefined ? current.schedule : (patch.schedule ?? undefined),
       timeZone: patch.timeZone ?? current.timeZone,
       minHoursSinceLastSuccess: patch.minHoursSinceLastSuccess ?? current.minHoursSinceLastSuccess,
       minChangedSessions: patch.minChangedSessions ?? current.minChangedSessions,
-      providerId: patch.providerId === undefined ? current.providerId : patch.providerId ?? undefined,
-      model: patch.model === undefined ? current.model : patch.model ?? undefined,
+      providerId: patch.providerId === undefined ? current.providerId : (patch.providerId ?? undefined),
+      model: patch.model === undefined ? current.model : (patch.model ?? undefined),
       executionTarget: patch.executionTarget ?? current.executionTarget,
       unavailableModelPolicy: patch.unavailableModelPolicy ?? current.unavailableModelPolicy,
       createdAt: current.createdAt,
@@ -528,14 +770,19 @@ export class MemoryMaintenanceRepository {
   }
 
   public listRuns(workspaceId: string, limit = 100): MemoryMaintenanceRunRecord[] {
-    const rows = toMemoryMaintenanceRunRows(this.listRunsStmt.all({
-      workspaceId,
-      limit: clampLimit(limit, 500),
-    }));
+    const rows = toMemoryMaintenanceRunRows(
+      this.listRunsStmt.all({
+        workspaceId,
+        limit: clampLimit(limit, 500),
+      }),
+    );
     return rows.map(mapRunRow);
   }
 
-  public replaceRunSources(runId: string, records: MemoryMaintenanceRunSourceRecord[]): MemoryMaintenanceRunSourceRecord[] {
+  public replaceRunSources(
+    runId: string,
+    records: MemoryMaintenanceRunSourceRecord[],
+  ): MemoryMaintenanceRunSourceRecord[] {
     this.deleteRunSourcesStmt.run(runId);
     for (const record of records) {
       this.insertRunSourceStmt.run({
@@ -640,10 +887,12 @@ export class MemoryMaintenanceRepository {
   }
 
   public listRecommendations(workspaceId: string, limit = 100): MemoryMaintenanceRecommendationRecord[] {
-    const rows = toMemoryMaintenanceRecommendationRows(this.listRecommendationsStmt.all({
-      workspaceId,
-      limit: clampLimit(limit, 500),
-    }));
+    const rows = toMemoryMaintenanceRecommendationRows(
+      this.listRecommendationsStmt.all({
+        workspaceId,
+        limit: clampLimit(limit, 500),
+      }),
+    );
     return rows.map(mapRecommendationRow);
   }
 }
@@ -727,8 +976,8 @@ function clampLimit(value: number, max: number): number {
   return Math.max(1, Math.min(max, Math.floor(value)));
 }
 
-function parseObjectJson(value: string): Record<string, unknown> {
-  const parsed = safeJsonParse<unknown>(value, {});
+function parseObjectJson(value: string | null): Record<string, unknown> {
+  const parsed = safeJsonParse<unknown>(value ?? "{}", {});
   return isRecord(parsed) ? parsed : {};
 }
 
@@ -768,105 +1017,115 @@ function isMemoryMaintenancePolicyRow(value: unknown): value is MemoryMaintenanc
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.workspace_id === "string"
-    && typeof value.enabled === "number"
-    && typeof value.run_mode === "string"
-    && typeof value.timing_strategy === "string"
-    && (typeof value.schedule_json === "string" || value.schedule_json === null)
-    && typeof value.time_zone === "string"
-    && typeof value.min_hours_since_last_success === "number"
-    && typeof value.min_changed_sessions === "number"
-    && (typeof value.provider_id === "string" || value.provider_id === null)
-    && (typeof value.model === "string" || value.model === null)
-    && typeof value.execution_target === "string"
-    && typeof value.unavailable_model_policy === "string"
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.workspace_id === "string" &&
+    typeof value.enabled === "number" &&
+    typeof value.run_mode === "string" &&
+    typeof value.timing_strategy === "string" &&
+    (typeof value.schedule_json === "string" || value.schedule_json === null) &&
+    typeof value.time_zone === "string" &&
+    typeof value.min_hours_since_last_success === "number" &&
+    typeof value.min_changed_sessions === "number" &&
+    (typeof value.provider_id === "string" || value.provider_id === null) &&
+    (typeof value.model === "string" || value.model === null) &&
+    typeof value.execution_target === "string" &&
+    typeof value.unavailable_model_policy === "string" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isMemoryMaintenanceStateRow(value: unknown): value is MemoryMaintenanceStateRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.workspace_id === "string"
-    && (typeof value.last_eligibility_at === "string" || value.last_eligibility_at === null)
-    && (typeof value.last_successful_run_at === "string" || value.last_successful_run_at === null)
-    && typeof value.changed_session_count === "number"
-    && (typeof value.active_run_id === "string" || value.active_run_id === null)
-    && (typeof value.last_recommendation_at === "string" || value.last_recommendation_at === null)
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.workspace_id === "string" &&
+    (typeof value.last_eligibility_at === "string" || value.last_eligibility_at === null) &&
+    (typeof value.last_successful_run_at === "string" || value.last_successful_run_at === null) &&
+    typeof value.changed_session_count === "number" &&
+    (typeof value.active_run_id === "string" || value.active_run_id === null) &&
+    (typeof value.last_recommendation_at === "string" || value.last_recommendation_at === null) &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isMemoryMaintenanceRunRow(value: unknown): value is MemoryMaintenanceRunRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.run_id === "string"
-    && (typeof value.durable_run_id === "string" || value.durable_run_id === null)
-    && typeof value.workspace_id === "string"
-    && typeof value.trigger_source === "string"
-    && typeof value.status === "string"
-    && (typeof value.provider_id === "string" || value.provider_id === null)
-    && (typeof value.model === "string" || value.model === null)
-    && typeof value.policy_snapshot_json === "string"
-    && typeof value.source_session_count === "number"
-    && typeof value.changed_artifact_count === "number"
-    && (typeof value.summary === "string" || value.summary === null)
-    && (typeof value.error_text === "string" || value.error_text === null)
-    && typeof value.created_at === "string"
-    && (typeof value.started_at === "string" || value.started_at === null)
-    && (typeof value.finished_at === "string" || value.finished_at === null)
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.run_id === "string" &&
+    (typeof value.durable_run_id === "string" || value.durable_run_id === null) &&
+    typeof value.workspace_id === "string" &&
+    typeof value.trigger_source === "string" &&
+    typeof value.status === "string" &&
+    (typeof value.provider_id === "string" || value.provider_id === null) &&
+    (typeof value.model === "string" || value.model === null) &&
+    typeof value.policy_snapshot_json === "string" &&
+    typeof value.source_session_count === "number" &&
+    typeof value.changed_artifact_count === "number" &&
+    (typeof value.summary === "string" || value.summary === null) &&
+    (typeof value.error_text === "string" || value.error_text === null) &&
+    typeof value.created_at === "string" &&
+    (typeof value.started_at === "string" || value.started_at === null) &&
+    (typeof value.finished_at === "string" || value.finished_at === null) &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isMemoryMaintenanceRunSourceRow(value: unknown): value is MemoryMaintenanceRunSourceRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.source_id === "string"
-    && typeof value.run_id === "string"
-    && typeof value.source_kind === "string"
-    && typeof value.source_ref === "string"
-    && (typeof value.modified_at === "string" || value.modified_at === null)
-    && (typeof value.excerpt === "string" || value.excerpt === null)
-    && (typeof value.token_estimate === "number" || value.token_estimate === null)
-    && typeof value.created_at === "string";
+  return (
+    typeof value.source_id === "string" &&
+    typeof value.run_id === "string" &&
+    typeof value.source_kind === "string" &&
+    typeof value.source_ref === "string" &&
+    (typeof value.modified_at === "string" || value.modified_at === null) &&
+    (typeof value.excerpt === "string" || value.excerpt === null) &&
+    (typeof value.token_estimate === "number" || value.token_estimate === null) &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isMemoryMaintenanceChangeRow(value: unknown): value is MemoryMaintenanceChangeRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.change_id === "string"
-    && typeof value.run_id === "string"
-    && typeof value.change_kind === "string"
-    && typeof value.target_kind === "string"
-    && typeof value.target_ref === "string"
-    && (typeof value.before_ref === "string" || value.before_ref === null)
-    && (typeof value.after_ref === "string" || value.after_ref === null)
-    && typeof value.summary === "string"
-    && typeof value.created_at === "string";
+  return (
+    typeof value.change_id === "string" &&
+    typeof value.run_id === "string" &&
+    typeof value.change_kind === "string" &&
+    typeof value.target_kind === "string" &&
+    typeof value.target_ref === "string" &&
+    (typeof value.before_ref === "string" || value.before_ref === null) &&
+    (typeof value.after_ref === "string" || value.after_ref === null) &&
+    typeof value.summary === "string" &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isMemoryMaintenanceRecommendationRow(value: unknown): value is MemoryMaintenanceRecommendationRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.recommendation_id === "string"
-    && typeof value.workspace_id === "string"
-    && typeof value.kind === "string"
-    && typeof value.status === "string"
-    && typeof value.summary === "string"
-    && typeof value.proposed_patch_json === "string"
-    && (typeof value.rationale === "string" || value.rationale === null)
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string"
-    && (typeof value.applied_at === "string" || value.applied_at === null);
+  return (
+    typeof value.recommendation_id === "string" &&
+    typeof value.workspace_id === "string" &&
+    typeof value.kind === "string" &&
+    typeof value.status === "string" &&
+    typeof value.summary === "string" &&
+    typeof value.proposed_patch_json === "string" &&
+    (typeof value.rationale === "string" || value.rationale === null) &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string" &&
+    (typeof value.applied_at === "string" || value.applied_at === null)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

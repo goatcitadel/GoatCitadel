@@ -4,6 +4,11 @@ import { authPlugin } from "./auth.js";
 import { authRoutes } from "../routes/auth.js";
 import type { AuthConfig } from "../config.js";
 
+vi.mock("node:sqlite", () => ({
+  DatabaseSync: class DatabaseSync {},
+  StatementSync: class StatementSync {},
+}));
+
 function defaultAuthConfig(): AuthConfig {
   return {
     mode: "token",

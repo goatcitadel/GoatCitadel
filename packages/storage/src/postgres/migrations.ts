@@ -290,4 +290,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON chat_session_workbench(worktree_status, validation_status, updated_at DESC);
     `,
   },
+  {
+    version: 5,
+    name: "sessions_session_key_unique_index",
+    sql: `
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_key_unique
+        ON sessions(session_key);
+    `,
+  },
 ];

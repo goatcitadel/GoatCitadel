@@ -210,11 +210,13 @@ export class ApprovalInboxRepository {
     receiverId: string,
     tokenId: string,
   ): ApprovalInboxItemRecord | undefined {
-    const row = toApprovalInboxRow(this.getByReceiverAndTokenStmt.get({
-      receiverKind,
-      receiverId,
-      tokenId,
-    }));
+    const row = toApprovalInboxRow(
+      this.getByReceiverAndTokenStmt.get({
+        receiverKind,
+        receiverId,
+        tokenId,
+      }),
+    );
     return row ? mapRow(row) : undefined;
   }
 
@@ -226,12 +228,20 @@ export class ApprovalInboxRepository {
       limit?: number;
     },
   ): ApprovalInboxItemRecord[] {
-    const rows = toApprovalInboxRows((input?.state ? this.listByStateStmt : this.listStmt).all({
-      receiverKind,
-      receiverId,
-      state: input?.state,
-      limit: input?.limit ?? 100,
-    }));
+    const rows = toApprovalInboxRows(
+      input?.state
+        ? this.listByStateStmt.all({
+            receiverKind,
+            receiverId,
+            state: input.state,
+            limit: input.limit ?? 100,
+          })
+        : this.listStmt.all({
+            receiverKind,
+            receiverId,
+            limit: input?.limit ?? 100,
+          }),
+    );
     return rows.map(mapRow);
   }
 
@@ -322,31 +332,31 @@ function isApprovalInboxRow(value: unknown): value is ApprovalInboxRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.inbox_item_id === "string"
-    && typeof value.approval_id === "string"
-    && typeof value.connector_id === "string"
-    && value.receiver_kind === "mcp"
-    && typeof value.receiver_id === "string"
-    && typeof value.token_id === "string"
-    && typeof value.token === "string"
-    && value.action_type === "approval.resolve"
-    && typeof value.state === "string"
-    && typeof value.approval_kind === "string"
-    && typeof value.risk_level === "string"
-    && typeof value.approval_status === "string"
-    && typeof value.preview_json === "string"
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string"
-    && typeof value.expires_at === "string"
-    && (typeof value.resolved_at === "string" || value.resolved_at === null)
-    && (typeof value.resolved_by === "string" || value.resolved_by === null)
-    && (typeof value.last_error === "string" || value.last_error === null)
-    && typeof value.delivery_count === "number"
-    && typeof value.last_delivered_at === "string";
+  return (
+    typeof value.inbox_item_id === "string" &&
+    typeof value.approval_id === "string" &&
+    typeof value.connector_id === "string" &&
+    value.receiver_kind === "mcp" &&
+    typeof value.receiver_id === "string" &&
+    typeof value.token_id === "string" &&
+    typeof value.token === "string" &&
+    value.action_type === "approval.resolve" &&
+    typeof value.state === "string" &&
+    typeof value.approval_kind === "string" &&
+    typeof value.risk_level === "string" &&
+    typeof value.approval_status === "string" &&
+    typeof value.preview_json === "string" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string" &&
+    typeof value.expires_at === "string" &&
+    (typeof value.resolved_at === "string" || value.resolved_at === null) &&
+    (typeof value.resolved_by === "string" || value.resolved_by === null) &&
+    (typeof value.last_error === "string" || value.last_error === null) &&
+    typeof value.delivery_count === "number" &&
+    typeof value.last_delivered_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

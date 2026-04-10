@@ -1750,6 +1750,21 @@ export class ChatProactiveService {
     );
     return rows.map(mapProactiveRunRow);
   }
+
+  findDurableRunIdsForApproval(approvalId: string): string[] {
+    const rows = this.ctx.gatewaySql
+      .prepare(
+        `
+      SELECT DISTINCT linked_durable_run_id AS run_id
+      FROM proactive_runs
+      WHERE approval_id = @approvalId
+        AND linked_durable_run_id IS NOT NULL
+      ORDER BY started_at DESC
+    `,
+      )
+      .all({ approvalId }) as Array<{ run_id: string | null }>;
+    return rows.map((row) => row.run_id?.trim()).filter((value): value is string => Boolean(value));
+  }
 }
 
 function mapProactiveRunRow(row: ProactiveRunRow): ProactiveRunRecord {

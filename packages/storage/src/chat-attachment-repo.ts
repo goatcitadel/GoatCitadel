@@ -100,11 +100,19 @@ export class ChatAttachmentRepository {
   }
 
   public listBySession(sessionId: string, limit = 200, workspaceId?: string): ChatAttachmentRecord[] {
-    const rows = toChatAttachmentRows((workspaceId ? this.listBySessionWorkspaceStmt : this.listBySessionStmt).all({
-      sessionId,
-      workspaceId: workspaceId ? sanitizeWorkspaceId(workspaceId) : undefined,
-      limit: Math.max(1, Math.min(2000, Math.floor(limit))),
-    }));
+    const normalizedLimit = Math.max(1, Math.min(2000, Math.floor(limit)));
+    const rows = toChatAttachmentRows(
+      workspaceId
+        ? this.listBySessionWorkspaceStmt.all({
+            sessionId,
+            workspaceId: sanitizeWorkspaceId(workspaceId),
+            limit: normalizedLimit,
+          })
+        : this.listBySessionStmt.all({
+            sessionId,
+            limit: normalizedLimit,
+          }),
+    );
     return rows.map(mapRow);
   }
 
@@ -189,27 +197,27 @@ function isChatAttachmentRow(value: unknown): value is ChatAttachmentRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.attachment_id === "string"
-    && typeof value.session_id === "string"
-    && typeof value.workspace_id === "string"
-    && (typeof value.project_id === "string" || value.project_id === null)
-    && typeof value.file_name === "string"
-    && typeof value.mime_type === "string"
-    && (typeof value.media_type === "string" || value.media_type === null)
-    && typeof value.size_bytes === "number"
-    && typeof value.sha256 === "string"
-    && typeof value.storage_rel_path === "string"
-    && typeof value.extract_status === "string"
-    && (typeof value.extract_preview === "string" || value.extract_preview === null)
-    && (typeof value.thumbnail_rel_path === "string" || value.thumbnail_rel_path === null)
-    && (typeof value.ocr_text === "string" || value.ocr_text === null)
-    && (typeof value.transcript_text === "string" || value.transcript_text === null)
-    && (typeof value.analysis_status === "string" || value.analysis_status === null)
-    && typeof value.created_at === "string";
+  return (
+    typeof value.attachment_id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.workspace_id === "string" &&
+    (typeof value.project_id === "string" || value.project_id === null) &&
+    typeof value.file_name === "string" &&
+    typeof value.mime_type === "string" &&
+    (typeof value.media_type === "string" || value.media_type === null) &&
+    typeof value.size_bytes === "number" &&
+    typeof value.sha256 === "string" &&
+    typeof value.storage_rel_path === "string" &&
+    typeof value.extract_status === "string" &&
+    (typeof value.extract_preview === "string" || value.extract_preview === null) &&
+    (typeof value.thumbnail_rel_path === "string" || value.thumbnail_rel_path === null) &&
+    (typeof value.ocr_text === "string" || value.ocr_text === null) &&
+    (typeof value.transcript_text === "string" || value.transcript_text === null) &&
+    (typeof value.analysis_status === "string" || value.analysis_status === null) &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

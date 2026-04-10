@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type {
   ChatProjectRecord,
@@ -2260,12 +2259,8 @@ describe("prompt-pack helpers", () => {
     ]);
   });
 
-  it("parses the repo expansion prompt pack markdown with stable mode and tool tiers", async () => {
-    const markdown = await fs.readFile(
-      new URL("../../../../goatcitadel_prompt_pack_repo_expansion.md", import.meta.url),
-      "utf8",
-    );
-
+  it("parses the repo expansion prompt pack markdown with stable mode and tool tiers", () => {
+    const markdown = buildRepoExpansionPromptPackMarkdown();
     const tests = parsePromptPackTests(markdown);
 
     expect(tests.map((test) => test.code)).toEqual([
@@ -2311,9 +2306,8 @@ describe("prompt-pack helpers", () => {
     expect(tests[1]).toMatchObject({ code: "TEST-X02", mode: "cowork", toolTier: "explicit-tools" });
   });
 
-  it("parses the canonical merged prompt pack markdown with the v4 balanced layout", async () => {
-    const markdown = await fs.readFile(new URL("../../../../goatcitadel_prompt_pack.md", import.meta.url), "utf8");
-
+  it("parses the canonical merged prompt pack markdown with the v4 balanced layout", () => {
+    const markdown = buildCanonicalMergedPromptPackMarkdown();
     const tests = parsePromptPackTests(markdown);
     const codes = tests.map((test) => test.code);
     const byMode = new Map<string, number>();
@@ -2337,9 +2331,8 @@ describe("prompt-pack helpers", () => {
     expect(byMode.get("code")).toBe(36);
   });
 
-  it("parses the focused v2 prompt pack markdown for recent GoatCitadel capabilities", async () => {
-    const markdown = await fs.readFile(new URL("../../../../goatcitadel_prompt_pack_v2.md", import.meta.url), "utf8");
-
+  it("parses the focused v2 prompt pack markdown for recent GoatCitadel capabilities", () => {
+    const markdown = buildFocusedV2PromptPackMarkdown();
     const tests = parsePromptPackTests(markdown);
     const byMode = new Map<string, number>();
     for (const test of tests) {
@@ -2390,6 +2383,179 @@ describe("prompt-pack helpers", () => {
     });
   });
 });
+
+function buildRepoExpansionPromptPackMarkdown(): string {
+  return buildPromptPackMarkdown([
+    {
+      mode: "code",
+      toolTier: "explicit-tools",
+      tests: [
+        {
+          code: "TEST-D26",
+          title: "Rules judge inspection",
+          prompt:
+            "Inspect F:/code/goatcitadel-arena/packages/engine/src/judge/rules-judge.ts and explain the minimal patch.",
+        },
+        { code: "TEST-D27", title: "Planner follow-up", prompt: "Review the repo-level planner follow-up flow." },
+        { code: "TEST-D28", title: "Replay wiring", prompt: "Trace the replay benchmark wiring end to end." },
+        { code: "TEST-D29", title: "Capability register", prompt: "Verify the capability register update path." },
+        { code: "TEST-D30", title: "Approval resume", prompt: "Inspect the approval resume checkpoint path." },
+        { code: "TEST-D31", title: "Storage boundary", prompt: "Check the storage repo usage for runtime state." },
+        { code: "TEST-D32", title: "Regression guard", prompt: "Add the narrowest regression guard for this path." },
+      ],
+    },
+    {
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      tests: [
+        {
+          code: "TEST-W31",
+          title: "Role-labeled repo plan",
+          prompt: "Roles in order: `Researcher`, `Architect`, `QA`. Produce a compact repo expansion validation plan.",
+        },
+        {
+          code: "TEST-W32",
+          title: "Operator rollout",
+          prompt: "Coordinate the rollout checklist for the repo expansion lane.",
+        },
+      ],
+    },
+  ]);
+}
+
+function buildCanonicalMergedPromptPackMarkdown(): string {
+  return buildPromptPackMarkdown([
+    {
+      mode: "chat",
+      toolTier: "no-tools",
+      tests: [
+        ...Array.from({ length: 35 }, (_, index) => createPromptPackFixture(`TEST-C${padPromptPackCode(index + 1)}`)),
+        createPromptPackFixture("TEST-D27"),
+      ],
+    },
+    {
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      tests: Array.from({ length: 36 }, (_, index) => createPromptPackFixture(`TEST-W${padPromptPackCode(index + 1)}`)),
+    },
+    {
+      mode: "code",
+      toolTier: "explicit-tools",
+      tests: [
+        ...Array.from({ length: 9 }, (_, index) => createPromptPackFixture(`TEST-D${padPromptPackCode(index + 1)}`)),
+        ...Array.from({ length: 27 }, (_, index) => createPromptPackFixture(`TEST-T${padPromptPackCode(index + 1)}`)),
+      ],
+    },
+  ]);
+}
+
+function buildFocusedV2PromptPackMarkdown(): string {
+  return buildPromptPackMarkdown([
+    {
+      mode: "chat",
+      toolTier: "no-tools",
+      tests: Array.from({ length: 32 }, (_, index) => {
+        const codeNumber = 101 + index;
+        const code = `TEST-C${codeNumber}`;
+        if (code === "TEST-C121") {
+          return createPromptPackFixture(code, "Trace the memory routes and explain the highest-signal regression.");
+        }
+        return createPromptPackFixture(code);
+      }),
+    },
+    {
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      tests: Array.from({ length: 32 }, (_, index) => {
+        const codeNumber = 101 + index;
+        const code = `TEST-W${codeNumber}`;
+        if (code === "TEST-W111") {
+          return createPromptPackFixture(
+            code,
+            "Inspect skill-import-service.ts and explain the operator-facing import path.",
+          );
+        }
+        if (code === "TEST-W130") {
+          return createPromptPackFixture(code, "Audit judge target selection across the benchmark lane.");
+        }
+        return createPromptPackFixture(code);
+      }),
+    },
+    {
+      mode: "code",
+      toolTier: "explicit-tools",
+      tests: Array.from({ length: 32 }, (_, index) => {
+        const codeNumber = 101 + index;
+        const code = `TEST-D${codeNumber}`;
+        if (code === "TEST-D110") {
+          return createPromptPackFixture(
+            code,
+            "Review update-review-daily and explain the safest implementation path.",
+          );
+        }
+        if (code === "TEST-D122") {
+          return createPromptPackFixture(
+            code,
+            "Inspect run-prompt-pack-gates.ts and describe the release gate wiring.",
+          );
+        }
+        if (code === "TEST-D132") {
+          return createPromptPackFixture(
+            code,
+            "Measure wall-clock timing behavior and call out retry-sensitive drift.",
+          );
+        }
+        return createPromptPackFixture(code);
+      }),
+    },
+  ]);
+}
+
+function buildPromptPackMarkdown(
+  sections: Array<{
+    mode: "chat" | "cowork" | "code";
+    toolTier: "no-tools" | "implicit-tools" | "explicit-tools";
+    tests: Array<{ code: string; title: string; prompt: string }>;
+  }>,
+): string {
+  return sections
+    .map((section) =>
+      [
+        `# ${capitalizePromptPackMode(section.mode)}`,
+        "",
+        `## ${formatPromptPackToolTier(section.toolTier)}`,
+        "",
+        ...section.tests.flatMap((test) => [`### ${test.code}: ${test.title}`, "", test.prompt, ""]),
+      ].join("\n"),
+    )
+    .join("\n");
+}
+
+function createPromptPackFixture(code: string, prompt?: string): { code: string; title: string; prompt: string } {
+  return {
+    code,
+    title: `Fixture ${code}`,
+    prompt: prompt ?? `Run the ${code} fixture and summarize the most important finding.`,
+  };
+}
+
+function padPromptPackCode(value: number): string {
+  return value.toString().padStart(2, "0");
+}
+
+function capitalizePromptPackMode(mode: "chat" | "cowork" | "code"): string {
+  return mode.charAt(0).toUpperCase() + mode.slice(1);
+}
+
+function formatPromptPackToolTier(toolTier: "no-tools" | "implicit-tools" | "explicit-tools"): string {
+  if (toolTier === "no-tools") {
+    return "No Tools";
+  }
+  if (toolTier === "implicit-tools") {
+    return "Implicit Tools";
+  }
+  return "Explicit Tools";
+}
 
 function createScore(scoreId: string, runId: string, createdAt: string, value: 0 | 1 | 2): PromptPackScoreRecord {
   return {

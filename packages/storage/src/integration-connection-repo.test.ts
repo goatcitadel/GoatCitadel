@@ -61,6 +61,7 @@ describe("IntegrationConnectionRepository", () => {
     const listed = repo.list("channel");
     assert.equal(listed.length, 1);
     assert.equal(listed[0]?.connectionId, created.connectionId);
+    assert.equal(repo.list(undefined, 1000).length, 1);
 
     const deleted = repo.delete(created.connectionId);
     assert.equal(deleted, true);

@@ -85,24 +85,30 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
         })),
         listSkills: createSkills,
         resolveSkillActivation: vi.fn(() => ({
-          suppressed: [{
-            skill: "Gmail Helper",
-            state: "disabled" as const,
-            confidence: 0.92,
-            reason: "skill_disabled",
-          }],
+          suppressed: [
+            {
+              skill: "Gmail Helper",
+              state: "disabled" as const,
+              confidence: 0.92,
+              reason: "skill_disabled",
+            },
+          ],
         })),
-        listSkillSources: vi.fn(async (): Promise<SkillSourceListResponse> => ({
-          generatedAt: new Date().toISOString(),
-          providers: [],
-          items: [],
-        })),
-        lookupSkillSources: vi.fn(async (): Promise<SkillSourceLookupResponse> => ({
-          query: "gmail helper",
-          generatedAt: new Date().toISOString(),
-          providers: [],
-          items: [],
-        })),
+        listSkillSources: vi.fn(
+          async (): Promise<SkillSourceListResponse> => ({
+            generatedAt: new Date().toISOString(),
+            providers: [],
+            items: [],
+          }),
+        ),
+        lookupSkillSources: vi.fn(
+          async (): Promise<SkillSourceLookupResponse> => ({
+            query: "gmail helper",
+            generatedAt: new Date().toISOString(),
+            providers: [],
+            items: [],
+          }),
+        ),
         listMcpTemplates: vi.fn((): Array<McpServerTemplateRecord & { installed: boolean }> => []),
         listMcpTemplateDiscovery: vi.fn((): McpTemplateDiscoveryResult[] => []),
       },
@@ -133,56 +139,68 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
         })),
         listSkills: vi.fn(() => []),
         resolveSkillActivation: vi.fn(() => ({ suppressed: [] })),
-        listSkillSources: vi.fn(async (): Promise<SkillSourceListResponse> => ({
-          generatedAt: new Date().toISOString(),
-          providers: [],
-          items: [{
-            sourceProvider: "github",
-            sourceUrl: "https://github.com/example/github-issues-skill",
-            repositoryUrl: "https://github.com/example/github-issues-skill",
-            name: "GitHub Issues Skill",
-            description: "Adds GitHub issue search and triage workflows.",
-            tags: ["github", "issues", "repo"],
-            canonicalKey: "github:github-issues-skill",
-            alternateProviders: [],
-            qualityScore: 0.8,
-            freshnessScore: 0.8,
-            trustScore: 0.7,
-            combinedScore: 8.2,
-          }],
-        })),
-        lookupSkillSources: vi.fn(async (): Promise<SkillSourceLookupResponse> => ({
-          query: "https://www.example.com/skill.md",
-          generatedAt: new Date().toISOString(),
-          providers: [],
-          items: [],
-        })),
-        listMcpTemplates: vi.fn((): Array<McpServerTemplateRecord & { installed: boolean }> => [{
-          templateId: "github-http",
-          label: "GitHub MCP",
-          description: "Connect GitHub repos, issues, and PR workflows.",
-          transport: "http",
-          url: "https://example.invalid/mcp",
-          authType: "token",
-          category: "development",
-          trustTier: "restricted",
-          costTier: "free",
-          policy: {
-            requireFirstToolApproval: false,
-            redactionMode: "basic",
-            allowedToolPatterns: [],
-            blockedToolPatterns: [],
+        listSkillSources: vi.fn(
+          async (): Promise<SkillSourceListResponse> => ({
+            generatedAt: new Date().toISOString(),
+            providers: [],
+            items: [
+              {
+                sourceProvider: "github",
+                sourceUrl: "https://github.com/example/github-issues-skill",
+                repositoryUrl: "https://github.com/example/github-issues-skill",
+                name: "GitHub Issues Skill",
+                description: "Adds GitHub issue search and triage workflows.",
+                tags: ["github", "issues", "repo"],
+                canonicalKey: "github:github-issues-skill",
+                alternateProviders: [],
+                qualityScore: 0.8,
+                freshnessScore: 0.8,
+                trustScore: 0.7,
+                combinedScore: 8.2,
+              },
+            ],
+          }),
+        ),
+        lookupSkillSources: vi.fn(
+          async (): Promise<SkillSourceLookupResponse> => ({
+            query: "https://www.example.com/skill.md",
+            generatedAt: new Date().toISOString(),
+            providers: [],
+            items: [],
+          }),
+        ),
+        listMcpTemplates: vi.fn(
+          (): Array<McpServerTemplateRecord & { installed: boolean }> => [
+            {
+              templateId: "github-http",
+              label: "GitHub MCP",
+              description: "Connect GitHub repos, issues, and PR workflows.",
+              transport: "http",
+              url: "https://example.invalid/mcp",
+              authType: "token",
+              category: "development",
+              trustTier: "restricted",
+              costTier: "free",
+              policy: {
+                requireFirstToolApproval: false,
+                redactionMode: "basic",
+                allowedToolPatterns: [],
+                blockedToolPatterns: [],
+              },
+              enabledByDefault: false,
+              installed: false,
+            },
+          ],
+        ),
+        listMcpTemplateDiscovery: vi.fn((): McpTemplateDiscoveryResult[] => [
+          {
+            templateId: "github-http",
+            label: "GitHub MCP",
+            installed: false,
+            readiness: "needs_auth",
+            dependencyChecks: [],
           },
-          enabledByDefault: false,
-          installed: false,
-        }]),
-        listMcpTemplateDiscovery: vi.fn((): McpTemplateDiscoveryResult[] => [{
-          templateId: "github-http",
-          label: "GitHub MCP",
-          installed: false,
-          readiness: "needs_auth",
-          dependencyChecks: [],
-        }]),
+        ]),
       },
     });
 
@@ -208,17 +226,21 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
         })),
         listSkills: createSkills,
         resolveSkillActivation: vi.fn(() => ({ suppressed: [] })),
-        listSkillSources: vi.fn(async (): Promise<SkillSourceListResponse> => ({
-          generatedAt: new Date().toISOString(),
-          providers: [],
-          items: [],
-        })),
-        lookupSkillSources: vi.fn(async (): Promise<SkillSourceLookupResponse> => ({
-          query: "short story lighthouse",
-          generatedAt: new Date().toISOString(),
-          providers: [],
-          items: [],
-        })),
+        listSkillSources: vi.fn(
+          async (): Promise<SkillSourceListResponse> => ({
+            generatedAt: new Date().toISOString(),
+            providers: [],
+            items: [],
+          }),
+        ),
+        lookupSkillSources: vi.fn(
+          async (): Promise<SkillSourceLookupResponse> => ({
+            query: "short story lighthouse",
+            generatedAt: new Date().toISOString(),
+            providers: [],
+            items: [],
+          }),
+        ),
         listMcpTemplates: vi.fn((): Array<McpServerTemplateRecord & { installed: boolean }> => []),
         listMcpTemplateDiscovery: vi.fn((): McpTemplateDiscoveryResult[] => []),
       },
@@ -228,7 +250,7 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
   });
 
   it("logs discovery failures without breaking the chat turn", async () => {
-    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     const suggestions = await scoutCapabilityUpgradeSuggestions({
       content: "Connect GitHub issues and repository metadata to the chat",
@@ -261,17 +283,10 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
     });
 
     expect(suggestions).toEqual([]);
-    expect(consoleWarn).toHaveBeenCalledTimes(2);
-    expect(consoleWarn).toHaveBeenNthCalledWith(
-      1,
-      "[chat-capability-scout] skill source discovery failed",
-      expect.any(Error),
-    );
-    expect(consoleWarn).toHaveBeenNthCalledWith(
-      2,
-      "[chat-capability-scout] mcp template discovery failed",
-      expect.any(Error),
-    );
+    const writes = stderrWrite.mock.calls.map(([chunk]) => String(chunk));
+    expect(writes.filter((line) => line.includes('"component":"core:chat-capability-scout"'))).toHaveLength(2);
+    expect(writes.some((line) => line.includes('"msg":"skill source discovery failed"'))).toBe(true);
+    expect(writes.some((line) => line.includes('"msg":"mcp template discovery failed"'))).toBe(true);
   });
 
   it("prefers install-and-enable for direct hosted skill bundle URLs", async () => {
@@ -292,31 +307,37 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
         })),
         listSkills: vi.fn(() => []),
         resolveSkillActivation: vi.fn(() => ({ suppressed: [] })),
-        listSkillSources: vi.fn(async (): Promise<SkillSourceListResponse> => ({
-          generatedAt: new Date().toISOString(),
-          providers: [],
-          items: [],
-        })),
-        lookupSkillSources: vi.fn(async (): Promise<SkillSourceLookupResponse> => ({
-          query: "https://www.moltbook.com/skill.md",
-          generatedAt: new Date().toISOString(),
-          providers: [],
-          items: [{
-            sourceProvider: "external",
-            sourceUrl: "https://www.moltbook.com/skill.md",
-            upstreamUrl: "https://www.moltbook.com/skill.md",
-            name: "Moltbook",
-            description: "Hosted skill bundle for joining Moltbook.",
-            tags: ["moltbook", "skill", "hosted"],
-            canonicalKey: "www.moltbook.com/skill.md",
-            alternateProviders: [],
-            qualityScore: 0.8,
-            freshnessScore: 0.8,
-            trustScore: 0.7,
-            combinedScore: 8.1,
-            installability: "direct",
-          }],
-        })),
+        listSkillSources: vi.fn(
+          async (): Promise<SkillSourceListResponse> => ({
+            generatedAt: new Date().toISOString(),
+            providers: [],
+            items: [],
+          }),
+        ),
+        lookupSkillSources: vi.fn(
+          async (): Promise<SkillSourceLookupResponse> => ({
+            query: "https://www.moltbook.com/skill.md",
+            generatedAt: new Date().toISOString(),
+            providers: [],
+            items: [
+              {
+                sourceProvider: "external",
+                sourceUrl: "https://www.moltbook.com/skill.md",
+                upstreamUrl: "https://www.moltbook.com/skill.md",
+                name: "Moltbook",
+                description: "Hosted skill bundle for joining Moltbook.",
+                tags: ["moltbook", "skill", "hosted"],
+                canonicalKey: "www.moltbook.com/skill.md",
+                alternateProviders: [],
+                qualityScore: 0.8,
+                freshnessScore: 0.8,
+                trustScore: 0.7,
+                combinedScore: 8.1,
+                installability: "direct",
+              },
+            ],
+          }),
+        ),
         listMcpTemplates: vi.fn((): Array<McpServerTemplateRecord & { installed: boolean }> => []),
         listMcpTemplateDiscovery: vi.fn((): McpTemplateDiscoveryResult[] => []),
       },

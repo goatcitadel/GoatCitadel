@@ -28,6 +28,8 @@ export class CandidateSkillVersionRepository {
   private readonly upsertStmt;
   private readonly getStmt;
   private readonly listStmt;
+  private readonly listByCandidateIdStmt;
+  private readonly updateLifecycleStateStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
@@ -59,6 +61,18 @@ export class CandidateSkillVersionRepository {
       SELECT * FROM candidate_skill_versions
       ORDER BY updated_at DESC, version_id DESC
       LIMIT @limit
+    `);
+    this.listByCandidateIdStmt = db.prepare(`
+      SELECT * FROM candidate_skill_versions
+      WHERE candidate_id = @candidateId
+      ORDER BY updated_at DESC, version_id DESC
+      LIMIT @limit
+    `);
+    this.updateLifecycleStateStmt = db.prepare(`
+      UPDATE candidate_skill_versions
+      SET lifecycle_state = @lifecycleState,
+          updated_at = @updatedAt
+      WHERE version_id = @versionId
     `);
   }
 
@@ -101,6 +115,33 @@ export class CandidateSkillVersionRepository {
   public list(limit = 100): CandidateSkillVersionRecord[] {
     return (this.listStmt.all({ limit }) as unknown as CandidateSkillVersionRow[]).map(mapCandidateSkillVersionRow);
   }
+
+  public listByCandidateId(candidateId: string, limit = 100): CandidateSkillVersionRecord[] {
+    return (
+      this.listByCandidateIdStmt.all({
+        candidateId,
+        limit,
+      }) as unknown as CandidateSkillVersionRow[]
+    ).map(mapCandidateSkillVersionRow);
+  }
+
+  public findLatestByCandidateId(candidateId: string): CandidateSkillVersionRecord | undefined {
+    return this.listByCandidateId(candidateId, 1)[0];
+  }
+
+  public updateLifecycleState(
+    versionId: string,
+    lifecycleState: CandidateSkillVersionRecord["lifecycleState"],
+    updatedAt = new Date().toISOString(),
+  ): CandidateSkillVersionRecord {
+    this.get(versionId);
+    this.updateLifecycleStateStmt.run({
+      versionId,
+      lifecycleState,
+      updatedAt,
+    });
+    return this.get(versionId);
+  }
 }
 
 function mapCandidateSkillVersionRow(row: CandidateSkillVersionRow): CandidateSkillVersionRecord {
@@ -130,5 +171,3 @@ function mapCandidateSkillVersionRow(row: CandidateSkillVersionRow): CandidateSk
     lastSuccessfulExecutionAt: row.last_successful_execution_at ?? undefined,
   } as CandidateSkillVersionRecord;
 }
-
-

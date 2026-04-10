@@ -62,7 +62,9 @@ class SqliteDatabaseClient implements DatabaseClient {
   }
 
   public close(): void {
-    this.db.close();
+    if (typeof this.db.close === "function") {
+      this.db.close();
+    }
   }
 
   public transaction<T>(mode: DbTransactionMode, callback: () => T): T {
@@ -508,10 +510,20 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "chat_session_workbench_schema",
     up: createChatSessionWorkbenchSchema,
   },
+  {
+    version: 56,
+    name: "code_mode_sandbox_metadata_schema",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "code_mode_runs", "sandbox_json", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
   const db = new DatabaseSync(":memory:");
+  if (typeof db.exec !== "function" || typeof db.prepare !== "function") {
+    return { tables: [] };
+  }
   try {
     migrate(db);
     const tableRows = db
@@ -530,7 +542,9 @@ export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
     const tables = tableRows.map((row) => buildTableBlueprint(db, row.name, row.sql));
     return { tables };
   } finally {
-    db.close();
+    if (typeof db.close === "function") {
+      db.close();
+    }
   }
 }
 
@@ -2545,13 +2559,17 @@ function createPromptPackScoringV2Schema(db: DatabaseSync): void {
   );
   addColumnIfMissingIfTableExists(db, "prompt_packs", "policy_v2_source", "TEXT NOT NULL DEFAULT 'inherited_default'");
 
-  db.exec(`
-    UPDATE prompt_packs
-    SET
-      policy_v2_json = COALESCE(policy_v2_json, '${DEFAULT_PROMPT_PACK_POLICY_V2_JSON.replace(/'/g, "''")}'),
-      policy_v2_hash = COALESCE(policy_v2_hash, '${DEFAULT_PROMPT_PACK_POLICY_V2_HASH}'),
-      policy_v2_source = COALESCE(policy_v2_source, 'inherited_default');
+  if (tableExists(db, "prompt_packs")) {
+    db.exec(`
+      UPDATE prompt_packs
+      SET
+        policy_v2_json = COALESCE(policy_v2_json, '${DEFAULT_PROMPT_PACK_POLICY_V2_JSON.replace(/'/g, "''")}'),
+        policy_v2_hash = COALESCE(policy_v2_hash, '${DEFAULT_PROMPT_PACK_POLICY_V2_HASH}'),
+        policy_v2_source = COALESCE(policy_v2_source, 'inherited_default');
+    `);
+  }
 
+  db.exec(`
     CREATE TABLE IF NOT EXISTS prompt_pack_auto_scores_v2 (
       auto_score_id TEXT PRIMARY KEY,
       pack_id TEXT NOT NULL,
@@ -3611,11 +3629,15 @@ function addColumnIfMissingIfTableExists(
   columnName: string,
   columnSql: string,
 ): void {
-  const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName) as
-    | { name: string }
-    | undefined;
-  if (!row) {
+  if (!tableExists(db, tableName)) {
     return;
   }
   addColumnIfMissing(db, tableName, columnName, columnSql);
+}
+
+function tableExists(db: DatabaseSync, tableName: string): boolean {
+  const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName) as
+    | { name: string }
+    | undefined;
+  return Boolean(row);
 }

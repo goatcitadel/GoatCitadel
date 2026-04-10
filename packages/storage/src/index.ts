@@ -14,6 +14,7 @@ import { ApprovalEventRepository } from "./approval-event-repo.js";
 import { PendingApprovalActionRepository } from "./pending-approval-action-repo.js";
 import { RemoteActionTokenRepository } from "./remote-action-token-repo.js";
 import { ApprovalInboxRepository } from "./approval-inbox-repo.js";
+import { ApprovalWaitRunRepository } from "./approval-wait-run-repo.js";
 import { OrchestrationRepository } from "./orchestration-repo.js";
 import { TaskRepository } from "./task-repo.js";
 import { TaskActivityRepository } from "./task-activity-repo.js";
@@ -75,6 +76,8 @@ import { SkillLifecycleRepository } from "./skill-lifecycle-repo.js";
 import { CandidateSkillVersionRepository } from "./candidate-skill-version-repo.js";
 import { CapabilityProposalEventRepository, CapabilityProposalRepository } from "./capability-proposal-repo.js";
 import { CodeModeRunRepository } from "./code-mode-run-repo.js";
+import { DurableRunEventRepository } from "./durable-run-event-repo.js";
+import { ChatReflectionAttemptRepository } from "./chat-reflection-attempt-repo.js";
 
 export interface StorageOptions extends Partial<SqliteOptions> {
   transcriptsDir: string;
@@ -102,6 +105,7 @@ export class Storage {
   public readonly pendingApprovalActions: PendingApprovalActionRepository;
   public readonly remoteActionTokens: RemoteActionTokenRepository;
   public readonly approvalInbox: ApprovalInboxRepository;
+  public readonly approvalWaitRuns: ApprovalWaitRunRepository;
   public readonly costLedger: CostLedgerRepository;
   public readonly orchestration: OrchestrationRepository;
   public readonly tasks: TaskRepository;
@@ -165,6 +169,8 @@ export class Storage {
   public readonly capabilityProposals: CapabilityProposalRepository;
   public readonly capabilityProposalEvents: CapabilityProposalEventRepository;
   public readonly codeModeRuns: CodeModeRunRepository;
+  public readonly durableRunEvents: DurableRunEventRepository;
+  public readonly chatReflectionAttempts: ChatReflectionAttemptRepository;
 
   public constructor(options: StorageOptions) {
     this.db =
@@ -186,6 +192,7 @@ export class Storage {
     this.pendingApprovalActions = new PendingApprovalActionRepository(this.db);
     this.remoteActionTokens = new RemoteActionTokenRepository(this.db);
     this.approvalInbox = new ApprovalInboxRepository(this.db);
+    this.approvalWaitRuns = new ApprovalWaitRunRepository(this.db);
     this.costLedger = new CostLedgerRepository(this.db);
     this.orchestration = new OrchestrationRepository(this.db);
     this.tasks = new TaskRepository(this.db);
@@ -249,6 +256,8 @@ export class Storage {
     this.capabilityProposals = new CapabilityProposalRepository(this.db);
     this.capabilityProposalEvents = new CapabilityProposalEventRepository(this.db);
     this.codeModeRuns = new CodeModeRunRepository(this.db);
+    this.durableRunEvents = new DurableRunEventRepository(this.db);
+    this.chatReflectionAttempts = new ChatReflectionAttemptRepository(this.db);
   }
 
   public close(): void {
@@ -523,4 +532,6 @@ export * from "./remote-action-token-repo.js";
 export * from "./approval-inbox-repo.js";
 export * from "./transcript-outbox-repo.js";
 export * from "./realtime-stream-lease-repo.js";
+export * from "./durable-run-event-repo.js";
+export * from "./chat-reflection-attempt-repo.js";
 export * from "./postgres/index.js";

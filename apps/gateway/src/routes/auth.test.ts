@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import rateLimit from "@fastify/rate-limit";
 import { authPlugin } from "../plugins/auth.js";
 import { authRoutes } from "./auth.js";
 import type { AuthConfig } from "../config.js";
+
+vi.mock("node:sqlite", () => ({
+  DatabaseSync: class DatabaseSync {},
+  StatementSync: class StatementSync {},
+}));
 
 function baseAuthConfig(mode: AuthConfig["mode"]): AuthConfig {
   return {
@@ -69,7 +74,7 @@ async function buildApp(
       deviceTokenExpiresAt: "2026-04-09T11:55:00.000Z",
       message: "Access approved.",
     }),
-    listDeviceAccessGrants: () => ([
+    listDeviceAccessGrants: () => [
       {
         grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
         requestId: "request-device-1",
@@ -84,7 +89,7 @@ async function buildApp(
         revokedAt: undefined,
         metadata: {},
       },
-    ]),
+    ],
     revokeDeviceAccessGrant: async (grantId: string) => ({
       grantId,
       requestId: "request-device-1",
@@ -99,7 +104,10 @@ async function buildApp(
       revokedAt: "2026-03-10T12:10:00.000Z",
       metadata: {},
     }),
-    exchangeCompanionSessionFromDeviceGrant: async (grantId: string, input: { clientName?: string; appVersion?: string }) => ({
+    exchangeCompanionSessionFromDeviceGrant: async (
+      grantId: string,
+      input: { clientName?: string; appVersion?: string },
+    ) => ({
       contractId: "companion.android.v1",
       sessionId: COMPANION_SESSION_ID,
       grantId,
@@ -208,7 +216,7 @@ async function buildApp(
         },
       },
     }),
-    listCompanionAuditEvents: async () => ([
+    listCompanionAuditEvents: async () => [
       {
         timestamp: "2026-03-10T12:20:00.000Z",
         event: "auth.companion_request.accepted",
@@ -220,22 +228,24 @@ async function buildApp(
         nonce: "nonce-1",
         requestHash: "hash-1",
       },
-    ]),
-    validateDeviceAccessToken: (token: string) => token === "device-bearer"
-      ? {
-          actorId: "device:ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
-          deviceId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
-          grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
-        }
-      : undefined,
-    validateCompanionAccessToken: (token: string) => token === "companion-bearer"
-      ? {
-          actorId: `companion:${COMPANION_SESSION_ID}`,
-          deviceId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
-          grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
-          sessionId: COMPANION_SESSION_ID,
-        }
-      : undefined,
+    ],
+    validateDeviceAccessToken: (token: string) =>
+      token === "device-bearer"
+        ? {
+            actorId: "device:ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+            deviceId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+            grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+          }
+        : undefined,
+    validateCompanionAccessToken: (token: string) =>
+      token === "companion-bearer"
+        ? {
+            actorId: `companion:${COMPANION_SESSION_ID}`,
+            deviceId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+            grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+            sessionId: COMPANION_SESSION_ID,
+          }
+        : undefined,
     verifyCompanionRequestSignature: () => undefined,
   } as never);
   app.decorate("gatewayConfig", {
@@ -253,9 +263,10 @@ async function buildApp(
     });
     app.addHook("onRoute", (routeOptions) => {
       const currentConfig = (routeOptions.config ?? {}) as Record<string, unknown>;
-      const currentRateLimit = currentConfig.rateLimit && typeof currentConfig.rateLimit === "object"
-        ? currentConfig.rateLimit as Record<string, unknown>
-        : {};
+      const currentRateLimit =
+        currentConfig.rateLimit && typeof currentConfig.rateLimit === "object"
+          ? (currentConfig.rateLimit as Record<string, unknown>)
+          : {};
       routeOptions.config = {
         ...currentConfig,
         rateLimit: {
@@ -451,7 +462,8 @@ describe("auth routes", () => {
         Authorization: "Bearer device-bearer",
       },
       payload: {
-        signingPublicKeyPem: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA7v0fakefakefakefakefakefakefakefakefak=\n-----END PUBLIC KEY-----",
+        signingPublicKeyPem:
+          "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA7v0fakefakefakefakefakefakefakefakefak=\n-----END PUBLIC KEY-----",
         clientName: "Android Companion",
         appVersion: "0.1.0",
       },

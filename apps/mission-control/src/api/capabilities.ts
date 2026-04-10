@@ -1,7 +1,10 @@
 import type {
+  CandidateLifecycleActionResult,
+  CandidateSkillDetailRecord,
   CapabilityCatalogEntry,
   CapabilityCatalogScope,
   CapabilityCatalogSnapshotRecord,
+  CapabilityProposalDetailRecord,
   CapabilityProposalRecord,
   CodeModeRunRecord,
   CodeModeRunRequest,
@@ -33,6 +36,44 @@ export async function createCapabilityProposal(input: {
   return request("/api/v1/capabilities/proposals", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export async function fetchCapabilityProposal(proposalId: string): Promise<CapabilityProposalDetailRecord> {
+  return request(`/api/v1/capabilities/proposals/${encodeURIComponent(proposalId)}`);
+}
+
+export async function fetchCapabilityCandidate(candidateId: string): Promise<CandidateSkillDetailRecord> {
+  return request(`/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}`);
+}
+
+export async function promoteCapabilityCandidate(
+  candidateId: string,
+  versionId?: string,
+): Promise<CandidateLifecycleActionResult> {
+  return request(`/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/promote`, {
+    method: "POST",
+    body: JSON.stringify(versionId ? { versionId } : {}),
+  });
+}
+
+export async function revokeCapabilityCandidate(
+  candidateId: string,
+  versionId?: string,
+): Promise<CandidateLifecycleActionResult> {
+  return request(`/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/revoke`, {
+    method: "POST",
+    body: JSON.stringify(versionId ? { versionId } : {}),
+  });
+}
+
+export async function rollbackCapabilityCandidate(
+  candidateId: string,
+  targetVersionId: string,
+): Promise<CandidateLifecycleActionResult> {
+  return request(`/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/rollback`, {
+    method: "POST",
+    body: JSON.stringify({ targetVersionId }),
   });
 }
 

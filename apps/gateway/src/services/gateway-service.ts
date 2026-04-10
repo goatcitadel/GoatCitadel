@@ -387,6 +387,7 @@ import { getRequestAttribution } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
 import { AssemblyService } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
+import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
 import { scoutCapabilityUpgradeSuggestions } from "./chat-capability-scout.js";
 import { classifyCapabilityGapFromTrace } from "./capability-gap-classifier.js";
 import {
@@ -499,6 +500,12 @@ import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import * as chatTurnEntryService from "./chat-turn-entry-service.js";
+import {
+  ChatTurnExecutionRegistry,
+  type ActiveChatTurnExecution,
+  type ActiveChatTurnStreamExecution,
+  ChatTurnWriteConflictError,
+} from "./chat-turn-execution-registry.js";
 import { buildDelegatedSessionToolGrantCopies } from "./delegated-session-tool-grants.js";
 import { resolveProjectRootForToolContext, resolveToolRequestPaths } from "./tool-path-resolution.js";
 import type { ServiceContext } from "./service-context.js";
@@ -1147,12 +1154,6 @@ export interface ResolvedRuntimeGuidance {
   truncated: boolean;
 }
 
-class ChatTurnWriteConflictError extends ConflictError {
-  public constructor(message: string) {
-    super({ code: "WRITE_CONFLICT", message });
-  }
-}
-
 export class ChatTurnCancelledError extends GoatError {
   readonly code = "TURN_CANCELLED" as const;
   readonly httpStatus = 499;
@@ -1180,23 +1181,6 @@ export function isChatTurnCancelledError(error: unknown): boolean {
   const name = error.name.toLowerCase();
   const message = error.message.toLowerCase();
   return name.includes("cancel") || message.includes("chat turn cancelled");
-}
-
-interface ActiveChatTurnExecution {
-  sessionId: string;
-  turnId: string;
-  operation: string;
-  startedAt: string;
-  controller: AbortController;
-}
-
-interface ActiveChatTurnStreamExecution {
-  sessionId: string;
-  turnId: string;
-  runId?: string;
-  startedAt: string;
-  nextSequence: number;
-  completed: boolean;
 }
 
 export type PersistableChatStreamChunk = ChatStreamChunkDraft extends infer T
@@ -1378,6 +1362,7 @@ export class GatewayService {
   private readonly chatProjectService: ChatProjectService;
   /** @internal */ public readonly durableRunService: DurableRunService;
   /** @internal */ public readonly hooksService: HooksService;
+  /** @internal */ public readonly approvalWaitRunService: ApprovalWaitRunService;
   private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
   private readonly promptPackService: PromptPackService;
   /** @internal */ public readonly chatProactiveService: ChatProactiveService;
@@ -1387,13 +1372,11 @@ export class GatewayService {
   private readonly backupRetentionService: BackupRetentionService;
   private readonly databaseCutoverService: DatabaseCutoverService;
   private readonly mediaVoiceService: MediaVoiceService;
+  /** @internal */ public readonly chatTurnExecutionRegistry = new ChatTurnExecutionRegistry();
   private readonly realtime = new EventEmitter();
   /** @internal */ public readonly backgroundTasks = new Set<Promise<void>>();
   private readonly warnedOutsideRootPathFingerprints = new Set<string>();
   private readonly chatMessageProjectionBackfillAttempted = new Set<string>();
-  /** @internal */ public readonly activeChatTurnWrites = new Map<string, string>();
-  /** @internal */ public readonly activeChatTurns = new Map<string, ActiveChatTurnExecution>();
-  private readonly activeChatTurnStreams = new Map<string, ActiveChatTurnStreamExecution>();
   /** @internal */ public readonly recentChannelSetupTests = new Map<string, ChannelSetupRecentTestCacheEntry>();
   private lastChatStreamPurgeAt = 0;
   /** @internal */ public readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
@@ -1606,6 +1589,13 @@ export class GatewayService {
     this.hooksService = new HooksService(serviceCtx, {
       createDurableRun: (input) => this.durableRunService.createDurableRun(input),
       requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
+    });
+    this.approvalWaitRunService = new ApprovalWaitRunService(serviceCtx, {
+      createDurableRun: (input) => this.createDurableRun(input),
+      getDurableRun: (runId) => this.getDurableRun(runId),
+      wakeDurableRun: (runId, event) => this.wakeDurableRun(runId, event),
+      requestRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
+      getRequestAttribution,
     });
     this.chatLearnedMemoryService = new ChatLearnedMemoryService(serviceCtx);
     this.promptPackService = new PromptPackService(serviceCtx, {
@@ -2132,7 +2122,7 @@ export class GatewayService {
       if (approval.linkage?.proactiveRunId) {
         linked.proactiveRunIds.add(approval.linkage.proactiveRunId);
       }
-      runId ??= approval.linkage?.durableRunId ?? this.findApprovalWaitDurableRunId(approvalId);
+      runId ??= approval.linkage?.durableRunId ?? this.storage.approvalWaitRuns.getRunId(approvalId);
     }
 
     let durableRun: DurableRunRecord | undefined;
@@ -2267,7 +2257,7 @@ export class GatewayService {
         .map((candidate) => candidate.linkedDurableRunId)
         .find((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0) ??
       task?.proactiveContext?.durableRunId;
-    const approvalWaitDurableRunId = approvalId ? this.findApprovalWaitDurableRunId(approvalId) : undefined;
+    const approvalWaitDurableRunId = approvalId ? this.storage.approvalWaitRuns.getRunId(approvalId) : undefined;
     const proactiveDurableRun = proactiveDurableRunId
       ? durableRun?.runId === proactiveDurableRunId
         ? durableRun
@@ -3025,27 +3015,19 @@ export class GatewayService {
     turnId: string,
     operation: string,
   ): AbortController {
-    const controller = new AbortController();
-    this.activeChatTurns.set(turnId, {
-      sessionId,
-      turnId,
-      operation,
-      startedAt: new Date().toISOString(),
-      controller,
-    });
-    return controller;
+    return this.chatTurnExecutionRegistry.beginActiveExecution(sessionId, turnId, operation);
   }
 
   /** @internal */ public endActiveChatTurnExecution(turnId: string, controller: AbortController): void {
-    const active = this.activeChatTurns.get(turnId);
-    if (!active || active.controller !== controller) {
-      return;
-    }
-    this.activeChatTurns.delete(turnId);
+    this.chatTurnExecutionRegistry.endActiveExecution(turnId, controller);
   }
 
   private isChatTurnCancellationRequested(turnId: string): boolean {
-    return this.activeChatTurns.get(turnId)?.controller.signal.aborted ?? false;
+    return this.chatTurnExecutionRegistry.isCancellationRequested(turnId);
+  }
+
+  /** @internal */ public getActiveChatTurnExecution(turnId: string): ActiveChatTurnExecution | undefined {
+    return this.chatTurnExecutionRegistry.getActiveExecution(turnId);
   }
 
   /** @internal */ public registerActiveChatTurnStream(
@@ -3053,32 +3035,24 @@ export class GatewayService {
     turnId: string,
     runId?: string,
   ): ActiveChatTurnStreamExecution {
-    const state: ActiveChatTurnStreamExecution = {
+    return this.chatTurnExecutionRegistry.registerActiveStream(
       sessionId,
       turnId,
+      this.storage.chatStreamEvents.getLatestSequence(turnId),
       runId,
-      startedAt: new Date().toISOString(),
-      nextSequence: this.storage.chatStreamEvents.getLatestSequence(turnId) + 1,
-      completed: false,
-    };
-    this.activeChatTurnStreams.set(turnId, state);
-    return state;
+    );
   }
 
   /** @internal */ public completeActiveChatTurnStream(turnId: string): void {
-    const active = this.activeChatTurnStreams.get(turnId);
-    if (!active) {
-      return;
-    }
-    active.completed = true;
+    this.chatTurnExecutionRegistry.completeActiveStream(turnId);
   }
 
   /** @internal */ public closeActiveChatTurnStream(turnId: string): void {
-    this.activeChatTurnStreams.delete(turnId);
+    this.chatTurnExecutionRegistry.closeActiveStream(turnId);
   }
 
   /** @internal */ public persistChatStreamChunk(chunk: PersistableChatStreamChunk, runId?: string): ChatStreamChunk {
-    const active = this.activeChatTurnStreams.get(chunk.turnId);
+    const active = this.chatTurnExecutionRegistry.getActiveStream(chunk.turnId);
     const sequence = active?.nextSequence ?? this.storage.chatStreamEvents.getLatestSequence(chunk.turnId) + 1;
     if (active) {
       active.nextSequence = sequence + 1;
@@ -3153,7 +3127,7 @@ export class GatewayService {
         continue;
       }
 
-      const active = this.activeChatTurnStreams.get(turnId);
+      const active = this.chatTurnExecutionRegistry.getActiveStream(turnId);
       const durablePending = options?.liveTail ? this.isDurableTurnStillStreaming(turnId) : false;
       if (!options?.liveTail || ((!active || active.completed) && !durablePending)) {
         return;
@@ -4728,36 +4702,12 @@ export class GatewayService {
     };
   }
 
-  private acquireChatTurnWriteLease(sessionId: string, operation: string): string {
-    const existing = this.activeChatTurnWrites.get(sessionId);
-    if (existing) {
-      throw new ChatTurnWriteConflictError(
-        `A chat turn write is already in progress for session ${sessionId}. Wait for the current ${existing} to finish and retry.`,
-      );
-    }
-    const leaseToken = `${operation}:${randomUUID()}`;
-    this.activeChatTurnWrites.set(sessionId, operation);
-    return leaseToken;
-  }
-
-  private releaseChatTurnWriteLease(sessionId: string, leaseToken: string): void {
-    const expectedOperation = leaseToken.split(":", 1)[0];
-    if (this.activeChatTurnWrites.get(sessionId) === expectedOperation) {
-      this.activeChatTurnWrites.delete(sessionId);
-    }
-  }
-
   /** @internal */ public async withChatTurnWriteLease<T>(
     sessionId: string,
     operation: string,
     work: () => Promise<T>,
   ): Promise<T> {
-    const leaseToken = this.acquireChatTurnWriteLease(sessionId, operation);
-    try {
-      return await work();
-    } finally {
-      this.releaseChatTurnWriteLease(sessionId, leaseToken);
-    }
+    return this.chatTurnExecutionRegistry.withWriteLease(sessionId, operation, work);
   }
 
   /** @internal */ public async *withChatTurnWriteLeaseStream(
@@ -4765,12 +4715,11 @@ export class GatewayService {
     operation: string,
     work: () => AsyncGenerator<ChatStreamChunk>,
   ): AsyncGenerator<ChatStreamChunk> {
-    const leaseToken = this.acquireChatTurnWriteLease(sessionId, operation);
-    try {
-      yield* work();
-    } finally {
-      this.releaseChatTurnWriteLease(sessionId, leaseToken);
-    }
+    yield* this.chatTurnExecutionRegistry.withWriteLeaseStream(sessionId, operation, work);
+  }
+
+  /** @internal */ public clearChatTurnWriteLease(sessionId: string): void {
+    this.chatTurnExecutionRegistry.clearSessionWriteLease(sessionId);
   }
 
   /** @internal */ public updateActiveLeafOrThrow(
@@ -6069,33 +6018,8 @@ export class GatewayService {
     return approvalLifecycleService.getApprovalReplay(this, approvalId, replayedBy);
   }
 
-  /** @internal */ public findApprovalWaitDurableRunId(approvalId: string): string | undefined {
-    const row = this.gatewaySql
-      .prepare(
-        `
-      SELECT run_id
-      FROM approval_wait_runs
-      WHERE approval_id = @approvalId
-      LIMIT 1
-    `,
-      )
-      .get({ approvalId }) as { run_id: string } | undefined;
-    return row?.run_id;
-  }
-
   /** @internal */ public findProactiveDurableRunIdsForApproval(approvalId: string): string[] {
-    const rows = this.gatewaySql
-      .prepare(
-        `
-      SELECT DISTINCT linked_durable_run_id AS run_id
-      FROM proactive_runs
-      WHERE approval_id = @approvalId
-        AND linked_durable_run_id IS NOT NULL
-      ORDER BY started_at DESC
-    `,
-      )
-      .all({ approvalId }) as Array<{ run_id: string | null }>;
-    return rows.map((row) => row.run_id?.trim()).filter((value): value is string => Boolean(value));
+    return this.chatProactiveService.findDurableRunIdsForApproval(approvalId);
   }
 
   private findDurableRunMaybe(runId: string): DurableRunRecord | undefined {
@@ -6114,204 +6038,7 @@ export class GatewayService {
   }
 
   /** @internal */ public ensureApprovalWaitDurableRun(approval: ApprovalRequest): DurableRunRecord | undefined {
-    if (!this.isFeatureEnabled("durableKernelV1Enabled")) {
-      return undefined;
-    }
-    const existing = this.gatewaySql
-      .prepare(
-        `
-      SELECT run_id
-      FROM approval_wait_runs
-      WHERE approval_id = @approvalId
-      LIMIT 1
-    `,
-      )
-      .get({ approvalId: approval.approvalId }) as { run_id: string } | undefined;
-    if (existing?.run_id) {
-      try {
-        return this.getDurableRun(existing.run_id);
-      } catch (error) {
-        if (!(error instanceof NotFoundError)) {
-          throw error;
-        }
-        // Fall through and repair the mapping with a new waiting run.
-      }
-    }
-    const requestAttribution = this.getCurrentRequestAttribution();
-    const run = this.createDurableRun({
-      workflowKey: "approval.wait",
-      payload: approvalWaitPayloadToRecord({
-        version: "approval.wait.v1",
-        approvalId: approval.approvalId,
-        approvalKind: approval.kind,
-        createdAt: approval.createdAt,
-        correlationId: requestAttribution.correlationId,
-        traceId: requestAttribution.traceId,
-        originSurface: requestAttribution.originSurface,
-      } satisfies ApprovalWaitWorkflowPayload),
-      metadata: {
-        approvalId: approval.approvalId,
-        approvalKind: approval.kind,
-      },
-      waitForEvent: {
-        eventKey: "approval.resolved",
-        correlationId: approval.approvalId,
-      },
-    });
-    this.gatewaySql
-      .prepare(
-        `
-      INSERT INTO approval_wait_runs (approval_id, run_id, created_at, resolved_at)
-      VALUES (@approvalId, @runId, @createdAt, NULL)
-      ON CONFLICT(approval_id) DO UPDATE SET
-        run_id = excluded.run_id,
-        created_at = excluded.created_at,
-        resolved_at = NULL
-    `,
-      )
-      .run({
-        approvalId: approval.approvalId,
-        runId: run.runId,
-        createdAt: new Date().toISOString(),
-      });
-    return run;
-  }
-
-  /** @internal */ public async wakeApprovalWaitDurableRun(
-    approval: ApprovalRequest,
-    input: ApprovalResolveInput,
-    executedAction?: ToolInvokeResult,
-  ): Promise<void> {
-    const row = this.gatewaySql
-      .prepare(
-        `
-      SELECT run_id
-      FROM approval_wait_runs
-      WHERE approval_id = @approvalId
-      LIMIT 1
-    `,
-      )
-      .get({ approvalId: approval.approvalId }) as { run_id: string } | undefined;
-    if (!row?.run_id) {
-      return;
-    }
-    this.gatewaySql
-      .prepare(
-        `
-      UPDATE approval_wait_runs
-      SET resolved_at = @resolvedAt
-      WHERE approval_id = @approvalId
-    `,
-      )
-      .run({
-        approvalId: approval.approvalId,
-        resolvedAt: approval.resolvedAt ?? new Date().toISOString(),
-      });
-    try {
-      this.wakeDurableRun(row.run_id, {
-        eventKey: "approval.resolved",
-        correlationId: approval.approvalId,
-        payload: {
-          approvalId: approval.approvalId,
-          status: approval.status,
-          decision: input.decision,
-          resolvedBy: input.resolvedBy,
-          executedOutcome: executedAction?.outcome,
-        },
-      });
-    } catch (error) {
-      const msg = String((error as Error).message ?? "");
-      if (!msg.includes("not waiting/paused")) {
-        throw error;
-      }
-      this.publishRealtime(
-        "approval_wake_skipped",
-        "approvals",
-        {
-          approvalId: approval.approvalId,
-          runId: row.run_id,
-          reason: "durable_run_not_waiting",
-          detail: msg,
-        },
-        {
-          eventClass: "operational_signal",
-          eventAuthority: "retained_stream",
-          links: {
-            approvalId: approval.approvalId,
-            runId: row.run_id,
-          },
-        },
-      );
-    }
-  }
-
-  /** @internal */ public markApprovalWaitDurableRunResolved(
-    approval: ApprovalRequest,
-    input: ApprovalResolveInput,
-    executedAction?: ToolInvokeResult,
-  ): string | undefined {
-    const row = this.gatewaySql
-      .prepare(
-        `
-      SELECT run_id
-      FROM approval_wait_runs
-      WHERE approval_id = @approvalId
-      LIMIT 1
-    `,
-      )
-      .get({ approvalId: approval.approvalId }) as { run_id: string } | undefined;
-    if (!row?.run_id) {
-      return undefined;
-    }
-    this.gatewaySql
-      .prepare(
-        `
-      UPDATE approval_wait_runs
-      SET resolved_at = @resolvedAt
-      WHERE approval_id = @approvalId
-    `,
-      )
-      .run({
-        approvalId: approval.approvalId,
-        resolvedAt: approval.resolvedAt ?? new Date().toISOString(),
-      });
-    try {
-      this.wakeDurableRun(row.run_id, {
-        eventKey: "approval.resolved",
-        correlationId: approval.approvalId,
-        payload: {
-          approvalId: approval.approvalId,
-          status: approval.status,
-          decision: input.decision,
-          resolvedBy: input.resolvedBy,
-          executedOutcome: executedAction?.outcome,
-        },
-      });
-    } catch (error) {
-      const msg = String((error as Error).message ?? "");
-      if (!msg.includes("not waiting/paused")) {
-        throw error;
-      }
-      this.publishRealtime(
-        "approval_wake_skipped",
-        "approvals",
-        {
-          approvalId: approval.approvalId,
-          runId: row.run_id,
-          reason: "durable_run_not_waiting",
-          detail: msg,
-        },
-        {
-          eventClass: "operational_signal",
-          eventAuthority: "retained_stream",
-          links: {
-            approvalId: approval.approvalId,
-            runId: row.run_id,
-          },
-        },
-      );
-    }
-    return row.run_id;
+    return this.approvalWaitRunService.ensureApprovalWaitDurableRun(approval);
   }
 
   /** @internal */ public enqueueApprovalRemoteTokenDelivery(
@@ -6371,43 +6098,18 @@ export class GatewayService {
   /** @internal */ public buildApprovalLinkage(
     linkage?: ApprovalRequest["linkage"],
   ): ApprovalRequest["linkage"] | undefined {
-    const requestAttribution = this.getCurrentRequestAttribution();
-    const normalized = Object.fromEntries(
-      Object.entries({
-        ...linkage,
-        correlationId: linkage?.correlationId ?? requestAttribution.correlationId,
-        traceId: linkage?.traceId ?? requestAttribution.traceId,
-      }).filter(([, value]) => typeof value === "string" && value.trim().length > 0),
-    );
-    return Object.keys(normalized).length > 0 ? normalized : undefined;
+    return this.approvalWaitRunService.buildApprovalLinkage(linkage);
   }
 
   /** @internal */ public buildApprovalRealtimeLinks(approval: ApprovalRequest): NonNullable<RealtimeEvent["links"]> {
-    return {
-      approvalId: approval.approvalId,
-      sessionId: approval.linkage?.sessionId,
-      taskId: approval.linkage?.taskId,
-      runId: approval.linkage?.durableRunId,
-      proactiveRunId: approval.linkage?.proactiveRunId,
-      workspaceId: approval.linkage?.workspaceId,
-      connectorId: approval.linkage?.connectorId,
-      tokenId: approval.linkage?.tokenId,
-    };
+    return this.approvalWaitRunService.buildApprovalRealtimeLinks(approval);
   }
 
   /** @internal */ public primeApprovalLifecycle(
     approvalId: string,
     linkage?: ApprovalRequest["linkage"],
   ): ApprovalRequest {
-    let approval = this.storage.approvals.get(approvalId);
-    if (linkage) {
-      approval = this.storage.approvals.mergeLinkage(approvalId, linkage);
-    }
-    const waitRun = this.ensureApprovalWaitDurableRun(approval);
-    if (waitRun?.runId && approval.linkage?.durableRunId !== waitRun.runId) {
-      approval = this.storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: waitRun.runId });
-    }
-    return approval;
+    return this.approvalWaitRunService.primeApprovalLifecycle(approvalId, linkage);
   }
 
   /** @internal */ public requireConnectorRecord(connectorId: string): ConnectorRecord {
@@ -6536,8 +6238,16 @@ export class GatewayService {
     return this.capabilitySystemService.getCatalogSnapshot(snapshotId);
   }
 
+  public getCapabilityCandidateDetail(candidateId: string) {
+    return this.capabilitySystemService.getCandidateDetail(candidateId);
+  }
+
   public listCapabilityProposals(limit = 100): CapabilityProposalRecord[] {
     return this.capabilitySystemService.listProposals(limit);
+  }
+
+  public getCapabilityProposalDetail(proposalId: string) {
+    return this.capabilitySystemService.getProposalDetail(proposalId);
   }
 
   public createCapabilityProposal(input: {
@@ -6561,6 +6271,18 @@ export class GatewayService {
 
   public async createCodeModeRun(input: CodeModeRunRequest): Promise<CodeModeRunRecord> {
     return this.capabilitySystemService.createCodeModeRun(input);
+  }
+
+  public promoteCapabilityCandidate(candidateId: string, versionId?: string) {
+    return this.capabilitySystemService.promoteCandidate(candidateId, versionId);
+  }
+
+  public revokeCapabilityCandidate(candidateId: string, versionId?: string) {
+    return this.capabilitySystemService.revokeCandidate(candidateId, versionId);
+  }
+
+  public rollbackCapabilityCandidate(candidateId: string, targetVersionId: string) {
+    return this.capabilitySystemService.rollbackCandidate(candidateId, targetVersionId);
   }
 
   public async executeCodeModePendingApproval(approvalId: string): Promise<ToolInvokeResult | undefined> {
@@ -9962,7 +9684,7 @@ export class GatewayService {
     });
 
     await this.recordApprovalResolutionEffects(approval!, input);
-    await this.wakeApprovalWaitDurableRun(approval!, input);
+    this.approvalWaitRunService.wakeApprovalWaitDurableRun(approval!, input);
     await this.storage.audit.append("approvals", {
       event: "auth.device_request.resolve",
       requestId: request.requestId,
@@ -10054,7 +9776,7 @@ export class GatewayService {
 
     if (approval) {
       await this.recordApprovalResolutionEffects(approval, resolutionInput);
-      await this.wakeApprovalWaitDurableRun(approval, resolutionInput);
+      this.approvalWaitRunService.wakeApprovalWaitDurableRun(approval, resolutionInput);
     }
     await this.storage.audit.append("approvals", {
       event: "auth.device_request.expire",
@@ -14536,10 +14258,6 @@ function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
 }
 
 function durableChatTurnPayloadToRecord(payload: DurableChatTurnExecutionPayload): Record<string, unknown> {
-  return { ...payload };
-}
-
-function approvalWaitPayloadToRecord(payload: ApprovalWaitWorkflowPayload): Record<string, unknown> {
   return { ...payload };
 }
 

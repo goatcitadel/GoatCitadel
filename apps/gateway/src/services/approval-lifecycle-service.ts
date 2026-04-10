@@ -21,13 +21,11 @@ import {
   type ApprovalBulkResolveInput,
   type ApprovalBulkResolveResult,
   type ApprovalCreateInput,
-  type ApprovalLinkage,
   type ApprovalRequest,
   type ApprovalResolveInput,
   type ConnectorRecord,
   type DurableRunRecord,
   type RealtimeEvent,
-  type RealtimeEventLinks,
   type ToolGrantCreateInput,
   type ToolGrantRecord,
   type ToolInvokeResult,
@@ -44,6 +42,7 @@ import type {
 } from "./gateway-service.js";
 import type { DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
+import type { ApprovalWaitRunService } from "./approval-wait-run-service.js";
 import type { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 
@@ -61,6 +60,7 @@ export interface ApprovalLifecycleHost {
     | "pendingApprovalActions"
     | "remoteActionTokens"
     | "audit"
+    | "approvalWaitRuns"
     | "chatInlineApprovals"
     | "chatSessionMeta"
     | "chatTurnTraces"
@@ -72,6 +72,10 @@ export interface ApprovalLifecycleHost {
   readonly policyEngine: Pick<ToolPolicyEngine, "listGrants" | "createGrant" | "revokeGrant" | "executeApprovedAction">;
   readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
   readonly durableRunService: Pick<DurableRunService, "requestRunProcessing">;
+  readonly approvalWaitRunService: Pick<
+    ApprovalWaitRunService,
+    "buildApprovalLinkage" | "buildApprovalRealtimeLinks" | "primeApprovalLifecycle" | "wakeApprovalWaitDurableRun"
+  >;
 
   // ── realtime ───────────────────────────────────────────────────────
   publishRealtime(
@@ -82,7 +86,6 @@ export interface ApprovalLifecycleHost {
   ): RealtimeEvent;
 
   // ── approval-specific gateway methods ──────────────────────────────
-  findApprovalWaitDurableRunId(approvalId: string): string | undefined;
   requireConnectorRecord(connectorId: string): ConnectorRecord;
   consumeRemoteActionToken(
     token: string,
@@ -105,15 +108,7 @@ export interface ApprovalLifecycleHost {
   executeCodeModePendingApproval(approvalId: string): Promise<ToolInvokeResult | undefined>;
   resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): string;
   parseApprovalCreateHookPatch(value: unknown): Record<string, unknown> | undefined;
-  primeApprovalLifecycle(approvalId: string, linkage: ApprovalLinkage | undefined): ApprovalRequest;
-  buildApprovalLinkage(linkage?: ApprovalLinkage): ApprovalLinkage | undefined;
-  buildApprovalRealtimeLinks(approval: ApprovalRequest): RealtimeEventLinks;
   scheduleApprovalExplanation(approval: ApprovalRequest): void;
-  markApprovalWaitDurableRunResolved(
-    approval: ApprovalRequest,
-    input: ApprovalResolveInput,
-    executedAction?: ToolInvokeResult,
-  ): string | undefined;
   findProactiveDurableRunIdsForApproval(approvalId: string): string[];
   wakeDurableRun(
     runId: string,
@@ -193,7 +188,7 @@ export function getApprovalReplay(
     approval,
     events: host.storage.approvalEvents.listByApprovalId(approvalId),
     pendingAction: host.storage.pendingApprovalActions.find(approvalId),
-    durableRunId: host.findApprovalWaitDurableRunId(approvalId),
+    durableRunId: host.storage.approvalWaitRuns.getRunId(approvalId),
   };
 }
 
@@ -413,7 +408,10 @@ export async function createApproval(
     : input;
 
   let approval = host.storage.approvals.create(hookableInput);
-  approval = host.primeApprovalLifecycle(approval.approvalId, host.buildApprovalLinkage(hookableInput.linkage));
+  approval = host.approvalWaitRunService.primeApprovalLifecycle(
+    approval.approvalId,
+    host.approvalWaitRunService.buildApprovalLinkage(hookableInput.linkage),
+  );
 
   host.storage.approvalEvents.append({
     approvalId: approval.approvalId,
@@ -446,7 +444,7 @@ export async function createApproval(
     {
       eventClass: "domain_fact",
       eventAuthority: "retained_stream",
-      links: host.buildApprovalRealtimeLinks(approval),
+      links: host.approvalWaitRunService.buildApprovalRealtimeLinks(approval),
       correlationId: approval.approvalId,
     },
   );
@@ -512,13 +510,12 @@ export async function resolveApproval(
         decision: input.decision,
       });
     }
-    wakeRunId = host.markApprovalWaitDurableRunResolved(approval, input, executedAction);
+    wakeRunId = host.approvalWaitRunService.wakeApprovalWaitDurableRun(approval, input, executedAction);
   });
 
   const proactiveRunIds = host.findProactiveDurableRunIdsForApproval(approvalId);
   if (wakeRunId) {
     approval = host.storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: wakeRunId });
-    host.durableRunService.requestRunProcessing(wakeRunId);
   }
   for (const proactiveRunId of proactiveRunIds) {
     try {
@@ -590,6 +587,15 @@ export async function resolveApproval(
   };
 }
 
+export function wakeApprovalWaitDurableRun(
+  host: ApprovalLifecycleHost,
+  approval: ApprovalRequest,
+  input: ApprovalResolveInput,
+  executedAction?: ToolInvokeResult,
+): string | undefined {
+  return host.approvalWaitRunService.wakeApprovalWaitDurableRun(approval, input, executedAction);
+}
+
 export async function resolveChatToolApproval(
   host: ApprovalLifecycleHost,
   sessionId: string,
@@ -635,26 +641,28 @@ export async function resolveChatToolApproval(
       throw new Error(`Approval ${approvalId} does not expose a tool pattern for persistent allow.`);
     }
     const scope = allowScope === "workspace" ? "workspace" : "session";
-    const scopeRef = allowScope === "workspace"
-      ? resolveChatApprovalWorkspaceScopeRef(host, approval, sessionId)
-      : sessionId;
-    grant = findExistingGrant(host, scope, scopeRef, toolPattern) ?? createToolGrant(host, {
-      toolPattern,
-      decision: "allow",
-      scope,
-      scopeRef,
-      grantType: "persistent",
-      createdBy: "chat-operator",
-    });
+    const scopeRef =
+      allowScope === "workspace" ? resolveChatApprovalWorkspaceScopeRef(host, approval, sessionId) : sessionId;
+    grant =
+      findExistingGrant(host, scope, scopeRef, toolPattern) ??
+      createToolGrant(host, {
+        toolPattern,
+        decision: "allow",
+        scope,
+        scopeRef,
+        grantType: "persistent",
+        createdBy: "chat-operator",
+      });
   }
   const resolution = await host.resolveApproval(approvalId, {
     decision,
     resolvedBy: "chat-operator",
     resolutionNote: buildChatApprovalResolutionNote(decision, allowScope),
   });
-  const resume = decision === "approve"
-    ? resumeLinkedChatTurnIfPossible(host, resolution.approval, turnId)
-    : { resumed: false as const };
+  const resume =
+    decision === "approve"
+      ? resumeLinkedChatTurnIfPossible(host, resolution.approval, turnId)
+      : { resumed: false as const };
   host.storage.chatInlineApprovals.upsert({
     approvalId,
     sessionId,
@@ -707,9 +715,10 @@ function resolveChatApprovalWorkspaceScopeRef(
       ? approval.linkage.workspaceId.trim()
       : undefined;
   const metaWorkspaceId = host.storage.chatSessionMeta.get(sessionId)?.workspaceId?.trim();
-  const workspaceId = linkageWorkspaceId
-    ?? (typeof payload.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim() : undefined)
-    ?? metaWorkspaceId;
+  const workspaceId =
+    linkageWorkspaceId ??
+    (typeof payload.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim() : undefined) ??
+    metaWorkspaceId;
   if (!workspaceId) {
     throw new Error(`Approval ${approval.approvalId} is not linked to a workspace.`);
   }
@@ -727,12 +736,15 @@ function findExistingGrant(
   toolPattern: string,
 ): ToolGrantRecord | undefined {
   const now = Date.now();
-  return host.policyEngine.listGrants(scope, scopeRef, 500).find((grant) =>
-    grant.decision === "allow"
-    && grant.toolPattern === toolPattern
-    && !grant.revokedAt
-    && (!grant.expiresAt || Date.parse(grant.expiresAt) > now)
-  );
+  return host.policyEngine
+    .listGrants(scope, scopeRef, 500)
+    .find(
+      (grant) =>
+        grant.decision === "allow" &&
+        grant.toolPattern === toolPattern &&
+        !grant.revokedAt &&
+        (!grant.expiresAt || Date.parse(grant.expiresAt) > now),
+    );
 }
 
 function resumeLinkedChatTurnIfPossible(

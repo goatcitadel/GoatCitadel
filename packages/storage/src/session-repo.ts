@@ -55,6 +55,7 @@ export class SessionRepository {
   private readonly upsertStmt;
   private readonly applyUsageStmt;
   private readonly listStmt;
+  private readonly listAfterCursorStmt;
   private readonly listOperatorSummariesStmt;
 
   public constructor(private readonly db: DatabaseClient) {
@@ -85,9 +86,13 @@ export class SessionRepository {
     `);
     this.listStmt = db.prepare(`
       SELECT * FROM sessions
+      ORDER BY updated_at DESC, session_id DESC
+      LIMIT @limit
+    `);
+    this.listAfterCursorStmt = db.prepare(`
+      SELECT * FROM sessions
       WHERE (
-        @cursorUpdatedAt IS NULL
-        OR updated_at < @cursorUpdatedAt
+        updated_at < @cursorUpdatedAt
         OR (updated_at = @cursorUpdatedAt AND session_id < @cursorSessionId)
       )
       ORDER BY updated_at DESC, session_id DESC
@@ -151,11 +156,13 @@ export class SessionRepository {
 
   public list(limit: number, cursor?: string): SessionMeta[] {
     const parsedCursor = parseCompositeCursor(cursor);
-    const rows = this.listStmt.all({
-      limit,
-      cursorUpdatedAt: parsedCursor?.timestamp ?? null,
-      cursorSessionId: parsedCursor?.key ?? null,
-    });
+    const rows = parsedCursor
+      ? this.listAfterCursorStmt.all({
+          limit,
+          cursorUpdatedAt: parsedCursor.timestamp,
+          cursorSessionId: parsedCursor.key,
+        })
+      : this.listStmt.all({ limit });
 
     assertSessionRows(rows);
     const sessionRows: SessionRow[] = rows;
@@ -224,22 +231,24 @@ function isSessionRow(value: unknown): value is SessionRow {
     return false;
   }
 
-  return typeof value.session_id === "string"
-    && typeof value.session_key === "string"
-    && (value.kind === "dm" || value.kind === "group" || value.kind === "thread")
-    && typeof value.channel === "string"
-    && typeof value.account === "string"
-    && (typeof value.display_name === "string" || value.display_name === null)
-    && (typeof value.routing_hints_json === "string" || value.routing_hints_json === null)
-    && typeof value.last_activity_at === "string"
-    && typeof value.updated_at === "string"
-    && typeof value.health === "string"
-    && typeof value.token_input === "number"
-    && typeof value.token_output === "number"
-    && typeof value.token_cached_input === "number"
-    && typeof value.token_total === "number"
-    && typeof value.cost_usd_total === "number"
-    && typeof value.budget_state === "string";
+  return (
+    typeof value.session_id === "string" &&
+    typeof value.session_key === "string" &&
+    (value.kind === "dm" || value.kind === "group" || value.kind === "thread") &&
+    typeof value.channel === "string" &&
+    typeof value.account === "string" &&
+    (typeof value.display_name === "string" || value.display_name === null) &&
+    (typeof value.routing_hints_json === "string" || value.routing_hints_json === null) &&
+    typeof value.last_activity_at === "string" &&
+    typeof value.updated_at === "string" &&
+    typeof value.health === "string" &&
+    typeof value.token_input === "number" &&
+    typeof value.token_output === "number" &&
+    typeof value.token_cached_input === "number" &&
+    typeof value.token_total === "number" &&
+    typeof value.cost_usd_total === "number" &&
+    typeof value.budget_state === "string"
+  );
 }
 
 function isOperatorSummaryRow(value: unknown): value is OperatorSummaryRow {
@@ -247,10 +256,12 @@ function isOperatorSummaryRow(value: unknown): value is OperatorSummaryRow {
     return false;
   }
 
-  return typeof value.operator_id === "string"
-    && typeof value.session_count === "number"
-    && typeof value.active_sessions === "number"
-    && (typeof value.last_activity_at === "string" || value.last_activity_at === null);
+  return (
+    typeof value.operator_id === "string" &&
+    typeof value.session_count === "number" &&
+    typeof value.active_sessions === "number" &&
+    (typeof value.last_activity_at === "string" || value.last_activity_at === null)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -277,5 +288,3 @@ function mapSessionRow(row: SessionRow): SessionMeta {
     budgetState: row.budget_state,
   };
 }
-
-

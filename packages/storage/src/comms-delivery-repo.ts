@@ -49,12 +49,15 @@ export class CommsDeliveryRepository {
     `);
   }
 
-  public createQueued(input: {
-    connectionId: string;
-    channelKey: string;
-    target: string;
-    payload: Record<string, unknown>;
-  }, now = new Date().toISOString()): CommsSendResult {
+  public createQueued(
+    input: {
+      connectionId: string;
+      channelKey: string;
+      target: string;
+      payload: Record<string, unknown>;
+    },
+    now = new Date().toISOString(),
+  ): CommsSendResult {
     const deliveryId = randomUUID();
     const payloadHash = createHash("sha256").update(JSON.stringify(input.payload)).digest("hex");
     this.insertStmt.run({
@@ -100,10 +103,16 @@ export class CommsDeliveryRepository {
   }
 
   public list(connectionId?: string, limit = 200): CommsSendResult[] {
-    const rows = toCommsDeliveryRows((connectionId ? this.listByConnectionStmt : this.listStmt).all({
-      connectionId,
-      limit,
-    }));
+    const rows = toCommsDeliveryRows(
+      connectionId
+        ? this.listByConnectionStmt.all({
+            connectionId,
+            limit,
+          })
+        : this.listStmt.all({
+            limit,
+          }),
+    );
     return rows.map((row) => ({
       deliveryId: row.delivery_id,
       status: row.status,
@@ -128,20 +137,20 @@ function isCommsDeliveryRow(value: unknown): value is CommsDeliveryRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.delivery_id === "string"
-    && typeof value.connection_id === "string"
-    && typeof value.channel_key === "string"
-    && typeof value.target === "string"
-    && typeof value.payload_hash === "string"
-    && typeof value.status === "string"
-    && (typeof value.provider_msg_id === "string" || value.provider_msg_id === null)
-    && (typeof value.error === "string" || value.error === null)
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.delivery_id === "string" &&
+    typeof value.connection_id === "string" &&
+    typeof value.channel_key === "string" &&
+    typeof value.target === "string" &&
+    typeof value.payload_hash === "string" &&
+    typeof value.status === "string" &&
+    (typeof value.provider_msg_id === "string" || value.provider_msg_id === null) &&
+    (typeof value.error === "string" || value.error === null) &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

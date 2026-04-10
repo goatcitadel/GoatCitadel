@@ -7,7 +7,9 @@ const refreshState = vi.hoisted(() => ({
 }));
 
 const apiMocks = vi.hoisted(() => ({
+  fetchCapabilityCandidate: vi.fn(),
   fetchCapabilityCatalog: vi.fn(),
+  fetchCapabilityProposal: vi.fn(),
   fetchCapabilityProposals: vi.fn(),
   fetchSkillActivationPolicies: vi.fn(),
   fetchSkillImportHistory: vi.fn(),
@@ -15,14 +17,19 @@ const apiMocks = vi.hoisted(() => ({
   fetchSkillSources: vi.fn(),
   fetchSkills: vi.fn(),
   installSkillImport: vi.fn(),
+  promoteCapabilityCandidate: vi.fn(),
   patchSkillActivationPolicies: vi.fn(),
   reloadSkills: vi.fn(),
+  revokeCapabilityCandidate: vi.fn(),
+  rollbackCapabilityCandidate: vi.fn(),
   updateSkillState: vi.fn(),
   validateSkillImport: vi.fn(),
 }));
 
 vi.mock("../api/client", () => ({
+  fetchCapabilityCandidate: apiMocks.fetchCapabilityCandidate,
   fetchCapabilityCatalog: apiMocks.fetchCapabilityCatalog,
+  fetchCapabilityProposal: apiMocks.fetchCapabilityProposal,
   fetchCapabilityProposals: apiMocks.fetchCapabilityProposals,
   fetchSkillActivationPolicies: apiMocks.fetchSkillActivationPolicies,
   fetchSkillImportHistory: apiMocks.fetchSkillImportHistory,
@@ -30,8 +37,11 @@ vi.mock("../api/client", () => ({
   fetchSkillSources: apiMocks.fetchSkillSources,
   fetchSkills: apiMocks.fetchSkills,
   installSkillImport: apiMocks.installSkillImport,
+  promoteCapabilityCandidate: apiMocks.promoteCapabilityCandidate,
   patchSkillActivationPolicies: apiMocks.patchSkillActivationPolicies,
   reloadSkills: apiMocks.reloadSkills,
+  revokeCapabilityCandidate: apiMocks.revokeCapabilityCandidate,
+  rollbackCapabilityCandidate: apiMocks.rollbackCapabilityCandidate,
   updateSkillState: apiMocks.updateSkillState,
   validateSkillImport: apiMocks.validateSkillImport,
 }));

@@ -27,10 +27,11 @@ export function PageGuideCard(props: PageGuideCardProps) {
   }, [mode, props.defaultExpanded, storageKey]);
 
   useEffect(() => {
-    if (!storageKey || typeof window === "undefined") {
+    const storage = getWindowStorage();
+    if (!storageKey || !storage) {
       return;
     }
-    window.localStorage.setItem(storageKey, expanded ? "expanded" : "collapsed");
+    storage.setItem(storageKey, expanded ? "expanded" : "collapsed");
   }, [expanded, storageKey]);
 
   if (embedded) {
@@ -98,11 +99,12 @@ function readExpandedPreference(
   mode: "simple" | "advanced",
   defaultExpanded?: boolean,
 ): boolean {
-  if (typeof window === "undefined") {
+  const storage = getWindowStorage();
+  if (!storage) {
     return defaultExpanded ?? mode === "simple";
   }
   if (storageKey) {
-    const raw = window.localStorage.getItem(storageKey);
+    const raw = storage.getItem(storageKey);
     if (raw === "expanded") {
       return true;
     }
@@ -114,4 +116,11 @@ function readExpandedPreference(
     return defaultExpanded;
   }
   return mode === "simple";
+}
+
+function getWindowStorage(): Storage | null {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return null;
+  }
+  return window.localStorage;
 }

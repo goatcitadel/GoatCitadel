@@ -61,6 +61,13 @@ export interface CapabilityRuntimeConfig {
   candidateRoot: string;
   codeModeArtifactRoot: string;
   tempRoot: string;
+  codeModeSandbox: CodeModeSandboxConfig;
+}
+
+export interface CodeModeSandboxConfig {
+  mode: "best_effort_host";
+  required: boolean;
+  bestEffortHostEnabled: boolean;
 }
 
 export interface MemoryConfig {
@@ -655,6 +662,14 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   if (codeModeTempRoot) {
     assistant.capabilities.tempRoot = codeModeTempRoot;
   }
+  const codeModeSandboxRequired = parseBooleanEnv(process.env.GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED);
+  if (codeModeSandboxRequired !== undefined) {
+    assistant.capabilities.codeModeSandbox.required = codeModeSandboxRequired;
+  }
+  const bestEffortSandboxEnabled = parseBooleanEnv(process.env.GOATCITADEL_CODE_MODE_BEST_EFFORT_SANDBOX_ENABLED);
+  if (bestEffortSandboxEnabled !== undefined) {
+    assistant.capabilities.codeModeSandbox.bestEffortHostEnabled = bestEffortSandboxEnabled;
+  }
 }
 
 function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig {
@@ -712,6 +727,11 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       candidateRoot: capabilitiesInput.candidateRoot ?? "./data/capability-candidates",
       codeModeArtifactRoot: capabilitiesInput.codeModeArtifactRoot ?? "./data/code-mode-artifacts",
       tempRoot: capabilitiesInput.tempRoot ?? "./data/code-mode-temp",
+      codeModeSandbox: {
+        mode: "best_effort_host",
+        required: capabilitiesInput.codeModeSandbox?.required ?? true,
+        bestEffortHostEnabled: capabilitiesInput.codeModeSandbox?.bestEffortHostEnabled ?? false,
+      },
     },
     workspaceDir: input.workspaceDir ?? "./workspace",
     worktreesDir: input.worktreesDir ?? "./.worktrees",

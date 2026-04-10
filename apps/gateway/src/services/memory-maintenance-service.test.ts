@@ -22,6 +22,13 @@ class FakeMemoryMaintenanceRepo {
   public readonly states = new Map<string, MemoryMaintenanceStateRecord>();
   public readonly runs = new Map<string, MemoryMaintenanceRunRecord>();
   public readonly recommendations = new Map<string, MemoryMaintenanceRecommendationRecord>();
+  public readonly changedSessionCounts: Map<string, number>;
+  public readonly eligibleSessions: Map<string, EligibleSession[]>;
+
+  public constructor(changedSessionCounts: Map<string, number>, eligibleSessions: Map<string, EligibleSession[]>) {
+    this.changedSessionCounts = changedSessionCounts;
+    this.eligibleSessions = eligibleSessions;
+  }
 
   public findPolicy(workspaceId: string): MemoryMaintenancePolicyRecord | undefined {
     return this.policies.get(workspaceId);
@@ -44,12 +51,12 @@ class FakeMemoryMaintenanceRepo {
       enabled: patch.enabled ?? current.enabled,
       runMode: patch.runMode ?? current.runMode,
       timingStrategy: patch.timingStrategy ?? current.timingStrategy,
-      schedule: patch.schedule === undefined ? current.schedule : patch.schedule ?? undefined,
+      schedule: patch.schedule === undefined ? current.schedule : (patch.schedule ?? undefined),
       timeZone: patch.timeZone ?? current.timeZone,
       minHoursSinceLastSuccess: patch.minHoursSinceLastSuccess ?? current.minHoursSinceLastSuccess,
       minChangedSessions: patch.minChangedSessions ?? current.minChangedSessions,
-      providerId: patch.providerId === undefined ? current.providerId : patch.providerId ?? undefined,
-      model: patch.model === undefined ? current.model : patch.model ?? undefined,
+      providerId: patch.providerId === undefined ? current.providerId : (patch.providerId ?? undefined),
+      model: patch.model === undefined ? current.model : (patch.model ?? undefined),
       executionTarget: patch.executionTarget ?? current.executionTarget,
       unavailableModelPolicy: patch.unavailableModelPolicy ?? current.unavailableModelPolicy,
       createdAt: current.createdAt,
@@ -138,28 +145,44 @@ class FakeMemoryMaintenanceRepo {
       .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
       .slice(0, limit);
   }
+
+  public listEnabledPolicyWorkspaceIds(): string[] {
+    return [...this.policies.values()]
+      .filter((policy) => policy.enabled)
+      .map((policy) => policy.workspaceId)
+      .sort((left, right) => left.localeCompare(right));
+  }
+
+  public countChangedSessions(workspaceId: string, _since?: string): number {
+    return this.changedSessionCounts.get(workspaceId) ?? 0;
+  }
+
+  public listEligibleSessions(workspaceId: string, _since?: string, limit = 100): EligibleSession[] {
+    return (this.eligibleSessions.get(workspaceId) ?? []).slice(0, limit);
+  }
+
+  public listActiveMemoryItems(_limit = 200): [] {
+    return [];
+  }
+
+  public listRecentToolArtifacts(_workspaceId?: string, _since?: string, _limit = 100): [] {
+    return [];
+  }
 }
 
 function createHarness() {
-  const memoryMaintenance = new FakeMemoryMaintenanceRepo();
+  const changedSessionCounts = new Map<string, number>();
+  const eligibleSessions = new Map<string, EligibleSession[]>();
+  const memoryMaintenance = new FakeMemoryMaintenanceRepo(changedSessionCounts, eligibleSessions);
   const durableRuns = new Map<string, DurableRunRecord>();
   const sessionMeta = new Map<string, { workspaceId?: string; includeInHistory?: boolean; origin?: string }>();
   const sessionBindings = new Map<string, { transport: string; writable: boolean }>();
-  const changedSessionCounts = new Map<string, number>();
-  const eligibleSessions = new Map<string, EligibleSession[]>();
   const subagentSessionIds = new Set<string>();
   const publishRealtime = vi.fn();
   let durableRunCounter = 0;
 
   const gatewaySql = {
     prepare(sql: string) {
-      if (sql.includes("FROM workspace_memory_maintenance_policies")) {
-        return {
-          all: () => [...memoryMaintenance.policies.values()]
-            .filter((policy) => policy.enabled)
-            .map((policy) => ({ workspace_id: policy.workspaceId })),
-        };
-      }
       if (sql.includes("AS changed_sessions")) {
         return {
           get: ({ workspaceId }: { workspaceId: string }) => ({
@@ -169,17 +192,16 @@ function createHarness() {
       }
       if (sql.includes("SELECT meta.session_id AS session_id")) {
         return {
-          all: ({ workspaceId, limit }: { workspaceId: string; limit: number }) => (
-            eligibleSessions.get(workspaceId) ?? []
-          ).slice(0, limit).map((session) => ({
-            session_id: session.sessionId,
-            modified_at: session.modifiedAt,
-          })),
+          all: ({ workspaceId, limit }: { workspaceId: string; limit: number }) =>
+            (eligibleSessions.get(workspaceId) ?? []).slice(0, limit).map((session) => ({
+              session_id: session.sessionId,
+              modified_at: session.modifiedAt,
+            })),
         };
       }
       if (sql.includes("FROM task_subagent_sessions")) {
         return {
-          get: (sessionId: string) => subagentSessionIds.has(sessionId) ? { 1: 1 } : undefined,
+          get: (sessionId: string) => (subagentSessionIds.has(sessionId) ? { 1: 1 } : undefined),
         };
       }
       throw new Error(`Unsupported SQL in test harness: ${sql}`);
@@ -221,6 +243,20 @@ function createHarness() {
       },
       chatSessionBindings: {
         get: (sessionId: string) => sessionBindings.get(sessionId),
+      },
+      taskSubagents: {
+        findByAgentSessionId: (sessionId: string) =>
+          subagentSessionIds.has(sessionId)
+            ? {
+                subagentSessionId: `subagent-${sessionId}`,
+                taskId: "task-1",
+                agentSessionId: sessionId,
+                agentName: "worker",
+                status: "active",
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              }
+            : undefined,
       },
     },
     config: {
@@ -317,12 +353,16 @@ describe("MemoryMaintenanceService due evaluation", () => {
       model: "qwen3",
     });
     expect(harness.memoryMaintenance.requireState("default").activeRunId).toBe(runs[0]?.runId);
-    expect(harness.publishRealtime).toHaveBeenCalledWith("system", "memory", expect.objectContaining({
-      type: "memory_maintenance_run_created",
-      workspaceId: "default",
-      runId: runs[0]?.runId,
-      triggerSource: "scheduled",
-    }));
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "memory",
+      expect.objectContaining({
+        type: "memory_maintenance_run_created",
+        workspaceId: "default",
+        runId: runs[0]?.runId,
+        triggerSource: "scheduled",
+      }),
+    );
 
     await harness.service.runDueEvaluation();
     expect(harness.memoryMaintenance.listRuns("default")).toHaveLength(1);

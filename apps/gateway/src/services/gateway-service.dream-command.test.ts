@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("sqlite", () => ({}));
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
   StatementSync: class StatementSync {},

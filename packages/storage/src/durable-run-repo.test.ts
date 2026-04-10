@@ -104,8 +104,36 @@ describe("DurableRunRepository", () => {
 
     const retries = repo.listRetries(run.runId, 20);
     assert.equal(retries.length, 3);
-    assert.deepEqual(retries.map((item) => item.attemptNo), [1, 3, 7]);
+    assert.deepEqual(
+      retries.map((item) => item.attemptNo),
+      [1, 3, 7],
+    );
     assert.equal(updated.attemptNo, 7);
     assert.equal(updated.reason, "seventh");
+  });
+
+  it("looks up and resolves dead letters by id", () => {
+    const repo = createRepo();
+    const run = repo.createRun({
+      workflowKey: "connector.delivery",
+      payload: { task: "notify" },
+    });
+
+    const deadLetter = repo.upsertDeadLetter({
+      deadLetterId: "dead-1",
+      runId: run.runId,
+      reason: "timeout",
+      payload: { attempt: 3 },
+    });
+
+    assert.equal(repo.getDeadLetterById(deadLetter.deadLetterId).reason, "timeout");
+
+    const resolved = repo.resolveDeadLetter(deadLetter.deadLetterId, {
+      resolvedAt: "2026-04-10T00:00:00.000Z",
+      resolutionNote: "recovered by operator",
+    });
+
+    assert.equal(resolved.resolvedAt, "2026-04-10T00:00:00.000Z");
+    assert.equal(resolved.resolutionNote, "recovered by operator");
   });
 });

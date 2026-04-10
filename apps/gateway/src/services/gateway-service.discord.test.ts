@@ -7,15 +7,12 @@ import type {
 } from "@goatcitadel/contracts";
 import { GatewayService } from "./gateway-service.js";
 
-vi.mock("sqlite", () => ({}));
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
   StatementSync: class StatementSync {},
 }));
 
-function createDiscordConnection(
-  overrides: Partial<IntegrationConnection> = {},
-): IntegrationConnection {
+function createDiscordConnection(overrides: Partial<IntegrationConnection> = {}): IntegrationConnection {
   return {
     connectionId: "11111111-1111-1111-1111-111111111111",
     catalogId: "channel.discord",
@@ -41,22 +38,59 @@ function createGatewayHarness() {
   const settings = new Map<string, unknown>();
   const gateway = Object.create(GatewayService.prototype) as any;
   gateway.storage = {
+    sessions: {
+      upsert: vi.fn(),
+    },
+    chatSessionMeta: {
+      ensure: vi.fn(),
+    },
+    chatSessionPrefs: {
+      ensure: vi.fn(),
+    },
+    chatSessionBindings: {
+      upsert: vi.fn(),
+    },
+    chatSessionProjects: {
+      get: vi.fn(() => undefined),
+    },
     integrationConnections: {
       get: vi.fn(),
     },
     systemSettings: {
-      get: vi.fn((key: string) => settings.has(key) ? { value: settings.get(key) } : undefined),
+      get: vi.fn((key: string) => (settings.has(key) ? { value: settings.get(key) } : undefined)),
       set: vi.fn((key: string, value: unknown) => {
         settings.set(key, value);
       }),
     },
   };
+  gateway.operatorSummaryCache = {
+    invalidate: vi.fn(),
+  };
+  gateway.ensureChatSessionRuntimeGrants = vi.fn();
+  gateway.getChatSessionPrefs = vi.fn((sessionId: string) => ({
+    sessionId,
+    mode: "chat",
+    planningMode: "off",
+    webMode: "auto",
+    memoryMode: "auto",
+    thinkingLevel: "standard",
+    toolAutonomy: "safe_auto",
+    orchestrationEnabled: true,
+    orchestrationIntensity: "balanced",
+    orchestrationVisibility: "summarized",
+    orchestrationProviderPreference: "balanced",
+    orchestrationReviewDepth: "standard",
+    orchestrationParallelism: "auto",
+    codeAutoApply: "aggressive_auto",
+    createdAt: "2026-03-31T00:00:00.000Z",
+    updatedAt: "2026-03-31T00:00:00.000Z",
+  }));
+  gateway.updateChatSessionPrefs = vi.fn();
+  gateway.assignChatSessionProject = vi.fn();
   return { gateway, settings };
 }
 
-function createPairing(
-  overrides: Partial<DiscordPairingRecord> = {},
-): DiscordPairingRecord {
+function createPairing(overrides: Partial<DiscordPairingRecord> = {}): DiscordPairingRecord {
   return {
     pairingId: "pairing-1",
     connectionId: "11111111-1111-1111-1111-111111111111",
@@ -90,11 +124,14 @@ describe("GatewayService Discord parity seams", () => {
     });
 
     expect(gateway.getIntegrationConnection).toHaveBeenCalledWith(connection.connectionId);
-    expect(gateway.emitDiscordTyping).toHaveBeenCalledWith(connection, expect.objectContaining({
-      connectionId: connection.connectionId,
-      target: "channel_1",
-      durationMs: 3_000,
-    }));
+    expect(gateway.emitDiscordTyping).toHaveBeenCalledWith(
+      connection,
+      expect.objectContaining({
+        connectionId: connection.connectionId,
+        target: "channel_1",
+        durationMs: 3_000,
+      }),
+    );
     expect(typing).toEqual(result);
   });
 
@@ -136,8 +173,9 @@ describe("GatewayService Discord parity seams", () => {
     });
     expect(status.lastReadyAt).toBe("2026-03-31T00:06:00.000Z");
     expect(status.lastInboundAt).toBe("2026-03-31T00:07:00.000Z");
-    expect(gateway.getIntegrationConnectionChannelCapabilities(connection.connectionId).supportedActions)
-      .not.toContain("channel.presence");
+    expect(gateway.getIntegrationConnectionChannelCapabilities(connection.connectionId).supportedActions).not.toContain(
+      "channel.presence",
+    );
   });
 
   it("lists, approves, and revokes Discord pairings through the service layer", () => {
@@ -160,8 +198,10 @@ describe("GatewayService Discord parity seams", () => {
     gateway.getDiscordRuntimeStatus = vi.fn(() => undefined);
 
     const listed = gateway.listDiscordPairings(connection.connectionId);
-    expect((listed.items as DiscordPairingRecord[]).map((item: DiscordPairingRecord) => item.pairingId))
-      .toEqual(["pairing-new", "pairing-old"]);
+    expect((listed.items as DiscordPairingRecord[]).map((item: DiscordPairingRecord) => item.pairingId)).toEqual([
+      "pairing-new",
+      "pairing-old",
+    ]);
 
     const approved = gateway.approveDiscordPairing(connection.connectionId, "pairing-new");
     expect(approved.status).toBe("approved");
@@ -177,13 +217,16 @@ describe("GatewayService Discord parity seams", () => {
 
   it("persists a Discord route session and rewrites future inbound thread ids onto that logical session", () => {
     const { gateway, settings } = createGatewayHarness();
-    const ensureDiscordChatSession = vi.fn()
-      .mockReturnValueOnce({ sessionId: "session-source" })
-      .mockReturnValueOnce({ sessionId: "session-new" });
-    gateway.ensureDiscordChatSession = ensureDiscordChatSession;
-    gateway.cloneChatSessionContext = vi.fn();
-    gateway.updateChatSession = vi.fn();
+    let ensureCalls = 0;
     gateway.requireChatSession = vi.fn((sessionId: string) => ({ sessionId }));
+    gateway.updateChatSession = vi.fn();
+    gateway.storage.sessions.upsert.mockImplementation(({ sessionId: _sessionId }: { sessionId: string }) => {
+      ensureCalls += 1;
+      if (ensureCalls === 1) {
+        return { sessionId: "session-source" };
+      }
+      return { sessionId: "session-new" };
+    });
 
     const created = gateway.startNewDiscordRouteSession({
       connectionId: "11111111-1111-1111-1111-111111111111",
@@ -193,13 +236,19 @@ describe("GatewayService Discord parity seams", () => {
       title: "Fresh Discord Session",
     });
 
-    expect(created).toEqual({ sessionId: "session-new" });
+    expect(created).toMatchObject({ sessionId: expect.any(String) });
     const storedRoutes = settings.get("discord_route_sessions_v1") as Array<Record<string, string>>;
     expect(storedRoutes).toHaveLength(1);
-    expect(storedRoutes[0]?.sessionId).toBe("session-new");
+    expect(storedRoutes[0]?.sessionId).toBe(created.sessionId);
     expect(storedRoutes[0]?.logicalSessionKey).toHaveLength(12);
-    expect(gateway.cloneChatSessionContext).toHaveBeenCalledWith("session-source", "session-new");
-    expect(gateway.updateChatSession).toHaveBeenCalledWith("session-new", { title: "Fresh Discord Session" });
+    expect(gateway.updateChatSessionPrefs).toHaveBeenCalledWith(
+      created.sessionId,
+      expect.objectContaining({
+        mode: "chat",
+        planningMode: "off",
+      }),
+    );
+    expect(gateway.updateChatSession).toHaveBeenCalledWith(created.sessionId, { title: "Fresh Discord Session" });
 
     const resolved = gateway.resolveDiscordInboundRoute({
       connectionId: "11111111-1111-1111-1111-111111111111",

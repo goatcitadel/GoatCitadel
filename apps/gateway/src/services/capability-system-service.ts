@@ -9,13 +9,17 @@ import * as ts from "typescript";
 import type {
   ApprovalCreateInput,
   ApprovalRequest,
+  CandidateLifecycleActionResult,
+  CandidateSkillDetailRecord,
   CapabilityArtifactRecord,
   CapabilityCatalogEntry,
   CapabilityCatalogScope,
   CapabilityCatalogSnapshotRecord,
+  CapabilityProposalDetailRecord,
   CapabilityProposalKind,
   CapabilityProposalRecord,
   CodeModeLanguage,
+  CodeModeSandboxMetadata,
   CodeModeRunRecord,
   CodeModeRunRequest,
   LoadedSkill,
@@ -31,6 +35,11 @@ import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/cont
 import type { Storage } from "@goatcitadel/storage";
 import type { CapabilityRuntimeConfig, FeatureFlagsConfig } from "../config.js";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
+import {
+  assertCodeModeSandboxAvailable,
+  prepareCodeModeSandboxLaunch,
+  resolveCodeModeSandboxMetadata,
+} from "./code-mode-sandbox-runner.js";
 
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
 const CODE_MODE_OUTPUT_CAPTURE_LIMIT_BYTES = 64 * 1024;
@@ -88,12 +97,14 @@ export class CapabilitySystemService {
   private readonly artifactRoot: string;
   private readonly tempRoot: string;
   private readonly harnessPath: string;
+  private readonly sandboxMetadata: CodeModeSandboxMetadata;
 
   public constructor(private readonly options: CapabilitySystemServiceOptions) {
     this.candidateRoot = resolveManagedRoot(options.rootDir, options.runtimeConfig.candidateRoot);
     this.artifactRoot = resolveManagedRoot(options.rootDir, options.runtimeConfig.codeModeArtifactRoot);
     this.tempRoot = resolveManagedRoot(options.rootDir, options.runtimeConfig.tempRoot);
     this.harnessPath = path.join(this.tempRoot, "code-mode-harness.mjs");
+    this.sandboxMetadata = resolveCodeModeSandboxMetadata(options.runtimeConfig.codeModeSandbox);
   }
 
   public ensureSkillLifecycleBackfill(): void {
@@ -148,8 +159,26 @@ export class CapabilitySystemService {
     return this.options.storage.capabilityCatalogSnapshots.get(snapshotId);
   }
 
+  public getCandidateDetail(candidateId: string): CandidateSkillDetailRecord {
+    return this.buildCandidateDetail(candidateId);
+  }
+
   public listProposals(limit = 100): CapabilityProposalRecord[] {
     return this.options.storage.capabilityProposals.list(limit);
+  }
+
+  public getProposalDetail(proposalId: string): CapabilityProposalDetailRecord {
+    const proposal = this.options.storage.capabilityProposals.get(proposalId);
+    const candidate = proposal.candidateId
+      ? this.options.storage.candidateSkillVersions.findLatestByCandidateId(proposal.candidateId)
+        ? this.buildCandidateDetail(proposal.candidateId)
+        : undefined
+      : undefined;
+    return {
+      proposal,
+      events: this.options.storage.capabilityProposalEvents.listByProposalId(proposalId),
+      candidate,
+    };
   }
 
   public createProposal(input: {
@@ -191,6 +220,96 @@ export class CapabilitySystemService {
       status: stored.status,
     });
     return stored;
+  }
+
+  public promoteCandidate(candidateId: string, versionId?: string): CandidateLifecycleActionResult {
+    const versions = this.requireCandidateVersions(candidateId);
+    const selected = versionId ? this.requireCandidateVersion(candidateId, versionId) : versions[0]!;
+    const changedVersionIds = new Set<string>();
+    const occurredAt = new Date().toISOString();
+    this.options.storage.runImmediateTransaction(() => {
+      for (const version of versions) {
+        if (version.versionId === selected.versionId) {
+          this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "approved", occurredAt);
+          changedVersionIds.add(version.versionId);
+          continue;
+        }
+        if (version.lifecycleState === "approved" || version.lifecycleState === "trusted") {
+          this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "deprecated", occurredAt);
+          changedVersionIds.add(version.versionId);
+        }
+      }
+    });
+    const detail = this.buildCandidateDetail(candidateId);
+    this.options.publishRealtime("candidate_skill_promoted", "capabilities", {
+      candidateId,
+      versionId: selected.versionId,
+    });
+    return {
+      action: "promote",
+      candidateId,
+      selectedVersionId: selected.versionId,
+      changedVersionIds: [...changedVersionIds],
+      occurredAt,
+      detail,
+    };
+  }
+
+  public revokeCandidate(candidateId: string, versionId?: string): CandidateLifecycleActionResult {
+    const versions = this.requireCandidateVersions(candidateId);
+    const selected = versionId ? this.requireCandidateVersion(candidateId, versionId) : versions[0]!;
+    const targets = versionId ? [selected] : versions;
+    const occurredAt = new Date().toISOString();
+    for (const version of targets) {
+      this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "revoked", occurredAt);
+    }
+    const detail = this.buildCandidateDetail(candidateId);
+    this.options.publishRealtime("candidate_skill_revoked", "capabilities", {
+      candidateId,
+      versionId: selected.versionId,
+      revokedVersionIds: targets.map((version) => version.versionId),
+    });
+    return {
+      action: "revoke",
+      candidateId,
+      selectedVersionId: selected.versionId,
+      changedVersionIds: targets.map((version) => version.versionId),
+      occurredAt,
+      detail,
+    };
+  }
+
+  public rollbackCandidate(candidateId: string, targetVersionId: string): CandidateLifecycleActionResult {
+    const versions = this.requireCandidateVersions(candidateId);
+    const target = this.requireCandidateVersion(candidateId, targetVersionId);
+    const occurredAt = new Date().toISOString();
+    const changedVersionIds = new Set<string>();
+    this.options.storage.runImmediateTransaction(() => {
+      for (const version of versions) {
+        if (version.versionId === target.versionId) {
+          this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "approved", occurredAt);
+          changedVersionIds.add(version.versionId);
+          continue;
+        }
+        if (version.lifecycleState !== "revoked") {
+          this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "deprecated", occurredAt);
+          changedVersionIds.add(version.versionId);
+        }
+      }
+    });
+    const detail = this.buildCandidateDetail(candidateId);
+    this.options.publishRealtime("candidate_skill_rolled_back", "capabilities", {
+      candidateId,
+      targetVersionId,
+    });
+    return {
+      action: "rollback",
+      candidateId,
+      selectedVersionId: target.versionId,
+      changedVersionIds: [...changedVersionIds],
+      occurredAt,
+      detail,
+    };
   }
 
   public listCodeModeRuns(limit = 100): CodeModeRunRecord[] {
@@ -261,6 +380,7 @@ export class CapabilitySystemService {
     const wrapperManifestHash = sha256Text(JSON.stringify(wrapperManifest));
     const policySnapshotHash = sha256Text(JSON.stringify(policySnapshot));
     const runId = `code-run-${randomUUID()}`;
+    const sandbox = this.sandboxMetadata;
 
     const codeArtifact = await this.persistManagedTextArtifact(
       this.artifactRoot,
@@ -294,6 +414,7 @@ export class CapabilitySystemService {
       affectedResources: wrapperManifest.wrappers.map((wrapper) => wrapper.name),
       sessionId: request.sessionId,
       turnId: request.turnId,
+      sandbox,
     });
 
     const approval = await this.options.createApproval({
@@ -323,6 +444,7 @@ export class CapabilitySystemService {
       approvalId: approval.approvalId,
       sessionId: request.sessionId,
       turnId: request.turnId,
+      sandbox,
       codeArtifact,
       wrapperManifestArtifact,
       policySnapshotArtifact,
@@ -373,6 +495,7 @@ export class CapabilitySystemService {
       capabilitySnapshotId: stored.capabilitySnapshotId,
       wrapperManifestHash: stored.wrapperManifestHash,
       codeHash: stored.codeHash,
+      sandbox,
     });
     return stored;
   }
@@ -393,15 +516,18 @@ export class CapabilitySystemService {
     const existing = this.options.storage.codeModeRuns.get(runId);
     const runInput = isRecord(pending.request.input) ? pending.request.input : {};
     const startedAt = new Date().toISOString();
+    const sandbox = existing.sandbox ?? this.sandboxMetadata;
     this.options.storage.codeModeRuns.upsert({
       ...existing,
       status: "running",
       startedAt,
+      sandbox,
     });
     this.options.publishRealtime("code_mode_run_started", "capabilities", {
       runId,
       approvalId,
       startedAt,
+      sandbox,
     });
 
     const source = await fs.readFile(path.resolve(this.options.rootDir, existing.codeArtifact.relPath), "utf8");
@@ -412,9 +538,19 @@ export class CapabilitySystemService {
 
     let finalRun = existing;
     try {
+      if (!sandbox.available) {
+        this.options.publishRealtime("code_mode_sandbox_unavailable", "capabilities", {
+          runId,
+          approvalId,
+          sandbox,
+          failClosedReason: sandbox.failClosedReason,
+        });
+      }
+      assertCodeModeSandboxAvailable(sandbox);
       await this.ensureHarnessFile();
       const execution = await this.executeChildHarness({
         runId,
+        sandbox,
         source: compiledSource,
         input: runInput,
         requestedOutputIntent: existing.requestedOutputIntent,
@@ -445,6 +581,7 @@ export class CapabilitySystemService {
       finalRun = this.options.storage.codeModeRuns.upsert({
         ...existing,
         status: execution.failed ? "failed" : "completed",
+        sandbox,
         stdoutArtifact,
         stderrArtifact,
         stdoutPreview: toPreview(execution.stdout.text),
@@ -491,6 +628,7 @@ export class CapabilitySystemService {
           approvalId,
           status: finalRun.status,
           error: finalRun.error,
+          sandbox,
         },
       );
 
@@ -502,12 +640,14 @@ export class CapabilitySystemService {
           runId: finalRun.runId,
           status: finalRun.status,
           codeHash: finalRun.codeHash,
+          sandbox,
         },
       };
     } catch (error) {
       finalRun = this.options.storage.codeModeRuns.upsert({
         ...finalRun,
         status: "failed",
+        sandbox,
         error: error instanceof Error ? error.message : String(error),
         startedAt,
         finishedAt: new Date().toISOString(),
@@ -520,6 +660,7 @@ export class CapabilitySystemService {
         runId: finalRun.runId,
         approvalId,
         error: finalRun.error,
+        sandbox,
       });
       return {
         outcome: "executed",
@@ -529,9 +670,52 @@ export class CapabilitySystemService {
           runId: finalRun.runId,
           status: finalRun.status,
           error: finalRun.error,
+          sandbox,
         },
       };
     }
+  }
+
+  private buildCandidateDetail(candidateId: string): CandidateSkillDetailRecord {
+    const versions = this.requireCandidateVersions(candidateId);
+    const activeVersion = versions.find(
+      (version) => version.lifecycleState === "approved" || version.lifecycleState === "trusted",
+    );
+    const latestVersion = versions[0]!;
+    const relatedProposals = this.options.storage.capabilityProposals
+      .list(200)
+      .filter((proposal) => proposal.candidateId === candidateId || proposal.activationTargetId === candidateId);
+    const originatingRunId = activeVersion?.originatingRunId ?? latestVersion?.originatingRunId;
+    const originatingRun = originatingRunId ? this.options.storage.codeModeRuns.find(originatingRunId) : undefined;
+    const activationBlockers = activeVersion
+      ? []
+      : ["No candidate version has been promoted into an approved or trusted lifecycle state."];
+    return {
+      candidateId,
+      versions,
+      latestVersion,
+      activeVersion,
+      relatedProposals,
+      originatingRun,
+      activationBlocked: activationBlockers.length > 0,
+      activationBlockers,
+    };
+  }
+
+  private requireCandidateVersions(candidateId: string) {
+    const versions = this.options.storage.candidateSkillVersions.listByCandidateId(candidateId, 200);
+    if (versions.length === 0) {
+      throw new NotFoundError({ entity: "candidate skill", id: candidateId });
+    }
+    return versions;
+  }
+
+  private requireCandidateVersion(candidateId: string, versionId: string) {
+    const version = this.options.storage.candidateSkillVersions.get(versionId);
+    if (version.candidateId !== candidateId) {
+      throw new NotFoundError({ entity: "candidate skill version", id: versionId });
+    }
+    return version;
   }
 
   private buildInspectableCatalog(): CapabilityCatalogEntry[] {
@@ -629,6 +813,7 @@ export class CapabilitySystemService {
 
   private async executeChildHarness(input: {
     runId: string;
+    sandbox: CodeModeSandboxMetadata;
     source: string;
     input: Record<string, unknown>;
     requestedOutputIntent?: string;
@@ -641,12 +826,23 @@ export class CapabilitySystemService {
     stderr: BoundedCaptureState;
   }> {
     const runTempRoot = path.join(this.tempRoot, input.runId);
-    await fs.mkdir(runTempRoot, { recursive: true });
+    const preparedSandbox = await prepareCodeModeSandboxLaunch(
+      this.options.runtimeConfig.codeModeSandbox,
+      {
+        runId: input.runId,
+        nodePath: process.execPath,
+        harnessPath: this.harnessPath,
+        runTempRoot,
+        heapMb: CODE_MODE_HEAP_MB,
+        env: createMinimalSyntheticEnv(),
+      },
+      { metadata: input.sandbox },
+    );
 
-    const child = spawn(process.execPath, [`--max-old-space-size=${CODE_MODE_HEAP_MB}`, this.harnessPath], {
-      shell: false,
-      cwd: runTempRoot,
-      env: createMinimalSyntheticEnv(),
+    const child = spawn(preparedSandbox.launch.executable, preparedSandbox.launch.args, {
+      shell: preparedSandbox.launch.shell,
+      cwd: preparedSandbox.launch.cwd,
+      env: preparedSandbox.launch.env,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
 
@@ -1164,12 +1360,13 @@ function buildCodeModeApprovalPayload(input: {
   affectedResources: string[];
   sessionId?: string;
   turnId?: string;
+  sandbox: CodeModeSandboxMetadata;
 }): Record<string, unknown> {
   return {
     runId: input.runId,
     sessionId: input.sessionId,
     turnId: input.turnId,
-    description: "Start a trusted Code Mode v1 run with the frozen wrapper manifest and policy snapshot.",
+    description: "Start a sandbox-gated Code Mode v1 run with the frozen wrapper manifest and policy snapshot.",
     riskLevel: "caution",
     affectedResources: input.affectedResources,
     codeHash: input.codeHash,
@@ -1179,6 +1376,7 @@ function buildCodeModeApprovalPayload(input: {
     codePreview: input.codePreview,
     requestedOutputIntent: input.requestedOutputIntent,
     saveCandidateOnSuccess: input.saveCandidateOnSuccess,
+    sandbox: input.sandbox,
   };
 }
 

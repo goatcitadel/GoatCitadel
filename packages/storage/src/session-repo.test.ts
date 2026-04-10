@@ -29,6 +29,36 @@ function createRepo(): SessionRepository {
 }
 
 describe("SessionRepository", () => {
+  it("lists sessions without requiring a cursor placeholder", () => {
+    const repo = createRepo();
+    const now = "2026-02-27T10:00:00.000Z";
+
+    repo.upsert({
+      sessionId: "session-a",
+      sessionKey: "discord:me:a",
+      kind: "dm",
+      channel: "discord",
+      account: "me",
+      timestamp: now,
+    });
+    repo.upsert({
+      sessionId: "session-b",
+      sessionKey: "discord:me:b",
+      kind: "dm",
+      channel: "discord",
+      account: "me",
+      timestamp: "2026-02-27T09:59:59.000Z",
+    });
+
+    const page = repo.list(10);
+
+    assert.equal(page.length, 2);
+    assert.deepEqual(
+      page.map((item) => item.sessionId),
+      ["session-a", "session-b"],
+    );
+  });
+
   it("uses composite cursor pagination without dropping identical timestamps", () => {
     const repo = createRepo();
     const now = "2026-02-27T10:00:00.000Z";
@@ -63,7 +93,10 @@ describe("SessionRepository", () => {
     const page2 = repo.list(10, cursor);
 
     assert.equal(page2.length, 2);
-    assert.equal(page2.some((item) => item.sessionId === page1[0]?.sessionId), false);
+    assert.equal(
+      page2.some((item) => item.sessionId === page1[0]?.sessionId),
+      false,
+    );
   });
 
   it("handles malformed routing_hints_json without throwing", () => {

@@ -14,6 +14,11 @@ import type { FastifyPluginAsync } from "fastify";
 import { integrationWebhookRoutes } from "./integration-webhooks.js";
 import { integrationsRoutes as baseIntegrationsRoutes } from "./integrations.js";
 
+vi.mock("node:sqlite", () => ({
+  DatabaseSync: class DatabaseSync {},
+  StatementSync: class StatementSync {},
+}));
+
 const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
   await fastify.register(baseIntegrationsRoutes);
   await fastify.register(integrationWebhookRoutes);

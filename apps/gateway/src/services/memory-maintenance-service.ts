@@ -209,18 +209,9 @@ export class MemoryMaintenanceService {
     if (!this.isOperational()) {
       return;
     }
-    const rows = this.ctx.gatewaySql
-      .prepare(
-        `
-      SELECT workspace_id
-      FROM workspace_memory_maintenance_policies
-      WHERE enabled = 1
-      ORDER BY workspace_id ASC
-    `,
-      )
-      .all() as Array<{ workspace_id: string }>;
-    for (const row of rows) {
-      await this.evaluateWorkspace(this.normalizeWorkspaceId(row.workspace_id), "scheduler");
+    const workspaceIds = this.ctx.storage.memoryMaintenance.listEnabledPolicyWorkspaceIds();
+    for (const workspaceId of workspaceIds) {
+      await this.evaluateWorkspace(this.normalizeWorkspaceId(workspaceId), "scheduler");
     }
   }
 
@@ -535,38 +526,7 @@ export class MemoryMaintenanceService {
   }
 
   private countChangedSessions(workspaceId: string, since?: string): number {
-    const sinceClause = since ? "AND trace.finished_at > @since" : "";
-    const row = this.ctx.gatewaySql
-      .prepare(
-        `
-      SELECT COUNT(*) AS count
-      FROM (
-        SELECT meta.session_id
-        FROM chat_session_meta AS meta
-        INNER JOIN chat_session_bindings AS binding
-          ON binding.session_id = meta.session_id
-        INNER JOIN chat_turn_traces AS trace
-          ON trace.session_id = meta.session_id
-        LEFT JOIN task_subagent_sessions AS subagent
-          ON subagent.agent_session_id = meta.session_id
-        WHERE meta.workspace_id = @workspaceId
-          AND meta.include_in_history = 1
-          AND (meta.origin IS NULL OR meta.origin = 'operator')
-          AND binding.transport = 'llm'
-          AND binding.writable = 1
-          AND subagent.agent_session_id IS NULL
-          AND trace.status = 'completed'
-          AND trace.assistant_message_id IS NOT NULL
-          ${sinceClause}
-        GROUP BY meta.session_id
-      ) AS changed_sessions
-    `,
-      )
-      .get({
-        workspaceId,
-        since,
-      }) as { count: number | null } | undefined;
-    return Number(row?.count ?? 0);
+    return this.ctx.storage.memoryMaintenance.countChangedSessions(workspaceId, since);
   }
 
   private listEligibleSessions(
@@ -574,41 +534,7 @@ export class MemoryMaintenanceService {
     since?: string,
     limit = MAX_TRANSCRIPT_SOURCES,
   ): EligibleWorkspaceSession[] {
-    const sinceClause = since ? "AND trace.finished_at > @since" : "";
-    const rows = this.ctx.gatewaySql
-      .prepare(
-        `
-      SELECT meta.session_id AS session_id, MAX(trace.finished_at) AS modified_at
-      FROM chat_session_meta AS meta
-      INNER JOIN chat_session_bindings AS binding
-        ON binding.session_id = meta.session_id
-      INNER JOIN chat_turn_traces AS trace
-        ON trace.session_id = meta.session_id
-      LEFT JOIN task_subagent_sessions AS subagent
-        ON subagent.agent_session_id = meta.session_id
-      WHERE meta.workspace_id = @workspaceId
-        AND meta.include_in_history = 1
-        AND (meta.origin IS NULL OR meta.origin = 'operator')
-        AND binding.transport = 'llm'
-        AND binding.writable = 1
-        AND subagent.agent_session_id IS NULL
-        AND trace.status = 'completed'
-        AND trace.assistant_message_id IS NOT NULL
-        ${sinceClause}
-      GROUP BY meta.session_id
-      ORDER BY modified_at DESC, meta.session_id DESC
-      LIMIT @limit
-    `,
-      )
-      .all({
-        workspaceId,
-        since,
-        limit: Math.max(1, Math.min(limit, 200)),
-      }) as Array<{ session_id: string; modified_at: string | null }>;
-    return rows.map((row) => ({
-      sessionId: row.session_id,
-      modifiedAt: row.modified_at ?? new Date(0).toISOString(),
-    }));
+    return this.ctx.storage.memoryMaintenance.listEligibleSessions(workspaceId, since, limit);
   }
 
   private getEligibleSession(sessionId: string): { sessionId: string; workspaceId: string } | undefined {
@@ -620,17 +546,7 @@ export class MemoryMaintenanceService {
     if (!binding || binding.transport !== "llm" || !binding.writable) {
       return undefined;
     }
-    const subagent = this.ctx.gatewaySql
-      .prepare(
-        `
-      SELECT 1
-      FROM task_subagent_sessions
-      WHERE agent_session_id = ?
-      LIMIT 1
-    `,
-      )
-      .get(sessionId) as { 1: number } | undefined;
-    if (subagent) {
+    if (this.ctx.storage.taskSubagents.findByAgentSessionId(sessionId)) {
       return undefined;
     }
     return {
@@ -884,7 +800,9 @@ export class MemoryMaintenanceService {
 
     const artifactSources = this.readRecentToolArtifacts(workspaceId, since, runId);
     for (const artifactSource of artifactSources) {
-      markdownSections.push(renderToolArtifactSection(artifactSource.sourceRef, artifactSource.modifiedAt, artifactSource.excerpt));
+      markdownSections.push(
+        renderToolArtifactSection(artifactSource.sourceRef, artifactSource.modifiedAt, artifactSource.excerpt),
+      );
     }
 
     if (markdownSections.length === 0) {
@@ -930,33 +848,8 @@ export class MemoryMaintenanceService {
   }
 
   private readRelevantMemoryItems(workspaceId: string, runId: string): MemoryMaintenanceRunSourceRecord[] {
-    const rows = this.ctx.gatewaySql
-      .prepare(
-        `
-      SELECT item_id, namespace, title, content, metadata_json, updated_at
-      FROM memory_items
-      WHERE status = 'active'
-      ORDER BY pinned DESC, updated_at DESC
-      LIMIT 200
-    `,
-      )
-      .all() as Array<{
-      item_id: string;
-      namespace: string;
-      title: string;
-      content: string;
-      metadata_json: string | null;
-      updated_at: string;
-    }>;
-    const items = rows
-      .map((row) => ({
-        itemId: row.item_id,
-        namespace: row.namespace,
-        title: row.title,
-        content: row.content,
-        metadata: parseJsonRecord(row.metadata_json),
-        updatedAt: row.updated_at,
-      }))
+    const items = this.ctx.storage.memoryMaintenance
+      .listActiveMemoryItems(200)
       .filter((item) => this.memoryItemMatchesWorkspace(item, workspaceId))
       .slice(0, MAX_MEMORY_ITEM_SOURCES);
 
@@ -1011,52 +904,25 @@ export class MemoryMaintenanceService {
     since: string | undefined,
     runId: string,
   ): MemoryMaintenanceRunSourceRecord[] {
-    const sinceClause = since ? "AND artifact.created_at > @since" : "";
-    const rows = this.ctx.gatewaySql.prepare(
-      `
-      SELECT
-        artifact.artifact_id AS artifact_id,
-        artifact.tool_name AS tool_name,
-        artifact.session_id AS session_id,
-        artifact.byte_length AS byte_length,
-        artifact.snippet AS snippet,
-        artifact.content_type AS content_type,
-        artifact.created_at AS created_at
-      FROM chat_tool_artifacts AS artifact
-      INNER JOIN chat_session_meta AS meta
-        ON meta.session_id = artifact.session_id
-      WHERE meta.workspace_id = @workspaceId
-        ${sinceClause}
-      ORDER BY artifact.created_at DESC
-      LIMIT @limit
-    `,
-    ).all({
-      workspaceId,
-      since,
-      limit: MAX_TOOL_ARTIFACT_SOURCES,
-    }) as Array<{
-      artifact_id: string;
-      tool_name: string;
-      session_id: string;
-      byte_length: number;
-      snippet: string | null;
-      content_type: string | null;
-      created_at: string;
-    }>;
-    return rows.map((row) => {
-      const header = `${row.tool_name} (${row.session_id}, ${row.byte_length} bytes${row.content_type ? `, ${row.content_type}` : ""})`;
-      const excerpt = truncateText(`${header}\n${row.snippet ?? "Artifact retained without inline snippet."}`, MAX_EXCERPT_CHARS);
-      return {
-        sourceId: randomUUID(),
-        runId,
-        sourceKind: "artifact",
-        sourceRef: row.artifact_id,
-        modifiedAt: row.created_at,
-        excerpt,
-        tokenEstimate: estimateTokens(excerpt),
-        createdAt: new Date().toISOString(),
-      } satisfies MemoryMaintenanceRunSourceRecord;
-    });
+    return this.ctx.storage.memoryMaintenance
+      .listRecentToolArtifacts(workspaceId, since, MAX_TOOL_ARTIFACT_SOURCES)
+      .map((artifact) => {
+        const header = `${artifact.toolName} (${artifact.sessionId}, ${artifact.byteLength} bytes${artifact.contentType ? `, ${artifact.contentType}` : ""})`;
+        const excerpt = truncateText(
+          `${header}\n${artifact.snippet ?? "Artifact retained without inline snippet."}`,
+          MAX_EXCERPT_CHARS,
+        );
+        return {
+          sourceId: randomUUID(),
+          runId,
+          sourceKind: "artifact",
+          sourceRef: artifact.artifactId,
+          modifiedAt: artifact.createdAt,
+          excerpt,
+          tokenEstimate: estimateTokens(excerpt),
+          createdAt: new Date().toISOString(),
+        } satisfies MemoryMaintenanceRunSourceRecord;
+      });
   }
 
   private memoryItemMatchesWorkspace(
@@ -1414,17 +1280,6 @@ function isProviderLikelyLocal(baseUrl: string): boolean {
     return host === "localhost" || host === "127.0.0.1" || host === "::1";
   } catch {
     return false;
-  }
-}
-
-function parseJsonRecord(raw: string | null): Record<string, unknown> {
-  if (!raw) {
-    return {};
-  }
-  try {
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return {};
   }
 }
 

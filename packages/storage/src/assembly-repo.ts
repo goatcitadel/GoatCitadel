@@ -336,9 +336,11 @@ export class AssemblyRepository {
   }
 
   public listRuns(limit = 50): AssemblyRunRecord[] {
-    const rows = toAssemblyRunRows(this.listRunsStmt.all({
-      limit: clampLimit(limit, 1, 250),
-    }));
+    const rows = toAssemblyRunRows(
+      this.listRunsStmt.all({
+        limit: clampLimit(limit, 1, 250),
+      }),
+    );
     return rows.map(mapRunRow);
   }
 
@@ -354,12 +356,15 @@ export class AssemblyRepository {
     });
   }
 
-  public completeRound(roundId: string, input: {
-    status: AssemblyRound["status"];
-    convergenceSnapshot?: AssemblyRound["convergenceSnapshot"];
-    stopCheck?: AssemblyRound["stopCheck"];
-    finishedAt?: string;
-  }): void {
+  public completeRound(
+    roundId: string,
+    input: {
+      status: AssemblyRound["status"];
+      convergenceSnapshot?: AssemblyRound["convergenceSnapshot"];
+      stopCheck?: AssemblyRound["stopCheck"];
+      finishedAt?: string;
+    },
+  ): void {
     this.updateRoundResultStmt.run({
       roundId,
       status: input.status,
@@ -399,10 +404,16 @@ export class AssemblyRepository {
   }
 
   public listArtifacts(runId: string, artifactType?: AssemblyArtifactType): AssemblyArtifactRecord[] {
-    const rows = toAssemblyArtifactRows((artifactType ? this.listArtifactsByTypeStmt : this.listArtifactsStmt).all({
-      runId,
-      artifactType,
-    }));
+    const rows = toAssemblyArtifactRows(
+      artifactType
+        ? this.listArtifactsByTypeStmt.all({
+            runId,
+            artifactType,
+          })
+        : this.listArtifactsStmt.all({
+            runId,
+          }),
+    );
     return rows.map(mapArtifactRow);
   }
 
@@ -426,9 +437,11 @@ export class AssemblyRepository {
   }
 
   public listReputations(limit = 100): ModelReputation[] {
-    const rows = toAssemblyReputationRows(this.listReputationsStmt.all({
-      limit: clampLimit(limit, 1, 500),
-    }));
+    const rows = toAssemblyReputationRows(
+      this.listReputationsStmt.all({
+        limit: clampLimit(limit, 1, 500),
+      }),
+    );
     return rows.map(mapReputationRow);
   }
 }
@@ -503,13 +516,9 @@ function mapRunRow(row: AssemblyRunRow): AssemblyRunRecord {
     problem: parseAssemblyObject(row.problem_json, createFallbackAssemblyProblem(row)),
     settings: parseAssemblyObject(row.settings_json, createFallbackAssemblySettings()),
     adversarialSettings: parseAssemblyObject(row.adversarial_settings_json, createFallbackAdversarialSettings()),
-    result: row.result_json
-      ? parseAssemblyOptionalObject(row.result_json)
-      : undefined,
+    result: row.result_json ? parseAssemblyOptionalObject(row.result_json) : undefined,
     stopReason: row.stop_reason ?? undefined,
-    usage: row.usage_json
-      ? safeJsonParse<AssemblyUsageSummary | undefined>(row.usage_json, undefined)
-      : undefined,
+    usage: row.usage_json ? safeJsonParse<AssemblyUsageSummary | undefined>(row.usage_json, undefined) : undefined,
     error: row.error_text ?? undefined,
     createdAt: row.created_at,
     startedAt: row.started_at ?? undefined,
@@ -744,12 +753,12 @@ function parseAssemblyArtifactPayload(row: AssemblyArtifactRow): AssemblyArtifac
 
 function parseAssemblyObject<T>(value: string, fallback: T): T {
   const parsed = safeJsonParse<unknown>(value, {});
-  return isRecord(parsed) ? parsed as T : fallback;
+  return isRecord(parsed) ? (parsed as T) : fallback;
 }
 
 function parseAssemblyOptionalObject<T>(value: string): T | undefined {
   const parsed = safeJsonParse<unknown>(value, undefined);
-  return isRecord(parsed) ? parsed as T : undefined;
+  return isRecord(parsed) ? (parsed as T) : undefined;
 }
 
 function toAssemblyRunRow(value: unknown): AssemblyRunRow | undefined {
@@ -776,80 +785,86 @@ function isAssemblyRunRow(value: unknown): value is AssemblyRunRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.run_id === "string"
-    && (typeof value.workspace_id === "string" || value.workspace_id === null)
-    && (typeof value.source_session_id === "string" || value.source_session_id === null)
-    && (typeof value.source_task_id === "string" || value.source_task_id === null)
-    && typeof value.title === "string"
-    && typeof value.status === "string"
-    && typeof value.current_stage === "string"
-    && typeof value.current_round_index === "number"
-    && typeof value.problem_json === "string"
-    && typeof value.settings_json === "string"
-    && typeof value.adversarial_settings_json === "string"
-    && (typeof value.result_json === "string" || value.result_json === null)
-    && (typeof value.stop_reason === "string" || value.stop_reason === null)
-    && (typeof value.usage_json === "string" || value.usage_json === null)
-    && (typeof value.error_text === "string" || value.error_text === null)
-    && typeof value.created_at === "string"
-    && (typeof value.started_at === "string" || value.started_at === null)
-    && (typeof value.finished_at === "string" || value.finished_at === null)
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.run_id === "string" &&
+    (typeof value.workspace_id === "string" || value.workspace_id === null) &&
+    (typeof value.source_session_id === "string" || value.source_session_id === null) &&
+    (typeof value.source_task_id === "string" || value.source_task_id === null) &&
+    typeof value.title === "string" &&
+    typeof value.status === "string" &&
+    typeof value.current_stage === "string" &&
+    typeof value.current_round_index === "number" &&
+    typeof value.problem_json === "string" &&
+    typeof value.settings_json === "string" &&
+    typeof value.adversarial_settings_json === "string" &&
+    (typeof value.result_json === "string" || value.result_json === null) &&
+    (typeof value.stop_reason === "string" || value.stop_reason === null) &&
+    (typeof value.usage_json === "string" || value.usage_json === null) &&
+    (typeof value.error_text === "string" || value.error_text === null) &&
+    typeof value.created_at === "string" &&
+    (typeof value.started_at === "string" || value.started_at === null) &&
+    (typeof value.finished_at === "string" || value.finished_at === null) &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isAssemblyRoundRow(value: unknown): value is AssemblyRoundRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.round_id === "string"
-    && typeof value.run_id === "string"
-    && typeof value.round_index === "number"
-    && typeof value.stage === "string"
-    && typeof value.status === "string"
-    && typeof value.participant_ids_json === "string"
-    && typeof value.artifact_ids_json === "string"
-    && (typeof value.convergence_snapshot_json === "string" || value.convergence_snapshot_json === null)
-    && (typeof value.stop_check_json === "string" || value.stop_check_json === null)
-    && typeof value.started_at === "string"
-    && (typeof value.finished_at === "string" || value.finished_at === null);
+  return (
+    typeof value.round_id === "string" &&
+    typeof value.run_id === "string" &&
+    typeof value.round_index === "number" &&
+    typeof value.stage === "string" &&
+    typeof value.status === "string" &&
+    typeof value.participant_ids_json === "string" &&
+    typeof value.artifact_ids_json === "string" &&
+    (typeof value.convergence_snapshot_json === "string" || value.convergence_snapshot_json === null) &&
+    (typeof value.stop_check_json === "string" || value.stop_check_json === null) &&
+    typeof value.started_at === "string" &&
+    (typeof value.finished_at === "string" || value.finished_at === null)
+  );
 }
 
 function isAssemblyArtifactRow(value: unknown): value is AssemblyArtifactRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.artifact_id === "string"
-    && typeof value.run_id === "string"
-    && typeof value.round_index === "number"
-    && typeof value.stage === "string"
-    && typeof value.artifact_type === "string"
-    && (typeof value.participant_model_ref === "string" || value.participant_model_ref === null)
-    && (typeof value.blinded_author_token === "string" || value.blinded_author_token === null)
-    && typeof value.payload_json === "string"
-    && typeof value.created_at === "string";
+  return (
+    typeof value.artifact_id === "string" &&
+    typeof value.run_id === "string" &&
+    typeof value.round_index === "number" &&
+    typeof value.stage === "string" &&
+    typeof value.artifact_type === "string" &&
+    (typeof value.participant_model_ref === "string" || value.participant_model_ref === null) &&
+    (typeof value.blinded_author_token === "string" || value.blinded_author_token === null) &&
+    typeof value.payload_json === "string" &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isAssemblyReputationRow(value: unknown): value is AssemblyReputationRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.model_ref === "string"
-    && typeof value.provider_id === "string"
-    && typeof value.model_id === "string"
-    && typeof value.overall === "number"
-    && typeof value.by_domain_json === "string"
-    && typeof value.accuracy === "number"
-    && typeof value.reasoning_strength === "number"
-    && typeof value.critique_quality === "number"
-    && typeof value.consensus_leadership === "number"
-    && typeof value.stability === "number"
-    && typeof value.adversarial_usefulness === "number"
-    && typeof value.sample_count === "number"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.model_ref === "string" &&
+    typeof value.provider_id === "string" &&
+    typeof value.model_id === "string" &&
+    typeof value.overall === "number" &&
+    typeof value.by_domain_json === "string" &&
+    typeof value.accuracy === "number" &&
+    typeof value.reasoning_strength === "number" &&
+    typeof value.critique_quality === "number" &&
+    typeof value.consensus_leadership === "number" &&
+    typeof value.stability === "number" &&
+    typeof value.adversarial_usefulness === "number" &&
+    typeof value.sample_count === "number" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

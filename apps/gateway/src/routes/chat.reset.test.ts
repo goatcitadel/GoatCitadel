@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { chatRoutes } from "./chat.js";
+import { promptPackRoutes } from "./prompt-packs.js";
 
 describe("prompt-pack reset route", () => {
   let app: FastifyInstance | null = null;
@@ -27,7 +27,7 @@ describe("prompt-pack reset route", () => {
       getPromptPackExport,
       resetPromptPackRunsAndScores,
     } as never);
-    await app.register(chatRoutes);
+    await app.register(promptPackRoutes);
 
     const response = await app.inject({
       method: "POST",
@@ -66,7 +66,7 @@ describe("prompt-pack reset route", () => {
       getPromptPackExport: vi.fn(),
       resetPromptPackRunsAndScores,
     } as never);
-    await app.register(chatRoutes);
+    await app.register(promptPackRoutes);
 
     const response = await app.inject({
       method: "POST",
