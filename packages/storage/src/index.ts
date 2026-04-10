@@ -62,6 +62,7 @@ import { GatewaySqlRepository } from "./gateway-sql-repo.js";
 import { AssemblyRepository } from "./assembly-repo.js";
 import { WorkspaceHookRepository } from "./workspace-hook-repo.js";
 import { HookRunRepository } from "./hook-run-repo.js";
+import { LearnedMemoryRepository } from "./learned-memory-repo.js";
 import { MemoryMaintenanceRepository } from "./memory-maintenance-repo.js";
 import { TranscriptOutboxRepository } from "./transcript-outbox-repo.js";
 import { RealtimeStreamLeaseRepository } from "./realtime-stream-lease-repo.js";
@@ -143,6 +144,7 @@ export class Storage {
   public readonly workspaces: WorkspaceRepository;
   public readonly workspaceHooks: WorkspaceHookRepository;
   public readonly hookRuns: HookRunRepository;
+  public readonly learnedMemory: LearnedMemoryRepository;
   public readonly memoryMaintenance: MemoryMaintenanceRepository;
   public readonly durableRuns: DurableRunRepository;
   public readonly gatewaySql: GatewaySqlRepository;
@@ -219,6 +221,7 @@ export class Storage {
     this.workspaces = new WorkspaceRepository(this.db);
     this.workspaceHooks = new WorkspaceHookRepository(this.db);
     this.hookRuns = new HookRunRepository(this.db);
+    this.learnedMemory = new LearnedMemoryRepository(this.db);
     this.memoryMaintenance = new MemoryMaintenanceRepository(this.db);
     this.durableRuns = new DurableRunRepository(this.db);
     this.gatewaySql = new GatewaySqlRepository(this.db);

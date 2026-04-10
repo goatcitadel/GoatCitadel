@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ToolInvokeRequest } from "@goatcitadel/contracts";
+import { ValidationError, type ToolInvokeRequest } from "@goatcitadel/contracts";
 import { resolveProjectRootForToolContext, resolveToolRequestPaths } from "./tool-path-resolution.js";
 
 const tempRoots: string[] = [];
@@ -116,11 +116,29 @@ describe("resolveToolRequestPaths", () => {
     expect(resolved.args.path).toBe(projectRoot);
   });
 
-  it("re-anchors filesystem root placeholders back to the assigned project root", async () => {
+  it("rejects filesystem root placeholders for read operations", async () => {
     const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
     const request: ToolInvokeRequest = {
       toolName: "code.search_files",
       args: { path: path.parse(workspaceRoot).root, query: "package.json" },
+      agentId: "agent",
+      sessionId: "session",
+    };
+
+    expect(() =>
+      resolveToolRequestPaths(request, {
+        workspaceRoot,
+        projectRoot,
+        projectWorkspacePath: "fixtures/prompt-pack-workspace",
+      }),
+    ).toThrow(ValidationError);
+  });
+
+  it("preserves filesystem root convenience for cwd resolution", async () => {
+    const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
+    const request: ToolInvokeRequest = {
+      toolName: "shell.exec",
+      args: { cwd: path.parse(workspaceRoot).root, command: "pwd" },
       agentId: "agent",
       sessionId: "session",
     };
@@ -131,7 +149,7 @@ describe("resolveToolRequestPaths", () => {
       projectWorkspacePath: "fixtures/prompt-pack-workspace",
     });
 
-    expect(resolved.args.path).toBe(projectRoot);
+    expect(resolved.args.cwd).toBe(projectRoot);
   });
 
   it("routes project-relative write targets into the assigned project root", async () => {
@@ -211,15 +229,110 @@ describe("resolveToolRequestPaths", () => {
     expect(resolvedList.args.path).toBe(projectRoot);
     expect(resolvedStat.args.path).toBe(projectRoot);
   });
+
+  it("rejects absolute read paths outside the workspace boundary", async () => {
+    const { projectRoot, workspaceRoot, outsideRoot } = await createWorkspaceFixture();
+    const request: ToolInvokeRequest = {
+      toolName: "file.read_range",
+      args: { path: path.join(outsideRoot, "escape.txt") },
+      agentId: "agent",
+      sessionId: "session",
+    };
+
+    await fs.writeFile(path.join(outsideRoot, "escape.txt"), "nope\n", "utf8");
+
+    expect(() =>
+      resolveToolRequestPaths(request, {
+        workspaceRoot,
+        projectRoot,
+        projectWorkspacePath: "fixtures/prompt-pack-workspace",
+      }),
+    ).toThrow(ValidationError);
+  });
+
+  it("rejects symlinked relative read paths that escape the workspace boundary", async () => {
+    const { workspaceRoot, outsideRoot } = await createWorkspaceFixture();
+    const outsideDir = path.join(outsideRoot, "linked-outside");
+    const linkDir = path.join(workspaceRoot, "linked-outside");
+    await fs.mkdir(outsideDir, { recursive: true });
+    await fs.writeFile(path.join(outsideDir, "secret.txt"), "shh\n", "utf8");
+    await createDirectoryLink(outsideDir, linkDir);
+
+    const request: ToolInvokeRequest = {
+      toolName: "file.read_range",
+      args: { path: "linked-outside/secret.txt" },
+      agentId: "agent",
+      sessionId: "session",
+    };
+
+    expect(() =>
+      resolveToolRequestPaths(request, {
+        workspaceRoot,
+      }),
+    ).toThrow(ValidationError);
+  });
+
+  it("rejects symlinked relative write targets that escape the workspace boundary", async () => {
+    const { workspaceRoot, outsideRoot } = await createWorkspaceFixture();
+    const outsideDir = path.join(outsideRoot, "linked-write");
+    const linkDir = path.join(workspaceRoot, "linked-write");
+    await fs.mkdir(outsideDir, { recursive: true });
+    await createDirectoryLink(outsideDir, linkDir);
+
+    const request: ToolInvokeRequest = {
+      toolName: "fs.write",
+      args: { path: "linked-write/new-file.ts", content: "export {};\n" },
+      agentId: "agent",
+      sessionId: "session",
+    };
+
+    expect(() =>
+      resolveToolRequestPaths(request, {
+        workspaceRoot,
+      }),
+    ).toThrow(ValidationError);
+  });
+
+  it("rejects symlinked relative cwd targets that escape the workspace boundary", async () => {
+    const { workspaceRoot, outsideRoot } = await createWorkspaceFixture();
+    const outsideDir = path.join(outsideRoot, "linked-cwd");
+    const linkDir = path.join(workspaceRoot, "linked-cwd");
+    await fs.mkdir(outsideDir, { recursive: true });
+    await createDirectoryLink(outsideDir, linkDir);
+
+    const request: ToolInvokeRequest = {
+      toolName: "shell.exec",
+      args: { cwd: "linked-cwd", command: "pwd" },
+      agentId: "agent",
+      sessionId: "session",
+    };
+
+    expect(() =>
+      resolveToolRequestPaths(request, {
+        workspaceRoot,
+      }),
+    ).toThrow(ValidationError);
+  });
 });
 
-async function createWorkspaceFixture(): Promise<{ repoRoot: string; workspaceRoot: string; projectRoot: string }> {
+async function createWorkspaceFixture(): Promise<{
+  repoRoot: string;
+  workspaceRoot: string;
+  projectRoot: string;
+  outsideRoot: string;
+}> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "goat-tool-paths-"));
   tempRoots.push(root);
   const repoRoot = root;
   const workspaceRoot = path.join(repoRoot, "workspace");
   const projectRoot = path.join(workspaceRoot, "fixtures", "prompt-pack-workspace");
+  const outsideRoot = path.join(repoRoot, "outside");
   await fs.mkdir(path.join(projectRoot, "src"), { recursive: true });
+  await fs.mkdir(outsideRoot, { recursive: true });
   await fs.writeFile(path.join(projectRoot, "src", "utils.ts"), "export const slugify = () => '';\n", "utf8");
-  return { repoRoot, workspaceRoot, projectRoot };
+  return { repoRoot, workspaceRoot, projectRoot, outsideRoot };
+}
+
+async function createDirectoryLink(target: string, link: string): Promise<void> {
+  await fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
 }

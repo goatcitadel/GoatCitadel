@@ -18,17 +18,9 @@ import type {
   ApprovalBulkResolveResult,
   ApprovalReplaySnapshot,
   ApprovalRequest,
-  A2UIProofLaneDraft,
-  ExtensionStarterPackArtifactRecord,
-  ExtensionStarterPackDraft,
-  ExtensionSdkBriefDraft,
   AssemblyRunDetailResponse,
   AssemblyRunRecord,
   ChangeRiskEvaluationResponse,
-  BrowserProofLaneDraft,
-  FollowOnProofLaneArtifactRecord,
-  PackagingProofLaneDraft,
-  VoiceProofLaneDraft,
   ChannelSetupDefinition,
   ChannelSetupDraft,
   ChannelSetupDraftCreateInput,
@@ -161,7 +153,6 @@ import type {
   CreateAssemblyRunInput,
   ModelReputation,
 } from "@goatcitadel/contracts";
-import type { FollowOnParityReport, OpenclawParityProgramReport } from "@goatcitadel/contracts";
 import type {
   AgentsResponse,
   ApprovalReplayResponse,
@@ -196,8 +187,6 @@ import { computeReconnectDelay, issueSseBridgeToken } from "./sse-bridge.js";
 
 export type { GuidanceDocumentRecord };
 export type { ObsidianIntegrationConfig, ObsidianIntegrationStatus };
-export type { ExtensionSdkBriefDraft };
-export type { ExtensionStarterPackArtifactRecord, ExtensionStarterPackDraft };
 export type { LlmRuntimeConfigResponse, ProviderSecretStatus } from "./platform.js";
 export type { FileTemplate } from "./operators-agents-files.js";
 export type { WorkspacesResponse } from "./workspaces.js";
@@ -619,28 +608,13 @@ export {
 export {
   createBackup,
   createMediaJob,
-  exportA2UIProofLaneDraft,
-  exportBrowserProofLaneDraft,
-  exportCompanionBootstrapBrief,
-  exportExtensionSdkBrief,
-  exportExtensionStarterPack,
-  exportPackagingProofLaneDraft,
-  exportVoiceProofLaneDraft,
-  fetchA2UIProofLaneDraft,
-  fetchBrowserProofLaneDraft,
   fetchCostSummary,
   fetchDashboardState,
-  fetchExtensionSdkBrief,
-  fetchExtensionStarterPack,
-  fetchFollowOnParityReport,
   fetchMediaJob,
   fetchMediaJobs,
-  fetchOpenclawParityReport,
-  fetchPackagingProofLaneDraft,
   fetchRealtimeEvents,
   fetchRetentionPolicy,
   fetchSystemVitals,
-  fetchVoiceProofLaneDraft,
   listBackups,
   pruneRetention,
   restoreBackup,

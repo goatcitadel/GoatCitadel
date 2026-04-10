@@ -100,14 +100,14 @@ export class RealtimeEventRepository {
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
-    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
     createdAt = new Date().toISOString(),
   ): RealtimeEvent {
     const normalizedOptions = normalizeRealtimeEventOptions(eventType, source, payload, options);
     const attribution = getRequestAttribution();
     const attributedPayload = {
       ...embedRealtimeEnvelope(payload, normalizedOptions),
-      correlationId: payload.correlationId ?? attribution?.correlationId,
+      correlationId: options?.correlationId ?? payload.correlationId ?? attribution?.correlationId,
       traceId: payload.traceId ?? attribution?.traceId,
       originSurface: payload.originSurface ?? attribution?.originSurface,
       actorId: payload.actorId ?? attribution?.actorId,
@@ -115,7 +115,7 @@ export class RealtimeEventRepository {
       grantId: payload.grantId ?? attribution?.grantId,
     };
     const eventId = randomUUID();
-    let sequence = 1;
+    let sequence: number;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const nextSequenceRow = toSequenceStateRow(this.allocateSequenceStmt.get());
@@ -152,43 +152,44 @@ export class RealtimeEventRepository {
   public list(limit: number, cursor?: string): RealtimeEvent[] {
     const sequenceCursor = parseSequenceCursor(cursor);
     if (sequenceCursor !== undefined) {
-      const rows = (
+      const rows =
         sequenceCursor > 0
           ? this.listBySequenceStmt.all({
-            limit,
-            cursorSequence: sequenceCursor,
-          })
-          : this.listLatestStmt.all({ limit })
-      );
+              limit,
+              cursorSequence: sequenceCursor,
+            })
+          : this.listLatestStmt.all({ limit });
       return toRealtimeEventRows(rows).map(mapRealtimeEventRow);
     }
 
     const parsedCursor = parseCompositeCursor(cursor);
     const rows = parsedCursor
       ? this.listStmt.all({
-        limit,
-        cursorCreatedAt: parsedCursor.timestamp,
-        cursorEventId: parsedCursor.key,
-      })
+          limit,
+          cursorCreatedAt: parsedCursor.timestamp,
+          cursorEventId: parsedCursor.key,
+        })
       : this.listLatestStmt.all({ limit });
 
     return toRealtimeEventRows(rows).map(mapRealtimeEventRow);
   }
 
   public listAfterSequence(afterSequence: number, limit: number): RealtimeEvent[] {
-    const rows = toRealtimeEventRows(this.listAfterSequenceStmt.all({
-      afterSequence,
-      limit,
-    }));
+    const rows = toRealtimeEventRows(
+      this.listAfterSequenceStmt.all({
+        afterSequence,
+        limit,
+      }),
+    );
     return rows.map(mapRealtimeEventRow);
   }
 
   public getSequenceBounds(): { oldestSequence?: number; newestSequence?: number } {
     const row = this.boundsStmt.get() as
       | {
-        oldest_sequence?: number | null;
-        newest_sequence?: number | null;
-      }
+          oldest_sequence?: number | null;
+          newest_sequence?: number | null;
+        }
       | undefined;
     return {
       oldestSequence: typeof row?.oldest_sequence === "number" ? row.oldest_sequence : undefined,
@@ -197,8 +198,7 @@ export class RealtimeEventRepository {
   }
 
   public pruneOlderThan(cutoffIso: string): number {
-    const before = this.db.prepare("SELECT COUNT(*) AS count FROM realtime_events WHERE created_at < ?")
-      .get(cutoffIso);
+    const before = this.db.prepare("SELECT COUNT(*) AS count FROM realtime_events WHERE created_at < ?").get(cutoffIso);
     const countRow = toCountRow(before);
     const count = Number(countRow?.count ?? 0);
     if (count <= 0) {
@@ -252,12 +252,14 @@ function isRealtimeEventRow(value: unknown): value is RealtimeEventRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.event_id === "string"
-    && typeof value.sequence === "number"
-    && typeof value.event_type === "string"
-    && typeof value.source === "string"
-    && typeof value.payload_json === "string"
-    && typeof value.created_at === "string";
+  return (
+    typeof value.event_id === "string" &&
+    typeof value.sequence === "number" &&
+    typeof value.event_type === "string" &&
+    typeof value.source === "string" &&
+    typeof value.payload_json === "string" &&
+    typeof value.created_at === "string"
+  );
 }
 
 function toRealtimeEventRows(value: unknown): RealtimeEventRow[] {
@@ -308,24 +310,26 @@ function mapRealtimeEventRow(row: RealtimeEventRow): RealtimeEvent {
   };
 }
 
-function extractRealtimeMetadata(payload: Record<string, unknown>): Pick<
-  RealtimeEvent,
-  "eventClass" | "eventAuthority" | "links" | "correlationId" | "traceId" | "originSurface"
-> {
+function extractRealtimeMetadata(
+  payload: Record<string, unknown>,
+): Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId" | "traceId" | "originSurface"> {
   const links = payload[REALTIME_EVENT_LINKS_KEY];
   return {
-    eventClass: typeof payload[REALTIME_EVENT_CLASS_KEY] === "string" && isRealtimeEventClass(payload[REALTIME_EVENT_CLASS_KEY])
-      ? payload[REALTIME_EVENT_CLASS_KEY]
-      : undefined,
-    eventAuthority: typeof payload[REALTIME_EVENT_AUTHORITY_KEY] === "string"
-      && isRealtimeEventAuthority(payload[REALTIME_EVENT_AUTHORITY_KEY])
-      ? payload[REALTIME_EVENT_AUTHORITY_KEY]
-      : undefined,
-    links: links && typeof links === "object" && !Array.isArray(links)
-      ? Object.fromEntries(
-        Object.entries(links).filter(([, value]) => typeof value === "string" && value.trim().length > 0),
-      )
-      : undefined,
+    eventClass:
+      typeof payload[REALTIME_EVENT_CLASS_KEY] === "string" && isRealtimeEventClass(payload[REALTIME_EVENT_CLASS_KEY])
+        ? payload[REALTIME_EVENT_CLASS_KEY]
+        : undefined,
+    eventAuthority:
+      typeof payload[REALTIME_EVENT_AUTHORITY_KEY] === "string" &&
+      isRealtimeEventAuthority(payload[REALTIME_EVENT_AUTHORITY_KEY])
+        ? payload[REALTIME_EVENT_AUTHORITY_KEY]
+        : undefined,
+    links:
+      links && typeof links === "object" && !Array.isArray(links)
+        ? Object.fromEntries(
+            Object.entries(links).filter(([, value]) => typeof value === "string" && value.trim().length > 0),
+          )
+        : undefined,
     correlationId: typeof payload.correlationId === "string" ? payload.correlationId : undefined,
     traceId: typeof payload.traceId === "string" ? payload.traceId : undefined,
     originSurface: typeof payload.originSurface === "string" ? payload.originSurface : undefined,
@@ -377,9 +381,9 @@ function normalizeRealtimeEventOptions(
 
 function stripRealtimeEnvelope(payload: Record<string, unknown>): Record<string, unknown> {
   if (
-    !(REALTIME_EVENT_CLASS_KEY in payload)
-    && !(REALTIME_EVENT_AUTHORITY_KEY in payload)
-    && !(REALTIME_EVENT_LINKS_KEY in payload)
+    !(REALTIME_EVENT_CLASS_KEY in payload) &&
+    !(REALTIME_EVENT_AUTHORITY_KEY in payload) &&
+    !(REALTIME_EVENT_LINKS_KEY in payload)
   ) {
     return payload;
   }
@@ -416,19 +420,19 @@ function inferRealtimeEventMetadata(
 function inferRealtimeEventClass(eventType: string, source: string): RealtimeEvent["eventClass"] {
   const haystack = `${eventType} ${source}`.toLowerCase();
   if (
-    haystack.includes("approval_remote_action_ready")
-    || haystack.includes("auth_device_request_created")
-    || haystack.includes("replay_gap")
+    haystack.includes("approval_remote_action_ready") ||
+    haystack.includes("auth_device_request_created") ||
+    haystack.includes("replay_gap")
   ) {
     return "ui_notification";
   }
   if (
-    haystack.includes("system")
-    || haystack.includes("cron")
-    || haystack.includes("durable")
-    || haystack.includes("connector")
-    || haystack.includes("integration")
-    || haystack.includes("memory")
+    haystack.includes("system") ||
+    haystack.includes("cron") ||
+    haystack.includes("durable") ||
+    haystack.includes("connector") ||
+    haystack.includes("integration") ||
+    haystack.includes("memory")
   ) {
     return "operational_signal";
   }

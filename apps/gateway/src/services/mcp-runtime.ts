@@ -316,6 +316,55 @@ function inferToolSeedNames(server: McpServerRecord): string[] {
   return ["search", "fetch"];
 }
 
+/** Max bytes of stderr to retain per MCP child process invocation. */
+const MCP_STDERR_MAX_BYTES = 4096;
+/** Max bytes per single stdout line before it's discarded. */
+const MCP_STDOUT_LINE_MAX_BYTES = 512 * 1024;
+
+/** Safe system env keys always passed to MCP child processes. */
+const MCP_SAFE_ENV_KEYS = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LANG",
+  "TERM",
+  "SHELL",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "SYSTEMROOT",
+  "COMSPEC",
+  "WINDIR",
+  "NODE_ENV",
+  "NODE_PATH",
+  "XDG_DATA_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME",
+];
+
+/**
+ * Build a restricted env for MCP child processes.
+ * Passes through safe system variables plus any keys explicitly
+ * declared in the server's policy.allowedEnvKeys.
+ */
+function buildMcpChildEnv(server: McpServerRecord): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
+  for (const key of MCP_SAFE_ENV_KEYS) {
+    if (process.env[key] !== undefined) {
+      env[key] = process.env[key];
+    }
+  }
+  const allowedKeys = server.policy.allowedEnvKeys;
+  if (Array.isArray(allowedKeys)) {
+    for (const key of allowedKeys) {
+      if (typeof key === "string" && key.trim() && process.env[key] !== undefined) {
+        env[key] = process.env[key];
+      }
+    }
+  }
+  return env;
+}
+
 async function withStdioMcpClient<T>(
   server: McpServerRecord,
   timeoutMs: number,
@@ -326,8 +375,9 @@ async function withStdioMcpClient<T>(
   const child = spawn(command, server.args ?? [], {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: process.cwd(),
-    env: process.env,
+    env: buildMcpChildEnv(server),
     windowsHide: true,
+    timeout: Math.ceil(timeoutMs * 1.5),
   });
   const pending = new Map<
     number,
@@ -357,7 +407,7 @@ async function withStdioMcpClient<T>(
     while (newlineIndex >= 0) {
       const rawLine = stdoutBuffer.slice(0, newlineIndex).trim();
       stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-      if (rawLine) {
+      if (rawLine && rawLine.length <= MCP_STDOUT_LINE_MAX_BYTES) {
         let message: JsonRpcEnvelope | undefined;
         try {
           message = JSON.parse(rawLine) as JsonRpcEnvelope;
@@ -375,10 +425,15 @@ async function withStdioMcpClient<T>(
       }
       newlineIndex = stdoutBuffer.indexOf("\n");
     }
+    if (stdoutBuffer.length > MCP_STDOUT_LINE_MAX_BYTES) {
+      stdoutBuffer = "";
+    }
   });
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {
-    stderrBuffer += chunk;
+    if (stderrBuffer.length < MCP_STDERR_MAX_BYTES) {
+      stderrBuffer += chunk.slice(0, MCP_STDERR_MAX_BYTES - stderrBuffer.length);
+    }
   });
   child.on("error", (error) => {
     rejectAll(error);
@@ -491,8 +546,8 @@ async function withStdioMcpClient<T>(
     client.notify("notifications/initialized", {});
     return await run(client);
   } catch (error) {
-    const suffix = client.readStderr();
-    const message = suffix ? `${(error as Error).message} ${suffix}`.trim() : (error as Error).message;
+    const suffix = client.readStderr().slice(0, 500);
+    const message = suffix ? `${(error as Error).message} [stderr: ${suffix}]`.trim() : (error as Error).message;
     throw new Error(message, { cause: error });
   } finally {
     client.close();

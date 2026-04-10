@@ -210,16 +210,19 @@ export class DurableRunService {
     if (current.status === "completed" || current.status === "failed" || current.status === "cancelled") {
       throw new Error(`Durable run ${runId} is already terminal (${current.status})`);
     }
-    const next = this.ctx.storage.durableRuns.updateRun({
-      runId,
-      status: "paused",
-      startedAt: current.startedAt ?? new Date().toISOString(),
-      finishedAt: undefined,
-      updatedAt: new Date().toISOString(),
-    });
-    this.recordDurableTimelineEvent(runId, "run_paused", {
-      actorId,
-      previousStatus: current.status,
+    let next!: DurableRunRecord;
+    this.ctx.storage.runImmediateTransaction(() => {
+      next = this.ctx.storage.durableRuns.updateRun({
+        runId,
+        status: "paused",
+        startedAt: current.startedAt ?? new Date().toISOString(),
+        finishedAt: undefined,
+        updatedAt: new Date().toISOString(),
+      });
+      this.recordDurableTimelineEvent(runId, "run_paused", {
+        actorId,
+        previousStatus: current.status,
+      });
     });
     this.ctx.publishRealtime("system", "durable", {
       type: "durable_run_paused",
@@ -235,22 +238,25 @@ export class DurableRunService {
     if (current.status !== "paused" && current.status !== "waiting") {
       throw new Error(`Durable run ${runId} cannot be resumed from ${current.status}`);
     }
-    const next = this.ctx.storage.durableRuns.updateRun({
-      runId,
-      status: "running",
-      startedAt: current.startedAt ?? new Date().toISOString(),
-      finishedAt: undefined,
-      updatedAt: new Date().toISOString(),
-      lastError: undefined,
-    });
-    this.ctx.storage.durableRuns.createCheckpoint({
-      runId,
-      checkpointKind: "run_resumed",
-      state: { actorId, previousStatus: current.status },
-    });
-    this.recordDurableTimelineEvent(runId, "run_resumed", {
-      actorId,
-      previousStatus: current.status,
+    let next!: DurableRunRecord;
+    this.ctx.storage.runImmediateTransaction(() => {
+      next = this.ctx.storage.durableRuns.updateRun({
+        runId,
+        status: "running",
+        startedAt: current.startedAt ?? new Date().toISOString(),
+        finishedAt: undefined,
+        updatedAt: new Date().toISOString(),
+        lastError: undefined,
+      });
+      this.ctx.storage.durableRuns.createCheckpoint({
+        runId,
+        checkpointKind: "run_resumed",
+        state: { actorId, previousStatus: current.status },
+      });
+      this.recordDurableTimelineEvent(runId, "run_resumed", {
+        actorId,
+        previousStatus: current.status,
+      });
     });
     this.ctx.publishRealtime("system", "durable", {
       type: "durable_run_resumed",
@@ -267,16 +273,19 @@ export class DurableRunService {
       throw new Error(`Durable run ${runId} is already terminal (${current.status})`);
     }
     const now = new Date().toISOString();
-    const next = this.ctx.storage.durableRuns.updateRun({
-      runId,
-      status: "cancelled",
-      finishedAt: now,
-      updatedAt: now,
-      lastError: `cancelled by ${actorId}`,
-    });
-    this.recordDurableTimelineEvent(runId, "run_cancelled", {
-      actorId,
-      previousStatus: current.status,
+    let next!: DurableRunRecord;
+    this.ctx.storage.runImmediateTransaction(() => {
+      next = this.ctx.storage.durableRuns.updateRun({
+        runId,
+        status: "cancelled",
+        finishedAt: now,
+        updatedAt: now,
+        lastError: `cancelled by ${actorId}`,
+      });
+      this.recordDurableTimelineEvent(runId, "run_cancelled", {
+        actorId,
+        previousStatus: current.status,
+      });
     });
     this.ctx.publishRealtime("system", "durable", {
       type: "durable_run_cancelled",
@@ -394,7 +403,11 @@ export class DurableRunService {
     return next;
   }
 
-  recoverDurableDeadLetter(entryId: string, actorId = "operator"): DurableRunRecord {
+  recoverDurableDeadLetter(
+    entryId: string,
+    actorId = "operator",
+    options?: { maxAttempts?: number },
+  ): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const row = this.ctx.gatewaySql
       .prepare(
@@ -408,29 +421,38 @@ export class DurableRunService {
     if (!row) {
       throw new Error(`Durable dead-letter entry not found: ${entryId}`);
     }
-    this.ctx.gatewaySql
-      .prepare(
-        `
-      UPDATE durable_dead_letters
-      SET resolved_at = @resolvedAt, resolution_note = @note
-      WHERE dead_letter_id = @entryId
-    `,
-      )
-      .run({
-        entryId,
-        resolvedAt: new Date().toISOString(),
-        note: `recovered by ${actorId}`,
+    const current = this.ctx.storage.durableRuns.getRun(row.run_id);
+    const newMaxAttempts = options?.maxAttempts
+      ? Math.max(current.attemptCount + 1, Math.min(20, Math.floor(options.maxAttempts)))
+      : undefined;
+    let next!: DurableRunRecord;
+    this.ctx.storage.runImmediateTransaction(() => {
+      this.ctx.gatewaySql
+        .prepare(
+          `
+        UPDATE durable_dead_letters
+        SET resolved_at = @resolvedAt, resolution_note = @note
+        WHERE dead_letter_id = @entryId
+      `,
+        )
+        .run({
+          entryId,
+          resolvedAt: new Date().toISOString(),
+          note: `recovered by ${actorId}${newMaxAttempts ? `, maxAttempts raised to ${newMaxAttempts}` : ""}`,
+        });
+      next = this.ctx.storage.durableRuns.updateRun({
+        runId: row.run_id,
+        status: "queued",
+        updatedAt: new Date().toISOString(),
+        finishedAt: undefined,
+        lastError: undefined,
+        ...(newMaxAttempts ? { maxAttempts: newMaxAttempts } : {}),
       });
-    const next = this.ctx.storage.durableRuns.updateRun({
-      runId: row.run_id,
-      status: "queued",
-      updatedAt: new Date().toISOString(),
-      finishedAt: undefined,
-      lastError: undefined,
-    });
-    this.recordDurableTimelineEvent(row.run_id, "dead_letter_recovered", {
-      actorId,
-      deadLetterId: entryId,
+      this.recordDurableTimelineEvent(row.run_id, "dead_letter_recovered", {
+        actorId,
+        deadLetterId: entryId,
+        ...(newMaxAttempts ? { maxAttemptsOverride: newMaxAttempts } : {}),
+      });
     });
     this.ctx.publishRealtime("system", "durable", {
       type: "durable_dead_letter_recovered",
@@ -554,6 +576,7 @@ export class DurableRunService {
     if (!this.deps) {
       return;
     }
+    const timeoutMs = this.ctx.config.assistant.durable.workflowTimeoutMs;
     while (true) {
       const run = this.claimNextQueuedRun();
       if (!run) {
@@ -561,7 +584,7 @@ export class DurableRunService {
       }
       this.activeRunIds.add(run.runId);
       try {
-        await this.deps.executeWorkflow(run);
+        await this.executeWithTimeout(this.deps.executeWorkflow(run), timeoutMs, run.runId);
       } catch (error) {
         await this.failWorkflowRun(run, error instanceof Error ? error.message : "Durable workflow execution failed.");
       } finally {
@@ -572,6 +595,24 @@ export class DurableRunService {
         this.activeRunIds.delete(run.runId);
       }
     }
+  }
+
+  private executeWithTimeout<T>(promise: Promise<T>, timeoutMs: number, runId: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Durable workflow ${runId} exceeded ${timeoutMs}ms execution timeout.`));
+      }, timeoutMs);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
   }
 
   private claimNextQueuedRun(): DurableRunRecord | undefined {
@@ -638,25 +679,28 @@ export class DurableRunService {
 
   private async failWorkflowRun(run: DurableRunRecord, message: string): Promise<void> {
     const now = new Date().toISOString();
-    const failed = this.ctx.storage.durableRuns.updateRun({
-      runId: run.runId,
-      status: "failed",
-      finishedAt: now,
-      lastError: message,
-      updatedAt: now,
-    });
-    this.ctx.storage.durableRuns.createCheckpoint({
-      runId: failed.runId,
-      checkpointKind: "run_failed",
-      state: {
+    let failed!: DurableRunRecord;
+    this.ctx.storage.runImmediateTransaction(() => {
+      failed = this.ctx.storage.durableRuns.updateRun({
+        runId: run.runId,
+        status: "failed",
+        finishedAt: now,
+        lastError: message,
+        updatedAt: now,
+      });
+      this.ctx.storage.durableRuns.createCheckpoint({
+        runId: failed.runId,
+        checkpointKind: "run_failed",
+        state: {
+          workflowKey: failed.workflowKey,
+          error: message,
+        },
+        createdAt: now,
+      });
+      this.recordDurableTimelineEvent(failed.runId, "run_failed", {
         workflowKey: failed.workflowKey,
         error: message,
-      },
-      createdAt: now,
-    });
-    this.recordDurableTimelineEvent(failed.runId, "run_failed", {
-      workflowKey: failed.workflowKey,
-      error: message,
+      });
     });
     this.ctx.publishRealtime("system", "durable", {
       type: "durable_run_failed",

@@ -600,6 +600,7 @@ export function recoverDurableDeadLetter(
   host: DurableExecutionHost,
   entryId: string,
   actorId = "operator",
+  options?: { maxAttempts?: number },
 ): DurableRunRecord {
-  return host.durableRunService.recoverDurableDeadLetter(entryId, actorId);
+  return host.durableRunService.recoverDurableDeadLetter(entryId, actorId, options);
 }

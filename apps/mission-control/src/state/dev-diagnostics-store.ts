@@ -431,14 +431,20 @@ function debugLogDiagnosticEvent(event: DevDiagnosticsEvent): void {
   console.debug("[goatcitadel:dev-diagnostics]", event);
 }
 
+const SENSITIVE_KEY_PATTERN =
+  /^(api[_-]?key|apiKey|access[_-]?token|accessToken|client[_-]?secret|clientSecret|token|secret|password|authorization|private[_-]?key|privateKey|credential|bearer|refresh[_-]?token|refreshToken|session[_-]?token|sessionToken|auth[_-]?token|authToken)$/i;
+const SENSITIVE_VALUE_PATTERN = /^(bearer\s+|sk-|ghp_|grat_|Basic\s+)/i;
+
 function sanitizeContext(context: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   if (!context) {
     return undefined;
   }
   return JSON.parse(
-    JSON.stringify(context, (_key, value: unknown) => {
-      if (typeof value === "string" && /^bearer\s+/i.test(value)) {
-        return "[redacted]";
+    JSON.stringify(context, (key, value: unknown) => {
+      if (typeof value === "string") {
+        if (SENSITIVE_VALUE_PATTERN.test(value) || (key && SENSITIVE_KEY_PATTERN.test(key))) {
+          return "[redacted]";
+        }
       }
       return value;
     }),

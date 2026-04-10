@@ -177,6 +177,15 @@ async function executeRun(params) {
     requestedOutputIntent:
       typeof params?.requestedOutputIntent === "string" ? params.requestedOutputIntent : undefined,
   });
+  // HARDENING ONLY — not a security sandbox.
+  // vm.Script.runInNewContext does NOT provide a secure isolation boundary.
+  // Blocking Function/eval/generators prevents casual dynamic code generation
+  // but a determined payload can still escape via prototype chain, Proxy tricks,
+  // or other vm breakout techniques. True sandboxing requires a separate process
+  // with restricted OS-level capabilities (e.g. seccomp, containers).
+  const blockedConstructor = Object.freeze(function blocked() {
+    throw new Error("Code-mode hardening: dynamic code generation is not allowed.");
+  });
   const sandboxGlobal = {
     capabilities,
     input,
@@ -199,6 +208,11 @@ async function executeRun(params) {
     clearInterval: undefined,
     clearImmediate: undefined,
     queueMicrotask: undefined,
+    Function: blockedConstructor,
+    eval: blockedConstructor,
+    GeneratorFunction: blockedConstructor,
+    AsyncFunction: blockedConstructor,
+    AsyncGeneratorFunction: blockedConstructor,
   };
   sandboxGlobal.globalThis = sandboxGlobal;
   deepFreeze(sandboxGlobal);

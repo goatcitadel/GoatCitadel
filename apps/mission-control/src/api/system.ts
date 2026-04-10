@@ -1,20 +1,10 @@
 import type {
-  A2UIProofLaneDraft,
   BackupCreateResponse,
   BackupManifestRecord,
-  BrowserProofLaneDraft,
-  ExtensionSdkBriefDraft,
-  ExtensionStarterPackArtifactRecord,
-  ExtensionStarterPackDraft,
-  FollowOnParityReport,
-  FollowOnProofLaneArtifactRecord,
   MediaCreateJobRequest,
   MediaJobRecord,
-  OpenclawParityProgramReport,
-  PackagingProofLaneDraft,
   RetentionPolicy,
   RetentionPruneResult,
-  VoiceProofLaneDraft,
 } from "@goatcitadel/contracts";
 import type { CostSummaryResponse, DashboardStateResponse, RealtimeEvent, SystemVitalsResponse } from "./types.js";
 import { request } from "./client-core.js";
@@ -106,85 +96,4 @@ export async function fetchDashboardState(): Promise<DashboardStateResponse> {
 
 export async function fetchSystemVitals(): Promise<SystemVitalsResponse> {
   return request<SystemVitalsResponse>("/api/v1/system/vitals");
-}
-
-export async function fetchFollowOnParityReport(): Promise<FollowOnParityReport> {
-  return request<FollowOnParityReport>("/api/v1/system/follow-on-parity");
-}
-
-export async function fetchOpenclawParityReport(): Promise<OpenclawParityProgramReport> {
-  return request<OpenclawParityProgramReport>("/api/v1/system/openclaw-parity");
-}
-
-export async function fetchBrowserProofLaneDraft(): Promise<BrowserProofLaneDraft> {
-  return request<BrowserProofLaneDraft>("/api/v1/system/follow-on-parity/browser-proof-lane");
-}
-
-export async function exportBrowserProofLaneDraft(): Promise<FollowOnProofLaneArtifactRecord> {
-  return request<FollowOnProofLaneArtifactRecord>("/api/v1/system/follow-on-parity/browser-proof-lane/export", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-export async function fetchPackagingProofLaneDraft(): Promise<PackagingProofLaneDraft> {
-  return request<PackagingProofLaneDraft>("/api/v1/system/follow-on-parity/packaging-proof-lane");
-}
-
-export async function exportPackagingProofLaneDraft(): Promise<FollowOnProofLaneArtifactRecord> {
-  return request<FollowOnProofLaneArtifactRecord>("/api/v1/system/follow-on-parity/packaging-proof-lane/export", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-export async function fetchA2UIProofLaneDraft(): Promise<A2UIProofLaneDraft> {
-  return request<A2UIProofLaneDraft>("/api/v1/system/follow-on-parity/a2ui-proof-lane");
-}
-
-export async function fetchVoiceProofLaneDraft(): Promise<VoiceProofLaneDraft> {
-  return request<VoiceProofLaneDraft>("/api/v1/system/follow-on-parity/voice-proof-lane");
-}
-
-export async function exportVoiceProofLaneDraft(): Promise<FollowOnProofLaneArtifactRecord> {
-  return request<FollowOnProofLaneArtifactRecord>("/api/v1/system/follow-on-parity/voice-proof-lane/export", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-export async function exportA2UIProofLaneDraft(): Promise<FollowOnProofLaneArtifactRecord> {
-  return request<FollowOnProofLaneArtifactRecord>("/api/v1/system/follow-on-parity/a2ui-proof-lane/export", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-export async function exportCompanionBootstrapBrief(): Promise<FollowOnProofLaneArtifactRecord> {
-  return request<FollowOnProofLaneArtifactRecord>("/api/v1/system/follow-on-parity/companion-bootstrap-brief/export", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-export async function fetchExtensionSdkBrief(): Promise<ExtensionSdkBriefDraft> {
-  return request<ExtensionSdkBriefDraft>("/api/v1/system/follow-on-parity/extension-sdk-brief");
-}
-
-export async function exportExtensionSdkBrief(): Promise<FollowOnProofLaneArtifactRecord> {
-  return request<FollowOnProofLaneArtifactRecord>("/api/v1/system/follow-on-parity/extension-sdk-brief/export", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-export async function fetchExtensionStarterPack(): Promise<ExtensionStarterPackDraft> {
-  return request<ExtensionStarterPackDraft>("/api/v1/system/follow-on-parity/extension-starter-pack");
-}
-
-export async function exportExtensionStarterPack(): Promise<ExtensionStarterPackArtifactRecord> {
-  return request<ExtensionStarterPackArtifactRecord>("/api/v1/system/follow-on-parity/extension-starter-pack/export", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
 }

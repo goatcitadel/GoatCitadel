@@ -37,8 +37,19 @@ export interface HookInlineDispatchResult<TPatch> {
   runs: HookRunRecord[];
 }
 
+/** Circuit breaker: max consecutive failures before auto-skip. */
+const CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5;
+/** Circuit breaker: cooldown period in ms after tripping (5 minutes). */
+const CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60_000;
+
+interface CircuitBreakerState {
+  consecutiveFailures: number;
+  trippedAt?: number;
+}
+
 export class HooksService {
   private readonly activeExecutions = new Set<string>();
+  private readonly circuitBreakers = new Map<string, CircuitBreakerState>();
 
   public constructor(
     private readonly ctx: ServiceContext,
@@ -48,6 +59,42 @@ export class HooksService {
       fetchImpl?: typeof fetch;
     },
   ) {}
+
+  private isCircuitBreakerTripped(hookId: string): boolean {
+    const state = this.circuitBreakers.get(hookId);
+    if (!state || state.consecutiveFailures < CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
+      return false;
+    }
+    if (state.trippedAt && Date.now() - state.trippedAt >= CIRCUIT_BREAKER_COOLDOWN_MS) {
+      state.consecutiveFailures = 0;
+      state.trippedAt = undefined;
+      return false;
+    }
+    return true;
+  }
+
+  private recordCircuitBreakerOutcome(hookId: string, success: boolean): void {
+    if (success) {
+      this.circuitBreakers.delete(hookId);
+      return;
+    }
+    const state = this.circuitBreakers.get(hookId) ?? { consecutiveFailures: 0 };
+    state.consecutiveFailures += 1;
+    if (state.consecutiveFailures >= CIRCUIT_BREAKER_FAILURE_THRESHOLD && !state.trippedAt) {
+      state.trippedAt = Date.now();
+      this.ctx.publishRealtime(
+        "hook_circuit_breaker_tripped",
+        "hooks",
+        {
+          hookId,
+          consecutiveFailures: state.consecutiveFailures,
+          cooldownMs: CIRCUIT_BREAKER_COOLDOWN_MS,
+        },
+        { eventClass: "operational_signal", eventAuthority: "retained_stream" },
+      );
+    }
+    this.circuitBreakers.set(hookId, state);
+  }
 
   public listWorkspaceHooks(workspaceId: string, limit = 200): HookRecord[] {
     return this.ctx.storage.workspaceHooks.list(this.ctx.normalizeWorkspaceId(workspaceId), limit);
@@ -293,6 +340,25 @@ export class HooksService {
     payload: Record<string, unknown>,
     attemptCount: number,
   ): Promise<HookRunRecord> {
+    if (this.isCircuitBreakerTripped(hook.hookId)) {
+      if (hook.failPolicy === "closed" && hook.mode !== "observe") {
+        this.ctx.storage.hookRuns.markOutcome(hookRunId, {
+          status: "failed",
+          errorText: "circuit_breaker_open_fail_closed",
+          completedAt: new Date().toISOString(),
+        });
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: `Hook ${hook.label} circuit breaker is open but fail-closed policy requires enforcement. Manual reset needed.`,
+        });
+      }
+      return this.ctx.storage.hookRuns.markOutcome(hookRunId, {
+        status: "skipped",
+        errorText: "circuit_breaker_open",
+        completedAt: new Date().toISOString(),
+      });
+    }
+
     const current = this.ctx.storage.hookRuns.markAttempt(hookRunId, {
       status: "running",
       attemptCount,
@@ -323,6 +389,7 @@ export class HooksService {
         completedAt: new Date().toISOString(),
       });
       this.publishRunRealtime(hook, completed);
+      this.recordCircuitBreakerOutcome(hook.hookId, true);
       return completed;
     } catch (error) {
       const timedOut = isTimeoutError(error);
@@ -333,6 +400,7 @@ export class HooksService {
         completedAt: new Date().toISOString(),
       });
       this.publishRunRealtime(hook, failed);
+      this.recordCircuitBreakerOutcome(hook.hookId, false);
       if (hook.failPolicy === "closed" && hook.mode !== "observe") {
         throw new ConflictError({
           code: "STATE_CONFLICT",

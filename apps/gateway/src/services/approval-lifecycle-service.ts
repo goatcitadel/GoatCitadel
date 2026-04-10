@@ -3,10 +3,11 @@
  *
  * Holds the moved bodies for the simpler members of the GatewayService
  * approval surface (Step 3 of the gateway-service decomposition plan).
- * The two largest methods — createApproval and resolveApproval — keep
- * their bodies inside GatewayService for now because they own
- * transaction scopes and hook orchestration; they will be migrated in a
- * follow-on pass once their dependency surface stabilizes.
+ *
+ * ApprovalLifecycleHost is a narrow interface that documents exactly
+ * which GatewayService capabilities the approval lifecycle requires.
+ * GatewayService satisfies this interface but is not the only possible
+ * implementation — this enables future decomposition and testing.
  *
  * Pattern reference: comms-service.ts, memory-facade-service.ts,
  * cron-scheduler-service.ts.
@@ -20,8 +21,13 @@ import {
   type ApprovalBulkResolveInput,
   type ApprovalBulkResolveResult,
   type ApprovalCreateInput,
+  type ApprovalLinkage,
   type ApprovalRequest,
   type ApprovalResolveInput,
+  type ConnectorRecord,
+  type DurableRunRecord,
+  type RealtimeEvent,
+  type RealtimeEventLinks,
   type ToolGrantCreateInput,
   type ToolGrantRecord,
   type ToolInvokeResult,
@@ -34,11 +40,94 @@ function hashSensitiveToken(value: string): string {
 import type {
   ApprovalReplayResult,
   ApprovalResolveResult,
-  GatewayService,
   RemoteApprovalActionTokenIssueResult,
 } from "./gateway-service.js";
+import type { DurableRunService } from "./durable-run-service.js";
+import type { HooksService } from "./hooks-service.js";
+import type { ToolPolicyEngine } from "@goatcitadel/policy-engine";
+import type { Storage } from "@goatcitadel/storage";
 
-export type ApprovalLifecycleHost = GatewayService;
+/**
+ * Narrow interface describing exactly what the approval lifecycle functions
+ * need from their host. GatewayService satisfies this interface, but the
+ * explicit contract enables future extraction and testability.
+ */
+export interface ApprovalLifecycleHost {
+  // ── storage ────────────────────────────────────────────────────────
+  readonly storage: Pick<
+    Storage,
+    | "approvals"
+    | "approvalEvents"
+    | "pendingApprovalActions"
+    | "remoteActionTokens"
+    | "audit"
+    | "chatInlineApprovals"
+    | "chatToolRuns"
+    | "runImmediateTransaction"
+  >;
+
+  // ── services ───────────────────────────────────────────────────────
+  readonly policyEngine: Pick<ToolPolicyEngine, "listGrants" | "createGrant" | "revokeGrant" | "executeApprovedAction">;
+  readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
+  readonly durableRunService: Pick<DurableRunService, "requestRunProcessing">;
+
+  // ── realtime ───────────────────────────────────────────────────────
+  publishRealtime(
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): RealtimeEvent;
+
+  // ── approval-specific gateway methods ──────────────────────────────
+  findApprovalWaitDurableRunId(approvalId: string): string | undefined;
+  requireConnectorRecord(connectorId: string): ConnectorRecord;
+  consumeRemoteActionToken(
+    token: string,
+    actionType: string,
+  ): { tokenId: string; approvalId?: string; mutation?: Record<string, unknown> };
+  consumeRemoteActionTokenById(
+    tokenId: string,
+    actionType: string,
+  ): { tokenId: string; approvalId?: string; mutation?: Record<string, unknown> };
+  resolveApprovalWithConsumedRemoteToken(
+    tokenRecord: { tokenId: string; approvalId?: string; mutation?: Record<string, unknown> },
+    input: {
+      decision: ApprovalResolveInput["decision"];
+      editedPayload?: Record<string, unknown>;
+      resolutionNote?: string;
+    },
+  ): Promise<ApprovalResolveResult>;
+  resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<ApprovalResolveResult>;
+  resolveDeviceAccessApproval(current: ApprovalRequest, input: ApprovalResolveInput): Promise<ApprovalResolveResult>;
+  executeCodeModePendingApproval(approvalId: string): Promise<ToolInvokeResult | undefined>;
+  resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): string;
+  parseApprovalCreateHookPatch(value: unknown): Record<string, unknown> | undefined;
+  primeApprovalLifecycle(approvalId: string, linkage: ApprovalLinkage | undefined): ApprovalRequest;
+  buildApprovalLinkage(linkage?: ApprovalLinkage): ApprovalLinkage | undefined;
+  buildApprovalRealtimeLinks(approval: ApprovalRequest): RealtimeEventLinks;
+  scheduleApprovalExplanation(approval: ApprovalRequest): void;
+  markApprovalWaitDurableRunResolved(
+    approval: ApprovalRequest,
+    input: ApprovalResolveInput,
+    executedAction?: ToolInvokeResult,
+  ): string | undefined;
+  findProactiveDurableRunIdsForApproval(approvalId: string): string[];
+  wakeDurableRun(
+    runId: string,
+    event: { eventKey: string; payload?: Record<string, unknown>; correlationId?: string },
+  ): DurableRunRecord;
+  recordApprovalResolutionEffects(
+    approval: ApprovalRequest,
+    input: ApprovalResolveInput,
+    executedAction?: ToolInvokeResult,
+  ): Promise<void>;
+  enqueueApprovalRemoteTokenDelivery(
+    approval: ApprovalRequest,
+    connector: ConnectorRecord,
+    tokenRecord: { token: string; tokenId: string; expiresAt: string },
+  ): void;
+}
 
 export function listToolGrants(
   host: ApprovalLifecycleHost,
@@ -356,6 +445,7 @@ export async function createApproval(
       eventClass: "domain_fact",
       eventAuthority: "retained_stream",
       links: host.buildApprovalRealtimeLinks(approval),
+      correlationId: approval.approvalId,
     },
   );
 
@@ -442,9 +532,28 @@ export async function resolveApproval(
         },
       });
     } catch (error) {
-      if (!String((error as Error).message ?? "").includes("not waiting/paused")) {
+      const msg = String((error as Error).message ?? "");
+      if (!msg.includes("not waiting/paused")) {
         throw error;
       }
+      host.publishRealtime(
+        "approval_proactive_wake_skipped",
+        "approvals",
+        {
+          approvalId: approval.approvalId,
+          runId: proactiveRunId,
+          reason: "proactive_run_not_waiting",
+          detail: msg,
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            approvalId: approval.approvalId,
+            runId: proactiveRunId,
+          },
+        },
+      );
     }
     host.durableRunService.requestRunProcessing(proactiveRunId);
   }

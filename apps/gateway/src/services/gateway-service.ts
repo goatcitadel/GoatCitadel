@@ -1154,6 +1154,12 @@ export class ChatTurnCancelledError extends GoatError {
   }
 }
 
+const VALID_TOOL_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$/;
+
+function isValidToolName(name: string): boolean {
+  return VALID_TOOL_NAME_PATTERN.test(name);
+}
+
 export function isChatTurnCancelledError(error: unknown): boolean {
   if (error instanceof ChatTurnCancelledError) {
     return true;
@@ -4510,8 +4516,12 @@ export class GatewayService {
     return durableExecutionService.wakeDurableRun(this, runId, event);
   }
 
-  public recoverDurableDeadLetter(entryId: string, actorId = "operator"): DurableRunRecord {
-    return durableExecutionService.recoverDurableDeadLetter(this, entryId, actorId);
+  public recoverDurableDeadLetter(
+    entryId: string,
+    actorId = "operator",
+    options?: { maxAttempts?: number },
+  ): DurableRunRecord {
+    return durableExecutionService.recoverDurableDeadLetter(this, entryId, actorId, options);
   }
 
   public getImprovementReport(reportId: string): WeeklyImprovementReportRecord {
@@ -5647,6 +5657,13 @@ export class GatewayService {
   }
 
   public async invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
+    if (!isValidToolName(request.toolName)) {
+      return {
+        outcome: "blocked",
+        policyReason: "blocked: invalid tool name format",
+        auditEventId: randomUUID(),
+      };
+    }
     const normalizedRequest = this.applyRuntimeBrowserBackendDefaults(this.resolveToolInvokeRequestPaths(request));
     const toolHookWorkspaceId = this.resolveToolHookWorkspaceId(normalizedRequest);
     const toolHookEntityId = `${normalizedRequest.sessionId}:${randomUUID()}`;
@@ -6092,9 +6109,28 @@ export class GatewayService {
         },
       });
     } catch (error) {
-      if (!String((error as Error).message ?? "").includes("not waiting/paused")) {
+      const msg = String((error as Error).message ?? "");
+      if (!msg.includes("not waiting/paused")) {
         throw error;
       }
+      this.publishRealtime(
+        "approval_wake_skipped",
+        "approvals",
+        {
+          approvalId: approval.approvalId,
+          runId: row.run_id,
+          reason: "durable_run_not_waiting",
+          detail: msg,
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            approvalId: approval.approvalId,
+            runId: row.run_id,
+          },
+        },
+      );
     }
   }
 
@@ -6141,9 +6177,28 @@ export class GatewayService {
         },
       });
     } catch (error) {
-      if (!String((error as Error).message ?? "").includes("not waiting/paused")) {
+      const msg = String((error as Error).message ?? "");
+      if (!msg.includes("not waiting/paused")) {
         throw error;
       }
+      this.publishRealtime(
+        "approval_wake_skipped",
+        "approvals",
+        {
+          approvalId: approval.approvalId,
+          runId: row.run_id,
+          reason: "durable_run_not_waiting",
+          detail: msg,
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            approvalId: approval.approvalId,
+            runId: row.run_id,
+          },
+        },
+      );
     }
     return row.run_id;
   }
@@ -10044,6 +10099,7 @@ export class GatewayService {
         eventClass: "domain_fact",
         eventAuthority: "retained_stream",
         links: this.buildApprovalRealtimeLinks(approval),
+        correlationId: approval.approvalId,
       },
     );
   }
@@ -10052,7 +10108,7 @@ export class GatewayService {
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
-    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): RealtimeEvent {
     const event = this.storage.realtimeEvents.append(eventType, source, payload, options);
     this.realtime.emit("event", event);

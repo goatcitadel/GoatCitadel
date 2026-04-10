@@ -23,7 +23,7 @@ export interface ServiceContext {
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
-    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): void;
 
   /** Throws if the given feature flag is disabled. */

@@ -574,6 +574,20 @@ function resolveLineChannelSecret(config: Record<string, unknown>): string | und
   );
 }
 
+/** Allowed env var name prefixes for webhook secret resolution. */
+const ALLOWED_SECRET_ENV_PREFIXES = [
+  "GOATCITADEL_",
+  "GC_",
+  "SLACK_",
+  "DISCORD_",
+  "TELEGRAM_",
+  "WHATSAPP_",
+  "LINE_",
+  "NEXTCLOUD_",
+  "WEBHOOK_SECRET",
+  "CHANNEL_SECRET",
+];
+
 function readConfigSecret(config: Record<string, unknown>, key: string, envKey: string): string | undefined {
   const direct = config[key];
   if (typeof direct === "string" && direct.trim().length > 0) {
@@ -581,6 +595,10 @@ function readConfigSecret(config: Record<string, unknown>, key: string, envKey: 
   }
   const envName = config[envKey];
   if (typeof envName !== "string" || envName.trim().length === 0) {
+    return undefined;
+  }
+  const trimmedEnvName = envName.trim().toUpperCase();
+  if (!ALLOWED_SECRET_ENV_PREFIXES.some((prefix) => trimmedEnvName.startsWith(prefix))) {
     return undefined;
   }
   const resolved = process.env[envName.trim()];

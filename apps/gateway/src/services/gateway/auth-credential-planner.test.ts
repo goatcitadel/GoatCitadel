@@ -266,6 +266,7 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
         maxAttemptsDefault: 1,
         executionEnabled: false,
         chatAutoPromoteEnabled: false,
+        workflowTimeoutMs: 300_000,
       },
       capabilities: {
         candidateRoot: "./data/capability-candidates",

@@ -17,17 +17,21 @@ const createRunBodySchema = z.object({
   workflowKey: z.string().min(1),
   payload: z.record(z.unknown()).optional(),
   metadata: z.record(z.unknown()).optional(),
-  retryPolicy: z.object({
-    maxAttempts: z.number().int().positive().max(20).optional(),
-    baseDelayMs: z.number().int().positive().max(300000).optional(),
-    maxDelayMs: z.number().int().positive().max(900000).optional(),
-    backoffMultiplier: z.number().positive().max(8).optional(),
-  }).optional(),
-  waitForEvent: z.object({
-    eventKey: z.string().min(1),
-    timeoutMs: z.number().int().positive().optional(),
-    correlationId: z.string().optional(),
-  }).optional(),
+  retryPolicy: z
+    .object({
+      maxAttempts: z.number().int().positive().max(20).optional(),
+      baseDelayMs: z.number().int().positive().max(300000).optional(),
+      maxDelayMs: z.number().int().positive().max(900000).optional(),
+      backoffMultiplier: z.number().positive().max(8).optional(),
+    })
+    .optional(),
+  waitForEvent: z
+    .object({
+      eventKey: z.string().min(1),
+      timeoutMs: z.number().int().positive().optional(),
+      correlationId: z.string().optional(),
+    })
+    .optional(),
 });
 
 const retryBodySchema = z.object({
@@ -43,6 +47,11 @@ const wakeBodySchema = z.object({
 
 const actorBodySchema = z.object({
   actorId: z.string().min(1).optional(),
+});
+
+const deadLetterRecoverBodySchema = z.object({
+  actorId: z.string().min(1).optional(),
+  maxAttempts: z.number().int().min(1).max(20).optional(),
 });
 
 export const durableRoutes: FastifyPluginAsync = async (fastify) => {
@@ -227,7 +236,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/durable/dead-letters/:entryId/recover", async (request, reply) => {
     const params = deadLetterParamsSchema.safeParse(request.params);
-    const body = actorBodySchema.safeParse(request.body ?? {});
+    const body = deadLetterRecoverBodySchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {
       return reply.code(400).send({
         error: {
@@ -237,7 +246,13 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.recoverDurableDeadLetter(params.data.entryId, resolveActorId(request)));
+      return reply.send(
+        fastify.gateway.recoverDurableDeadLetter(
+          params.data.entryId,
+          resolveActorId(request),
+          body.data.maxAttempts ? { maxAttempts: body.data.maxAttempts } : undefined,
+        ),
+      );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");

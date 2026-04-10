@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ToolInvokeRequest } from "@goatcitadel/contracts";
+import { ValidationError, type ToolInvokeRequest } from "@goatcitadel/contracts";
 
 export interface ToolPathResolutionContext {
   workspaceRoot: string;
@@ -107,7 +107,7 @@ function resolveRelativeToolPath(
     return rawPath;
   }
   if (path.isAbsolute(trimmed)) {
-    return resolveAbsoluteToolPath(trimmed, context, kind) ?? rawPath;
+    return resolveAbsoluteToolPath(trimmed, context, kind);
   }
 
   if (isDotPath(trimmed)) {
@@ -118,45 +118,60 @@ function resolveRelativeToolPath(
   const projectRelativePath = normalizeProjectRelativeInput(trimmed, context.projectWorkspacePath);
   const projectCandidate = context.projectRoot ? path.resolve(context.projectRoot, projectRelativePath) : undefined;
   if (!projectCandidate) {
-    return workspaceCandidate;
+    return finalizeResolvedToolPath(workspaceCandidate, trimmed, context, kind);
   }
 
   if (shouldPreferWorkspaceRoot(trimmed, context.projectWorkspacePath)) {
-    if (candidateLooksValid(workspaceCandidate, kind)) {
-      return workspaceCandidate;
+    if (candidateLooksValid(workspaceCandidate, kind, context)) {
+      return finalizeResolvedToolPath(workspaceCandidate, trimmed, context, kind);
     }
-    if (candidateLooksValid(projectCandidate, kind)) {
-      return projectCandidate;
+    if (candidateLooksValid(projectCandidate, kind, context)) {
+      return finalizeResolvedToolPath(projectCandidate, trimmed, context, kind);
     }
-    return workspaceCandidate;
+    return finalizeResolvedToolPath(workspaceCandidate, trimmed, context, kind);
   }
 
-  if (candidateLooksValid(projectCandidate, kind)) {
-    return projectCandidate;
+  if (candidateLooksValid(projectCandidate, kind, context)) {
+    return finalizeResolvedToolPath(projectCandidate, trimmed, context, kind);
   }
-  if (candidateLooksValid(workspaceCandidate, kind)) {
-    return workspaceCandidate;
+  if (candidateLooksValid(workspaceCandidate, kind, context)) {
+    return finalizeResolvedToolPath(workspaceCandidate, trimmed, context, kind);
   }
 
-  return projectCandidate;
+  return finalizeResolvedToolPath(projectCandidate, trimmed, context, kind);
 }
 
 function resolveAbsoluteToolPath(
   rawPath: string,
   context: ToolPathResolutionContext,
   kind: PathResolutionKind,
-): string | undefined {
-  const resolved = path.resolve(rawPath);
-  if (!isFilesystemRootPath(resolved)) {
-    return undefined;
+): string {
+  const absoluteTarget = path.resolve(rawPath);
+  if (isFilesystemRootPath(absoluteTarget)) {
+    if (kind === "cwd") {
+      return defaultToolCwd(context);
+    }
+    throw new ValidationError({
+      message: `Path "${rawPath}" resolves to the filesystem root and is not allowed for ${kind} operations.`,
+    });
   }
-  return kind === "cwd"
-    ? defaultToolCwd(context)
-    : (context.projectRoot ?? path.resolve(context.workspaceRoot));
+
+  const resolvedTarget = resolvePathViaExistingAncestor(absoluteTarget);
+  if (isWithinWorkspaceBounds(resolvedTarget, context)) {
+    return resolvedTarget;
+  }
+
+  throw new ValidationError({
+    message: `Path "${rawPath}" is outside the workspace boundary and is not allowed.`,
+  });
 }
 
-function candidateLooksValid(candidate: string, kind: PathResolutionKind): boolean {
+function candidateLooksValid(candidate: string, kind: PathResolutionKind, context: ToolPathResolutionContext): boolean {
   try {
+    const resolvedCandidate = resolvePathViaExistingAncestor(candidate);
+    if (!isWithinWorkspaceBounds(resolvedCandidate, context)) {
+      return false;
+    }
     if (!fs.existsSync(candidate)) {
       if (kind !== "write") {
         return false;
@@ -166,10 +181,18 @@ function candidateLooksValid(candidate: string, kind: PathResolutionKind): boole
     if (kind !== "cwd") {
       return true;
     }
-    return fs.statSync(candidate).isDirectory();
+    return fs.statSync(resolvedCandidate).isDirectory();
   } catch {
     return false;
   }
+}
+
+function isWithinWorkspaceBounds(resolvedPath: string, context: ToolPathResolutionContext): boolean {
+  const normalizedPath = path.resolve(resolvedPath);
+  return (
+    isWithinRoot(context.workspaceRoot, normalizedPath) ||
+    (context.projectRoot ? isWithinRoot(context.projectRoot, normalizedPath) : false)
+  );
 }
 
 function shouldPreferWorkspaceRoot(rawPath: string, projectWorkspacePath?: string): boolean {
@@ -181,8 +204,7 @@ function shouldPreferWorkspaceRoot(rawPath: string, projectWorkspacePath?: strin
   if (!normalizedProjectPath) {
     return true;
   }
-  return normalizedRawPath === normalizedProjectPath
-    || normalizedRawPath.startsWith(`${normalizedProjectPath}/`);
+  return normalizedRawPath === normalizedProjectPath || normalizedRawPath.startsWith(`${normalizedProjectPath}/`);
 }
 
 function normalizeProjectRelativeInput(rawPath: string, projectWorkspacePath?: string): string {
@@ -219,6 +241,50 @@ function isDotPath(value: string): boolean {
 function isFilesystemRootPath(value: string): boolean {
   const parsed = path.parse(value);
   return parsed.root === value;
+}
+
+function isWithinRoot(root: string, target: string): boolean {
+  const rel = path.relative(path.resolve(root), target);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function resolvePathViaExistingAncestor(targetPath: string): string {
+  const absoluteTarget = path.resolve(targetPath);
+  let probe = absoluteTarget;
+
+  while (true) {
+    if (fs.existsSync(probe)) {
+      const realExisting = fs.realpathSync(probe);
+      if (probe === absoluteTarget) {
+        return realExisting;
+      }
+      const relativeTail = path.relative(probe, absoluteTarget);
+      return path.resolve(realExisting, relativeTail);
+    }
+
+    const parent = path.dirname(probe);
+    if (parent === probe) {
+      break;
+    }
+    probe = parent;
+  }
+
+  return absoluteTarget;
+}
+
+function finalizeResolvedToolPath(
+  candidate: string,
+  rawPath: string,
+  context: ToolPathResolutionContext,
+  kind: PathResolutionKind,
+): string {
+  const resolvedCandidate = resolvePathViaExistingAncestor(candidate);
+  if (!isWithinWorkspaceBounds(resolvedCandidate, context)) {
+    throw new ValidationError({
+      message: `Path "${rawPath}" is outside the workspace boundary and is not allowed for ${kind} operations.`,
+    });
+  }
+  return candidate;
 }
 
 function defaultToolCwd(context: ToolPathResolutionContext): string {

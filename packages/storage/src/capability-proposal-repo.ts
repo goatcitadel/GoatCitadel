@@ -54,7 +54,32 @@ export class CapabilityProposalRepository {
     `);
   }
 
+  private static readonly VALID_TRANSITIONS: Record<string, string[]> = {
+    proposed: ["validating", "rejected", "failed"],
+    validating: ["pending_approval", "approved", "rejected", "failed"],
+    pending_approval: ["approved", "rejected", "failed"],
+    approved: ["activated", "failed"],
+    rejected: [],
+    activated: [],
+    failed: ["proposed"],
+  };
+
   public upsert(input: CapabilityProposalRecord): CapabilityProposalRecord {
+    try {
+      const existing = this.get(input.proposalId);
+      const allowed = CapabilityProposalRepository.VALID_TRANSITIONS[existing.status];
+      if (allowed && !allowed.includes(input.status) && input.status !== existing.status) {
+        throw new Error(
+          `Invalid proposal status transition: ${existing.status} → ${input.status} (allowed: ${allowed.join(", ") || "none"})`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        /* new proposal — all statuses allowed */
+      } else {
+        throw error;
+      }
+    }
     this.upsertStmt.run({
       proposalId: input.proposalId,
       proposalKind: input.proposalKind,

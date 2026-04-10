@@ -15,6 +15,26 @@ export const MCP_APPROVAL_INBOX_LIST_TOOL_NAME = "goatcitadel.approval.remote_ac
 export const MCP_APPROVAL_INBOX_RESOLVE_TOOL_NAME = "goatcitadel.approval.remote_action_inbox.resolve";
 export const MCP_APPROVAL_INBOX_URL = "goatcitadel://approval-inbox";
 
+/** Rate limiter: max resolve attempts per server per window. */
+const RESOLVE_RATE_LIMIT_MAX = 10;
+const RESOLVE_RATE_LIMIT_WINDOW_MS = 60_000;
+const resolveAttempts = new Map<string, { count: number; windowStart: number }>();
+
+function checkResolveRateLimit(serverId: string): void {
+  const now = Date.now();
+  const entry = resolveAttempts.get(serverId);
+  if (!entry || now - entry.windowStart > RESOLVE_RATE_LIMIT_WINDOW_MS) {
+    resolveAttempts.set(serverId, { count: 1, windowStart: now });
+    return;
+  }
+  entry.count += 1;
+  if (entry.count > RESOLVE_RATE_LIMIT_MAX) {
+    throw new ConflictError({
+      message: `Approval resolution rate limit exceeded for MCP server ${serverId}. Max ${RESOLVE_RATE_LIMIT_MAX} per ${RESOLVE_RATE_LIMIT_WINDOW_MS / 1000}s.`,
+    });
+  }
+}
+
 type ApprovalInboxPort = Pick<
   ApprovalInboxRepository,
   "receiveMcpApprovalDelivery" | "listByReceiver" | "get" | "markResolved"
@@ -221,6 +241,7 @@ async function resolveInboxItem(
     }) => Promise<{ approval: ApprovalRequest }>;
   },
 ): Promise<{ item: ApprovalInboxItemRecord; approval?: ApprovalRequest }> {
+  checkResolveRateLimit(serverId);
   const inboxItemId = requireNonEmptyString(args?.inboxItemId, "inboxItemId");
   const decision = requireEnumValue(args?.decision, ["approve", "reject", "edit"], "decision");
   const resolvedBy = optionalString(args?.resolvedBy) ?? "operator:mcp";

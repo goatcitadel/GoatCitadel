@@ -60,7 +60,7 @@ export async function* iterateSsePayloads(
     reader.releaseLock();
   }
   if (buffer.trim()) {
-    throw new Error(`Streaming response ended before a complete SSE event was received: ${previewSseText(buffer)}`);
+    throw new Error(`SSE stream ended with incomplete event data: ${previewSseText(buffer)}`);
   }
 }
 

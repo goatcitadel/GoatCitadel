@@ -8,9 +8,7 @@ describe("DurableRunService", () => {
     const runs = new Map<string, DurableRunRecord>();
     const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
     const timeline: Array<{ runId: string; eventType: string }> = [];
-    const service = new DurableRunService(
-      createContext(runs, checkpoints, timeline) as unknown as ServiceContext,
-    );
+    const service = new DurableRunService(createContext(runs, checkpoints, timeline) as unknown as ServiceContext);
 
     const created = service.createDurableRun({
       workflowKey: "proactive.tick",
@@ -33,9 +31,7 @@ describe("DurableRunService", () => {
   });
 
   it("requeues and resumes recoverable orphaned chat turn runs on worker startup", async () => {
-    const runs = new Map<string, DurableRunRecord>([
-      ["run-1", createRun("run-1", "running")],
-    ]);
+    const runs = new Map<string, DurableRunRecord>([["run-1", createRun("run-1", "running")]]);
     const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
     const timeline: Array<{ runId: string; eventType: string }> = [];
     const backgroundTasks = new Set<Promise<void>>();
@@ -45,23 +41,22 @@ describe("DurableRunService", () => {
         finishedAt: "2026-03-14T00:00:05.000Z",
       });
     });
-    const service = new DurableRunService(
-      createContext(runs, checkpoints, timeline) as unknown as ServiceContext,
-      {
-        backgroundTasks,
-        executeWorkflow,
-        isWorkflowRecoverable: () => ({ recoverable: true }),
-      },
-    );
+    const service = new DurableRunService(createContext(runs, checkpoints, timeline) as unknown as ServiceContext, {
+      backgroundTasks,
+      executeWorkflow,
+      isWorkflowRecoverable: () => ({ recoverable: true }),
+    });
 
     service.startWorker();
     await Promise.all([...backgroundTasks]);
 
     expect(executeWorkflow).toHaveBeenCalledTimes(1);
-    expect(executeWorkflow).toHaveBeenCalledWith(expect.objectContaining({
-      runId: "run-1",
-      status: "running",
-    }));
+    expect(executeWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        status: "running",
+      }),
+    );
     expect(runs.get("run-1")?.status).toBe("completed");
     expect(checkpoints.map((item) => item.checkpointKind)).toContain("run_started");
     expect(timeline.map((item) => item.eventType)).toContain("run_started");
@@ -150,23 +145,31 @@ function createContext(
   timeline: Array<{ runId: string; eventType: string }>,
   options?: {
     retries?: Map<string, DurableRetryRecord[]>;
-    deadLetters?: Map<string, {
-      dead_letter_id: string;
-      run_id: string;
-      reason: string;
-      resolved_at?: string;
-      resolution_note?: string;
-    }>;
+    deadLetters?: Map<
+      string,
+      {
+        dead_letter_id: string;
+        run_id: string;
+        reason: string;
+        resolved_at?: string;
+        resolution_note?: string;
+      }
+    >;
   },
 ) {
   const retries = options?.retries ?? new Map<string, DurableRetryRecord[]>();
-  const deadLetters = options?.deadLetters ?? new Map<string, {
-    dead_letter_id: string;
-    run_id: string;
-    reason: string;
-    resolved_at?: string;
-    resolution_note?: string;
-  }>();
+  const deadLetters =
+    options?.deadLetters ??
+    new Map<
+      string,
+      {
+        dead_letter_id: string;
+        run_id: string;
+        reason: string;
+        resolved_at?: string;
+        resolution_note?: string;
+      }
+    >();
 
   return {
     storage: {
@@ -230,11 +233,13 @@ function createContext(
           return input;
         },
       },
+      runImmediateTransaction: <T>(callback: () => T): T => callback(),
     },
     config: {
       assistant: {
         durable: {
           enabled: true,
+          workflowTimeoutMs: 300_000,
         },
       },
     },
@@ -244,14 +249,10 @@ function createContext(
       prepare: (sql: string) => ({
         all: () => {
           if (sql.includes("WHERE status = 'running'")) {
-            return [...runs.values()]
-              .filter((run) => run.status === "running")
-              .map((run) => ({ run_id: run.runId }));
+            return [...runs.values()].filter((run) => run.status === "running").map((run) => ({ run_id: run.runId }));
           }
           if (sql.includes("WHERE status = 'queued'")) {
-            return [...runs.values()]
-              .filter((run) => run.status === "queued")
-              .map((run) => ({ run_id: run.runId }));
+            return [...runs.values()].filter((run) => run.status === "queued").map((run) => ({ run_id: run.runId }));
           }
           return [];
         },
@@ -261,13 +262,17 @@ function createContext(
           }
           return undefined;
         },
-        run: (params: {
-          runId?: string;
-          eventType?: string;
-          entryId?: string;
-          resolvedAt?: string;
-          note?: string;
-        } | undefined) => {
+        run: (
+          params:
+            | {
+                runId?: string;
+                eventType?: string;
+                entryId?: string;
+                resolvedAt?: string;
+                note?: string;
+              }
+            | undefined,
+        ) => {
           if (sql.includes("INSERT INTO durable_run_events") && params?.runId && params?.eventType) {
             timeline.push({
               runId: params.runId,

@@ -21,9 +21,7 @@ export class CapabilityCatalogSnapshotRepository {
       ) VALUES (
         @snapshotId, @inspectableJson, @callableJson, @createdAt
       )
-      ON CONFLICT(snapshot_id) DO UPDATE SET
-        inspectable_json = excluded.inspectable_json,
-        callable_json = excluded.callable_json
+      ON CONFLICT(snapshot_id) DO NOTHING
     `);
     this.getStmt = db.prepare("SELECT * FROM capability_catalog_snapshots WHERE snapshot_id = ?");
   }

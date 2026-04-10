@@ -269,8 +269,14 @@ function rejectOversizedWebhookPayload(request: FastifyRequest, reply: FastifyRe
 
 async function readPayloadBuffer(payload: NodeJS.ReadableStream): Promise<Buffer> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of payload) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buf.length;
+    if (totalBytes > CHANNEL_INBOUND_MAX_BYTES) {
+      throw new Error(`Inbound channel payload exceeded ${CHANNEL_INBOUND_MAX_BYTES} bytes during streaming read.`);
+    }
+    chunks.push(buf);
   }
   return Buffer.concat(chunks);
 }

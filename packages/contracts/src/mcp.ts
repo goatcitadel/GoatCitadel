@@ -19,6 +19,8 @@ export interface McpServerPolicy {
   redactionMode: "off" | "basic" | "strict";
   allowedToolPatterns: string[];
   blockedToolPatterns: string[];
+  /** Explicit env var keys this server needs passed through (e.g. auth tokens, config). */
+  allowedEnvKeys?: string[];
   notes?: string;
 }
 

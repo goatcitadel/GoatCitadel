@@ -53,9 +53,19 @@ Authority:
 - Contract shape: `packages/contracts/src/durable.ts`
 - Persistence: `packages/storage/src/durable-run-repo.ts`
 
+Implementation status:
+- Schema and storage repository: complete (migration v21).
+- Read-only diagnostics API: complete.
+- Execution-engine adoption: **not yet complete** — no background worker loop auto-executes queued runs.
+- Queue consumers / idempotent worker runtime: **not yet complete**.
+- DLQ operator actions: **not yet complete**.
+- See `docs/DURABLE_RUNS_REPLAY_FOUNDATION.md` for the full activation checklist.
+
 Notes:
-- A run is execution truth, not transcript truth.
+- A run records execution intent and outcome; it is not yet the default execution path.
+- Most chat-turn and approval execution still runs synchronously inside `GatewayService`. Durable runs currently serve as an audit trail and coordination record, not as the primary execution runtime.
 - Runs may be linked to sessions, turns, tasks, and approvals.
+- The `durableKernelV1Enabled` feature flag gates durable-run APIs. The `replayOverridesV1Enabled` flag (default: off) gates replay-with-overrides.
 
 ### Approval
 
@@ -145,6 +155,25 @@ Session stream events should carry `links.sessionId` and related `taskId` when k
 ### Prompt-pack outcomes
 
 Prompt-pack status must preserve `approval_paused` separately from `failed`.
+
+### Memory Context
+
+Definition:
+A distilled or composed context pack drawn from memory items, learned memory, and workspace knowledge for use in prompts and reasoning.
+
+Authority:
+- Context pack cache: `packages/storage/src/memory-context-repo.ts`
+- Memory items: `packages/storage/src/memory-item-repo.ts`
+- Learned memory: `apps/gateway/src/services/chat-learned-memory-service.ts` (direct SQL, not yet in a storage repo)
+
+Implementation status:
+- QMD composition, distillation, and caching: complete.
+- Memory maintenance (retention, compaction, recommendations): feature-flagged behind `memoryMaintenanceV1Enabled`.
+- Learned-memory dedup and memory-maintenance dedup are independent implementations without coordination.
+
+Notes:
+- Memory ownership is currently distributed across `MemoryContextService`, `MemoryMaintenanceService`, `ChatLearnedMemoryService`, `memory-facade-service.ts`, and `memory-item-helpers.ts`. There is no single service that owns the full memory lifecycle.
+- `ChatLearnedMemoryService` uses `ctx.gatewaySql.prepare()` directly instead of a storage repository, which is a known migration target.
 
 ## Derived Views
 

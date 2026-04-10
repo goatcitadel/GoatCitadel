@@ -201,6 +201,8 @@ export interface DurableConfig {
   executionEnabled: boolean;
   chatAutoPromoteEnabled: boolean;
   maxAttemptsDefault: number;
+  /** Maximum wall-clock time (ms) for a single workflow execution before it is cancelled. Default: 5 minutes. */
+  workflowTimeoutMs: number;
 }
 
 export interface SqliteTuningConfig {
@@ -690,6 +692,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       executionEnabled: durableInput.executionEnabled ?? true,
       chatAutoPromoteEnabled: durableInput.chatAutoPromoteEnabled ?? true,
       maxAttemptsDefault: Math.max(1, Math.floor(durableInput.maxAttemptsDefault ?? 3)),
+      workflowTimeoutMs: clampInt(durableInput.workflowTimeoutMs, 5 * 60_000, 10_000, 30 * 60_000),
     },
     features: {
       durableKernelV1Enabled: featuresInput.durableKernelV1Enabled ?? true,
