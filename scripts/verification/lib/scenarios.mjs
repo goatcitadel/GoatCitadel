@@ -1221,6 +1221,10 @@ export async function runSurfaceRegressionLane(context, options = {}) {
     gatewayEnv: {
       GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
       GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+      GOATCITADEL_MESH_NODE_ID: "build-main",
+    },
+    uiEnv: {
+      VITE_GOATCITADEL_VISUAL_REGRESSION_MODE: "true",
     },
   });
   try {
@@ -1730,6 +1734,7 @@ export async function runBackupRoundtripLane(context, options = {}) {
           includeUi: false,
           gatewayEnv: {
             GOATCITADEL_BACKUP_DIR: backupRoot,
+            GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
             HOME: runtimeRoot,
             USERPROFILE: runtimeRoot,
           },
@@ -1908,7 +1913,7 @@ export async function runVisualRegressionLane(context, options = {}) {
                 if (route.readyText) {
                   await page.getByText(route.readyText, { exact: false }).first().waitFor({ timeout: 30000 });
                 }
-                await page.waitForTimeout(250);
+                await page.waitForTimeout(1000);
                 const artifactSlug = `visual-regression-${route.slug}-${variant.slug}`;
                 const artifacts = await captureBrowserArtifacts(context, {
                   slug: artifactSlug,

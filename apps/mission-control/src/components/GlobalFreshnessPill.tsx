@@ -2,7 +2,7 @@ import { memo } from "react";
 import type { EventStreamConnectionState } from "../api/shell-client";
 import { useEventStreamStatus } from "../hooks/useEventStreamStatus";
 
-const VISUAL_REGRESSION_STABLE_TIME = "12:18:05 AM";
+const VISUAL_REGRESSION_STABLE_TIME = "1:42:32 AM";
 const visualRegressionMode =
   (import.meta.env.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE as string | undefined)?.trim().toLowerCase() === "true";
 
