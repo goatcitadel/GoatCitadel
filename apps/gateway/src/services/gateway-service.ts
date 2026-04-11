@@ -365,6 +365,11 @@ import type {
   ReplayDiffSummary,
   RepairCandidateRecord,
   RepairValidationStatus,
+  ImprovementActivationRecord,
+  ImprovementCandidateDetailResponse,
+  ImprovementCandidateRecord,
+  ImprovementRef,
+  ImprovementSignalRecord,
   MemoryItemRecord,
   MemoryLifecyclePatch,
   MemoryChangeEvent,
@@ -739,6 +744,8 @@ export interface RuntimeSettings {
     cronReviewQueueV1Enabled: boolean;
     replayRegressionV1Enabled: boolean;
     codeModeV1Enabled: boolean;
+    improvementLedgerV1Enabled: boolean;
+    improvementActivationV1Enabled: boolean;
   };
 }
 
@@ -1059,6 +1066,8 @@ const IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE = "improvement_tune_blocker_template
 const IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD = "improvement_tune_retry_threshold_v1";
 const IMPROVEMENT_TUNE_KEY_LIVE_INTENT = "improvement_tune_live_intent_threshold_v1";
 const IMPROVEMENT_TUNE_KEY_REFUSAL_STYLE = "improvement_tune_refusal_style_v1";
+const IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY = "improvement_repair_policy_config_v1";
+const IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY = "improvement_routing_policy_config_v1";
 const IMPROVEMENT_RUN_STATUS_VALUES = new Set(["queued", "running", "completed", "failed"]);
 const IMPROVEMENT_CAUSE_CLASSES = new Set<DecisionReplayCauseClass>([
   "false_refusal_tone",
@@ -1593,6 +1602,12 @@ export class GatewayService {
       markWorkflowUnrecoverable: async (run, reason) => {
         await this.markDurableWorkflowUnrecoverable(run, reason);
       },
+      onRunFailed: async (run, message) => {
+        this.improvementService.recordDurableRunFailureSignal({
+          run,
+          message,
+        });
+      },
     });
     this.hooksService = new HooksService(serviceCtx, {
       createDurableRun: (input) => this.durableRunService.createDurableRun(input),
@@ -1613,6 +1628,12 @@ export class GatewayService {
       getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
       getPromptJudgeModelDefaults: () => this.getPromptJudgeModelDefaults(),
       backgroundTasks: this.backgroundTasks,
+      recordImprovementBenchmarkSignal: (input) => {
+        this.improvementService.recordPromptLabBenchmarkCompletionSignal(input);
+      },
+      recordImprovementRegressionSignal: (input) => {
+        this.improvementService.recordPromptLabRegressionCompletionSignal(input);
+      },
     });
     this.chatProactiveService = new ChatProactiveService(serviceCtx, {
       listChatSessions: (query) => this.listChatSessions(query),
@@ -1630,6 +1651,13 @@ export class GatewayService {
       },
     });
     this.improvementService = new ImprovementService(serviceCtx, {
+      createApproval: (input) => this.createApproval(input),
+      captureRepairPolicySnapshot: (targetKey) => this.captureRepairPolicySnapshot(targetKey),
+      applyRepairPolicyCandidate: (targetKey, revisionRef) => this.applyRepairPolicyCandidate(targetKey, revisionRef),
+      restoreRepairPolicySnapshot: (snapshotRef) => this.restoreRepairPolicySnapshot(snapshotRef),
+      captureRoutingPolicySnapshot: (targetKey) => this.captureRoutingPolicySnapshot(targetKey),
+      applyRoutingPolicyCandidate: (targetKey, revisionRef) => this.applyRoutingPolicyCandidate(targetKey, revisionRef),
+      restoreRoutingPolicySnapshot: (snapshotRef) => this.restoreRoutingPolicySnapshot(snapshotRef),
       createChatCompletion: (request) => this.createChatCompletion(request),
       getPromptRunnerModelDefaults: () => this.getPromptRunnerModelDefaults(),
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
@@ -4492,6 +4520,160 @@ export class GatewayService {
     return this.improvementService.updateRepairCandidateValidation(candidateId, input);
   }
 
+  public listImprovementSignals(limit = 100, workspaceId?: string): ImprovementSignalRecord[] {
+    return this.improvementService.listImprovementSignals(limit, workspaceId);
+  }
+
+  public getImprovementSignal(signalId: string): ImprovementSignalRecord {
+    return this.improvementService.getImprovementSignal(signalId);
+  }
+
+  public listImprovementCandidates(limit = 100, workspaceId?: string): ImprovementCandidateRecord[] {
+    return this.improvementService.listImprovementCandidates(limit, workspaceId);
+  }
+
+  public getImprovementCandidate(candidateId: string): ImprovementCandidateDetailResponse {
+    return this.improvementService.getImprovementCandidateDetail(candidateId);
+  }
+
+  public async requestImprovementActivation(
+    candidateId: string,
+    actorId = "operator",
+  ): Promise<ImprovementActivationRecord> {
+    return this.improvementService.requestImprovementActivation(candidateId, actorId);
+  }
+
+  public getImprovementActivation(activationId: string): ImprovementActivationRecord {
+    return this.improvementService.getImprovementActivation(activationId);
+  }
+
+  public pauseImprovementActivation(activationId: string, actorId = "operator"): ImprovementActivationRecord {
+    return this.improvementService.pauseImprovementActivation(activationId, actorId);
+  }
+
+  public rollbackImprovementActivation(activationId: string, actorId = "operator"): ImprovementActivationRecord {
+    return this.improvementService.rollbackImprovementActivation(activationId, actorId);
+  }
+
+  private captureRepairPolicySnapshot(targetKey: string): ImprovementRef {
+    return this.captureImprovementPolicySnapshot(
+      IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY,
+      "repair_policy_snapshot",
+      targetKey,
+    );
+  }
+
+  private applyRepairPolicyCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
+    return this.applyImprovementPolicyCandidate(
+      IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY,
+      "repair_policy_config",
+      targetKey,
+      revisionRef,
+    );
+  }
+
+  private restoreRepairPolicySnapshot(snapshotRef: ImprovementRef): void {
+    this.restoreImprovementPolicySnapshot(IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY, snapshotRef);
+  }
+
+  private captureRoutingPolicySnapshot(targetKey: string): ImprovementRef {
+    return this.captureImprovementPolicySnapshot(
+      IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
+      "routing_policy_snapshot",
+      targetKey,
+    );
+  }
+
+  private applyRoutingPolicyCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef {
+    return this.applyImprovementPolicyCandidate(
+      IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
+      "routing_policy_config",
+      targetKey,
+      revisionRef,
+    );
+  }
+
+  private restoreRoutingPolicySnapshot(snapshotRef: ImprovementRef): void {
+    this.restoreImprovementPolicySnapshot(IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY, snapshotRef);
+  }
+
+  private captureImprovementPolicySnapshot(
+    settingKey: string,
+    refType: ImprovementRef["refType"],
+    targetKey: string,
+  ): ImprovementRef {
+    const policies = this.readImprovementPolicyMap(settingKey);
+    const hadValue = Object.prototype.hasOwnProperty.call(policies, targetKey);
+    const previousValue = hadValue ? policies[targetKey] : null;
+    return {
+      refType,
+      refId: targetKey,
+      hash: createHash("sha1").update(JSON.stringify({ hadValue, previousValue })).digest("hex"),
+      metadata: {
+        settingKey,
+        targetKey,
+        hadValue,
+        previousValue,
+      },
+    };
+  }
+
+  private applyImprovementPolicyCandidate(
+    settingKey: string,
+    refType: ImprovementRef["refType"],
+    targetKey: string,
+    revisionRef: ImprovementRef,
+  ): ImprovementRef {
+    const policies = this.readImprovementPolicyMap(settingKey);
+    const proposedChange = isRecord(revisionRef.metadata) ? revisionRef.metadata.proposedChange : undefined;
+    const nextValue = proposedChange ?? revisionRef.metadata ?? {};
+    this.writeImprovementPolicyMap(settingKey, {
+      ...policies,
+      [targetKey]: nextValue,
+    });
+    return {
+      refType,
+      refId: targetKey,
+      hash: createHash("sha1").update(JSON.stringify(nextValue)).digest("hex"),
+      metadata: {
+        settingKey,
+        targetKey,
+        appliedValue: nextValue,
+      },
+    };
+  }
+
+  private restoreImprovementPolicySnapshot(expectedSettingKey: string, snapshotRef: ImprovementRef): void {
+    const metadata = isRecord(snapshotRef.metadata) ? snapshotRef.metadata : {};
+    const settingKey =
+      typeof metadata.settingKey === "string" && metadata.settingKey.trim().length > 0
+        ? metadata.settingKey
+        : expectedSettingKey;
+    const targetKey = typeof metadata.targetKey === "string" ? metadata.targetKey : snapshotRef.refId;
+    const hadValue = metadata.hadValue === true;
+    const policies = this.readImprovementPolicyMap(settingKey);
+    const next = { ...policies };
+    if (hadValue) {
+      next[targetKey] = metadata.previousValue;
+    } else {
+      delete next[targetKey];
+    }
+    this.writeImprovementPolicyMap(settingKey, next);
+  }
+
+  private readImprovementPolicyMap(settingKey: string): Record<string, unknown> {
+    const stored = this.storage.systemSettings.get<unknown>(settingKey)?.value;
+    return isRecord(stored) ? { ...stored } : {};
+  }
+
+  private writeImprovementPolicyMap(settingKey: string, next: Record<string, unknown>): void {
+    if (Object.keys(next).length === 0) {
+      this.storage.systemSettings.set(settingKey, null);
+      return;
+    }
+    this.storage.systemSettings.set(settingKey, next);
+  }
+
   public getDurableDiagnostics(): DurableDiagnosticsResponse {
     return durableExecutionService.getDurableDiagnostics(this);
   }
@@ -5213,6 +5395,20 @@ export class GatewayService {
         confidence: classified.confidence,
         recoveryOptions: classified.recoveryOptions,
       });
+      if (toolRun?.toolName && failureClass) {
+        this.improvementService.recordFocusedToolFailureSignal({
+          workspaceId: input.trace.guidance?.workspaceId,
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          durableRunId: input.trace.durable?.runId,
+          toolName: toolRun.toolName,
+          providerId: input.trace.routing.effectiveProviderId ?? input.trace.routing.primaryProviderId,
+          model: input.trace.model ?? input.trace.routing.effectiveModel,
+          failureClass,
+          operationPhase: toolRun.status,
+          policyReason: toolRun.error ?? input.trace.failure?.message,
+        });
+      }
     } catch (error) {
       log.warn("failed to record capability gap", { error: error instanceof Error ? error.message : String(error) });
     }
@@ -8764,6 +8960,8 @@ export class GatewayService {
       cronReviewQueueV1Enabled: patch.cronReviewQueueV1Enabled ?? current.cronReviewQueueV1Enabled,
       replayRegressionV1Enabled: patch.replayRegressionV1Enabled ?? current.replayRegressionV1Enabled,
       codeModeV1Enabled: patch.codeModeV1Enabled ?? current.codeModeV1Enabled,
+      improvementLedgerV1Enabled: patch.improvementLedgerV1Enabled ?? current.improvementLedgerV1Enabled,
+      improvementActivationV1Enabled: patch.improvementActivationV1Enabled ?? current.improvementActivationV1Enabled,
     };
     this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
     this.config.assistant.features = { ...next };
@@ -8790,6 +8988,9 @@ export class GatewayService {
       cronReviewQueueV1Enabled: stored?.cronReviewQueueV1Enabled ?? fromConfig.cronReviewQueueV1Enabled,
       replayRegressionV1Enabled: stored?.replayRegressionV1Enabled ?? fromConfig.replayRegressionV1Enabled,
       codeModeV1Enabled: stored?.codeModeV1Enabled ?? fromConfig.codeModeV1Enabled,
+      improvementLedgerV1Enabled: stored?.improvementLedgerV1Enabled ?? fromConfig.improvementLedgerV1Enabled,
+      improvementActivationV1Enabled:
+        stored?.improvementActivationV1Enabled ?? fromConfig.improvementActivationV1Enabled,
     };
   }
 
@@ -8808,6 +9009,16 @@ export class GatewayService {
     stepKey?: string,
   ): DurableRunTimelineEvent {
     return this.durableRunService.recordDurableTimelineEvent(runId, eventType, payload, stepKey);
+  }
+
+  /** @internal */ public recordImprovementDurableRunCompletion(
+    run: DurableRunRecord,
+    checkpointState: Record<string, unknown>,
+  ): void {
+    this.improvementService.recordDurableRunCompletionSignal({
+      run,
+      checkpointState,
+    });
   }
 
   // normalizeReplayOverrides, replaceReplayOverrideSteps, computeReplayDiffSummary moved to ImprovementService
@@ -9739,6 +9950,8 @@ export class GatewayService {
         correlationId: approval.approvalId,
       },
     );
+    this.improvementService.recordApprovalResolutionSignal(approval);
+    this.improvementService.handleActivationApprovalResolution(approval);
   }
 
   public publishRealtime(

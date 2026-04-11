@@ -167,6 +167,25 @@ export interface PromptPackServiceDeps {
   getPromptJudgeModelDefaults(): { providerId?: string; model?: string };
   /** Shared background-task set for fire-and-forget benchmark tasks. */
   backgroundTasks: Set<Promise<void>>;
+  recordImprovementBenchmarkSignal?: (input: {
+    benchmarkRunId: string;
+    packId: string;
+    providerId: string;
+    model: string;
+    weightedScore?: number;
+    passRate?: number;
+    runFailures?: number;
+    failureSignal?: string;
+  }) => void;
+  recordImprovementRegressionSignal?: (input: {
+    regressionRunId: string;
+    packId: string;
+    baselineRef?: string;
+    scoreDelta: number;
+    passDelta: number;
+    latencyDeltaMs: number;
+    capability: string;
+  }) => void;
 }
 
 interface PromptPackExecutionProfile {
@@ -988,6 +1007,18 @@ export class PromptPackService {
       packId,
       testCodes: selectedCodes,
     });
+    const regressionStatus = this.getPromptPackReplayRegressionStatus(regressionRunId);
+    for (const result of regressionStatus.results) {
+      this.deps.recordImprovementRegressionSignal?.({
+        regressionRunId,
+        packId,
+        baselineRef: input.baselineRef,
+        scoreDelta: result.scoreDelta,
+        passDelta: result.passDelta,
+        latencyDeltaMs: result.latencyDeltaMs,
+        capability: result.capability,
+      });
+    }
     return { regressionRunId };
   }
 
@@ -1367,6 +1398,19 @@ export class PromptPackService {
         benchmarkRunId,
         finishedAt,
       });
+    const benchmarkStatus = this.getPromptPackBenchmarkStatus(benchmarkRunId);
+    for (const summary of benchmarkStatus.modelSummaries) {
+      this.deps.recordImprovementBenchmarkSignal?.({
+        benchmarkRunId,
+        packId: run.packId,
+        providerId: summary.providerId,
+        model: summary.model,
+        weightedScore: summary.averageWeightedScore,
+        passRate: summary.passRate,
+        runFailures: summary.runFailures,
+        failureSignal: summary.topFailureSignals[0]?.signal,
+      });
+    }
     this.ctx.publishRealtime("prompt_pack_benchmark_completed", "promptLab", {
       benchmarkRunId,
       completedItems,

@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { z } from "zod";
 
 const reportListQuerySchema = z.object({
@@ -7,6 +7,11 @@ const reportListQuerySchema = z.object({
 
 const runListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(300).default(40),
+});
+
+const ledgerListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(500).default(100),
+  workspaceId: z.string().trim().min(1).optional(),
 });
 
 const reportParamsSchema = z.object({
@@ -25,6 +30,23 @@ const tuneParamsSchema = z.object({
   tuneId: z.string().min(1),
 });
 
+const signalParamsSchema = z.object({
+  signalId: z.string().min(1),
+});
+
+const candidateParamsSchema = z.object({
+  candidateId: z.string().min(1),
+});
+
+const activationParamsSchema = z.object({
+  activationId: z.string().min(1),
+});
+
+const repairCandidateValidationBodySchema = z.object({
+  status: z.enum(["not_started", "queued", "running", "needs_review", "passed", "failed"]),
+  summary: z.string().trim().min(1).max(2000).optional(),
+});
+
 const manualReplayBodySchema = z.object({
   sampleSize: z.coerce.number().int().positive().max(2000).optional(),
 });
@@ -40,6 +62,142 @@ const replayDraftBodySchema = z.object({
 });
 
 export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
+  const replyWithImprovementMutationError = (reply: FastifyReply, error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const statusCode = message.toLowerCase().includes("not found") ? 404 : 409;
+    return reply.code(statusCode).send({ error: message });
+  };
+
+  fastify.get("/api/v1/improvement/capability-gaps", async (request, reply) => {
+    const parsed = ledgerListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send({
+      items: fastify.gateway.listCapabilityGapEvents(parsed.data.limit),
+    });
+  });
+
+  fastify.get("/api/v1/improvement/repair-candidates", async (request, reply) => {
+    const parsed = ledgerListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send({
+      items: fastify.gateway.listRepairCandidates(parsed.data.limit),
+    });
+  });
+
+  fastify.patch("/api/v1/improvement/repair-candidates/:candidateId/validation", async (request, reply) => {
+    const params = candidateParamsSchema.safeParse(request.params);
+    const body = repairCandidateValidationBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(fastify.gateway.updateRepairCandidateValidation(params.data.candidateId, body.data));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/improvement/signals", async (request, reply) => {
+    const parsed = ledgerListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send({
+      items: fastify.gateway.listImprovementSignals(parsed.data.limit, parsed.data.workspaceId),
+    });
+  });
+
+  fastify.get("/api/v1/improvement/signals/:signalId", async (request, reply) => {
+    const params = signalParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.getImprovementSignal(params.data.signalId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/improvement/candidates", async (request, reply) => {
+    const parsed = ledgerListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send({
+      items: fastify.gateway.listImprovementCandidates(parsed.data.limit, parsed.data.workspaceId),
+    });
+  });
+
+  fastify.get("/api/v1/improvement/candidates/:candidateId", async (request, reply) => {
+    const params = candidateParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.getImprovementCandidate(params.data.candidateId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/improvement/candidates/:candidateId/activation-request", async (request, reply) => {
+    const params = candidateParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.gateway.requestImprovementActivation(params.data.candidateId));
+    } catch (error) {
+      return replyWithImprovementMutationError(reply, error);
+    }
+  });
+
+  fastify.get("/api/v1/improvement/activations/:activationId", async (request, reply) => {
+    const params = activationParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.getImprovementActivation(params.data.activationId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/improvement/activations/:activationId/pause", async (request, reply) => {
+    const params = activationParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.pauseImprovementActivation(params.data.activationId));
+    } catch (error) {
+      return replyWithImprovementMutationError(reply, error);
+    }
+  });
+
+  fastify.post("/api/v1/improvement/activations/:activationId/rollback", async (request, reply) => {
+    const params = activationParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.rollbackImprovementActivation(params.data.activationId));
+    } catch (error) {
+      return replyWithImprovementMutationError(reply, error);
+    }
+  });
+
   fastify.get("/api/v1/improvement/reports", async (request, reply) => {
     const parsed = reportListQuerySchema.safeParse(request.query);
     if (!parsed.success) {

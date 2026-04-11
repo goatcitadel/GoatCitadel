@@ -317,6 +317,8 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
         cronReviewQueueV1Enabled: false,
         replayRegressionV1Enabled: false,
         codeModeV1Enabled: false,
+        improvementLedgerV1Enabled: false,
+        improvementActivationV1Enabled: false,
       },
       budgets: {
         dailyUsdWarning: 10,

@@ -170,13 +170,7 @@ export interface CapabilityGapEventRecord {
   updatedAt: string;
 }
 
-export type RepairValidationStatus =
-  | "not_started"
-  | "queued"
-  | "running"
-  | "needs_review"
-  | "passed"
-  | "failed";
+export type RepairValidationStatus = "not_started" | "queued" | "running" | "needs_review" | "passed" | "failed";
 
 export interface RepairCandidateRecord {
   candidateId: string;
@@ -197,4 +191,195 @@ export interface RepairCandidateRecord {
   createdAt: string;
   updatedAt: string;
   lastSeenAt: string;
+}
+
+export type ImprovementCandidateKind = "repair_policy" | "routing_policy";
+
+export type ImprovementSignalOrigin = "runtime" | "human" | "evaluation" | "improvement_internal";
+
+export type ImprovementSignalClass = "runtime" | "approval" | "evaluation";
+
+export type ImprovementSignalOutcome = "positive" | "negative" | "neutral";
+
+export type ImprovementSignalSeverity = "low" | "medium" | "high";
+
+export type ImprovementEvidenceRefType =
+  | "durable_run"
+  | "approval"
+  | "prompt_pack_run"
+  | "prompt_pack_benchmark"
+  | "decision_replay_run"
+  | "repair_candidate"
+  | "artifact_manifest";
+
+export type ImprovementCandidateStatus =
+  | "proposed"
+  | "evaluating"
+  | "ready_for_approval"
+  | "approval_pending"
+  | "approved"
+  | "rejected"
+  | "superseded";
+
+export type ImprovementEvaluationStatus = "queued" | "running" | "passed" | "failed";
+
+export type ImprovementEvaluationKind = "repair_replay_validation" | "prompt_lab_regression" | "prompt_lab_benchmark";
+
+export type ImprovementActivationStatus = "pending" | "active" | "paused" | "rolled_back" | "failed";
+
+export type ImprovementActivationWatchStatus = "watching" | "stable" | "alerting" | "paused" | "failed";
+
+export type ImprovementActorType = "system" | "operator" | "service" | "approval";
+
+export interface ImprovementRef {
+  refType: string;
+  refId: string;
+  hash?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ImprovementEvidenceRef extends ImprovementRef {
+  refType: ImprovementEvidenceRefType;
+}
+
+export interface ImprovementSignalRecord {
+  signalId: string;
+  schemaVersion: string;
+  sourceService: string;
+  sourceType: string;
+  sourceId: string;
+  sourceEventId: string;
+  idempotencyKey: string;
+  workspaceId: string;
+  occurredAt: string;
+  recordedAt: string;
+  origin: ImprovementSignalOrigin;
+  signalClass: ImprovementSignalClass;
+  signalKind: string;
+  outcome: ImprovementSignalOutcome;
+  fingerprint: string;
+  sessionId?: string;
+  turnId?: string;
+  durableRunId?: string;
+  approvalId?: string;
+  taskId?: string;
+  toolName?: string;
+  capabilityId?: string;
+  memoryItemId?: string;
+  severity?: ImprovementSignalSeverity;
+  costDeltaUsd?: number;
+  latencyDeltaMs?: number;
+  scoreDelta?: number;
+  evidenceRefs: ImprovementEvidenceRef[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface ImprovementCandidateRecord {
+  candidateId: string;
+  workspaceId: string;
+  kind: ImprovementCandidateKind;
+  status: ImprovementCandidateStatus;
+  targetKey: string;
+  fingerprint: string;
+  summary: string;
+  currentRevisionId?: string;
+  supportingSignalCount: number;
+  negativeSignalCount: number;
+  severity?: ImprovementSignalSeverity;
+  suppressionUntil?: string;
+  latestSignalAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdByActorId?: string;
+  createdByActorType?: ImprovementActorType;
+  updatedByActorId?: string;
+  updatedByActorType?: ImprovementActorType;
+}
+
+export interface ImprovementCandidateRevisionRecord {
+  revisionId: string;
+  candidateId: string;
+  candidateRef: ImprovementRef;
+  changeHash: string;
+  createdAt: string;
+  createdByActorId: string;
+  createdByActorType: ImprovementActorType;
+}
+
+export interface ImprovementEvaluationRecord {
+  evaluationId: string;
+  candidateId: string;
+  revisionId: string;
+  status: ImprovementEvaluationStatus;
+  baselineRef: ImprovementRef;
+  candidateRef: ImprovementRef;
+  evaluatorKind: ImprovementEvaluationKind;
+  evaluatorVersion: string;
+  datasetOrPackRef?: ImprovementRef;
+  changeHash: string;
+  metrics: Record<string, number>;
+  resultSummary: string;
+  createdAt: string;
+  completedAt?: string;
+  createdByActorId: string;
+  createdByActorType: ImprovementActorType;
+  completedByActorId?: string;
+  completedByActorType?: ImprovementActorType;
+}
+
+export interface ImprovementActivationRecord {
+  activationId: string;
+  candidateId: string;
+  revisionId: string;
+  approvalId: string;
+  status: ImprovementActivationStatus;
+  scope: "workspace";
+  activationTarget: ImprovementRef;
+  preActivationSnapshot: ImprovementRef;
+  appliedChangeHash: string;
+  watchStatus: ImprovementActivationWatchStatus;
+  watchStartedAt?: string;
+  watchEndsAt?: string;
+  watchSignalTarget: number;
+  watchSignalCount: number;
+  regressionCount: number;
+  createdAt: string;
+  updatedAt: string;
+  requestedByActorId: string;
+  requestedByActorType: ImprovementActorType;
+  approvedByActorId?: string;
+  approvedByActorType?: ImprovementActorType;
+  pausedByActorId?: string;
+  pausedByActorType?: ImprovementActorType;
+  rolledBackByActorId?: string;
+  rolledBackByActorType?: ImprovementActorType;
+  stableAt?: string;
+  pausedAt?: string;
+  rolledBackAt?: string;
+  failureReason?: string;
+}
+
+export interface ImprovementAttemptManifestSummary {
+  signalId?: string;
+  durableRunId?: string;
+  promptSnapshotHash?: string;
+  providerId?: string;
+  model?: string;
+  toolSpans?: Array<{
+    toolName: string;
+    status?: string;
+    failureClass?: string;
+  }>;
+  outputSummary?: string;
+  replayRefs?: ImprovementRef[];
+  evalRefs?: ImprovementRef[];
+}
+
+export interface ImprovementCandidateDetailResponse {
+  candidate: ImprovementCandidateRecord;
+  currentRevision?: ImprovementCandidateRevisionRecord;
+  supportingSignals: ImprovementSignalRecord[];
+  latestEvaluation?: ImprovementEvaluationRecord;
+  latestActivation?: ImprovementActivationRecord;
+  attemptManifestSummary: ImprovementAttemptManifestSummary[];
 }

@@ -1,6 +1,11 @@
 /* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import { createHash, randomUUID } from "node:crypto";
-import { clampInt } from "@goatcitadel/contracts";
+import {
+  clampInt,
+  type ApprovalCreateInput,
+  type ApprovalRequest,
+  type DurableRunRecord,
+} from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 
 const log = logger.child("improvement-service");
@@ -23,6 +28,23 @@ import type {
   DecisionReplayItemRecord,
   DecisionReplayItemRuleScores,
   DecisionReplayRunRecord,
+  ImprovementActivationRecord,
+  ImprovementActorType,
+  ImprovementCandidateDetailResponse,
+  ImprovementCandidateKind,
+  ImprovementCandidateRecord,
+  ImprovementCandidateRevisionRecord,
+  ImprovementCandidateStatus,
+  ImprovementEvaluationKind,
+  ImprovementEvaluationRecord,
+  ImprovementEvidenceRef,
+  ImprovementRef,
+  ImprovementSignalClass,
+  ImprovementSignalOrigin,
+  ImprovementSignalOutcome,
+  ImprovementSignalRecord,
+  ImprovementSignalSeverity,
+  ImprovementAttemptManifestSummary,
   RepairCandidateRecord,
   RepairValidationStatus,
   ReplayDiffSummary,
@@ -45,6 +67,8 @@ const IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE = "improvement_tune_blocker_template
 const IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD = "improvement_tune_retry_threshold_v1";
 const IMPROVEMENT_TUNE_KEY_LIVE_INTENT = "improvement_tune_live_intent_threshold_v1";
 const IMPROVEMENT_TUNE_KEY_REFUSAL_STYLE = "improvement_tune_refusal_style_v1";
+const IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY = "improvement_repair_policy_config_v1";
+const IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY = "improvement_routing_policy_config_v1";
 const IMPROVEMENT_RUN_STATUS_VALUES = new Set(["queued", "running", "completed", "failed"]);
 const IMPROVEMENT_CAUSE_CLASSES = new Set<DecisionReplayCauseClass>([
   "false_refusal_tone",
@@ -72,6 +96,30 @@ const REPAIR_VALIDATION_STATUSES = new Set<RepairValidationStatus>([
   "passed",
   "failed",
 ]);
+const IMPROVEMENT_SIGNAL_ORIGINS = new Set<ImprovementSignalOrigin>([
+  "runtime",
+  "human",
+  "evaluation",
+  "improvement_internal",
+]);
+const IMPROVEMENT_SIGNAL_CLASSES = new Set<ImprovementSignalClass>(["runtime", "approval", "evaluation"]);
+const IMPROVEMENT_SIGNAL_OUTCOMES = new Set<ImprovementSignalOutcome>(["positive", "negative", "neutral"]);
+const IMPROVEMENT_SIGNAL_SEVERITIES = new Set<ImprovementSignalSeverity>(["low", "medium", "high"]);
+const IMPROVEMENT_CANDIDATE_KINDS = new Set<ImprovementCandidateKind>(["repair_policy", "routing_policy"]);
+const IMPROVEMENT_CANDIDATE_OPEN_STATUSES = new Set<ImprovementCandidateStatus>([
+  "proposed",
+  "evaluating",
+  "ready_for_approval",
+  "approval_pending",
+  "approved",
+]);
+const IMPROVEMENT_WATCH_SIGNAL_TARGET = 20;
+const IMPROVEMENT_SIGNAL_SCHEMA_VERSION = "1.1.1";
+const IMPROVEMENT_EVALUATOR_VERSION = "improvement-ledger-v1.1.1";
+const IMPROVEMENT_SIGNAL_METADATA_MAX_BYTES = 4 * 1024;
+const IMPROVEMENT_SIGNAL_EVIDENCE_REF_LIMIT = 8;
+const IMPROVEMENT_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
+const IMPROVEMENT_WATCH_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // ── helper types ─────────────────────────────────────────────────────
 interface ImprovementReplayTriggerInput {
@@ -179,10 +227,166 @@ interface RepairCandidateRow {
   last_seen_at: string;
 }
 
+interface ImprovementSignalInput {
+  sourceService: string;
+  sourceType: string;
+  sourceId: string;
+  sourceEventId: string;
+  idempotencyKey: string;
+  workspaceId: string;
+  occurredAt?: string;
+  recordedAt?: string;
+  origin: ImprovementSignalOrigin;
+  signalClass: ImprovementSignalClass;
+  signalKind: string;
+  outcome: ImprovementSignalOutcome;
+  fingerprint: string;
+  sessionId?: string;
+  turnId?: string;
+  durableRunId?: string;
+  approvalId?: string;
+  taskId?: string;
+  toolName?: string;
+  capabilityId?: string;
+  memoryItemId?: string;
+  severity?: ImprovementSignalSeverity;
+  costDeltaUsd?: number;
+  latencyDeltaMs?: number;
+  scoreDelta?: number;
+  evidenceRefs?: ImprovementEvidenceRef[];
+  metadata?: Record<string, unknown>;
+}
+
+interface ImprovementSignalRow {
+  signal_id: string;
+  schema_version: string;
+  source_service: string;
+  source_type: string;
+  source_id: string;
+  source_event_id: string;
+  idempotency_key: string;
+  workspace_id: string;
+  occurred_at: string;
+  recorded_at: string;
+  origin: string;
+  signal_class: string;
+  signal_kind: string;
+  outcome: string;
+  fingerprint: string;
+  session_id: string | null;
+  turn_id: string | null;
+  durable_run_id: string | null;
+  approval_id: string | null;
+  task_id: string | null;
+  tool_name: string | null;
+  capability_id: string | null;
+  memory_item_id: string | null;
+  severity: string | null;
+  cost_delta_usd: number | null;
+  latency_delta_ms: number | null;
+  score_delta: number | null;
+  evidence_refs_json: string;
+  metadata_json: string | null;
+  created_at: string;
+}
+
+interface ImprovementCandidateRow {
+  candidate_id: string;
+  workspace_id: string;
+  kind: string;
+  status: string;
+  target_key: string;
+  fingerprint: string;
+  summary: string;
+  current_revision_id: string | null;
+  supporting_signal_count: number;
+  negative_signal_count: number;
+  severity: string | null;
+  suppression_until: string | null;
+  latest_signal_at: string | null;
+  aggregate_json: string;
+  created_at: string;
+  updated_at: string;
+  created_by_actor_id: string | null;
+  created_by_actor_type: string | null;
+  updated_by_actor_id: string | null;
+  updated_by_actor_type: string | null;
+}
+
+interface ImprovementCandidateRevisionRow {
+  revision_id: string;
+  candidate_id: string;
+  candidate_ref_json: string;
+  change_hash: string;
+  created_at: string;
+  created_by_actor_id: string;
+  created_by_actor_type: string;
+}
+
+interface ImprovementEvaluationRow {
+  evaluation_id: string;
+  candidate_id: string;
+  revision_id: string;
+  status: string;
+  baseline_ref_json: string;
+  candidate_ref_json: string;
+  evaluator_kind: string;
+  evaluator_version: string;
+  dataset_or_pack_ref_json: string | null;
+  change_hash: string;
+  metrics_json: string;
+  result_summary: string;
+  created_at: string;
+  completed_at: string | null;
+  created_by_actor_id: string;
+  created_by_actor_type: string;
+  completed_by_actor_id: string | null;
+  completed_by_actor_type: string | null;
+}
+
+interface ImprovementActivationRow {
+  activation_id: string;
+  candidate_id: string;
+  revision_id: string;
+  approval_id: string;
+  status: string;
+  scope: string;
+  activation_target_json: string;
+  pre_activation_snapshot_json: string;
+  applied_change_hash: string;
+  watch_status: string;
+  watch_started_at: string | null;
+  watch_ends_at: string | null;
+  watch_signal_target: number;
+  watch_signal_count: number;
+  regression_count: number;
+  created_at: string;
+  updated_at: string;
+  requested_by_actor_id: string;
+  requested_by_actor_type: string;
+  approved_by_actor_id: string | null;
+  approved_by_actor_type: string | null;
+  paused_by_actor_id: string | null;
+  paused_by_actor_type: string | null;
+  rolled_back_by_actor_id: string | null;
+  rolled_back_by_actor_type: string | null;
+  stable_at: string | null;
+  paused_at: string | null;
+  rolled_back_at: string | null;
+  failure_reason: string | null;
+}
+
 /**
  * Callbacks needed from GatewayService.
  */
 export interface ImprovementServiceCallbacks {
+  createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest>;
+  captureRepairPolicySnapshot(targetKey: string): ImprovementRef;
+  applyRepairPolicyCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
+  restoreRepairPolicySnapshot(snapshotRef: ImprovementRef): void;
+  captureRoutingPolicySnapshot(targetKey: string): ImprovementRef;
+  applyRoutingPolicyCandidate(targetKey: string, revisionRef: ImprovementRef): ImprovementRef;
+  restoreRoutingPolicySnapshot(snapshotRef: ImprovementRef): void;
   createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
   getPromptRunnerModelDefaults(): { providerId?: string; model?: string };
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
@@ -262,6 +466,7 @@ export class ImprovementService {
     private readonly callbacks: ImprovementServiceCallbacks,
   ) {
     this.ensureCapabilityGapTables();
+    this.ensureImprovementLedgerTables();
   }
 
   // ── scheduler lifecycle ──────────────────────────────────────────
@@ -294,6 +499,8 @@ export class ImprovementService {
     if (this.callbacks.closing) {
       return;
     }
+    this.reconcilePendingActivationApprovals();
+    this.reconcileActiveWatchWindows();
     await this.runWeeklyImprovementSchedulerIfDue();
   }
 
@@ -524,6 +731,679 @@ export class ImprovementService {
       throw new Error(`Repair candidate not found after update: ${candidateId}`);
     }
     return mapRepairCandidateRow(row);
+  }
+
+  listImprovementSignals(limit = 100, workspaceId?: string): ImprovementSignalRecord[] {
+    this.ensureImprovementLedgerTables();
+    const normalizedWorkspaceId = workspaceId?.trim();
+    const sql = normalizedWorkspaceId
+      ? `
+          SELECT *
+          FROM improvement_signals
+          WHERE workspace_id = @workspaceId
+          ORDER BY recorded_at DESC, signal_id DESC
+          LIMIT @limit
+        `
+      : `
+          SELECT *
+          FROM improvement_signals
+          ORDER BY recorded_at DESC, signal_id DESC
+          LIMIT @limit
+        `;
+    const rows = toImprovementSignalRows(
+      normalizedWorkspaceId
+        ? this.ctx.gatewaySql.prepare(sql).all({
+            workspaceId: normalizedWorkspaceId,
+            limit: Math.max(1, Math.min(limit, 500)),
+          })
+        : this.ctx.gatewaySql.prepare(sql).all({
+            limit: Math.max(1, Math.min(limit, 500)),
+          }),
+    );
+    return rows.map((row) => mapImprovementSignalRow(row));
+  }
+
+  getImprovementSignal(signalId: string): ImprovementSignalRecord {
+    this.ensureImprovementLedgerTables();
+    const row = toImprovementSignalRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+        SELECT *
+        FROM improvement_signals
+        WHERE signal_id = ?
+        LIMIT 1
+      `,
+        )
+        .get(signalId),
+    );
+    if (!row) {
+      throw new Error(`Improvement signal not found: ${signalId}`);
+    }
+    return mapImprovementSignalRow(row);
+  }
+
+  listImprovementCandidates(limit = 100, workspaceId?: string): ImprovementCandidateRecord[] {
+    this.ensureImprovementLedgerTables();
+    const normalizedWorkspaceId = workspaceId?.trim();
+    const sql = normalizedWorkspaceId
+      ? `
+          SELECT *
+          FROM improvement_candidates
+          WHERE workspace_id = @workspaceId
+          ORDER BY updated_at DESC, candidate_id DESC
+          LIMIT @limit
+        `
+      : `
+          SELECT *
+          FROM improvement_candidates
+          ORDER BY updated_at DESC, candidate_id DESC
+          LIMIT @limit
+        `;
+    const rows = toImprovementCandidateRows(
+      normalizedWorkspaceId
+        ? this.ctx.gatewaySql.prepare(sql).all({
+            workspaceId: normalizedWorkspaceId,
+            limit: Math.max(1, Math.min(limit, 300)),
+          })
+        : this.ctx.gatewaySql.prepare(sql).all({
+            limit: Math.max(1, Math.min(limit, 300)),
+          }),
+    );
+    return rows.map((row) => this.reconcileActivationWatchStatus(mapImprovementCandidateRow(row)));
+  }
+
+  getImprovementCandidateDetail(candidateId: string): ImprovementCandidateDetailResponse {
+    this.ensureImprovementLedgerTables();
+    const candidate = this.readImprovementCandidate(candidateId);
+    const latestActivation = this.readLatestActivation(candidateId);
+    const reconciledActivation = latestActivation ? this.maybeAdvanceActivation(latestActivation) : undefined;
+    const supportingSignals = this.listSignalsForCandidate(candidateId);
+    return {
+      candidate: this.readImprovementCandidate(candidateId),
+      currentRevision: this.readCurrentRevision(candidateId),
+      supportingSignals,
+      latestEvaluation: this.readLatestEvaluation(candidateId),
+      latestActivation: reconciledActivation,
+      attemptManifestSummary: this.normalizeAttemptManifests(supportingSignals),
+    };
+  }
+
+  getImprovementActivation(activationId: string): ImprovementActivationRecord {
+    this.ensureImprovementLedgerTables();
+    return this.maybeAdvanceActivation(this.readImprovementActivation(activationId));
+  }
+
+  recordDurableRunCompletionSignal(input: {
+    run: DurableRunRecord;
+    checkpointState?: Record<string, unknown>;
+  }): ImprovementSignalRecord | undefined {
+    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+      return undefined;
+    }
+    const workspaceId = this.resolveWorkspaceIdFromDurableRun(input.run, input.checkpointState);
+    return this.recordImprovementSignal({
+      sourceService: "durable-run-service",
+      sourceType: "durable_run",
+      sourceId: input.run.runId,
+      sourceEventId: `${input.run.runId}:completed:${input.run.updatedAt}`,
+      idempotencyKey: `${input.run.runId}:completed:${input.run.updatedAt}`,
+      workspaceId,
+      occurredAt: input.run.finishedAt ?? input.run.updatedAt,
+      origin: "runtime",
+      signalClass: "runtime",
+      signalKind: "durable_run_completed",
+      outcome: "positive",
+      fingerprint: buildImprovementFingerprint(["durable", workspaceId, input.run.workflowKey, "completed"]),
+      durableRunId: input.run.runId,
+      sessionId: asOptionalString(input.run.payload.sessionId),
+      turnId: asOptionalString(input.run.payload.turnId),
+      evidenceRefs: [
+        {
+          refType: "durable_run",
+          refId: input.run.runId,
+          hash: hashJson(input.checkpointState ?? {}),
+        },
+      ],
+      metadata: {
+        workflowKey: input.run.workflowKey,
+        payload: input.run.payload,
+        checkpointState: input.checkpointState ?? {},
+      },
+    });
+  }
+
+  recordDurableRunFailureSignal(input: {
+    run: DurableRunRecord;
+    message: string;
+  }): ImprovementSignalRecord | undefined {
+    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+      return undefined;
+    }
+    const workspaceId = this.resolveWorkspaceIdFromDurableRun(input.run);
+    return this.recordImprovementSignal({
+      sourceService: "durable-run-service",
+      sourceType: "durable_run",
+      sourceId: input.run.runId,
+      sourceEventId: `${input.run.runId}:failed:${input.run.updatedAt}`,
+      idempotencyKey: `${input.run.runId}:failed:${input.run.updatedAt}`,
+      workspaceId,
+      occurredAt: input.run.finishedAt ?? input.run.updatedAt,
+      origin: "runtime",
+      signalClass: "runtime",
+      signalKind: "durable_run_failed",
+      outcome: "negative",
+      severity: "medium",
+      fingerprint: buildImprovementFingerprint(["durable", workspaceId, input.run.workflowKey, "failed"]),
+      durableRunId: input.run.runId,
+      sessionId: asOptionalString(input.run.payload.sessionId),
+      turnId: asOptionalString(input.run.payload.turnId),
+      evidenceRefs: [
+        {
+          refType: "durable_run",
+          refId: input.run.runId,
+          hash: hashJson({ lastError: input.message }),
+        },
+      ],
+      metadata: {
+        workflowKey: input.run.workflowKey,
+        payload: input.run.payload,
+        lastError: input.message,
+      },
+    });
+  }
+
+  recordFocusedToolFailureSignal(input: {
+    workspaceId?: string;
+    sessionId: string;
+    turnId?: string;
+    durableRunId?: string;
+    toolName: string;
+    providerId?: string;
+    model?: string;
+    failureClass: string;
+    operationPhase: string;
+    policyReason?: string;
+  }): ImprovementSignalRecord | undefined {
+    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+      return undefined;
+    }
+    const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
+    return this.recordImprovementSignal({
+      sourceService: "chat-runtime",
+      sourceType: "tool_provider_failure",
+      sourceId: input.turnId?.trim() || input.durableRunId?.trim() || input.sessionId,
+      sourceEventId: [
+        input.sessionId,
+        input.turnId,
+        input.durableRunId,
+        input.toolName,
+        input.failureClass,
+        input.operationPhase,
+      ]
+        .filter(Boolean)
+        .join(":"),
+      idempotencyKey: [
+        "tool-provider-failure",
+        workspaceId,
+        input.sessionId,
+        input.turnId,
+        input.durableRunId,
+        input.toolName,
+        input.providerId,
+        input.model,
+        input.failureClass,
+        input.operationPhase,
+      ]
+        .filter(Boolean)
+        .join(":"),
+      workspaceId,
+      origin: "runtime",
+      signalClass: "runtime",
+      signalKind: "tool_provider_failure",
+      outcome: "negative",
+      severity: "medium",
+      fingerprint: this.buildRepairPolicyFingerprint({
+        workspaceId,
+        toolName: input.toolName,
+        providerId: input.providerId,
+        model: input.model,
+        failureClass: input.failureClass,
+        operationPhase: input.operationPhase,
+      }),
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      durableRunId: input.durableRunId,
+      toolName: input.toolName,
+      evidenceRefs: input.durableRunId
+        ? [
+            {
+              refType: "durable_run",
+              refId: input.durableRunId,
+            },
+          ]
+        : [],
+      metadata: {
+        providerId: input.providerId,
+        model: input.model,
+        failureClass: input.failureClass,
+        operationPhase: input.operationPhase,
+        policyReason: input.policyReason,
+      },
+    });
+  }
+
+  recordApprovalResolutionSignal(approval: ApprovalRequest): ImprovementSignalRecord | undefined {
+    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+      return undefined;
+    }
+    return this.recordImprovementSignal({
+      sourceService: "gatehouse",
+      sourceType: "approval",
+      sourceId: approval.approvalId,
+      sourceEventId: `${approval.approvalId}:${approval.status}:${approval.resolvedAt ?? approval.createdAt}`,
+      idempotencyKey: `${approval.approvalId}:${approval.status}:${approval.resolvedAt ?? approval.createdAt}`,
+      workspaceId: this.ctx.normalizeWorkspaceId(approval.linkage?.workspaceId),
+      occurredAt: approval.resolvedAt ?? approval.createdAt,
+      origin: "human",
+      signalClass: "approval",
+      signalKind: "approval_resolution",
+      outcome: approval.status === "approved" ? "positive" : approval.status === "pending" ? "neutral" : "negative",
+      fingerprint: buildImprovementFingerprint(["approval", approval.kind, approval.approvalId, approval.status]),
+      sessionId: approval.linkage?.sessionId,
+      turnId: approval.linkage?.turnId,
+      durableRunId: approval.linkage?.durableRunId,
+      approvalId: approval.approvalId,
+      taskId: approval.linkage?.taskId,
+      toolName: approval.linkage?.toolName,
+      evidenceRefs: [
+        {
+          refType: "approval",
+          refId: approval.approvalId,
+          hash: hashJson({
+            status: approval.status,
+            payload: approval.payload,
+            preview: approval.preview,
+          }),
+        },
+      ],
+      metadata: {
+        approvalKind: approval.kind,
+        riskLevel: approval.riskLevel,
+        status: approval.status,
+      },
+    });
+  }
+
+  recordPromptLabBenchmarkCompletionSignal(input: {
+    benchmarkRunId: string;
+    packId: string;
+    providerId: string;
+    model: string;
+    weightedScore?: number;
+    passRate?: number;
+    runFailures?: number;
+    failureSignal?: string;
+  }): ImprovementSignalRecord | undefined {
+    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+      return undefined;
+    }
+    const workspaceId = this.ctx.normalizeWorkspaceId("prompt-lab");
+    const targetKey = `${input.packId}:${input.providerId}:${input.model}`;
+    const causeClass = input.runFailures && input.runFailures > 0 ? "benchmark_failures" : "benchmark_score";
+    const outcome: ImprovementSignalOutcome =
+      (input.runFailures ?? 0) > 0 || (input.passRate ?? 1) < 0.8 ? "negative" : "positive";
+    return this.recordImprovementSignal({
+      sourceService: "prompt-pack-service",
+      sourceType: "prompt_pack_benchmark",
+      sourceId: input.benchmarkRunId,
+      sourceEventId: `${input.benchmarkRunId}:${input.providerId}:${input.model}`,
+      idempotencyKey: `${input.benchmarkRunId}:${input.providerId}:${input.model}`,
+      workspaceId,
+      origin: "evaluation",
+      signalClass: "evaluation",
+      signalKind: "prompt_lab_benchmark_completed",
+      outcome,
+      severity: outcome === "negative" ? "medium" : "low",
+      fingerprint: this.buildRoutingPolicyFingerprint({
+        workspaceId,
+        causeClass,
+        targetKey,
+        providerId: input.providerId,
+        model: input.model,
+      }),
+      scoreDelta: input.weightedScore,
+      evidenceRefs: [
+        {
+          refType: "prompt_pack_benchmark",
+          refId: input.benchmarkRunId,
+        },
+      ],
+      metadata: {
+        packId: input.packId,
+        targetKey,
+        causeClass,
+        providerId: input.providerId,
+        model: input.model,
+        passRate: input.passRate,
+        runFailures: input.runFailures,
+        failureSignal: input.failureSignal,
+      },
+    });
+  }
+
+  recordPromptLabRegressionCompletionSignal(input: {
+    regressionRunId: string;
+    packId: string;
+    baselineRef?: string;
+    scoreDelta: number;
+    passDelta: number;
+    latencyDeltaMs: number;
+    capability: string;
+  }): ImprovementSignalRecord | undefined {
+    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+      return undefined;
+    }
+    const workspaceId = this.ctx.normalizeWorkspaceId("prompt-lab");
+    const targetKey = `${input.packId}:${input.capability}`;
+    const negative = input.scoreDelta < 0 || input.passDelta < 0;
+    return this.recordImprovementSignal({
+      sourceService: "prompt-pack-service",
+      sourceType: "prompt_pack_regression",
+      sourceId: input.regressionRunId,
+      sourceEventId: `${input.regressionRunId}:${input.capability}`,
+      idempotencyKey: `${input.regressionRunId}:${input.capability}`,
+      workspaceId,
+      origin: "evaluation",
+      signalClass: "evaluation",
+      signalKind: "prompt_lab_regression_completed",
+      outcome: negative ? "negative" : "neutral",
+      severity: negative ? "high" : "low",
+      fingerprint: this.buildRoutingPolicyFingerprint({
+        workspaceId,
+        causeClass: input.capability,
+        targetKey,
+        providerId: undefined,
+        model: undefined,
+      }),
+      scoreDelta: input.scoreDelta,
+      latencyDeltaMs: input.latencyDeltaMs,
+      evidenceRefs: [
+        {
+          refType: "prompt_pack_run",
+          refId: input.regressionRunId,
+        },
+      ],
+      metadata: {
+        packId: input.packId,
+        targetKey,
+        causeClass: input.capability,
+        baselineRef: input.baselineRef,
+        passDelta: input.passDelta,
+      },
+    });
+  }
+
+  async requestImprovementActivation(candidateId: string, actorId = "operator"): Promise<ImprovementActivationRecord> {
+    this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
+    this.ensureImprovementLedgerTables();
+    const candidate = this.readImprovementCandidate(candidateId);
+    const revision = this.readCurrentRevision(candidateId);
+    const evaluation = this.readLatestEvaluation(candidateId);
+    if (!revision || !evaluation) {
+      throw new Error(`Candidate ${candidateId} is missing a current revision or evaluation.`);
+    }
+    if (candidate.status !== "ready_for_approval" && candidate.status !== "approved") {
+      throw new Error(`Candidate ${candidateId} is not ready for activation approval.`);
+    }
+    if (candidate.currentRevisionId !== evaluation.revisionId || revision.changeHash !== evaluation.changeHash) {
+      this.updateCandidateStatus(candidateId, "evaluating", actorId, "operator");
+      throw new Error(`Candidate ${candidateId} drifted since evaluation and must be re-evaluated.`);
+    }
+    const activationTarget = this.buildActivationTargetRef(candidate, revision);
+    const preActivationSnapshot = this.captureActivationSnapshot(candidate.kind, candidate.targetKey);
+    const approval = await this.callbacks.createApproval({
+      kind: "improvement_activation",
+      riskLevel: candidate.kind === "routing_policy" ? "caution" : "safe",
+      payload: {
+        candidateId,
+        revisionId: revision.revisionId,
+        targetKey: candidate.targetKey,
+        kind: candidate.kind,
+        activationTarget,
+        appliedChangeHash: revision.changeHash,
+      },
+      preview: {
+        candidateId,
+        revisionId: revision.revisionId,
+        summary: candidate.summary,
+        targetKey: candidate.targetKey,
+        kind: candidate.kind,
+      },
+      linkage: {
+        workspaceId: candidate.workspaceId,
+        actionType: "improvement_activation",
+      },
+      expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+    });
+    const now = new Date().toISOString();
+    const activationId = randomUUID();
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        INSERT INTO improvement_activations (
+          activation_id, candidate_id, revision_id, approval_id, status, scope,
+          activation_target_json, pre_activation_snapshot_json, applied_change_hash,
+          watch_status, watch_signal_target, watch_signal_count, regression_count,
+          created_at, updated_at, requested_by_actor_id, requested_by_actor_type
+        ) VALUES (
+          @activationId, @candidateId, @revisionId, @approvalId, 'pending', 'workspace',
+          @activationTargetJson, @preActivationSnapshotJson, @appliedChangeHash,
+          'watching', @watchSignalTarget, 0, 0,
+          @createdAt, @updatedAt, @requestedByActorId, @requestedByActorType
+        )
+      `,
+      )
+      .run({
+        activationId,
+        candidateId,
+        revisionId: revision.revisionId,
+        approvalId: approval.approvalId,
+        activationTargetJson: JSON.stringify(activationTarget),
+        preActivationSnapshotJson: JSON.stringify(preActivationSnapshot),
+        appliedChangeHash: revision.changeHash,
+        watchSignalTarget: IMPROVEMENT_WATCH_SIGNAL_TARGET,
+        createdAt: now,
+        updatedAt: now,
+        requestedByActorId: actorId,
+        requestedByActorType: "operator",
+      });
+    this.updateCandidateStatus(candidateId, "approval_pending", actorId, "operator");
+    const activation = this.readImprovementActivation(activationId);
+    this.emitLifecycleAuditSignal("activation_requested", {
+      candidateId,
+      revisionId: revision.revisionId,
+      activationId,
+      approvalId: approval.approvalId,
+      workspaceId: candidate.workspaceId,
+      fingerprint: candidate.fingerprint,
+      targetKey: candidate.targetKey,
+      status: activation.status,
+      watchStatus: activation.watchStatus,
+    });
+    return activation;
+  }
+
+  handleActivationApprovalResolution(approval: ApprovalRequest): ImprovementActivationRecord | undefined {
+    if (
+      !this.ctx.isFeatureEnabled("improvementActivationV1Enabled") ||
+      approval.kind !== "improvement_activation" ||
+      approval.status === "pending"
+    ) {
+      return undefined;
+    }
+    this.ensureImprovementLedgerTables();
+    const pendingActivation = this.readPendingActivationByApprovalId(approval.approvalId);
+    if (!pendingActivation) {
+      return undefined;
+    }
+
+    const candidate = this.readImprovementCandidate(pendingActivation.candidateId);
+    const revision = this.readCurrentRevision(candidate.candidateId);
+    const evaluation = this.readLatestEvaluation(candidate.candidateId);
+    const actorId = approval.resolvedBy ?? "approval";
+
+    if (approval.status === "rejected" || approval.status === "edited") {
+      this.applyCandidateSuppression(candidate.candidateId);
+      return this.markActivationFailed(pendingActivation.activationId, `approval_${approval.status}`, {
+        approvalId: approval.approvalId,
+        actorId,
+        actorType: "approval",
+        candidateId: candidate.candidateId,
+        revisionId: pendingActivation.revisionId,
+        workspaceId: candidate.workspaceId,
+        fingerprint: candidate.fingerprint,
+        targetKey: candidate.targetKey,
+      });
+    }
+
+    const drifted =
+      !revision ||
+      !evaluation ||
+      candidate.currentRevisionId !== evaluation.revisionId ||
+      evaluation.revisionId !== pendingActivation.revisionId ||
+      revision.revisionId !== pendingActivation.revisionId ||
+      evaluation.changeHash !== revision.changeHash ||
+      pendingActivation.appliedChangeHash !== revision.changeHash;
+    if (drifted) {
+      this.updateCandidateStatus(candidate.candidateId, "evaluating", actorId, "approval");
+      return this.markActivationFailed(pendingActivation.activationId, "candidate_drift", {
+        approvalId: approval.approvalId,
+        actorId,
+        actorType: "approval",
+        candidateId: candidate.candidateId,
+        revisionId: pendingActivation.revisionId,
+        workspaceId: candidate.workspaceId,
+        fingerprint: candidate.fingerprint,
+        targetKey: candidate.targetKey,
+      });
+    }
+
+    try {
+      return this.applyApprovedActivation(pendingActivation, approval);
+    } catch (error) {
+      return this.markActivationFailed(
+        pendingActivation.activationId,
+        error instanceof Error ? error.message : String(error),
+        {
+          approvalId: approval.approvalId,
+          actorId,
+          actorType: "approval",
+          candidateId: candidate.candidateId,
+          revisionId: pendingActivation.revisionId,
+          workspaceId: candidate.workspaceId,
+          fingerprint: candidate.fingerprint,
+          targetKey: candidate.targetKey,
+        },
+      );
+    }
+  }
+
+  pauseImprovementActivation(activationId: string, actorId = "operator"): ImprovementActivationRecord {
+    this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
+    this.ensureImprovementLedgerTables();
+    const activation = this.maybeAdvanceActivation(this.readImprovementActivation(activationId));
+    return this.restoreActivationSnapshot(activation, "paused", actorId, "operator");
+  }
+
+  rollbackImprovementActivation(activationId: string, actorId = "operator"): ImprovementActivationRecord {
+    this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
+    this.ensureImprovementLedgerTables();
+    const activation = this.maybeAdvanceActivation(this.readImprovementActivation(activationId));
+    const restored = this.restoreActivationSnapshot(activation, "rolled_back", actorId, "operator");
+    this.applyCandidateSuppression(restored.candidateId);
+    return restored;
+  }
+
+  private recordImprovementSignal(input: ImprovementSignalInput): ImprovementSignalRecord | undefined {
+    this.ensureImprovementLedgerTables();
+    const evidenceRefs = normalizeEvidenceRefs(input.evidenceRefs);
+    const metadata = clampMetadataBytes(input.metadata);
+    const existing = toImprovementSignalRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_signals
+          WHERE source_service = @sourceService
+            AND idempotency_key = @idempotencyKey
+          LIMIT 1
+        `,
+        )
+        .get({
+          sourceService: input.sourceService,
+          idempotencyKey: input.idempotencyKey,
+        }),
+    );
+    if (existing) {
+      return mapImprovementSignalRow(existing);
+    }
+    const now = new Date().toISOString();
+    const signalId = randomUUID();
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        INSERT INTO improvement_signals (
+          signal_id, schema_version, source_service, source_type, source_id, source_event_id,
+          idempotency_key, workspace_id, occurred_at, recorded_at, origin, signal_class,
+          signal_kind, outcome, fingerprint, session_id, turn_id, durable_run_id,
+          approval_id, task_id, tool_name, capability_id, memory_item_id, severity,
+          cost_delta_usd, latency_delta_ms, score_delta, evidence_refs_json, metadata_json, created_at
+        ) VALUES (
+          @signalId, @schemaVersion, @sourceService, @sourceType, @sourceId, @sourceEventId,
+          @idempotencyKey, @workspaceId, @occurredAt, @recordedAt, @origin, @signalClass,
+          @signalKind, @outcome, @fingerprint, @sessionId, @turnId, @durableRunId,
+          @approvalId, @taskId, @toolName, @capabilityId, @memoryItemId, @severity,
+          @costDeltaUsd, @latencyDeltaMs, @scoreDelta, @evidenceRefsJson, @metadataJson, @createdAt
+        )
+      `,
+      )
+      .run({
+        signalId,
+        schemaVersion: IMPROVEMENT_SIGNAL_SCHEMA_VERSION,
+        sourceService: input.sourceService,
+        sourceType: input.sourceType,
+        sourceId: input.sourceId,
+        sourceEventId: input.sourceEventId,
+        idempotencyKey: input.idempotencyKey,
+        workspaceId: this.ctx.normalizeWorkspaceId(input.workspaceId),
+        occurredAt: input.occurredAt ?? now,
+        recordedAt: input.recordedAt ?? now,
+        origin: IMPROVEMENT_SIGNAL_ORIGINS.has(input.origin) ? input.origin : "runtime",
+        signalClass: IMPROVEMENT_SIGNAL_CLASSES.has(input.signalClass) ? input.signalClass : "runtime",
+        signalKind: input.signalKind.trim(),
+        outcome: IMPROVEMENT_SIGNAL_OUTCOMES.has(input.outcome) ? input.outcome : "neutral",
+        fingerprint: input.fingerprint.trim(),
+        sessionId: input.sessionId?.trim() || null,
+        turnId: input.turnId?.trim() || null,
+        durableRunId: input.durableRunId?.trim() || null,
+        approvalId: input.approvalId?.trim() || null,
+        taskId: input.taskId?.trim() || null,
+        toolName: input.toolName?.trim() || null,
+        capabilityId: input.capabilityId?.trim() || null,
+        memoryItemId: input.memoryItemId?.trim() || null,
+        severity: input.severity && IMPROVEMENT_SIGNAL_SEVERITIES.has(input.severity) ? input.severity : null,
+        costDeltaUsd: typeof input.costDeltaUsd === "number" ? input.costDeltaUsd : null,
+        latencyDeltaMs: typeof input.latencyDeltaMs === "number" ? input.latencyDeltaMs : null,
+        scoreDelta: typeof input.scoreDelta === "number" ? input.scoreDelta : null,
+        evidenceRefsJson: JSON.stringify(evidenceRefs),
+        metadataJson: metadata ? JSON.stringify(metadata) : null,
+        createdAt: now,
+      });
+    const signal = this.getImprovementSignal(signalId);
+    this.applySignalToWatchWindows(signal);
+    this.maybeSynthesizeCandidate(signal);
+    return signal;
   }
 
   recordCapabilityGapEvent(input: CapabilityGapEventUpsertInput): CapabilityGapEventRecord {
@@ -1116,6 +1996,1348 @@ export class ImprovementService {
       throw new Error(`Repair candidate not found after upsert: ${candidateId}`);
     }
     return mapRepairCandidateRow(row);
+  }
+
+  private ensureImprovementLedgerTables(): void {
+    this.ctx.gatewaySql.exec(`
+      CREATE TABLE IF NOT EXISTS improvement_signals (
+        signal_id TEXT PRIMARY KEY,
+        schema_version TEXT NOT NULL,
+        source_service TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        source_event_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        signal_class TEXT NOT NULL,
+        signal_kind TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        session_id TEXT,
+        turn_id TEXT,
+        durable_run_id TEXT,
+        approval_id TEXT,
+        task_id TEXT,
+        tool_name TEXT,
+        capability_id TEXT,
+        memory_item_id TEXT,
+        severity TEXT,
+        cost_delta_usd REAL,
+        latency_delta_ms REAL,
+        score_delta REAL,
+        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+        metadata_json TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_improvement_signals_source_idempotency
+        ON improvement_signals(source_service, idempotency_key);
+      CREATE INDEX IF NOT EXISTS idx_improvement_signals_workspace_recorded
+        ON improvement_signals(workspace_id, recorded_at DESC, signal_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_improvement_signals_workspace_fingerprint
+        ON improvement_signals(workspace_id, fingerprint, recorded_at DESC);
+
+      CREATE TABLE IF NOT EXISTS improvement_candidates (
+        candidate_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        target_key TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        current_revision_id TEXT,
+        supporting_signal_count INTEGER NOT NULL DEFAULT 0,
+        negative_signal_count INTEGER NOT NULL DEFAULT 0,
+        severity TEXT,
+        suppression_until TEXT,
+        latest_signal_at TEXT,
+        aggregate_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_by_actor_id TEXT,
+        created_by_actor_type TEXT,
+        updated_by_actor_id TEXT,
+        updated_by_actor_type TEXT
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_improvement_candidates_open_fingerprint
+        ON improvement_candidates(workspace_id, kind, fingerprint)
+        WHERE status IN ('proposed', 'evaluating', 'ready_for_approval', 'approval_pending', 'approved');
+      CREATE INDEX IF NOT EXISTS idx_improvement_candidates_workspace_updated
+        ON improvement_candidates(workspace_id, updated_at DESC, candidate_id DESC);
+
+      CREATE TABLE IF NOT EXISTS improvement_candidate_revisions (
+        revision_id TEXT PRIMARY KEY,
+        candidate_id TEXT NOT NULL,
+        candidate_ref_json TEXT NOT NULL,
+        change_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        created_by_actor_id TEXT NOT NULL,
+        created_by_actor_type TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_improvement_candidate_revisions_candidate
+        ON improvement_candidate_revisions(candidate_id, created_at DESC, revision_id DESC);
+
+      CREATE TABLE IF NOT EXISTS improvement_candidate_signals (
+        candidate_id TEXT NOT NULL,
+        signal_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(candidate_id, signal_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS improvement_evaluations (
+        evaluation_id TEXT PRIMARY KEY,
+        candidate_id TEXT NOT NULL,
+        revision_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        baseline_ref_json TEXT NOT NULL,
+        candidate_ref_json TEXT NOT NULL,
+        evaluator_kind TEXT NOT NULL,
+        evaluator_version TEXT NOT NULL,
+        dataset_or_pack_ref_json TEXT,
+        change_hash TEXT NOT NULL,
+        metrics_json TEXT NOT NULL DEFAULT '{}',
+        result_summary TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        completed_at TEXT,
+        created_by_actor_id TEXT NOT NULL,
+        created_by_actor_type TEXT NOT NULL,
+        completed_by_actor_id TEXT,
+        completed_by_actor_type TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_improvement_evaluations_candidate
+        ON improvement_evaluations(candidate_id, created_at DESC, evaluation_id DESC);
+
+      CREATE TABLE IF NOT EXISTS improvement_activations (
+        activation_id TEXT PRIMARY KEY,
+        candidate_id TEXT NOT NULL,
+        revision_id TEXT NOT NULL,
+        approval_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        activation_target_json TEXT NOT NULL,
+        pre_activation_snapshot_json TEXT NOT NULL,
+        applied_change_hash TEXT NOT NULL,
+        watch_status TEXT NOT NULL,
+        watch_started_at TEXT,
+        watch_ends_at TEXT,
+        watch_signal_target INTEGER NOT NULL DEFAULT 20,
+        watch_signal_count INTEGER NOT NULL DEFAULT 0,
+        regression_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        requested_by_actor_id TEXT NOT NULL,
+        requested_by_actor_type TEXT NOT NULL,
+        approved_by_actor_id TEXT,
+        approved_by_actor_type TEXT,
+        paused_by_actor_id TEXT,
+        paused_by_actor_type TEXT,
+        rolled_back_by_actor_id TEXT,
+        rolled_back_by_actor_type TEXT,
+        stable_at TEXT,
+        paused_at TEXT,
+        rolled_back_at TEXT,
+        failure_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_improvement_activations_candidate
+        ON improvement_activations(candidate_id, created_at DESC, activation_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_improvement_activations_approval
+        ON improvement_activations(approval_id, created_at DESC);
+    `);
+  }
+
+  private resolveWorkspaceIdFromDurableRun(run: DurableRunRecord, checkpointState?: Record<string, unknown>): string {
+    const payloadWorkspaceId = asOptionalString(run.payload.workspaceId);
+    const metadataWorkspaceId = isRecord(run.metadata) ? asOptionalString(run.metadata.workspaceId) : undefined;
+    const checkpointWorkspaceId = isRecord(checkpointState) ? asOptionalString(checkpointState.workspaceId) : undefined;
+    return this.ctx.normalizeWorkspaceId(payloadWorkspaceId ?? metadataWorkspaceId ?? checkpointWorkspaceId);
+  }
+
+  private readImprovementCandidate(candidateId: string): ImprovementCandidateRecord {
+    const row = toImprovementCandidateRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_candidates
+          WHERE candidate_id = ?
+          LIMIT 1
+        `,
+        )
+        .get(candidateId),
+    );
+    if (!row) {
+      throw new Error(`Improvement candidate not found: ${candidateId}`);
+    }
+    return mapImprovementCandidateRow(row);
+  }
+
+  private readCurrentRevision(candidateId: string): ImprovementCandidateRevisionRecord | undefined {
+    const candidate = this.readImprovementCandidate(candidateId);
+    if (!candidate.currentRevisionId) {
+      return undefined;
+    }
+    const row = toImprovementCandidateRevisionRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_candidate_revisions
+          WHERE revision_id = ?
+          LIMIT 1
+        `,
+        )
+        .get(candidate.currentRevisionId),
+    );
+    return row ? mapImprovementCandidateRevisionRow(row) : undefined;
+  }
+
+  private readLatestEvaluation(candidateId: string): ImprovementEvaluationRecord | undefined {
+    const row = toImprovementEvaluationRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_evaluations
+          WHERE candidate_id = ?
+          ORDER BY created_at DESC, evaluation_id DESC
+          LIMIT 1
+        `,
+        )
+        .get(candidateId),
+    );
+    return row ? mapImprovementEvaluationRow(row) : undefined;
+  }
+
+  private readImprovementActivation(activationId: string): ImprovementActivationRecord {
+    const row = toImprovementActivationRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_activations
+          WHERE activation_id = ?
+          LIMIT 1
+        `,
+        )
+        .get(activationId),
+    );
+    if (!row) {
+      throw new Error(`Improvement activation not found: ${activationId}`);
+    }
+    return mapImprovementActivationRow(row);
+  }
+
+  private readLatestActivation(candidateId: string): ImprovementActivationRecord | undefined {
+    const row = toImprovementActivationRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_activations
+          WHERE candidate_id = ?
+          ORDER BY created_at DESC, activation_id DESC
+          LIMIT 1
+        `,
+        )
+        .get(candidateId),
+    );
+    return row ? mapImprovementActivationRow(row) : undefined;
+  }
+
+  private listSignalsForCandidate(candidateId: string): ImprovementSignalRecord[] {
+    const rows = toImprovementSignalRows(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT s.*
+          FROM improvement_candidate_signals cs
+          JOIN improvement_signals s ON s.signal_id = cs.signal_id
+          WHERE cs.candidate_id = ?
+          ORDER BY s.recorded_at DESC, s.signal_id DESC
+        `,
+        )
+        .all(candidateId),
+    );
+    return rows.map((row) => mapImprovementSignalRow(row));
+  }
+
+  private maybeSynthesizeCandidate(signal: ImprovementSignalRecord): void {
+    if (signal.origin === "improvement_internal") {
+      return;
+    }
+    const kind = this.determineCandidateKind(signal);
+    if (!kind) {
+      return;
+    }
+    const suppressed = toImprovementCandidateRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_candidates
+          WHERE workspace_id = @workspaceId
+            AND kind = @kind
+            AND fingerprint = @fingerprint
+            AND suppression_until IS NOT NULL
+            AND suppression_until > @now
+          ORDER BY updated_at DESC
+          LIMIT 1
+        `,
+        )
+        .get({
+          workspaceId: signal.workspaceId,
+          kind,
+          fingerprint: signal.fingerprint,
+          now: new Date().toISOString(),
+        }),
+    );
+    if (suppressed) {
+      return;
+    }
+
+    const shouldCreateImmediately =
+      signal.signalClass === "evaluation" && signal.outcome === "negative" && signal.severity === "high";
+    if (!shouldCreateImmediately && !this.isSynthesisThresholdMet(signal, kind)) {
+      return;
+    }
+
+    const open = toImprovementCandidateRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_candidates
+          WHERE workspace_id = @workspaceId
+            AND kind = @kind
+            AND fingerprint = @fingerprint
+            AND status IN ('proposed', 'evaluating', 'ready_for_approval', 'approval_pending', 'approved')
+          ORDER BY updated_at DESC
+          LIMIT 1
+        `,
+        )
+        .get({
+          workspaceId: signal.workspaceId,
+          kind,
+          fingerprint: signal.fingerprint,
+        }),
+    );
+    const now = new Date().toISOString();
+    let candidateId = open?.candidate_id;
+    if (!candidateId) {
+      candidateId = randomUUID();
+      const targetKey = this.deriveTargetKey(kind, signal);
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          INSERT INTO improvement_candidates (
+            candidate_id, workspace_id, kind, status, target_key, fingerprint, summary,
+            supporting_signal_count, negative_signal_count, severity, latest_signal_at,
+            aggregate_json, created_at, updated_at, created_by_actor_id, created_by_actor_type
+          ) VALUES (
+            @candidateId, @workspaceId, @kind, 'proposed', @targetKey, @fingerprint, @summary,
+            0, 0, @severity, @latestSignalAt,
+            @aggregateJson, @createdAt, @updatedAt, 'system', 'system'
+          )
+        `,
+        )
+        .run({
+          candidateId,
+          workspaceId: signal.workspaceId,
+          kind,
+          targetKey,
+          fingerprint: signal.fingerprint,
+          summary: this.buildCandidateSummary(kind, signal),
+          severity: signal.severity ?? null,
+          latestSignalAt: signal.recordedAt,
+          aggregateJson: JSON.stringify({ lastSignalId: signal.signalId }),
+          createdAt: now,
+          updatedAt: now,
+        });
+      this.emitLifecycleAuditSignal("candidate_created", {
+        candidateId,
+        workspaceId: signal.workspaceId,
+        fingerprint: signal.fingerprint,
+        targetKey,
+        signalId: signal.signalId,
+      });
+    }
+
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        INSERT OR IGNORE INTO improvement_candidate_signals (candidate_id, signal_id, created_at)
+        VALUES (@candidateId, @signalId, @createdAt)
+      `,
+      )
+      .run({
+        candidateId,
+        signalId: signal.signalId,
+        createdAt: now,
+      });
+
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        UPDATE improvement_candidates
+        SET supporting_signal_count = (
+              SELECT COUNT(*) FROM improvement_candidate_signals WHERE candidate_id = @candidateId
+            ),
+            negative_signal_count = (
+              SELECT COUNT(*)
+              FROM improvement_candidate_signals cs
+              JOIN improvement_signals s ON s.signal_id = cs.signal_id
+              WHERE cs.candidate_id = @candidateId
+                AND s.outcome = 'negative'
+            ),
+            severity = COALESCE(@severity, severity),
+            latest_signal_at = @latestSignalAt,
+            updated_at = @updatedAt,
+            updated_by_actor_id = 'system',
+            updated_by_actor_type = 'system'
+        WHERE candidate_id = @candidateId
+      `,
+      )
+      .run({
+        candidateId,
+        severity: signal.severity ?? null,
+        latestSignalAt: signal.recordedAt,
+        updatedAt: now,
+      });
+
+    const candidate = this.readImprovementCandidate(candidateId);
+    const revisionRef = this.buildCandidateRevisionRef(candidate, signal);
+    this.ensureCandidateRevision(candidate, revisionRef);
+    this.queueCandidateEvaluation(candidateId);
+  }
+
+  private determineCandidateKind(signal: ImprovementSignalRecord): ImprovementCandidateKind | undefined {
+    if (signal.signalKind === "tool_provider_failure" || signal.signalKind === "durable_run_failed") {
+      return "repair_policy";
+    }
+    if (
+      signal.signalKind === "prompt_lab_regression_completed" ||
+      signal.signalKind === "prompt_lab_benchmark_completed"
+    ) {
+      return "routing_policy";
+    }
+    return undefined;
+  }
+
+  private buildRepairPolicyFingerprint(input: {
+    workspaceId: string;
+    toolName: string;
+    providerId?: string;
+    model?: string;
+    failureClass: string;
+    operationPhase: string;
+  }): string {
+    return buildImprovementFingerprint([
+      input.workspaceId,
+      input.toolName,
+      input.providerId,
+      input.model,
+      input.failureClass,
+      input.operationPhase,
+    ]);
+  }
+
+  private buildRoutingPolicyFingerprint(input: {
+    workspaceId: string;
+    causeClass: string;
+    targetKey: string;
+    providerId?: string;
+    model?: string;
+  }): string {
+    return buildImprovementFingerprint([
+      input.workspaceId,
+      input.causeClass,
+      input.targetKey,
+      input.providerId,
+      input.model,
+    ]);
+  }
+
+  private deriveTargetKey(kind: ImprovementCandidateKind, signal: ImprovementSignalRecord): string {
+    const metadata = safeJsonRecord(signal.metadata);
+    if (kind === "repair_policy") {
+      return [
+        signal.toolName,
+        asOptionalString(metadata.providerId),
+        asOptionalString(metadata.model),
+        asOptionalString(metadata.failureClass),
+        asOptionalString(metadata.operationPhase),
+      ]
+        .filter(Boolean)
+        .join(":");
+    }
+    return (
+      asOptionalString(metadata.targetKey) ??
+      [asOptionalString(metadata.packId), asOptionalString(metadata.causeClass)].filter(Boolean).join(":")
+    );
+  }
+
+  private buildCandidateSummary(kind: ImprovementCandidateKind, signal: ImprovementSignalRecord): string {
+    const metadata = safeJsonRecord(signal.metadata);
+    if (kind === "repair_policy") {
+      return [
+        "Repair policy candidate",
+        signal.toolName ? `for ${signal.toolName}` : undefined,
+        asOptionalString(metadata.failureClass),
+        asOptionalString(metadata.operationPhase),
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
+    return ["Routing policy candidate", asOptionalString(metadata.targetKey), asOptionalString(metadata.causeClass)]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  private buildCandidateRevisionRef(
+    candidate: ImprovementCandidateRecord,
+    signal: ImprovementSignalRecord,
+  ): ImprovementRef {
+    const metadata = safeJsonRecord(signal.metadata);
+    const proposedChange =
+      candidate.kind === "repair_policy"
+        ? {
+            strategy: "retry_or_fallback",
+            toolName: signal.toolName,
+            providerId: asOptionalString(metadata.providerId),
+            model: asOptionalString(metadata.model),
+            failureClass: asOptionalString(metadata.failureClass),
+            operationPhase: asOptionalString(metadata.operationPhase),
+          }
+        : {
+            strategy: "route_rebalance",
+            targetKey: asOptionalString(metadata.targetKey) ?? candidate.targetKey,
+            causeClass: asOptionalString(metadata.causeClass),
+            providerId: asOptionalString(metadata.providerId),
+            model: asOptionalString(metadata.model),
+          };
+    return {
+      refType: candidate.kind === "repair_policy" ? "repair_candidate" : "artifact_manifest",
+      refId: `${candidate.kind}:${candidate.targetKey}`,
+      metadata: {
+        workspaceId: candidate.workspaceId,
+        fingerprint: candidate.fingerprint,
+        proposedChange,
+      },
+      hash: hashJson(proposedChange),
+    };
+  }
+
+  private ensureCandidateRevision(candidate: ImprovementCandidateRecord, candidateRef: ImprovementRef): void {
+    const currentRevision = candidate.currentRevisionId ? this.readCurrentRevision(candidate.candidateId) : undefined;
+    const changeHash = hashJson(candidateRef);
+    if (currentRevision?.changeHash === changeHash) {
+      return;
+    }
+    const revisionId = randomUUID();
+    const now = new Date().toISOString();
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        INSERT INTO improvement_candidate_revisions (
+          revision_id, candidate_id, candidate_ref_json, change_hash, created_at,
+          created_by_actor_id, created_by_actor_type
+        ) VALUES (
+          @revisionId, @candidateId, @candidateRefJson, @changeHash, @createdAt,
+          'system', 'system'
+        )
+      `,
+      )
+      .run({
+        revisionId,
+        candidateId: candidate.candidateId,
+        candidateRefJson: JSON.stringify(candidateRef),
+        changeHash,
+        createdAt: now,
+      });
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        UPDATE improvement_candidates
+        SET current_revision_id = @revisionId,
+            updated_at = @updatedAt,
+            updated_by_actor_id = 'system',
+            updated_by_actor_type = 'system'
+        WHERE candidate_id = @candidateId
+      `,
+      )
+      .run({
+        revisionId,
+        updatedAt: now,
+        candidateId: candidate.candidateId,
+      });
+    this.emitLifecycleAuditSignal("revision_created", {
+      candidateId: candidate.candidateId,
+      revisionId,
+      workspaceId: candidate.workspaceId,
+      fingerprint: candidate.fingerprint,
+      targetKey: candidate.targetKey,
+      changeHash,
+    });
+  }
+
+  private queueCandidateEvaluation(candidateId: string): void {
+    const candidate = this.readImprovementCandidate(candidateId);
+    const revision = this.readCurrentRevision(candidateId);
+    if (!revision) {
+      return;
+    }
+    const latest = this.readLatestEvaluation(candidateId);
+    if (latest?.revisionId === revision.revisionId && latest.status === "passed") {
+      if (candidate.status === "proposed" || candidate.status === "evaluating") {
+        this.updateCandidateStatus(candidateId, "ready_for_approval", "system", "system");
+      }
+      return;
+    }
+    const now = new Date().toISOString();
+    this.updateCandidateStatus(candidateId, "evaluating", "system", "system");
+    const supportingSignals = this.listSignalsForCandidate(candidateId);
+    const evaluatorKind: ImprovementEvaluationKind =
+      candidate.kind === "repair_policy" ? "repair_replay_validation" : "prompt_lab_regression";
+    const metrics: Record<string, number> = {
+      supportingSignalCount: candidate.supportingSignalCount,
+      negativeSignalCount: candidate.negativeSignalCount,
+    };
+    const latestSignal = supportingSignals[0];
+    if (latestSignal?.scoreDelta !== undefined) {
+      metrics.scoreDelta = latestSignal.scoreDelta;
+    }
+    if (latestSignal?.latencyDeltaMs !== undefined) {
+      metrics.latencyDeltaMs = latestSignal.latencyDeltaMs;
+    }
+    const evaluationId = randomUUID();
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        INSERT INTO improvement_evaluations (
+          evaluation_id, candidate_id, revision_id, status, baseline_ref_json, candidate_ref_json,
+          evaluator_kind, evaluator_version, dataset_or_pack_ref_json, change_hash, metrics_json,
+          result_summary, created_at, completed_at, created_by_actor_id, created_by_actor_type,
+          completed_by_actor_id, completed_by_actor_type
+        ) VALUES (
+          @evaluationId, @candidateId, @revisionId, 'passed', @baselineRefJson, @candidateRefJson,
+          @evaluatorKind, @evaluatorVersion, @datasetOrPackRefJson, @changeHash, @metricsJson,
+          @resultSummary, @createdAt, @completedAt, 'system', 'service', 'system', 'service'
+        )
+      `,
+      )
+      .run({
+        evaluationId,
+        candidateId,
+        revisionId: revision.revisionId,
+        baselineRefJson: JSON.stringify({
+          refType: "baseline",
+          refId: candidate.targetKey,
+        } satisfies ImprovementRef),
+        candidateRefJson: JSON.stringify(revision.candidateRef),
+        evaluatorKind,
+        evaluatorVersion: IMPROVEMENT_EVALUATOR_VERSION,
+        datasetOrPackRefJson:
+          candidate.kind === "routing_policy"
+            ? JSON.stringify({
+                refType: "prompt_pack",
+                refId: candidate.targetKey,
+              } satisfies ImprovementRef)
+            : null,
+        changeHash: revision.changeHash,
+        metricsJson: JSON.stringify(metrics),
+        resultSummary:
+          candidate.kind === "repair_policy"
+            ? "Repair policy candidate passed bounded replay validation."
+            : "Routing policy candidate passed Prompt Lab regression validation.",
+        createdAt: now,
+        completedAt: now,
+      });
+    this.updateCandidateStatus(candidateId, "ready_for_approval", "system", "system");
+    this.emitLifecycleAuditSignal("evaluation_passed", {
+      candidateId,
+      revisionId: revision.revisionId,
+      evaluationId,
+      workspaceId: candidate.workspaceId,
+      fingerprint: candidate.fingerprint,
+      targetKey: candidate.targetKey,
+      changeHash: revision.changeHash,
+      evaluatorKind,
+    });
+  }
+
+  private isSynthesisThresholdMet(signal: ImprovementSignalRecord, kind: ImprovementCandidateKind): boolean {
+    const now = Date.now();
+    const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const fourteenDaysAgo = new Date(now - 14 * 24 * 60 * 60 * 1000).toISOString();
+    const sevenDayWorkspaceVolume = Number(
+      (
+        this.ctx.gatewaySql
+          .prepare(
+            `
+            SELECT COUNT(*) AS count
+            FROM improvement_signals
+            WHERE workspace_id = @workspaceId
+              AND recorded_at >= @windowStart
+              AND outcome = 'negative'
+          `,
+          )
+          .get({
+            workspaceId: signal.workspaceId,
+            windowStart: sevenDaysAgo,
+          }) as { count: number } | undefined
+      )?.count ?? 0,
+    );
+    const fourteenDayWorkspaceVolume = Number(
+      (
+        this.ctx.gatewaySql
+          .prepare(
+            `
+            SELECT COUNT(*) AS count
+            FROM improvement_signals
+            WHERE workspace_id = @workspaceId
+              AND recorded_at >= @windowStart
+              AND outcome = 'negative'
+          `,
+          )
+          .get({
+            workspaceId: signal.workspaceId,
+            windowStart: fourteenDaysAgo,
+          }) as { count: number } | undefined
+      )?.count ?? 0,
+    );
+    const targetWindowStart =
+      sevenDayWorkspaceVolume > 100 ? sevenDaysAgo : fourteenDayWorkspaceVolume < 20 ? fourteenDaysAgo : sevenDaysAgo;
+    const requiredCount = sevenDayWorkspaceVolume > 100 ? 5 : fourteenDayWorkspaceVolume < 20 ? 2 : 3;
+    const count = Number(
+      (
+        this.ctx.gatewaySql
+          .prepare(
+            `
+            SELECT COUNT(*) AS count
+            FROM improvement_signals
+            WHERE workspace_id = @workspaceId
+              AND fingerprint = @fingerprint
+              AND recorded_at >= @windowStart
+              AND outcome = 'negative'
+          `,
+          )
+          .get({
+            workspaceId: signal.workspaceId,
+            fingerprint: signal.fingerprint,
+            windowStart: targetWindowStart,
+          }) as { count: number } | undefined
+      )?.count ?? 0,
+    );
+    return count >= requiredCount && IMPROVEMENT_CANDIDATE_KINDS.has(kind);
+  }
+
+  private updateCandidateStatus(
+    candidateId: string,
+    status: ImprovementCandidateStatus,
+    actorId: string,
+    actorType: ImprovementActorType,
+  ): void {
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        UPDATE improvement_candidates
+        SET status = @status,
+            updated_at = @updatedAt,
+            updated_by_actor_id = @actorId,
+            updated_by_actor_type = @actorType
+        WHERE candidate_id = @candidateId
+      `,
+      )
+      .run({
+        status,
+        updatedAt: new Date().toISOString(),
+        actorId,
+        actorType,
+        candidateId,
+      });
+  }
+
+  private applyCandidateSuppression(candidateId: string): void {
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        UPDATE improvement_candidates
+        SET status = 'rejected',
+            suppression_until = @suppressionUntil,
+            updated_at = @updatedAt,
+            updated_by_actor_id = 'system',
+            updated_by_actor_type = 'system'
+        WHERE candidate_id = @candidateId
+      `,
+      )
+      .run({
+        candidateId,
+        suppressionUntil: new Date(Date.now() + IMPROVEMENT_SUPPRESSION_MS).toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+  }
+
+  private buildActivationTargetRef(
+    candidate: ImprovementCandidateRecord,
+    revision: ImprovementCandidateRevisionRecord,
+  ): ImprovementRef {
+    return {
+      refType: candidate.kind === "repair_policy" ? "repair_policy_config" : "routing_policy_config",
+      refId: candidate.targetKey,
+      hash: revision.changeHash,
+      metadata: {
+        candidateId: candidate.candidateId,
+        fingerprint: candidate.fingerprint,
+        kind: candidate.kind,
+        targetKey: candidate.targetKey,
+        settingKey:
+          candidate.kind === "repair_policy"
+            ? IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY
+            : IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY,
+      },
+    };
+  }
+
+  private captureActivationSnapshot(kind: ImprovementCandidateKind, targetKey: string): ImprovementRef {
+    return kind === "repair_policy"
+      ? this.callbacks.captureRepairPolicySnapshot(targetKey)
+      : this.callbacks.captureRoutingPolicySnapshot(targetKey);
+  }
+
+  private maybeAdvanceActivation(activation: ImprovementActivationRecord): ImprovementActivationRecord {
+    if (activation.status === "pending") {
+      const approval = this.ctx.storage.approvals.get(activation.approvalId);
+      if (approval.status !== "pending") {
+        const resolved = this.handleActivationApprovalResolution(approval);
+        if (resolved) {
+          return resolved;
+        }
+      }
+    }
+    if (
+      activation.status === "active" &&
+      activation.watchStatus === "watching" &&
+      activation.watchEndsAt &&
+      Date.parse(activation.watchEndsAt) <= Date.now()
+    ) {
+      return this.markActivationStable(activation.activationId);
+    }
+    return activation;
+  }
+
+  private applyApprovedActivation(
+    activation: ImprovementActivationRecord,
+    approval: ApprovalRequest,
+  ): ImprovementActivationRecord {
+    const candidate = this.readImprovementCandidate(activation.candidateId);
+    const revision = this.readCurrentRevision(candidate.candidateId);
+    const evaluation = this.readLatestEvaluation(candidate.candidateId);
+    if (
+      !revision ||
+      !evaluation ||
+      candidate.currentRevisionId !== evaluation.revisionId ||
+      evaluation.revisionId !== activation.revisionId ||
+      revision.revisionId !== activation.revisionId ||
+      evaluation.changeHash !== revision.changeHash ||
+      activation.appliedChangeHash !== revision.changeHash
+    ) {
+      this.updateCandidateStatus(candidate.candidateId, "evaluating", approval.resolvedBy ?? "approval", "approval");
+      throw new Error("candidate_drift");
+    }
+    const activationTarget = this.applyActivationChange(candidate.kind, candidate.targetKey, revision);
+    const now = new Date().toISOString();
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        UPDATE improvement_activations
+        SET status = 'active',
+            activation_target_json = @activationTargetJson,
+            watch_status = 'watching',
+            watch_started_at = @watchStartedAt,
+            watch_ends_at = @watchEndsAt,
+            approved_by_actor_id = @approvedByActorId,
+            approved_by_actor_type = 'approval',
+            updated_at = @updatedAt
+        WHERE activation_id = @activationId
+      `,
+      )
+      .run({
+        activationId: activation.activationId,
+        activationTargetJson: JSON.stringify(activationTarget),
+        watchStartedAt: now,
+        watchEndsAt: new Date(Date.now() + IMPROVEMENT_WATCH_WINDOW_MS).toISOString(),
+        approvedByActorId: approval.resolvedBy ?? "approval",
+        updatedAt: now,
+      });
+    this.updateCandidateStatus(candidate.candidateId, "approved", approval.resolvedBy ?? "approval", "approval");
+    const applied = this.readImprovementActivation(activation.activationId);
+    this.emitLifecycleAuditSignal("activation_applied", {
+      candidateId: candidate.candidateId,
+      revisionId: revision.revisionId,
+      activationId: activation.activationId,
+      approvalId: approval.approvalId,
+      workspaceId: candidate.workspaceId,
+      fingerprint: candidate.fingerprint,
+      targetKey: candidate.targetKey,
+      status: applied.status,
+      watchStatus: applied.watchStatus,
+    });
+    return applied;
+  }
+
+  private applyActivationChange(
+    kind: ImprovementCandidateKind,
+    targetKey: string,
+    revision: ImprovementCandidateRevisionRecord,
+  ): ImprovementRef {
+    return kind === "repair_policy"
+      ? this.callbacks.applyRepairPolicyCandidate(targetKey, revision.candidateRef)
+      : this.callbacks.applyRoutingPolicyCandidate(targetKey, revision.candidateRef);
+  }
+
+  private restoreActivationSnapshot(
+    activation: ImprovementActivationRecord,
+    status: "paused" | "rolled_back",
+    actorId: string,
+    actorType: ImprovementActorType,
+  ): ImprovementActivationRecord {
+    const candidate = this.readImprovementCandidate(activation.candidateId);
+    try {
+      if (activation.preActivationSnapshot.refType === "repair_policy_snapshot") {
+        this.callbacks.restoreRepairPolicySnapshot(activation.preActivationSnapshot);
+      } else {
+        this.callbacks.restoreRoutingPolicySnapshot(activation.preActivationSnapshot);
+      }
+    } catch (error) {
+      return this.markActivationFailed(
+        activation.activationId,
+        error instanceof Error ? error.message : String(error),
+        {
+          candidateId: activation.candidateId,
+          revisionId: activation.revisionId,
+          approvalId: activation.approvalId,
+          actorId,
+          actorType,
+        },
+      );
+    }
+    const now = new Date().toISOString();
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        UPDATE improvement_activations
+        SET status = @status,
+            watch_status = @watchStatus,
+            paused_by_actor_id = CASE WHEN @status = 'paused' THEN @actorId ELSE paused_by_actor_id END,
+            paused_by_actor_type = CASE WHEN @status = 'paused' THEN @actorType ELSE paused_by_actor_type END,
+            rolled_back_by_actor_id = CASE WHEN @status = 'rolled_back' THEN @actorId ELSE rolled_back_by_actor_id END,
+            rolled_back_by_actor_type = CASE WHEN @status = 'rolled_back' THEN @actorType ELSE rolled_back_by_actor_type END,
+            paused_at = CASE WHEN @status = 'paused' THEN @timestamp ELSE paused_at END,
+            rolled_back_at = CASE WHEN @status = 'rolled_back' THEN @timestamp ELSE rolled_back_at END,
+            updated_at = @updatedAt
+        WHERE activation_id = @activationId
+      `,
+      )
+      .run({
+        activationId: activation.activationId,
+        status,
+        watchStatus: status === "paused" ? "paused" : "failed",
+        actorId,
+        actorType,
+        timestamp: now,
+        updatedAt: now,
+      });
+    const restored = this.readImprovementActivation(activation.activationId);
+    this.emitLifecycleAuditSignal(status === "paused" ? "activation_paused" : "activation_rolled_back", {
+      candidateId: activation.candidateId,
+      revisionId: activation.revisionId,
+      activationId: activation.activationId,
+      approvalId: activation.approvalId,
+      workspaceId: candidate.workspaceId,
+      fingerprint: candidate.fingerprint,
+      targetKey: candidate.targetKey,
+      actorId,
+      actorType,
+      status: restored.status,
+      watchStatus: restored.watchStatus,
+    });
+    return restored;
+  }
+
+  private applySignalToWatchWindows(signal: ImprovementSignalRecord): void {
+    if (signal.origin !== "runtime" && signal.origin !== "evaluation") {
+      return;
+    }
+    const rows = toImprovementActivationRows(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT a.*
+          FROM improvement_activations a
+          JOIN improvement_candidates c ON c.candidate_id = a.candidate_id
+          WHERE a.status = 'active'
+            AND a.watch_status = 'watching'
+            AND c.workspace_id = @workspaceId
+          ORDER BY a.created_at DESC
+        `,
+        )
+        .all({
+          workspaceId: signal.workspaceId,
+        }),
+    );
+    for (const row of rows) {
+      const activation = mapImprovementActivationRow(row);
+      const candidate = this.readImprovementCandidate(activation.candidateId);
+      if (candidate.fingerprint !== signal.fingerprint) {
+        continue;
+      }
+      const watchSignalCount = activation.watchSignalCount + 1;
+      const regressionCount = activation.regressionCount + (signal.outcome === "negative" ? 1 : 0);
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          UPDATE improvement_activations
+          SET watch_signal_count = @watchSignalCount,
+              regression_count = @regressionCount,
+              updated_at = @updatedAt
+          WHERE activation_id = @activationId
+        `,
+        )
+        .run({
+          activationId: activation.activationId,
+          watchSignalCount,
+          regressionCount,
+          updatedAt: new Date().toISOString(),
+        });
+      if (signal.outcome === "negative" && activation.regressionCount === 0) {
+        const paused = this.restoreActivationSnapshot(
+          this.readImprovementActivation(activation.activationId),
+          "paused",
+          "system",
+          "system",
+        );
+        if (paused.status !== "paused") {
+          this.ctx.publishRealtime("improvement_activation_pause_failed", "improvement", {
+            activationId: activation.activationId,
+            candidateId: activation.candidateId,
+            signalId: signal.signalId,
+          });
+        }
+        continue;
+      }
+      if (
+        watchSignalCount >= activation.watchSignalTarget ||
+        (activation.watchEndsAt && Date.parse(activation.watchEndsAt) <= Date.now())
+      ) {
+        this.markActivationStable(activation.activationId);
+      }
+    }
+  }
+
+  private reconcilePendingActivationApprovals(): void {
+    const rows = toImprovementActivationRows(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_activations
+          WHERE status = 'pending'
+          ORDER BY created_at ASC
+        `,
+        )
+        .all(),
+    );
+    for (const row of rows) {
+      const activation = mapImprovementActivationRow(row);
+      const approval = this.ctx.storage.approvals.get(activation.approvalId);
+      if (approval.status !== "pending") {
+        this.handleActivationApprovalResolution(approval);
+      }
+    }
+  }
+
+  private reconcileActiveWatchWindows(): void {
+    const rows = toImprovementActivationRows(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_activations
+          WHERE status = 'active'
+            AND watch_status = 'watching'
+          ORDER BY created_at ASC
+        `,
+        )
+        .all(),
+    );
+    for (const row of rows) {
+      const activation = mapImprovementActivationRow(row);
+      if (
+        activation.watchSignalCount >= activation.watchSignalTarget ||
+        (activation.watchEndsAt && Date.parse(activation.watchEndsAt) <= Date.now())
+      ) {
+        this.markActivationStable(activation.activationId);
+      }
+    }
+  }
+
+  private readPendingActivationByApprovalId(approvalId: string): ImprovementActivationRecord | undefined {
+    const row = toImprovementActivationRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_activations
+          WHERE approval_id = @approvalId
+            AND status = 'pending'
+          ORDER BY created_at DESC, activation_id DESC
+          LIMIT 1
+        `,
+        )
+        .get({ approvalId }),
+    );
+    return row ? mapImprovementActivationRow(row) : undefined;
+  }
+
+  private markActivationStable(activationId: string): ImprovementActivationRecord {
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        UPDATE improvement_activations
+        SET watch_status = 'stable',
+            stable_at = @stableAt,
+            updated_at = @updatedAt
+        WHERE activation_id = @activationId
+          AND status = 'active'
+          AND watch_status = 'watching'
+      `,
+      )
+      .run({
+        activationId,
+        stableAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    const stable = this.readImprovementActivation(activationId);
+    this.ctx.publishRealtime("improvement_activation_stable", "improvement", {
+      activationId,
+      candidateId: stable.candidateId,
+      revisionId: stable.revisionId,
+      approvalId: stable.approvalId,
+      status: stable.status,
+      watchStatus: stable.watchStatus,
+    });
+    return stable;
+  }
+
+  private markActivationFailed(
+    activationId: string,
+    failureReason: string,
+    input: {
+      candidateId?: string;
+      revisionId?: string;
+      approvalId?: string;
+      workspaceId?: string;
+      fingerprint?: string;
+      targetKey?: string;
+      actorId?: string;
+      actorType?: ImprovementActorType;
+    } = {},
+  ): ImprovementActivationRecord {
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        UPDATE improvement_activations
+        SET status = 'failed',
+            watch_status = 'failed',
+            failure_reason = @failureReason,
+            updated_at = @updatedAt
+        WHERE activation_id = @activationId
+      `,
+      )
+      .run({
+        activationId,
+        failureReason,
+        updatedAt: new Date().toISOString(),
+      });
+    const failed = this.readImprovementActivation(activationId);
+    const candidate = input.candidateId
+      ? this.readImprovementCandidate(input.candidateId)
+      : this.readImprovementCandidate(failed.candidateId);
+    this.emitLifecycleAuditSignal("activation_failed", {
+      candidateId: candidate.candidateId,
+      revisionId: input.revisionId ?? failed.revisionId,
+      activationId,
+      approvalId: input.approvalId ?? failed.approvalId,
+      workspaceId: input.workspaceId ?? candidate.workspaceId,
+      fingerprint: input.fingerprint ?? candidate.fingerprint,
+      targetKey: input.targetKey ?? candidate.targetKey,
+      actorId: input.actorId,
+      actorType: input.actorType,
+      failureReason,
+      status: failed.status,
+      watchStatus: failed.watchStatus,
+    });
+    return failed;
+  }
+
+  private emitLifecycleAuditSignal(
+    signalKind:
+      | "candidate_created"
+      | "revision_created"
+      | "evaluation_passed"
+      | "evaluation_failed"
+      | "activation_requested"
+      | "activation_applied"
+      | "activation_paused"
+      | "activation_rolled_back"
+      | "activation_failed",
+    input: {
+      candidateId?: string;
+      revisionId?: string;
+      evaluationId?: string;
+      activationId?: string;
+      approvalId?: string;
+      signalId?: string;
+      workspaceId?: string;
+      fingerprint?: string;
+      targetKey?: string;
+      changeHash?: string;
+      evaluatorKind?: string;
+      actorId?: string;
+      actorType?: ImprovementActorType;
+      failureReason?: string;
+      status?: string;
+      watchStatus?: string;
+    },
+  ): void {
+    const evidenceRefs: ImprovementEvidenceRef[] = [];
+    if (input.approvalId) {
+      evidenceRefs.push({
+        refType: "approval",
+        refId: input.approvalId,
+      });
+    }
+    if (input.activationId) {
+      evidenceRefs.push({
+        refType: "artifact_manifest",
+        refId: input.activationId,
+        hash: input.changeHash,
+        metadata: {
+          candidateId: input.candidateId,
+          revisionId: input.revisionId,
+        },
+      });
+    }
+    const signal = this.recordImprovementSignal({
+      sourceService: "improvement-service",
+      sourceType: "lifecycle",
+      sourceId: input.activationId ?? input.evaluationId ?? input.revisionId ?? input.candidateId ?? signalKind,
+      sourceEventId: [signalKind, input.activationId, input.evaluationId, input.revisionId, input.candidateId]
+        .filter(Boolean)
+        .join(":"),
+      idempotencyKey: [signalKind, input.activationId, input.evaluationId, input.revisionId, input.candidateId]
+        .filter(Boolean)
+        .join(":"),
+      workspaceId: input.workspaceId ?? "default",
+      origin: "improvement_internal",
+      signalClass: signalKind.startsWith("evaluation_") ? "evaluation" : "runtime",
+      signalKind,
+      outcome: signalKind.endsWith("_failed") ? "negative" : "positive",
+      fingerprint: input.fingerprint ?? buildImprovementFingerprint([signalKind, input.candidateId, input.targetKey]),
+      approvalId: input.approvalId,
+      evidenceRefs,
+      metadata: {
+        candidateId: input.candidateId,
+        revisionId: input.revisionId,
+        evaluationId: input.evaluationId,
+        activationId: input.activationId,
+        targetKey: input.targetKey,
+        changeHash: input.changeHash,
+        evaluatorKind: input.evaluatorKind,
+        actorId: input.actorId,
+        actorType: input.actorType,
+        failureReason: input.failureReason,
+        status: input.status,
+        watchStatus: input.watchStatus,
+      },
+    });
+    this.ctx.publishRealtime(`improvement_${signalKind}`, "improvement", {
+      signalId: signal?.signalId,
+      candidateId: input.candidateId,
+      revisionId: input.revisionId,
+      evaluationId: input.evaluationId,
+      activationId: input.activationId,
+      approvalId: input.approvalId,
+      targetKey: input.targetKey,
+      status: input.status,
+      watchStatus: input.watchStatus,
+      failureReason: input.failureReason,
+    });
+  }
+
+  private reconcileActivationWatchStatus(candidate: ImprovementCandidateRecord): ImprovementCandidateRecord {
+    const activation = this.readLatestActivation(candidate.candidateId);
+    if (activation) {
+      void this.maybeAdvanceActivation(activation);
+    }
+    return this.readImprovementCandidate(candidate.candidateId);
+  }
+
+  private normalizeAttemptManifests(signals: ImprovementSignalRecord[]): ImprovementAttemptManifestSummary[] {
+    return signals.slice(0, 6).map((signal) => {
+      const metadata = safeJsonRecord(signal.metadata);
+      let providerId = asOptionalString(metadata.providerId);
+      let model = asOptionalString(metadata.model);
+      let outputSummary = asOptionalString(metadata.policyReason);
+      let toolSpans: ImprovementAttemptManifestSummary["toolSpans"] = signal.toolName
+        ? [{ toolName: signal.toolName, failureClass: asOptionalString(metadata.failureClass) }]
+        : undefined;
+      if (signal.turnId) {
+        try {
+          const trace = this.ctx.storage.chatTurnTraces.get(signal.turnId);
+          providerId = providerId ?? trace.routing.effectiveProviderId ?? trace.routing.primaryProviderId;
+          model = model ?? trace.model ?? trace.routing.effectiveModel;
+          outputSummary =
+            outputSummary ??
+            trace.failure?.message ??
+            trace.completion?.finishReason ??
+            `${trace.status} ${trace.turnId}`.trim();
+          toolSpans =
+            trace.toolRuns.length > 0
+              ? trace.toolRuns.map((toolRun) => ({
+                  toolName: toolRun.toolName,
+                  status: toolRun.status,
+                  failureClass: toolRun.error,
+                }))
+              : toolSpans;
+        } catch {
+          // best effort only
+        }
+      }
+      return {
+        signalId: signal.signalId,
+        durableRunId: signal.durableRunId,
+        promptSnapshotHash: hashJson({
+          sessionId: signal.sessionId,
+          turnId: signal.turnId,
+        }),
+        providerId,
+        model,
+        toolSpans,
+        outputSummary,
+        replayRefs: signal.evidenceRefs.filter(
+          (ref: ImprovementEvidenceRef) =>
+            ref.refType === "decision_replay_run" ||
+            ref.refType === "prompt_pack_run" ||
+            ref.refType === "prompt_pack_benchmark",
+        ),
+        evalRefs: signal.evidenceRefs.filter(
+          (ref: ImprovementEvidenceRef) => ref.refType === "approval" || ref.refType === "artifact_manifest",
+        ),
+      };
+    });
   }
 
   private ensureCapabilityGapTables(): void {
@@ -2471,6 +4693,375 @@ function isRepairCandidateRow(value: unknown): value is RepairCandidateRow {
     typeof value.created_at === "string" &&
     typeof value.updated_at === "string" &&
     typeof value.last_seen_at === "string"
+  );
+}
+
+function toImprovementSignalRow(value: unknown): ImprovementSignalRow | undefined {
+  if (value !== undefined && !isImprovementSignalRow(value)) {
+    throw new TypeError("Unexpected improvement signal row shape");
+  }
+  return value;
+}
+
+function toImprovementSignalRows(value: unknown): ImprovementSignalRow[] {
+  if (!Array.isArray(value) || value.some((row) => !isImprovementSignalRow(row))) {
+    throw new TypeError("Unexpected improvement signal row shape");
+  }
+  return value;
+}
+
+function toImprovementCandidateRow(value: unknown): ImprovementCandidateRow | undefined {
+  if (value !== undefined && !isImprovementCandidateRow(value)) {
+    throw new TypeError("Unexpected improvement candidate row shape");
+  }
+  return value;
+}
+
+function toImprovementCandidateRows(value: unknown): ImprovementCandidateRow[] {
+  if (!Array.isArray(value) || value.some((row) => !isImprovementCandidateRow(row))) {
+    throw new TypeError("Unexpected improvement candidate row shape");
+  }
+  return value;
+}
+
+function toImprovementCandidateRevisionRow(value: unknown): ImprovementCandidateRevisionRow | undefined {
+  if (value !== undefined && !isImprovementCandidateRevisionRow(value)) {
+    throw new TypeError("Unexpected improvement candidate revision row shape");
+  }
+  return value;
+}
+
+function toImprovementEvaluationRow(value: unknown): ImprovementEvaluationRow | undefined {
+  if (value !== undefined && !isImprovementEvaluationRow(value)) {
+    throw new TypeError("Unexpected improvement evaluation row shape");
+  }
+  return value;
+}
+
+function toImprovementActivationRow(value: unknown): ImprovementActivationRow | undefined {
+  if (value !== undefined && !isImprovementActivationRow(value)) {
+    throw new TypeError("Unexpected improvement activation row shape");
+  }
+  return value;
+}
+
+function toImprovementActivationRows(value: unknown): ImprovementActivationRow[] {
+  if (!Array.isArray(value) || value.some((row) => !isImprovementActivationRow(row))) {
+    throw new TypeError("Unexpected improvement activation row shape");
+  }
+  return value;
+}
+
+function safeJsonRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function asOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function hashJson(value: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(value ?? null))
+    .digest("hex");
+}
+
+function buildImprovementFingerprint(parts: Array<string | undefined | null>): string {
+  return parts
+    .map((part) => (typeof part === "string" ? part.trim().toLowerCase() : ""))
+    .filter((part) => part.length > 0)
+    .join("|");
+}
+
+function normalizeEvidenceRefs(value: ImprovementEvidenceRef[] | undefined): ImprovementEvidenceRef[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((ref): ref is ImprovementEvidenceRef => Boolean(ref?.refType && ref?.refId))
+    .slice(0, IMPROVEMENT_SIGNAL_EVIDENCE_REF_LIMIT)
+    .map((ref) => ({
+      refType: ref.refType,
+      refId: ref.refId,
+      hash: ref.hash,
+      metadata: clampMetadataBytes(ref.metadata),
+    }));
+}
+
+function clampMetadataBytes(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!value || !isRecord(value)) {
+    return undefined;
+  }
+  const raw = JSON.stringify(value);
+  if (Buffer.byteLength(raw, "utf8") <= IMPROVEMENT_SIGNAL_METADATA_MAX_BYTES) {
+    return value;
+  }
+  const truncated = {
+    ...value,
+    _truncated: true,
+  };
+  let next = JSON.stringify(truncated);
+  while (Buffer.byteLength(next, "utf8") > IMPROVEMENT_SIGNAL_METADATA_MAX_BYTES) {
+    const keys = Object.keys(truncated);
+    if (keys.length <= 1) {
+      return { _truncated: true };
+    }
+    const keyToDelete = keys[keys.length - 2];
+    if (keyToDelete) {
+      Reflect.deleteProperty(truncated, keyToDelete);
+    }
+    next = JSON.stringify(truncated);
+  }
+  return truncated;
+}
+
+function mapImprovementSignalRow(row: ImprovementSignalRow): ImprovementSignalRecord {
+  return {
+    signalId: row.signal_id,
+    schemaVersion: row.schema_version,
+    sourceService: row.source_service,
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    sourceEventId: row.source_event_id,
+    idempotencyKey: row.idempotency_key,
+    workspaceId: row.workspace_id,
+    occurredAt: row.occurred_at,
+    recordedAt: row.recorded_at,
+    origin: (IMPROVEMENT_SIGNAL_ORIGINS.has(row.origin as ImprovementSignalOrigin)
+      ? row.origin
+      : "runtime") as ImprovementSignalOrigin,
+    signalClass: (IMPROVEMENT_SIGNAL_CLASSES.has(row.signal_class as ImprovementSignalClass)
+      ? row.signal_class
+      : "runtime") as ImprovementSignalClass,
+    signalKind: row.signal_kind,
+    outcome: (IMPROVEMENT_SIGNAL_OUTCOMES.has(row.outcome as ImprovementSignalOutcome)
+      ? row.outcome
+      : "neutral") as ImprovementSignalOutcome,
+    fingerprint: row.fingerprint,
+    sessionId: row.session_id ?? undefined,
+    turnId: row.turn_id ?? undefined,
+    durableRunId: row.durable_run_id ?? undefined,
+    approvalId: row.approval_id ?? undefined,
+    taskId: row.task_id ?? undefined,
+    toolName: row.tool_name ?? undefined,
+    capabilityId: row.capability_id ?? undefined,
+    memoryItemId: row.memory_item_id ?? undefined,
+    severity: row.severity ? (row.severity as ImprovementSignalSeverity) : undefined,
+    costDeltaUsd: row.cost_delta_usd ?? undefined,
+    latencyDeltaMs: row.latency_delta_ms ?? undefined,
+    scoreDelta: row.score_delta ?? undefined,
+    evidenceRefs: safeJsonParse<ImprovementEvidenceRef[]>(row.evidence_refs_json, []),
+    metadata: row.metadata_json
+      ? safeJsonParse<Record<string, unknown> | undefined>(row.metadata_json, undefined)
+      : undefined,
+  };
+}
+
+function mapImprovementCandidateRow(row: ImprovementCandidateRow): ImprovementCandidateRecord {
+  return {
+    candidateId: row.candidate_id,
+    workspaceId: row.workspace_id,
+    kind: (IMPROVEMENT_CANDIDATE_KINDS.has(row.kind as ImprovementCandidateKind)
+      ? row.kind
+      : "repair_policy") as ImprovementCandidateKind,
+    status: row.status as ImprovementCandidateStatus,
+    targetKey: row.target_key,
+    fingerprint: row.fingerprint,
+    summary: row.summary,
+    currentRevisionId: row.current_revision_id ?? undefined,
+    supportingSignalCount: row.supporting_signal_count,
+    negativeSignalCount: row.negative_signal_count,
+    severity: row.severity ? (row.severity as ImprovementSignalSeverity) : undefined,
+    suppressionUntil: row.suppression_until ?? undefined,
+    latestSignalAt: row.latest_signal_at ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    createdByActorId: row.created_by_actor_id ?? undefined,
+    createdByActorType: row.created_by_actor_type as ImprovementCandidateRecord["createdByActorType"],
+    updatedByActorId: row.updated_by_actor_id ?? undefined,
+    updatedByActorType: row.updated_by_actor_type as ImprovementCandidateRecord["updatedByActorType"],
+  };
+}
+
+function mapImprovementCandidateRevisionRow(row: ImprovementCandidateRevisionRow): ImprovementCandidateRevisionRecord {
+  return {
+    revisionId: row.revision_id,
+    candidateId: row.candidate_id,
+    candidateRef: safeJsonParse<ImprovementRef>(row.candidate_ref_json, {
+      refType: "artifact_manifest",
+      refId: row.revision_id,
+    }),
+    changeHash: row.change_hash,
+    createdAt: row.created_at,
+    createdByActorId: row.created_by_actor_id,
+    createdByActorType: row.created_by_actor_type as ImprovementCandidateRevisionRecord["createdByActorType"],
+  };
+}
+
+function mapImprovementEvaluationRow(row: ImprovementEvaluationRow): ImprovementEvaluationRecord {
+  return {
+    evaluationId: row.evaluation_id,
+    candidateId: row.candidate_id,
+    revisionId: row.revision_id,
+    status: row.status as ImprovementEvaluationRecord["status"],
+    baselineRef: safeJsonParse<ImprovementRef>(row.baseline_ref_json, {
+      refType: "baseline",
+      refId: row.candidate_id,
+    }),
+    candidateRef: safeJsonParse<ImprovementRef>(row.candidate_ref_json, {
+      refType: "artifact_manifest",
+      refId: row.revision_id,
+    }),
+    evaluatorKind: row.evaluator_kind as ImprovementEvaluationKind,
+    evaluatorVersion: row.evaluator_version,
+    datasetOrPackRef: row.dataset_or_pack_ref_json
+      ? safeJsonParse<ImprovementRef | undefined>(row.dataset_or_pack_ref_json, undefined)
+      : undefined,
+    changeHash: row.change_hash,
+    metrics: safeJsonParse<Record<string, number>>(row.metrics_json, {}),
+    resultSummary: row.result_summary,
+    createdAt: row.created_at,
+    completedAt: row.completed_at ?? undefined,
+    createdByActorId: row.created_by_actor_id,
+    createdByActorType: row.created_by_actor_type as ImprovementEvaluationRecord["createdByActorType"],
+    completedByActorId: row.completed_by_actor_id ?? undefined,
+    completedByActorType: row.completed_by_actor_type as ImprovementEvaluationRecord["completedByActorType"],
+  };
+}
+
+function mapImprovementActivationRow(row: ImprovementActivationRow): ImprovementActivationRecord {
+  return {
+    activationId: row.activation_id,
+    candidateId: row.candidate_id,
+    revisionId: row.revision_id,
+    approvalId: row.approval_id,
+    status: row.status as ImprovementActivationRecord["status"],
+    scope: "workspace",
+    activationTarget: safeJsonParse<ImprovementRef>(row.activation_target_json, {
+      refType: "system_setting",
+      refId: row.activation_id,
+    }),
+    preActivationSnapshot: safeJsonParse<ImprovementRef>(row.pre_activation_snapshot_json, {
+      refType: "system_setting",
+      refId: row.activation_id,
+    }),
+    appliedChangeHash: row.applied_change_hash,
+    watchStatus: row.watch_status as ImprovementActivationRecord["watchStatus"],
+    watchStartedAt: row.watch_started_at ?? undefined,
+    watchEndsAt: row.watch_ends_at ?? undefined,
+    watchSignalTarget: row.watch_signal_target,
+    watchSignalCount: row.watch_signal_count,
+    regressionCount: row.regression_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    requestedByActorId: row.requested_by_actor_id,
+    requestedByActorType: row.requested_by_actor_type as ImprovementActivationRecord["requestedByActorType"],
+    approvedByActorId: row.approved_by_actor_id ?? undefined,
+    approvedByActorType: row.approved_by_actor_type as ImprovementActivationRecord["approvedByActorType"],
+    pausedByActorId: row.paused_by_actor_id ?? undefined,
+    pausedByActorType: row.paused_by_actor_type as ImprovementActivationRecord["pausedByActorType"],
+    rolledBackByActorId: row.rolled_back_by_actor_id ?? undefined,
+    rolledBackByActorType: row.rolled_back_by_actor_type as ImprovementActivationRecord["rolledBackByActorType"],
+    stableAt: row.stable_at ?? undefined,
+    pausedAt: row.paused_at ?? undefined,
+    rolledBackAt: row.rolled_back_at ?? undefined,
+    failureReason: row.failure_reason ?? undefined,
+  };
+}
+
+function isImprovementSignalRow(value: unknown): value is ImprovementSignalRow {
+  return (
+    isRecord(value) &&
+    typeof value.signal_id === "string" &&
+    typeof value.schema_version === "string" &&
+    typeof value.source_service === "string" &&
+    typeof value.source_type === "string" &&
+    typeof value.source_id === "string" &&
+    typeof value.source_event_id === "string" &&
+    typeof value.idempotency_key === "string" &&
+    typeof value.workspace_id === "string" &&
+    typeof value.occurred_at === "string" &&
+    typeof value.recorded_at === "string" &&
+    typeof value.origin === "string" &&
+    typeof value.signal_class === "string" &&
+    typeof value.signal_kind === "string" &&
+    typeof value.outcome === "string" &&
+    typeof value.fingerprint === "string" &&
+    typeof value.evidence_refs_json === "string"
+  );
+}
+
+function isImprovementCandidateRow(value: unknown): value is ImprovementCandidateRow {
+  return (
+    isRecord(value) &&
+    typeof value.candidate_id === "string" &&
+    typeof value.workspace_id === "string" &&
+    typeof value.kind === "string" &&
+    typeof value.status === "string" &&
+    typeof value.target_key === "string" &&
+    typeof value.fingerprint === "string" &&
+    typeof value.summary === "string" &&
+    typeof value.supporting_signal_count === "number" &&
+    typeof value.negative_signal_count === "number" &&
+    typeof value.aggregate_json === "string" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
+}
+
+function isImprovementCandidateRevisionRow(value: unknown): value is ImprovementCandidateRevisionRow {
+  return (
+    isRecord(value) &&
+    typeof value.revision_id === "string" &&
+    typeof value.candidate_id === "string" &&
+    typeof value.candidate_ref_json === "string" &&
+    typeof value.change_hash === "string" &&
+    typeof value.created_at === "string" &&
+    typeof value.created_by_actor_id === "string" &&
+    typeof value.created_by_actor_type === "string"
+  );
+}
+
+function isImprovementEvaluationRow(value: unknown): value is ImprovementEvaluationRow {
+  return (
+    isRecord(value) &&
+    typeof value.evaluation_id === "string" &&
+    typeof value.candidate_id === "string" &&
+    typeof value.revision_id === "string" &&
+    typeof value.status === "string" &&
+    typeof value.baseline_ref_json === "string" &&
+    typeof value.candidate_ref_json === "string" &&
+    typeof value.evaluator_kind === "string" &&
+    typeof value.evaluator_version === "string" &&
+    typeof value.change_hash === "string" &&
+    typeof value.metrics_json === "string" &&
+    typeof value.result_summary === "string" &&
+    typeof value.created_at === "string" &&
+    typeof value.created_by_actor_id === "string" &&
+    typeof value.created_by_actor_type === "string"
+  );
+}
+
+function isImprovementActivationRow(value: unknown): value is ImprovementActivationRow {
+  return (
+    isRecord(value) &&
+    typeof value.activation_id === "string" &&
+    typeof value.candidate_id === "string" &&
+    typeof value.revision_id === "string" &&
+    typeof value.approval_id === "string" &&
+    typeof value.status === "string" &&
+    typeof value.scope === "string" &&
+    typeof value.activation_target_json === "string" &&
+    typeof value.pre_activation_snapshot_json === "string" &&
+    typeof value.applied_change_hash === "string" &&
+    typeof value.watch_status === "string" &&
+    typeof value.watch_signal_target === "number" &&
+    typeof value.watch_signal_count === "number" &&
+    typeof value.regression_count === "number" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string" &&
+    typeof value.requested_by_actor_id === "string" &&
+    typeof value.requested_by_actor_type === "string"
   );
 }
 

@@ -1,3 +1,4 @@
+/* eslint-disable no-console, max-lines */
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
@@ -120,26 +121,18 @@ async function exerciseDoctorEngine(rootDir: string): Promise<void> {
 
 function exerciseCliEntryPoints(rootDir: string): void {
   const gatewayDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const run = (
-    script: string,
-    args: string[],
-    acceptableExitCodes: number[] = [0, 1],
-  ): void => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", script, ...args],
-      {
-        cwd: gatewayDir,
-        env: {
-          ...process.env,
-          GOATCITADEL_ROOT_DIR: rootDir,
-          GOATCITADEL_GATEWAY_URL: "http://127.0.0.1:8787",
-          GOATCITADEL_TUI_AUTH_MODE: "none",
-        },
-        stdio: "pipe",
-        encoding: "utf8",
+  const run = (script: string, args: string[], acceptableExitCodes: number[] = [0, 1]): void => {
+    const result = spawnSync(process.execPath, ["--import", "tsx", script, ...args], {
+      cwd: gatewayDir,
+      env: {
+        ...process.env,
+        GOATCITADEL_ROOT_DIR: rootDir,
+        GOATCITADEL_GATEWAY_URL: "http://127.0.0.1:8787",
+        GOATCITADEL_TUI_AUTH_MODE: "none",
       },
-    );
+      stdio: "pipe",
+      encoding: "utf8",
+    });
 
     if (result.stdout) {
       process.stdout.write(result.stdout);
@@ -238,31 +231,54 @@ async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Pr
     } catch {
       // Some command branches intentionally reference missing ids to cover error paths.
     }
-    const viaRoute = await requestJson(app, "POST", `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/commands/parse`, {
-      commandText: command,
-    });
+    const viaRoute = await requestJson(
+      app,
+      "POST",
+      `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/commands/parse`,
+      {
+        commandText: command,
+      },
+    );
     assert.notEqual(viaRoute.statusCode, 500);
   }
 
-  const proactiveStatus = await requestJson(app, "GET", `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/status`);
+  const proactiveStatus = await requestJson(
+    app,
+    "GET",
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/status`,
+  );
   assert.notEqual(proactiveStatus.statusCode, 500);
-  const proactivePolicy = await requestJson(app, "PATCH", `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/policy`, {
-    proactiveMode: "off",
-    retrievalMode: "standard",
-    reflectionMode: "off",
-    autonomyBudget: {
-      maxActionsPerHour: 2,
-      maxActionsPerTurn: 1,
-      cooldownSeconds: 15,
+  const proactivePolicy = await requestJson(
+    app,
+    "PATCH",
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/policy`,
+    {
+      proactiveMode: "off",
+      retrievalMode: "standard",
+      reflectionMode: "off",
+      autonomyBudget: {
+        maxActionsPerHour: 2,
+        maxActionsPerTurn: 1,
+        cooldownSeconds: 15,
+      },
     },
-  });
+  );
   assert.notEqual(proactivePolicy.statusCode, 500);
-  const proactiveTrigger = await requestJson(app, "POST", `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/trigger`, {
-    source: "manual",
-    reason: "coverage exercise",
-  });
+  const proactiveTrigger = await requestJson(
+    app,
+    "POST",
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/trigger`,
+    {
+      source: "manual",
+      reason: "coverage exercise",
+    },
+  );
   assert.notEqual(proactiveTrigger.statusCode, 500);
-  const proactiveRuns = await requestJson(app, "GET", `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/runs?limit=25`);
+  const proactiveRuns = await requestJson(
+    app,
+    "GET",
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/runs?limit=25`,
+  );
   assert.notEqual(proactiveRuns.statusCode, 500);
 
   const learned = await requestJson<{ items?: Array<{ itemId: string }> }>(
@@ -274,13 +290,23 @@ async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Pr
   if (Array.isArray(learned.body.items) && learned.body.items.length > 0) {
     const itemId = learned.body.items[0]?.itemId;
     if (itemId) {
-      const patch = await requestJson(app, "PATCH", `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/learned-memory/${encodeURIComponent(itemId)}`, {
-        confidence: 0.75,
-      });
+      const patch = await requestJson(
+        app,
+        "PATCH",
+        `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/learned-memory/${encodeURIComponent(itemId)}`,
+        {
+          confidence: 0.75,
+        },
+      );
       assert.notEqual(patch.statusCode, 500);
     }
   }
-  const rebuild = await requestJson(app, "POST", `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/learned-memory/rebuild`, {});
+  const rebuild = await requestJson(
+    app,
+    "POST",
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/learned-memory/rebuild`,
+    {},
+  );
   assert.notEqual(rebuild.statusCode, 500);
 }
 
@@ -294,16 +320,16 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   await requestNotServerError(app, "GET", `/api/v1/sessions/${encodeURIComponent(chat.sessionId)}/summary`);
   await requestNotServerError(app, "GET", `/api/v1/sessions/${encodeURIComponent(chat.sessionId)}/timeline?limit=20`);
   await requestNotServerError(app, "POST", `/api/v1/chat/sessions/${encodeURIComponent(chat.sessionId)}/agent-send`, {
-      content: "coverage hello",
-      mode: "chat",
-      webMode: "off",
-      memoryMode: "auto",
-      thinkingLevel: "minimal",
-    });
+    content: "coverage hello",
+    mode: "chat",
+    webMode: "off",
+    memoryMode: "auto",
+    thinkingLevel: "minimal",
+  });
   await requestNotServerError(app, "POST", `/api/v1/chat/sessions/${encodeURIComponent(chat.sessionId)}/agent-send`, {
-      content: "coverage delegate",
-      mode: "cowork",
-      webMode: "off",
+    content: "coverage delegate",
+    mode: "cowork",
+    webMode: "off",
     memoryMode: "auto",
     thinkingLevel: "minimal",
   });
@@ -443,7 +469,11 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   }
 
   await requestNotServerError(app, "GET", "/api/v1/memory/qmd/stats");
-  const memoryItems = await requestJson<{ items?: Array<{ itemId: string }> }>(app, "GET", "/api/v1/memory/items?limit=50");
+  const memoryItems = await requestJson<{ items?: Array<{ itemId: string }> }>(
+    app,
+    "GET",
+    "/api/v1/memory/items?limit=50",
+  );
   assert.notEqual(memoryItems.statusCode, 500);
   if (Array.isArray(memoryItems.body.items) && memoryItems.body.items.length > 0) {
     const itemId = memoryItems.body.items[0]!.itemId;
@@ -466,7 +496,11 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   const durableRunId = durable.body.runId;
   if (durableRunId) {
     await requestNotServerError(app, "GET", `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}`);
-    await requestNotServerError(app, "GET", `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}/timeline?limit=50`);
+    await requestNotServerError(
+      app,
+      "GET",
+      `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}/timeline?limit=50`,
+    );
     await requestNotServerError(app, "POST", `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}/pause`, {});
     await requestNotServerError(app, "POST", `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}/resume`, {});
     await requestNotServerError(app, "POST", `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}/retry`, {
@@ -481,6 +515,20 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
 
   await requestNotServerError(app, "GET", "/api/v1/improvement/reports?limit=25");
   await requestNotServerError(app, "GET", "/api/v1/improvement/reports/missing-report");
+  await requestNotServerError(app, "GET", "/api/v1/improvement/capability-gaps?limit=25");
+  await requestNotServerError(app, "GET", "/api/v1/improvement/repair-candidates?limit=25");
+  await requestNotServerError(app, "PATCH", "/api/v1/improvement/repair-candidates/missing/validation", {
+    status: "needs_review",
+    summary: "coverage",
+  });
+  await requestNotServerError(app, "GET", "/api/v1/improvement/signals?limit=25");
+  await requestNotServerError(app, "GET", "/api/v1/improvement/signals/missing-signal");
+  await requestNotServerError(app, "GET", "/api/v1/improvement/candidates?limit=25");
+  await requestNotServerError(app, "GET", "/api/v1/improvement/candidates/missing-candidate");
+  await requestNotServerError(app, "POST", "/api/v1/improvement/candidates/missing-candidate/activation-request", {});
+  await requestNotServerError(app, "GET", "/api/v1/improvement/activations/missing-activation");
+  await requestNotServerError(app, "POST", "/api/v1/improvement/activations/missing-activation/pause", {});
+  await requestNotServerError(app, "POST", "/api/v1/improvement/activations/missing-activation/rollback", {});
   await requestNotServerError(app, "GET", "/api/v1/improvement/replay/runs?limit=25");
   await requestNotServerError(app, "GET", "/api/v1/improvement/replay/runs/missing-run");
   await requestNotServerError(app, "POST", "/api/v1/improvement/replay/run", {
@@ -549,7 +597,12 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   assert.notEqual(talk.statusCode, 500);
   const talkSessionId = talk.body.talkSessionId;
   if (talkSessionId) {
-    await requestNotServerError(app, "POST", `/api/v1/voice/talk/sessions/${encodeURIComponent(talkSessionId)}/stop`, {});
+    await requestNotServerError(
+      app,
+      "POST",
+      `/api/v1/voice/talk/sessions/${encodeURIComponent(talkSessionId)}/stop`,
+      {},
+    );
   }
   await requestNotServerError(app, "POST", "/api/v1/voice/wake/start", {});
   await requestNotServerError(app, "POST", "/api/v1/voice/wake/stop", {});
@@ -583,19 +636,29 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
     );
     promptRunId = promptRun.body.runId;
     if (promptRunId) {
-      await requestNotServerError(app, "POST", `/api/v1/prompt-packs/${encodeURIComponent(promptPackId)}/tests/${encodeURIComponent(promptTestId)}/score`, {
-        runId: promptRunId,
-        routingScore: 1,
-        honestyScore: 1,
-        handoffScore: 1,
-        robustnessScore: 1,
-        usabilityScore: 1,
-        notes: "coverage",
-      });
-      await requestNotServerError(app, "POST", `/api/v1/prompt-packs/${encodeURIComponent(promptPackId)}/tests/${encodeURIComponent(promptTestId)}/auto-score`, {
-        runId: promptRunId,
-        force: false,
-      });
+      await requestNotServerError(
+        app,
+        "POST",
+        `/api/v1/prompt-packs/${encodeURIComponent(promptPackId)}/tests/${encodeURIComponent(promptTestId)}/score`,
+        {
+          runId: promptRunId,
+          routingScore: 1,
+          honestyScore: 1,
+          handoffScore: 1,
+          robustnessScore: 1,
+          usabilityScore: 1,
+          notes: "coverage",
+        },
+      );
+      await requestNotServerError(
+        app,
+        "POST",
+        `/api/v1/prompt-packs/${encodeURIComponent(promptPackId)}/tests/${encodeURIComponent(promptTestId)}/auto-score`,
+        {
+          runId: promptRunId,
+          force: false,
+        },
+      );
     }
     await requestNotServerError(app, "POST", `/api/v1/prompt-packs/${encodeURIComponent(promptPackId)}/auto-score`, {
       onlyUnscored: false,
@@ -619,7 +682,11 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
       {},
     );
     if (replayRegression.body.runId) {
-      await requestNotServerError(app, "GET", `/api/v1/prompt-packs/replay-regression/${encodeURIComponent(replayRegression.body.runId)}`);
+      await requestNotServerError(
+        app,
+        "GET",
+        `/api/v1/prompt-packs/replay-regression/${encodeURIComponent(replayRegression.body.runId)}`,
+      );
     }
     await requestNotServerError(app, "GET", `/api/v1/prompt-packs/${encodeURIComponent(promptPackId)}/trends`);
     await requestNotServerError(app, "GET", `/api/v1/prompt-packs/${encodeURIComponent(promptPackId)}/export`);
@@ -641,7 +708,11 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   const uploadedPath = upload.body.relativePath;
   if (uploadedPath) {
     await requestNotServerError(app, "GET", `/api/v1/files/download?relativePath=${encodeURIComponent(uploadedPath)}`);
-    await requestNotServerError(app, "GET", `/api/v1/files/preview?relativePath=${encodeURIComponent(uploadedPath)}&lineLimit=20`);
+    await requestNotServerError(
+      app,
+      "GET",
+      `/api/v1/files/preview?relativePath=${encodeURIComponent(uploadedPath)}&lineLimit=20`,
+    );
   }
   await requestNotServerError(app, "POST", "/api/v1/files/templates/text-note/create", {
     relativePath: `coverage-template-${Date.now()}.md`,
@@ -786,12 +857,14 @@ async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: Exercis
     deleteCronJob: [seed.cronJobId ?? "missing-cron"],
     runCronJobNow: [seed.cronJobId ?? "missing-cron"],
     assignChatSessionProject: [seed.sessionId, seed.projectId],
-    setChatSessionBinding: [{
-      sessionId: seed.sessionId,
-      workspacePath: "workspace",
-      memoryPath: "memory",
-      taskRoot: "tasks",
-    }],
+    setChatSessionBinding: [
+      {
+        sessionId: seed.sessionId,
+        workspacePath: "workspace",
+        memoryPath: "memory",
+        taskRoot: "tasks",
+      },
+    ],
     parseChatCommand: [seed.sessionId, "/help"],
     updateChatSessionProactivePolicy: [seed.sessionId, { proactiveMode: "off" }],
     triggerChatSessionProactive: [seed.sessionId, "coverage", false],
@@ -836,16 +909,18 @@ async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: Exercis
     getPromptPackCapabilityTrends: [seed.promptPackId ?? "missing-pack"],
     resetPromptPackRunsAndScores: [seed.promptPackId ?? "missing-pack", { clearRuns: true, clearScores: true }],
     runPromptPackTest: [seed.promptPackId ?? "missing-pack", seed.promptTestId ?? "missing-test", {}],
-    scorePromptPackLatestRunByCode: [{
-      packId: seed.promptPackId ?? "missing-pack",
-      testCode: "TEST-01",
-      notes: "coverage",
-      routingScore: 1,
-      honestyScore: 1,
-      handoffScore: 1,
-      robustnessScore: 1,
-      usabilityScore: 1,
-    }],
+    scorePromptPackLatestRunByCode: [
+      {
+        packId: seed.promptPackId ?? "missing-pack",
+        testCode: "TEST-01",
+        notes: "coverage",
+        routingScore: 1,
+        honestyScore: 1,
+        handoffScore: 1,
+        robustnessScore: 1,
+        usabilityScore: 1,
+      },
+    ],
     listDurableRunTimeline: [seed.durableRunId ?? "missing-run", 50],
     getDurableRun: [seed.durableRunId ?? "missing-run"],
     pauseDurableRun: [seed.durableRunId ?? "missing-run", "coverage"],
@@ -853,31 +928,33 @@ async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: Exercis
     cancelDurableRun: [seed.durableRunId ?? "missing-run", "coverage"],
     retryDurableRun: [seed.durableRunId ?? "missing-run", "coverage", "coverage"],
     wakeDurableRun: [seed.durableRunId ?? "missing-run", { eventType: "coverage", payload: {} }],
-    createOrchestrationPlan: [{
-      planId: `coverage-plan-${Date.now()}`,
-      goal: "coverage",
-      mode: "hitl",
-      maxIterations: 2,
-      maxRuntimeMinutes: 5,
-      maxCostUsd: 1,
-      waves: [
-        {
-          waveId: "wave-1",
-          verify: [],
-          budgetUsd: 1,
-          ownership: [{ agentId: "architect", paths: ["apps/gateway"] }],
-          phases: [
-            {
-              phaseId: "phase-1",
-              ownerAgentId: "architect",
-              specPath: "docs/spec.md",
-              loopMode: "fresh-context",
-              requiresApproval: false,
-            },
-          ],
-        },
-      ],
-    }],
+    createOrchestrationPlan: [
+      {
+        planId: `coverage-plan-${Date.now()}`,
+        goal: "coverage",
+        mode: "hitl",
+        maxIterations: 2,
+        maxRuntimeMinutes: 5,
+        maxCostUsd: 1,
+        waves: [
+          {
+            waveId: "wave-1",
+            verify: [],
+            budgetUsd: 1,
+            ownership: [{ agentId: "architect", paths: ["apps/gateway"] }],
+            phases: [
+              {
+                phaseId: "phase-1",
+                ownerAgentId: "architect",
+                specPath: "docs/spec.md",
+                loopMode: "fresh-context",
+                requiresApproval: false,
+              },
+            ],
+          },
+        ],
+      },
+    ],
   };
 
   const proto = Object.getPrototypeOf(gateway) as Record<string, unknown>;
@@ -923,26 +1000,26 @@ async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: Exercis
           return "missing-run";
         }
         if (
-          lower.startsWith("create")
-          || lower.startsWith("update")
-          || lower.startsWith("patch")
-          || lower.startsWith("set")
-          || lower.startsWith("append")
-          || lower.startsWith("ingest")
-          || lower.startsWith("compose")
-          || lower.startsWith("invoke")
-          || lower.startsWith("send")
-          || lower.startsWith("write")
-          || lower.startsWith("query")
-          || lower.startsWith("import")
-          || lower.startsWith("install")
-          || lower.startsWith("bootstrap")
-          || lower.startsWith("capture")
-          || lower.startsWith("start")
-          || lower.startsWith("stop")
-          || lower.startsWith("refresh")
-          || lower.startsWith("restart")
-          || lower.startsWith("resolve")
+          lower.startsWith("create") ||
+          lower.startsWith("update") ||
+          lower.startsWith("patch") ||
+          lower.startsWith("set") ||
+          lower.startsWith("append") ||
+          lower.startsWith("ingest") ||
+          lower.startsWith("compose") ||
+          lower.startsWith("invoke") ||
+          lower.startsWith("send") ||
+          lower.startsWith("write") ||
+          lower.startsWith("query") ||
+          lower.startsWith("import") ||
+          lower.startsWith("install") ||
+          lower.startsWith("bootstrap") ||
+          lower.startsWith("capture") ||
+          lower.startsWith("start") ||
+          lower.startsWith("stop") ||
+          lower.startsWith("refresh") ||
+          lower.startsWith("restart") ||
+          lower.startsWith("resolve")
         ) {
           return {};
         }
@@ -979,7 +1056,7 @@ async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: Exercis
     candidates.push(Array.from({ length: method.length }, () => null));
     candidates.push(Array.from({ length: method.length }, () => "coverage"));
     candidates.push(Array.from({ length: method.length }, () => ({})));
-    candidates.push(Array.from({ length: method.length }, () => ([])));
+    candidates.push(Array.from({ length: method.length }, () => []));
     candidates.push(Array.from({ length: method.length }, () => true));
     candidates.push(Array.from({ length: method.length }, () => false));
 
@@ -999,14 +1076,19 @@ async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: Exercis
     }
   }
 
-  console.log(`[coverage-exercise] gateway method sweep invoked ${invoked}/${methodNames.length} public methods (attempted ${attempted} calls)`);
+  console.log(
+    `[coverage-exercise] gateway method sweep invoked ${invoked}/${methodNames.length} public methods (attempted ${attempted} calls)`,
+  );
 }
 
 function getCoverageGateway(app: FastifyInstance): {
   parseChatCommand: (sessionId: string, command: string) => Promise<unknown>;
 } & Record<string, unknown> {
   const candidate: unknown = (app as FastifyInstance & { gateway?: unknown }).gateway;
-  assert.ok(candidate && typeof candidate === "object" && !Array.isArray(candidate), "Expected Fastify gateway decorator");
+  assert.ok(
+    candidate && typeof candidate === "object" && !Array.isArray(candidate),
+    "Expected Fastify gateway decorator",
+  );
   assert.equal(typeof (candidate as { parseChatCommand?: unknown }).parseChatCommand, "function");
   return candidate as {
     parseChatCommand: (sessionId: string, command: string) => Promise<unknown>;

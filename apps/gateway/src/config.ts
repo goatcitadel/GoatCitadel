@@ -55,6 +55,8 @@ export interface FeatureFlagsConfig {
   cronReviewQueueV1Enabled: boolean;
   replayRegressionV1Enabled: boolean;
   codeModeV1Enabled: boolean;
+  improvementLedgerV1Enabled: boolean;
+  improvementActivationV1Enabled: boolean;
 }
 
 export interface CapabilityRuntimeConfig {
@@ -488,6 +490,8 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["cronReviewQueueV1Enabled", process.env.GOATCITADEL_FEATURE_CRON_REVIEW_QUEUE_V1_ENABLED],
     ["replayRegressionV1Enabled", process.env.GOATCITADEL_FEATURE_REPLAY_REGRESSION_V1_ENABLED],
     ["codeModeV1Enabled", process.env.GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED],
+    ["improvementLedgerV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LEDGER_V1_ENABLED],
+    ["improvementActivationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_ACTIVATION_V1_ENABLED],
   ];
   for (const [flag, raw] of featureFlagMap) {
     if (!raw) {
@@ -917,6 +921,8 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       cronReviewQueueV1Enabled: featuresInput.cronReviewQueueV1Enabled ?? false,
       replayRegressionV1Enabled: featuresInput.replayRegressionV1Enabled ?? false,
       codeModeV1Enabled: featuresInput.codeModeV1Enabled ?? false,
+      improvementLedgerV1Enabled: featuresInput.improvementLedgerV1Enabled ?? false,
+      improvementActivationV1Enabled: featuresInput.improvementActivationV1Enabled ?? false,
     },
     budgets: {
       dailyUsdWarning: input.budgets?.dailyUsdWarning ?? 10,

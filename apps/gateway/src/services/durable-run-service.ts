@@ -33,6 +33,7 @@ export class DurableRunService {
       executeWorkflow: (run: DurableRunRecord) => Promise<void>;
       isWorkflowRecoverable?: (run: DurableRunRecord) => { recoverable: boolean; reason?: string };
       markWorkflowUnrecoverable?: (run: DurableRunRecord, reason: string) => Promise<void> | void;
+      onRunFailed?: (run: DurableRunRecord, message: string) => Promise<void> | void;
     },
   ) {}
 
@@ -619,5 +620,6 @@ export class DurableRunService {
       runId: failed.runId,
       error: message,
     });
+    await this.deps?.onRunFailed?.(failed, message);
   }
 }

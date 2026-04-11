@@ -4,6 +4,10 @@ import type {
   DecisionReplayFindingRecord,
   DecisionReplayItemRecord,
   DecisionReplayRunRecord,
+  ImprovementActivationRecord,
+  ImprovementCandidateDetailResponse,
+  ImprovementCandidateRecord,
+  ImprovementSignalRecord,
   RepairCandidateRecord,
   ReplayDiffSummary,
   ReplayOverrideDraft,
@@ -37,6 +41,76 @@ export async function runImprovementReplay(input?: { sampleSize?: number }): Pro
 export async function fetchImprovementReplayRuns(limit = 40): Promise<{ items: DecisionReplayRunRecord[] }> {
   return request<{ items: DecisionReplayRunRecord[] }>(
     `/api/v1/improvement/replay/runs?limit=${Math.max(1, Math.min(limit, 300))}`,
+  );
+}
+
+export async function fetchImprovementSignals(
+  limit = 100,
+  workspaceId?: string,
+): Promise<{ items: ImprovementSignalRecord[] }> {
+  const query = new URLSearchParams({
+    limit: String(Math.max(1, Math.min(limit, 500))),
+  });
+  if (workspaceId) {
+    query.set("workspaceId", workspaceId);
+  }
+  return request<{ items: ImprovementSignalRecord[] }>(`/api/v1/improvement/signals?${query.toString()}`);
+}
+
+export async function fetchImprovementSignal(signalId: string): Promise<ImprovementSignalRecord> {
+  return request<ImprovementSignalRecord>(`/api/v1/improvement/signals/${encodeURIComponent(signalId)}`);
+}
+
+export async function fetchImprovementCandidates(
+  limit = 100,
+  workspaceId?: string,
+): Promise<{ items: ImprovementCandidateRecord[] }> {
+  const query = new URLSearchParams({
+    limit: String(Math.max(1, Math.min(limit, 300))),
+  });
+  if (workspaceId) {
+    query.set("workspaceId", workspaceId);
+  }
+  return request<{ items: ImprovementCandidateRecord[] }>(`/api/v1/improvement/candidates?${query.toString()}`);
+}
+
+export async function fetchImprovementCandidate(candidateId: string): Promise<ImprovementCandidateDetailResponse> {
+  return request<ImprovementCandidateDetailResponse>(
+    `/api/v1/improvement/candidates/${encodeURIComponent(candidateId)}`,
+  );
+}
+
+export async function requestImprovementActivation(candidateId: string): Promise<ImprovementActivationRecord> {
+  return request<ImprovementActivationRecord>(
+    `/api/v1/improvement/candidates/${encodeURIComponent(candidateId)}/activation-request`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function fetchImprovementActivation(activationId: string): Promise<ImprovementActivationRecord> {
+  return request<ImprovementActivationRecord>(`/api/v1/improvement/activations/${encodeURIComponent(activationId)}`);
+}
+
+export async function pauseImprovementActivation(activationId: string): Promise<ImprovementActivationRecord> {
+  return request<ImprovementActivationRecord>(
+    `/api/v1/improvement/activations/${encodeURIComponent(activationId)}/pause`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function rollbackImprovementActivation(activationId: string): Promise<ImprovementActivationRecord> {
+  return request<ImprovementActivationRecord>(
+    `/api/v1/improvement/activations/${encodeURIComponent(activationId)}/rollback`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
   );
 }
 

@@ -13,7 +13,6 @@
 import {
   type ChannelReplyInput,
   type ChannelReactInput,
-  type ChannelSendInput,
   type ChannelTypingInput,
   type ChannelTypingResult,
   type ChannelUnsendInput,
@@ -103,6 +102,7 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
   ): void;
+  recordImprovementDurableRunCompletion?(run: DurableRunRecord, checkpointState: Record<string, unknown>): void;
 }
 
 type HookDeliveryWorkflowPayload = {
@@ -232,6 +232,7 @@ function completeDurableWorkflowRun(
     runId,
     checkpoint: checkpointState,
   });
+  host.recordImprovementDurableRunCompletion?.(host.storage.durableRuns.getRun(runId), checkpointState);
 }
 
 export async function executeDurableApprovalWaitRun(host: DurableExecutionHost, run: DurableRunRecord): Promise<void> {

@@ -470,6 +470,8 @@ export const AssistantConfigInputSchema = z
         cronReviewQueueV1Enabled: z.boolean().optional(),
         replayRegressionV1Enabled: z.boolean().optional(),
         codeModeV1Enabled: z.boolean().optional(),
+        improvementLedgerV1Enabled: z.boolean().optional(),
+        improvementActivationV1Enabled: z.boolean().optional(),
       })
       .passthrough()
       .optional(),

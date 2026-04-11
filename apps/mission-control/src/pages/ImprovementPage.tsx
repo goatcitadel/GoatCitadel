@@ -3,10 +3,16 @@ import {
   approveImprovementAutoTune,
   draftReplayOverride,
   executeReplayOverride,
+  fetchImprovementCandidate,
+  fetchImprovementCandidates,
   fetchReplayDiff,
+  fetchImprovementSignals,
   fetchImprovementReplayRun,
   fetchImprovementReplayRuns,
   fetchImprovementReports,
+  pauseImprovementActivation,
+  requestImprovementActivation,
+  rollbackImprovementActivation,
   revertImprovementAutoTune,
   runImprovementReplay,
 } from "../api/client";
@@ -15,9 +21,11 @@ import { FieldHelp } from "../components/FieldHelp";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { PageGuideCard } from "../components/PageGuideCard";
+import { SideInspectorDrawer } from "../components/SideInspectorDrawer";
 import { StatusChip } from "../components/StatusChip";
 import { GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
+import { buildRouteSearch } from "../content/page-registry";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 
 export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: string }) {
@@ -32,6 +40,13 @@ export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: s
   const [lastRunUpdateAt, setLastRunUpdateAt] = useState<string | null>(null);
   const [reports, setReports] = useState<Awaited<ReturnType<typeof fetchImprovementReports>>["items"]>([]);
   const [replayRuns, setReplayRuns] = useState<Awaited<ReturnType<typeof fetchImprovementReplayRuns>>["items"]>([]);
+  const [signals, setSignals] = useState<Awaited<ReturnType<typeof fetchImprovementSignals>>["items"]>([]);
+  const [candidates, setCandidates] = useState<Awaited<ReturnType<typeof fetchImprovementCandidates>>["items"]>([]);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [candidateDetail, setCandidateDetail] = useState<Awaited<ReturnType<typeof fetchImprovementCandidate>> | null>(
+    null,
+  );
+  const [candidateActionBusy, setCandidateActionBusy] = useState<null | "activate" | "pause" | "rollback">(null);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [runDetail, setRunDetail] = useState<Awaited<ReturnType<typeof fetchImprovementReplayRun>> | null>(null);
@@ -50,12 +65,16 @@ export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: s
         setIsInitialLoading(true);
       }
       try {
-        const [reportResponse, runResponse] = await Promise.all([
+        const [reportResponse, runResponse, signalResponse, candidateResponse] = await Promise.all([
           fetchImprovementReports(60),
           fetchImprovementReplayRuns(80),
+          fetchImprovementSignals(120, _workspaceId),
+          fetchImprovementCandidates(80, _workspaceId),
         ]);
         setReports(reportResponse.items);
         setReplayRuns(runResponse.items);
+        setSignals(signalResponse.items);
+        setCandidates(candidateResponse.items);
         const nextReportId =
           selectedReportId && reportResponse.items.some((item) => item.reportId === selectedReportId)
             ? selectedReportId
@@ -74,6 +93,16 @@ export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: s
         } else {
           setRunDetail(null);
         }
+        const nextCandidateId =
+          selectedCandidateId && candidateResponse.items.some((item) => item.candidateId === selectedCandidateId)
+            ? selectedCandidateId
+            : (candidateResponse.items[0]?.candidateId ?? null);
+        setSelectedCandidateId(nextCandidateId);
+        if (nextCandidateId) {
+          setCandidateDetail(await fetchImprovementCandidate(nextCandidateId));
+        } else {
+          setCandidateDetail(null);
+        }
         setLastRunUpdateAt(new Date().toISOString());
         setError(null);
       } catch (err) {
@@ -86,7 +115,7 @@ export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: s
         }
       }
     },
-    [selectedReportId, selectedRunId],
+    [_workspaceId, selectedCandidateId, selectedReportId, selectedRunId],
   );
 
   useEffect(() => {
@@ -171,6 +200,28 @@ export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: s
       cancelled = true;
     };
   }, [refreshSelectedRunDetail, selectedRunId]);
+
+  useEffect(() => {
+    if (!selectedCandidateId) {
+      setCandidateDetail(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchImprovementCandidate(selectedCandidateId)
+      .then((detail) => {
+        if (!cancelled) {
+          setCandidateDetail(detail);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCandidateDetail(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCandidateId]);
 
   const latestSummary = reportDetail?.summary;
   const topItems = useMemo(() => (runDetail?.items ?? []).slice(0, 8), [runDetail?.items]);
@@ -334,6 +385,68 @@ export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: s
     [load],
   );
 
+  const handleActivationRequest = useCallback(async () => {
+    if (!selectedCandidateId) {
+      setError("Select a candidate first.");
+      return;
+    }
+    setCandidateActionBusy("activate");
+    setError(null);
+    setSuccess(null);
+    try {
+      const activation = await requestImprovementActivation(selectedCandidateId);
+      setSuccess(`Activation request queued (${activation.activationId.slice(0, 8)}).`);
+      setCandidateDetail(await fetchImprovementCandidate(selectedCandidateId));
+      await load({ background: true });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setCandidateActionBusy(null);
+    }
+  }, [load, selectedCandidateId]);
+
+  const handlePauseActivation = useCallback(async () => {
+    const activationId = candidateDetail?.latestActivation?.activationId;
+    if (!activationId || !selectedCandidateId) {
+      setError("No activation available to pause.");
+      return;
+    }
+    setCandidateActionBusy("pause");
+    setError(null);
+    setSuccess(null);
+    try {
+      await pauseImprovementActivation(activationId);
+      setSuccess("Activation paused and previous snapshot restored.");
+      setCandidateDetail(await fetchImprovementCandidate(selectedCandidateId));
+      await load({ background: true });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setCandidateActionBusy(null);
+    }
+  }, [candidateDetail?.latestActivation?.activationId, load, selectedCandidateId]);
+
+  const handleRollbackActivation = useCallback(async () => {
+    const activationId = candidateDetail?.latestActivation?.activationId;
+    if (!activationId || !selectedCandidateId) {
+      setError("No activation available to roll back.");
+      return;
+    }
+    setCandidateActionBusy("rollback");
+    setError(null);
+    setSuccess(null);
+    try {
+      await rollbackImprovementActivation(activationId);
+      setSuccess("Activation rolled back and fingerprint suppression started.");
+      setCandidateDetail(await fetchImprovementCandidate(selectedCandidateId));
+      await load({ background: true });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setCandidateActionBusy(null);
+    }
+  }, [candidateDetail?.latestActivation?.activationId, load, selectedCandidateId]);
+
   if (isInitialLoading) {
     return <p>Loading improvement reports...</p>;
   }
@@ -393,6 +506,171 @@ export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: s
           test a change without mutating the baseline run immediately.
         </FieldHelp>
       </div>
+
+      <div className="split-grid">
+        <Panel
+          title="Signals"
+          subtitle="Append-only improvement signals captured from runtime, approvals, and Prompt Lab."
+        >
+          <ul className="improvement-simple-list">
+            {signals.slice(0, 12).map((signal) => (
+              <li key={signal.signalId}>
+                <strong>{signal.signalKind}</strong> - {signal.outcome}
+                <div className="table-subtext">
+                  {signal.toolName ? `${signal.toolName} · ` : ""}
+                  {new Date(signal.recordedAt).toLocaleString()}
+                  {signal.severity ? ` · ${signal.severity}` : ""}
+                </div>
+              </li>
+            ))}
+          </ul>
+          {signals.length === 0 ? <p>No ledger signals yet.</p> : null}
+        </Panel>
+
+        <Panel
+          title="Candidates"
+          subtitle="Bounded repair and routing proposals waiting on evidence, evaluation, or approval."
+        >
+          <ul className="improvement-simple-list">
+            {candidates.map((candidate) => (
+              <li key={candidate.candidateId}>
+                <button
+                  type="button"
+                  className={["gc-button", selectedCandidateId === candidate.candidateId ? "active" : ""]
+                    .filter(Boolean)
+                    .join(" ")}
+                  onClick={() => setSelectedCandidateId(candidate.candidateId)}
+                >
+                  {candidate.kind}
+                </button>
+                <div className="prompt-lab-test-meta">
+                  <span className={`prompt-lab-chip run-${candidate.status}`}>{candidate.status}</span>
+                  <span>{candidate.supportingSignalCount} signals</span>
+                  <span>{candidate.targetKey}</span>
+                </div>
+                <div className="table-subtext">{candidate.summary}</div>
+              </li>
+            ))}
+          </ul>
+          {candidates.length === 0 ? <p>No improvement candidates yet.</p> : null}
+        </Panel>
+      </div>
+
+      <SideInspectorDrawer
+        title="Candidate Detail"
+        subtitle={
+          candidateDetail
+            ? candidateDetail.candidate.summary
+            : "Select a candidate to inspect revision, evidence, evaluation, and activation state."
+        }
+        open={Boolean(candidateDetail)}
+        actions={
+          candidateDetail ? (
+            <div className="actions">
+              <ActionButton
+                label="Request Activation"
+                pendingLabel="Requesting..."
+                onClick={() => void handleActivationRequest()}
+                pending={candidateActionBusy === "activate"}
+                disabled={
+                  candidateDetail.candidate.status !== "ready_for_approval" &&
+                  candidateDetail.candidate.status !== "approved"
+                }
+              />
+              <ActionButton
+                label="Pause"
+                pendingLabel="Pausing..."
+                onClick={() => void handlePauseActivation()}
+                pending={candidateActionBusy === "pause"}
+                disabled={candidateDetail.latestActivation?.status !== "active"}
+              />
+              <ActionButton
+                label="Rollback"
+                pendingLabel="Rolling Back..."
+                onClick={() => void handleRollbackActivation()}
+                pending={candidateActionBusy === "rollback"}
+                disabled={
+                  !candidateDetail.latestActivation ||
+                  (candidateDetail.latestActivation.status !== "active" &&
+                    candidateDetail.latestActivation.status !== "paused")
+                }
+              />
+            </div>
+          ) : null
+        }
+      >
+        {candidateDetail ? (
+          <div className="stack-md">
+            <p className="office-subtitle">
+              Status {candidateDetail.candidate.status} · Revision{" "}
+              {candidateDetail.currentRevision?.revisionId?.slice(0, 8) ?? "none"} · Signals{" "}
+              {candidateDetail.supportingSignals.length}
+            </p>
+            <p className="office-subtitle">
+              Evaluation: {candidateDetail.latestEvaluation?.evaluatorKind ?? "none"} ·{" "}
+              {candidateDetail.latestEvaluation?.resultSummary ?? "waiting"}
+            </p>
+            <p className="office-subtitle">
+              Activation: {candidateDetail.latestActivation?.status ?? "none"} · Watch{" "}
+              {candidateDetail.latestActivation?.watchStatus ?? "n/a"} · Signals{" "}
+              {candidateDetail.latestActivation
+                ? `${candidateDetail.latestActivation.watchSignalCount}/${candidateDetail.latestActivation.watchSignalTarget}`
+                : "0/20"}{" "}
+              · Regressions {candidateDetail.latestActivation?.regressionCount ?? 0}
+              {candidateDetail.latestActivation?.approvalId ? (
+                <>
+                  {" "}
+                  · Gatehouse{" "}
+                  <a
+                    href={buildRouteSearch({
+                      space: "operate",
+                      page: "approvals",
+                      approvalId: candidateDetail.latestActivation.approvalId,
+                    })}
+                  >
+                    {candidateDetail.latestActivation.approvalId.slice(0, 8)}
+                  </a>
+                </>
+              ) : null}
+            </p>
+            {candidateDetail.candidate.suppressionUntil ? (
+              <p className="office-subtitle">Suppressed until {candidateDetail.candidate.suppressionUntil}</p>
+            ) : null}
+            <details open>
+              <summary>Evidence refs</summary>
+              <ul className="improvement-simple-list">
+                {candidateDetail.supportingSignals
+                  .flatMap((signal: (typeof candidateDetail.supportingSignals)[number]) => signal.evidenceRefs)
+                  .map(
+                    (
+                      ref: (typeof candidateDetail.supportingSignals)[number]["evidenceRefs"][number],
+                      index: number,
+                    ) => (
+                      <li key={`${ref.refType}:${ref.refId}:${index}`}>
+                        <strong>{ref.refType}</strong> - {ref.refId}
+                      </li>
+                    ),
+                  )}
+              </ul>
+            </details>
+            <details open>
+              <summary>Attempt manifests</summary>
+              <ul className="improvement-simple-list">
+                {candidateDetail.attemptManifestSummary.map(
+                  (manifest: (typeof candidateDetail.attemptManifestSummary)[number], index: number) => (
+                    <li key={`${manifest.signalId ?? manifest.durableRunId ?? index}`}>
+                      <strong>{manifest.providerId ?? "unknown provider"}</strong> {manifest.model ?? ""}
+                      <div className="table-subtext">{manifest.outputSummary ?? "No summary available."}</div>
+                    </li>
+                  ),
+                )}
+              </ul>
+            </details>
+          </div>
+        ) : (
+          <p>No candidate selected.</p>
+        )}
+      </SideInspectorDrawer>
 
       <Panel
         title="Replay Override + Diff"
@@ -458,7 +736,7 @@ export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: s
             <li key={run.runId}>
               <button
                 type="button"
-                className={["gc-button", (selectedRunId === run.runId ? "active" : "")].filter(Boolean).join(" ")}
+                className={["gc-button", selectedRunId === run.runId ? "active" : ""].filter(Boolean).join(" ")}
                 onClick={() => setSelectedRunId(run.runId)}
               >
                 {new Date(run.startedAt).toLocaleString()}
@@ -488,7 +766,9 @@ export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: s
               <li key={report.reportId}>
                 <button
                   type="button"
-                  className={["gc-button", (selectedReportId === report.reportId ? "active" : "")].filter(Boolean).join(" ")}
+                  className={["gc-button", selectedReportId === report.reportId ? "active" : ""]
+                    .filter(Boolean)
+                    .join(" ")}
                   onClick={() => {
                     setSelectedReportId(report.reportId);
                     setSelectedRunId(report.runId);
