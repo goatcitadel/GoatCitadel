@@ -62,16 +62,6 @@ export async function createBackup(input?: { name?: string; outputPath?: string 
   });
 }
 
-export async function restoreBackup(
-  filePath: string,
-  confirm = false,
-): Promise<{ restored: boolean; backupId?: string; filesRestored: number }> {
-  return request<{ restored: boolean; backupId?: string; filesRestored: number }>("/api/v1/admin/backups/restore", {
-    method: "POST",
-    body: JSON.stringify({ filePath, confirm }),
-  });
-}
-
 export async function verifyBackup(filePath: string): Promise<BackupVerifyResponse> {
   return request<BackupVerifyResponse>("/api/v1/admin/backups/verify", {
     method: "POST",

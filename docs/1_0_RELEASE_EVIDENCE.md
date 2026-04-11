@@ -8,9 +8,9 @@ This document maps the public `1.0` claims to the repo-visible code paths and ve
 
 - Live admin restore is blocked at [apps/gateway/src/routes/admin.ts](../apps/gateway/src/routes/admin.ts).
 - Shared path jailing and blocked restore payload shaping live in [apps/gateway/src/services/backup-paths.ts](../apps/gateway/src/services/backup-paths.ts).
-- Offline restore and verify execution live in [apps/gateway/src/services/backup-retention-service.ts](../apps/gateway/src/services/backup-retention-service.ts) and [apps/gateway/src/admin-cli.ts](../apps/gateway/src/admin-cli.ts).
+- Offline restore and verify execution live in [apps/gateway/src/services/backup-retention-service.ts](../apps/gateway/src/services/backup-retention-service.ts), [apps/gateway/src/admin-backup-cli.ts](../apps/gateway/src/admin-backup-cli.ts), and the early CLI intercept in [apps/gateway/src/admin-cli.ts](../apps/gateway/src/admin-cli.ts).
 - Route proof lives in [apps/gateway/src/routes/admin.test.ts](../apps/gateway/src/routes/admin.test.ts).
-- CLI proof lives in [apps/gateway/src/admin-cli.test.ts](../apps/gateway/src/admin-cli.test.ts).
+- CLI proof lives in [apps/gateway/src/admin-cli.integration.test.ts](../apps/gateway/src/admin-cli.integration.test.ts).
 
 ## Backup Contract Proof
 

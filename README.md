@@ -122,7 +122,8 @@ Safe claims today:
 - Code Mode host isolation is best-effort and fail-closed when required isolation is unavailable; it is still a trusted-code/manual-governed surface
 - Skills Hub and inline approvals now expose lifecycle, trust, provenance, and richer Code Mode inspection details
 - visible `beta` integrations in Mission Control now expose real operator actions backed by runtime handlers instead of diagnostics-only catalog shells
-- filesystem-backed restore is offline-only for `1.0`; the live admin restore route preserves compatibility by returning `offline_restore_required` instead of mutating an active runtime
+- filesystem-backed restore is offline-only for `1.0`; operators must stop any gateway serving that runtime root before running the CLI restore, and the live admin restore route preserves compatibility by returning `offline_restore_required` instead of mutating an active runtime
+- Postgres backups support create and verify in the shipped `1.0` surface, while restore remains an operator-run `pg_restore` workflow instead of the SQLite file-copy restore path
 - Docker can add a stronger runtime isolation boundary for local/shared-host deployment when paired with auth and policy configuration
 - provider secrets may be stored in local env/config files when secure-store persistence is disabled or unavailable
 - `verify:visual:regression` compares checked-in shell and primary-surface baselines for the full visible `Work / Observe / Tune` footprint derived from the canonical release-surface manifest

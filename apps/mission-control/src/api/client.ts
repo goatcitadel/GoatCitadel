@@ -627,7 +627,6 @@ export {
   fetchTimelineSummary,
   listBackups,
   pruneRetention,
-  restoreBackup,
   runCheaper,
   updateRetentionPolicy,
   verifyBackup,

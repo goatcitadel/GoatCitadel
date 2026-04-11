@@ -25,9 +25,10 @@ Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFL
 - `packages/mesh-core` is currently smoke-only and does not count toward the `1.0` readiness bar while it still relies on `--passWithNoTests`.
 - `apps/npu-sidecar` is optional experimental infrastructure and is not part of the current `1.0` bar.
 - Visible `beta` and `native` non-channel integrations derive their advertised capabilities from the operator-action runtime registry; Mission Control should not surface diagnostics-only shells for those entries.
-- Filesystem-backed backup restore is offline-only for `1.0`; the live admin restore route must fail closed with `offline_restore_required` while the gateway is serving.
+- Filesystem-backed backup restore is offline-only for `1.0`; operators must stop any gateway serving the same runtime root before invoking the CLI restore, and the live admin restore route must fail closed with `offline_restore_required` while the gateway is serving.
 - Backup verify now carries two truths for `1.0`: archive integrity (`verified`) and minimum-set contract coverage (`contractVerified`).
 - Surface-regression and visual-regression derive from the same canonical release-surface manifest so the visible `Work / Observe / Tune` proof set cannot drift silently.
+- Postgres backups participate in shipped create/verify coverage, but restore remains an operator-driven `pg_restore` workflow rather than the SQLite file-copy restore path.
 
 ## 0. OpenClaw-Informed Hardening Deltas (Current Cycle)
 

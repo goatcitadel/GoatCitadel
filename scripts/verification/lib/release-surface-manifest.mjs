@@ -11,7 +11,11 @@ export const RELEASE_SURFACE_MANIFEST = [
   { slug: "tune-general", href: "?space=configure&page=settings&tab=general", readyText: "General" },
   { slug: "tune-runtime", href: "?space=configure&page=settings&tab=runtime", readyText: "Runtime" },
   { slug: "tune-workspaces", href: "?space=configure&page=settings&tab=workspaces", readyText: "Workspaces" },
-  { slug: "tune-integrations", href: "?space=configure&page=integrations&tab=overview", readyText: "Integrations" },
+  {
+    slug: "tune-integrations",
+    href: "?space=configure&page=integrations&tab=overview",
+    readyText: "How connections work",
+  },
   { slug: "tune-tools", href: "?space=configure&page=tools", readyText: "Tools" },
   { slug: "tune-agents", href: "?space=configure&page=agents&tab=overview", readyText: "Agents" },
 ];

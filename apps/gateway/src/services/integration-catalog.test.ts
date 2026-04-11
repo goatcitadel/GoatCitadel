@@ -27,7 +27,7 @@ describe("integration-catalog", () => {
     }
   });
 
-  it("only upgrades planned catalog entries to plugin when the matching plugin is installed", () => {
+  it("does not promote planned catalog entries through plugin presence", () => {
     const plannedPluginChannel: IntegrationCatalogEntry = {
       ...requireCatalogEntry("channel.discord"),
       key: "custom-bridge",
@@ -39,9 +39,9 @@ describe("integration-catalog", () => {
     expect(resolveIntegrationCatalogMaturity(plannedPluginChannel, new Set())).toBe("disabled");
     expect(resolveIntegrationCatalogRuntimeAvailability(plannedPluginChannel, new Set())).toBe("blocked");
     expect(resolveIntegrationCatalogMaturity(plannedPluginChannel, new Set(["slack"]))).toBe("disabled");
-    expect(resolveIntegrationCatalogMaturity(plannedPluginChannel, new Set(["custombridge"]))).toBe("plugin");
+    expect(resolveIntegrationCatalogMaturity(plannedPluginChannel, new Set(["custombridge"]))).toBe("disabled");
     expect(resolveIntegrationCatalogRuntimeAvailability(plannedPluginChannel, new Set(["custombridge"]))).toBe(
-      "runnable",
+      "blocked",
     );
   });
 
@@ -120,7 +120,7 @@ describe("integration-catalog", () => {
     });
   });
 
-  it("supports plugin aliases for mismatched OpenClaw plugin IDs", () => {
+  it("keeps planned aliases disabled until they are explicitly modeled as plugin entries", () => {
     const whatsapp = requireCatalogEntry("channel.whatsapp");
     const plannedAliasEntry: IntegrationCatalogEntry = {
       ...requireCatalogEntry("channel.line"),
@@ -130,9 +130,29 @@ describe("integration-catalog", () => {
       pluginId: "googlechat",
     };
 
-    expect(resolveIntegrationCatalogMaturity(plannedAliasEntry, new Set(["googlechat"]))).toBe("plugin");
+    expect(resolveIntegrationCatalogMaturity(plannedAliasEntry, new Set(["googlechat"]))).toBe("disabled");
+    expect(resolveIntegrationCatalogRuntimeAvailability(plannedAliasEntry, new Set(["googlechat"]))).toBe("blocked");
     expect(resolveIntegrationCatalogMaturity(whatsapp, new Set())).toBe("beta");
     expect(resolveIntegrationCatalogRuntimeAvailability(whatsapp, new Set())).toBe("runnable");
+  });
+
+  it("ships no planned entries in the current catalog", () => {
+    for (const entry of INTEGRATION_CATALOG) {
+      expect(entry.maturity).not.toBe("planned");
+      expect(resolveIntegrationCatalogMaturity(entry, new Set())).not.toBe("planned");
+    }
+  });
+
+  it("only treats explicitly beta, native, or plugin entries as runnable", () => {
+    for (const entry of INTEGRATION_CATALOG) {
+      const resolvedMaturity = resolveIntegrationCatalogMaturity(entry, new Set());
+      const runtimeAvailability = resolveIntegrationCatalogRuntimeAvailability(entry, new Set());
+      if (runtimeAvailability === "runnable") {
+        expect(["beta", "native", "plugin"]).toContain(resolvedMaturity);
+      } else {
+        expect(resolvedMaturity).toBe("disabled");
+      }
+    }
   });
 
   it("keeps built-in channel runtimes truthful while still marking them runnable", () => {

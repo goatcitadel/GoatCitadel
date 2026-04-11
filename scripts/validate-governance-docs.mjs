@@ -262,6 +262,17 @@ if (/semantic pre-release versions/i.test(changelog) || /public surface is still
   errors.push("CHANGELOG.md must not keep stale pre-release boilerplate at the top of the file.");
 }
 
+const releaseEvidencePath = path.join(root, "docs", "1_0_RELEASE_EVIDENCE.md");
+const releaseEvidence = await readFile(releaseEvidencePath, "utf8");
+for (const linkTarget of extractRelativeMarkdownLinks(releaseEvidence)) {
+  const resolvedTarget = path.resolve(path.dirname(releaseEvidencePath), linkTarget);
+  try {
+    await access(resolvedTarget, constants.F_OK | constants.R_OK);
+  } catch {
+    errors.push(`docs/1_0_RELEASE_EVIDENCE.md points to a missing proof anchor: ${linkTarget}`);
+  }
+}
+
 const adminRouteSource = await readFile(path.join(root, "apps", "gateway", "src", "routes", "admin.ts"), "utf8");
 if (!/buildOfflineRestoreRequiredResponse/.test(adminRouteSource)) {
   errors.push("apps/gateway/src/routes/admin.ts must use the shared offline restore blocker helper.");
@@ -321,3 +332,16 @@ if (errors.length > 0) {
 }
 
 console.log("[docs:check] governance docs validation passed.");
+
+function extractRelativeMarkdownLinks(content) {
+  const matches = content.matchAll(/\[[^\]]+\]\(([^)]+)\)/g);
+  const links = [];
+  for (const match of matches) {
+    const target = match[1]?.trim();
+    if (!target || target.startsWith("http://") || target.startsWith("https://") || target.startsWith("#")) {
+      continue;
+    }
+    links.push(target);
+  }
+  return links;
+}

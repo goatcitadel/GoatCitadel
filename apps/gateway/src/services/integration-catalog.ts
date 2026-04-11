@@ -1057,12 +1057,9 @@ export function getIntegrationFormSchema(catalogId: string): IntegrationFormSche
 
 export function resolveIntegrationCatalogMaturity(
   entry: IntegrationCatalogEntry,
-  pluginIds: ReadonlySet<string>,
+  _pluginIds: ReadonlySet<string>,
 ): IntegrationCatalogEntry["maturity"] {
-  const pluginId = (entry.pluginId ?? entry.key).trim().toLowerCase();
-  if (entry.maturity === "planned" && pluginIds.has(pluginId)) {
-    return "plugin";
-  }
+  void _pluginIds;
   return entry.maturity === "planned" ? "disabled" : entry.maturity;
 }
 

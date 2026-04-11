@@ -60,13 +60,14 @@ The repo must not claim these at `1.0` unless separately proven and documented:
 - Config evolution continues to flow through the managed GoatCitadel config sync path.
 - Storage migrations are forward-upgrade paths. Rollback across schema changes is not promised; restore from a verified backup is the supported recovery path.
 - Backup create, list, and verify are shipped through the admin API/CLI surface.
-- For filesystem-backed `1.0` runtimes, restore is offline CLI-only through the shared offline restore entrypoint; the live admin restore route remains additive-compatible by returning `offline_restore_required` with an offline restore hint instead of mutating the active runtime.
+- For filesystem-backed `1.0` runtimes, restore is offline CLI-only through the shared offline restore entrypoint; operators must stop any gateway serving the same runtime root before invoking it, and the live admin restore route remains additive-compatible by returning `offline_restore_required` with an offline restore hint instead of mutating the active runtime.
 - Backup verify must report both archive integrity (`verified`) and minimum-set contract truth (`contractVerified`) for current `1.0` backups.
 - Minimum operator backup set remains:
   - `data/index.db`
   - `data/transcripts/*.jsonl`
   - `data/audit/*.jsonl`
   - `config/*.json`
+- Postgres backups are part of the shipped create/verify surface, but restore remains an operator-run `pg_restore` workflow rather than the SQLite file-copy restore path.
 - Replay/import rebuild from logs is not part of the shipped `1.0` backup guarantee unless separately documented here.
 
 ## Ecosystem Contract
