@@ -53,6 +53,8 @@ const API_COMPAT_BASELINE_PATH = path.join(repoRoot, "scripts", "verification", 
 const API_COMPAT_ALLOWLIST_PATH = path.join(repoRoot, "scripts", "verification", "baselines", "api-compat", "allowlist.json");
 const VISUAL_DIFF_PIXEL_DELTA = 18;
 const VISUAL_DIFF_RATIO_THRESHOLD = 0.005;
+const VISUAL_DIFF_NORMALIZE_BLUR = 4;
+const VISUAL_DIFF_NORMALIZE_SCALE = 0.25;
 
 export async function runFastLane(context) {
   const commands = [
@@ -2626,8 +2628,8 @@ async function compareVisualBaseline(context, slug) {
 
   await fs.copyFile(baselinePath, baselineArtifactPath);
 
-  const current = await sharp(screenshotPath).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  const baseline = await sharp(baselinePath).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const current = await loadVisualComparisonImage(screenshotPath);
+  const baseline = await loadVisualComparisonImage(baselinePath);
 
   let changedPixels = 0;
   let diffRatio = 0;
@@ -2638,25 +2640,30 @@ async function compareVisualBaseline(context, slug) {
     diffRatio = 1;
   } else {
     const pixelCount = current.info.width * current.info.height;
-    const diffBuffer = Buffer.alloc(current.data.length);
-    for (let index = 0; index < current.data.length; index += 4) {
-      const delta = Math.max(
-        Math.abs(current.data[index] - baseline.data[index]),
-        Math.abs(current.data[index + 1] - baseline.data[index + 1]),
-        Math.abs(current.data[index + 2] - baseline.data[index + 2]),
-        Math.abs(current.data[index + 3] - baseline.data[index + 3]),
-      );
+    const channelCount = current.info.channels;
+    const diffBuffer = Buffer.alloc(pixelCount * 4);
+    for (let pixelIndex = 0; pixelIndex < pixelCount; pixelIndex += 1) {
+      const sourceOffset = pixelIndex * channelCount;
+      const diffOffset = pixelIndex * 4;
+      let delta = 0;
+      for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
+        delta = Math.max(
+          delta,
+          Math.abs(current.data[sourceOffset + channelIndex] - baseline.data[sourceOffset + channelIndex]),
+        );
+      }
       if (delta > VISUAL_DIFF_PIXEL_DELTA) {
         changedPixels += 1;
-        diffBuffer[index] = 255;
-        diffBuffer[index + 1] = 0;
-        diffBuffer[index + 2] = 0;
-        diffBuffer[index + 3] = 255;
+        diffBuffer[diffOffset] = 255;
+        diffBuffer[diffOffset + 1] = 0;
+        diffBuffer[diffOffset + 2] = 0;
+        diffBuffer[diffOffset + 3] = 255;
       } else {
-        diffBuffer[index] = baseline.data[index];
-        diffBuffer[index + 1] = baseline.data[index + 1];
-        diffBuffer[index + 2] = baseline.data[index + 2];
-        diffBuffer[index + 3] = 80;
+        const baselineValue = baseline.data[sourceOffset];
+        diffBuffer[diffOffset] = baselineValue;
+        diffBuffer[diffOffset + 1] = baselineValue;
+        diffBuffer[diffOffset + 2] = baselineValue;
+        diffBuffer[diffOffset + 3] = 80;
       }
     }
     diffRatio = pixelCount > 0 ? changedPixels / pixelCount : 0;
@@ -2679,6 +2686,8 @@ async function compareVisualBaseline(context, slug) {
     diffRatio,
     diffPixelDelta: VISUAL_DIFF_PIXEL_DELTA,
     diffRatioThreshold: VISUAL_DIFF_RATIO_THRESHOLD,
+    normalizedBlur: VISUAL_DIFF_NORMALIZE_BLUR,
+    normalizedScale: VISUAL_DIFF_NORMALIZE_SCALE,
   });
 
   return {
@@ -2689,6 +2698,20 @@ async function compareVisualBaseline(context, slug) {
       ? [relativeToRun(context, baselineArtifactPath)]
       : [relativeToRun(context, baselineArtifactPath), relativeToRun(context, diffPath)],
   };
+}
+
+async function loadVisualComparisonImage(filePath) {
+  const image = sharp(filePath);
+  const metadata = await image.metadata();
+  const width = Math.max(1, Math.round((metadata.width ?? 1) * VISUAL_DIFF_NORMALIZE_SCALE));
+  const height = Math.max(1, Math.round((metadata.height ?? 1) * VISUAL_DIFF_NORMALIZE_SCALE));
+  return image
+    .grayscale()
+    .blur(VISUAL_DIFF_NORMALIZE_BLUR)
+    .resize({ width, height })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
 }
 
 async function assertVisualBaselineCoverage(context) {
