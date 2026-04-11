@@ -21,14 +21,17 @@ describe("verifyBackupAtPath", () => {
     const backupPath = await createBackupFixture("valid");
     const result = await verifyBackupAtPath(backupPath);
     expect(result.verified).toBe(true);
-    expect(result.filesVerified).toBe(1);
+    expect(result.contractVerified).toBe(true);
+    expect(result.filesVerified).toBe(4);
     expect(result.issues).toEqual([]);
+    expect(result.contractCoverage.minimumSet.config.verified).toBe(true);
   });
 
   it("flags missing and unexpected payload files", async () => {
     const backupPath = await createBackupFixture("extra-file");
     const result = await verifyBackupAtPath(backupPath);
     expect(result.verified).toBe(false);
+    expect(result.contractVerified).toBe(false);
     expect(result.issues.map((issue) => issue.code)).toContain("payload_untracked_file");
   });
 
@@ -36,33 +39,89 @@ describe("verifyBackupAtPath", () => {
     const backupPath = await createBackupFixture("traversal");
     const result = await verifyBackupAtPath(backupPath);
     expect(result.verified).toBe(false);
+    expect(result.contractVerified).toBe(false);
     expect(result.issues.map((issue) => issue.code)).toContain("manifest_invalid_path");
+  });
+
+  it("reports legacy manifests as integrity-verified but contract-incomplete", async () => {
+    const backupPath = await createBackupFixture("legacy");
+    const result = await verifyBackupAtPath(backupPath);
+    expect(result.verified).toBe(true);
+    expect(result.contractVerified).toBe(false);
+    expect(result.contractCoverage.legacyManifest).toBe(true);
+    expect(result.contractCoverage.reasons).toContain("legacy_manifest_missing_contract_coverage");
+  });
+
+  it("fails contract verification for manifest-valid backups that miss part of the minimum set", async () => {
+    const backupPath = await createBackupFixture("contract-incomplete");
+    const result = await verifyBackupAtPath(backupPath);
+    expect(result.verified).toBe(true);
+    expect(result.contractVerified).toBe(false);
+    expect(result.contractCoverage.minimumSet.audit.verified).toBe(false);
+    expect(result.contractCoverage.minimumSet.audit.expectedPaths).toEqual(["data/audit/missing.jsonl"]);
+    expect(result.contractCoverage.minimumSet.audit.missingPaths).toEqual(["data/audit/missing.jsonl"]);
+    expect(result.contractCoverage.reasons).toContain("minimum_set_audit_incomplete");
   });
 });
 
-async function createBackupFixture(mode: "valid" | "extra-file" | "traversal"): Promise<string> {
+async function createBackupFixture(
+  mode: "valid" | "extra-file" | "traversal" | "legacy" | "contract-incomplete",
+): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-backup-verify-"));
   TEMP_ROOTS.push(root);
   const backupPath = path.join(root, "fixture.backup");
-  const payloadDir = path.join(backupPath, "payload", "data");
-  await mkdir(payloadDir, { recursive: true });
+  await mkdir(path.join(backupPath, "payload", "data", "transcripts"), { recursive: true });
+  await mkdir(path.join(backupPath, "payload", "data", "audit"), { recursive: true });
+  await mkdir(path.join(backupPath, "payload", "config"), { recursive: true });
 
-  const filePath = path.join(payloadDir, "session.json");
-  const fileBytes = Buffer.from('{"ok":true}\n', "utf8");
-  await writeFile(filePath, fileBytes);
+  const payloadFiles = [
+    {
+      path: "data/index.db",
+      bytes: Buffer.from("sqlite-backup\n", "utf8"),
+    },
+    {
+      path: "data/transcripts/session.jsonl",
+      bytes: Buffer.from('{"event":"transcript"}\n', "utf8"),
+    },
+    {
+      path: "data/audit/audit.jsonl",
+      bytes: Buffer.from('{"event":"audit"}\n', "utf8"),
+    },
+    {
+      path: "config/llm-providers.json",
+      bytes: Buffer.from('{"providers":[]}\n', "utf8"),
+    },
+  ];
+
+  for (const entry of payloadFiles) {
+    const fullPath = path.join(backupPath, "payload", entry.path);
+    await mkdir(path.dirname(fullPath), { recursive: true });
+    await writeFile(fullPath, entry.bytes);
+  }
 
   const manifest = {
     backupId: "fixture-1",
     createdAt: "2026-03-12T12:00:00.000Z",
     appVersion: "1.0.0",
     rootDir: "F:/code/personal-ai",
-    files: [
-      {
-        path: mode === "traversal" ? "../outside.txt" : "data/session.json",
-        sizeBytes: fileBytes.length,
-        sha256: createHash("sha256").update(fileBytes).digest("hex"),
-      },
-    ],
+    files: payloadFiles.map((entry) => ({
+      path: mode === "traversal" && entry.path === "data/index.db" ? "../outside.txt" : entry.path,
+      sizeBytes: entry.bytes.length,
+      sha256: createHash("sha256").update(entry.bytes).digest("hex"),
+    })),
+    ...(mode === "legacy"
+      ? {}
+      : {
+          contractCoverage: {
+            contractVersion: "1.0",
+            minimumSet: {
+              databasePaths: ["data/index.db"],
+              transcriptPaths: ["data/transcripts/session.jsonl"],
+              auditPaths: mode === "contract-incomplete" ? ["data/audit/missing.jsonl"] : ["data/audit/audit.jsonl"],
+              configPaths: ["config/llm-providers.json"],
+            },
+          },
+        }),
   };
 
   if (mode === "extra-file") {

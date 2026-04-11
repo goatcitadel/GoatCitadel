@@ -2,9 +2,11 @@
 
 All notable changes to GoatCitadel are documented in this file.
 
-The project uses semantic pre-release versions while the public surface is still settling.
-
 ## [Unreleased]
+
+No unreleased changes are staged yet.
+
+## [1.0.0] - 2026-04-11
 
 ### Added
 

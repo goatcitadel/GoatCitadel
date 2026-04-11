@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import type {
   BackupCreateResponse,
+  BackupManifestContractCoverageRecord,
   BackupManifestFileRecord,
   BackupManifestRecord,
   BackupVerifyResponse,
@@ -31,20 +32,6 @@ const DEFAULT_RETENTION_POLICY: RetentionPolicy = {
 export interface BackupRetentionDeps {
   readonly storage: Storage;
   readonly config: GatewayRuntimeConfig;
-}
-
-export async function restoreBackupAtRuntime(
-  config: GatewayRuntimeConfig,
-  input: {
-    filePath: string;
-    confirm: boolean;
-  },
-): Promise<{ restored: boolean; backupId?: string; filesRestored: number }> {
-  return restoreBackupOffline({
-    rootDir: config.rootDir,
-    filePath: input.filePath,
-    confirm: input.confirm,
-  });
 }
 
 export async function restoreBackupOffline(input: {
@@ -196,6 +183,7 @@ export class BackupRetentionService {
       gitRef: readGitRef(this.config.rootDir),
       rootDir: this.config.rootDir,
       files,
+      contractCoverage: buildBackupManifestContractCoverage(files),
     };
     const manifestPath = path.join(tempDir, "manifest.json");
     const manifestRaw = `${JSON.stringify(manifest, null, 2)}\n`;
@@ -210,13 +198,6 @@ export class BackupRetentionService {
       bytes: files.reduce((sum, item) => sum + item.sizeBytes, 0) + Buffer.byteLength(manifestRaw, "utf8"),
       manifest,
     };
-  }
-
-  public async restoreBackup(input: {
-    filePath: string;
-    confirm: boolean;
-  }): Promise<{ restored: boolean; backupId?: string; filesRestored: number }> {
-    return restoreBackupAtRuntime(this.config, input);
   }
 
   public async verifyBackup(input: { filePath: string }): Promise<BackupVerifyResponse> {
@@ -497,6 +478,19 @@ async function collectBackupFileRecords(payloadDir: string): Promise<BackupManif
   return files;
 }
 
+function buildBackupManifestContractCoverage(files: BackupManifestFileRecord[]): BackupManifestContractCoverageRecord {
+  const paths = files.map((file) => file.path).sort((left, right) => left.localeCompare(right));
+  return {
+    contractVersion: "1.0",
+    minimumSet: {
+      databasePaths: paths.filter(isContractDatabasePath),
+      transcriptPaths: paths.filter(isContractTranscriptPath),
+      auditPaths: paths.filter(isContractAuditPath),
+      configPaths: paths.filter(isContractConfigPath),
+    },
+  };
+}
+
 function formatBackupVerifyFailure(result: BackupVerifyResponse): string {
   if (result.issues.length === 0) {
     return "Backup verification failed.";
@@ -565,6 +559,22 @@ function ensurePathWithinRoot(targetPath: string, rootDir: string): void {
     return;
   }
   throw new Error("Path escapes allowed root");
+}
+
+function isContractDatabasePath(filePath: string): boolean {
+  return filePath === "data/index.db" || filePath === "database/postgres.dump";
+}
+
+function isContractTranscriptPath(filePath: string): boolean {
+  return filePath.startsWith("data/transcripts/") && filePath.endsWith(".jsonl");
+}
+
+function isContractAuditPath(filePath: string): boolean {
+  return filePath.startsWith("data/audit/") && filePath.endsWith(".jsonl");
+}
+
+function isContractConfigPath(filePath: string): boolean {
+  return filePath.startsWith("config/") && filePath.endsWith(".json");
 }
 
 function resolvePgDumpCommand(config: GatewayRuntimeConfig): string {

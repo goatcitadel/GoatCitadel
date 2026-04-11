@@ -16,6 +16,11 @@ import {
   writeText,
 } from "./shared.mjs";
 import {
+  buildVisualBaselineFileName,
+  RELEASE_SURFACE_MANIFEST,
+  RELEASE_SURFACE_VARIANTS,
+} from "./release-surface-manifest.mjs";
+import {
   delay,
   prepareVerificationRuntime,
   requestJson,
@@ -39,52 +44,9 @@ const TAB_ROUTES = [
   { tab: "mcp", title: "MCP" },
 ];
 
-const SURFACE_REGRESSION_ROUTES = [
-  { slug: "work-chat", href: "?space=operate&page=surface&surface=chat", readySelector: ".chat-v11.mode-chat" },
-  { slug: "work-cowork", href: "?space=operate&page=surface&surface=cowork", readySelector: ".chat-v11.mode-cowork" },
-  { slug: "work-code", href: "?space=operate&page=surface&surface=code", readySelector: ".chat-v11.mode-code" },
-  { slug: "work-tasks", href: "?space=operate&page=tasks", readyText: "Tasks" },
-  { slug: "work-approvals", href: "?space=operate&page=approvals", readyText: "Approvals" },
-  { slug: "observe-timeline", href: "?space=observe&page=activity&tab=activity", readyText: "Timeline" },
-  { slug: "observe-health", href: "?space=observe&page=costs", readyText: "Health" },
-  { slug: "observe-artifacts", href: "?space=observe&page=artifacts&tab=memory", readyText: "Artifacts" },
-  { slug: "observe-quality", href: "?space=observe&page=quality", readyText: "Quality" },
-  { slug: "tune-general", href: "?space=configure&page=settings&tab=general", readyText: "General" },
-  { slug: "tune-runtime", href: "?space=configure&page=settings&tab=runtime", readyText: "Runtime" },
-  { slug: "tune-workspaces", href: "?space=configure&page=settings&tab=workspaces", readyText: "Workspaces" },
-  { slug: "tune-integrations", href: "?space=configure&page=integrations&tab=overview", readyText: "Integrations" },
-  { slug: "tune-tools", href: "?space=configure&page=tools", readyText: "Tools" },
-  { slug: "tune-agents", href: "?space=configure&page=agents&tab=overview", readyText: "Agents" },
-];
-
-const VISUAL_REGRESSION_ROUTES = SURFACE_REGRESSION_ROUTES;
-
-const VISUAL_REGRESSION_VARIANTS = [
-  {
-    slug: "desktop-dark",
-    viewport: { width: 1440, height: 1024 },
-    colorScheme: "dark",
-    themeQuery: "",
-  },
-  {
-    slug: "desktop-light",
-    viewport: { width: 1440, height: 1024 },
-    colorScheme: "light",
-    themeQuery: "theme=light",
-  },
-  {
-    slug: "mobile-dark",
-    viewport: { width: 390, height: 844 },
-    colorScheme: "dark",
-    themeQuery: "",
-  },
-  {
-    slug: "mobile-light",
-    viewport: { width: 390, height: 844 },
-    colorScheme: "light",
-    themeQuery: "theme=light",
-  },
-];
+const SURFACE_REGRESSION_ROUTES = RELEASE_SURFACE_MANIFEST;
+const VISUAL_REGRESSION_ROUTES = RELEASE_SURFACE_MANIFEST;
+const VISUAL_REGRESSION_VARIANTS = RELEASE_SURFACE_VARIANTS;
 
 const VISUAL_BASELINE_DIR = path.join(repoRoot, "scripts", "verification", "baselines", "visual");
 const API_COMPAT_BASELINE_PATH = path.join(repoRoot, "scripts", "verification", "baselines", "api-compat", "rest-sse.json");
@@ -143,6 +105,9 @@ export async function runDeepCoreLane(context, options = {}) {
     gatewayEnv: {
       GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
       GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+    },
+    uiEnv: {
+      VITE_GOATCITADEL_VISUAL_REGRESSION_MODE: "true",
     },
   });
   try {
@@ -1672,7 +1637,7 @@ export async function runBackupRoundtripLane(context, options = {}) {
           },
         });
         assertOk(verifiedBackup, "verify runtime backup");
-        if (verifiedBackup.body?.verified !== true) {
+        if (verifiedBackup.body?.verified !== true || verifiedBackup.body?.contractVerified !== true) {
           throw new Error(`expected verified backup, got ${JSON.stringify(verifiedBackup.body)}`);
         }
 
@@ -1808,6 +1773,18 @@ export async function runBackupRoundtripLane(context, options = {}) {
         if (Object.values(expectedManifestChecks).some((value) => !value)) {
           throw new Error(`backup manifest missed part of the minimum backup set: ${JSON.stringify(expectedManifestChecks)}`);
         }
+        const verifiedConfigCoverage = Array.isArray(verifiedBackup.body?.contractCoverage?.minimumSet?.config?.expectedPaths)
+          ? [...verifiedBackup.body.contractCoverage.minimumSet.config.expectedPaths].sort((left, right) => left.localeCompare(right))
+          : [];
+        const expectedConfigCoverage = configSnapshots.map((snapshot) => snapshot.relativePath).sort((left, right) => left.localeCompare(right));
+        if (JSON.stringify(verifiedConfigCoverage) !== JSON.stringify(expectedConfigCoverage)) {
+          throw new Error(
+            `backup verify contract coverage did not report the exact config file set: ${JSON.stringify({
+              verifiedConfigCoverage,
+              expectedConfigCoverage,
+            })}`,
+          );
+        }
 
         const restoredConfigSummary = {};
         for (const snapshot of configSnapshots) {
@@ -1861,6 +1838,7 @@ export async function runBackupRoundtripLane(context, options = {}) {
             },
           },
           manifestChecks: expectedManifestChecks,
+          contractCoverage: verifiedBackup.body?.contractCoverage ?? null,
           configManifestChecks,
           configRestoreSummary: restoredConfigSummary,
         });
@@ -1887,6 +1865,10 @@ export async function runBackupRoundtripLane(context, options = {}) {
 }
 
 export async function runVisualRegressionLane(context, options = {}) {
+  const updateBaselines = maybeParseBool(process.env.GOATCITADEL_UPDATE_VISUAL_BASELINES, false);
+  if (!updateBaselines) {
+    await assertVisualBaselineCoverage(context);
+  }
   const stack = await startVerificationStack(context, {
     includeUi: true,
     gatewayEnv: {
@@ -2670,6 +2652,30 @@ async function compareVisualBaseline(context, slug) {
       ? [relativeToRun(context, baselineArtifactPath)]
       : [relativeToRun(context, baselineArtifactPath), relativeToRun(context, diffPath)],
   };
+}
+
+async function assertVisualBaselineCoverage(context) {
+  const expectedFiles = RELEASE_SURFACE_MANIFEST.flatMap((route) =>
+    RELEASE_SURFACE_VARIANTS.map((variant) => buildVisualBaselineFileName(route.slug, variant.slug)),
+  );
+  const missing = [];
+  for (const fileName of expectedFiles) {
+    try {
+      await fs.access(path.join(VISUAL_BASELINE_DIR, fileName));
+    } catch {
+      missing.push(fileName);
+    }
+  }
+  if (missing.length === 0) {
+    return;
+  }
+  const diagnosticsPath = path.join(context.artifactRoot, "diagnostics", "visual-baseline-coverage.json");
+  await writeJson(diagnosticsPath, {
+    baselineDirectory: VISUAL_BASELINE_DIR,
+    expectedFiles,
+    missingFiles: missing,
+  });
+  throw new Error(`visual baseline coverage is incomplete: ${missing.join(", ")}`);
 }
 
 function snapshotRestContract(openApiDocument) {

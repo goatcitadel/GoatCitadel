@@ -26,6 +26,8 @@ Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFL
 - `apps/npu-sidecar` is optional experimental infrastructure and is not part of the current `1.0` bar.
 - Visible `beta` and `native` non-channel integrations derive their advertised capabilities from the operator-action runtime registry; Mission Control should not surface diagnostics-only shells for those entries.
 - Filesystem-backed backup restore is offline-only for `1.0`; the live admin restore route must fail closed with `offline_restore_required` while the gateway is serving.
+- Backup verify now carries two truths for `1.0`: archive integrity (`verified`) and minimum-set contract coverage (`contractVerified`).
+- Surface-regression and visual-regression derive from the same canonical release-surface manifest so the visible `Work / Observe / Tune` proof set cannot drift silently.
 
 ## 0. OpenClaw-Informed Hardening Deltas (Current Cycle)
 

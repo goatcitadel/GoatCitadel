@@ -61,6 +61,7 @@ The repo must not claim these at `1.0` unless separately proven and documented:
 - Storage migrations are forward-upgrade paths. Rollback across schema changes is not promised; restore from a verified backup is the supported recovery path.
 - Backup create, list, and verify are shipped through the admin API/CLI surface.
 - For filesystem-backed `1.0` runtimes, restore is offline CLI-only through the shared offline restore entrypoint; the live admin restore route remains additive-compatible by returning `offline_restore_required` with an offline restore hint instead of mutating the active runtime.
+- Backup verify must report both archive integrity (`verified`) and minimum-set contract truth (`contractVerified`) for current `1.0` backups.
 - Minimum operator backup set remains:
   - `data/index.db`
   - `data/transcripts/*.jsonl`
@@ -89,9 +90,9 @@ GoatCitadel may not claim `1.0` until all of these are true:
 
 - `verify:operator:proof` is green
 - `verify:durable:recovery` is green and includes stack-backed restart/recovery proof
-- `verify:surface:regression` is green across the visible `Work / Observe / Tune` route set
+- `verify:surface:regression` is green across the visible `Work / Observe / Tune` route set derived from the canonical release-surface manifest
 - `verify:catalog:parity` is green and executes real runtime-backed operator actions for the visible non-channel catalog classes it claims to cover
-- `verify:visual:regression` is green and compares checked-in dark/light desktop/mobile baselines for the visible shell and primary `Work / Observe / Tune` surfaces
+- `verify:visual:regression` is green and compares checked-in dark/light desktop/mobile baselines for the visible shell and primary `Work / Observe / Tune` surfaces derived from the canonical release-surface manifest
 - `verify:backup:roundtrip` is green and restores the full minimum operator backup set (`data/index.db`, `data/transcripts/*.jsonl`, `data/audit/*.jsonl`, `config/*.json`)
 - `verify:api:compat` is green and fails on breaking REST route/schema or realtime event-envelope diffs
 - governance docs pass freshness validation against this contract

@@ -4,13 +4,18 @@ import { adminRoutes } from "./admin.js";
 
 describe("admin routes", () => {
   let app: FastifyInstance | null = null;
+  const originalBackupDir = process.env.GOATCITADEL_BACKUP_DIR;
 
   afterEach(async () => {
-    if (!app) {
-      return;
+    if (app) {
+      await app.close();
+      app = null;
     }
-    await app.close();
-    app = null;
+    if (originalBackupDir === undefined) {
+      delete process.env.GOATCITADEL_BACKUP_DIR;
+    } else {
+      process.env.GOATCITADEL_BACKUP_DIR = originalBackupDir;
+    }
   });
 
   it("returns retention policy from the gateway", async () => {
@@ -104,6 +109,27 @@ describe("admin routes", () => {
     });
     expect(response.json().cliHint).toContain("pnpm admin backup restore");
     expect(restoreBackup).not.toHaveBeenCalled();
+  });
+
+  it("uses the shared backup directory resolution for the blocked live-restore payload", async () => {
+    process.env.GOATCITADEL_BACKUP_DIR = "C:/custom-backups";
+    app = Fastify();
+    app.decorate("gateway", {} as never);
+    await app.register(adminRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/backups/restore",
+      payload: {
+        filePath: "folder/runtime.backup",
+        confirm: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      filePath: "C:\\custom-backups\\folder\\runtime.backup",
+    });
   });
 
   it("returns backup verification output from the gateway", async () => {

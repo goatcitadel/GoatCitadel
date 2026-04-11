@@ -1,17 +1,18 @@
 /* eslint-disable no-console -- CLI entrypoint intentionally writes structured output to stdout and stderr. */
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import type { BundledPostgresRuntimeHandle } from "./bundled-postgres-runtime.js";
 import { ensureBundledPostgresRuntime } from "./bundled-postgres-runtime.js";
 import { repoHasConfigMarker } from "./config-files.js";
+import { runOfflineBackupCommand } from "./admin-backup-cli.js";
 import { loadLocalEnvFile } from "./env-file.js";
 import { loadGatewayConfig } from "./config.js";
 import { GatewayService } from "./services/gateway-service.js";
-import { restoreBackupOffline, verifyBackupOffline } from "./services/backup-retention-service.js";
 
 loadLocalEnvFile();
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 0) {
     printUsage();
@@ -57,39 +58,6 @@ async function main(): Promise<void> {
   }
 }
 
-async function runOfflineBackupCommand(action: string | undefined, args: string[]): Promise<void> {
-  const rootDir = resolveRootDir();
-  if (action === "restore") {
-    const filePath = readFlag(args, "--file");
-    const confirm = args.includes("--confirm");
-    if (!filePath) {
-      throw new Error("Missing required --file <path>");
-    }
-    if (!confirm) {
-      throw new Error("Restore requires --confirm");
-    }
-    const restored = await restoreBackupOffline({
-      rootDir,
-      filePath,
-      confirm: true,
-    });
-    console.log(JSON.stringify(restored, null, 2));
-    return;
-  }
-
-  if (action === "verify") {
-    const filePath = readFlag(args, "--file");
-    if (!filePath) {
-      throw new Error("Missing required --file <path>");
-    }
-    const verified = await verifyBackupOffline({
-      filePath,
-    });
-    console.log(JSON.stringify(verified, null, 2));
-    return;
-  }
-}
-
 async function runBackupCommand(gateway: GatewayService, action: string | undefined, args: string[]): Promise<void> {
   if (action === "create") {
     const name = readFlag(args, "--name");
@@ -107,35 +75,6 @@ async function runBackupCommand(gateway: GatewayService, action: string | undefi
     const limit = limitRaw ? Number.parseInt(limitRaw, 10) : 50;
     const items = await gateway.listBackups(Number.isFinite(limit) ? limit : 50);
     console.log(JSON.stringify({ items }, null, 2));
-    return;
-  }
-
-  if (action === "restore") {
-    const filePath = readFlag(args, "--file");
-    const confirm = args.includes("--confirm");
-    if (!filePath) {
-      throw new Error("Missing required --file <path>");
-    }
-    if (!confirm) {
-      throw new Error("Restore requires --confirm");
-    }
-    const restored = await gateway.restoreBackup({
-      filePath,
-      confirm: true,
-    });
-    console.log(JSON.stringify(restored, null, 2));
-    return;
-  }
-
-  if (action === "verify") {
-    const filePath = readFlag(args, "--file");
-    if (!filePath) {
-      throw new Error("Missing required --file <path>");
-    }
-    const verified = await gateway.verifyBackup({
-      filePath,
-    });
-    console.log(JSON.stringify(verified, null, 2));
     return;
   }
 
@@ -283,7 +222,11 @@ function printUsage(): void {
   goat admin retention prune [--dry-run|--apply]`);
 }
 
-main().catch((error) => {
-  console.error((error as Error).message);
-  process.exitCode = 1;
-});
+const invokedAsScript = typeof process.argv[1] === "string" && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedAsScript) {
+  main().catch((error) => {
+    console.error((error as Error).message);
+    process.exitCode = 1;
+  });
+}

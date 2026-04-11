@@ -4,6 +4,18 @@ export interface BackupManifestFileRecord {
   sha256: string;
 }
 
+export interface BackupManifestContractMinimumSetRecord {
+  databasePaths: string[];
+  transcriptPaths: string[];
+  auditPaths: string[];
+  configPaths: string[];
+}
+
+export interface BackupManifestContractCoverageRecord {
+  contractVersion: "1.0";
+  minimumSet: BackupManifestContractMinimumSetRecord;
+}
+
 export interface BackupManifestRecord {
   backupId: string;
   createdAt: string;
@@ -11,6 +23,7 @@ export interface BackupManifestRecord {
   gitRef?: string;
   rootDir: string;
   files: BackupManifestFileRecord[];
+  contractCoverage?: BackupManifestContractCoverageRecord;
 }
 
 export interface BackupCreateResponse {
@@ -26,13 +39,34 @@ export interface BackupVerifyIssue {
   path?: string;
 }
 
+export interface BackupVerifyContractSection {
+  expectedPaths: string[];
+  verifiedPaths: string[];
+  missingPaths: string[];
+  verified: boolean;
+}
+
+export interface BackupVerifyContractCoverageRecord {
+  contractVersion: "1.0";
+  legacyManifest: boolean;
+  reasons: string[];
+  minimumSet: {
+    database: BackupVerifyContractSection;
+    transcripts: BackupVerifyContractSection;
+    audit: BackupVerifyContractSection;
+    config: BackupVerifyContractSection;
+  };
+}
+
 export interface BackupVerifyResponse {
   backupPath: string;
   backupId?: string;
   verified: boolean;
+  contractVerified: boolean;
   filesVerified: number;
   issues: BackupVerifyIssue[];
   manifest?: BackupManifestRecord;
+  contractCoverage: BackupVerifyContractCoverageRecord;
 }
 
 export interface RetentionPolicy {

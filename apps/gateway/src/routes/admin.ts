@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { resolveBackupPathWithinDirectory } from "../services/backup-paths.js";
+import { buildOfflineRestoreRequiredResponse, resolveBackupPathWithinDirectory } from "../services/backup-paths.js";
 
 const retentionPatchSchema = z.object({
   realtimeEventsDays: z.coerce.number().int().positive().max(365).optional(),
@@ -113,19 +113,11 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const jailed = resolveBackupPathWithinDirectory(parsed.data.filePath);
-    if (!jailed.ok) {
-      return reply.code(400).send({ error: jailed.error });
+    const blocked = buildOfflineRestoreRequiredResponse(parsed.data.filePath);
+    if (!blocked.ok) {
+      return reply.code(400).send({ error: blocked.error });
     }
-    return reply.code(409).send({
-      error: "offline_restore_required",
-      code: "offline_restore_required",
-      message: "Filesystem-backed backup restore is only supported while the GoatCitadel gateway is offline.",
-      maintenanceRequired: true,
-      supportedMode: "offline",
-      filePath: jailed.resolvedPath,
-      cliHint: `pnpm admin backup restore --file "${parsed.data.filePath}" --confirm`,
-    });
+    return reply.code(409).send(blocked.response);
   });
 
   fastify.post("/api/v1/admin/backups/verify", async (request, reply) => {

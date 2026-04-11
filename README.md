@@ -113,7 +113,7 @@ GoatCitadel now ships at the `1.0.0` bar defined in [docs/1_0_CONTRACT.md](./doc
 
 This repository intentionally favors truthful product claims over aspirational parity language. If something is still experimental, optional, or only partially proven, the docs should say so plainly.
 
-The current `1.0` promise, visible scope, trust posture, additive API posture, backup guarantees, and release gates are defined in [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md).
+The current `1.0` promise, visible scope, trust posture, additive API posture, backup guarantees, and release gates are defined in [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md). The proof map for those claims lives in [docs/1_0_RELEASE_EVIDENCE.md](./docs/1_0_RELEASE_EVIDENCE.md).
 
 Safe claims today:
 
@@ -125,7 +125,8 @@ Safe claims today:
 - filesystem-backed restore is offline-only for `1.0`; the live admin restore route preserves compatibility by returning `offline_restore_required` instead of mutating an active runtime
 - Docker can add a stronger runtime isolation boundary for local/shared-host deployment when paired with auth and policy configuration
 - provider secrets may be stored in local env/config files when secure-store persistence is disabled or unavailable
-- `verify:visual:regression` compares checked-in shell and primary-surface baselines for the full visible `Work / Observe / Tune` footprint instead of only capturing screenshots
+- `verify:visual:regression` compares checked-in shell and primary-surface baselines for the full visible `Work / Observe / Tune` footprint derived from the canonical release-surface manifest
+- backup verify now reports both archive integrity and `contractVerified` coverage for the `1.0` minimum backup set
 - `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and every runtime `config/*.json` file
 - `verify:catalog:parity` now executes real operator actions for visible runtime-backed non-channel entries instead of stopping at metadata checks
 - `verify:api:compat` snapshots REST schemas and realtime event envelopes and fails on breaking diffs
@@ -155,6 +156,7 @@ Full gallery: [docs/screenshots/mission-control](./docs/screenshots/mission-cont
 - [CONTRIBUTING.md](./CONTRIBUTING.md)
 - [SECURITY.md](./SECURITY.md)
 - [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md)
+- [docs/1_0_RELEASE_EVIDENCE.md](./docs/1_0_RELEASE_EVIDENCE.md)
 - [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md)
 - [docs/ENGINEERING_HANDBOOK.md](./docs/ENGINEERING_HANDBOOK.md)
 - [docs/PLUGIN_SDK_CONTRACT.md](./docs/PLUGIN_SDK_CONTRACT.md)

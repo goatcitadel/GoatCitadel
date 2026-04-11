@@ -116,7 +116,7 @@ function buildOpenApiSpec(): Record<string, unknown> {
       },
       "/api/v1/admin/backups/verify": {
         post: {
-          summary: "Verify backup manifest and payload integrity",
+          summary: "Verify backup manifest/payload integrity and 1.0 minimum-set contract coverage",
           responses: { "200": { description: "Backup verification result" } },
         },
       },

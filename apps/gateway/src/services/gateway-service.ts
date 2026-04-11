@@ -5594,13 +5594,6 @@ export class GatewayService {
     return this.backupRetentionService.createBackup(input);
   }
 
-  public async restoreBackup(input: {
-    filePath: string;
-    confirm: boolean;
-  }): Promise<{ restored: boolean; backupId?: string; filesRestored: number }> {
-    return this.backupRetentionService.restoreBackup(input);
-  }
-
   public async verifyBackup(input: { filePath: string }): Promise<BackupVerifyResponse> {
     return this.backupRetentionService.verifyBackup(input);
   }

@@ -282,9 +282,14 @@ export function launchPreparedAgentChatTurnStream(
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   resolvedOrchestration?: PreparedChatExecutionPlanResolution,
 ): void {
+  const durableRequested = shouldUseDurableExecution(host, prepared, input);
   const durableRun = host.beginDurableChatRun(prepared, input, threadEventType);
   host.registerActiveChatTurnStream(sessionId, prepared.turnId, durableRun?.runId);
   if (durableRun) {
+    return;
+  }
+  if (durableRequested) {
+    persistDurableUnavailableFailure(host, sessionId, prepared);
     return;
   }
   const task = executePreparedAgentChatTurnBackground(
@@ -298,6 +303,42 @@ export function launchPreparedAgentChatTurnStream(
   );
   task.finally(() => host.backgroundTasks.delete(task));
   host.backgroundTasks.add(task);
+}
+
+function persistDurableUnavailableFailure(
+  host: ChatTurnDispatchHost,
+  sessionId: string,
+  prepared: PreparedAgentChatTurn,
+): void {
+  const failedTrace = host.storage.chatTurnTraces.patch(prepared.turnId, {
+    status: "failed",
+    finishedAt: new Date().toISOString(),
+    failure: {
+      failureClass: "unknown",
+      message: "Durable execution could not start for this shipped operator surface.",
+      retryable: false,
+      recommendedAction: "check_gateway_connection",
+    },
+    completion: {
+      finishReason: "error",
+      status: "interrupted",
+      repaired: false,
+    },
+  });
+  host.persistChatStreamChunk({
+    type: "trace_update",
+    sessionId,
+    turnId: prepared.turnId,
+    trace: host.createHydratedChatTurnTrace(prepared.turnId, failedTrace),
+  });
+  host.persistChatStreamChunk({
+    type: "error",
+    sessionId,
+    turnId: prepared.turnId,
+    error: "durable_unavailable: shipped Chat/Cowork/Code sends must allocate a durable run before execution.",
+  });
+  host.completeActiveChatTurnStream(prepared.turnId);
+  setTimeout(() => host.closeActiveChatTurnStream(prepared.turnId), 30_000);
 }
 
 export async function sendPreparedIntegrationChatTurn(

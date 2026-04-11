@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import type {
-  BackupManifestFileRecord,
+  BackupManifestContractCoverageRecord,
   BackupManifestRecord,
+  BackupVerifyContractCoverageRecord,
+  BackupVerifyContractSection,
   BackupVerifyIssue,
   BackupVerifyResponse,
 } from "@goatcitadel/contracts";
@@ -27,6 +29,7 @@ export async function verifyBackupAtPath(backupPath: string): Promise<BackupVeri
   }
 
   const payloadFiles = await collectPayloadFiles(payloadDir, issues);
+  const payloadVerifiedPaths = new Set<string>();
   let filesVerified = 0;
 
   if (manifest) {
@@ -81,6 +84,7 @@ export async function verifyBackupAtPath(backupPath: string): Promise<BackupVeri
         continue;
       }
       filesVerified += 1;
+      payloadVerifiedPaths.add(normalizedPath);
       payloadFiles.delete(normalizedPath);
     }
 
@@ -93,13 +97,20 @@ export async function verifyBackupAtPath(backupPath: string): Promise<BackupVeri
     }
   }
 
+  const contractCoverage = buildBackupVerifyContractCoverage(manifest, payloadVerifiedPaths, issues);
+  const verified = issues.length === 0;
+  const contractVerified =
+    verified && allContractSectionsVerified(contractCoverage) && !contractCoverage.legacyManifest;
+
   return {
     backupPath: resolvedBackupPath,
     backupId: manifest?.backupId,
-    verified: issues.length === 0,
+    verified,
+    contractVerified,
     filesVerified,
     issues,
     manifest,
+    contractCoverage,
   };
 }
 
@@ -127,11 +138,11 @@ function parseBackupManifest(raw: string, issues: BackupVerifyIssue[]): BackupMa
 
   const record = parsed as Partial<BackupManifestRecord>;
   if (
-    typeof record.backupId !== "string"
-    || typeof record.createdAt !== "string"
-    || typeof record.appVersion !== "string"
-    || typeof record.rootDir !== "string"
-    || !Array.isArray(record.files)
+    typeof record.backupId !== "string" ||
+    typeof record.createdAt !== "string" ||
+    typeof record.appVersion !== "string" ||
+    typeof record.rootDir !== "string" ||
+    !Array.isArray(record.files)
   ) {
     issues.push({
       code: "manifest_invalid_shape",
@@ -141,15 +152,15 @@ function parseBackupManifest(raw: string, issues: BackupVerifyIssue[]): BackupMa
     return undefined;
   }
 
-  const files: BackupManifestFileRecord[] = [];
+  const files = [];
   for (const entry of record.files) {
     if (
-      !entry
-      || typeof entry !== "object"
-      || typeof (entry as Partial<BackupManifestFileRecord>).path !== "string"
-      || typeof (entry as Partial<BackupManifestFileRecord>).sizeBytes !== "number"
-      || !Number.isFinite((entry as Partial<BackupManifestFileRecord>).sizeBytes)
-      || typeof (entry as Partial<BackupManifestFileRecord>).sha256 !== "string"
+      !entry ||
+      typeof entry !== "object" ||
+      typeof entry.path !== "string" ||
+      typeof entry.sizeBytes !== "number" ||
+      !Number.isFinite(entry.sizeBytes) ||
+      typeof entry.sha256 !== "string"
     ) {
       issues.push({
         code: "manifest_invalid_file_record",
@@ -159,9 +170,9 @@ function parseBackupManifest(raw: string, issues: BackupVerifyIssue[]): BackupMa
       continue;
     }
     files.push({
-      path: (entry as BackupManifestFileRecord).path,
-      sizeBytes: Math.max(0, Math.floor((entry as BackupManifestFileRecord).sizeBytes)),
-      sha256: (entry as BackupManifestFileRecord).sha256,
+      path: entry.path,
+      sizeBytes: Math.max(0, Math.floor(entry.sizeBytes)),
+      sha256: entry.sha256,
     });
   }
 
@@ -172,13 +183,79 @@ function parseBackupManifest(raw: string, issues: BackupVerifyIssue[]): BackupMa
     gitRef: typeof record.gitRef === "string" ? record.gitRef : undefined,
     rootDir: record.rootDir,
     files,
+    contractCoverage: parseManifestContractCoverage(record.contractCoverage, issues),
   };
 }
 
-async function collectPayloadFiles(
-  payloadDir: string,
+function parseManifestContractCoverage(
+  input: unknown,
   issues: BackupVerifyIssue[],
-): Promise<Map<string, string>> {
+): BackupManifestContractCoverageRecord | undefined {
+  if (input === undefined) {
+    return undefined;
+  }
+  if (!input || typeof input !== "object") {
+    issues.push({
+      code: "manifest_invalid_contract_coverage",
+      message: "Backup manifest contractCoverage must be an object when present.",
+      path: "manifest.json",
+    });
+    return undefined;
+  }
+  const record = input as Partial<BackupManifestContractCoverageRecord>;
+  const minimumSet = record.minimumSet as Partial<BackupManifestContractCoverageRecord["minimumSet"]> | undefined;
+  if (
+    record.contractVersion !== "1.0" ||
+    !minimumSet ||
+    !Array.isArray(minimumSet.databasePaths) ||
+    !Array.isArray(minimumSet.transcriptPaths) ||
+    !Array.isArray(minimumSet.auditPaths) ||
+    !Array.isArray(minimumSet.configPaths)
+  ) {
+    issues.push({
+      code: "manifest_invalid_contract_coverage",
+      message: "Backup manifest contractCoverage is missing required minimum-set metadata.",
+      path: "manifest.json",
+    });
+    return undefined;
+  }
+  return {
+    contractVersion: "1.0",
+    minimumSet: {
+      databasePaths: normalizeContractPaths(minimumSet.databasePaths, issues),
+      transcriptPaths: normalizeContractPaths(minimumSet.transcriptPaths, issues),
+      auditPaths: normalizeContractPaths(minimumSet.auditPaths, issues),
+      configPaths: normalizeContractPaths(minimumSet.configPaths, issues),
+    },
+  };
+}
+
+function normalizeContractPaths(input: unknown[], issues: BackupVerifyIssue[]): string[] {
+  const normalized = new Set<string>();
+  for (const value of input) {
+    if (typeof value !== "string") {
+      issues.push({
+        code: "manifest_invalid_contract_coverage",
+        message: "Backup manifest contractCoverage paths must be strings.",
+        path: "manifest.json",
+      });
+      continue;
+    }
+    const normalizedPath = normalizeBackupRelativePath(value);
+    if (!normalizedPath) {
+      issues.push({
+        code: "manifest_invalid_contract_coverage",
+        message: `Backup manifest contractCoverage contains an invalid path: ${value}`,
+        path: "manifest.json",
+      });
+      continue;
+    }
+    normalized.add(normalizedPath);
+  }
+  return [...normalized].sort((left, right) => left.localeCompare(right));
+}
+
+async function collectPayloadFiles(payloadDir: string, issues: BackupVerifyIssue[]): Promise<Map<string, string>> {
   const files = new Map<string, string>();
   try {
     await fs.access(payloadDir);
@@ -221,6 +298,99 @@ async function collectPayloadFiles(
   return files;
 }
 
+function buildBackupVerifyContractCoverage(
+  manifest: BackupManifestRecord | undefined,
+  payloadVerifiedPaths: Set<string>,
+  issues: BackupVerifyIssue[],
+): BackupVerifyContractCoverageRecord {
+  const reasons = new Set<string>();
+  if (!manifest) {
+    reasons.add("manifest_missing_or_invalid");
+    return {
+      contractVersion: "1.0",
+      legacyManifest: false,
+      reasons: [...reasons],
+      minimumSet: {
+        database: buildContractSection([], payloadVerifiedPaths),
+        transcripts: buildContractSection([], payloadVerifiedPaths),
+        audit: buildContractSection([], payloadVerifiedPaths),
+        config: buildContractSection([], payloadVerifiedPaths),
+      },
+    };
+  }
+
+  const legacyManifest = !manifest.contractCoverage;
+  if (legacyManifest) {
+    reasons.add("legacy_manifest_missing_contract_coverage");
+  }
+  if (issues.length > 0) {
+    reasons.add("payload_integrity_failed");
+  }
+
+  const database = buildContractSection(
+    manifest.contractCoverage?.minimumSet.databasePaths ?? [],
+    payloadVerifiedPaths,
+  );
+  const transcripts = buildContractSection(
+    manifest.contractCoverage?.minimumSet.transcriptPaths ?? [],
+    payloadVerifiedPaths,
+  );
+  const audit = buildContractSection(manifest.contractCoverage?.minimumSet.auditPaths ?? [], payloadVerifiedPaths);
+  const config = buildContractSection(manifest.contractCoverage?.minimumSet.configPaths ?? [], payloadVerifiedPaths);
+
+  appendContractReasons(reasons, "database", database);
+  appendContractReasons(reasons, "transcripts", transcripts);
+  appendContractReasons(reasons, "audit", audit);
+  appendContractReasons(reasons, "config", config);
+
+  return {
+    contractVersion: "1.0",
+    legacyManifest,
+    reasons: [...reasons],
+    minimumSet: {
+      database,
+      transcripts,
+      audit,
+      config,
+    },
+  };
+}
+
+function buildContractSection(expectedPaths: string[], payloadVerifiedPaths: Set<string>): BackupVerifyContractSection {
+  const normalizedExpected = [...new Set(expectedPaths)].sort((left, right) => left.localeCompare(right));
+  const verifiedPaths = normalizedExpected.filter((item) => payloadVerifiedPaths.has(item));
+  const missingPaths = normalizedExpected.filter((item) => !payloadVerifiedPaths.has(item));
+  return {
+    expectedPaths: normalizedExpected,
+    verifiedPaths,
+    missingPaths,
+    verified: normalizedExpected.length > 0 && missingPaths.length === 0,
+  };
+}
+
+function appendContractReasons(
+  reasons: Set<string>,
+  sectionName: "database" | "transcripts" | "audit" | "config",
+  section: BackupVerifyContractSection,
+): void {
+  if (section.expectedPaths.length === 0) {
+    reasons.add(`minimum_set_${sectionName}_missing`);
+    return;
+  }
+  if (section.missingPaths.length > 0) {
+    reasons.add(`minimum_set_${sectionName}_incomplete`);
+  }
+}
+
+function allContractSectionsVerified(contractCoverage: BackupVerifyContractCoverageRecord): boolean {
+  return (
+    contractCoverage.minimumSet.database.verified &&
+    contractCoverage.minimumSet.transcripts.verified &&
+    contractCoverage.minimumSet.audit.verified &&
+    contractCoverage.minimumSet.config.verified
+  );
+}
+
 function normalizeBackupRelativePath(input: string): string | undefined {
   const normalized = input.replaceAll("\\", "/").trim();
   if (!normalized || normalized.startsWith("/")) {
@@ -238,10 +408,7 @@ function normalizeBackupRelativePath(input: string): string | undefined {
 
 function ensurePathWithinRoot(targetPath: string, rootDir: string): void {
   const relative = path.relative(rootDir, targetPath);
-  if (
-    relative === ""
-    || (!relative.startsWith("..") && !path.isAbsolute(relative))
-  ) {
+  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
     return;
   }
   throw new Error(`Path escapes allowed root: ${targetPath}`);

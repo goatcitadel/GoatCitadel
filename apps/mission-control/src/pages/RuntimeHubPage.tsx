@@ -68,9 +68,11 @@ export function RuntimeHubPage() {
     try {
       const verified = await verifyBackup(selectedBackupPath);
       setStatus(
-        verified.verified
-          ? `Verified backup ${verified.backupId ?? "manifest"} with ${verified.filesVerified} files.`
-          : `Backup verification reported ${verified.issues.length} issue${verified.issues.length === 1 ? "" : "s"}.`,
+        verified.verified && verified.contractVerified
+          ? `Verified backup ${verified.backupId ?? "manifest"} with ${verified.filesVerified} files and confirmed the 1.0 minimum backup contract.`
+          : verified.verified
+            ? `Backup integrity is valid, but 1.0 contract coverage is incomplete: ${verified.contractCoverage.reasons.join(", ")}.`
+            : `Backup verification reported ${verified.issues.length} issue${verified.issues.length === 1 ? "" : "s"}.`,
       );
     } catch (err) {
       setError((err as Error).message);

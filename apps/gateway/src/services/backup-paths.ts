@@ -1,6 +1,16 @@
 import os from "node:os";
 import path from "node:path";
 
+export interface OfflineRestoreRequiredResponse {
+  error: "offline_restore_required";
+  code: "offline_restore_required";
+  message: string;
+  maintenanceRequired: true;
+  supportedMode: "offline";
+  filePath: string;
+  cliHint: string;
+}
+
 export function resolveBackupDirectory(explicitDir?: string): string {
   const fromInput = explicitDir?.trim();
   if (fromInput) {
@@ -30,5 +40,27 @@ export function resolveBackupPathWithinDirectory(
     ok: true,
     resolvedPath,
     backupDirectory,
+  };
+}
+
+export function buildOfflineRestoreRequiredResponse(
+  filePath: string,
+  backupDir?: string,
+): { ok: true; response: OfflineRestoreRequiredResponse } | { ok: false; error: string } {
+  const jailed = resolveBackupPathWithinDirectory(filePath, backupDir);
+  if (!jailed.ok) {
+    return jailed;
+  }
+  return {
+    ok: true,
+    response: {
+      error: "offline_restore_required",
+      code: "offline_restore_required",
+      message: "Filesystem-backed backup restore is only supported while the GoatCitadel gateway is offline.",
+      maintenanceRequired: true,
+      supportedMode: "offline",
+      filePath: jailed.resolvedPath,
+      cliHint: `pnpm admin backup restore --file "${filePath}" --confirm`,
+    },
   };
 }

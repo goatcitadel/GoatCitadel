@@ -1,6 +1,11 @@
 import { access, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
+import {
+  buildVisualBaselineFileName,
+  RELEASE_SURFACE_MANIFEST,
+  RELEASE_SURFACE_VARIANTS,
+} from "./verification/lib/release-surface-manifest.mjs";
 
 const root = process.cwd();
 
@@ -11,12 +16,13 @@ const requiredFiles = [
   "CONTRIBUTING.md",
   "SECURITY.md",
   "docs/1_0_CONTRACT.md",
+  "docs/1_0_RELEASE_EVIDENCE.md",
   "docs/CANONICAL_RUNTIME_STATE_MODEL.md",
   "docs/ENGINEERING_HANDBOOK.md",
 ];
 
 const requiredHeadings = {
-  "CHANGELOG.md": ["# Changelog", "## [Unreleased]"],
+  "CHANGELOG.md": ["# Changelog", "## [Unreleased]", "## [1.0.0]"],
   "AGENTS.md": ["# GoatCitadel Agent Conventions", "## Agent Roles", "## Safety Boundaries (Non-Overridable)"],
   "CONTRIBUTING.md": ["# Contributing to GoatCitadel", "## Quality Gates", "## Governance Docs Policy"],
   "SECURITY.md": ["# Security Policy", "## Reporting a Vulnerability", "## Security Invariants"],
@@ -27,6 +33,12 @@ const requiredHeadings = {
     "## Trust and Security Posture",
     "## Upgrade and Backup Guarantees",
     "## Release Gates",
+  ],
+  "docs/1_0_RELEASE_EVIDENCE.md": [
+    "# GoatCitadel 1.0 Release Evidence",
+    "## Recovery Truth",
+    "## Backup Contract Proof",
+    "## Visible Surface Proof",
   ],
 };
 
@@ -140,6 +152,9 @@ if (!/NPU sidecar maturity or local-inference completeness as a `1\.0` signal/i.
 if (!/docs\/1_0_CONTRACT\.md/.test(readme)) {
   errors.push("README.md must point readers to docs/1_0_CONTRACT.md for the current 1.0 contract.");
 }
+if (!/docs\/1_0_RELEASE_EVIDENCE\.md/.test(readme)) {
+  errors.push("README.md must point readers to docs/1_0_RELEASE_EVIDENCE.md for the current 1.0 proof map.");
+}
 if (!/visible `beta` integrations in Mission Control now expose real operator actions backed by runtime handlers/i.test(readme)) {
   errors.push("README.md must describe visible beta integrations as real operator-action runtimes, not diagnostics-only shells.");
 }
@@ -148,6 +163,9 @@ if (!/verify:visual:regression` compares checked-in shell and primary-surface ba
 }
 if (!/verify:backup:roundtrip` now restores and verifies the full minimum operator backup set/i.test(readme)) {
   errors.push("README.md must describe verify:backup:roundtrip as restoring the full minimum operator backup set.");
+}
+if (!/contractVerified/i.test(readme)) {
+  errors.push("README.md must describe backup verify as reporting contractVerified minimum-set truth.");
 }
 if (/late beta/i.test(readme) || /release-0\.9/i.test(readme) || /before `1\.0`/i.test(readme)) {
   errors.push("README.md must not describe GoatCitadel as beta or pre-1.0.");
@@ -223,6 +241,9 @@ if (!/verify:backup:roundtrip` is green and restores the full minimum operator b
 if (!/offline CLI-only/i.test(contract) || !/offline_restore_required/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must describe filesystem-backed restore as offline CLI-only and name the blocked live-route response.");
 }
+if (!/contractVerified/i.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must describe backup verify as reporting contractVerified minimum-set truth.");
+}
 if (!/verify:catalog:parity` is green and executes real runtime-backed operator actions/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must require catalog-parity runtime action proof.");
 }
@@ -234,6 +255,54 @@ if (!/mesh-core/i.test(contract) || !/smoke-only/i.test(contract)) {
 }
 if (!/npu-sidecar/i.test(contract) || !/optional experimental infrastructure/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must keep the NPU sidecar outside the readiness-bearing 1.0 story while it remains experimental.");
+}
+
+const changelog = await readFile(path.join(root, "CHANGELOG.md"), "utf8");
+if (/semantic pre-release versions/i.test(changelog) || /public surface is still settling/i.test(changelog)) {
+  errors.push("CHANGELOG.md must not keep stale pre-release boilerplate at the top of the file.");
+}
+
+const adminRouteSource = await readFile(path.join(root, "apps", "gateway", "src", "routes", "admin.ts"), "utf8");
+if (!/buildOfflineRestoreRequiredResponse/.test(adminRouteSource)) {
+  errors.push("apps/gateway/src/routes/admin.ts must use the shared offline restore blocker helper.");
+}
+if (/gateway\.restoreBackup\(/.test(adminRouteSource)) {
+  errors.push("apps/gateway/src/routes/admin.ts must not call gateway.restoreBackup from the live admin route.");
+}
+
+const backupVerifySource = await readFile(
+  path.join(root, "apps", "gateway", "src", "services", "gateway", "backup-verify.ts"),
+  "utf8",
+);
+if (!/contractVerified/.test(backupVerifySource) || !/contractCoverage/.test(backupVerifySource)) {
+  errors.push("apps/gateway/src/services/gateway/backup-verify.ts must expose contractVerified and contractCoverage.");
+}
+
+const scenariosSource = await readFile(path.join(root, "scripts", "verification", "lib", "scenarios.mjs"), "utf8");
+if (!/release-surface-manifest\.mjs/.test(scenariosSource) || !/RELEASE_SURFACE_MANIFEST/.test(scenariosSource)) {
+  errors.push("scripts/verification/lib/scenarios.mjs must derive release-bearing route coverage from the shared release-surface manifest.");
+}
+
+if (RELEASE_SURFACE_MANIFEST.length !== 15) {
+  errors.push("scripts/verification/lib/release-surface-manifest.mjs must freeze the 15 release-bearing primary surfaces.");
+}
+
+for (const route of RELEASE_SURFACE_MANIFEST) {
+  for (const variant of RELEASE_SURFACE_VARIANTS) {
+    const baselinePath = path.join(
+      root,
+      "scripts",
+      "verification",
+      "baselines",
+      "visual",
+      buildVisualBaselineFileName(route.slug, variant.slug),
+    );
+    try {
+      await access(baselinePath, constants.F_OK | constants.R_OK);
+    } catch {
+      errors.push(`Missing required visual baseline: ${path.relative(root, baselinePath).replaceAll("\\", "/")}`);
+    }
+  }
 }
 
 for (const relPath of workspacePackageFiles) {
