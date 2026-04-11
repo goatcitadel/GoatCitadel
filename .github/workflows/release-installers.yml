@@ -1,14 +1,22 @@
-name: Release Installers
+name: Release Windows Installers
 
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to publish (for example v1.0.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
-  id-token: write
+
+env:
+  PNPM_VERSION: 10.31.0
+  NODE_VERSION: 24
 
 jobs:
   windows:
@@ -24,12 +32,12 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.31.0
+          version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
       - name: Install dependencies
@@ -44,152 +52,34 @@ jobs:
       - name: Build Windows installer
         run: pnpm package:windows --target ${{ matrix.target }}
 
-      - name: Upload Windows installer
+      - name: Write SHA-256 checksum
+        shell: pwsh
+        run: |
+          $installer = "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash
+          Set-Content -Path "$installer.sha256" -Value "$hash *$(Split-Path $installer -Leaf)"
+
+      - name: Upload Windows release assets
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}-installer
-          path: artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe
-
-  macos:
-    runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [darwin-x64, darwin-arm64]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.31.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build packaged bundle
-        run: pnpm package:bundle --target ${{ matrix.target }}
-
-      - name: Build macOS package
-        run: pnpm package:macos --target ${{ matrix.target }}
-
-      - name: Upload macOS installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}-installer
-          path: artifacts/installers/macos/GoatCitadel-Setup-${{ matrix.target }}.pkg
-
-  linux:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.31.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build packaged bundle
-        run: pnpm package:bundle --target linux-x64
-
-      - name: Build Linux package
-        run: pnpm package:linux --target linux-x64
-
-      - name: Upload Linux installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-x64-installer
-          path: artifacts/installers/linux/GoatCitadel-Setup-linux-x64.tar.gz
+          name: ${{ matrix.target }}-release-assets
+          path: |
+            artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe
+            artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe.sha256
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
-    needs: [windows, macos, linux]
+    needs: windows
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.31.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Download packaged artifacts
+      - name: Download packaged assets
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
 
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
-      - name: Sign installer artifacts and emit checksums
-        run: node scripts/release/sign-release-artifacts.mjs --artifacts-dir release-artifacts
-
-      - name: Generate CycloneDX SBOM
-        run: |
-          mkdir -p artifacts/release
-          pnpm dlx @cyclonedx/cyclonedx-npm \
-            --output-format json \
-            --output-file artifacts/release/goatcitadel-${{ github.ref_name }}.cyclonedx.json \
-            --ignore-npm-errors
-
-      - name: Assemble release proof bundle
-        run: >
-          node scripts/release/assemble-release-package.mjs
-          --version ${{ github.ref_name }}
-          --tag ${{ github.ref_name }}
-          --artifacts-dir release-artifacts
-          --sbom-file artifacts/release/goatcitadel-${{ github.ref_name }}.cyclonedx.json
-          --out-dir artifacts/release/package
-
-      - name: Sign release proof bundle
-        run: node scripts/release/sign-release-artifacts.mjs --artifacts-dir artifacts/release/package
-
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
-          body_path: artifacts/release/package/release-${{ github.ref_name }}/docs/handoff.md
-          files: |
-            release-artifacts/**/*.exe
-            release-artifacts/**/*.exe.sha256
-            release-artifacts/**/*.exe.sig
-            release-artifacts/**/*.exe.pem
-            release-artifacts/**/*.pkg
-            release-artifacts/**/*.pkg.sha256
-            release-artifacts/**/*.pkg.sig
-            release-artifacts/**/*.pkg.pem
-            release-artifacts/**/*.tar.gz
-            release-artifacts/**/*.tar.gz.sha256
-            release-artifacts/**/*.tar.gz.sig
-            release-artifacts/**/*.tar.gz.pem
-            artifacts/release/*.cyclonedx.json
-            artifacts/release/package/*.zip
-            artifacts/release/package/*.zip.sha256
-            artifacts/release/package/*.zip.sig
-            artifacts/release/package/*.zip.pem
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: release-artifacts/**/*
