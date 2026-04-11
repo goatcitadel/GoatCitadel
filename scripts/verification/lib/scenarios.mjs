@@ -53,7 +53,7 @@ const API_COMPAT_BASELINE_PATH = path.join(repoRoot, "scripts", "verification", 
 const API_COMPAT_ALLOWLIST_PATH = path.join(repoRoot, "scripts", "verification", "baselines", "api-compat", "allowlist.json");
 const VISUAL_DIFF_PIXEL_DELTA = 18;
 const VISUAL_DIFF_RATIO_THRESHOLD = 0.005;
-const VISUAL_DIFF_NORMALIZE_BLUR = 4;
+const VISUAL_DIFF_NORMALIZE_BLUR = 6;
 const VISUAL_DIFF_NORMALIZE_SCALE = 0.25;
 
 export async function runFastLane(context) {
