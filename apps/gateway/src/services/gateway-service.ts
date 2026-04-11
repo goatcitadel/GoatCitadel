@@ -1048,6 +1048,8 @@ const IMPROVEMENT_WEEKLY_SAMPLE_SIZE = 500;
 const IMPROVEMENT_JUDGE_SAMPLE_LIMIT = 120;
 const IMPROVEMENT_JUDGE_TIMEOUT_MS = 15_000;
 const IMPROVEMENT_SCHEDULER_INTERVAL_MS = 60_000;
+const maintenanceSchedulerDisabled =
+  process.env.GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER?.trim().toLowerCase() === "true";
 const IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY = "improvement_weekly_last_week_key_v1";
 const MEMORY_FLUSH_HISTORY_DAYS = 30;
 const COST_REPORT_LOOKBACK_HOURS = 1;
@@ -1834,7 +1836,9 @@ export class GatewayService {
     this.persistAssistantConfig();
     this.startProactiveScheduler();
     this.improvementService.startScheduler();
-    this.startMaintenanceScheduler();
+    if (!maintenanceSchedulerDisabled) {
+      this.startMaintenanceScheduler();
+    }
     this.durableRunService.startWorker();
     if (isVerboseLoggingEnabled()) {
       log.info("feature flags", { flags: this.readFeatureFlags() });

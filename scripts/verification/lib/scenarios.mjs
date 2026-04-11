@@ -1517,6 +1517,7 @@ export async function runBackupRoundtripLane(context, options = {}) {
     includeUi: false,
     gatewayEnv: {
       GOATCITADEL_BACKUP_DIR: backupRoot,
+      GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
       HOME: runtimeRoot,
       USERPROFILE: runtimeRoot,
     },
