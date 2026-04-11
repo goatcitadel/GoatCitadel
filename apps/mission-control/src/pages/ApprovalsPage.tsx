@@ -291,6 +291,15 @@ export function ApprovalsPage() {
     [allItems],
   );
   const recoveryItems = useMemo(() => allItems.filter((item) => hasRecoveryLinkage(item)), [allItems]);
+  const pendingRiskCounts = useMemo(() => {
+    return pendingItems.reduce<Record<ApprovalsResponse["items"][number]["riskLevel"], number>>(
+      (counts, item) => {
+        counts[item.riskLevel] = (counts[item.riskLevel] ?? 0) + 1;
+        return counts;
+      },
+      { safe: 0, caution: 0, danger: 0, nuclear: 0 },
+    );
+  }, [pendingItems]);
   const openLiveLane = useCallback((event: MouseEvent<HTMLAnchorElement>, route: ResolvedRoute) => {
     if (typeof window === "undefined") {
       return;
@@ -323,6 +332,11 @@ export function ApprovalsPage() {
             ? `${historyItems.length} history`
             : `${recoveryItems.length} recovery-linked`}
       </StatusChip>
+      {pendingRiskCounts.caution > 0 ? <StatusChip tone="muted">{pendingRiskCounts.caution} caution</StatusChip> : null}
+      {pendingRiskCounts.danger > 0 ? <StatusChip tone="warning">{pendingRiskCounts.danger} danger</StatusChip> : null}
+      {pendingRiskCounts.nuclear > 0 ? (
+        <StatusChip tone="critical">{pendingRiskCounts.nuclear} nuclear</StatusChip>
+      ) : null}
       {replayCount > 0 ? <StatusChip tone="muted">{replayCount} replay trails loaded</StatusChip> : null}
       {hasPendingApprovals ? (
         <button

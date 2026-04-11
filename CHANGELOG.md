@@ -4,7 +4,19 @@ All notable changes to GoatCitadel are documented in this file.
 
 ## [Unreleased]
 
-No unreleased changes are staged yet.
+### Added
+
+- Release proof bundle tooling for tagged releases:
+  - signed installer checksums and cosign certificate sidecars
+  - CycloneDX SBOM generation in CI
+  - assembled release ZIP with artifacts, docs, and provenance metadata
+- Release-facing docs for reproducible builds, supported platforms, smoke tests, and dependency policy.
+- `CODEOWNERS` coverage for release-bearing paths.
+
+### Changed
+
+- `SECURITY.md` now reflects the shipped `1.x` support posture instead of the pre-1.0 beta line.
+- Release workflow is expanded from raw installer publishing to a signed proof-package handoff.
 
 ## [1.0.0] - 2026-04-11
 

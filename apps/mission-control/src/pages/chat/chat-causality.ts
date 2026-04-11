@@ -23,7 +23,13 @@ type ChatRefreshPhase = "plan_resolved" | "plan_applied" | "plan_completed";
 export interface ChatPendingApprovalDiagnostic {
   approvalId: string;
   toolName?: string;
+  kind?: string;
   reason?: string;
+  riskLevel?: "safe" | "caution" | "danger" | "nuclear";
+  remainingCount?: number;
+  affectedResourceCount?: number;
+  requestedOutputIntent?: string;
+  expiresAt?: string;
 }
 
 export function createChatExecutionCorrelationId(): string {
@@ -63,7 +69,7 @@ export function recordChatApprovalPhase(input: {
   correlationId?: string;
   approval: ChatPendingApprovalDiagnostic;
   level?: "debug" | "info" | "warn" | "error";
-  source?: "stream" | "thread" | "operator";
+  source?: "stream" | "thread" | "queue" | "operator";
   context?: Record<string, unknown>;
 }): void {
   recordClientDiagnostic({
@@ -79,7 +85,13 @@ export function recordChatApprovalPhase(input: {
       source: input.source,
       approvalId: input.approval.approvalId,
       toolName: input.approval.toolName,
+      kind: input.approval.kind,
       reason: input.approval.reason,
+      riskLevel: input.approval.riskLevel,
+      remainingCount: input.approval.remainingCount,
+      affectedResourceCount: input.approval.affectedResourceCount,
+      requestedOutputIntent: input.approval.requestedOutputIntent,
+      expiresAt: input.approval.expiresAt,
       ...(input.context ?? {}),
     },
   });

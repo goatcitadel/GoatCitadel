@@ -1,15 +1,16 @@
 # Security Policy
 
-Last updated: 2026-03-05
+Last updated: 2026-04-11
 
 ## Supported Versions
 
-GoatCitadel is currently pre-1.0. Only the latest prerelease line is supported for security updates.
+GoatCitadel now ships at `1.x`. Security support follows the current stable line first, then the immediately prior prerelease line for critical fixes only when a stable upgrade is not yet practical.
 
 | Version line | Supported |
 |---|---|
-| `0.6.0-beta.x` | Yes |
-| Earlier prerelease builds | Best effort only |
+| `1.x` | Yes |
+| `0.9.x-beta.x` | Critical fixes only |
+| Earlier prerelease builds | No |
 
 ## Reporting a Vulnerability
 
@@ -22,9 +23,14 @@ Recommended report content:
 - Impact assessment.
 - Suggested mitigation (if known).
 
-Temporary contact path (until dedicated security inbox is published):
+Current reporting path:
 
 - Open a private GitHub security advisory in the repository.
+
+Response target:
+
+- Initial triage within 2 business days.
+- Fix, mitigation, or remediation ETA within 7 calendar days once reproduced.
 
 Do not publish exploit details before coordinated remediation.
 

@@ -153,15 +153,31 @@ export function useChatOutboundExecution(input: {
   const refreshPendingApprovalQueue = useCallback(
     async (sessionId: string) => {
       const response = await fetchChatPendingApprovals(sessionId);
+      const activeItems = response.items.filter((item) => !item.stale);
+      const riskCounts = activeItems.reduce<Record<string, number>>((counts, item) => {
+        const key = item.riskLevel ?? "unknown";
+        counts[key] = (counts[key] ?? 0) + 1;
+        return counts;
+      }, {});
+      recordClientDiagnostic({
+        level: "debug",
+        category: "chat",
+        event: "approval.queue_synced",
+        message: "Synced pending approval queue",
+        sessionId,
+        context: {
+          pendingCount: activeItems.length,
+          activeApprovalId: response.activeApprovalId,
+          riskCounts,
+        },
+      });
       const active =
-        response.items.find((item) => !item.stale && item.approvalId === response.activeApprovalId) ??
-        response.items.find((item) => !item.stale) ??
-        null;
+        activeItems.find((item) => item.approvalId === response.activeApprovalId) ?? activeItems[0] ?? null;
       if (!active) {
         setPendingApproval(null);
         return;
       }
-      setPendingApproval({
+      const nextApproval = {
         approvalId: active.approvalId,
         kind: active.kind,
         toolName: active.toolName,
@@ -185,6 +201,39 @@ export function useChatOutboundExecution(input: {
           ? active.details.affectedResources.filter((value): value is string => typeof value === "string")
           : undefined,
         codePreview: typeof active.details?.codePreview === "string" ? active.details.codePreview : undefined,
+      };
+      setPendingApproval((current) => {
+        const changed =
+          !current ||
+          current.approvalId !== nextApproval.approvalId ||
+          current.toolName !== nextApproval.toolName ||
+          current.reason !== nextApproval.reason ||
+          current.riskLevel !== nextApproval.riskLevel ||
+          current.remainingCount !== nextApproval.remainingCount;
+        if (changed) {
+          recordChatApprovalPhase({
+            phase: "prompt_arrived",
+            sessionId,
+            approval: {
+              approvalId: nextApproval.approvalId,
+              toolName: nextApproval.toolName,
+              kind: nextApproval.kind,
+              reason: nextApproval.reason,
+              riskLevel: nextApproval.riskLevel,
+              remainingCount: nextApproval.remainingCount,
+              affectedResourceCount: nextApproval.affectedResources?.length,
+              requestedOutputIntent: nextApproval.requestedOutputIntent,
+              expiresAt: nextApproval.expiresAt,
+            },
+            source: "queue",
+            level: "debug",
+            context: {
+              queueDepth: activeItems.length,
+              riskCounts,
+            },
+          });
+        }
+        return nextApproval;
       });
     },
     [setPendingApproval],
@@ -614,7 +663,17 @@ export function useChatOutboundExecution(input: {
                 correlationId: executionCorrelationId,
                 sessionId: session!.sessionId,
                 turnId: chunk.turnId,
-                approval,
+                approval: {
+                  approvalId: approval.approvalId,
+                  toolName: approval.toolName,
+                  kind: approval.kind,
+                  reason: approval.reason,
+                  riskLevel: approval.riskLevel,
+                  remainingCount: approval.remainingCount,
+                  affectedResourceCount: approval.affectedResources?.length,
+                  requestedOutputIntent: approval.requestedOutputIntent,
+                  expiresAt: approval.expiresAt,
+                },
                 source: "stream",
               });
             }
@@ -893,46 +952,74 @@ export function useChatOutboundExecution(input: {
     [commitThreadUpdate, selectedSessionId, setError],
   );
 
-  const handleApprovePending = useCallback(async (allowScope: "once" | "session" | "workspace" = "once") => {
-    if (!selectedSession || !pendingApproval) return;
-    setApprovalPending(true);
-    try {
-      recordChatApprovalPhase({
-        phase: "resolve_started",
-        sessionId: selectedSession.sessionId,
-        approval: pendingApproval,
-        source: "operator",
-        context: { allowScope },
-      });
-      const result = await approveChatTool(selectedSession.sessionId, pendingApproval.approvalId, { allowScope });
-      await refreshPendingApprovalQueue(selectedSession.sessionId);
-      const scopeLabel =
-        allowScope === "session"
-          ? "Session allow created."
-          : allowScope === "workspace"
-            ? "Workspace allow created."
-            : "Approved once.";
-      pushLocalNotice(
-        `Approved request ${pendingApproval.approvalId}. ${scopeLabel} ${
-          result.resumed
-            ? "The runtime resumed immediately."
-            : "If the run is no longer live, use Approvals & Recovery to continue from the persisted checkpoint."
-        }`,
-        "success",
-      );
-      recordChatApprovalPhase({
-        phase: "resolved",
-        sessionId: selectedSession.sessionId,
-        approval: pendingApproval,
-        source: "operator",
-        context: { allowScope },
-      });
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setApprovalPending(false);
-    }
-  }, [pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError]);
+  const handleApprovePending = useCallback(
+    async (allowScope: "once" | "session" | "workspace" = "once") => {
+      if (!selectedSession || !pendingApproval) return;
+      setApprovalPending(true);
+      try {
+        recordChatApprovalPhase({
+          phase: "resolve_started",
+          sessionId: selectedSession.sessionId,
+          approval: {
+            approvalId: pendingApproval.approvalId,
+            toolName: pendingApproval.toolName,
+            kind: pendingApproval.kind,
+            reason: pendingApproval.reason,
+            riskLevel: pendingApproval.riskLevel,
+            remainingCount: pendingApproval.remainingCount,
+            affectedResourceCount: pendingApproval.affectedResources?.length,
+            requestedOutputIntent: pendingApproval.requestedOutputIntent,
+            expiresAt: pendingApproval.expiresAt,
+          },
+          source: "operator",
+          context: { allowScope },
+        });
+        const result = await approveChatTool(selectedSession.sessionId, pendingApproval.approvalId, { allowScope });
+        await refreshPendingApprovalQueue(selectedSession.sessionId);
+        const scopeLabel =
+          allowScope === "session"
+            ? "Session allow created."
+            : allowScope === "workspace"
+              ? "Workspace allow created."
+              : "Approved once.";
+        pushLocalNotice(
+          `Approved request ${pendingApproval.approvalId}. ${scopeLabel} ${
+            result.resumed
+              ? "The runtime resumed immediately."
+              : "If the run is no longer live, use Approvals & Recovery to continue from the persisted checkpoint."
+          }`,
+          "success",
+        );
+        recordChatApprovalPhase({
+          phase: "resolved",
+          sessionId: selectedSession.sessionId,
+          approval: {
+            approvalId: pendingApproval.approvalId,
+            toolName: pendingApproval.toolName,
+            kind: pendingApproval.kind,
+            reason: pendingApproval.reason,
+            riskLevel: pendingApproval.riskLevel,
+            remainingCount: pendingApproval.remainingCount,
+            affectedResourceCount: pendingApproval.affectedResources?.length,
+            requestedOutputIntent: pendingApproval.requestedOutputIntent,
+            expiresAt: pendingApproval.expiresAt,
+          },
+          source: "operator",
+          context: {
+            allowScope,
+            resumed: result.resumed,
+            resumedRunId: result.resumedRunId,
+            resumedTurnId: result.resumedTurnId,
+          },
+        });
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setApprovalPending(false);
+      }
+    },
+    [pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError],
+  );
 
   const handleDenyPending = useCallback(async () => {
     if (!selectedSession || !pendingApproval) return;
@@ -941,7 +1028,17 @@ export function useChatOutboundExecution(input: {
       recordChatApprovalPhase({
         phase: "resolve_started",
         sessionId: selectedSession.sessionId,
-        approval: pendingApproval,
+        approval: {
+          approvalId: pendingApproval.approvalId,
+          toolName: pendingApproval.toolName,
+          kind: pendingApproval.kind,
+          reason: pendingApproval.reason,
+          riskLevel: pendingApproval.riskLevel,
+          remainingCount: pendingApproval.remainingCount,
+          affectedResourceCount: pendingApproval.affectedResources?.length,
+          requestedOutputIntent: pendingApproval.requestedOutputIntent,
+          expiresAt: pendingApproval.expiresAt,
+        },
         source: "operator",
       });
       await denyChatTool(selectedSession.sessionId, pendingApproval.approvalId);
@@ -950,7 +1047,17 @@ export function useChatOutboundExecution(input: {
       recordChatApprovalPhase({
         phase: "dismissed",
         sessionId: selectedSession.sessionId,
-        approval: pendingApproval,
+        approval: {
+          approvalId: pendingApproval.approvalId,
+          toolName: pendingApproval.toolName,
+          kind: pendingApproval.kind,
+          reason: pendingApproval.reason,
+          riskLevel: pendingApproval.riskLevel,
+          remainingCount: pendingApproval.remainingCount,
+          affectedResourceCount: pendingApproval.affectedResources?.length,
+          requestedOutputIntent: pendingApproval.requestedOutputIntent,
+          expiresAt: pendingApproval.expiresAt,
+        },
         source: "operator",
       });
     } catch (err) {

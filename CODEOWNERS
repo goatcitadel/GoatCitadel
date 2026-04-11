@@ -1,0 +1,11 @@
+# GoatCitadel CODEOWNERS
+# Assumption: the repository uses the @goatcitadel/maintainers team for release-bearing paths.
+# If your GitHub team slug differs, update this file before enabling required-review enforcement.
+
+* @goatcitadel/maintainers
+
+/apps/ @goatcitadel/maintainers
+/packages/ @goatcitadel/maintainers
+/scripts/ @goatcitadel/maintainers
+/docs/ @goatcitadel/maintainers
+/.github/workflows/ @goatcitadel/maintainers
