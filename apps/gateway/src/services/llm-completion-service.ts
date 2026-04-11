@@ -60,7 +60,7 @@ export async function createChatCompletion(
   if (useQmd) {
     const prompt = extractPromptFromMessages(request.messages);
     if (prompt.trim()) {
-      memoryContext = await host.memoryContextService.compose({
+      memoryContext = await host.memoryLifecycleService.composeContext({
         scope: "chat",
         prompt,
         sessionId: memoryInput?.sessionId,
@@ -391,7 +391,7 @@ export async function* createChatCompletionStream(
   if (useQmd) {
     const prompt = extractPromptFromMessages(request.messages);
     if (prompt.trim()) {
-      memoryContext = await host.memoryContextService.compose({
+      memoryContext = await host.memoryLifecycleService.composeContext({
         scope: "chat",
         prompt,
         sessionId: memoryInput?.sessionId,

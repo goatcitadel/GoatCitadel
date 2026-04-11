@@ -71,6 +71,8 @@ const DELIVERABLE_PATH_OPTIONS = [
   "src/",
 ].map((value) => ({ value, label: value }));
 
+const TASK_BOARD_STATUSES: TaskRecord["status"][] = ["inbox", "assigned", "in_progress", "testing", "review", "blocked", "done"];
+
 export function TasksPage({ workspaceId = "default" }: { workspaceId?: string }) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>();
@@ -118,6 +120,14 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
   const deleteAction = useAction();
 
   const selectedTask = useMemo(() => tasks.find((task) => task.taskId === selectedTaskId), [selectedTaskId, tasks]);
+  const taskBoardColumns = useMemo(
+    () =>
+      TASK_BOARD_STATUSES.map((status) => ({
+        status,
+        items: tasks.filter((task) => task.status === status),
+      })),
+    [tasks],
+  );
 
   const isSelectedTaskDeleted = Boolean(selectedTask?.deletedAt);
   const canCreateTask = createTitle.trim().length > 0;
@@ -552,63 +562,84 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
 
       {loadingTasks ? <TableSkeleton rows={6} cols={5} /> : null}
       <div className="split-grid">
-        <Panel title="Task Queue" subtitle="Switch views, then inspect the selected task.">
-          <table className="gc-data-table">
-            <thead>
-              <tr>
-                <th>Title</th>
-                <th>Status</th>
-                <th>Priority</th>
-                <th>Updated</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
+        <Panel
+          title={viewFilter === "trash" ? "Task Trash" : "Task Board"}
+          subtitle={
+            viewFilter === "trash"
+              ? "Inspect trashed tasks before restoring or permanently deleting them."
+              : "Use the board to scan queue state, then open the selected task in the inspector."
+          }
+        >
+          {tasks.length === 0 ? (
+            <div className="task-queue-empty">
+              <p>{viewFilter === "trash" ? "No trashed tasks right now." : "No tasks in this view yet."}</p>
+              <p>{viewFilter === "trash" ? "Moved tasks will appear here for restore or permanent cleanup." : "Create a task to start tracking operator work, checkpoints, and delegated execution."}</p>
+            </div>
+          ) : viewFilter === "trash" ? (
+            <div className="task-trash-list" role="list" aria-label="Trashed tasks">
               {tasks.map((task) => (
-                <tr
+                <button
                   key={task.taskId}
-                  className={task.taskId === selectedTaskId ? "row-selected" : ""}
-                  aria-selected={task.taskId === selectedTaskId}
+                  type="button"
+                  className={`task-queue-card task-queue-card-trash${task.taskId === selectedTaskId ? " active" : ""}`}
+                  aria-pressed={task.taskId === selectedTaskId}
+                  onClick={() => setSelectedTaskId(task.taskId)}
                 >
-                  <td>
-                    <button
-                      type="button"
-                      className="gc-button task-queue-select"
-                      aria-pressed={task.taskId === selectedTaskId}
-                      onClick={() => setSelectedTaskId(task.taskId)}
-                    >
-                      <span className="task-queue-select-title">{task.title}</span>
-                      <span className="task-queue-select-meta">
-                        {task.deletedAt ? "Open trashed task details" : "Open task details"}
-                      </span>
-                    </button>
-                  </td>
-                  <td>{task.status}</td>
-                  <td>{task.priority}</td>
-                  <td>{new Date(task.updatedAt).toLocaleString()}</td>
-                  <td className="actions">
-                    {!task.deletedAt ? (
-                      <button type="button" onClick={() => setConfirmDelete({ task, mode: "soft" })} className="gc-button">
-                        Move to Trash
-                      </button>
-                    ) : (
-                      <button type="button" onClick={() => void onRestore(task)} className="gc-button">
-                        Restore
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="gc-button danger"
-                      onClick={() => setConfirmDelete({ task, mode: "hard" })}
-                      disabled={deleteAction.pending}
-                    >
-                      Delete Permanently
-                    </button>
-                  </td>
-                </tr>
+                  <div className="task-queue-card-head">
+                    <strong>{task.title}</strong>
+                    <StatusChip tone="warning">Trash</StatusChip>
+                  </div>
+                  <p className="task-queue-card-meta">
+                    Priority {task.priority} | Updated {new Date(task.updatedAt).toLocaleString()}
+                  </p>
+                  <p className="task-queue-card-note">
+                    {task.deleteReason ? `Reason: ${task.deleteReason}` : "Open this task to restore or permanently delete it."}
+                  </p>
+                </button>
               ))}
-            </tbody>
-          </table>
+            </div>
+          ) : (
+            <div className="task-board" aria-label="Task board">
+              {taskBoardColumns.map((column) => (
+                <section key={column.status} className="task-board-column">
+                  <div className="task-board-column-head">
+                    <strong>{column.status.replaceAll("_", " ")}</strong>
+                    <StatusChip tone={column.items.length > 0 ? "live" : "muted"}>{column.items.length}</StatusChip>
+                  </div>
+                  {column.items.length > 0 ? (
+                    <div className="task-board-stack">
+                      {column.items.map((task) => (
+                        <button
+                          key={task.taskId}
+                          type="button"
+                          className={`task-queue-card${task.taskId === selectedTaskId ? " active" : ""}`}
+                          aria-pressed={task.taskId === selectedTaskId}
+                          onClick={() => setSelectedTaskId(task.taskId)}
+                        >
+                          <div className="task-queue-card-head">
+                            <strong>{task.title}</strong>
+                            <StatusChip tone={task.status === "blocked" ? "warning" : task.status === "done" ? "success" : "muted"}>
+                              P{task.priority}
+                            </StatusChip>
+                          </div>
+                          <p className="task-queue-card-meta">
+                            Updated {new Date(task.updatedAt).toLocaleString()}
+                          </p>
+                          <p className="task-queue-card-note">
+                            {task.proactiveContext?.durableRunId
+                              ? `Durable ${task.proactiveContext.durableRunId}`
+                              : task.description?.trim() || "Open the inspector for linkage, deliverables, and recovery details."}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="task-board-empty">No tasks in this column.</p>
+                  )}
+                </section>
+              ))}
+            </div>
+          )}
         </Panel>
 
         <div className="task-detail-stack">
@@ -623,6 +654,23 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     <StatusChip tone={isSelectedTaskDeleted ? "muted" : "live"}>{selectedTask.status}</StatusChip>
                     <StatusChip tone="muted">Priority {selectedTask.priority}</StatusChip>
                     {selectedTask.deletedAt ? <StatusChip tone="warning">In trash</StatusChip> : null}
+                    {!selectedTask.deletedAt ? (
+                      <button type="button" onClick={() => setConfirmDelete({ task: selectedTask, mode: "soft" })} className="gc-button">
+                        Move to Trash
+                      </button>
+                    ) : (
+                      <button type="button" onClick={() => void onRestore(selectedTask)} className="gc-button">
+                        Restore
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="gc-button danger"
+                      onClick={() => setConfirmDelete({ task: selectedTask, mode: "hard" })}
+                      disabled={deleteAction.pending}
+                    >
+                      Delete Permanently
+                    </button>
                   </div>
                 }
                 className="task-detail-summary-panel"
@@ -638,6 +686,24 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     {selectedTask.deleteReason ? ` (${selectedTask.deleteReason})` : ""}
                   </p>
                 ) : null}
+                <div className="task-summary-grid">
+                  <div className="task-summary-stat">
+                    <span>Session</span>
+                    <strong>{selectedTask.proactiveContext?.sessionId ?? "none"}</strong>
+                  </div>
+                  <div className="task-summary-stat">
+                    <span>Proactive run</span>
+                    <strong>{selectedTask.proactiveContext?.proactiveRunId ?? "none"}</strong>
+                  </div>
+                  <div className="task-summary-stat">
+                    <span>Durable run</span>
+                    <strong>{selectedTask.proactiveContext?.durableRunId ?? durableStatus?.runId ?? "none"}</strong>
+                  </div>
+                  <div className="task-summary-stat">
+                    <span>Subagents</span>
+                    <strong>{subagents.length}</strong>
+                  </div>
+                </div>
 
                 <div className="controls-row task-status-row">
                   <span>Status:</span>

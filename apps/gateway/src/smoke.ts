@@ -11,7 +11,14 @@ interface JsonResponse<T = unknown> {
   body: T;
 }
 
+let smokeRunId = randomUUID();
+
+function smokeIdempotencyKey(base: string): string {
+  return `${base}-${smokeRunId}`;
+}
+
 export async function runSmoke(): Promise<void> {
+  smokeRunId = randomUUID();
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-smoke-"));
   const priorRoot = process.env.GOATCITADEL_ROOT_DIR;
@@ -82,7 +89,7 @@ async function smokeChat(app: Awaited<ReturnType<typeof buildApp>>): Promise<voi
       workspacePath: "chat/smoke",
     },
     {
-      "Idempotency-Key": "smoke-chat-project-create-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-chat-project-create-1"),
     },
   );
   assert.equal(createdProject.statusCode, 201);
@@ -96,7 +103,7 @@ async function smokeChat(app: Awaited<ReturnType<typeof buildApp>>): Promise<voi
       projectId,
     },
     {
-      "Idempotency-Key": "smoke-chat-session-create-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-chat-session-create-1"),
     },
   );
   assert.equal(createdSession.statusCode, 201);
@@ -130,7 +137,7 @@ async function smokeChat(app: Awaited<ReturnType<typeof buildApp>>): Promise<voi
       bytesBase64: Buffer.from("hello from smoke").toString("base64"),
     },
     {
-      "Idempotency-Key": "smoke-chat-attachment-create-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-chat-attachment-create-1"),
     },
   );
   assert.equal(uploaded.statusCode, 201);
@@ -163,7 +170,7 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
       ].join("\n"),
     },
     {
-      "Idempotency-Key": "smoke-prompt-pack-import-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-prompt-pack-import-1"),
     },
   );
   assert.equal(imported.statusCode, 200);
@@ -188,7 +195,7 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
     `/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId!)}/run`,
     {},
     {
-      "Idempotency-Key": "smoke-prompt-pack-run-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-prompt-pack-run-1"),
     },
   );
   assert.equal(run.statusCode, 200);
@@ -196,8 +203,14 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
   assert.equal(["running", "completed", "failed", "queued"].includes(run.body.status), true);
 
   const score = await postJson<{
-    scoreId: string;
-    totalScore: number;
+    reviewId: string;
+    scores: {
+      taskSuccess?: number;
+      honesty?: number;
+      executionQuality?: number;
+      robustness?: number;
+      usability?: number;
+    };
   }>(
     app,
     `/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId!)}/score`,
@@ -211,12 +224,15 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
       notes: "smoke",
     },
     {
-      "Idempotency-Key": "smoke-prompt-pack-score-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-prompt-pack-score-1"),
     },
   );
   assert.equal(score.statusCode, 200);
-  assert.equal(typeof score.body.scoreId, "string");
-  assert.equal(score.body.totalScore, 5);
+  assert.equal(typeof score.body.reviewId, "string");
+  assert.equal(score.body.scores.honesty, 2);
+  assert.equal(score.body.scores.executionQuality, 2);
+  assert.equal(score.body.scores.robustness, 2);
+  assert.equal(score.body.scores.usability, 2);
 
   const report = await app.inject({
     method: "GET",
@@ -257,7 +273,7 @@ async function smokeGatewayEvents(app: Awaited<ReturnType<typeof buildApp>>): Pr
     },
   };
   const headers = {
-    "Idempotency-Key": "smoke-gateway-event-1",
+    "Idempotency-Key": smokeIdempotencyKey("smoke-gateway-event-1"),
   };
 
   const first = await postJson(app, "/api/v1/gateway/events", payload, headers);
@@ -309,7 +325,7 @@ async function smokeTools(app: Awaited<ReturnType<typeof buildApp>>): Promise<vo
     sessionId: "smoke-session",
   };
   const res = await postJson(app, "/api/v1/tools/invoke", request, {
-    "Idempotency-Key": "smoke-tool-invoke-1",
+    "Idempotency-Key": smokeIdempotencyKey("smoke-tool-invoke-1"),
   });
   assert.equal(res.statusCode, 200);
   assert.equal((res.body as { outcome: string }).outcome, "executed");
@@ -336,7 +352,7 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
       createdBy: "smoke",
     },
     {
-      "Idempotency-Key": "smoke-tool-grant-create-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-tool-grant-create-1"),
     },
   );
   assert.equal(createGrant.statusCode, 201);
@@ -361,7 +377,7 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
       },
     },
     {
-      "Idempotency-Key": "smoke-tool-access-evaluate-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-tool-access-evaluate-1"),
     },
   );
   assert.equal(evaluate.statusCode, 200);
@@ -382,7 +398,7 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
       agentId: "architect",
     },
     {
-      "Idempotency-Key": "smoke-knowledge-write-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-knowledge-write-1"),
     },
   );
   assert.equal(memoryWrite.statusCode, 200);
@@ -401,7 +417,7 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
       createdBy: "smoke",
     },
     {
-      "Idempotency-Key": "smoke-tool-grant-create-2",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-tool-grant-create-2"),
     },
   );
   assert.equal(createSearchGrant.statusCode, 201);
@@ -420,7 +436,7 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
       agentId: "architect",
     },
     {
-      "Idempotency-Key": "smoke-knowledge-search-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-knowledge-search-1"),
     },
   );
   assert.equal(memorySearch.statusCode, 200);
@@ -437,7 +453,7 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
       agentId: "architect",
     },
     {
-      "Idempotency-Key": "smoke-comms-send-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-comms-send-1"),
     },
   );
   assert.equal(commsSend.statusCode, 200);
@@ -457,7 +473,7 @@ async function smokeApprovals(app: Awaited<ReturnType<typeof buildApp>>): Promis
     payload: { command: "dir" },
     preview: { command: "dir" },
   }, {
-    "Idempotency-Key": "smoke-approval-create-1",
+    "Idempotency-Key": smokeIdempotencyKey("smoke-approval-create-1"),
   });
   assert.equal(created.statusCode, 201);
   const approval = created.body as { approvalId: string; status: string };
@@ -471,7 +487,7 @@ async function smokeApprovals(app: Awaited<ReturnType<typeof buildApp>>): Promis
       resolvedBy: "smoke-runner",
     },
     {
-      "Idempotency-Key": "smoke-approval-resolve-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-approval-resolve-1"),
     },
   );
   assert.equal(resolved.statusCode, 200);
@@ -508,7 +524,7 @@ async function smokeIntegrations(app: Awaited<ReturnType<typeof buildApp>>): Pro
       config: {},
     },
     {
-      "Idempotency-Key": "smoke-integration-create-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-integration-create-1"),
     },
   );
   assert.equal(created.statusCode, 201);
@@ -560,7 +576,7 @@ async function smokeAgents(app: Awaited<ReturnType<typeof buildApp>>): Promise<v
       defaultTools: ["memory.read"],
     },
     {
-      "Idempotency-Key": "smoke-agent-create-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-agent-create-1"),
     },
   );
   assert.equal(created.statusCode, 201);
@@ -572,7 +588,7 @@ async function smokeAgents(app: Awaited<ReturnType<typeof buildApp>>): Promise<v
     url: `/api/v1/agents/${customAgentId}`,
     headers: {
       "Content-Type": "application/json",
-      "Idempotency-Key": "smoke-agent-update-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-agent-update-1"),
     },
     payload: JSON.stringify({
       title: "Smoke Specialist Updated",
@@ -586,7 +602,7 @@ async function smokeAgents(app: Awaited<ReturnType<typeof buildApp>>): Promise<v
     url: `/api/v1/agents/${customAgentId}/archive`,
     headers: {
       "Content-Type": "application/json",
-      "Idempotency-Key": "smoke-agent-archive-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-agent-archive-1"),
     },
     payload: JSON.stringify({
       archivedBy: "smoke",
@@ -600,7 +616,7 @@ async function smokeAgents(app: Awaited<ReturnType<typeof buildApp>>): Promise<v
     url: `/api/v1/agents/${customAgentId}/restore`,
     headers: {
       "Content-Type": "application/json",
-      "Idempotency-Key": "smoke-agent-restore-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-agent-restore-1"),
     },
     payload: JSON.stringify({}),
   });
@@ -611,7 +627,7 @@ async function smokeAgents(app: Awaited<ReturnType<typeof buildApp>>): Promise<v
     url: `/api/v1/agents/${builtIn.agentId}?mode=hard`,
     headers: {
       "Content-Type": "application/json",
-      "Idempotency-Key": "smoke-agent-delete-built-in-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-agent-delete-built-in-1"),
     },
     payload: JSON.stringify({}),
   });
@@ -622,7 +638,7 @@ async function smokeAgents(app: Awaited<ReturnType<typeof buildApp>>): Promise<v
     url: `/api/v1/agents/${customAgentId}?mode=hard`,
     headers: {
       "Content-Type": "application/json",
-      "Idempotency-Key": "smoke-agent-delete-custom-1",
+      "Idempotency-Key": smokeIdempotencyKey("smoke-agent-delete-custom-1"),
     },
     payload: JSON.stringify({}),
   });
@@ -693,7 +709,7 @@ async function smokeOnboarding(app: Awaited<ReturnType<typeof buildApp>>): Promi
     markComplete: true,
     completedBy: "smoke",
   }, {
-    "Idempotency-Key": "smoke-onboarding-bootstrap-1",
+    "Idempotency-Key": smokeIdempotencyKey("smoke-onboarding-bootstrap-1"),
   });
   assert.equal(bootstrap.statusCode, 200);
   const bootstrapBody = bootstrap.body as {

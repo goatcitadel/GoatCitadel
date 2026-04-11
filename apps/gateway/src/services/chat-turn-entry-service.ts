@@ -29,6 +29,22 @@ import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 
 export type ChatTurnEntryHost = GatewayService;
 
+export interface ChatTurnResumeHost {
+  readonly storage: {
+    readonly chatTurnTraces: {
+      get(turnId: string): Pick<ChatTurnTraceRecord, "sessionId">;
+    };
+  };
+  streamPersistedChatTurnEvents(
+    sessionId: string,
+    turnId: string,
+    options?: {
+      sinceEventId?: string;
+      liveTail?: boolean;
+    },
+  ): AsyncGenerator<ChatStreamChunk>;
+}
+
 export async function agentSendChatMessage(
   host: ChatTurnEntryHost,
   sessionId: string,
@@ -684,11 +700,19 @@ export async function cancelChatTurn(
 }
 
 export async function* resumeAgentChatTurnStream(
-  host: ChatTurnEntryHost,
+  host: ChatTurnResumeHost,
   sessionId: string,
   turnId: string,
   sinceEventId?: string,
 ): AsyncGenerator<ChatStreamChunk> {
+  const trace = host.storage.chatTurnTraces.get(turnId);
+  if (trace.sessionId !== sessionId) {
+    throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
+  }
+
+  // Durable-linked turns should resume from retained stream state first. Legacy
+  // traces without durable linkage still flow through the same persisted stream
+  // path as a compatibility fallback.
   yield* host.streamPersistedChatTurnEvents(sessionId, turnId, {
     sinceEventId,
     liveTail: true,

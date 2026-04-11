@@ -253,7 +253,14 @@ async function removeRuntimeRootWithRetry(runtimeRoot, attempts = 6) {
       return;
     } catch (error) {
       lastError = error;
-      if ((error?.code !== "EBUSY" && error?.code !== "EPERM") || attempt === attempts - 1) {
+      const isTransientWindowsLock = error?.code === "EBUSY" || error?.code === "EPERM";
+      if (!isTransientWindowsLock || attempt === attempts - 1) {
+        if (process.platform === "win32" && isTransientWindowsLock) {
+          console.warn(
+            `[verify] unable to remove verification runtime root after ${attempts} attempts; leaving ${runtimeRoot} in place (${error.code}).`,
+          );
+          return;
+        }
         throw error;
       }
       await delay(1000 * (attempt + 1));

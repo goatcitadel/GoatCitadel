@@ -310,6 +310,12 @@ GLM_API_KEY=your_key_here
 MOONSHOT_API_KEY=your_key_here
 ```
 
+Truth-in-testing notes:
+
+- if secure-store persistence is disabled or unavailable, onboarding and provider bootstrap flows may persist provider secrets into the local `.env` file
+- Code Mode v1 is for trusted, operator-governed code only; it is not a hostile-code sandbox claim
+- host isolation is best-effort by platform and fails closed only when Code Mode is configured to require it
+
 ## Managed Local Voice Runtime
 
 - GoatCitadel installs a managed local whisper.cpp runtime by default unless you pass `--skip-voice`.
@@ -411,6 +417,27 @@ pnpm coverage:collect
 pnpm coverage:gate
 ```
 
+### External Tester Matrix
+
+Use this matrix when handing the repo to external manual testers:
+
+| Flow | Required setup | Expected proof |
+| --- | --- | --- |
+| Installer bootstrap | `goatcitadel verify install` or `pnpm verify:install` | isolated gateway/UI stack starts, onboarding bootstrap succeeds, provider bootstrap writes expected config/env state |
+| Onboarding + dashboard | `goatcitadel up`, then complete onboarding | Dashboard, Chat, Sessions, and Settings load without auth/origin errors |
+| Chat command flow | any started stack, one session | `/help` or another local command path returns a stable thread/update result without requiring cloud provider access |
+| Approval lifecycle | one intentionally risky action or synthetic approval | pending approval appears, resolves cleanly, replay remains inspectable |
+| Code Mode v1 | `GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED=true` | run is approval-gated, sandbox metadata is visible, stdout/stderr artifacts stay bounded, candidate-save path only runs after approval |
+| Candidate lifecycle | Code Mode run with `saveCandidateOnSuccess=true` | candidate detail loads, promote/revoke paths update lifecycle state without widening callable surface implicitly |
+
+Tester reminders:
+
+- call out when a flow required a local env secret, a break-glass flag, or an advisory unsandboxed Code Mode run
+- do not describe Code Mode as safe for hostile or arbitrary third-party code
+- attach the verification artifact path when reporting failures so gateway/UI logs can be traced quickly
+
+For the current `1.0` promise, visible scope, and release gates, use [docs/1_0_CONTRACT.md](./1_0_CONTRACT.md) as the product-level source of truth.
+
 ## TUI And Operator Commands
 
 Installed path:
@@ -429,6 +456,14 @@ pnpm tools -- catalog
 pnpm admin -- backups list
 ```
 
+Backup and restore operators should also know these commands:
+
+```bash
+goatcitadel admin backup create --name manual-pre-upgrade
+goatcitadel admin backup verify --file <backup-file>
+goatcitadel admin backup restore --file <backup-file> --confirm
+```
+
 ## Browser Automation Prerequisite
 
 Installer-based installs provision Playwright Chromium automatically.
@@ -440,6 +475,8 @@ pnpm --filter @goatcitadel/policy-engine exec playwright install chromium
 ```
 
 ## Optional: NPU Sidecar
+
+The NPU sidecar is optional experimental infrastructure. It is useful for local runtime experiments, but it is not part of the current `1.0` readiness bar and should not be treated as maturity proof for local inference.
 
 Direct run:
 

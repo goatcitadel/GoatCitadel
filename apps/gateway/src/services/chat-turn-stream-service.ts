@@ -4,18 +4,31 @@
  * Step 8c of the gateway-service decomposition plan: extracts the streaming
  * generator (`streamPreparedAgentChatTurn`) and its execution helpers
  * (`executePreparedModeOrchestration`, `executeDelegatedPlanStep`,
- * `collectOrchestrationToolRuns`). All functions are pure over a
- * `GatewayService` host and use only its `/** @internal *\/` public surface.
+ * `collectOrchestrationToolRuns`). These helpers depend on a bounded host
+ * contract instead of the full GatewayService type.
  */
 
 import { randomUUID } from "node:crypto";
 import type {
+  ChatCapabilityUpgradeSuggestion,
   ChatCitationRecord,
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ChatMode,
+  ChatOrchestrationSummary,
   ChatSendMessageRequest,
+  ChatSendMessageResponse,
   ChatStreamChunkDraft,
+  ChatSpecialistCandidateSuggestionRecord,
+  ChatSessionCreateInput,
+  ChatSessionPrefsPatch,
+  ChatSessionRecord,
   ChatToolRunRecord,
   ChatTurnTraceRecord,
+  GatewayEventInput,
 } from "@goatcitadel/contracts";
+import type { Storage } from "@goatcitadel/storage";
+import type { TurnRuntime } from "@goatcitadel/orchestration";
 import type {
   OrchestrationExecutionResult,
   OrchestrationPlan as ModeOrchestrationPlan,
@@ -37,10 +50,86 @@ import {
   truncateSummaryLine,
   type PreparedChatExecutionPlanResolution,
 } from "./gateway-service.js";
-import type { GatewayService } from "./gateway-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 
-export type ChatTurnStreamHost = GatewayService;
+type ChatTurnStreamStorage = Pick<
+  Storage,
+  | "chatDelegationSteps"
+  | "chatToolRuns"
+  | "chatExecutionPlans"
+  | "chatDelegationRuns"
+  | "chatSessionProjects"
+  | "chatTurnTraces"
+>;
+
+export interface ChatTurnStreamHost {
+  readonly storage: ChatTurnStreamStorage;
+  readonly turnRuntime: Pick<TurnRuntime, "runStream">;
+  resolvePreparedTurnOrchestration(
+    prepared: PreparedAgentChatTurn,
+  ): Promise<PreparedChatExecutionPlanResolution | undefined>;
+  createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  recordDevDiagnostic(input: {
+    level: "info" | "warn";
+    category: string;
+    event: string;
+    message: string;
+    sessionId?: string;
+    turnId?: string;
+    providerId?: string;
+    modelId?: string;
+    context?: Record<string, unknown>;
+  }): void;
+  buildChatOrchestrationSummary(input: {
+    runId: string;
+    objective: string;
+    modePolicy: ChatMode;
+    routeDecision: ChatOrchestrationSummary["routeDecision"];
+    stepResults: OrchestrationStepExecutionResult[];
+    finalSummary?: string;
+    finalized?: boolean;
+    advisoryOnly?: boolean;
+  }): NonNullable<ChatTurnTraceRecord["orchestration"]>;
+  createChatSession(input: ChatSessionCreateInput): ChatSessionRecord;
+  inheritDelegatedSessionToolGrants(sessionId: string, delegatedSessionId: string): void;
+  updateChatSessionPrefs(sessionId: string, input: ChatSessionPrefsPatch): unknown;
+  agentSendChatMessage(sessionId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse>;
+  beginActiveChatTurnExecution(sessionId: string, turnId: string, operation: string): AbortController;
+  endActiveChatTurnExecution(turnId: string, controller: AbortController): void;
+  ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<unknown>;
+  updateActiveLeafOrThrow(sessionId: string, previousActiveTurnId: string | undefined, nextActiveTurnId: string): void;
+  collectCapabilityUpgradeSuggestions(input: {
+    sessionId: string;
+    content: string;
+    assistantText: string;
+    trace?: ChatTurnTraceRecord;
+  }): Promise<ChatCapabilityUpgradeSuggestion[]>;
+  collectSpecialistCandidateSuggestions(input: {
+    sessionId: string;
+    mode: ChatMode;
+    content: string;
+    capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
+    trace: ChatTurnTraceRecord;
+  }): ChatSpecialistCandidateSuggestionRecord[];
+  publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): void;
+  extractAndPersistLearnedMemory(
+    sessionId: string,
+    content: string,
+    source: {
+      role: "user" | "assistant";
+      sourceRef: string;
+      trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
+    },
+  ): void;
+  scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void;
+  recordCapabilityGapFromTrace(input: {
+    sessionId: string;
+    turnId: string;
+    content: string;
+    trace: ChatTurnTraceRecord;
+  }): void;
+  markChatTurnCancelled(sessionId: string, turnId: string): ChatTurnTraceRecord;
+}
 
 export function collectOrchestrationToolRuns(host: ChatTurnStreamHost, runId: string): ChatToolRunRecord[] {
   const steps = host.storage.chatDelegationSteps.listByRun(runId);

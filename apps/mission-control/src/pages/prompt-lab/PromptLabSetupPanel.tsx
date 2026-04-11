@@ -90,9 +90,12 @@ export function PromptLabSetupPanel({
   onRefreshRegression,
 }: PromptLabSetupPanelProps) {
   return (
-    <div className="prompt-lab-grid">
-      <article className="card prompt-lab-surface prompt-lab-import">
+    <div className="prompt-lab-config-grid">
+      <article className="card prompt-lab-surface prompt-lab-import prompt-lab-import-card">
         <h3>Import Prompt Pack</h3>
+        <p className="office-subtitle">
+          Paste prompt-pack markdown to load a new evaluation set into the live workspace.
+        </p>
         <textarea
           rows={10}
           placeholder="Paste prompt-pack markdown here..."
@@ -103,14 +106,17 @@ export function PromptLabSetupPanel({
         <p className="office-subtitle">Tip: import once, then use Run next test to move quickly through the pack.</p>
       </article>
 
-      <article className="card prompt-lab-surface prompt-lab-packs">
-        <h3>Prompt Packs</h3>
+      <article className="card prompt-lab-surface prompt-lab-packs prompt-lab-compact-card">
+        <div className="prompt-lab-section-heading">
+          <h3>Prompt Packs</h3>
+          <span className="office-subtitle">{packs.length} loaded</span>
+        </div>
         <ul>
           {packs.map((pack) => (
             <li key={pack.packId}>
               <button
                 type="button"
-                className={["gc-button", (selectedPackId === pack.packId ? "active" : "")].filter(Boolean).join(" ")}
+                className={["gc-button", selectedPackId === pack.packId ? "active" : ""].filter(Boolean).join(" ")}
                 onClick={() => onSelectedPackIdChange(pack.packId)}
               >
                 {pack.name}
@@ -119,6 +125,13 @@ export function PromptLabSetupPanel({
             </li>
           ))}
         </ul>
+      </article>
+
+      <article className="card prompt-lab-surface prompt-lab-compact-card">
+        <div className="prompt-lab-section-heading">
+          <h3>Run Lane</h3>
+          <span className="office-subtitle">Provider and scoring</span>
+        </div>
         <div className="prompt-lab-model-picker">
           <p className="office-subtitle">
             {reuseLastModel && lastSuccessfulModel
@@ -152,10 +165,16 @@ export function PromptLabSetupPanel({
           />
           Auto-score completed runs (model + rules)
         </label>
-        <details className="prompt-lab-benchmark-panel">
-          <summary>Benchmark matrix</summary>
+      </article>
+
+      <article className="card prompt-lab-surface prompt-lab-benchmark-card">
+        <div className="prompt-lab-section-heading">
+          <h3>Benchmark & Replay</h3>
+          <span className="office-subtitle">Matrix and regression tools</span>
+        </div>
+        <div className="prompt-lab-benchmark-panel prompt-lab-benchmark-panel-open">
           <p className="office-subtitle">
-            Run a provider/model matrix on selected test codes (default high-signal subset).
+            Run a provider/model matrix on selected test codes, then replay against a baseline.
           </p>
           <label className="prompt-lab-field">
             Test codes (comma or newline separated)
@@ -197,7 +216,7 @@ export function PromptLabSetupPanel({
               {" • "}results: {regressionStatus.results.length}
             </p>
           ) : null}
-        </details>
+        </div>
       </article>
     </div>
   );

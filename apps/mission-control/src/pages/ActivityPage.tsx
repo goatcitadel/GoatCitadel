@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import { connectEventStream, fetchRealtimeEvents, type RealtimeEvent } from "../api/client";
+import { buildRealtimeEventSummary, EventCard } from "../components/EventCard";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { PageGuideCard } from "../components/PageGuideCard";
@@ -59,31 +60,15 @@ export function ActivityPage() {
           <Virtuoso
             data={events}
             itemContent={(_index, event) => {
-              const links = event.links as Record<string, string | undefined> | undefined;
               return (
                 <div className="virtual-list-item">
-                  <div className="workflow-summary-strip">
-                    <strong>{event.eventType}</strong>
-                    <StatusChip tone="muted">{event.source}</StatusChip>
-                    {event.eventClass ? <StatusChip tone="muted">{event.eventClass}</StatusChip> : null}
-                    {event.eventAuthority ? <StatusChip tone="live">{event.eventAuthority}</StatusChip> : null}
-                    {links?.proactiveRunId ? <StatusChip tone="warning">proactive</StatusChip> : null}
-                    {links?.approvalId ? <StatusChip tone="warning">approval</StatusChip> : null}
-                    {links?.taskId ? <StatusChip tone="muted">task</StatusChip> : null}
-                    {links?.runId ? <StatusChip tone="muted">durable</StatusChip> : null}
-                  </div>
-                  <p className="office-subtitle">{new Date(event.timestamp).toLocaleString()}</p>
-                  {links ? (
-                    <p className="office-subtitle">
-                      {Object.entries(links)
-                        .map(([key, value]) => `${key}: ${value}`)
-                        .join(" | ")}
-                    </p>
-                  ) : null}
-                  {renderActivityPayloadSummary(event.payload) ? (
-                    <p className="office-subtitle">{renderActivityPayloadSummary(event.payload)}</p>
-                  ) : null}
-                  <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+                  <EventCard
+                    event={event}
+                    summary={[
+                      buildRealtimeEventSummary(event),
+                      renderActivityPayloadSummary(event.payload),
+                    ].filter(Boolean).join(" ")}
+                  />
                 </div>
               );
             }}

@@ -3,7 +3,7 @@
 Last updated: 2026-04-02
 Target audience: beginner to intermediate operators
 
-This guide walks through GoatCitadel channel setup in the order that makes the most sense for public beta testing.
+This guide walks through GoatCitadel channel setup in the order that makes the most sense for operator-facing `1.0` validation.
 
 For parity status and tranche tracking, see [OPENCLAW_PARITY_STATUS.md](./OPENCLAW_PARITY_STATUS.md).
 
@@ -29,7 +29,7 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, WhatsApp, Signal, LINE
 | `channel.zalo` | Official Account access token | sandbox send through the OA send path | yes |
 | `channel.zalouser` | zca bridge URL + optional bearer token | sandbox send through the bridge text-send path | yes |
 
-Long-form walkthroughs below still focus on the current beta channels. The additional guided definitions above exist so operators can draft, edit, repair, and retest those planned channels inside Mission Control without dropping back to raw JSON.
+Long-form walkthroughs below still focus on the current high-traffic channels. The additional guided definitions above exist so operators can draft, edit, repair, and retest those guided channels inside Mission Control without dropping back to raw JSON.
 
 ## Recommended Rollout Order
 
@@ -371,14 +371,12 @@ Channel maturity is now truth-based:
 - `beta`: implemented in the current runtime but still stabilizing
 - `plugin`: available through an installed plugin adapter
 - `disabled`: cataloged but not available in the current runtime
-- `planned`: not parity-complete yet
 
-Built-in channel bridges that exist but are not yet parity-complete now stay `planned` in the catalog.
-
-When GoatCitadel can still configure or exercise a partial/manual bridge path, the catalog also marks runtime availability separately as runnable. That split is intentional:
+Visible built-in channels must now resolve to `native` or `beta` in the catalog. Runtime availability remains a separate signal so operators can distinguish between "implemented but currently blocked" and "implemented and runnable now."
 
 - `maturity` answers "how complete is parity?"
 - runtime availability answers "can an operator wire this up in the current runtime?"
+- visible built-in channels no longer use legacy planned-state treatment in Mission Control; blocked setups stay visible with explicit diagnostics and operator-readable next actions
 
 - [ ] Connection create succeeds.
 - [ ] Health or connectivity check succeeds.

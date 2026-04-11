@@ -218,6 +218,8 @@ import type {
   IntegrationConnection,
   IntegrationConnectionCreateInput,
   IntegrationConnectionUpdateInput,
+  IntegrationActionInvokeInput,
+  IntegrationActionInvokeResult,
   IntegrationKind,
   HookCreateInput,
   HookDecisionBlock,
@@ -324,7 +326,6 @@ import type {
   DurableDeadLetterRecord,
   DurableDiagnosticsResponse,
   DurableRunRecord,
-  DurableRunStatus,
   WeeklyImprovementReportRecord,
   SystemVitals,
   TaskActivityCreateInput,
@@ -493,6 +494,7 @@ import * as chatCommandService from "./chat-command-service.js";
 import * as chatSessionService from "./chat-session-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
+import * as chatDurableRunService from "./chat-durable-run-service.js";
 import * as chatTurnPrepService from "./chat-turn-prep-service.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
 import * as chatTurnUserMessage from "./chat-turn-user-message.js";
@@ -519,6 +521,7 @@ import { PromptPackService, normalizePromptTestCode, clampPromptScore } from "./
 import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
+import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import type { CodeModeApprovalQueueItem } from "./capability-system-service.js";
 import { ReplayExecutionSkippedError } from "./replay-execution.js";
@@ -562,6 +565,7 @@ import {
   installIntegrationPlugin as installIntegrationPluginImpl,
   setIntegrationPluginEnabled as setIntegrationPluginEnabledImpl,
 } from "./integration-channel-service.js";
+import { invokeIntegrationConnectionAction as invokeIntegrationConnectionActionImpl } from "./integration-action-service.js";
 import {
   mergeLatestFollowOnParityArtifacts,
   readLatestFollowOnParityArtifactsByProfile,
@@ -574,12 +578,14 @@ import {
   handleInternalMcpApprovalInboxInvoke,
   isInternalMcpApprovalInboxServer,
 } from "./mcp-approval-inbox.js";
+import type { ApprovalResolutionEffectsResult } from "./approval-resolution-effects-service.js";
 
 export interface ApprovalResolveResult {
   approval: ApprovalRequest;
   executedAction?: ToolInvokeResult;
   replay: ApprovalReplayResult;
   durableRunId?: string;
+  resolutionEffects?: ApprovalResolutionEffectsResult;
 }
 
 export interface ApprovalReplayResult {
@@ -1346,7 +1352,7 @@ export class GatewayService {
   /** @internal */ public readonly orchestrationEngine: OrchestrationEngine;
   /** @internal */ public readonly llmService: LlmService;
   private readonly assemblyService: AssemblyService;
-  /** @internal */ public readonly memoryContextService: MemoryContextService;
+  private readonly memoryContextService: MemoryContextService;
   /** @internal */ public readonly meshService: MeshService;
   /** @internal */ public readonly npuSidecar: NpuSidecarService;
   /** @internal */ public readonly llamaCppRuntime: LlamaCppRuntimeService;
@@ -1367,7 +1373,8 @@ export class GatewayService {
   private readonly promptPackService: PromptPackService;
   /** @internal */ public readonly chatProactiveService: ChatProactiveService;
   private readonly improvementService: ImprovementService;
-  /** @internal */ public readonly memoryMaintenanceService: MemoryMaintenanceService;
+  private readonly memoryMaintenanceService: MemoryMaintenanceService;
+  /** @internal */ public readonly memoryLifecycleService: MemoryLifecycleService;
   private readonly capabilitySystemService: CapabilitySystemService;
   private readonly backupRetentionService: BackupRetentionService;
   private readonly databaseCutoverService: DatabaseCutoverService;
@@ -1634,6 +1641,12 @@ export class GatewayService {
     this.memoryMaintenanceService = new MemoryMaintenanceService(serviceCtx, {
       createDurableRun: (input) => this.createDurableRun(input),
       getDurableRun: (runId) => this.getDurableRun(runId),
+    });
+    this.memoryLifecycleService = new MemoryLifecycleService({
+      context: this.memoryContextService,
+      learned: this.chatLearnedMemoryService,
+      maintenance: this.memoryMaintenanceService,
+      readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
     });
   }
 
@@ -2721,14 +2734,14 @@ export class GatewayService {
     await this.runMemoryFlushSchedulerIfDue();
     await this.runCostReportSchedulerIfDue();
     await this.runUpdateReviewSchedulerIfDue();
-    await this.memoryMaintenanceService.runDueEvaluation();
+    await this.memoryLifecycleService.runDueEvaluation();
   }
 
   /** @internal */ public scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void {
     if (this.closing || parentTurnId) {
       return;
     }
-    const task = this.memoryMaintenanceService.noteSuccessfulRootTurn(sessionId).catch((error) => {
+    const task = this.memoryLifecycleService.noteSuccessfulRootTurn(sessionId).catch((error) => {
       log.error("memory maintenance post-turn evaluation failed", error);
     });
     this.backgroundTasks.add(task);
@@ -3137,7 +3150,7 @@ export class GatewayService {
   }
 
   private isDurableTurnStillStreaming(turnId: string): boolean {
-    const row = this.gatewaySql
+    const eventRow = this.gatewaySql
       .prepare(
         `
       SELECT run_id
@@ -3148,11 +3161,19 @@ export class GatewayService {
     `,
       )
       .get(turnId) as { run_id: string | null } | undefined;
-    if (!row?.run_id) {
+    let runId = eventRow?.run_id ?? null;
+    if (!runId) {
+      try {
+        runId = this.storage.chatTurnTraces.get(turnId).durable?.runId ?? null;
+      } catch {
+        runId = null;
+      }
+    }
+    if (!runId) {
       return false;
     }
     try {
-      const run = this.storage.durableRuns.getRun(row.run_id);
+      const run = this.storage.durableRuns.getRun(runId);
       return run.status === "queued" || run.status === "running" || run.status === "waiting" || run.status === "paused";
     } catch {
       return false;
@@ -3374,7 +3395,7 @@ export class GatewayService {
     if (this.isReplayScratchSession(sessionId)) {
       return;
     }
-    return this.chatLearnedMemoryService.extractAndPersistLearnedMemory(sessionId, content, source);
+    return this.memoryLifecycleService.extractLearnedMemory(sessionId, content, source);
   }
 
   private getPromptRunnerModelDefaults(): { providerId?: string; model?: string } {
@@ -4100,7 +4121,7 @@ export class GatewayService {
     items: LearnedMemoryItemRecord[];
     conflicts: LearnedMemoryConflictRecord[];
   } {
-    return this.chatLearnedMemoryService.listChatSessionLearnedMemory(sessionId, limit);
+    return this.memoryLifecycleService.listSessionLearnedMemory(sessionId, limit);
   }
 
   public listChatSessionSpecialistCandidates(
@@ -4191,7 +4212,7 @@ export class GatewayService {
     itemId: string,
     input: LearnedMemoryUpdateInput,
   ): LearnedMemoryItemRecord {
-    return this.chatLearnedMemoryService.updateChatSessionLearnedMemory(sessionId, itemId, input);
+    return this.memoryLifecycleService.updateSessionLearnedMemory(sessionId, itemId, input);
   }
 
   public async rebuildChatSessionLearnedMemory(sessionId: string): Promise<{
@@ -4199,9 +4220,7 @@ export class GatewayService {
     items: LearnedMemoryItemRecord[];
     conflicts: LearnedMemoryConflictRecord[];
   }> {
-    return this.chatLearnedMemoryService.rebuildChatSessionLearnedMemory(sessionId, (sid) =>
-      this.readTranscriptOrEmpty(sid),
-    );
+    return this.memoryLifecycleService.rebuildSessionLearnedMemory(sessionId);
   }
 
   public async suggestChatDelegation(
@@ -4509,48 +4528,48 @@ export class GatewayService {
   }
 
   public getMemoryMaintenancePolicy(workspaceId?: string): MemoryMaintenancePolicyRecord {
-    return this.memoryMaintenanceService.getPolicy(workspaceId);
+    return this.memoryLifecycleService.getMaintenancePolicy(workspaceId);
   }
 
   public patchMemoryMaintenancePolicy(
     workspaceId: string | undefined,
     patch: MemoryMaintenancePolicyPatchInput,
   ): MemoryMaintenancePolicyRecord {
-    return this.memoryMaintenanceService.patchPolicy(workspaceId, patch);
+    return this.memoryLifecycleService.patchMaintenancePolicy(workspaceId, patch);
   }
 
   public getMemoryMaintenanceStatus(workspaceId?: string): MemoryMaintenanceStatusRecord {
-    return this.memoryMaintenanceService.getStatus(workspaceId);
+    return this.memoryLifecycleService.getMaintenanceStatus(workspaceId);
   }
 
   public listMemoryMaintenanceRuns(workspaceId?: string, limit = 50): MemoryMaintenanceRunRecord[] {
-    return this.memoryMaintenanceService.listRuns(workspaceId, limit);
+    return this.memoryLifecycleService.listMaintenanceRuns(workspaceId, limit);
   }
 
   public runMemoryMaintenanceNow(input: MemoryMaintenanceRunNowInput): MemoryMaintenanceRunRecord {
-    return this.memoryMaintenanceService.runNow(input);
+    return this.memoryLifecycleService.runMaintenanceNow(input);
   }
 
   public getMemoryMaintenanceRunProvenance(runId: string): MemoryMaintenanceProvenanceRecord {
-    return this.memoryMaintenanceService.getRunProvenance(runId);
+    return this.memoryLifecycleService.getMaintenanceRunProvenance(runId);
   }
 
   public listMemoryMaintenanceRecommendations(
     workspaceId?: string,
     limit = 50,
   ): MemoryMaintenanceRecommendationRecord[] {
-    return this.memoryMaintenanceService.listRecommendations(workspaceId, limit);
+    return this.memoryLifecycleService.listMaintenanceRecommendations(workspaceId, limit);
   }
 
   public acceptMemoryMaintenanceRecommendation(recommendationId: string): {
     recommendation: MemoryMaintenanceRecommendationRecord;
     policy: MemoryMaintenancePolicyRecord;
   } {
-    return this.memoryMaintenanceService.acceptRecommendation(recommendationId);
+    return this.memoryLifecycleService.acceptMaintenanceRecommendation(recommendationId);
   }
 
   public rejectMemoryMaintenanceRecommendation(recommendationId: string): MemoryMaintenanceRecommendationRecord {
-    return this.memoryMaintenanceService.rejectRecommendation(recommendationId);
+    return this.memoryLifecycleService.rejectMaintenanceRecommendation(recommendationId);
   }
 
   public wakeDurableRun(
@@ -5235,7 +5254,7 @@ export class GatewayService {
   }
 
   private parseMemoryMaintenanceWorkflowPayload(run: DurableRunRecord) {
-    return this.memoryMaintenanceService.parseWorkflowPayload(run);
+    return this.memoryLifecycleService.parseMaintenanceWorkflowPayload(run);
   }
 
   /** @internal */ public resolveDurableRunHookWorkspaceId(run: DurableRunRecord): string {
@@ -5320,68 +5339,24 @@ export class GatewayService {
     };
   }
 
-  private createDurableCheckpointState(
-    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
-    trace: ChatTurnTraceRecord,
-  ): Record<string, unknown> {
-    const toolRuns = this.storage.chatToolRuns.listByTurn(prepared.turnId);
-    const artifacts = this.storage.chatToolArtifacts.listByTurn(prepared.turnId).map((artifact) => ({
-      artifactId: artifact.artifactId,
-      toolRunId: artifact.toolRunId,
-      toolName: artifact.toolName,
-      contentType: artifact.contentType,
-      byteLength: artifact.byteLength,
-      storageRelPath: artifact.storageRelPath,
-      snippet: artifact.snippet,
-    }));
-    return {
-      objective: prepared.content,
-      currentStep: trace.status,
-      attemptedTools: toolRuns.map((run) => ({
-        toolRunId: run.toolRunId,
-        toolName: run.toolName,
-        status: run.status,
-        startedAt: run.startedAt,
-        finishedAt: run.finishedAt,
-      })),
-      artifactPointers: artifacts,
-      blocker: trace.failure?.message,
-      nextAction: trace.failure?.recommendedAction,
-    };
-  }
-
   /** @internal */ public beginDurableChatRun(
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   ): DurableRunRecord | undefined {
-    if (!this.shouldUseDurableExecution(prepared, input)) {
-      return undefined;
-    }
-    const mode = prepared.normalized.mode ?? prepared.prefs.mode;
-    const run = this.createDurableRun({
-      workflowKey: "chat.turn.execute",
-      payload: durableChatTurnPayloadToRecord(this.createDurableChatTurnPayload(prepared, input, threadEventType)),
-      metadata: {
-        surface: mode,
-        autoPromoted: mode === "chat",
-        objective: prepared.content,
-      },
-    });
-    this.persistChatStreamChunk(
+    return chatDurableRunService.beginDurableChatRun(
       {
-        type: "message_start",
-        sessionId: prepared.session.sessionId,
-        turnId: prepared.turnId,
-        messageId: prepared.assistantMessageId,
-        parentTurnId: prepared.parentTurnId,
-        branchKind: prepared.branchKind,
-        sourceTurnId: prepared.sourceTurnId,
+        shouldUseDurableExecution: this.shouldUseDurableExecution(prepared, input),
+        createDurableRun: (runInput) => this.createDurableRun(runInput),
+        buildDurablePayloadRecord: (preparedTurn, request, eventType) =>
+          durableChatTurnPayloadToRecord(this.createDurableChatTurnPayload(preparedTurn, request, eventType)),
+        persistChatStreamChunk: (chunk, durableRunId) => this.persistChatStreamChunk(chunk, durableRunId),
+        requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       },
-      run.runId,
+      prepared,
+      input,
+      threadEventType,
     );
-    this.durableRunService.requestRunProcessing(run.runId);
-    return run;
   }
 
   /** @internal */ public finalizeDurableChatRun(
@@ -5389,70 +5364,19 @@ export class GatewayService {
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     trace: ChatTurnTraceRecord,
   ): void {
-    const now = new Date().toISOString();
-    const checkpointState = this.createDurableCheckpointState(prepared, trace);
-    if (trace.status === "waiting_for_approval") {
-      this.storage.durableRuns.updateRun({
-        runId,
-        status: "waiting",
-        updatedAt: now,
-        finishedAt: undefined,
-      });
-      this.storage.durableRuns.createCheckpoint({
-        runId,
-        checkpointKind: "run_waiting",
-        state: checkpointState,
-      });
-      this.recordDurableTimelineEvent(runId, "run_waiting", checkpointState);
-      this.patchDurableTraceIfPresent(prepared.turnId, {
-        durable: {
-          runId,
-          status: "waiting",
-          checkpointKind: "run_waiting",
-        },
-      });
-      return;
-    }
-    if (trace.status === "cancelled") {
-      this.storage.durableRuns.updateRun({
-        runId,
-        status: "cancelled",
-        updatedAt: now,
-        finishedAt: now,
-      });
-      this.recordDurableTimelineEvent(runId, "run_cancelled", checkpointState);
-      this.patchDurableTraceIfPresent(prepared.turnId, {
-        durable: {
-          runId,
-          status: "cancelled",
-          checkpointKind: "run_failed",
-        },
-      });
-      return;
-    }
-    const failed = trace.status === "failed" || trace.completion?.status !== "complete";
-    const nextStatus: DurableRunStatus = failed ? "failed" : "completed";
-    const checkpointKind: DurableCheckpointRecord["checkpointKind"] = failed ? "run_failed" : "run_completed";
-    this.storage.durableRuns.updateRun({
-      runId,
-      status: nextStatus,
-      updatedAt: now,
-      finishedAt: now,
-      lastError: failed ? trace.failure?.message : undefined,
-    });
-    this.storage.durableRuns.createCheckpoint({
-      runId,
-      checkpointKind,
-      state: checkpointState,
-    });
-    this.recordDurableTimelineEvent(runId, failed ? "run_failed" : "run_completed", checkpointState);
-    this.patchDurableTraceIfPresent(prepared.turnId, {
-      durable: {
-        runId,
-        status: nextStatus,
-        checkpointKind,
+    chatDurableRunService.finalizeDurableChatRun(
+      {
+        durableRuns: this.storage.durableRuns,
+        chatToolRuns: this.storage.chatToolRuns,
+        chatToolArtifacts: this.storage.chatToolArtifacts,
+        recordDurableTimelineEvent: (durableRunId, eventType, payload) =>
+          this.recordDurableTimelineEvent(durableRunId, eventType, payload),
+        patchDurableTraceIfPresent: (turnId, patch) => this.patchDurableTraceIfPresent(turnId, patch),
       },
-    });
+      runId,
+      prepared,
+      trace,
+    );
   }
 
   private patchDurableTraceIfPresent(turnId: string, input: Parameters<Storage["chatTurnTraces"]["patch"]>[1]): void {
@@ -6981,23 +6905,23 @@ export class GatewayService {
   }
 
   public async composeMemoryContext(input: MemoryContextComposeRequest): Promise<MemoryContextPack> {
-    return this.memoryContextService.compose(input);
+    return this.memoryLifecycleService.composeContext(input);
   }
 
   public getMemoryContext(contextId: string): MemoryContextPack {
-    return this.memoryContextService.get(contextId);
+    return this.memoryLifecycleService.getContext(contextId);
   }
 
   public listRunContexts(runId: string): MemoryContextPack[] {
-    return this.memoryContextService.listByRun(runId);
+    return this.memoryLifecycleService.listRunContexts(runId);
   }
 
   public listRecentMemoryContexts(limit = 60): MemoryContextPack[] {
-    return this.memoryContextService.listRecent(limit);
+    return this.memoryLifecycleService.listRecentContexts(limit);
   }
 
   public getMemoryQmdStats(from: string, to: string): MemoryQmdStatsResponse {
-    return this.memoryContextService.stats(from, to);
+    return this.memoryLifecycleService.getContextStats(from, to);
   }
 
   public getTurnContextManifest(turnId: string): ContextManifestDetail | undefined {
@@ -7898,6 +7822,14 @@ export class GatewayService {
 
   public async runIntegrationConnectionDiagnostics(connectionId: string): Promise<ConnectorDiagnosticReport> {
     return runIntegrationConnectionDiagnosticsImpl(this, connectionId);
+  }
+
+  public async invokeIntegrationConnectionAction(
+    connectionId: string,
+    actionId: string,
+    input: IntegrationActionInvokeInput = {},
+  ): Promise<IntegrationActionInvokeResult> {
+    return invokeIntegrationConnectionActionImpl(this, connectionId, actionId, input);
   }
 
   public createIntegrationConnection(input: IntegrationConnectionCreateInput): IntegrationConnection {
@@ -10084,8 +10016,8 @@ export class GatewayService {
       return;
     }
 
-    const task = this.memoryContextService
-      .compose({
+    const task = this.memoryLifecycleService
+      .composeContext({
         scope: "orchestration",
         prompt: [
           `Plan goal: ${plan.goal}`,

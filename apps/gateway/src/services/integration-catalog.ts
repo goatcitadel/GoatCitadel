@@ -3,6 +3,7 @@ import type {
   IntegrationFormSchema,
   IntegrationFieldSchema,
 } from "@goatcitadel/contracts";
+import { entryWithOperatorActions } from "./integration-action-registry.js";
 
 const BUILT_IN_CHANNEL_RUNTIME_KEYS = new Set([
   "discord",
@@ -19,6 +20,37 @@ const BUILT_IN_CHANNEL_RUNTIME_KEYS = new Set([
   "zalouser",
   "webchat",
 ]);
+
+function localBridgeSchema(
+  catalogId: string,
+  title: string,
+  description: string,
+  defaultLabel: string,
+  options: {
+    targetField?: IntegrationFieldSchema;
+  } = {},
+): IntegrationFormSchema {
+  return {
+    catalogId,
+    title,
+    description,
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: defaultLabel }),
+      url("bridgeUrl", "Bridge URL", {
+        placeholder: "http://127.0.0.1:8765",
+        required: true,
+      }),
+      text("authTokenEnv", "Bridge Token ENV Var", {
+        placeholder: "LOCAL_AGENT_AUTH_TOKEN",
+        secretRef: true,
+        advanced: true,
+      }),
+      ...(options.targetField ? [options.targetField] : []),
+      bool("enabled", "Enabled", true),
+    ],
+  };
+}
 
 const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.discord": {
@@ -401,6 +433,157 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       bool("enabled", "Enabled", true),
     ],
   },
+  "productivity.apple-notes": localBridgeSchema(
+    "productivity.apple-notes",
+    "Apple Notes Connection",
+    "Configure the local bridge GoatCitadel uses to read and write Apple Notes content.",
+    "Apple Notes",
+    {
+      targetField: text("defaultFolder", "Default Folder", {
+        placeholder: "GoatCitadel",
+        advanced: true,
+      }),
+    },
+  ),
+  "productivity.apple-reminders": localBridgeSchema(
+    "productivity.apple-reminders",
+    "Apple Reminders Connection",
+    "Configure the local bridge GoatCitadel uses to read and write Apple Reminders lists.",
+    "Apple Reminders",
+    {
+      targetField: text("defaultList", "Default List", {
+        placeholder: "Inbox",
+        advanced: true,
+      }),
+    },
+  ),
+  "productivity.things3": localBridgeSchema(
+    "productivity.things3",
+    "Things 3 Connection",
+    "Configure the local bridge GoatCitadel uses to read and write Things 3 tasks.",
+    "Things 3",
+    {
+      targetField: text("defaultList", "Default List", {
+        placeholder: "Inbox",
+        advanced: true,
+      }),
+    },
+  ),
+  "productivity.bear": localBridgeSchema(
+    "productivity.bear",
+    "Bear Notes Connection",
+    "Configure the local bridge GoatCitadel uses to read and write Bear notes.",
+    "Bear",
+    {
+      targetField: text("defaultTag", "Default Tag", {
+        placeholder: "goatcitadel",
+        advanced: true,
+      }),
+    },
+  ),
+  "productivity.trello": {
+    catalogId: "productivity.trello",
+    title: "Trello Connection",
+    description: "Configure Trello board access with API credentials and an optional default board/list target.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Trello" }),
+      text("apiKeyEnv", "API Key ENV Var", {
+        placeholder: "TRELLO_API_KEY",
+        required: true,
+        secretRef: true,
+      }),
+      text("tokenEnv", "Access Token ENV Var", {
+        placeholder: "TRELLO_TOKEN",
+        required: true,
+        secretRef: true,
+      }),
+      text("defaultBoardId", "Default Board ID", {
+        placeholder: "workspace-board-id",
+      }),
+      text("defaultListId", "Default List ID", {
+        placeholder: "list-id",
+        advanced: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "automation.gif-search": {
+    catalogId: "automation.gif-search",
+    title: "GIF Search Connection",
+    description: "Configure the provider and API key GoatCitadel uses for operator-facing GIF search.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "GIF Search" }),
+      select("provider", "Provider", ["tenor", "giphy"], "tenor"),
+      text("apiKeyEnv", "API Key ENV Var", {
+        placeholder: "TENOR_API_KEY",
+        required: true,
+        secretRef: true,
+      }),
+      text("defaultLocale", "Default Locale", {
+        placeholder: "en_US",
+        advanced: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "automation.peekaboo-screen": localBridgeSchema(
+    "automation.peekaboo-screen",
+    "Peekaboo Screen Connection",
+    "Configure the local capture/control bridge used for screen inspection and remote-control flows.",
+    "Peekaboo Screen",
+    {
+      targetField: select("defaultAction", "Default Action", ["capture", "control"], "capture", {
+        advanced: true,
+      }),
+    },
+  ),
+  "automation.camera-photo-video": localBridgeSchema(
+    "automation.camera-photo-video",
+    "Camera Connection",
+    "Configure the local camera bridge GoatCitadel uses for photo and video capture.",
+    "Camera",
+    {
+      targetField: select("defaultMode", "Default Capture Mode", ["photo", "video"], "photo", {
+        advanced: true,
+      }),
+    },
+  ),
+  "platform.macos-menubar-voice": localBridgeSchema(
+    "platform.macos-menubar-voice",
+    "macOS Menu Bar + Voice",
+    "Configure the local companion bridge for menu-bar presence and voice capture on macOS.",
+    "macOS Menu Bar",
+    {
+      targetField: text("voiceProfile", "Voice Profile", {
+        placeholder: "default",
+        advanced: true,
+      }),
+    },
+  ),
+  "platform.ios-canvas-camera-voice": {
+    catalogId: "platform.ios-canvas-camera-voice",
+    title: "iOS Canvas / Camera / Voice",
+    description: "Configure the device-facing companion registration used to surface iOS canvas, camera, and voice capabilities.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "iOS Companion" }),
+      text("deviceId", "Device ID", {
+        placeholder: "iphone-operator",
+        required: true,
+      }),
+      text("companionSessionId", "Companion Session ID", {
+        placeholder: "companion-session-id",
+        advanced: true,
+      }),
+      text("bridgeUrl", "Bridge URL", {
+        placeholder: "http://127.0.0.1:8765",
+        advanced: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
   "model_provider.openai": providerSchema("model_provider.openai", "OpenAI", "OPENAI_API_KEY", "https://api.openai.com/v1", "gpt-5.4-mini"),
   "model_provider.openrouter": providerSchema("model_provider.openrouter", "OpenRouter", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1", "openai/gpt-5.4-mini"),
   "model_provider.glm": providerSchema("model_provider.glm", "GLM (Z.AI)", "GLM_API_KEY", "https://api.z.ai/api/paas/v4", "glm-5"),
@@ -432,45 +615,45 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   entry("model_provider", "openai", "OpenAI", "Direct OpenAI provider support.", "native", ["api-key"], ["chat-completions"]),
   entry("model_provider", "anthropic", "Anthropic", "Anthropic provider via adapter or compatible proxy.", "beta", ["api-key"], ["messages", "chat-completions"]),
   entry("model_provider", "google", "Google", "Google model provider via adapter/proxy.", "beta", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "minimax", "MiniMax", "MiniMax provider route.", "planned", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "vercel", "Vercel AI Gateway", "Vercel AI Gateway compatible endpoint.", "planned", ["api-key"], ["chat-completions"]),
+  entry("model_provider", "minimax", "MiniMax", "MiniMax provider route.", "beta", ["api-key"], ["chat-completions"]),
+  entry("model_provider", "vercel", "Vercel AI Gateway", "Vercel AI Gateway compatible endpoint.", "beta", ["api-key"], ["chat-completions"]),
   entry("model_provider", "openrouter", "OpenRouter", "OpenRouter aggregated model endpoint.", "native", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "mistral", "Mistral", "Mistral provider route.", "planned", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "deepseek", "DeepSeek", "DeepSeek provider route.", "planned", ["api-key"], ["chat-completions"]),
+  entry("model_provider", "mistral", "Mistral", "Mistral provider route.", "beta", ["api-key"], ["chat-completions"]),
+  entry("model_provider", "deepseek", "DeepSeek", "DeepSeek provider route.", "beta", ["api-key"], ["chat-completions"]),
   entry("model_provider", "glm", "GLM (Z.AI)", "GLM provider route via Z.AI OpenAI-compatible API.", "beta", ["api-key"], ["chat-completions"]),
   entry("model_provider", "moonshot", "Moonshot (Kimi API)", "Moonshot Kimi OpenAI-compatible provider route.", "beta", ["api-key"], ["chat-completions"]),
   entry("model_provider", "ollama", "Ollama", "Ollama local runtime via OpenAI-compatible endpoint.", "native", ["local"], ["chat-completions"]),
-  entry("model_provider", "perplexity", "Perplexity", "Perplexity provider route.", "planned", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "huggingface", "HuggingFace", "HuggingFace inference route.", "planned", ["api-key"], ["chat-completions"]),
+  entry("model_provider", "perplexity", "Perplexity", "Perplexity provider route.", "beta", ["api-key"], ["chat-completions"]),
+  entry("model_provider", "huggingface", "HuggingFace", "HuggingFace inference route.", "beta", ["api-key"], ["chat-completions"]),
   entry("model_provider", "local-models", "Local Models", "Local model backends (LM Studio/Ollama/LocalAI).", "native", ["local"], ["chat-completions"]),
   entry("model_provider", "npu-local", "NPU Local Sidecar", "Local ONNX Runtime GenAI sidecar for Windows ARM64 Snapdragon NPU acceleration.", "beta", ["local"], ["chat-completions", "npu"]),
 
   // Productivity
-  entry("productivity", "apple-notes", "Apple Notes", "Sync or publish notes to Apple Notes.", "planned", ["local-agent"], ["read", "write"]),
-  entry("productivity", "apple-reminders", "Apple Reminders", "Task/reminder sync with Apple Reminders.", "planned", ["local-agent"], ["read", "write"]),
-  entry("productivity", "things3", "Things 3", "Things 3 task integration.", "planned", ["local-agent"], ["read", "write"]),
+  entry("productivity", "apple-notes", "Apple Notes", "Sync or publish notes to Apple Notes.", "beta", ["local-agent"], ["read", "write"]),
+  entry("productivity", "apple-reminders", "Apple Reminders", "Task/reminder sync with Apple Reminders.", "beta", ["local-agent"], ["read", "write"]),
+  entry("productivity", "things3", "Things 3", "Things 3 task integration.", "beta", ["local-agent"], ["read", "write"]),
   entry("productivity", "notion", "Notion", "Notion workspace integration.", "beta", ["oauth", "token"], ["read", "write", "search"]),
   entry("productivity", "obsidian", "Obsidian", "Obsidian vault integration.", "beta", ["local"], ["read", "write", "search"]),
-  entry("productivity", "bear", "Bear Notes", "Bear notes integration.", "planned", ["local-agent"], ["read", "write"]),
-  entry("productivity", "trello", "Trello", "Trello board/task integration.", "planned", ["oauth"], ["read", "write"]),
+  entry("productivity", "bear", "Bear Notes", "Bear notes integration.", "beta", ["local-agent"], ["read", "write"]),
+  entry("productivity", "trello", "Trello", "Trello board/task integration.", "beta", ["oauth"], ["read", "write"]),
   entry("productivity", "github", "GitHub", "GitHub issue/pr/repo automation integration.", "native", ["token"], ["read", "write", "webhooks"]),
 
   // Automation tools
   entry("automation", "browser-chrome-control", "Browser Control", "Chrome/Chromium automation and capture flows.", "beta", ["local"], ["browse", "automation", "screenshots"]),
   entry("automation", "canvas-a2ui", "Canvas + A2UI", "Visual canvas workspace and agent-to-ui interactions.", "beta", ["local"], ["scene-view", "selection", "inspect", "agent-apply"]),
   entry("automation", "voice-wake-talk", "Voice Wake + Talk", "Wake-word and voice interaction pipeline.", "beta", ["local"], ["voice"]),
-  entry("automation", "gmail", "Gmail", "Gmail read/send integration.", "planned", ["oauth"], ["read", "write"]),
+  entry("automation", "gmail", "Gmail", "Gmail read/send integration.", "beta", ["oauth"], ["read", "write"]),
   entry("automation", "cron", "Cron Jobs", "Scheduled task orchestration.", "native", ["local"], ["scheduling"]),
   entry("automation", "webhooks", "Webhooks", "Inbound/outbound webhook automation.", "native", ["token"], ["events", "automation"]),
   entry("automation", "weather", "Weather", "Weather data integration.", "native", ["none"], ["data"]),
   entry("automation", "image-gen", "Image Generation", "Image generation model integration with generate/edit support.", "beta", ["api-key"], ["generation", "edits"]),
-  entry("automation", "gif-search", "GIF Search", "GIF search integration.", "planned", ["api-key"], ["search"]),
-  entry("automation", "peekaboo-screen", "Peekaboo Screen", "Screen capture and remote control integration.", "planned", ["local-agent"], ["capture", "control"]),
-  entry("automation", "camera-photo-video", "Camera", "Photo/video capture integration.", "planned", ["local-agent"], ["capture"]),
+  entry("automation", "gif-search", "GIF Search", "GIF search integration.", "beta", ["api-key"], ["search"]),
+  entry("automation", "peekaboo-screen", "Peekaboo Screen", "Screen capture and remote control integration.", "beta", ["local-agent"], ["capture", "control"]),
+  entry("automation", "camera-photo-video", "Camera", "Photo/video capture integration.", "beta", ["local-agent"], ["capture"]),
 
   // Platforms
-  entry("platform", "macos-menubar-voice", "macOS Menu Bar + Voice", "Native macOS app integration target.", "planned", ["local-agent"], ["voice", "tray"]),
-  entry("platform", "ios-canvas-camera-voice", "iOS Canvas/Camera/Voice", "Native iOS companion capabilities.", "planned", ["app-auth"], ["canvas", "camera", "voice"]),
+  entry("platform", "macos-menubar-voice", "macOS Menu Bar + Voice", "Native macOS app integration target.", "beta", ["local-agent"], ["voice", "tray"]),
+  entry("platform", "ios-canvas-camera-voice", "iOS Canvas/Camera/Voice", "Native iOS companion capabilities.", "beta", ["app-auth"], ["canvas", "camera", "voice"]),
   entry("platform", "android-canvas-camera-screen", "Android Canvas/Camera/Screen", "Native Android companion capabilities.", "beta", ["app-auth"], ["canvas", "camera", "screen"]),
   entry("platform", "windows-wsl2", "Windows (WSL2 Recommended)", "Windows host platform support.", "native", ["local"], ["desktop"]),
   entry("platform", "linux-native", "Linux Native", "Linux native platform support.", "native", ["local"], ["desktop"]),
@@ -528,7 +711,7 @@ function entry(
   } = {},
 ): IntegrationCatalogEntry {
   const catalogId = `${kind}.${key}`;
-  return {
+  return entryWithOperatorActions({
     catalogId,
     kind,
     key,
@@ -539,7 +722,7 @@ function entry(
     capabilities,
     pluginId: options.pluginId,
     formSchema: FORM_SCHEMA_OVERRIDES[catalogId] ?? buildDefaultFormSchema(catalogId, label, kind, key),
-  };
+  });
 }
 
 function buildDefaultFormSchema(

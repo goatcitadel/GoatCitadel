@@ -1495,7 +1495,16 @@ function toPreview(value: string): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return normalized.length > 4000 ? `${normalized.slice(0, 3997)}...` : normalized;
+  if (normalized.length <= 4000) {
+    return normalized;
+  }
+  const truncationMarker = "...[truncated]";
+  if (normalized.includes(truncationMarker)) {
+    const previewBudget = 4000 - truncationMarker.length - 1;
+    const head = normalized.slice(0, Math.max(0, previewBudget)).trimEnd();
+    return `${head}\n${truncationMarker}`;
+  }
+  return `${normalized.slice(0, 3997)}...`;
 }
 
 function asOptionalString(value: unknown): string | undefined {

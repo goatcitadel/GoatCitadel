@@ -11,9 +11,19 @@
  */
 
 import {
+  type ChannelReplyInput,
+  type ChannelReactInput,
+  type ChannelSendInput,
+  type ChannelTypingInput,
+  type ChannelTypingResult,
+  type ChannelUnsendInput,
   ConflictError,
+  type ConnectorRecord,
+  type McpInvokeRequest,
+  type McpInvokeResponse,
   NotFoundError,
   type ApprovalWaitWorkflowPayload,
+  type ChatSendMessageRequest,
   type ChatTurnTraceRecord,
   type ConnectorDeliveryWorkflowPayload,
   type DurableCheckpointRecord,
@@ -24,12 +34,76 @@ import {
   type DurableRunTimelineEvent,
   type HookTrigger,
   type ProactiveTickWorkflowPayload,
+  type ProactiveRunRecord,
+  type ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import type { Storage } from "@goatcitadel/storage";
 import { dispatchConnectorDelivery } from "./connector-delivery.js";
+import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
-import type { DurableChatTurnExecutionPayload, GatewayService } from "./gateway-service.js";
+import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import type { DurableChatTurnExecutionPayload } from "./gateway-service.js";
+import type { DurableRunService } from "./durable-run-service.js";
+import type { HooksService } from "./hooks-service.js";
+import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 
-export type DurableExecutionHost = GatewayService;
+type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["storage"] &
+  Pick<Storage, "approvals" | "audit" | "chatMessages">;
+
+export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDispatchHost {
+  readonly storage: DurableExecutionStorage;
+  readonly gatewaySql: Storage["gatewaySql"];
+  readonly durableRunService: Pick<
+    DurableRunService,
+    | "createDurableRun"
+    | "getDurableRun"
+    | "listDurableRuns"
+    | "listDurableDeadLetters"
+    | "listDurableRunCheckpoints"
+    | "listDurableRunTimeline"
+    | "getDurableDiagnostics"
+    | "pauseDurableRun"
+    | "resumeDurableRun"
+    | "cancelDurableRun"
+    | "retryDurableRun"
+    | "wakeDurableRun"
+    | "recoverDurableDeadLetter"
+    | "requestRunProcessing"
+  >;
+  readonly hooksService: Pick<HooksService, "executeHookDelivery" | "markHookRunDeadLettered" | "enqueueAfterHooks">;
+  readonly memoryLifecycleService: Pick<
+    MemoryLifecycleService,
+    "parseMaintenanceWorkflowPayload" | "syncMaintenanceFromDurableRun" | "executeMaintenanceDurableRun"
+  >;
+  readonly chatProactiveService: Pick<ChatProactiveService, "executeDurableProactiveTickRun">;
+  prepareAgentChatTurn(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+    options?: {
+      branchKind?: PreparedAgentChatTurn["branchKind"];
+      sourceTurnId?: string;
+      parentTurnId?: string;
+      existingUserMessage?: PreparedAgentChatTurn["userMessage"];
+      ingestUserMessage?: boolean;
+      turnId?: string;
+      assistantMessageId?: string;
+    },
+  ): Promise<PreparedAgentChatTurn>;
+  requireConnectorRecord(connectorId: string): ConnectorRecord;
+  commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>>;
+  commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>>;
+  commsUnsend(input: ChannelUnsendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
+  commsTyping(input: ChannelTypingInput): Promise<ChannelTypingResult | Record<string, unknown>>;
+  invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse>;
+  computeDurableRetryDelayMs(current: DurableRunRecord, attemptNo: number): number;
+  resolveDurableRunHookWorkspaceId(run: DurableRunRecord): string;
+  listChatSessionProactiveRuns(sessionId: string, limit?: number): ProactiveRunRecord[];
+  recordDurableTimelineEvent(
+    runId: string,
+    eventType: DurableRunTimelineEvent["eventType"],
+    payload?: Record<string, unknown>,
+  ): void;
+}
 
 type HookDeliveryWorkflowPayload = {
   version: "hook.delivery.v1";
@@ -293,7 +367,7 @@ export function isDurableWorkflowRecoverable(
 ): { recoverable: boolean; reason?: string } {
   switch (run.workflowKey) {
     case "memory.maintenance":
-      return host.memoryMaintenanceService.parseWorkflowPayload(run)
+      return host.memoryLifecycleService.parseMaintenanceWorkflowPayload(run)
         ? { recoverable: true }
         : { recoverable: false, reason: "Durable memory maintenance payload is invalid or incomplete." };
     case "chat.turn.execute":
@@ -351,7 +425,7 @@ export async function markDurableWorkflowUnrecoverable(
   reason: string,
 ): Promise<void> {
   if (run.workflowKey === "memory.maintenance") {
-    host.memoryMaintenanceService.syncFromDurableRun(run);
+    host.memoryLifecycleService.syncMaintenanceFromDurableRun(run);
     host.publishRealtime("system", "durable", {
       type: "durable_workflow_unrecoverable",
       runId: run.runId,
@@ -464,7 +538,7 @@ export async function markDurableWorkflowUnrecoverable(
 export async function executeDurableWorkflowRun(host: DurableExecutionHost, run: DurableRunRecord): Promise<void> {
   switch (run.workflowKey) {
     case "memory.maintenance":
-      completeDurableWorkflowRun(host, run.runId, await host.memoryMaintenanceService.executeDurableRun(run));
+      completeDurableWorkflowRun(host, run.runId, await host.memoryLifecycleService.executeMaintenanceDurableRun(run));
       return;
     case "chat.turn.execute":
       await executeDurableChatTurnRun(host, run);
@@ -532,14 +606,14 @@ export function pauseDurableRun(host: DurableExecutionHost, runId: string, actor
 
 export function resumeDurableRun(host: DurableExecutionHost, runId: string, actorId = "operator"): DurableRunRecord {
   const run = host.durableRunService.resumeDurableRun(runId, actorId);
-  host.memoryMaintenanceService.syncFromDurableRun(run);
+  host.memoryLifecycleService.syncMaintenanceFromDurableRun(run);
   host.durableRunService.requestRunProcessing(runId);
   return run;
 }
 
 export function cancelDurableRun(host: DurableExecutionHost, runId: string, actorId = "operator"): DurableRunRecord {
   const run = host.durableRunService.cancelDurableRun(runId, actorId);
-  host.memoryMaintenanceService.syncFromDurableRun(run);
+  host.memoryLifecycleService.syncMaintenanceFromDurableRun(run);
   return run;
 }
 
@@ -550,7 +624,7 @@ export function retryDurableRun(
   actorId = "operator",
 ): DurableRunRecord {
   const run = host.durableRunService.retryDurableRun(runId, reason, actorId);
-  host.memoryMaintenanceService.syncFromDurableRun(run);
+  host.memoryLifecycleService.syncMaintenanceFromDurableRun(run);
   if (run.status === "queued") {
     host.durableRunService.requestRunProcessing(runId);
   }

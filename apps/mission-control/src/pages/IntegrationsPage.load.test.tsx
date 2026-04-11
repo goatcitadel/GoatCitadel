@@ -27,6 +27,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchIntegrationPlugins: vi.fn(),
   fetchObsidianIntegrationStatus: vi.fn(),
   fetchSettings: vi.fn(),
+  invokeIntegrationConnectionAction: vi.fn(),
   installIntegrationPlugin: vi.fn(),
   patchObsidianIntegrationConfig: vi.fn(),
   reconnectDiscordRuntime: vi.fn(),
@@ -62,6 +63,7 @@ vi.mock("../api/client", async () => {
     fetchIntegrationPlugins: apiMocks.fetchIntegrationPlugins,
     fetchObsidianIntegrationStatus: apiMocks.fetchObsidianIntegrationStatus,
     fetchSettings: apiMocks.fetchSettings,
+    invokeIntegrationConnectionAction: apiMocks.invokeIntegrationConnectionAction,
     installIntegrationPlugin: apiMocks.installIntegrationPlugin,
     patchObsidianIntegrationConfig: apiMocks.patchObsidianIntegrationConfig,
     reconnectDiscordRuntime: apiMocks.reconnectDiscordRuntime,
@@ -139,7 +141,7 @@ function rendererText(renderer: ReactTestRenderer): string {
 
 function baseCatalogEntry() {
   return {
-    catalogId: "integration.discord",
+    catalogId: "channel.discord",
     key: "discord",
     kind: "channel" as const,
     label: "Discord",
@@ -285,7 +287,7 @@ describe("IntegrationsPage load discipline", () => {
     }
   });
 
-  it("allows runnable planned entries to be created", async () => {
+  it("allows runnable beta entries to be created", async () => {
     apiMocks.fetchIntegrationCatalog.mockResolvedValue({
       items: [{
         ...baseCatalogEntry(),
@@ -293,7 +295,7 @@ describe("IntegrationsPage load discipline", () => {
         key: "whatsapp",
         label: "WhatsApp",
         description: "WhatsApp Cloud bridge",
-        maturity: "planned" as const,
+        maturity: "beta" as const,
         runtimeAvailability: "runnable" as const,
       }],
     });
@@ -321,16 +323,16 @@ describe("IntegrationsPage load discipline", () => {
     }
   });
 
-  it("keeps blocked planned entries non-runnable", async () => {
+  it("keeps blocked visible entries non-runnable", async () => {
     apiMocks.fetchIntegrationCatalog.mockResolvedValue({
       items: [{
         ...baseCatalogEntry(),
         catalogId: "automation.image-gen",
         key: "image-gen",
         label: "Image Generation",
-        description: "Planned image generation route",
+        description: "Image generation route",
         kind: "automation" as const,
-        maturity: "planned" as const,
+        maturity: "beta" as const,
         runtimeAvailability: "blocked" as const,
       }],
     });
@@ -364,7 +366,7 @@ describe("IntegrationsPage load discipline", () => {
           key: "whatsapp",
           label: "WhatsApp",
           description: "WhatsApp Cloud bridge",
-          maturity: "planned" as const,
+          maturity: "beta" as const,
           runtimeAvailability: "runnable" as const,
         },
       ],
@@ -411,7 +413,7 @@ describe("IntegrationsPage load discipline", () => {
         key: "signal",
         label: "Signal",
         description: "Signal bridge",
-        maturity: "planned" as const,
+        maturity: "beta" as const,
         runtimeAvailability: "blocked" as const,
       }],
     });
@@ -424,7 +426,79 @@ describe("IntegrationsPage load discipline", () => {
       await flush();
 
       expect(rendererText(renderer)).toMatch(/Setup path:\s+Unavailable in current runtime/);
-      expect(rendererText(renderer)).toContain("GoatCitadel cannot create a runnable connection");
+      expect(rendererText(renderer)).toContain("current runtime posture still blocks a runnable connection");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("shows runnable operator actions for visible non-channel entries", async () => {
+    apiMocks.fetchIntegrationCatalog.mockResolvedValue({
+      items: [{
+        catalogId: "productivity.apple-notes",
+        key: "apple-notes",
+        kind: "productivity" as const,
+        label: "Apple Notes",
+        description: "Apple Notes local bridge",
+        authMethods: ["bridge"],
+        capabilities: ["read", "write"],
+        maturity: "beta" as const,
+        runtimeAvailability: "runnable" as const,
+        operatorActions: [
+          {
+            actionId: "read",
+            label: "Read Sample",
+            description: "Fetch a sample note payload.",
+            capability: "read",
+          },
+        ],
+      }],
+    });
+    apiMocks.fetchIntegrationConnections.mockResolvedValue({
+      items: [{
+        connectionId: "connection-apple-notes",
+        catalogId: "productivity.apple-notes",
+        kind: "productivity" as const,
+        key: "apple-notes",
+        label: "Apple Notes Bridge",
+        enabled: true,
+        status: "connected" as const,
+        config: { bridgeUrl: "http://127.0.0.1:4040" },
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:00:00.000Z",
+      }],
+    });
+    apiMocks.invokeIntegrationConnectionAction.mockResolvedValue({
+      connectionId: "connection-apple-notes",
+      catalogId: "productivity.apple-notes",
+      actionId: "read",
+      status: "executed",
+      message: "Fetched sample note payload.",
+      checkedAt: "2026-04-10T00:00:00.000Z",
+      output: {
+        items: [{ title: "Sample note" }],
+      },
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<IntegrationsPage />);
+      });
+      await flush();
+
+      expect(rendererText(renderer)).toContain("Operator Actions");
+      await act(async () => {
+        findButton(renderer.root, "Run Read Sample").props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.invokeIntegrationConnectionAction).toHaveBeenCalledWith(
+        "connection-apple-notes",
+        "read",
+        { input: {} },
+      );
+      expect(rendererText(renderer)).toContain("Fetched sample note payload.");
     } finally {
       renderer.unmount();
     }

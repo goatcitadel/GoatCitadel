@@ -75,11 +75,11 @@ export class SessionRepository {
     this.applyUsageStmt = db.prepare(`
       UPDATE sessions
       SET
-        token_input = token_input + @tokenInput,
-        token_output = token_output + @tokenOutput,
-        token_cached_input = token_cached_input + @tokenCachedInput,
-        token_total = token_total + (@tokenInput + @tokenOutput),
-        cost_usd_total = cost_usd_total + @costUsd,
+        token_input = token_input + CAST(@tokenInput AS INTEGER),
+        token_output = token_output + CAST(@tokenOutput AS INTEGER),
+        token_cached_input = token_cached_input + CAST(@tokenCachedInput AS INTEGER),
+        token_total = token_total + (CAST(@tokenInput AS INTEGER) + CAST(@tokenOutput AS INTEGER)),
+        cost_usd_total = cost_usd_total + CAST(@costUsd AS REAL),
         last_activity_at = @timestamp,
         updated_at = @timestamp
       WHERE session_id = @sessionId

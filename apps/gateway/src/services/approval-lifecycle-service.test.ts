@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveChatToolApproval, type ApprovalLifecycleHost } from "./approval-lifecycle-service.js";
 
 describe("resolveChatToolApproval", () => {
-  it("wakes the linked durable chat turn and reports that the runtime resumed", async () => {
+  it("uses the shared approval resolution wake result instead of double-waking the linked turn", async () => {
     const approval = {
       approvalId: "approval-1",
       kind: "shell.exec",
@@ -69,9 +69,16 @@ describe("resolveChatToolApproval", () => {
           events: [],
           pendingAction: undefined,
         },
-      })),
-      wakeDurableRun: vi.fn(() => ({
-        runId: "durable-turn-1",
+        durableRunId: "approval-wait-1",
+        resolutionEffects: {
+          approvalWaitDurableRunId: "approval-wait-1",
+          proactiveRunIds: [],
+          chatTurnResume: {
+            resumed: true,
+            turnId: "turn-1",
+            durableRunId: "durable-turn-1",
+          },
+        },
       })),
     } as unknown as ApprovalLifecycleHost;
 
@@ -82,10 +89,6 @@ describe("resolveChatToolApproval", () => {
     expect(host.resolveApproval).toHaveBeenCalledWith("approval-1", expect.objectContaining({
       decision: "approve",
       resolvedBy: "chat-operator",
-    }));
-    expect(host.wakeDurableRun).toHaveBeenCalledWith("durable-turn-1", expect.objectContaining({
-      eventKey: "approval.resolved",
-      correlationId: "approval-1",
     }));
     expect(result).toMatchObject({
       allowScope: "once",

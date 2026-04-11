@@ -351,6 +351,7 @@ export {
   fetchIntegrationFormSchema,
   fetchIntegrationPlugins,
   fetchObsidianIntegrationStatus,
+  invokeIntegrationConnectionAction,
   installIntegrationPlugin,
   patchObsidianIntegrationConfig,
   readObsidianNote,
@@ -617,16 +618,19 @@ export {
   createMediaJob,
   fetchCostSummary,
   fetchDashboardState,
+  fetchHealthSummary,
   fetchMediaJob,
   fetchMediaJobs,
   fetchRealtimeEvents,
   fetchRetentionPolicy,
   fetchSystemVitals,
+  fetchTimelineSummary,
   listBackups,
   pruneRetention,
   restoreBackup,
   runCheaper,
   updateRetentionPolicy,
+  verifyBackup,
 } from "./system.js";
 
 export type EventStreamConnectionState = "connecting" | "open" | "retrying" | "error" | "closed";

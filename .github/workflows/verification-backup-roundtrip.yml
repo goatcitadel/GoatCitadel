@@ -1,0 +1,51 @@
+name: Verification Backup Roundtrip
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/gateway/**"
+      - "scripts/verification/**"
+      - ".github/workflows/verification-backup-roundtrip.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+
+jobs:
+  backup-roundtrip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Prepare pnpm
+        run: corepack prepare pnpm@10.31.0 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run backup-roundtrip verification
+        run: pnpm verify:backup:roundtrip
+
+      - name: Run review generation
+        if: always()
+        run: pnpm verify:review
+
+      - name: Upload verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-backup-roundtrip-artifacts
+          path: artifacts/verification
+          if-no-files-found: ignore

@@ -189,6 +189,51 @@ describe("integration-catalog", () => {
     expect(resolveIntegrationCatalogMaturity(voice, new Set())).toBe("beta");
     expect(voice.capabilities).toEqual(expect.arrayContaining(["voice"]));
   });
+
+  it("keeps the OpenAI-compatible visible provider set at operator-ready catalog maturity", () => {
+    const providerCatalogIds = [
+      "model_provider.minimax",
+      "model_provider.vercel",
+      "model_provider.mistral",
+      "model_provider.deepseek",
+      "model_provider.perplexity",
+      "model_provider.huggingface",
+    ];
+
+    for (const catalogId of providerCatalogIds) {
+      const entry = requireCatalogEntry(catalogId);
+      expect(entry.maturity).toBe("beta");
+      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("beta");
+      expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("runnable");
+    }
+  });
+
+  it("keeps the mandatory visible non-provider catalog set at operator-ready beta maturity", () => {
+    const catalogIds = [
+      "productivity.apple-notes",
+      "productivity.apple-reminders",
+      "productivity.things3",
+      "productivity.bear",
+      "productivity.trello",
+      "automation.gif-search",
+      "automation.peekaboo-screen",
+      "automation.camera-photo-video",
+      "platform.macos-menubar-voice",
+      "platform.ios-canvas-camera-voice",
+    ];
+
+    for (const catalogId of catalogIds) {
+      const entry = requireCatalogEntry(catalogId);
+      expect(entry.maturity).toBe("beta");
+      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("beta");
+      expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("runnable");
+      expect(getIntegrationFormSchema(catalogId)?.fields.length).toBeGreaterThan(0);
+      expect(entry.operatorActions?.length ?? 0).toBeGreaterThan(0);
+      expect(entry.capabilities).toEqual(
+        expect.arrayContaining((entry.operatorActions ?? []).map((action) => action.capability)),
+      );
+    }
+  });
 });
 
 function requireCatalogEntry(catalogId: string): IntegrationCatalogEntry {

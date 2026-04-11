@@ -171,13 +171,8 @@ export function IntegrationsCreateConnectionPanel(props: IntegrationsCreateConne
               ) : null}
               {selectedCatalog.runtimeAvailability === "blocked" ? (
                 <FieldHelp>
-                  This catalog entry stays visible for planning, but GoatCitadel cannot create a runnable connection
-                  from it in the current runtime yet.
-                </FieldHelp>
-              ) : selectedCatalog.maturity === "planned" ? (
-                <FieldHelp>
-                  This catalog entry is runnable through the current runtime, but the parity program still classifies it
-                  as unfinished. Expect manual setup and follow-on proof work.
+                  This integration remains visible so operators can prepare it, but the current runtime posture
+                  still blocks a runnable connection or supported action path.
                 </FieldHelp>
               ) : null}
               {selectedCatalog.kind === "channel" && selectedCatalogSetupPath ? (

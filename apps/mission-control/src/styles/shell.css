@@ -98,6 +98,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: calc(var(--space-2) * var(--density-scale));
   padding: 0 calc(var(--space-4) * var(--density-scale)) calc(var(--space-2) * var(--density-scale));
   border-bottom: 1px solid var(--border-default);
@@ -105,6 +106,26 @@
 
 .shell-secondary-nav.compact {
   justify-content: flex-start;
+}
+
+.shell-secondary-nav-primary {
+  min-width: 0;
+  flex: 1 1 520px;
+}
+
+.shell-trust-hud {
+  min-width: min(100%, 420px);
+  flex: 1 1 420px;
+  display: grid;
+  justify-items: end;
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+.shell-trust-hud-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: calc(var(--space-2) * var(--density-scale));
 }
 
 .shell-main {
@@ -295,6 +316,12 @@
   .shell-bar-actions {
     justify-content: flex-start;
   }
+
+  .shell-trust-hud,
+  .shell-trust-hud-chips {
+    justify-items: flex-start;
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 899px) {
@@ -325,6 +352,16 @@
 
   .surface-nav,
   .secondary-page-nav {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .shell-trust-hud {
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .shell-trust-hud-chips {
     overflow-x: auto;
     flex-wrap: nowrap;
   }

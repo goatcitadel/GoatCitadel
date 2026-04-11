@@ -15,8 +15,11 @@ import {
   fetchIntegrationPlugins,
   fetchObsidianIntegrationStatus,
   fetchIntegrationConnectionDiagnostics,
+  invokeIntegrationConnectionAction,
   type IntegrationCatalogEntry,
+  type IntegrationActionInvokeResult,
   type IntegrationConnection,
+  type IntegrationOperatorAction,
   type ObsidianIntegrationStatus,
 } from "../api/client";
 import type {
@@ -78,6 +81,7 @@ import { IntegrationsChannelTestBench } from "./integrations/IntegrationsChannel
 import { IntegrationsConnectionsTable } from "./integrations/IntegrationsConnectionsTable";
 import { IntegrationsCreateConnectionPanel } from "./integrations/IntegrationsCreateConnectionPanel";
 import { IntegrationsObsidianPanel } from "./integrations/IntegrationsObsidianPanel";
+import { IntegrationsOperatorActionsPanel } from "./integrations/IntegrationsOperatorActionsPanel";
 import { IntegrationsPageIntro } from "./integrations/IntegrationsPageIntro";
 import { IntegrationsPluginsPanel } from "./integrations/IntegrationsPluginsPanel";
 import { useIntegrationsChannelActions } from "./integrations/useIntegrationsChannelActions";
@@ -144,6 +148,8 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
     Record<string, Awaited<ReturnType<typeof fetchIntegrationConnectionDiagnostics>>>
   >({});
   const [selectedDiagnosticConnectionId, setSelectedDiagnosticConnectionId] = useState<string | null>(null);
+  const [operatorActionBusyKey, setOperatorActionBusyKey] = useState<string | null>(null);
+  const [operatorActionResult, setOperatorActionResult] = useState<IntegrationActionInvokeResult | null>(null);
   const [discordPairingsByConnectionId, setDiscordPairingsByConnectionId] = useState<
     Record<
       string,
@@ -332,7 +338,7 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
   const selectedCatalogIsRunnable = selectedCatalog
     ? selectedCatalog.runtimeAvailability
       ? selectedCatalog.runtimeAvailability === "runnable"
-      : selectedCatalog.maturity !== "planned"
+      : selectedCatalog.maturity === "native" || selectedCatalog.maturity === "beta" || selectedCatalog.maturity === "plugin"
     : false;
   const selectedCatalogSetupPath = selectedCatalog
     ? resolveChannelSetupPath(selectedCatalog, guidedChannelCatalogIds)
@@ -418,6 +424,25 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
   const selectedChannelRuntimeStatus = selectedChannelConnection
     ? channelRuntimeStatusByConnectionId[selectedChannelConnection.connectionId]
     : undefined;
+
+  const runOperatorAction = async (
+    connection: IntegrationConnection,
+    action: IntegrationOperatorAction,
+    input: Record<string, unknown>,
+  ) => {
+    const busyKey = `${connection.connectionId}:${action.actionId}`;
+    setOperatorActionBusyKey(busyKey);
+    try {
+      const result = await invokeIntegrationConnectionAction(connection.connectionId, action.actionId, { input });
+      setOperatorActionResult(result);
+      setError(null);
+      await load({ background: true });
+    } catch (nextError) {
+      setError((nextError as Error).message);
+    } finally {
+      setOperatorActionBusyKey(null);
+    }
+  };
 
   const effectiveConfig = useMemo(() => {
     if (showAdvancedJson) {
@@ -741,6 +766,16 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
         selectedDiagnosticConnectionId={selectedDiagnosticConnectionId}
         selectedDiagnostics={selectedDiagnostics}
       />
+
+      {!isChannelsView ? (
+        <IntegrationsOperatorActionsPanel
+          catalog={catalog}
+          connections={connections}
+          busyKey={operatorActionBusyKey}
+          result={operatorActionResult}
+          onRunAction={runOperatorAction}
+        />
+      ) : null}
 
       <IntegrationsChannelTestBench
         channelConnections={channelConnections}

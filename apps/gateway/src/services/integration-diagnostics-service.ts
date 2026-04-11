@@ -268,6 +268,100 @@ export function buildIntegrationConnectionChecks(
     }
     if (connection.key === "gmail") {
       requireText("auth", "Gmail refresh token handle", host.readConnectionConfigValue(config, "refreshTokenHandle"));
+      checks.push({
+        key: "auth_mode",
+        status: hasConnectionEnvValue(host, config, "clientIdEnv") && hasConnectionEnvValue(host, config, "clientSecretEnv")
+          ? "pass"
+          : "warn",
+        message:
+          hasConnectionEnvValue(host, config, "clientIdEnv") && hasConnectionEnvValue(host, config, "clientSecretEnv")
+            ? "OAuth client env references are configured."
+            : "OAuth client env references are not fully configured yet.",
+      });
+    }
+    if (connection.key === "gif-search") {
+      requireText("provider", "GIF search provider", host.readConnectionConfigValue(config, "provider"), "warn");
+      checks.push({
+        key: "auth",
+        status: hasConnectionEnvValue(host, config, "apiKeyEnv") || host.readConnectionConfigValue(config, "apiKey")
+          ? "pass"
+          : "fail",
+        message:
+          hasConnectionEnvValue(host, config, "apiKeyEnv") || host.readConnectionConfigValue(config, "apiKey")
+            ? "GIF search API key is configured."
+            : "GIF search API key is missing.",
+      });
+    }
+    if (connection.key === "peekaboo-screen" || connection.key === "camera-photo-video") {
+      const bridgeUrl = host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
+      checkUrl("url", "Local bridge URL", bridgeUrl, true);
+      checks.push({
+        key: "bridge_auth",
+        status: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl)
+          || host.readConnectionConfigValue(config, "authToken")
+          || hasConnectionEnvValue(host, config, "authTokenEnv")
+          ? "pass"
+          : "warn",
+        message: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl)
+          ? "Local bridge URL is configured."
+          : host.readConnectionConfigValue(config, "authToken") || hasConnectionEnvValue(host, config, "authTokenEnv")
+            ? "Remote bridge authentication is configured."
+            : "Remote bridge authentication is not configured.",
+      });
+    }
+  } else if (connection.kind === "productivity") {
+    if (connection.key === "trello") {
+      checks.push({
+        key: "auth",
+        status:
+          hasConnectionEnvValue(host, config, "apiKeyEnv") && hasConnectionEnvValue(host, config, "tokenEnv")
+            ? "pass"
+            : "fail",
+        message:
+          hasConnectionEnvValue(host, config, "apiKeyEnv") && hasConnectionEnvValue(host, config, "tokenEnv")
+            ? "Trello API credentials are configured."
+            : "Trello API credentials are missing.",
+      });
+      requireText("target", "Default Trello board", host.readConnectionConfigValue(config, "defaultBoardId"), "warn");
+    }
+    if (["apple-notes", "apple-reminders", "things3", "bear"].includes(connection.key)) {
+      const bridgeUrl = host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
+      checkUrl("url", "Local bridge URL", bridgeUrl, true);
+      checks.push({
+        key: "host_requirement",
+        status: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl) ? "pass" : "warn",
+        message: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl)
+          ? "Local bridge host requirement is satisfied."
+          : "This productivity integration expects a local bridge or agent on the same trusted network.",
+      });
+    }
+  } else if (connection.kind === "platform") {
+    if (connection.key === "macos-menubar-voice") {
+      const bridgeUrl = host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
+      checkUrl("url", "macOS bridge URL", bridgeUrl, true);
+      checks.push({
+        key: "host_requirement",
+        status: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl) ? "pass" : "warn",
+        message: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl)
+          ? "macOS bridge is configured on a local host."
+          : "macOS Menu Bar + Voice expects a trusted local bridge or agent host.",
+      });
+    }
+    if (connection.key === "ios-canvas-camera-voice") {
+      requireText("device", "Device ID", host.readConnectionConfigValue(config, "deviceId"), "warn");
+      checks.push({
+        key: "companion",
+        status:
+          host.readConnectionConfigValue(config, "companionSessionId")
+          || host.readConnectionConfigValue(config, "bridgeUrl")
+            ? "pass"
+            : "warn",
+        message:
+          host.readConnectionConfigValue(config, "companionSessionId")
+          || host.readConnectionConfigValue(config, "bridgeUrl")
+            ? "A companion session or bridge target is configured."
+            : "Pair an iOS companion session or bridge target before claiming this capability as ready.",
+      });
     }
   }
 

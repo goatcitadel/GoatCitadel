@@ -26,6 +26,7 @@ import {
 } from "./api/shell-client";
 import { fetchDashboardState, type DashboardStateResponse } from "./api/client";
 import { DeviceAccessApprovalModal, type DeviceAccessApprovalPrompt } from "./components/DeviceAccessApprovalModal";
+import { GlobalFreshnessPill } from "./components/GlobalFreshnessPill";
 import { GCSelect } from "./components/ui";
 import { GatewayAccessGate } from "./components/GatewayAccessGate";
 import { NotificationStack, type NotificationItem, upsertNotificationItem } from "./components/NotificationStack";
@@ -37,24 +38,25 @@ import { StatusStrip } from "./components/StatusStrip";
 import { appCopy } from "./content/copy";
 import {
   buildRouteSearch,
+  buildRouteForVisiblePage,
   DEFAULT_ROUTE,
-  getPageLabel,
-  isWorkSurface,
+  getVisiblePage,
+  getVisiblePageLabel,
   normalizeResolvedRoute,
-  PAGE_META,
   readRouteFromLocation,
   SPACE_META,
-  SPACE_PAGES,
-  type ActivityTab,
+  VISIBLE_SPACE_PAGES,
   type AgentsTab,
   type ArtifactsTab,
   type IntegrationsTab,
   type ResolvedRoute,
-  type SettingsTab,
   type Space,
-  type SpacePage,
-  type WorkSurface,
+  type VisiblePage,
 } from "./content/page-registry";
+import type { GeneralTab } from "./pages/GeneralHubPage";
+import type { HealthTab } from "./pages/HealthPage";
+import type { TimelineTab } from "./pages/TimelinePage";
+import type { WorkspacesTab } from "./pages/WorkspacesHubPage";
 import { emitRefresh, type RefreshTopic } from "./state/refresh-bus";
 import { useUiPreferences } from "./state/ui-preferences";
 import { resolveEffectiveEffectsMode } from "./state/effects-mode";
@@ -93,21 +95,21 @@ function lazyPage<TModule extends Record<string, unknown>, TExport extends keyof
   }) as LazyPageComponent<TModule, TExport>;
 }
 
-const ActivityHubPage = lazyPage(() => import("./pages/ActivityHubPage"), "ActivityHubPage");
 const AgentsHubPage = lazyPage(() => import("./pages/AgentsHubPage"), "AgentsHubPage");
 const ApprovalsPage = lazyPage(() => import("./pages/ApprovalsPage"), "ApprovalsPage");
 const ArtifactsPage = lazyPage(() => import("./pages/ArtifactsPage"), "ArtifactsPage");
 const ChatPage = lazyPage(() => import("./pages/ChatPage"), "ChatPage");
 const CommandPalette = lazyPage(() => import("./components/CommandPalette"), "CommandPalette");
-const CostConsolePage = lazyPage(() => import("./pages/CostConsolePage"), "CostConsolePage");
 const DevDiagnosticsPanel = lazyPage(() => import("./components/DevDiagnosticsPanel"), "DevDiagnosticsPanel");
+const GeneralHubPage = lazyPage(() => import("./pages/GeneralHubPage"), "GeneralHubPage");
+const HealthPage = lazyPage(() => import("./pages/HealthPage"), "HealthPage");
 const IntegrationsHubPage = lazyPage(() => import("./pages/IntegrationsHubPage"), "IntegrationsHubPage");
 const PromptLabPage = lazyPage(() => import("./pages/PromptLabPage"), "PromptLabPage");
-const SessionsPage = lazyPage(() => import("./pages/SessionsPage"), "SessionsPage");
-const SettingsHubPage = lazyPage(() => import("./pages/SettingsHubPage"), "SettingsHubPage");
-const SystemPage = lazyPage(() => import("./pages/SystemPage"), "SystemPage");
+const RuntimeHubPage = lazyPage(() => import("./pages/RuntimeHubPage"), "RuntimeHubPage");
 const TasksPage = lazyPage(() => import("./pages/TasksPage"), "TasksPage");
+const TimelinePage = lazyPage(() => import("./pages/TimelinePage"), "TimelinePage");
 const ToolsPage = lazyPage(() => import("./pages/ToolsPage"), "ToolsPage");
+const WorkspacesHubPage = lazyPage(() => import("./pages/WorkspacesHubPage"), "WorkspacesHubPage");
 const GATEWAY_ACCESS_AUTO_RETRY_MS = 300;
 const OPERATE_STATUS_STALE_AFTER_MS = 45_000;
 
@@ -165,6 +167,52 @@ function PageLoadingFallback({ label }: { label: string }) {
 
 function deriveOperateStatusStripCollapsed(route: ResolvedRoute): boolean {
   return route.space === "operate" && route.page === "surface";
+}
+
+function resolveShellThemeClass(): "theme-signal-noir" | "theme-citadel-light" {
+  if (typeof window === "undefined") {
+    return "theme-signal-noir";
+  }
+  const value = new URLSearchParams(window.location.search).get("theme")?.trim().toLowerCase();
+  if (value === "light" || value === "citadel-light" || value === "theme-citadel-light") {
+    return "theme-citadel-light";
+  }
+  return "theme-signal-noir";
+}
+
+function deriveTimelineTab(route: ResolvedRoute): TimelineTab {
+  if (route.space !== "observe") {
+    return "activity";
+  }
+  if (route.page === "sessions") {
+    return "sessions";
+  }
+  if (route.page === "activity" && route.tab === "scheduler") {
+    return "scheduler";
+  }
+  if (route.page === "activity" && route.tab === "improvement") {
+    return "improvement";
+  }
+  return "activity";
+}
+
+function deriveHealthTab(route: ResolvedRoute): HealthTab {
+  return route.space === "observe" && route.page === "system" ? "system" : "costs";
+}
+
+function deriveGeneralTab(route: ResolvedRoute): GeneralTab {
+  if (
+    route.space === "configure" &&
+    route.page === "settings" &&
+    (route.tab === "providers" || route.tab === "access" || route.tab === "budget" || route.tab === "onboarding")
+  ) {
+    return route.tab;
+  }
+  return "general";
+}
+
+function deriveWorkspacesTab(route: ResolvedRoute): WorkspacesTab {
+  return route.space === "configure" && route.page === "settings" && route.tab === "addons" ? "addons" : "workspaces";
 }
 
 const refreshTopicRules: Array<{ topic: RefreshTopic; keywords: string[] }> = [
@@ -370,43 +418,11 @@ export function App() {
     [navigate],
   );
 
-  const handleSelectPage = useCallback(
-    (page: SpacePage) => {
-      if (page === "surface") {
-        navigate({ space: "operate", page: "surface", surface: route.page === "surface" ? route.surface : "chat" });
-        return;
-      }
-      const meta = PAGE_META[page];
-      if (meta.space === "observe" && page === "activity") {
-        navigate({ space: "observe", page, tab: "activity" });
-        return;
-      }
-      if (meta.space === "observe" && page === "artifacts") {
-        navigate({ space: "observe", page, tab: "memory" });
-        return;
-      }
-      if (meta.space === "configure" && page === "settings") {
-        navigate({ space: "configure", page, tab: route.page === "settings" ? route.tab : "general" });
-        return;
-      }
-      if (meta.space === "configure" && page === "integrations") {
-        navigate({ space: "configure", page, tab: route.page === "integrations" ? route.tab : "overview" });
-        return;
-      }
-      if (meta.space === "configure" && page === "agents") {
-        navigate({ space: "configure", page, tab: route.page === "agents" ? route.tab : "overview" });
-        return;
-      }
-      navigate({ space: meta.space, page });
+  const handleSelectVisiblePage = useCallback(
+    (page: VisiblePage) => {
+      navigate(buildRouteForVisiblePage(route, page));
     },
-    [navigate, route.page, route.surface, route.tab],
-  );
-
-  const handleSelectSurface = useCallback(
-    (surface: WorkSurface) => {
-      navigate({ space: "operate", page: "surface", surface });
-    },
-    [navigate],
+    [navigate, route],
   );
 
   const handleOnboardingCompleted = useCallback(() => {
@@ -808,23 +824,25 @@ export function App() {
         keywords: [space, meta.label.toLowerCase()],
         run: () => handleSelectSpace(space as Space),
       })),
-      ...SPACE_PAGES.operate.map((item) => ({
-        id: `operate:${item.page}`,
-        label: item.page === "surface" ? "Open Chat surface" : `Open ${item.label}`,
-        keywords: [item.label.toLowerCase(), item.page],
-        run: () => (item.page === "surface" ? handleSelectSurface("chat") : handleSelectPage(item.page)),
-      })),
+      ...Object.entries(VISIBLE_SPACE_PAGES).flatMap(([space, pages]) =>
+        pages.map((item) => ({
+          id: `page:${space}:${item.page}`,
+          label: `Open ${item.label}`,
+          keywords: [space, item.label.toLowerCase(), item.page],
+          run: () => handleSelectVisiblePage(item.page),
+        })),
+      ),
       ...(["chat", "cowork", "code"] as const).map((surface) => ({
         id: `surface:${surface}`,
         label: `Open ${CHAT_MODE_PRESETS[surface].label}`,
         keywords: [surface, CHAT_MODE_PRESETS[surface].label.toLowerCase()],
-        run: () => handleSelectSurface(surface),
+        run: () => handleSelectVisiblePage(surface),
       })),
       {
         id: "settings:open",
-        label: "Open Settings",
-        keywords: ["settings", "configure"],
-        run: () => navigate({ space: "configure", page: "settings", tab: "general" }),
+        label: "Open General",
+        keywords: ["general", "settings", "configure", "tune"],
+        run: () => handleSelectVisiblePage("general"),
       },
       {
         id: "density:compact",
@@ -893,10 +911,8 @@ export function App() {
     ],
     [
       diagnosticsOpen,
-      handleSelectPage,
+      handleSelectVisiblePage,
       handleSelectSpace,
-      handleSelectSurface,
-      navigate,
       setDensity,
       setEffectsMode,
       setShowTechnicalDetails,
@@ -905,7 +921,8 @@ export function App() {
     ],
   );
 
-  const currentPageLabel = getPageLabel(route);
+  const visiblePage = getVisiblePage(route);
+  const currentPageLabel = getVisiblePageLabel(route);
   const operateApprovalsCount = deriveShellApprovalCount(operateStatus, localApprovalPromptCount);
   const operateActiveAgentsCount = operateStatus?.activeSubagents ?? 0;
   const operateDailyCostUsd = operateStatus?.dailyCostUsd ?? 0;
@@ -922,15 +939,13 @@ export function App() {
         : "Decisions clear";
 
   const operateSurfaceTab = route.space === "operate" && route.page === "surface" ? (route.surface ?? "chat") : "chat";
-
-  const observeActivityTab =
-    route.space === "observe" && route.page === "activity" ? ((route.tab ?? "activity") as ActivityTab) : "activity";
+  const timelineTab = deriveTimelineTab(route);
+  const healthTab = deriveHealthTab(route);
 
   const observeArtifactsTab =
     route.space === "observe" && route.page === "artifacts" ? ((route.tab ?? "memory") as ArtifactsTab) : "memory";
-
-  const configureSettingsTab =
-    route.space === "configure" && route.page === "settings" ? ((route.tab ?? "general") as SettingsTab) : "general";
+  const generalTab = deriveGeneralTab(route);
+  const workspacesTab = deriveWorkspacesTab(route);
 
   const configureIntegrationsTab =
     route.space === "configure" && route.page === "integrations"
@@ -941,6 +956,13 @@ export function App() {
     route.space === "configure" && route.page === "agents" ? ((route.tab ?? "overview") as AgentsTab) : "overview";
   const activeWorkspaceName =
     workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId;
+  const shellAreaLabel = route.space === "operate" && route.page === "surface"
+    ? CHAT_MODE_PRESETS[operateSurfaceTab].label
+    : currentPageLabel;
+  const runtimeSummaryLabel = operateActiveAgentsCount > 0
+    ? `${operateActiveAgentsCount} active runtime${operateActiveAgentsCount === 1 ? "" : "s"}`
+    : "No active runtime";
+  const workspaceSummaryLabel = activeWorkspaceName.trim().length > 0 ? activeWorkspaceName : "Workspace unavailable";
 
   useEffect(() => {
     if (route.space !== "operate") {
@@ -989,26 +1011,22 @@ export function App() {
     }
 
     if (route.space === "observe") {
-      if (route.page === "activity") {
+      if (visiblePage === "timeline") {
         return (
-          <ActivityHubPage
+          <TimelinePage
             workspaceId={activeWorkspaceId}
-            activeTab={observeActivityTab}
-            onTabChange={(tab: ActivityTab) => navigate({ space: "observe", page: "activity", tab })}
+            activeTab={timelineTab}
+            onTabChange={(tab: TimelineTab) =>
+              navigate(
+                tab === "sessions"
+                  ? { space: "observe", page: "sessions" }
+                  : { space: "observe", page: "activity", tab: tab === "activity" ? "activity" : tab },
+              )
+            }
           />
         );
       }
-      if (route.page === "sessions") {
-        return (
-          <ShellPageFrame
-            title="Sessions"
-            subtitle="Inspect completed and active runs, timelines, and outcome summaries."
-          >
-            <SessionsPage />
-          </ShellPageFrame>
-        );
-      }
-      if (route.page === "artifacts") {
+      if (visiblePage === "artifacts") {
         return (
           <ArtifactsPage
             workspaceId={activeWorkspaceId}
@@ -1017,14 +1035,17 @@ export function App() {
           />
         );
       }
-      if (route.page === "costs") {
+      if (visiblePage === "health") {
         return (
-          <ShellPageFrame title="Costs" subtitle="Monitor spend, provider usage, and runtime cost posture.">
-            <CostConsolePage />
-          </ShellPageFrame>
+          <HealthPage
+            activeTab={healthTab}
+            onTabChange={(tab: HealthTab) =>
+              navigate(tab === "system" ? { space: "observe", page: "system" } : { space: "observe", page: "costs" })
+            }
+          />
         );
       }
-      if (route.page === "quality") {
+      if (visiblePage === "quality") {
         return (
           <ShellPageFrame
             title="Quality"
@@ -1034,28 +1055,31 @@ export function App() {
           </ShellPageFrame>
         );
       }
-      return (
-        <ShellPageFrame
-          title="System"
-          subtitle="Machine, runtime, and infrastructure health for this Mission Control node."
-        >
-          <SystemPage />
-        </ShellPageFrame>
-      );
     }
 
-    if (route.page === "settings") {
+    if (visiblePage === "general") {
       return (
-        <SettingsHubPage
-          activeTab={configureSettingsTab}
-          activeWorkspaceId={activeWorkspaceId}
-          onWorkspaceChange={setActiveWorkspaceId}
-          onTabChange={(tab: SettingsTab) => navigate({ space: "configure", page: "settings", tab })}
+        <GeneralHubPage
+          activeTab={generalTab}
+          onTabChange={(tab: GeneralTab) => navigate({ space: "configure", page: "settings", tab })}
           onOnboardingCompleted={handleOnboardingCompleted}
         />
       );
     }
-    if (route.page === "integrations") {
+    if (visiblePage === "runtime") {
+      return <RuntimeHubPage />;
+    }
+    if (visiblePage === "workspaces") {
+      return (
+        <WorkspacesHubPage
+          activeTab={workspacesTab}
+          activeWorkspaceId={activeWorkspaceId}
+          onWorkspaceChange={setActiveWorkspaceId}
+          onTabChange={(tab: WorkspacesTab) => navigate({ space: "configure", page: "settings", tab })}
+        />
+      );
+    }
+    if (visiblePage === "integrations") {
       return (
         <IntegrationsHubPage
           activeTab={configureIntegrationsTab}
@@ -1063,7 +1087,7 @@ export function App() {
         />
       );
     }
-    if (route.page === "agents") {
+    if (visiblePage === "agents") {
       return (
         <AgentsHubPage
           activeTab={configureAgentsTab}
@@ -1081,16 +1105,19 @@ export function App() {
     activeWorkspaceName,
     configureAgentsTab,
     configureIntegrationsTab,
-    configureSettingsTab,
+    generalTab,
     handleOnboardingCompleted,
+    healthTab,
     navigate,
-    observeActivityTab,
     observeArtifactsTab,
     operateApprovalsCount,
+    setActiveWorkspaceId,
+    timelineTab,
+    visiblePage,
+    workspacesTab,
     route.page,
     route.space,
     route.surface,
-    setActiveWorkspaceId,
   ]);
 
   if (gatewayAccess.status !== "ready") {
@@ -1109,23 +1136,13 @@ export function App() {
     .filter((item, index, arr) => arr.findIndex((other) => other.workspaceId === item.workspaceId) === index)
     .map((item) => ({ value: item.workspaceId, label: item.name }));
 
-  const compactShellNavOptions =
-    route.space === "operate"
-      ? [
-          { value: "chat", label: CHAT_MODE_PRESETS.chat.label },
-          { value: "cowork", label: CHAT_MODE_PRESETS.cowork.label },
-          { value: "code", label: CHAT_MODE_PRESETS.code.label },
-          { value: "tasks", label: "Tasks" },
-          { value: "approvals", label: "Approvals" },
-        ]
-      : SPACE_PAGES[route.space].map((item) => ({ value: item.page, label: item.label }));
-
-  const compactShellNavValue =
-    route.space === "operate" ? (route.page === "surface" ? (route.surface ?? "chat") : route.page) : route.page;
+  const compactShellNavOptions = VISIBLE_SPACE_PAGES[route.space].map((item) => ({ value: item.page, label: item.label }));
+  const compactShellNavValue = visiblePage;
+  const shellThemeClass = resolveShellThemeClass();
 
   return (
     <div
-      className={`app-shell layout-shell theme-signal-noir ui-mode-${uiMode} ui-density-${density} ui-effects-${effectiveEffectsMode}${showTechnicalDetails ? "" : " ui-hide-technical"}`}
+      className={`app-shell layout-shell ${shellThemeClass} ui-mode-${uiMode} ui-density-${density} ui-effects-${effectiveEffectsMode}${showTechnicalDetails ? "" : " ui-hide-technical"}`}
       data-density={density}
       data-effects-mode={effectsMode}
       data-effective-effects-mode={effectiveEffectsMode}
@@ -1176,63 +1193,45 @@ export function App() {
       </header>
 
       <div className={`shell-secondary-nav${compactShellNav ? " compact" : ""}`}>
-        {compactShellNav ? (
-          <label className="shell-context-picker">
-            <span className="shell-action-label">Current area</span>
-            <GCSelect
-              value={compactShellNavValue}
-              onChange={(value) => {
-                if (route.space === "operate" && isWorkSurface(value)) {
-                  handleSelectSurface(value);
-                  return;
-                }
-                handleSelectPage(value as SpacePage);
-              }}
-              options={compactShellNavOptions}
+        <div className="shell-secondary-nav-primary">
+          {compactShellNav ? (
+            <label className="shell-context-picker">
+              <span className="shell-action-label">Current area</span>
+              <GCSelect
+                value={compactShellNavValue}
+                onChange={(value) => handleSelectVisiblePage(value as VisiblePage)}
+                options={compactShellNavOptions}
+                aria-label={`${SPACE_META[route.space].label} pages`}
+              />
+            </label>
+          ) : (
+            <nav
+              className={route.space === "operate" ? "surface-nav" : "secondary-page-nav"}
               aria-label={`${SPACE_META[route.space].label} pages`}
-            />
-          </label>
-        ) : route.space === "operate" ? (
-          <nav className="surface-nav" aria-label="Operate destinations">
-            {(["chat", "cowork", "code"] as WorkSurface[]).map((surface) => (
-              <button
-                key={surface}
-                type="button"
-                className={`surface-nav-item gc-nav-pill${route.page === "surface" && operateSurfaceTab === surface ? " active" : ""}`}
-                onClick={() => handleSelectSurface(surface)}
-              >
-                {CHAT_MODE_PRESETS[surface].label}
-              </button>
-            ))}
-            <button
-              type="button"
-              className={`surface-nav-item gc-nav-pill${route.page === "tasks" ? " active" : ""}`}
-              onClick={() => handleSelectPage("tasks")}
             >
-              Tasks
-            </button>
-            <button
-              type="button"
-              className={`surface-nav-item gc-nav-pill${route.page === "approvals" ? " active" : ""}`}
-              onClick={() => handleSelectPage("approvals")}
-            >
-              Approvals
-            </button>
-          </nav>
-        ) : (
-          <nav className="secondary-page-nav" aria-label={`${SPACE_META[route.space].label} pages`}>
-            {SPACE_PAGES[route.space].map((item) => (
-              <button
-                key={item.page}
-                type="button"
-                className={`secondary-page-nav-item gc-nav-pill${route.page === item.page ? " active" : ""}`}
-                onClick={() => handleSelectPage(item.page)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
-        )}
+              {VISIBLE_SPACE_PAGES[route.space].map((item) => (
+                <button
+                  key={item.page}
+                  type="button"
+                  className={`${route.space === "operate" ? "surface-nav-item" : "secondary-page-nav-item"} gc-nav-pill${visiblePage === item.page ? " active" : ""}`}
+                  onClick={() => handleSelectVisiblePage(item.page)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+          )}
+        </div>
+        <div className="shell-trust-hud" aria-label="Shell trust context">
+          <div className="shell-trust-hud-chips">
+            <StatusChip tone={shellGatewayState.tone}>{shellGatewayState.label}</StatusChip>
+            <StatusChip tone="muted">Area {shellAreaLabel}</StatusChip>
+            <StatusChip tone="muted">Workspace {workspaceSummaryLabel}</StatusChip>
+            <StatusChip tone={operateApprovalsCount > 0 ? "warning" : "success"}>{decisionsChipLabel}</StatusChip>
+            <StatusChip tone={operateActiveAgentsCount > 0 ? "live" : "muted"}>{runtimeSummaryLabel}</StatusChip>
+          </div>
+          <GlobalFreshnessPill streamState={streamState} />
+        </div>
       </div>
 
       <main className="shell-main">
@@ -1268,7 +1267,7 @@ export function App() {
             onCollapsedChange={setOperateStatusStripCollapsed}
             onOpenApprovals={() => navigate({ space: "operate", page: "approvals" })}
             onOpenAgents={() => navigate({ space: "configure", page: "agents", tab: "herd-live" })}
-            onOpenCosts={() => navigate({ space: "observe", page: "costs" })}
+            onOpenCosts={() => handleSelectVisiblePage("health")}
             onOpenTasks={() => navigate({ space: "operate", page: "tasks" })}
           />
         ) : null}

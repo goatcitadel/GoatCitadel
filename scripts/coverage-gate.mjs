@@ -5,6 +5,7 @@ const repoRoot = process.cwd();
 const summaryPath = path.join(repoRoot, "artifacts", "coverage", "coverage-summary.json");
 const DEFAULT_LINE_THRESHOLD = 65;
 const DEFAULT_BRANCH_THRESHOLD = 45;
+const profile = resolveGateProfile();
 
 let summaryRaw = "";
 try {
@@ -44,18 +45,67 @@ for (const warning of warnings) {
   console.warn(`[coverage:gate] warning: ${warning}`);
 }
 
+let failed = false;
+
 if (linePercent < resolved.line.value || branchPercent < resolved.branch.value) {
   console.error(
     `[coverage:gate] failed: line ${linePercent}% (required ${resolved.line.value}%), `
     + `branch ${branchPercent}% (required ${resolved.branch.value}%).`,
   );
+  failed = true;
+}
+
+if (profile === "production") {
+  const riskTierCoverage = Array.isArray(summary.riskTierCoverage) ? summary.riskTierCoverage : [];
+  if (riskTierCoverage.length === 0) {
+    console.error("[coverage:gate] failed: production profile requires riskTierCoverage. Run pnpm coverage:collect with current tooling.");
+    failed = true;
+  }
+
+  for (const tier of riskTierCoverage) {
+    const line = Number(tier.linePercent ?? NaN);
+    const branch = Number(tier.branchPercent ?? NaN);
+    const lineThreshold = Number(tier.lineThreshold ?? NaN);
+    const branchThreshold = Number(tier.branchThreshold ?? NaN);
+    if (
+      !Number.isFinite(line)
+      || !Number.isFinite(branch)
+      || !Number.isFinite(lineThreshold)
+      || !Number.isFinite(branchThreshold)
+    ) {
+      console.error(`[coverage:gate] failed: invalid production tier coverage for ${JSON.stringify(tier.id)}.`);
+      failed = true;
+      continue;
+    }
+
+    if (line < lineThreshold || branch < branchThreshold) {
+      console.error(
+        `[coverage:gate] production tier ${tier.id} failed: line ${line}% (required ${lineThreshold}%), `
+        + `branch ${branch}% (required ${branchThreshold}%).`,
+      );
+      failed = true;
+    }
+  }
+}
+
+if (failed) {
   process.exit(1);
 }
 
 console.log(
   `[coverage:gate] passed: line ${linePercent}% (>= ${resolved.line.value}%), `
-  + `branch ${branchPercent}% (>= ${resolved.branch.value}%).`,
+  + `branch ${branchPercent}% (>= ${resolved.branch.value}%), profile ${profile}.`,
 );
+
+function resolveGateProfile() {
+  const arg = process.argv.find((item) => item.startsWith("--profile="));
+  const raw = arg?.slice("--profile=".length) || process.env.GOATCITADEL_COVERAGE_GATE_PROFILE || "default";
+  if (raw === "default" || raw === "production") {
+    return raw;
+  }
+  console.warn(`[coverage:gate] warning: unknown profile ${JSON.stringify(raw)}. Using default.`);
+  return "default";
+}
 
 function resolveThresholds(warningsList) {
   const allowLower = process.env.GOATCITADEL_ALLOW_LOWER_COVERAGE_GATE === "1";

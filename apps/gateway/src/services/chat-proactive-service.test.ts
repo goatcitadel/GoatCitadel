@@ -48,7 +48,7 @@ type ProactiveRunRow = {
   linked_task_id: string | null;
   linked_durable_run_id: string | null;
   approval_id: string | null;
-  status: ProactiveRunRecord["status"];
+  status: ProactiveRunRecord["status"] | "waiting";
   mode: ProactiveRunRecord["mode"];
   trigger_source: string | null;
   origin_surface: string | null;
@@ -115,6 +115,36 @@ describe("ChatProactiveService", () => {
     await (harness.service as unknown as { runSchedulerTick: () => Promise<void> }).runSchedulerTick();
 
     expect(triggerSpy).not.toHaveBeenCalled();
+  });
+
+  it("finds approval-linked durable runs in latest-started order without duplicate ids", () => {
+    const { service, state } = createHarness();
+    state.proactiveRuns.set("run-old", createProactiveRunRow({
+      runId: "run-old",
+      linkedDurableRunId: "durable-old",
+      approvalId: "approval-1",
+      startedAt: "2026-04-04T18:00:00.000Z",
+    }));
+    state.proactiveRuns.set("run-new-duplicate", createProactiveRunRow({
+      runId: "run-new-duplicate",
+      linkedDurableRunId: "durable-old",
+      approvalId: "approval-1",
+      startedAt: "2026-04-04T19:00:00.000Z",
+    }));
+    state.proactiveRuns.set("run-new", createProactiveRunRow({
+      runId: "run-new",
+      linkedDurableRunId: "durable-new",
+      approvalId: "approval-1",
+      startedAt: "2026-04-04T20:00:00.000Z",
+    }));
+    state.proactiveRuns.set("run-other-approval", createProactiveRunRow({
+      runId: "run-other-approval",
+      linkedDurableRunId: "durable-other",
+      approvalId: "approval-2",
+      startedAt: "2026-04-04T21:00:00.000Z",
+    }));
+
+    expect(service.findDurableRunIdsForApproval("approval-1")).toEqual(["durable-new", "durable-old"]);
   });
 
   it("resumes approval-blocked proactive durable runs from checkpoint without rerunning completed actions", async () => {
@@ -660,6 +690,22 @@ function createStatement(sql: string, state: HarnessState) {
           .filter((row) => row.session_id === args[0])
           .sort((a, b) => b.started_at.localeCompare(a.started_at))
           .slice(0, Number(args[1] ?? 50));
+      if (query.includes("FROM proactive_runs") && query.includes("WHERE approval_id = @approvalId")) {
+        const params = args[0] as { approvalId?: string };
+        const latestByDurableRunId = new Map<string, ProactiveRunRow>();
+        for (const row of state.proactiveRuns.values()) {
+          if (row.approval_id !== params.approvalId || !row.linked_durable_run_id) {
+            continue;
+          }
+          const current = latestByDurableRunId.get(row.linked_durable_run_id);
+          if (!current || row.started_at > current.started_at) {
+            latestByDurableRunId.set(row.linked_durable_run_id, row);
+          }
+        }
+        return [...latestByDurableRunId.values()]
+          .sort((a, b) => b.started_at.localeCompare(a.started_at))
+          .map((row) => ({ run_id: row.linked_durable_run_id }));
+      }
       if (query.includes("FROM durable_run_events") && query.includes("WHERE run_id = ?"))
         return state.timeline
           .filter((row) => row.run_id === args[0])
@@ -765,7 +811,10 @@ function createStatement(sql: string, state: HarnessState) {
   };
 }
 
-function readRun(state: HarnessState, runId: string): ProactiveRunRecord {
+function readRun(
+  state: HarnessState,
+  runId: string,
+): Omit<ProactiveRunRecord, "status"> & { status: ProactiveRunRow["status"] } {
   const row = state.proactiveRuns.get(runId);
   if (!row) throw new Error(`Unknown proactive run ${runId}`);
   return {
@@ -815,6 +864,36 @@ function actionsForRun(state: HarnessState, runId: string): ProactiveActionRecor
       createdAt: row.created_at,
       updatedAt: row.updated_at ?? undefined,
     }));
+}
+
+function createProactiveRunRow(input: {
+  runId: string;
+  linkedDurableRunId: string;
+  approvalId: string;
+  startedAt: string;
+}): ProactiveRunRow {
+  return {
+    run_id: input.runId,
+    session_id: "session-1",
+    linked_task_id: null,
+    linked_durable_run_id: input.linkedDurableRunId,
+    approval_id: input.approvalId,
+    status: "waiting",
+    mode: "auto_full",
+    trigger_source: "scheduler",
+    origin_surface: "chat",
+    confidence: 0.8,
+    reasoning_summary: "approval link test",
+    suggested_actions_json: "[]",
+    executed_actions_json: "[]",
+    next_wake_at: null,
+    stop_reason: null,
+    external_reference_roots_json: null,
+    resume_metadata_json: null,
+    started_at: input.startedAt,
+    finished_at: null,
+    error: null,
+  };
 }
 
 function isActiveDurable(state: HarnessState, runId: string) {

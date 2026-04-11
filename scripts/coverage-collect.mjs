@@ -10,6 +10,38 @@ const summaryJsonPath = path.join(artifactsDir, "coverage-summary.json");
 const summaryMdPath = path.join(artifactsDir, "coverage-summary.md");
 const DEFAULT_LINE_THRESHOLD = 65;
 const DEFAULT_BRANCH_THRESHOLD = 45;
+const PRODUCTION_RISK_TIERS = [
+  {
+    id: "storage-policy-security-critical",
+    label: "Storage, Policy, And Security-Critical Paths",
+    lineThreshold: 90,
+    branchThreshold: 80,
+    sourcePrefixes: [
+      "packages/storage/src/",
+      "packages/policy-engine/src/",
+    ],
+  },
+  {
+    id: "gateway-shared-contracts",
+    label: "Gateway And Shared Contracts",
+    lineThreshold: 80,
+    branchThreshold: 70,
+    sourcePrefixes: [
+      "apps/gateway/src/",
+      "packages/gateway-core/src/",
+      "packages/contracts/src/",
+    ],
+  },
+  {
+    id: "mission-control",
+    label: "Mission Control",
+    lineThreshold: 75,
+    branchThreshold: 60,
+    sourcePrefixes: [
+      "apps/mission-control/src/",
+    ],
+  },
+];
 const sourceRunId = crypto.randomUUID();
 const runStartedAt = new Date().toISOString();
 
@@ -27,7 +59,11 @@ await writeSummary({
 });
 
 try {
-  execSync("pnpm -r --if-present test:coverage", {
+  execSync("pnpm --filter @goatcitadel/gateway... --if-present build", {
+    cwd: repoRoot,
+    stdio: "inherit",
+  });
+  execSync("pnpm -r --workspace-concurrency=1 --if-present test:coverage", {
     cwd: repoRoot,
     stdio: "inherit",
   });
@@ -73,8 +109,11 @@ let lineCovered = 0;
 let branchTotal = 0;
 let branchCovered = 0;
 const uncoveredSample = [];
+const packageBuckets = new Map();
+const riskTierBuckets = new Map(PRODUCTION_RISK_TIERS.map((tier) => [tier.id, createCoverageBucket()]));
 
 for (const filePath of sourceFiles) {
+  const relativePath = path.relative(repoRoot, filePath).replaceAll("\\", "/");
   const normalized = normalizePathForLookup(filePath);
   const entry = coverageMap.get(normalized);
   const metrics = entry
@@ -82,22 +121,36 @@ for (const filePath of sourceFiles) {
     : {
       lineTotal: await countRelevantLines(filePath),
       lineCovered: 0,
-      branchTotal: 0,
-      branchCovered: 0,
-    };
+    branchTotal: 0,
+    branchCovered: 0,
+  };
+  const fileCovered = metrics.lineCovered > 0 || metrics.branchCovered > 0;
 
   lineTotal += metrics.lineTotal;
   lineCovered += metrics.lineCovered;
   branchTotal += metrics.branchTotal;
   branchCovered += metrics.branchCovered;
 
-  if (metrics.lineCovered > 0 || metrics.branchCovered > 0) {
+  if (fileCovered) {
     coveredFiles += 1;
   } else {
     uncoveredFiles += 1;
     if (uncoveredSample.length < 200) {
-      uncoveredSample.push(path.relative(repoRoot, filePath).replaceAll("\\", "/"));
+      uncoveredSample.push(relativePath);
     }
+  }
+
+  const packageKey = getPackageKey(relativePath);
+  if (packageKey) {
+    const packageBucket = ensureBucket(packageBuckets, packageKey);
+    addFileMetrics(packageBucket, metrics, fileCovered, relativePath);
+  }
+
+  for (const tier of PRODUCTION_RISK_TIERS) {
+    if (!tier.sourcePrefixes.some((prefix) => relativePath.startsWith(prefix))) {
+      continue;
+    }
+    addFileMetrics(riskTierBuckets.get(tier.id), metrics, fileCovered, relativePath);
   }
 }
 
@@ -112,6 +165,24 @@ const branchPercent = branchTotal === 0
   : Number(((branchCovered / branchTotal) * 100).toFixed(2));
 
 const resolvedThresholds = resolveThresholds(warnings);
+const packageCoverage = [...packageBuckets.entries()]
+  .map(([id, bucket]) => formatCoverageBucket(id, id, bucket))
+  .sort((left, right) => left.id.localeCompare(right.id));
+const riskTierCoverage = PRODUCTION_RISK_TIERS.map((tier) => {
+  const bucket = riskTierBuckets.get(tier.id) ?? createCoverageBucket();
+  const formatted = formatCoverageBucket(tier.id, tier.label, bucket);
+  const passesLine = formatted.linePercent >= tier.lineThreshold;
+  const passesBranch = formatted.branchPercent >= tier.branchThreshold;
+  return {
+    ...formatted,
+    lineThreshold: tier.lineThreshold,
+    branchThreshold: tier.branchThreshold,
+    passesLine,
+    passesBranch,
+    passes: passesLine && passesBranch,
+    sourcePrefixes: tier.sourcePrefixes,
+  };
+});
 
 const summary = {
   generatedAt: new Date().toISOString(),
@@ -140,6 +211,12 @@ const summary = {
   thresholdSource: {
     line: resolvedThresholds.line.source,
     branch: resolvedThresholds.branch.source,
+  },
+  packageCoverage,
+  riskTierCoverage,
+  productionTargets: {
+    profile: "production",
+    allRiskTiersPass: riskTierCoverage.every((tier) => tier.passes),
   },
   warnings,
   coverageFinalFiles: coverageFiles.map((filePath) => path.relative(repoRoot, filePath).replaceAll("\\", "/")),
@@ -411,6 +488,88 @@ function computeCoverageMetrics(entry) {
   };
 }
 
+function createCoverageBucket() {
+  return {
+    sourceFiles: 0,
+    coveredFiles: 0,
+    uncoveredFiles: 0,
+    lineTotal: 0,
+    lineCovered: 0,
+    branchTotal: 0,
+    branchCovered: 0,
+    uncoveredSample: [],
+  };
+}
+
+function ensureBucket(map, id) {
+  const existing = map.get(id);
+  if (existing) {
+    return existing;
+  }
+  const next = createCoverageBucket();
+  map.set(id, next);
+  return next;
+}
+
+function addFileMetrics(bucket, metrics, fileCovered, relativePath) {
+  if (!bucket) {
+    return;
+  }
+  bucket.sourceFiles += 1;
+  bucket.lineTotal += metrics.lineTotal;
+  bucket.lineCovered += metrics.lineCovered;
+  bucket.branchTotal += metrics.branchTotal;
+  bucket.branchCovered += metrics.branchCovered;
+  if (fileCovered) {
+    bucket.coveredFiles += 1;
+  } else {
+    bucket.uncoveredFiles += 1;
+    if (bucket.uncoveredSample.length < 50) {
+      bucket.uncoveredSample.push(relativePath);
+    }
+  }
+}
+
+function formatCoverageBucket(id, label, bucket) {
+  return {
+    id,
+    label,
+    sourceFiles: bucket.sourceFiles,
+    coveredFiles: bucket.coveredFiles,
+    uncoveredFiles: bucket.uncoveredFiles,
+    fileCoveragePercent: percent(bucket.coveredFiles, bucket.sourceFiles, 0),
+    linePercent: percent(bucket.lineCovered, bucket.lineTotal, 0),
+    branchPercent: percent(bucket.branchCovered, bucket.branchTotal, 100),
+    lineTotals: {
+      covered: bucket.lineCovered,
+      total: bucket.lineTotal,
+    },
+    branchTotals: {
+      covered: bucket.branchCovered,
+      total: bucket.branchTotal,
+    },
+    uncoveredSample: bucket.uncoveredSample,
+  };
+}
+
+function getPackageKey(relativePath) {
+  const segments = relativePath.split("/");
+  if (segments.length < 3) {
+    return undefined;
+  }
+  if (segments[0] !== "apps" && segments[0] !== "packages") {
+    return undefined;
+  }
+  return `${segments[0]}/${segments[1]}`;
+}
+
+function percent(covered, total, emptyValue) {
+  if (total === 0) {
+    return emptyValue;
+  }
+  return Number(((covered / total) * 100).toFixed(2));
+}
+
 async function countRelevantLines(filePath) {
   let raw = "";
   try {
@@ -553,6 +712,8 @@ async function writeSummary(summary) {
 function buildMarkdownSummary(summary) {
   const coverageFinalFiles = Array.isArray(summary.coverageFinalFiles) ? summary.coverageFinalFiles : [];
   const uncoveredSample = Array.isArray(summary.uncoveredSample) ? summary.uncoveredSample : [];
+  const packageCoverage = Array.isArray(summary.packageCoverage) ? summary.packageCoverage : [];
+  const riskTierCoverage = Array.isArray(summary.riskTierCoverage) ? summary.riskTierCoverage : [];
   const lineTotals = summary.lineTotals ?? { covered: 0, total: 0 };
   const branchTotals = summary.branchTotals ?? { covered: 0, total: 0 };
   const effectiveThresholds = summary.effectiveThresholds ?? { line: DEFAULT_LINE_THRESHOLD, branch: DEFAULT_BRANCH_THRESHOLD };
@@ -569,6 +730,28 @@ function buildMarkdownSummary(summary) {
   const syntheticCoverageNotes = summary.syntheticCoverageNotes?.moduleLoadSmokeTests ?? [];
   const syntheticSection = syntheticCoverageNotes.length > 0
     ? syntheticCoverageNotes.map((item) => `- \`${item}\``).join("\n")
+    : "- none";
+  const packageSection = packageCoverage.length > 0
+    ? [
+      "| Package | Files | Lines | Branches |",
+      "| --- | ---: | ---: | ---: |",
+      ...packageCoverage.map((item) => {
+        const lines = item.lineTotals ?? { covered: 0, total: 0 };
+        const branches = item.branchTotals ?? { covered: 0, total: 0 };
+        return `| \`${item.id}\` | ${item.coveredFiles ?? 0}/${item.sourceFiles ?? 0} (${item.fileCoveragePercent ?? 0}%) | ${item.linePercent ?? 0}% (${lines.covered}/${lines.total}) | ${item.branchPercent ?? 0}% (${branches.covered}/${branches.total}) |`;
+      }),
+    ].join("\n")
+    : "- none";
+  const riskTierSection = riskTierCoverage.length > 0
+    ? [
+      "| Risk Tier | Lines | Branches | Target | Status |",
+      "| --- | ---: | ---: | --- | --- |",
+      ...riskTierCoverage.map((item) => {
+        const target = `${item.lineThreshold ?? "n/a"}% lines / ${item.branchThreshold ?? "n/a"}% branches`;
+        const status = item.passes ? "pass" : "below target";
+        return `| \`${item.id}\` | ${item.linePercent ?? 0}% | ${item.branchPercent ?? 0}% | ${target} | ${status} |`;
+      }),
+    ].join("\n")
     : "- none";
 
   return [
@@ -593,6 +776,12 @@ function buildMarkdownSummary(summary) {
     "",
     "## Coverage Reports",
     coverageFiles,
+    "",
+    "## Package Coverage",
+    packageSection,
+    "",
+    "## Production Risk Tiers",
+    riskTierSection,
     "",
     "## Synthetic Coverage Notes",
     syntheticSection,

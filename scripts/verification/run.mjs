@@ -1,7 +1,18 @@
 #!/usr/bin/env node
 import path from "node:path";
 import { generateVerificationReview, loadManifestForReview } from "./lib/review.mjs";
-import { runDeepCoreLane, runDeepEcosystemLane, runFastLane, runSoakLane } from "./lib/scenarios.mjs";
+import {
+  runBackupRoundtripLane,
+  runCatalogParityLane,
+  runDeepCoreLane,
+  runDeepEcosystemLane,
+  runDurableRecoveryLane,
+  runFastLane,
+  runOperatorProofLane,
+  runVisualRegressionLane,
+  runSurfaceRegressionLane,
+  runSoakLane,
+} from "./lib/scenarios.mjs";
 import {
   artifactsRoot,
   createRunContext,
@@ -13,7 +24,20 @@ import {
   readJson as readRunJson,
 } from "./lib/shared.mjs";
 
-const VALID_LANES = new Set(["fast", "deep-core", "deep-ecosystem", "soak", "review", "all"]);
+const VALID_LANES = new Set([
+  "fast",
+  "deep-core",
+  "deep-ecosystem",
+  "catalog-parity",
+  "operator-proof",
+  "durable-recovery",
+  "surface-regression",
+  "visual-regression",
+  "backup-roundtrip",
+  "soak",
+  "review",
+  "all",
+]);
 
 async function main() {
   const { positional, options } = parseCliArgs(process.argv.slice(2));
@@ -23,9 +47,7 @@ async function main() {
   }
 
   if (lane === "review") {
-    const latestPointer = parseLatestRunPointer(
-      await readRunJson(path.join(artifactsRoot, "latest-run.json")),
-    );
+    const latestPointer = parseLatestRunPointer(await readRunJson(path.join(artifactsRoot, "latest-run.json")));
     const context = {
       artifactRoot: latestPointer.artifactRoot,
       runId: latestPointer.runId,
@@ -57,19 +79,37 @@ async function main() {
       await runDeepCoreLane(context, { profile });
     } else if (lane === "deep-ecosystem") {
       await runDeepEcosystemLane(context, { profile });
+    } else if (lane === "catalog-parity") {
+      await runCatalogParityLane(context, { profile });
+    } else if (lane === "operator-proof") {
+      await runOperatorProofLane(context, { profile });
+    } else if (lane === "durable-recovery") {
+      await runDurableRecoveryLane(context, { profile });
+    } else if (lane === "surface-regression") {
+      await runSurfaceRegressionLane(context, { profile });
+    } else if (lane === "visual-regression") {
+      await runVisualRegressionLane(context, { profile });
+    } else if (lane === "backup-roundtrip") {
+      await runBackupRoundtripLane(context, { profile });
     } else if (lane === "soak") {
       await runSoakLane(context, { profile, durationMs });
     } else if (lane === "all") {
       await runFastLane(context);
       await runDeepCoreLane(context, { profile });
       await runDeepEcosystemLane(context, { profile });
+      await runCatalogParityLane(context, { profile });
+      await runOperatorProofLane(context, { profile });
+      await runDurableRecoveryLane(context, { profile });
+      await runSurfaceRegressionLane(context, { profile });
+      await runVisualRegressionLane(context, { profile });
+      await runBackupRoundtripLane(context, { profile });
       if (includeSoak) {
         await runSoakLane(context, { profile, durationMs });
       }
     }
 
     manifest = await finalizeRunContext(context);
-    if (lane === "deep-core" || lane === "deep-ecosystem" || lane === "all" || lane === "soak") {
+    if (shouldGenerateReview(lane)) {
       await generateVerificationReview(context, {
         manifest,
         reviewGatewayUrl: options["review-gateway-url"],
@@ -77,7 +117,7 @@ async function main() {
     }
   } catch (error) {
     manifest = await finalizeRunContext(context, "failed");
-    if (lane === "deep-core" || lane === "deep-ecosystem" || lane === "all" || lane === "soak") {
+    if (shouldGenerateReview(lane)) {
       await generateVerificationReview(context, {
         manifest,
         reviewGatewayUrl: options["review-gateway-url"],
@@ -88,9 +128,27 @@ async function main() {
 
   console.log(`Verification run completed: ${context.artifactRoot}`);
   console.log(`Status: ${manifest.status}`);
+  if (manifest.status === "failed") {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+  console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
   process.exitCode = 1;
 });
+
+function shouldGenerateReview(lane) {
+  return (
+    lane === "deep-core" ||
+    lane === "deep-ecosystem" ||
+    lane === "catalog-parity" ||
+    lane === "operator-proof" ||
+    lane === "durable-recovery" ||
+    lane === "surface-regression" ||
+    lane === "visual-regression" ||
+    lane === "backup-roundtrip" ||
+    lane === "all" ||
+    lane === "soak"
+  );
+}

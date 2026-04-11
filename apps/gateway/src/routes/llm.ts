@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { createProviderRuntime } from "../services/provider-runtime-service.js";
 
 const llmApiStyleSchema = z.enum([
   "openai-chat-completions",
@@ -167,12 +168,22 @@ const chatCompletionSchema = z.object({
 });
 
 export const llmRoutes: FastifyPluginAsync = async (fastify) => {
+  const providerRuntime = createProviderRuntime({
+    listProviders: () => fastify.gateway.listLlmProviders(),
+    getConfigWithDetails: () => fastify.gateway.getLlmConfigWithDetails(),
+    updateConfig: (input) => fastify.gateway.updateLlmConfig(input),
+    listModels: (providerId) => fastify.gateway.listLlmModels(providerId),
+    previewModels: (input) => fastify.gateway.previewLlmModels(input),
+    generateImage: (input) => fastify.gateway.generateImage(input),
+    createChatCompletion: (input) => fastify.gateway.createChatCompletion(input),
+  });
+
   fastify.get("/api/v1/llm/providers", async (_request, reply) => {
-    return reply.send({ items: fastify.gateway.listLlmProviders() });
+    return reply.send({ items: providerRuntime.listProviders() });
   });
 
   fastify.get("/api/v1/llm/config", async (_request, reply) => {
-    return reply.send(fastify.gateway.getLlmConfigWithDetails());
+    return reply.send(providerRuntime.getConfigWithDetails());
   });
 
   fastify.patch("/api/v1/llm/config", async (request, reply) => {
@@ -181,7 +192,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.updateLlmConfig(parsed.data));
+      return reply.send(providerRuntime.updateConfig(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -194,7 +205,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send({ items: await fastify.gateway.listLlmModels(parsed.data.providerId) });
+      return reply.send({ items: await providerRuntime.listModels(parsed.data.providerId) });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -207,7 +218,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(await fastify.gateway.previewLlmModels(parsed.data));
+      return reply.send(await providerRuntime.previewModels(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -220,7 +231,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(await fastify.gateway.generateImage(parsed.data));
+      return reply.send(await providerRuntime.generateImage(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -233,7 +244,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const result = await fastify.gateway.createChatCompletion(parsed.data);
+      const result = await providerRuntime.createChatCompletion(parsed.data);
       return reply.send(result);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

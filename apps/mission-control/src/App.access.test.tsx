@@ -541,9 +541,9 @@ describe("App gateway access gate", () => {
 
     const text = renderTreeText(renderer!);
     expect(text).toContain("chat-ready:chat:locked");
-    expect(text).toContain("Operate");
+    expect(text).toContain("Work");
     expect(text).toContain("Observe");
-    expect(text).toContain("Configure");
+    expect(text).toContain("Tune");
     expect(text).toContain("Cowork");
     expect(text).toContain("Code");
     expect(text).not.toContain("More");

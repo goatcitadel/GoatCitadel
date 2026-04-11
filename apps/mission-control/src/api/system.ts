@@ -1,12 +1,20 @@
 import type {
   BackupCreateResponse,
   BackupManifestRecord,
+  BackupVerifyResponse,
   MediaCreateJobRequest,
   MediaJobRecord,
   RetentionPolicy,
   RetentionPruneResult,
 } from "@goatcitadel/contracts";
-import type { CostSummaryResponse, DashboardStateResponse, RealtimeEvent, SystemVitalsResponse } from "./types.js";
+import type {
+  CostSummaryResponse,
+  DashboardStateResponse,
+  HealthSummaryResponse,
+  RealtimeEvent,
+  SystemVitalsResponse,
+  TimelineSummaryResponse,
+} from "./types.js";
 import { request } from "./client-core.js";
 
 export async function createMediaJob(input: MediaCreateJobRequest): Promise<MediaJobRecord> {
@@ -64,6 +72,13 @@ export async function restoreBackup(
   });
 }
 
+export async function verifyBackup(filePath: string): Promise<BackupVerifyResponse> {
+  return request<BackupVerifyResponse>("/api/v1/admin/backups/verify", {
+    method: "POST",
+    body: JSON.stringify({ filePath }),
+  });
+}
+
 export async function fetchCostSummary(
   scope: "day" | "session" | "agent" | "task" = "day",
 ): Promise<CostSummaryResponse> {
@@ -96,4 +111,12 @@ export async function fetchDashboardState(): Promise<DashboardStateResponse> {
 
 export async function fetchSystemVitals(): Promise<SystemVitalsResponse> {
   return request<SystemVitalsResponse>("/api/v1/system/vitals");
+}
+
+export async function fetchTimelineSummary(): Promise<TimelineSummaryResponse> {
+  return request<TimelineSummaryResponse>("/api/v1/observe/timeline");
+}
+
+export async function fetchHealthSummary(): Promise<HealthSummaryResponse> {
+  return request<HealthSummaryResponse>("/api/v1/observe/health");
 }

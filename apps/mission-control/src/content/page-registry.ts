@@ -4,6 +4,10 @@ export type OperatePage = "surface" | "tasks" | "approvals";
 export type ObservePage = "activity" | "sessions" | "artifacts" | "costs" | "system" | "quality";
 export type ConfigurePage = "settings" | "integrations" | "tools" | "agents";
 export type SpacePage = OperatePage | ObservePage | ConfigurePage;
+export type VisibleWorkPage = WorkSurface | "tasks" | "approvals";
+export type VisibleObservePage = "timeline" | "health" | "artifacts" | "quality";
+export type VisibleTunePage = "general" | "runtime" | "workspaces" | "integrations" | "tools" | "agents";
+export type VisiblePage = VisibleWorkPage | VisibleObservePage | VisibleTunePage;
 
 export type ActivityTab = "activity" | "scheduler" | "improvement";
 export type ArtifactsTab = "memory" | "files";
@@ -32,16 +36,16 @@ interface RouteInfo {
 
 export const SPACE_META: Record<Space, { label: string; description: string }> = {
   operate: {
-    label: "Operate",
-    description: "What needs doing or deciding now.",
+    label: "Work",
+    description: "Core work surfaces, active decisions, and operator flow.",
   },
   observe: {
     label: "Observe",
     description: "What the system is doing and how it is behaving.",
   },
   configure: {
-    label: "Configure",
-    description: "How GoatCitadel is set up and governed.",
+    label: "Tune",
+    description: "Runtime setup, governance, and ecosystem control.",
   },
 };
 
@@ -142,6 +146,30 @@ export const SPACE_PAGES: Record<Space, Array<{ page: SpacePage; label: string }
   ],
   configure: [
     { page: "settings", label: "Settings" },
+    { page: "integrations", label: "Integrations" },
+    { page: "tools", label: "Tools" },
+    { page: "agents", label: "Agents" },
+  ],
+};
+
+export const VISIBLE_SPACE_PAGES: Record<Space, Array<{ page: VisiblePage; label: string }>> = {
+  operate: [
+    { page: "chat", label: "Chat" },
+    { page: "cowork", label: "Cowork" },
+    { page: "code", label: "Code" },
+    { page: "tasks", label: "Tasks" },
+    { page: "approvals", label: "Approvals" },
+  ],
+  observe: [
+    { page: "timeline", label: "Timeline" },
+    { page: "health", label: "Health" },
+    { page: "artifacts", label: "Artifacts" },
+    { page: "quality", label: "Quality" },
+  ],
+  configure: [
+    { page: "general", label: "General" },
+    { page: "runtime", label: "Runtime" },
+    { page: "workspaces", label: "Workspaces" },
     { page: "integrations", label: "Integrations" },
     { page: "tools", label: "Tools" },
     { page: "agents", label: "Agents" },
@@ -363,4 +391,112 @@ export function getPageLabel(route: ResolvedRoute): string {
     return route.surface === "chat" ? "Chat" : route.surface === "cowork" ? "Cowork" : "Code";
   }
   return PAGE_META[route.page].label;
+}
+
+export function getVisiblePage(route: ResolvedRoute): VisiblePage {
+  if (route.space === "operate") {
+    if (route.page === "surface") {
+      return route.surface ?? "chat";
+    }
+    return route.page === "tasks" ? "tasks" : "approvals";
+  }
+
+  if (route.space === "observe") {
+    if (route.page === "activity" || route.page === "sessions") {
+      return "timeline";
+    }
+    if (route.page === "costs" || route.page === "system") {
+      return "health";
+    }
+    return route.page === "artifacts" ? "artifacts" : "quality";
+  }
+
+  if (route.page === "integrations") {
+    return "integrations";
+  }
+  if (route.page === "tools") {
+    return "tools";
+  }
+  if (route.page === "agents") {
+    return "agents";
+  }
+
+  if (route.page === "settings") {
+    if (route.tab === "runtime") {
+      return "runtime";
+    }
+    if (route.tab === "workspaces" || route.tab === "addons") {
+      return "workspaces";
+    }
+    return "general";
+  }
+
+  return "general";
+}
+
+export function getVisiblePageLabel(route: ResolvedRoute): string {
+  const visiblePage = getVisiblePage(route);
+  const label = VISIBLE_SPACE_PAGES[route.space].find((item) => item.page === visiblePage)?.label;
+  return label ?? getPageLabel(route);
+}
+
+export function buildRouteForVisiblePage(currentRoute: ResolvedRoute, targetPage: VisiblePage): ResolvedRoute {
+  if (targetPage === "chat" || targetPage === "cowork" || targetPage === "code") {
+    return {
+      space: "operate",
+      page: "surface",
+      surface: targetPage,
+      sessionId: currentRoute.sessionId,
+      turnId: currentRoute.turnId,
+      approvalId: currentRoute.approvalId,
+    };
+  }
+  if (targetPage === "tasks" || targetPage === "approvals") {
+    return { space: "operate", page: targetPage };
+  }
+  if (targetPage === "timeline") {
+    if (currentRoute.space === "observe" && (currentRoute.page === "activity" || currentRoute.page === "sessions")) {
+      return currentRoute;
+    }
+    return { space: "observe", page: "activity", tab: "activity" };
+  }
+  if (targetPage === "health") {
+    if (currentRoute.space === "observe" && (currentRoute.page === "costs" || currentRoute.page === "system")) {
+      return currentRoute;
+    }
+    return { space: "observe", page: "costs" };
+  }
+  if (targetPage === "artifacts" || targetPage === "quality") {
+    return targetPage === "artifacts"
+      ? { space: "observe", page: "artifacts", tab: "memory" }
+      : { space: "observe", page: "quality" };
+  }
+  if (targetPage === "integrations" || targetPage === "tools" || targetPage === "agents") {
+    if (targetPage === "integrations") {
+      return { space: "configure", page: "integrations", tab: "overview" };
+    }
+    if (targetPage === "agents") {
+      return { space: "configure", page: "agents", tab: "overview" };
+    }
+    return { space: "configure", page: "tools" };
+  }
+  if (targetPage === "runtime") {
+    return { space: "configure", page: "settings", tab: "runtime" };
+  }
+  if (targetPage === "workspaces") {
+    if (currentRoute.page === "settings" && (currentRoute.tab === "workspaces" || currentRoute.tab === "addons")) {
+      return currentRoute;
+    }
+    return { space: "configure", page: "settings", tab: "workspaces" };
+  }
+  if (currentRoute.page === "settings" && (
+    currentRoute.tab === "general" ||
+    currentRoute.tab === "providers" ||
+    currentRoute.tab === "access" ||
+    currentRoute.tab === "budget" ||
+    currentRoute.tab === "onboarding"
+  )) {
+    return currentRoute;
+  }
+  return { space: "configure", page: "settings", tab: "general" };
 }

@@ -7,13 +7,13 @@ import type {
   TranscriptEvent,
 } from "@goatcitadel/contracts";
 import { extractLearnedMemoryCandidates, shouldExtractLearnedMemoryContent } from "./learned-memory-utils.js";
+import {
+  clampMemoryConfidence,
+  decideLearnedMemoryWrite,
+} from "./memory-lifecycle-policy.js";
 import type { ServiceContext } from "./service-context.js";
 
 // ── pure helpers ─────────────────────────────────────────────────────
-
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
-}
 
 function looksSensitive(value: string): boolean {
   const normalized = value.toLowerCase();
@@ -22,32 +22,6 @@ function looksSensitive(value: string): boolean {
     /\bsk-[a-z0-9]{8,}\b/i.test(normalized) ||
     /\bghp_[a-z0-9]{10,}\b/i.test(normalized)
   );
-}
-
-function normalizeMemoryText(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[`*_>#]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function memoryTextOverlap(left: string, right: string): number {
-  if (!left || !right) {
-    return 0;
-  }
-  const leftTokens = new Set(left.split(" ").filter((token) => token.length > 2));
-  const rightTokens = new Set(right.split(" ").filter((token) => token.length > 2));
-  if (leftTokens.size === 0 || rightTokens.size === 0) {
-    return 0;
-  }
-  let matches = 0;
-  for (const token of leftTokens) {
-    if (rightTokens.has(token)) {
-      matches += 1;
-    }
-  }
-  return matches / Math.max(leftTokens.size, rightTokens.size);
 }
 
 function extractStringFromUnknown(value: unknown): string {
@@ -121,7 +95,9 @@ export class ChatLearnedMemoryService {
     }
     const nextStatus = input.status ?? current.status;
     const nextContent = input.content?.trim() || current.content;
-    const nextConfidence = clamp01(typeof input.confidence === "number" ? input.confidence : current.confidence);
+    const nextConfidence = clampMemoryConfidence(
+      typeof input.confidence === "number" ? input.confidence : current.confidence,
+    );
     this.ctx.storage.learnedMemory.updateItemFields(itemId, {
       status: nextStatus,
       content: nextContent,
@@ -244,71 +220,63 @@ export class ChatLearnedMemoryService {
     sourceRef: string;
     snippet: string;
   }): void {
-    const normalized = normalizeMemoryText(input.content);
-    if (!normalized) {
-      return;
-    }
     const repo = this.ctx.storage.learnedMemory;
     const existing = repo.findActiveByType(input.sessionId, input.itemType as LearnedMemoryItemType);
-
-    const duplicate = existing.find((item) => normalizeMemoryText(item.content) === normalized);
-    if (duplicate) {
-      repo.updateItemConfidence(duplicate.itemId, Math.max(clamp01(input.confidence), duplicate.confidence));
-      repo.appendSource(duplicate.itemId, input.sourceKind, input.sourceRef, input.snippet);
+    const decision = decideLearnedMemoryWrite({
+      content: input.content,
+      confidence: input.confidence,
+      existing,
+    });
+    if (decision.action === "skip") {
       return;
     }
-
-    const current = existing[0];
-    if (current) {
-      const overlap = memoryTextOverlap(normalized, normalizeMemoryText(current.content));
-      const incomingConfidence = clamp01(input.confidence);
-      const existingConfidence = clamp01(current.confidence);
-      if (overlap < 0.45) {
-        const diff = Math.abs(incomingConfidence - existingConfidence);
-        if (diff < 0.2) {
-          const incomingItem = repo.insertItem({
-            sessionId: input.sessionId,
-            itemType: input.itemType as LearnedMemoryItemType,
-            content: input.content,
-            confidence: incomingConfidence,
-            status: "conflict",
-            redacted: false,
-            sourceKind: input.sourceKind,
-            sourceRef: input.sourceRef,
-            snippet: input.snippet,
-          });
-          repo.insertConflict({
-            sessionId: input.sessionId,
-            itemType: input.itemType as LearnedMemoryItemType,
-            existingItemId: current.itemId,
-            incomingItemId: incomingItem.itemId,
-            incomingContent: input.content,
-          });
-          return;
-        }
-        if (incomingConfidence > existingConfidence + 0.2) {
-          const next = repo.insertItem({
-            sessionId: input.sessionId,
-            itemType: input.itemType as LearnedMemoryItemType,
-            content: input.content,
-            confidence: incomingConfidence,
-            status: "active",
-            redacted: false,
-            sourceKind: input.sourceKind,
-            sourceRef: input.sourceRef,
-            snippet: input.snippet,
-          });
-          repo.supersedeItem(current.itemId, next.itemId);
-          return;
-        }
-      }
+    if (decision.action === "merge_duplicate") {
+      repo.updateItemConfidence(decision.itemId, decision.nextConfidence);
+      repo.appendSource(decision.itemId, input.sourceKind, input.sourceRef, input.snippet);
+      return;
+    }
+    if (decision.action === "record_conflict") {
+      const incomingItem = repo.insertItem({
+        sessionId: input.sessionId,
+        itemType: input.itemType as LearnedMemoryItemType,
+        content: input.content,
+        confidence: decision.incomingConfidence,
+        status: "conflict",
+        redacted: false,
+        sourceKind: input.sourceKind,
+        sourceRef: input.sourceRef,
+        snippet: input.snippet,
+      });
+      repo.insertConflict({
+        sessionId: input.sessionId,
+        itemType: input.itemType as LearnedMemoryItemType,
+        existingItemId: decision.existingItemId,
+        incomingItemId: incomingItem.itemId,
+        incomingContent: input.content,
+      });
+      return;
+    }
+    if (decision.action === "supersede") {
+      const next = repo.insertItem({
+        sessionId: input.sessionId,
+        itemType: input.itemType as LearnedMemoryItemType,
+        content: input.content,
+        confidence: decision.incomingConfidence,
+        status: "active",
+        redacted: false,
+        sourceKind: input.sourceKind,
+        sourceRef: input.sourceRef,
+        snippet: input.snippet,
+      });
+      repo.supersedeItem(decision.existingItemId, next.itemId);
+      return;
     }
 
     repo.insertItem({
       sessionId: input.sessionId,
       itemType: input.itemType as LearnedMemoryItemType,
       content: input.content,
-      confidence: clamp01(input.confidence),
+      confidence: decision.incomingConfidence,
       status: "active",
       redacted: false,
       sourceKind: input.sourceKind,

@@ -142,8 +142,7 @@ export class PromptPackRepository {
     const resolvedPolicy = input.policyV2 ?? parsePolicy(existing?.policy_v2_json) ?? DEFAULT_PROMPT_PACK_POLICY_V2;
     const resolvedSource =
       input.policySource ?? normalizePolicySource(existing?.policy_v2_source) ?? "inherited_default";
-    this.db.exec("SAVEPOINT prompt_pack_replace");
-    try {
+    this.db.transaction("immediate", () => {
       this.upsertPackStmt.run({
         packId,
         name: input.name,
@@ -170,12 +169,7 @@ export class PromptPackRepository {
           createdAt: now,
         });
       }
-      this.db.exec("RELEASE SAVEPOINT prompt_pack_replace");
-    } catch (error) {
-      this.db.exec("ROLLBACK TO SAVEPOINT prompt_pack_replace");
-      this.db.exec("RELEASE SAVEPOINT prompt_pack_replace");
-      throw error;
-    }
+    });
 
     return {
       pack: this.getPack(packId),

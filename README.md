@@ -19,7 +19,7 @@ GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflo
 - Tool policy enforcement with path jails, allowlists, and approval gates
 - Workspace-aware context and memory maintenance flows
 - Multi-provider model routing with local-friendly runtime support
-- Add-on and integration-plugin scaffolds for extending the system
+- Add-on and integration-plugin scaffolds plus the published `@goatcitadel/extensions-sdk` package for extending the system
 
 ## What's new on `main`
 
@@ -33,7 +33,7 @@ GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflo
 
 - [apps/mission-control](./apps/mission-control): React/Vite operator console
 - [apps/gateway](./apps/gateway): Fastify control plane and runtime APIs
-- [apps/npu-sidecar](./apps/npu-sidecar): optional Python sidecar for local NPU-backed inference
+- [apps/npu-sidecar](./apps/npu-sidecar): optional experimental Python sidecar for local NPU-backed inference; not part of the current `1.0` readiness bar
 
 ### Shared packages
 
@@ -113,17 +113,26 @@ GoatCitadel is in late beta. The repo contains a real Mission Control shell, a w
 
 This repository intentionally favors truthful product claims over aspirational parity language. If something is still experimental, optional, or only partially proven, the docs should say so plainly.
 
+The current `1.0` promise, visible scope, trust posture, backup guarantees, and release gates are defined in [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md).
+
 Safe claims today:
 
 - the capability system now governs tools, runtime skills, generated candidates, proposals, and Code Mode runs on one native path
 - Code Mode v1 exists as a governed trusted-code surface with immutable run artifacts and explicit operator approval
+- Code Mode host isolation is best-effort and fail-closed when required isolation is unavailable; it is still a trusted-code/manual-governed surface
 - Skills Hub and inline approvals now expose lifecycle, trust, provenance, and richer Code Mode inspection details
+- visible `beta` integrations in Mission Control now expose real operator actions backed by runtime handlers instead of diagnostics-only catalog shells
 - Docker can add a stronger runtime isolation boundary for local/shared-host deployment when paired with auth and policy configuration
+- provider secrets may be stored in local env/config files when secure-store persistence is disabled or unavailable
+- `verify:visual:regression` compares checked-in shell and primary-surface baselines instead of only capturing screenshots
+- `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and config
 
 Not safe to over-claim yet:
 
 - hostile-code sandboxing for Code Mode
 - autonomous tool activation without governance
+- `packages/mesh-core` as a readiness-bearing `1.0` subsystem while it still ships smoke-only coverage via `--passWithNoTests`
+- NPU sidecar maturity or local-inference completeness as a `1.0` signal
 
 ## Screenshots
 
@@ -142,6 +151,7 @@ Full gallery: [docs/screenshots/mission-control](./docs/screenshots/mission-cont
 - [CHANGELOG.md](./CHANGELOG.md)
 - [CONTRIBUTING.md](./CONTRIBUTING.md)
 - [SECURITY.md](./SECURITY.md)
+- [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md)
 - [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md)
 - [docs/ENGINEERING_HANDBOOK.md](./docs/ENGINEERING_HANDBOOK.md)
 - [docs/PLUGIN_SDK_CONTRACT.md](./docs/PLUGIN_SDK_CONTRACT.md)

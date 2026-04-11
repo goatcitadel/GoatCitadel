@@ -170,6 +170,196 @@ describe("dev verification routes", () => {
     expect(storageClose).toHaveBeenCalledTimes(1);
   });
 
+  it("seeds a deterministic chat approval resume scenario", async () => {
+    const createApproval = vi.fn(async () => ({
+      approvalId: "approval-1",
+      kind: "shell.exec",
+      riskLevel: "danger",
+      status: "pending",
+      payload: {},
+      preview: {},
+      createdAt: "2026-04-10T00:00:00.000Z",
+      expiresAt: "2026-04-10T00:10:00.000Z",
+      explanationStatus: "not_requested",
+    }));
+    const durableCreateRun = vi.fn(() => ({ runId: "durable-turn-1" }));
+    const inlineUpsert = vi.fn();
+    const chatMessageUpsert = vi.fn();
+    const branchSetActiveLeaf = vi.fn();
+    const approvalWaitGetRunId = vi.fn(() => "approval-wait-1");
+
+    app = Fastify();
+    app.decorate("gateway", {
+      isDevDiagnosticsEnabled: () => true,
+      createApproval,
+      storage: {
+        approvalWaitRuns: {
+          getRunId: approvalWaitGetRunId,
+        },
+        durableRuns: {
+          createRun: durableCreateRun,
+        },
+        chatMessages: {
+          upsert: chatMessageUpsert,
+        },
+        chatTurnTraces: {
+          create: storageTurnCreate,
+        },
+        chatInlineApprovals: {
+          upsert: inlineUpsert,
+        },
+        chatSessionBranchState: {
+          setActiveLeaf: branchSetActiveLeaf,
+        },
+      },
+    } as never);
+    app.decorate("gatewayConfig", {
+      rootDir: "f:/tmp/goatcitadel-dev",
+    } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/chat-approval-scenario",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      payload: JSON.stringify({
+        sessionId: "session-1",
+        workspaceId: "workspace-1",
+      }),
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(createApproval).toHaveBeenCalledWith(expect.objectContaining({
+      linkage: expect.objectContaining({
+        sessionId: "session-1",
+        workspaceId: "workspace-1",
+      }),
+    }));
+    expect(durableCreateRun).toHaveBeenCalledWith(expect.objectContaining({
+      workflowKey: "approval.wait",
+      status: "waiting",
+      payload: expect.objectContaining({
+        version: "approval.wait.v1",
+        approvalId: "approval-1",
+      }),
+      metadata: {
+        surface: "chat",
+        waitForEvent: {
+          eventKey: "approval.resolved",
+          correlationId: "approval-1",
+        },
+      },
+    }));
+    expect(storageTurnCreate).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "session-1",
+      status: "waiting_for_approval",
+      durable: expect.objectContaining({ runId: "durable-turn-1" }),
+    }));
+    expect(inlineUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      approvalId: "approval-1",
+      sessionId: "session-1",
+      status: "pending",
+    }));
+    expect(branchSetActiveLeaf).toHaveBeenCalledWith("session-1", expect.any(String));
+    expect(response.json()).toMatchObject({
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      approvalId: "approval-1",
+      approvalWaitRunId: "approval-wait-1",
+      chatTurnDurableRunId: "durable-turn-1",
+    });
+  });
+
+  it("seeds orphaned and dead-letter durable recovery scenarios", async () => {
+    const createApproval = vi.fn()
+      .mockResolvedValueOnce({
+        approvalId: "approval-orphan",
+        kind: "verification.approval.wait",
+        riskLevel: "danger",
+        status: "pending",
+        payload: {},
+        preview: {},
+        createdAt: "2026-04-10T00:00:00.000Z",
+        explanationStatus: "not_requested",
+      })
+      .mockResolvedValueOnce({
+        approvalId: "approval-dead",
+        kind: "verification.approval.wait",
+        riskLevel: "danger",
+        status: "pending",
+        payload: {},
+        preview: {},
+        createdAt: "2026-04-10T00:00:00.000Z",
+        explanationStatus: "not_requested",
+      });
+    const approvalResolve = vi.fn((approvalId: string) => ({
+      approvalId,
+      resolvedAt: "2026-04-10T00:00:05.000Z",
+    }));
+    const getRunId = vi.fn((approvalId: string) =>
+      approvalId === "approval-orphan" ? "run-orphan" : "run-dead");
+    const markResolved = vi.fn();
+    const updateRun = vi.fn();
+    const upsertDeadLetter = vi.fn(() => ({ deadLetterId: "dead-letter-1" }));
+
+    app = Fastify();
+    app.decorate("gateway", {
+      isDevDiagnosticsEnabled: () => true,
+      createApproval,
+      storage: {
+        approvals: {
+          resolve: approvalResolve,
+        },
+        approvalWaitRuns: {
+          getRunId,
+          markResolved,
+        },
+        durableRuns: {
+          updateRun,
+          upsertDeadLetter,
+        },
+      },
+    } as never);
+    app.decorate("gatewayConfig", {
+      rootDir: "f:/tmp/goatcitadel-dev",
+    } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/durable-recovery-seed",
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(createApproval).toHaveBeenCalledTimes(2);
+    expect(approvalResolve).toHaveBeenCalledTimes(2);
+    expect(updateRun).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "run-orphan",
+      status: "running",
+    }));
+    expect(updateRun).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "run-dead",
+      status: "dead_lettered",
+    }));
+    expect(upsertDeadLetter).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "run-dead",
+      reason: "verification_seed_dead_letter",
+    }));
+    expect(response.json()).toMatchObject({
+      orphanRecovery: {
+        approvalId: "approval-orphan",
+        runId: "run-orphan",
+      },
+      deadLetterRecovery: {
+        approvalId: "approval-dead",
+        runId: "run-dead",
+        deadLetterId: "dead-letter-1",
+      },
+    });
+  });
+
   it("wraps provider exercise failures in a successful response payload", async () => {
     app = Fastify();
     app.decorate("gateway", {

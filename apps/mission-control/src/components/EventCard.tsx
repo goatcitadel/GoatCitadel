@@ -1,19 +1,41 @@
+import type { RealtimeEvent } from "../api/client";
 import { StatusChip } from "./StatusChip";
 
 interface EventCardProps {
-  event: {
-    eventId: string;
-    eventType: string;
-    source: string;
-    timestamp: string;
-    sequence: number;
-    correlationId?: string;
-    traceId?: string;
-    payload: Record<string, unknown>;
-  };
+  event: RealtimeEvent;
   summary: string;
   tracePreview?: string[];
   onLoadTracePreview?: () => void;
+}
+
+function readPayloadString(payload: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function formatEventType(eventType: string): string {
+  return eventType.replace(/_/g, " ");
+}
+
+export function buildRealtimeEventSummary(event: RealtimeEvent): string {
+  const detail =
+    readPayloadString(event.payload, ["summary", "message", "title", "name", "status", "action", "kind"]) ??
+    (event.links?.sessionId ? `session ${event.links.sessionId.slice(-6)}` : null) ??
+    (event.links?.taskId ? `task ${event.links.taskId.slice(-6)}` : null) ??
+    null;
+
+  const prefix = event.source === "system"
+    ? "System"
+    : event.source.charAt(0).toUpperCase() + event.source.slice(1);
+
+  return detail
+    ? `${prefix} reported ${formatEventType(event.eventType)}: ${detail}.`
+    : `${prefix} reported ${formatEventType(event.eventType)}.`;
 }
 
 function formatEventLabel(eventType: string): string {
@@ -41,6 +63,7 @@ function getEventTone(eventType: string): "live" | "warning" | "critical" | "suc
 
 export function EventCard({ event, summary, tracePreview, onLoadTracePreview }: EventCardProps) {
   const eventTone = getEventTone(event.eventType);
+  const links = event.links as Record<string, string | undefined> | undefined;
 
   return (
     <article className="event-card">
@@ -52,14 +75,20 @@ export function EventCard({ event, summary, tracePreview, onLoadTracePreview }: 
         <div className="event-card-meta">
           <span>#{event.sequence}</span>
           <span>{event.source}</span>
+          {event.eventClass ? <span>{event.eventClass}</span> : null}
+          {event.eventAuthority ? <span>{event.eventAuthority}</span> : null}
           <span>{new Date(event.timestamp).toLocaleString()}</span>
         </div>
       </div>
 
-      {(event.traceId || event.correlationId) ? (
+      {(event.traceId || event.correlationId || links?.approvalId || links?.proactiveRunId || links?.taskId || links?.runId) ? (
         <div className="event-card-links">
           {event.traceId ? <span>trace {event.traceId}</span> : null}
           {event.correlationId ? <span>correlation {event.correlationId}</span> : null}
+          {links?.approvalId ? <span>approval {links.approvalId}</span> : null}
+          {links?.proactiveRunId ? <span>proactive {links.proactiveRunId}</span> : null}
+          {links?.taskId ? <span>task {links.taskId}</span> : null}
+          {links?.runId ? <span>durable {links.runId}</span> : null}
         </div>
       ) : null}
 

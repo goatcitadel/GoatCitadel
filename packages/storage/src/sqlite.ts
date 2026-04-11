@@ -577,20 +577,23 @@ function buildTableBlueprint(db: DatabaseSync, tableName: string, sql: string): 
       origin: string;
     }>
   )
-    .filter((index) => !index.name.startsWith("sqlite_autoindex_"))
     .map((index) => {
       const indexColumns = db.prepare(`PRAGMA index_info(${index.name})`).all() as Array<{
         name: string;
       }>;
+      const columns = indexColumns
+        .map((column) => column.name)
+        .filter((name): name is string => typeof name === "string" && name.length > 0);
       return {
-        name: index.name,
+        name: index.name.startsWith("sqlite_autoindex_")
+          ? buildGeneratedIndexName(tableName, columns, index.unique === 1)
+          : index.name,
         unique: index.unique === 1,
         origin: index.origin,
-        columns: indexColumns
-          .map((column) => column.name)
-          .filter((name): name is string => typeof name === "string" && name.length > 0),
+        columns,
       } satisfies SqliteSchemaIndexBlueprint;
-    });
+    })
+    .filter((index) => index.origin !== "pk");
 
   const seedRows =
     tableName === "workspaces" || tableName === "realtime_event_sequence_state"
@@ -620,6 +623,12 @@ function buildTableBlueprint(db: DatabaseSync, tableName: string, sql: string): 
     indexes,
     seedRows,
   };
+}
+
+function buildGeneratedIndexName(tableName: string, columns: string[], unique: boolean): string {
+  const suffix = unique ? "unique" : "index";
+  const columnPart = columns.length > 0 ? columns.join("_") : "constraint";
+  return `idx_${tableName}_${columnPart}_${suffix}`;
 }
 
 function createBaseSchema(db: DatabaseSync): void {

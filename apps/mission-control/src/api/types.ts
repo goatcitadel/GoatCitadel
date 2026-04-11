@@ -12,7 +12,10 @@ import type {
   BrowserProofLaneDraft,
   FollowOnParityReport,
   FollowOnProofLaneArtifactRecord,
+  IntegrationActionInvokeInput,
+  IntegrationActionInvokeResult,
   IntegrationFormSchema,
+  IntegrationOperatorAction,
   NpuRuntimeStatus,
   OnboardingState,
   OpenclawParityProgramReport,
@@ -157,6 +160,44 @@ export interface DashboardStateResponse {
   dailyCostUsd: number;
 }
 
+export interface TimelineSummaryResponse {
+  generatedAt: string;
+  events: {
+    items: RealtimeEvent[];
+  };
+  sessions: {
+    items: SessionsResponse["items"];
+  };
+  scheduler: {
+    jobs: CronJobsResponse["items"];
+    reviewQueue: Array<{
+      itemId: string;
+      jobId?: string;
+      scheduledFor?: string;
+      status?: string;
+      reason?: string;
+    }>;
+  };
+  improvement: {
+    reports: Array<{
+      reportId: string;
+      runId?: string;
+      createdAt?: string;
+      title?: string;
+      summary?: Record<string, unknown>;
+      [key: string]: unknown;
+    }>;
+    replayRuns: Array<{
+      runId: string;
+      status?: string;
+      createdAt?: string;
+      updatedAt?: string;
+      reportId?: string;
+      [key: string]: unknown;
+    }>;
+  };
+}
+
 export interface SystemVitalsResponse {
   hostname: string;
   platform: string;
@@ -169,6 +210,52 @@ export interface SystemVitalsResponse {
   memoryUsedBytes: number;
   processRssBytes: number;
   processHeapUsedBytes: number;
+}
+
+export interface HealthSummaryResponse {
+  generatedAt: string;
+  systemVitals: SystemVitalsResponse;
+  daemonStatus: {
+    running: boolean;
+    pid: number;
+    uptimeSeconds: number;
+    host: string;
+    state: "running" | "stopped";
+    lastCommandAt?: string;
+    requestedState?: "running" | "stopped";
+    supported: boolean;
+    controllable: boolean;
+    controlMessage: string;
+  };
+  daemonLogs: {
+    items: Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }>;
+  };
+  costs: {
+    summary: CostSummaryResponse;
+    qmd: {
+      totalRuns: number;
+      compressionPercent: number;
+      expansionPercent: number;
+      efficiencyLabel: "reduced" | "expanded" | "neutral";
+      originalTokenEstimate?: number;
+      distilledTokenEstimate?: number;
+      netTokenDelta?: number;
+    };
+  };
+  backups: {
+    items: Array<{
+      backupId: string;
+      createdAt: string;
+      files: Array<{ path?: string; [key: string]: unknown }>;
+      [key: string]: unknown;
+    }>;
+    latest: {
+      backupId: string;
+      createdAt: string;
+      files: Array<{ path?: string; [key: string]: unknown }>;
+      [key: string]: unknown;
+    } | null;
+  };
 }
 
 export type {
@@ -343,13 +430,14 @@ export interface IntegrationCatalogEntry {
   key: string;
   label: string;
   description: string;
-  maturity: "native" | "plugin" | "disabled" | "beta" | "planned";
+  maturity: "native" | "plugin" | "disabled" | "beta";
   runtimeAvailability?: "runnable" | "blocked";
   authMethods: string[];
   capabilities: string[];
   docsUrl?: string;
   formSchema?: IntegrationFormSchema;
   pluginId?: string;
+  operatorActions?: IntegrationOperatorAction[];
 }
 
 export interface IntegrationConnection {
@@ -369,6 +457,8 @@ export interface IntegrationConnection {
   lastSyncAt?: string;
   lastError?: string;
 }
+
+export type { IntegrationActionInvokeInput, IntegrationActionInvokeResult, IntegrationOperatorAction };
 
 export interface LlmChatCompletionResponse {
   id?: string;

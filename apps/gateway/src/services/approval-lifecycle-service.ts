@@ -1,16 +1,12 @@
 /**
  * Approval lifecycle service.
  *
- * Holds the moved bodies for the simpler members of the GatewayService
- * approval surface (Step 3 of the gateway-service decomposition plan).
+ * Owns approval state mutation, replay, and resolution side-effect
+ * orchestration behind an explicit host contract.
  *
- * ApprovalLifecycleHost is a narrow interface that documents exactly
- * which GatewayService capabilities the approval lifecycle requires.
- * GatewayService satisfies this interface but is not the only possible
- * implementation — this enables future decomposition and testing.
- *
- * Pattern reference: comms-service.ts, memory-facade-service.ts,
- * cron-scheduler-service.ts.
+ * ApprovalLifecycleHost documents exactly which capabilities the approval
+ * lifecycle requires. GatewayService satisfies this interface, but is not
+ * the only possible implementation.
  */
 
 import { randomUUID } from "node:crypto";
@@ -40,9 +36,12 @@ import type {
   ApprovalResolveResult,
   RemoteApprovalActionTokenIssueResult,
 } from "./gateway-service.js";
-import type { DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
 import type { ApprovalWaitRunService } from "./approval-wait-run-service.js";
+import {
+  applyApprovalResolutionWakeEffects,
+  type ApprovalResolutionEffectsResult,
+} from "./approval-resolution-effects-service.js";
 import type { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 
@@ -71,7 +70,6 @@ export interface ApprovalLifecycleHost {
   // ── services ───────────────────────────────────────────────────────
   readonly policyEngine: Pick<ToolPolicyEngine, "listGrants" | "createGrant" | "revokeGrant" | "executeApprovedAction">;
   readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
-  readonly durableRunService: Pick<DurableRunService, "requestRunProcessing">;
   readonly approvalWaitRunService: Pick<
     ApprovalWaitRunService,
     "buildApprovalLinkage" | "buildApprovalRealtimeLinks" | "primeApprovalLifecycle" | "wakeApprovalWaitDurableRun"
@@ -488,8 +486,6 @@ export async function resolveApproval(
   }
 
   let approval!: ApprovalRequest;
-  let wakeRunId: string | undefined;
-
   host.storage.runImmediateTransaction(() => {
     approval = host.storage.approvals.resolve(approvalId, input);
 
@@ -510,51 +506,18 @@ export async function resolveApproval(
         decision: input.decision,
       });
     }
-    wakeRunId = host.approvalWaitRunService.wakeApprovalWaitDurableRun(approval, input, executedAction);
   });
 
-  const proactiveRunIds = host.findProactiveDurableRunIdsForApproval(approvalId);
-  if (wakeRunId) {
+  const resolutionEffects: ApprovalResolutionEffectsResult | undefined = applyApprovalResolutionWakeEffects(
+    host,
+    approval,
+    input,
+    executedAction,
+  );
+
+  const wakeRunId = resolutionEffects?.approvalWaitDurableRunId;
+  if (wakeRunId && approval.linkage?.durableRunId !== wakeRunId) {
     approval = host.storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: wakeRunId });
-  }
-  for (const proactiveRunId of proactiveRunIds) {
-    try {
-      host.wakeDurableRun(proactiveRunId, {
-        eventKey: "approval.resolved",
-        correlationId: approval.approvalId,
-        payload: {
-          approvalId: approval.approvalId,
-          status: approval.status,
-          decision: input.decision,
-          resolvedBy: input.resolvedBy,
-          executedOutcome: executedAction?.outcome,
-        },
-      });
-    } catch (error) {
-      const msg = String((error as Error).message ?? "");
-      if (!msg.includes("not waiting/paused")) {
-        throw error;
-      }
-      host.publishRealtime(
-        "approval_proactive_wake_skipped",
-        "approvals",
-        {
-          approvalId: approval.approvalId,
-          runId: proactiveRunId,
-          reason: "proactive_run_not_waiting",
-          detail: msg,
-        },
-        {
-          eventClass: "operational_signal",
-          eventAuthority: "retained_stream",
-          links: {
-            approvalId: approval.approvalId,
-            runId: proactiveRunId,
-          },
-        },
-      );
-    }
-    host.durableRunService.requestRunProcessing(proactiveRunId);
   }
 
   await host.recordApprovalResolutionEffects(approval, input, executedAction);
@@ -584,6 +547,7 @@ export async function resolveApproval(
       pendingAction: host.storage.pendingApprovalActions.find(approvalId),
     },
     durableRunId: wakeRunId,
+    resolutionEffects,
   };
 }
 
@@ -659,10 +623,7 @@ export async function resolveChatToolApproval(
     resolvedBy: "chat-operator",
     resolutionNote: buildChatApprovalResolutionNote(decision, allowScope),
   });
-  const resume =
-    decision === "approve"
-      ? resumeLinkedChatTurnIfPossible(host, resolution.approval, turnId)
-      : { resumed: false as const };
+  const resume = resolution.resolutionEffects?.chatTurnResume ?? { resumed: false as const };
   host.storage.chatInlineApprovals.upsert({
     approvalId,
     sessionId,
@@ -683,7 +644,7 @@ export async function resolveChatToolApproval(
     allowScope,
     grant,
     resumed: resume.resumed,
-    resumedTurnId: resume.turnId,
+    resumedTurnId: resume.turnId ?? turnId,
     resumedRunId: resume.durableRunId,
   };
 }
@@ -745,54 +706,4 @@ function findExistingGrant(
         !grant.revokedAt &&
         (!grant.expiresAt || Date.parse(grant.expiresAt) > now),
     );
-}
-
-function resumeLinkedChatTurnIfPossible(
-  host: ApprovalLifecycleHost,
-  approval: ApprovalRequest,
-  turnId: string,
-): { resumed: boolean; turnId?: string; durableRunId?: string } {
-  let trace: { durable?: { runId?: string } } | undefined;
-  try {
-    trace = host.storage.chatTurnTraces.get(turnId);
-  } catch {
-    return {
-      resumed: false,
-      turnId,
-    };
-  }
-  const durableRunId = trace.durable?.runId;
-  if (!durableRunId) {
-    return {
-      resumed: false,
-      turnId,
-    };
-  }
-  try {
-    host.wakeDurableRun(durableRunId, {
-      eventKey: "approval.resolved",
-      correlationId: approval.approvalId,
-      payload: {
-        approvalId: approval.approvalId,
-        status: approval.status,
-        decision: "approve",
-        resolvedBy: approval.resolvedBy,
-      },
-    });
-    return {
-      resumed: true,
-      turnId,
-      durableRunId,
-    };
-  } catch (error) {
-    const msg = String((error as Error).message ?? "");
-    if (!msg.includes("not waiting/paused")) {
-      throw error;
-    }
-    return {
-      resumed: false,
-      turnId,
-      durableRunId,
-    };
-  }
 }

@@ -1,13 +1,9 @@
 /**
  * Chat turn preparation pipeline.
  *
- * Step 8b of the gateway-service decomposition plan: extracts the
- * `prepareAgentChatTurn` method along with its closely-related orchestration
- * resolution helpers (`resolvePreparedTurnOrchestration`,
- * `applyApprovedSpecialistsToPlan`, `generatePreparedExecutionPlanDraft`) and
- * the pure summary builder (`buildChatOrchestrationSummary`). All functions
- * are pure over a `GatewayService` host and use only its `/** @internal *\/`
- * public surface.
+ * Owns chat turn preparation and orchestration-planning helpers behind a
+ * narrow host contract. GatewayService remains the composition root, but this
+ * module no longer needs to type itself as the gateway monolith.
  */
 
 import { randomUUID } from "node:crypto";
@@ -18,7 +14,9 @@ import {
 } from "@goatcitadel/contracts";
 import type {
   ChatCompletionRequest,
+  ChatCompletionResponse,
   ChatDelegationRunRecord,
+  GatewayEventInput,
   ChatMessageRecord,
   ChatMode,
   ChatSendMessageRequest,
@@ -27,9 +25,9 @@ import type {
   ChatTurnTraceRecord,
   SessionMeta,
 } from "@goatcitadel/contracts";
-import type { SessionAutonomyPrefsRecord } from "@goatcitadel/storage";
+import type { SessionAutonomyPrefsRecord, Storage } from "@goatcitadel/storage";
 import { normalizeAgentInputFromSend } from "./chat-agent-orchestrator.js";
-import { assertChatSessionActive } from "./chat-session-utils.js";
+import { assertChatSessionActive, splitChatPrefsPatch } from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
 import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
@@ -56,15 +54,61 @@ import {
   type PreparedChatExecutionPlanResolution,
   type ResolvedRuntimeGuidance,
   scoreSpecialistCandidateMatch,
-  splitChatPrefsPatch,
 } from "./gateway-service.js";
-import type { GatewayService } from "./gateway-service.js";
+import type { LlmService } from "./llm-service.js";
 
-export type ChatTurnPrepHost = GatewayService;
+export interface ChatTurnRoute {
+  channel: string;
+  account: string;
+  peer?: string;
+  room?: string;
+  threadId?: string;
+}
+
+export interface ChatTurnSessionState {
+  traces: ChatTurnTraceRecord[];
+  tracesById: Map<string, ChatTurnTraceRecord>;
+  turnLineageById: Map<string, { turnId: string; parentTurnId?: string }>;
+  messages: ChatMessageRecord[];
+  messagesById: Map<string, ChatMessageRecord>;
+  childrenByTurnId: Map<string, string[]>;
+  activeLeafTurnId?: string;
+}
+
+export interface ChatTurnPrepHost {
+  readonly storage: Storage;
+  readonly llmService: Pick<LlmService, "getRuntimeConfig">;
+  getSession(sessionId: string): SessionMeta;
+  ensureChatSessionRuntimeGrants(sessionId: string): void;
+  maybeAutoTitleChatSession(sessionId: string, content: string): void;
+  normalizeWorkspaceId(workspaceId?: string): string;
+  routeFromSession(session: SessionMeta): ChatTurnRoute;
+  ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<unknown>;
+  patchSessionAutonomyPrefs(
+    sessionId: string,
+    input: Partial<Pick<SessionAutonomyPrefsRecord, "proactiveMode" | "maxActionsPerHour" | "maxActionsPerTurn" | "cooldownSeconds" | "retrievalMode" | "reflectionMode">>,
+  ): SessionAutonomyPrefsRecord;
+  ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
+  getSessionAutonomyPrefs(sessionId: string): SessionAutonomyPrefsRecord;
+  resolveRuntimeGuidance(workspaceId: string): Promise<ResolvedRuntimeGuidance>;
+  loadChatTurnSessionState(sessionId: string): Promise<ChatTurnSessionState>;
+  buildLlmMessagesFromBranchPath(
+    sessionId: string,
+    pathTurnIds: string[],
+    currentUserMessage: ChatMessageRecord | undefined,
+    options?: {
+      providerId?: string;
+      model?: string;
+      guidanceSystemInstruction?: string;
+    },
+    state?: ChatTurnSessionState,
+  ): Promise<ChatCompletionRequest["messages"]>;
+  createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+}
 
 export interface PreparedAgentChatTurn {
   session: SessionMeta;
-  route: ReturnType<GatewayService["routeFromSession"]>;
+  route: ChatTurnRoute;
   workspaceId: string;
   content: string;
   userEventId: string;

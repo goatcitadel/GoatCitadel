@@ -147,6 +147,19 @@ const updateSettingsSchema = z.object({
     .optional(),
 });
 
+const timelineSummaryQuerySchema = z.object({
+  eventLimit: z.coerce.number().int().positive().max(300).default(60),
+  sessionLimit: z.coerce.number().int().positive().max(120).default(24),
+  cronReviewLimit: z.coerce.number().int().positive().max(120).default(24),
+  improvementLimit: z.coerce.number().int().positive().max(60).default(12),
+});
+
+const healthSummaryQuerySchema = z.object({
+  costScope: z.enum(["session", "day", "agent", "task"]).default("day"),
+  logTail: z.coerce.number().int().positive().max(200).default(40),
+  backupLimit: z.coerce.number().int().positive().max(24).default(6),
+});
+
 export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/dashboard/state", async (_request, reply) => {
     return reply.send(fastify.gateway.getDashboardState());
@@ -154,6 +167,63 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/system/vitals", async (_request, reply) => {
     return reply.send(fastify.gateway.getSystemVitals());
+  });
+
+  fastify.get("/api/v1/observe/timeline", async (request, reply) => {
+    const parsed = timelineSummaryQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send({
+      generatedAt: new Date().toISOString(),
+      events: {
+        items: fastify.gateway.listRealtimeEvents(parsed.data.eventLimit),
+      },
+      sessions: {
+        items: fastify.gateway.listSessions(parsed.data.sessionLimit),
+      },
+      scheduler: {
+        jobs: fastify.gateway.listCronJobs(),
+        reviewQueue: fastify.gateway.listCronReviewQueue(parsed.data.cronReviewLimit),
+      },
+      improvement: {
+        reports: fastify.gateway.listImprovementReports(parsed.data.improvementLimit),
+        replayRuns: fastify.gateway.listDecisionReplayRuns(parsed.data.improvementLimit),
+      },
+    });
+  });
+
+  fastify.get("/api/v1/observe/health", async (request, reply) => {
+    const parsed = healthSummaryQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    const now = new Date();
+    const to = now.toISOString();
+    const from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const backups = await fastify.gateway.listBackups(parsed.data.backupLimit);
+    return reply.send({
+      generatedAt: to,
+      systemVitals: fastify.gateway.getSystemVitals(),
+      daemonStatus: fastify.gateway.getDaemonStatus(),
+      daemonLogs: {
+        items: fastify.gateway.listDaemonLogs(parsed.data.logTail),
+      },
+      costs: {
+        summary: {
+          items: fastify.gateway.costSummary(parsed.data.costScope, from, to),
+          scope: parsed.data.costScope,
+          from,
+          to,
+          usageAvailability: fastify.gateway.costUsageAvailability(from, to),
+        },
+        qmd: fastify.gateway.getMemoryQmdStats(from, to),
+      },
+      backups: {
+        items: backups,
+        latest: backups[0] ?? null,
+      },
+    });
   });
 
   fastify.get("/api/v1/cron/jobs", async (_request, reply) => {

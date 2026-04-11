@@ -33,6 +33,15 @@ const connectionParamsSchema = z.object({
   connectionId: z.string().uuid(),
 });
 
+const connectionActionParamsSchema = z.object({
+  connectionId: z.string().uuid(),
+  actionId: z.string().min(1).max(120),
+});
+
+const connectionActionBodySchema = z.object({
+  input: z.record(z.unknown()).optional(),
+});
+
 const discordPairingParamsSchema = z.object({
   connectionId: z.string().uuid(),
   pairingId: z.string().uuid(),
@@ -318,6 +327,34 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const deleted = fastify.gateway.deleteIntegrationConnection(params.data.connectionId);
     return reply.send({ deleted });
+  });
+
+  fastify.post("/api/v1/integrations/connections/:connectionId/actions/:actionId", async (request, reply) => {
+    const params = connectionActionParamsSchema.safeParse(request.params);
+    const parsed = connectionActionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !parsed.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: parsed.success ? undefined : parsed.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(
+        await fastify.gateway.invokeIntegrationConnectionAction(
+          params.data.connectionId,
+          params.data.actionId,
+          parsed.data,
+        ),
+      );
+    } catch (error) {
+      const message = (error as Error).message;
+      const lowered = message.toLowerCase();
+      const notFound = lowered.includes("unknown integration connection");
+      const unsupported = lowered.includes("unsupported integration action");
+      return reply.code(notFound || unsupported ? 404 : 409).send({ error: message });
+    }
   });
 
   fastify.get("/api/v1/integrations/connections/:connectionId/discord/pairings", async (request, reply) => {

@@ -21,9 +21,14 @@ import type {
   TranscriptEvent,
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
+import {
+  DEFAULT_MEMORY_WORKSPACE_ID,
+  matchesMemoryWorkspaceScope,
+  MEMORY_RECOMMENDATION_DEDUP_WINDOW_MS,
+  shouldSuppressMaintenanceRecommendation,
+} from "./memory-lifecycle-policy.js";
 import type { ServiceContext } from "./service-context.js";
 
-const DEFAULT_WORKSPACE_ID = "default";
 const MEMORY_MAINTENANCE_WORKFLOW_KEY = "memory.maintenance";
 const MEMORY_MAINTENANCE_WORKFLOW_VERSION = "memory.maintenance.v1";
 const MAX_TRANSCRIPT_SOURCES = 24;
@@ -34,7 +39,6 @@ const MAX_FILE_BYTES = 12_000;
 const MAX_EXCERPT_CHARS = 1_400;
 const MAX_MODEL_EVIDENCE_TOKENS = 7_000;
 const MAX_MAINTENANCE_OUTPUT_TOKENS = 1_800;
-const RECOMMENDATION_DEDUP_WINDOW_MS = 12 * 60 * 60 * 1000;
 const SCHEDULE_SCAN_WINDOW_MINUTES = 8 * 24 * 60;
 
 interface MemoryMaintenanceWorkflowPayload {
@@ -929,15 +933,7 @@ export class MemoryMaintenanceService {
     item: Pick<MemoryItemRecord, "namespace" | "metadata"> & { metadata: Record<string, unknown> },
     workspaceId: string,
   ): boolean {
-    const explicitWorkspaceId =
-      typeof item.metadata.workspaceId === "string" ? this.normalizeWorkspaceId(item.metadata.workspaceId) : undefined;
-    if (explicitWorkspaceId) {
-      return explicitWorkspaceId === workspaceId;
-    }
-    if (workspaceId === DEFAULT_WORKSPACE_ID) {
-      return true;
-    }
-    return item.namespace.startsWith(`${workspaceId}.`) || item.namespace.startsWith(`${workspaceId}/`);
+    return matchesMemoryWorkspaceScope(item, workspaceId, this.normalizeWorkspaceId.bind(this), DEFAULT_MEMORY_WORKSPACE_ID);
   }
 
   private async generateConsolidatedArtifact(input: {
@@ -1175,17 +1171,15 @@ export class MemoryMaintenanceService {
       proposedPatch: Record<string, unknown>;
     },
   ): Promise<MemoryMaintenanceRecommendationRecord | undefined> {
-    const existing = this.ctx.storage.memoryMaintenance.listRecommendations(workspaceId, 25).find((item) => {
-      if (item.kind !== input.kind || item.status === "rejected") {
-        return false;
-      }
-      const updatedAtMs = Date.parse(item.updatedAt);
-      if (Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs > RECOMMENDATION_DEDUP_WINDOW_MS) {
-        return false;
-      }
-      return JSON.stringify(item.proposedPatch) === JSON.stringify(input.proposedPatch);
-    });
-    if (existing) {
+    const existing = this.ctx.storage.memoryMaintenance.listRecommendations(workspaceId, 25);
+    if (
+      shouldSuppressMaintenanceRecommendation({
+        existing,
+        kind: input.kind,
+        proposedPatch: input.proposedPatch,
+        dedupeWindowMs: MEMORY_RECOMMENDATION_DEDUP_WINDOW_MS,
+      })
+    ) {
       return undefined;
     }
     const now = new Date().toISOString();
@@ -1266,11 +1260,11 @@ export class MemoryMaintenanceService {
 }
 
 function getWorkspaceMemoryRelativeDir(workspaceId: string): string {
-  return workspaceId === DEFAULT_WORKSPACE_ID ? "memory" : `workspaces/${workspaceId}/memory`;
+  return workspaceId === DEFAULT_MEMORY_WORKSPACE_ID ? "memory" : `workspaces/${workspaceId}/memory`;
 }
 
 function getWorkspaceMaintenanceRelativeDir(workspaceId: string): string {
-  return workspaceId === DEFAULT_WORKSPACE_ID ? "memory/maintenance" : `workspaces/${workspaceId}/memory/maintenance`;
+  return workspaceId === DEFAULT_MEMORY_WORKSPACE_ID ? "memory/maintenance" : `workspaces/${workspaceId}/memory/maintenance`;
 }
 
 function isProviderLikelyLocal(baseUrl: string): boolean {

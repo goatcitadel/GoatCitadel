@@ -122,6 +122,36 @@ describe("SessionRepository", () => {
     assert.equal(row.routingHints, undefined);
   });
 
+  it("applies usage deltas without relying on untyped arithmetic parameters", () => {
+    const repo = createRepo();
+    const now = "2026-02-27T10:00:00.000Z";
+
+    repo.upsert({
+      sessionId: "session-usage",
+      sessionKey: "discord:me:usage",
+      kind: "dm",
+      channel: "discord",
+      account: "me",
+      timestamp: now,
+    });
+
+    repo.applyUsage({
+      sessionId: "session-usage",
+      tokenInput: 11,
+      tokenOutput: 7,
+      tokenCachedInput: 3,
+      costUsd: 0.42,
+      timestamp: "2026-02-27T10:05:00.000Z",
+    });
+
+    const row = repo.getBySessionId("session-usage");
+    assert.equal(row.tokenInput, 11);
+    assert.equal(row.tokenOutput, 7);
+    assert.equal(row.tokenCachedInput, 3);
+    assert.equal(row.tokenTotal, 18);
+    assert.equal(row.costUsdTotal, 0.42);
+  });
+
   it("aggregates operator summaries in SQL with active-session counts", () => {
     const repo = createRepo();
 

@@ -132,6 +132,49 @@ describe("integrations inbound route guards", () => {
     );
   });
 
+  it("invokes shared operator actions through the integration action route", async () => {
+    const invokeIntegrationConnectionAction = vi.fn(async () => ({
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      catalogId: "productivity.apple-notes",
+      actionId: "read",
+      status: "executed",
+      message: "Fetched sample note payload.",
+      checkedAt: "2026-04-10T00:00:00.000Z",
+      output: {
+        items: [{ title: "Sample note" }],
+      },
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      invokeIntegrationConnectionAction,
+    } as never);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/actions/read",
+      payload: {
+        input: {
+          query: "sample",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(invokeIntegrationConnectionAction).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111",
+      "read",
+      { input: { query: "sample" } },
+    );
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        catalogId: "productivity.apple-notes",
+        actionId: "read",
+        status: "executed",
+      }),
+    );
+  });
+
   it("lists Discord pairings through the integration route", async () => {
     const listDiscordPairings = vi.fn(() => ({
       runtime: {

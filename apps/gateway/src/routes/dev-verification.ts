@@ -25,6 +25,11 @@ const providerExerciseSchema = z.object({
   scenario: z.enum(["simple", "stream", "tools", "structured"]),
 });
 
+const chatApprovalScenarioSchema = z.object({
+  sessionId: z.string().trim().min(1),
+  workspaceId: z.string().trim().min(1),
+});
+
 export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/dev/verification/status", async (_request, reply) => {
     if (!fastify.gateway.isDevDiagnosticsEnabled()) {
@@ -194,6 +199,210 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       sessionId: session.sessionId,
       sessionIds: sessions.map((item) => item.sessionId),
       sessionTitle: parsed.data.sessionTitle,
+    });
+  });
+
+  fastify.post("/api/v1/dev/verification/chat-approval-scenario", async (request, reply) => {
+    if (!fastify.gateway.isDevDiagnosticsEnabled()) {
+      return reply.code(404).send({ error: "Development verification endpoints are disabled." });
+    }
+    const parsed = chatApprovalScenarioSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+
+    const now = new Date().toISOString();
+    const turnId = randomUUID();
+    const userMessageId = randomUUID();
+    const storage = fastify.gateway.storage;
+
+    const approval = await fastify.gateway.createApproval({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: {
+        sessionId: parsed.data.sessionId,
+        turnId,
+        workspaceId: parsed.data.workspaceId,
+        command: "pnpm test",
+      },
+      preview: {
+        title: "Verification chat approval",
+        command: "pnpm test",
+      },
+      linkage: {
+        sessionId: parsed.data.sessionId,
+        turnId,
+        workspaceId: parsed.data.workspaceId,
+      },
+    });
+    const approvalWaitRunId = storage.approvalWaitRuns.getRunId(approval.approvalId);
+    const chatTurnDurableRun = storage.durableRuns.createRun({
+      workflowKey: "approval.wait",
+      status: "waiting",
+      payload: {
+        version: "approval.wait.v1",
+        approvalId: approval.approvalId,
+        approvalKind: approval.kind,
+        createdAt: approval.createdAt,
+      },
+      metadata: {
+        surface: "chat",
+        waitForEvent: {
+          eventKey: "approval.resolved",
+          correlationId: approval.approvalId,
+        },
+      },
+      startedAt: now,
+      now,
+    });
+
+    storage.chatMessages.upsert({
+      messageId: userMessageId,
+      sessionId: parsed.data.sessionId,
+      role: "user",
+      actorType: "user",
+      actorId: "verification-operator",
+      content: "Run the governed verification command.",
+      timestamp: now,
+    });
+    storage.chatTurnTraces.create({
+      turnId,
+      sessionId: parsed.data.sessionId,
+      userMessageId,
+      status: "waiting_for_approval",
+      mode: "chat",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      durable: {
+        runId: chatTurnDurableRun.runId,
+        status: "waiting",
+        checkpointKind: "run_waiting",
+      },
+      failure: {
+        failureClass: "approval_required",
+        message: "Waiting for verification approval.",
+        retryable: true,
+        recommendedAction: "approve_pending_step",
+      },
+      startedAt: now,
+    });
+    storage.chatInlineApprovals.upsert({
+      approvalId: approval.approvalId,
+      sessionId: parsed.data.sessionId,
+      turnId,
+      kind: approval.kind,
+      toolName: "shell.exec",
+      status: "pending",
+      reason: "Waiting for verification chat approval.",
+      riskLevel: approval.riskLevel,
+      expiresAt: approval.expiresAt,
+      details: {
+        scenario: "verification-chat-approval",
+      },
+      createdAt: now,
+    });
+    storage.chatSessionBranchState.setActiveLeaf(parsed.data.sessionId, turnId);
+
+    return reply.code(201).send({
+      sessionId: parsed.data.sessionId,
+      workspaceId: parsed.data.workspaceId,
+      turnId,
+      userMessageId,
+      approvalId: approval.approvalId,
+      approvalWaitRunId,
+      chatTurnDurableRunId: chatTurnDurableRun.runId,
+    });
+  });
+
+  fastify.post("/api/v1/dev/verification/durable-recovery-seed", async (_request, reply) => {
+    if (!fastify.gateway.isDevDiagnosticsEnabled()) {
+      return reply.code(404).send({ error: "Development verification endpoints are disabled." });
+    }
+
+    const now = new Date().toISOString();
+    const orphanApproval = await fastify.gateway.createApproval({
+      kind: "verification.approval.wait",
+      riskLevel: "danger",
+      payload: {
+        scope: "durable-recovery",
+        scenario: "orphaned-approval-wait",
+      },
+      preview: {
+        title: "Verification orphaned approval wait",
+      },
+    });
+    const orphanApprovalResolved = fastify.gateway.storage.approvals.resolve(orphanApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: "verification-seed",
+      resolutionNote: "Seeded resolved approval for orphan recovery verification.",
+    });
+    const orphanRunId = fastify.gateway.storage.approvalWaitRuns.getRunId(orphanApproval.approvalId);
+    if (!orphanRunId) {
+      return reply.code(500).send({ error: "Failed to seed orphan approval wait run." });
+    }
+    fastify.gateway.storage.approvalWaitRuns.markResolved(orphanApproval.approvalId, orphanApprovalResolved.resolvedAt);
+    fastify.gateway.storage.durableRuns.updateRun({
+      runId: orphanRunId,
+      status: "running",
+      startedAt: now,
+      finishedAt: undefined,
+      lastError: undefined,
+      updatedAt: now,
+    });
+
+    const deadLetterApproval = await fastify.gateway.createApproval({
+      kind: "verification.approval.wait",
+      riskLevel: "danger",
+      payload: {
+        scope: "durable-recovery",
+        scenario: "dead-letter-approval-wait",
+      },
+      preview: {
+        title: "Verification dead-letter approval wait",
+      },
+    });
+    const deadLetterApprovalResolved = fastify.gateway.storage.approvals.resolve(deadLetterApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: "verification-seed",
+      resolutionNote: "Seeded resolved approval for dead-letter recovery verification.",
+    });
+    const deadLetterRunId = fastify.gateway.storage.approvalWaitRuns.getRunId(deadLetterApproval.approvalId);
+    if (!deadLetterRunId) {
+      return reply.code(500).send({ error: "Failed to seed dead-letter approval wait run." });
+    }
+    fastify.gateway.storage.approvalWaitRuns.markResolved(
+      deadLetterApproval.approvalId,
+      deadLetterApprovalResolved.resolvedAt,
+    );
+    fastify.gateway.storage.durableRuns.updateRun({
+      runId: deadLetterRunId,
+      status: "dead_lettered",
+      startedAt: now,
+      finishedAt: now,
+      lastError: "Seeded dead letter for durable recovery verification.",
+      updatedAt: now,
+    });
+    const deadLetter = fastify.gateway.storage.durableRuns.upsertDeadLetter({
+      runId: deadLetterRunId,
+      reason: "verification_seed_dead_letter",
+      payload: {
+        approvalId: deadLetterApproval.approvalId,
+        scenario: "dead-letter-approval-wait",
+      },
+      createdAt: now,
+    });
+
+    return reply.code(201).send({
+      orphanRecovery: {
+        approvalId: orphanApproval.approvalId,
+        runId: orphanRunId,
+      },
+      deadLetterRecovery: {
+        approvalId: deadLetterApproval.approvalId,
+        runId: deadLetterRunId,
+        deadLetterId: deadLetter.deadLetterId,
+      },
     });
   });
 

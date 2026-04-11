@@ -56,14 +56,15 @@ Authority:
 Implementation status:
 - Schema and storage repository: complete (migration v21).
 - Read-only diagnostics API: complete.
-- Execution-engine adoption: **in progress** — `DurableRunService` now starts a background worker loop and auto-drains eligible queued runs, but not every critical runtime flow is durably owned yet.
+- Execution-engine adoption: **in progress** — the adopted resumable chat flow set is now durably owned for approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics.
 - Queue consumers / idempotent worker runtime: **not yet complete**.
 - DLQ operator actions: **not yet complete**.
 - See `docs/DURABLE_RUNS_REPLAY_FOUNDATION.md` for the full activation checklist.
 
 Notes:
-- A run records execution intent and outcome; it is not yet the default execution path.
-- Durable execution now owns worker startup, retry scheduling, wake/resume, and dead-letter recovery mechanics, but most core chat-turn execution still begins from gateway-owned synchronous entry paths before promoting into durable flow.
+- A run records execution intent and outcome for the adopted resumable flow set. Non-adopted paths are called out explicitly rather than inferred.
+- Durable execution now owns worker startup, retry scheduling, wake/resume, dead-letter recovery mechanics, approval wait/resume wake effects, approval-linked proactive wakes, and durable-linked chat-turn stream resumption.
+- Remaining non-adopted chat flows are still explicit: HTTP/SSE entrypoints still prepare and enqueue chat sends and retries, and legacy traces without durable linkage still rely on compatibility resume behavior.
 - Runs may be linked to sessions, turns, tasks, and approvals.
 - The `durableKernelV1Enabled` feature flag gates durable-run APIs. The `replayOverridesV1Enabled` flag (default: off) gates replay-with-overrides.
 
@@ -169,12 +170,13 @@ Authority:
 Implementation status:
 - QMD composition, distillation, and caching: complete.
 - Memory maintenance (retention, compaction, recommendations): feature-flagged behind `memoryMaintenanceV1Enabled`.
-- Learned-memory dedup and memory-maintenance dedup are independent implementations without coordination.
+- Learned-memory promotion, dedupe, workspace scope resolution, and maintenance recommendation suppression now route through lifecycle-owned policy helpers coordinated by `MemoryLifecycleService`.
 
 Notes:
-- Memory ownership is currently distributed across `MemoryContextService`, `MemoryMaintenanceService`, `ChatLearnedMemoryService`, `memory-facade-service.ts`, and `memory-item-helpers.ts`. There is no single service that owns the full memory lifecycle.
+- `MemoryLifecycleService` is the operator-facing lifecycle owner for context composition, learned-memory entry points, maintenance policy/run orchestration, and shared dedupe/scope policy decisions.
+- `MemoryContextService`, `ChatLearnedMemoryService`, and `MemoryMaintenanceService` remain focused collaborators behind that owner.
 - `ChatLearnedMemoryService` is storage-repo backed for learned-memory item persistence.
-- Remaining direct-SQL owners in core runtime-adjacent code still include `GatewayService`, `MemoryMaintenanceService`, `ImprovementService`, `PromptPackService`, `ChatProactiveService`, and selected migration/ops services such as `database-cutover-service.ts` and `gateway/cron-automation-service.ts`.
+- Remaining direct-SQL owners in core runtime-adjacent code still include `GatewayService`, `ImprovementService`, `PromptPackService`, `ChatProactiveService`, and selected migration/ops services such as `database-cutover-service.ts` and `gateway/cron-automation-service.ts`.
 
 ## Derived Views
 

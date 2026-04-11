@@ -298,6 +298,47 @@ describe("CapabilitySystemService", () => {
       }),
     );
   });
+
+  it("persists truncation markers when stdout/stderr exceed the capture budget", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: `
+        console.log("x".repeat(70000));
+        console.error("y".repeat(70000));
+        return { ok: true };
+      `,
+      requestedOutputIntent: "Exercise bounded output capture.",
+      saveCandidateOnSuccess: false,
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+    const stdoutArtifactPath = path.resolve(harness.rootDir, storedRun.stdoutArtifact!.relPath);
+    const stderrArtifactPath = path.resolve(harness.rootDir, storedRun.stderrArtifact!.relPath);
+    const stdout = await fs.readFile(stdoutArtifactPath, "utf8");
+    const stderr = await fs.readFile(stderrArtifactPath, "utf8");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "completed",
+      }),
+    });
+    expect(storedRun.stdoutTruncated).toBe(true);
+    expect(storedRun.stderrTruncated).toBe(true);
+    expect(stdout).toContain("...[truncated]");
+    expect(stderr).toContain("...[truncated]");
+    expect(storedRun.stdoutPreview).toContain("...[truncated]");
+    expect(storedRun.stderrPreview).toContain("...[truncated]");
+  });
 });
 
 async function createHarness(input?: {

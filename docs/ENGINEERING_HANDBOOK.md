@@ -6,9 +6,25 @@ This document is the deep technical documentation for GoatCitadel. It is intende
 - External reviewers performing architecture and code quality audits.
 - Contributors implementing new features without breaking deterministic safety behavior.
 
-This handbook describes what is currently implemented in `F:\code\personal-ai` as of February 2026.
+This handbook is a reference architecture guide for the current repo shape. It is not the final authority for runtime ownership or feature completeness.
 
-Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md`. Use this handbook for architecture and system truth.
+When runtime ownership, lifecycle status, or operator truth matter, prefer these sources in order:
+
+1. `docs/CANONICAL_RUNTIME_STATE_MODEL.md`
+2. current implementation under `apps/` and `packages/`
+3. `docs/1_0_CONTRACT.md` for public `1.0` scope, support truth, and release gates
+4. this handbook for broader subsystem orientation
+
+Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md`.
+
+## Current Runtime Truth
+
+- Durable execution is the canonical owner for the adopted resumable flow set: approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics.
+- Remaining non-adopted chat flows are still explicit: HTTP/SSE entrypoints prepare and enqueue chat sends and retries, and legacy traces without durable linkage still rely on compatibility resume behavior.
+- `MemoryLifecycleService` is the operator-facing memory lifecycle owner. `MemoryContextService`, `ChatLearnedMemoryService`, and `MemoryMaintenanceService` remain collaborators behind that boundary instead of separate policy owners.
+- `packages/mesh-core` is currently smoke-only and does not count toward the `1.0` readiness bar while it still relies on `--passWithNoTests`.
+- `apps/npu-sidecar` is optional experimental infrastructure and is not part of the current `1.0` bar.
+- Visible `beta` and `native` non-channel integrations derive their advertised capabilities from the operator-action runtime registry; Mission Control should not surface diagnostics-only shells for those entries.
 
 ## 0. OpenClaw-Informed Hardening Deltas (Current Cycle)
 
@@ -48,7 +64,7 @@ Primary implementation goals:
 ## 2. Monorepo Structure
 
 ```text
-F:\code\personal-ai
+<repo-root>
 ├─ apps
 │  ├─ gateway                  # Fastify backend, canonical control plane
 │  └─ mission-control          # React + Vite operator console
@@ -119,7 +135,7 @@ Mission Control is an API client, not a backend extension. It:
 ### 3.3 Shared Domain Packages
 
 - `@goatcitadel/contracts`: types shared across backend and frontend.
-- `@goatcitadel/extensions-sdk`: author-facing manifest schemas, validation, and file helpers for extensions.
+- `@goatcitadel/extensions-sdk`: published author-facing manifest schemas, validation, and file helpers for extensions.
 - `@goatcitadel/storage`: all SQLite repository and JSONL append/read logic.
 - `@goatcitadel/gateway-core`: event ingest and deterministic session key logic.
 - `@goatcitadel/policy-engine`: policy resolution and enforcement gates.
@@ -718,6 +734,11 @@ Minimum backup set:
 - `data/transcripts/*.jsonl`
 - `data/audit/*.jsonl`
 - `config/*.json`
+
+Release-proof expectation:
+
+- `verify:backup:roundtrip` must seed, mutate, restore, and verify all four classes above.
+- `verify:visual:regression` must compare checked-in baselines for the shell and primary `Work / Observe / Tune` surfaces, not just capture screenshots.
 
 If `index.db` is lost but logs remain:
 

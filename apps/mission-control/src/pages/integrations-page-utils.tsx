@@ -49,13 +49,7 @@ export function evaluateLocalRisk(input: {
     items.push({
       field: "integration.runtimeAvailability",
       level: "critical",
-      hint: "This integration is cataloged for planning, but it is not runnable in the current runtime.",
-    });
-  } else if (input.selectedCatalog?.maturity === "planned") {
-    items.push({
-      field: "integration.maturity",
-      level: "warning",
-      hint: "This integration is still parity-incomplete. Expect manual setup and follow-on proof before claiming it as finished.",
+      hint: "This integration is visible in the catalog, but the current runtime posture cannot make it runnable yet.",
     });
   }
 
@@ -401,8 +395,6 @@ export function formatMaturity(maturity: IntegrationCatalogEntry["maturity"]): s
       return "Disabled";
     case "beta":
       return "Beta";
-    case "planned":
-      return "Planned";
     default:
       return maturity;
   }
@@ -484,8 +476,6 @@ export function describeMaturity(maturity: IntegrationCatalogEntry["maturity"]):
       return "Known integration, currently disabled in this runtime.";
     case "beta":
       return "Available, but still stabilizing.";
-    case "planned":
-      return "Roadmapped. May need plugin or manual setup before use.";
     default:
       return "";
   }

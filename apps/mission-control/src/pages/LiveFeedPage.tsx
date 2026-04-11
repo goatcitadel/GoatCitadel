@@ -1,38 +1,8 @@
 import { useEffect, useState } from "react";
 import { connectEventStream, fetchDevDiagnostics, fetchRealtimeEvents, type RealtimeEvent } from "../api/client";
-import { EventCard } from "../components/EventCard";
+import { buildRealtimeEventSummary, EventCard } from "../components/EventCard";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { pageCopy } from "../content/copy";
-
-function formatEventType(eventType: string): string {
-  return eventType.replace(/_/g, " ");
-}
-
-function readPayloadString(payload: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    const value = payload[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-  return null;
-}
-
-export function buildRealtimeEventSummary(event: RealtimeEvent): string {
-  const detail =
-    readPayloadString(event.payload, ["summary", "message", "title", "name", "status", "action", "kind"]) ??
-    (event.links?.sessionId ? `session ${event.links.sessionId.slice(-6)}` : null) ??
-    (event.links?.taskId ? `task ${event.links.taskId.slice(-6)}` : null) ??
-    null;
-
-  const prefix = event.source === "system"
-    ? "System"
-    : event.source.charAt(0).toUpperCase() + event.source.slice(1);
-
-  return detail
-    ? `${prefix} reported ${formatEventType(event.eventType)}: ${detail}.`
-    : `${prefix} reported ${formatEventType(event.eventType)}.`;
-}
 
 export function LiveFeedPage() {
   const [events, setEvents] = useState<RealtimeEvent[]>([]);

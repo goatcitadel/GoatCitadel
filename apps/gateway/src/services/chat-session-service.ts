@@ -1,10 +1,9 @@
 /**
  * Chat session service.
  *
- * Body-move home for the chat session CRUD / archive / prefs / binding
- * methods previously living on GatewayService (Step 5 of the
- * gateway-service decomposition plan). The remaining façade entries
- * (chat-project + chat-thread) still delegate to GatewayService methods.
+ * Owns chat session CRUD / archive / prefs / binding behavior behind a
+ * narrow host contract so GatewayService can act as composition root
+ * instead of the only usable session owner.
  *
  * Pattern reference: comms-service.ts, settings-auth-service.ts.
  */
@@ -22,14 +21,37 @@ import {
   type ChatSessionPrefsPatch,
   type ChatSessionPrefsRecord,
   type ChatSessionRecord,
+  type SessionMeta,
 } from "@goatcitadel/contracts";
-import { buildChatSessionUpdatedPayload, deriveChatSessionTitleFromContent } from "./chat-session-utils.js";
-import type { GatewayService } from "./gateway-service.js";
-import { splitChatPrefsPatch, toChatSessionRecord } from "./gateway-service.js";
+import type { Storage } from "@goatcitadel/storage";
+import {
+  buildChatSessionUpdatedPayload,
+  deriveChatSessionTitleFromContent,
+  splitChatPrefsPatch,
+  toChatSessionRecord,
+} from "./chat-session-utils.js";
 
 const log = logger.child("chat-session-service");
 
-export type ChatSessionHost = GatewayService;
+export interface ChatSessionHost {
+  readonly storage: Storage;
+  readonly operatorSummaryCache: {
+    invalidate(): void;
+  };
+  normalizeWorkspaceId(workspaceId?: string): string;
+  ensureChatSessionRuntimeGrants(sessionId: string): void;
+  requireChatSession(sessionId: string): ChatSessionRecord;
+  getSession(sessionId: string): SessionMeta;
+  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
+  clearChatTurnWriteLease(sessionId: string): void;
+  removeChatSessionStoredFile(storageRelPath: string): Promise<void>;
+  ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
+  hydrateChatPrefsWithAutonomy(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
+  patchSessionAutonomyPrefs(
+    sessionId: string,
+    patch: ReturnType<typeof splitChatPrefsPatch>["autonomyPatch"],
+  ): void;
+}
 
 export function listChatSessions(host: ChatSessionHost, query: ChatSessionListQuery = {}): ChatSessionRecord[] {
   const workspaceId = host.normalizeWorkspaceId(query.workspaceId);

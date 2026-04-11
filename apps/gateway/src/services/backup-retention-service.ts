@@ -33,6 +33,62 @@ export interface BackupRetentionDeps {
   readonly config: GatewayRuntimeConfig;
 }
 
+export async function restoreBackupAtRuntime(
+  config: GatewayRuntimeConfig,
+  input: {
+    filePath: string;
+    confirm: boolean;
+  },
+): Promise<{ restored: boolean; backupId?: string; filesRestored: number }> {
+  if (!input.confirm) {
+    throw new Error("Backup restore requires explicit confirm=true");
+  }
+
+  const backupDir = path.resolve(resolveBackupDirectory());
+  const backupPath = path.resolve(backupDir, input.filePath);
+  ensurePathWithinRoot(backupPath, backupDir);
+  const verification = await verifyBackupAtRuntime(config, { filePath: input.filePath });
+  if (!verification.verified || !verification.manifest) {
+    throw new Error(formatBackupVerifyFailure(verification));
+  }
+
+  const payloadDir = path.join(backupPath, "payload");
+  const manifest = verification.manifest;
+  if (manifest.files.some((file) => file.path === "database/postgres.dump")) {
+    throw new Error(
+      "Postgres backups must be restored with pg_restore; file-copy restore is only available for SQLite backups.",
+    );
+  }
+
+  for (const file of manifest.files) {
+    if (isEphemeralSqliteSidecar(file.path)) {
+      continue;
+    }
+    const source = path.resolve(payloadDir, file.path);
+    ensurePathWithinRoot(source, payloadDir);
+    const target = path.resolve(config.rootDir, file.path);
+    ensurePathWithinRoot(target, config.rootDir);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.copyFile(source, target);
+  }
+
+  return {
+    restored: true,
+    backupId: manifest.backupId,
+    filesRestored: manifest.files.length,
+  };
+}
+
+export async function verifyBackupAtRuntime(
+  _config: GatewayRuntimeConfig,
+  input: { filePath: string },
+): Promise<BackupVerifyResponse> {
+  const backupDir = path.resolve(resolveBackupDirectory());
+  const backupPath = path.resolve(backupDir, input.filePath);
+  ensurePathWithinRoot(backupPath, backupDir);
+  return verifyBackupAtPath(backupPath);
+}
+
 export class BackupRetentionService {
   private readonly storage: Storage;
   private readonly config: GatewayRuntimeConfig;
@@ -94,6 +150,7 @@ export class BackupRetentionService {
         await copyPathIfExists(source, target);
       }
     } else {
+      this.checkpointSqliteBeforeBackup();
       const includePaths = this.buildBackupIncludePaths();
       for (const includePath of includePaths) {
         const source = path.resolve(this.config.rootDir, includePath);
@@ -130,47 +187,21 @@ export class BackupRetentionService {
     filePath: string;
     confirm: boolean;
   }): Promise<{ restored: boolean; backupId?: string; filesRestored: number }> {
-    if (!input.confirm) {
-      throw new Error("Backup restore requires explicit confirm=true");
-    }
-
-    const backupDir = path.resolve(this.getBackupDirectory());
-    const backupPath = path.resolve(backupDir, input.filePath);
-    ensurePathWithinRoot(backupPath, backupDir);
-    const verification = await this.verifyBackup({
-      filePath: input.filePath,
-    });
-    if (!verification.verified || !verification.manifest) {
-      throw new Error(formatBackupVerifyFailure(verification));
-    }
-
-    const payloadDir = path.join(backupPath, "payload");
-    const manifest = verification.manifest;
-    if (manifest.files.some((file) => file.path === "database/postgres.dump")) {
-      throw new Error("Postgres backups must be restored with pg_restore; file-copy restore is only available for SQLite backups.");
-    }
-
-    for (const file of manifest.files) {
-      const source = path.resolve(payloadDir, file.path);
-      ensurePathWithinRoot(source, payloadDir);
-      const target = path.resolve(this.config.rootDir, file.path);
-      ensurePathWithinRoot(target, this.config.rootDir);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.copyFile(source, target);
-    }
-
-    return {
-      restored: true,
-      backupId: manifest.backupId,
-      filesRestored: manifest.files.length,
-    };
+    return restoreBackupAtRuntime(this.config, input);
   }
 
   public async verifyBackup(input: { filePath: string }): Promise<BackupVerifyResponse> {
-    const backupDir = path.resolve(this.getBackupDirectory());
-    const backupPath = path.resolve(backupDir, input.filePath);
-    ensurePathWithinRoot(backupPath, backupDir);
-    return verifyBackupAtPath(backupPath);
+    return verifyBackupAtRuntime(this.config, input);
+  }
+
+  private checkpointSqliteBeforeBackup(): void {
+    try {
+      this.gatewaySql.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    } catch (error) {
+      throw new Error(`failed to checkpoint sqlite before backup: ${(error as Error).message}`, {
+        cause: error,
+      });
+    }
   }
 
   // ── Retention ────────────────────────────────────────────────────────
@@ -252,11 +283,7 @@ export class BackupRetentionService {
   // ── Private helpers ──────────────────────────────────────────────────
 
   private getBackupDirectory(): string {
-    const fromEnv = process.env.GOATCITADEL_BACKUP_DIR?.trim();
-    if (fromEnv) {
-      return path.resolve(fromEnv);
-    }
-    return path.join(os.homedir(), ".GoatCitadel", "backups");
+    return resolveBackupDirectory();
   }
 
   private buildBackupIncludePaths(): string[] {
@@ -288,15 +315,19 @@ export class BackupRetentionService {
       }
     }
     const pgDumpCommand = resolvePgDumpCommand(this.config);
-    execFileSync(
-      pgDumpCommand,
-      ["--format=custom", "--file", dumpPath, connectionString],
-      {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    execFileSync(pgDumpCommand, ["--format=custom", "--file", dumpPath, connectionString], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   }
+}
+
+function resolveBackupDirectory(): string {
+  const fromEnv = process.env.GOATCITADEL_BACKUP_DIR?.trim();
+  if (fromEnv) {
+    return path.resolve(fromEnv);
+  }
+  return path.join(os.homedir(), ".GoatCitadel", "backups");
 }
 
 // ── Module-level helpers ───────────────────────────────────────────────
@@ -549,11 +580,18 @@ function resolveCommandOnPath(command: string): string | undefined {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-    const first = output.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+    const first = output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
     return first || undefined;
   } catch {
     return undefined;
   }
+}
+
+function isEphemeralSqliteSidecar(filePath: string): boolean {
+  return /(\.db|\.sqlite)(-shm|-wal)$/i.test(filePath);
 }
 
 function tryDumpViaBundledDocker(config: GatewayRuntimeConfig, connectionString: string): Buffer | undefined {
@@ -567,7 +605,14 @@ function tryDumpViaBundledDocker(config: GatewayRuntimeConfig, connectionString:
   try {
     return execFileSync(
       "docker",
-      ["exec", containerName, "pg_dump", "--format=custom", "--dbname", normalizeBundledDockerConnectionString(connectionString)],
+      [
+        "exec",
+        containerName,
+        "pg_dump",
+        "--format=custom",
+        "--dbname",
+        normalizeBundledDockerConnectionString(connectionString),
+      ],
       {
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -595,13 +640,7 @@ function canUseDockerCli(): boolean {
 
 function isDockerContainerRunning(containerName: string): boolean {
   try {
-    const output = execFileSync("docker", [
-      "ps",
-      "--filter",
-      `name=^/${containerName}$`,
-      "--format",
-      "{{.Names}}",
-    ], {
+    const output = execFileSync("docker", ["ps", "--filter", `name=^/${containerName}$`, "--format", "{{.Names}}"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();

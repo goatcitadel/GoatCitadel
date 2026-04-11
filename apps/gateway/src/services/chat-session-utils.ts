@@ -1,7 +1,13 @@
 import type {
+  ChatProjectRecord,
+  ChatProactiveMode,
+  ChatReflectionMode,
+  ChatRetrievalMode,
   ChatCompletionRequest,
   ChatSessionLifecycleStatus,
+  ChatSessionPrefsPatch,
   ChatSessionRecord,
+  SessionMeta,
 } from "@goatcitadel/contracts";
 
 export function assertChatSessionActive(
@@ -71,4 +77,118 @@ export function buildChatSessionUpdatedPayload(
         projectId: session.projectId,
       };
   }
+}
+
+export function toChatSessionRecord(
+  session: SessionMeta,
+  meta: {
+    workspaceId?: string;
+    title?: string;
+    origin?: "operator" | "prompt_pack" | "system";
+    includeInHistory: boolean;
+    pinned: boolean;
+    lifecycleStatus: "active" | "archived";
+    archivedAt?: string;
+  },
+  project?: ChatProjectRecord,
+): ChatSessionRecord {
+  return {
+    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
+    workspaceId: meta.workspaceId ?? project?.workspaceId,
+    scope: session.channel === "mission" ? "mission" : "external",
+    origin: meta.origin,
+    includeInHistory: meta.includeInHistory,
+    title: meta.title ?? session.displayName,
+    pinned: meta.pinned,
+    lifecycleStatus: meta.lifecycleStatus,
+    archivedAt: meta.archivedAt,
+    projectId: project?.projectId,
+    projectName: project?.name,
+    channel: session.channel,
+    account: session.account,
+    updatedAt: session.updatedAt,
+    lastActivityAt: session.lastActivityAt,
+    tokenTotal: session.tokenTotal,
+    costUsdTotal: session.costUsdTotal,
+  };
+}
+
+export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
+  basePatch: Pick<
+    ChatSessionPrefsPatch,
+    | "mode"
+    | "planningMode"
+    | "providerId"
+    | "model"
+    | "webMode"
+    | "memoryMode"
+    | "thinkingLevel"
+    | "toolAutonomy"
+    | "visionFallbackModel"
+    | "orchestrationEnabled"
+    | "orchestrationIntensity"
+    | "orchestrationVisibility"
+    | "orchestrationProviderPreference"
+    | "orchestrationReviewDepth"
+    | "orchestrationParallelism"
+    | "codeAutoApply"
+  >;
+  autonomyPatch: Partial<{
+    proactiveMode: ChatProactiveMode;
+    maxActionsPerHour: number;
+    maxActionsPerTurn: number;
+    cooldownSeconds: number;
+    retrievalMode: ChatRetrievalMode;
+    reflectionMode: ChatReflectionMode;
+  }>;
+} {
+  const basePatch: Pick<
+    ChatSessionPrefsPatch,
+    | "mode"
+    | "planningMode"
+    | "providerId"
+    | "model"
+    | "webMode"
+    | "memoryMode"
+    | "thinkingLevel"
+    | "toolAutonomy"
+    | "visionFallbackModel"
+    | "orchestrationEnabled"
+    | "orchestrationIntensity"
+    | "orchestrationVisibility"
+    | "orchestrationProviderPreference"
+    | "orchestrationReviewDepth"
+    | "orchestrationParallelism"
+    | "codeAutoApply"
+  > = {
+    mode: input.mode,
+    planningMode: input.planningMode,
+    providerId: input.providerId,
+    model: input.model,
+    webMode: input.webMode,
+    memoryMode: input.memoryMode,
+    thinkingLevel: input.thinkingLevel,
+    toolAutonomy: input.toolAutonomy,
+    visionFallbackModel: input.visionFallbackModel,
+    orchestrationEnabled: input.orchestrationEnabled,
+    orchestrationIntensity: input.orchestrationIntensity,
+    orchestrationVisibility: input.orchestrationVisibility,
+    orchestrationProviderPreference: input.orchestrationProviderPreference,
+    orchestrationReviewDepth: input.orchestrationReviewDepth,
+    orchestrationParallelism: input.orchestrationParallelism,
+    codeAutoApply: input.codeAutoApply,
+  };
+
+  return {
+    basePatch,
+    autonomyPatch: {
+      proactiveMode: input.proactiveMode,
+      maxActionsPerHour: input.autonomyBudget?.maxActionsPerHour,
+      maxActionsPerTurn: input.autonomyBudget?.maxActionsPerTurn,
+      cooldownSeconds: input.autonomyBudget?.cooldownSeconds,
+      retrievalMode: input.retrievalMode,
+      reflectionMode: input.reflectionMode,
+    },
+  };
 }

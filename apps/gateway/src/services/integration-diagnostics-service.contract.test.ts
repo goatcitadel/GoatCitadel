@@ -37,6 +37,25 @@ function createDiscordConnection(config: Record<string, unknown>): IntegrationCo
   };
 }
 
+function createIntegrationConnection(
+  key: string,
+  kind: IntegrationConnection["kind"],
+  config: Record<string, unknown>,
+): IntegrationConnection {
+  return {
+    connectionId: "22222222-2222-2222-2222-222222222222",
+    catalogId: `${kind}.${key}`,
+    kind,
+    key,
+    label: key,
+    enabled: true,
+    status: "connected",
+    config,
+    createdAt: "2026-04-08T00:00:00.000Z",
+    updatedAt: "2026-04-08T00:00:00.000Z",
+  };
+}
+
 function createHost(): IntegrationDiagnosticsHost {
   return {
     config: {
@@ -131,5 +150,68 @@ describe("integration-diagnostics-service contract behavior", () => {
         fetcher: expect.any(Function),
       }),
     );
+  });
+
+  it("requires local bridge posture for local-app productivity entries", () => {
+    const host = createHost();
+    const connection = createIntegrationConnection("apple-notes", "productivity", {
+      bridgeUrl: "https://remote-agent.example.test",
+    });
+
+    const checks = buildIntegrationConnectionChecks(host, connection);
+
+    expect(checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: "url",
+        status: "warn",
+      }),
+      expect.objectContaining({
+        key: "host_requirement",
+        status: "warn",
+      }),
+    ]));
+  });
+
+  it("treats gmail connections as operator-ready when token handles and oauth env references exist", () => {
+    const host = createHost();
+    host.readConnectionConfigValue = vi.fn((config: Record<string, unknown>, key: string) => {
+      const value = config[key];
+      return typeof value === "string" ? value : undefined;
+    });
+    const originalEnv = process.env.GMAIL_CLIENT_ID;
+    const originalSecret = process.env.GMAIL_CLIENT_SECRET;
+    process.env.GMAIL_CLIENT_ID = "client-id";
+    process.env.GMAIL_CLIENT_SECRET = "client-secret";
+    try {
+      const connection = createIntegrationConnection("gmail", "automation", {
+        refreshTokenHandle: "gmail-primary",
+        clientIdEnv: "GMAIL_CLIENT_ID",
+        clientSecretEnv: "GMAIL_CLIENT_SECRET",
+      });
+
+      const checks = buildIntegrationConnectionChecks(host, connection);
+
+      expect(checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          key: "auth",
+          status: "pass",
+        }),
+        expect.objectContaining({
+          key: "auth_mode",
+          status: "pass",
+        }),
+      ]));
+    } finally {
+      if (originalEnv === undefined) {
+        delete process.env.GMAIL_CLIENT_ID;
+      } else {
+        process.env.GMAIL_CLIENT_ID = originalEnv;
+      }
+      if (originalSecret === undefined) {
+        delete process.env.GMAIL_CLIENT_SECRET;
+      } else {
+        process.env.GMAIL_CLIENT_SECRET = originalSecret;
+      }
+    }
   });
 });

@@ -82,6 +82,14 @@ Code Mode v1 is intentionally narrow:
 - read-only deterministic wrappers only
 - no in-program approval pause/resume
 
+Operator truth:
+
+- Linux uses a firejail-based best-effort host adapter when available
+- macOS uses `sandbox-exec` while the adapter remains available on the host
+- Windows uses an AppContainer-style launcher path when prerequisites are present
+- if required host isolation is unavailable, Code Mode fails closed
+- if isolation is advisory only, the run may proceed but must surface unsandboxed/advisory metadata to the operator
+
 ### Launch Contract
 
 Production runs launch a child-process harness with:

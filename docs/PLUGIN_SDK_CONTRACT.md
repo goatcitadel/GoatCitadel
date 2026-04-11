@@ -7,7 +7,7 @@ Scope: `GC-P2-11` extension / plugin SDK breadth
 
 This document defines the current GoatCitadel author-facing contract for third-party extension work.
 
-It is intentionally narrower than a fully packaged public SDK. Today it serves as the repo-native baseline for:
+It now serves as the published package and repo-native contract baseline for:
 
 - add-on authors
 - integration plugin authors
@@ -15,15 +15,14 @@ It is intentionally narrower than a fully packaged public SDK. Today it serves a
 
 ## What This Document Is
 
-- a public contract draft for author-facing extension work
+- the public contract for author-facing extension work
 - a separation line between author concerns and operator concerns
-- the baseline that future starter kits, examples, or SDK packages should follow
+- the baseline that starter kits, examples, and the published SDK package follow
 
 ## What This Document Is Not
 
-- a published npm SDK package
-- a stable compatibility promise across major architecture changes
-- a claim that GoatCitadel already has full third-party extension parity
+- a guarantee that every ecosystem surface is already feature-complete
+- a stable compatibility promise across major architecture changes outside the documented package contract
 
 ## Current Extension Families
 
@@ -136,7 +135,7 @@ An add-on author should currently assume the following minimum contract:
 
 ## Minimum Integration Plugin Contract
 
-Until a dedicated plugin package exists, an integration plugin author should assume:
+Integration plugin authors should assume:
 
 - a stable plugin identifier
 - install source that can be reviewed and reproduced
@@ -149,24 +148,24 @@ Until a dedicated plugin package exists, an integration plugin author should ass
 
 These are still true after this document lands:
 
-- there is no published TypeScript SDK package for plugin or add-on authors
-- there is now a local workspace SDK package in `packages/extensions-sdk/`
-- there is now a repo-native starter-pack export path for the current contract doc plus reference scaffolds
-- there is now a local installable reference integration-plugin scaffold in `templates/integration-plugins/reference-integration-plugin/`
-- compatibility still depends on repo-native contracts and a workspace-local SDK package rather than an independently versioned published SDK package
+- the published author package is `@goatcitadel/extensions-sdk`
+- the source of that package lives in `packages/extensions-sdk/`
+- the repo-native starter-pack export path bundles the current contract doc plus reference scaffolds
+- the local installable reference integration-plugin scaffold lives in `templates/integration-plugins/reference-integration-plugin/`
+- compatibility still depends on the documented package contract plus the repo-native operator/runtime surfaces that consume it
 
 ## Safe Claims Now
 
 - GoatCitadel has a documented author contract baseline for add-ons and broader extension work.
-- GoatCitadel now has a local workspace SDK package in `packages/extensions-sdk/` for manifest validation and file-loading helpers.
+- GoatCitadel now has a published `@goatcitadel/extensions-sdk` package for manifest validation and file-loading helpers.
 - GoatCitadel now has a schema-validated reference add-on scaffold in `templates/addons/reference-separate-repo-addon/`.
 - GoatCitadel now has a local installable reference integration-plugin scaffold in `templates/integration-plugins/reference-integration-plugin/`.
 - GoatCitadel now has a repo-native starter-pack export path that bundles the contract doc plus the reference add-on and integration-plugin scaffolds.
 - GoatCitadel already has a meaningful operator lifecycle for add-ons and integration plugins.
-- The public SDK story is still partial, not complete.
+- The public SDK story is anchored in the published `@goatcitadel/extensions-sdk` package, the reference scaffolds, and the starter-pack smoke path.
 
 ## Recommended Next Slice
 
 1. Keep a smoke test around the reference integration-plugin install, enable/disable, and reporting path.
-2. Publish `packages/extensions-sdk/`, or decide whether the next public artifact should instead be a broader runtime contract, or both.
+2. Keep `@goatcitadel/extensions-sdk` versioned and prepublish-checked as the public author boundary.
 3. Only after that, widen the runtime contract beyond lifecycle metadata if it is still justified.

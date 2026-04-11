@@ -7,6 +7,7 @@ import { repoHasConfigMarker } from "./config-files.js";
 import { loadLocalEnvFile } from "./env-file.js";
 import { loadGatewayConfig } from "./config.js";
 import { GatewayService } from "./services/gateway-service.js";
+import { restoreBackupAtRuntime, verifyBackupAtRuntime } from "./services/backup-retention-service.js";
 
 loadLocalEnvFile();
 
@@ -25,6 +26,10 @@ async function main(): Promise<void> {
   }
 
   const config = await loadGatewayConfig(resolveRootDir());
+  if (group === "backup" && (action === "restore" || action === "verify")) {
+    await runOfflineBackupCommand(config, action, rest);
+    return;
+  }
   let bundledPostgres: BundledPostgresRuntimeHandle | undefined;
   if (config.assistant.database.driver === "postgres") {
     bundledPostgres = await ensureBundledPostgresRuntime(config);
@@ -49,6 +54,41 @@ async function main(): Promise<void> {
   } finally {
     await gateway.close();
     await bundledPostgres?.stop();
+  }
+}
+
+async function runOfflineBackupCommand(
+  config: Awaited<ReturnType<typeof loadGatewayConfig>>,
+  action: string | undefined,
+  args: string[],
+): Promise<void> {
+  if (action === "restore") {
+    const filePath = readFlag(args, "--file");
+    const confirm = args.includes("--confirm");
+    if (!filePath) {
+      throw new Error("Missing required --file <path>");
+    }
+    if (!confirm) {
+      throw new Error("Restore requires --confirm");
+    }
+    const restored = await restoreBackupAtRuntime(config, {
+      filePath,
+      confirm: true,
+    });
+    console.log(JSON.stringify(restored, null, 2));
+    return;
+  }
+
+  if (action === "verify") {
+    const filePath = readFlag(args, "--file");
+    if (!filePath) {
+      throw new Error("Missing required --file <path>");
+    }
+    const verified = await verifyBackupAtRuntime(config, {
+      filePath,
+    });
+    console.log(JSON.stringify(verified, null, 2));
+    return;
   }
 }
 

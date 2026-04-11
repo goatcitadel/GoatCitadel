@@ -30,6 +30,9 @@ function serializeError(error) {
     if (typeof record.code === "string") {
       base.code = record.code;
     }
+    if (typeof record.message === "string" && record.message.trim().length > 0) {
+      base.message = record.message;
+    }
     if (typeof record.stack === "string") {
       base.stack = record.stack;
     }

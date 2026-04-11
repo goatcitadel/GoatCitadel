@@ -22,6 +22,8 @@ import type {
   DiscordRuntimeStatus,
   GmailReadQuery,
   GmailSendInput,
+  IntegrationActionInvokeInput,
+  IntegrationActionInvokeResult,
   IntegrationFormSchema,
   IntegrationPluginRecord,
   ObsidianIntegrationConfig,
@@ -187,6 +189,20 @@ export async function deleteIntegrationConnection(connectionId: string): Promise
 export async function fetchIntegrationConnectionDiagnostics(connectionId: string): Promise<ConnectorDiagnosticReport> {
   return request<ConnectorDiagnosticReport>(
     `/api/v1/integrations/connections/${encodeURIComponent(connectionId)}/diagnostics`,
+  );
+}
+
+export async function invokeIntegrationConnectionAction(
+  connectionId: string,
+  actionId: string,
+  input: IntegrationActionInvokeInput = {},
+): Promise<IntegrationActionInvokeResult> {
+  return request<IntegrationActionInvokeResult>(
+    `/api/v1/integrations/connections/${encodeURIComponent(connectionId)}/actions/${encodeURIComponent(actionId)}`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
   );
 }
 

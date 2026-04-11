@@ -2309,6 +2309,82 @@
   background: var(--gc-shell-band);
 }
 
+.theme-citadel-light .task-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.theme-citadel-light .task-board-column,
+.theme-citadel-light .task-trash-list,
+.theme-citadel-light .task-queue-empty,
+.theme-citadel-light .task-summary-stat {
+  border: 1px solid rgba(24, 72, 86, 0.1);
+  border-radius: 14px;
+  background: rgba(246, 250, 251, 0.92);
+}
+
+.theme-citadel-light .task-board-column,
+.theme-citadel-light .task-trash-list,
+.theme-citadel-light .task-queue-empty {
+  padding: 14px;
+}
+
+.theme-citadel-light .task-board-column-head,
+.theme-citadel-light .task-queue-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.theme-citadel-light .task-board-stack,
+.theme-citadel-light .task-trash-list,
+.theme-citadel-light .task-detail-stack,
+.theme-citadel-light .task-summary-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.theme-citadel-light .task-queue-card {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid rgba(24, 72, 86, 0.1);
+  border-radius: 14px;
+  background: rgba(252, 253, 253, 0.98);
+  text-align: left;
+  cursor: pointer;
+}
+
+.theme-citadel-light .task-queue-card.active {
+  border-color: rgba(17, 95, 117, 0.32);
+  box-shadow: var(--gc-shell-shadow-sm);
+}
+
+.theme-citadel-light .task-queue-card strong,
+.theme-citadel-light .task-summary-stat strong,
+.theme-citadel-light .task-board-column-head strong {
+  color: var(--gc-text-primary);
+}
+
+.theme-citadel-light .task-queue-card-meta,
+.theme-citadel-light .task-queue-card-note,
+.theme-citadel-light .task-board-empty,
+.theme-citadel-light .task-queue-empty p,
+.theme-citadel-light .task-summary-stat span {
+  margin: 0;
+  color: rgba(24, 54, 63, 0.82);
+}
+
+.theme-citadel-light .task-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin-bottom: 12px;
+}
+
+.theme-citadel-light .task-summary-stat {
+  padding: 12px 14px;
+}
+
 .theme-citadel-light .task-status-row {
   align-items: center;
 }
@@ -2717,6 +2793,10 @@
   }
 
   .theme-citadel-light .split-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .theme-citadel-light .task-board {
     grid-template-columns: 1fr;
   }
 

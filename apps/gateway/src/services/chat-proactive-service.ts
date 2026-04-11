@@ -1755,11 +1755,12 @@ export class ChatProactiveService {
     const rows = this.ctx.gatewaySql
       .prepare(
         `
-      SELECT DISTINCT linked_durable_run_id AS run_id
+      SELECT linked_durable_run_id AS run_id
       FROM proactive_runs
       WHERE approval_id = @approvalId
         AND linked_durable_run_id IS NOT NULL
-      ORDER BY started_at DESC
+      GROUP BY linked_durable_run_id
+      ORDER BY MAX(started_at) DESC
     `,
       )
       .all({ approvalId }) as Array<{ run_id: string | null }>;

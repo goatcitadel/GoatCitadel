@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildRouteSearch, readRouteFromLocation } from "./page-registry";
+import {
+  buildRouteForVisiblePage,
+  buildRouteSearch,
+  getVisiblePage,
+  getVisiblePageLabel,
+  readRouteFromLocation,
+} from "./page-registry";
 
 const originalWindow = globalThis.window;
 
@@ -48,6 +54,45 @@ describe("page-registry route links", () => {
       sessionId: "sess-code",
       turnId: "turn-code",
       approvalId: "approval-code",
+    });
+  });
+
+  it("normalizes legacy observe and tune routes into visible page labels", () => {
+    expect(getVisiblePage({ space: "observe", page: "sessions" })).toBe("timeline");
+    expect(getVisiblePageLabel({ space: "observe", page: "system" })).toBe("Health");
+    expect(getVisiblePage({ space: "configure", page: "settings", tab: "addons" })).toBe("workspaces");
+    expect(getVisiblePageLabel({ space: "configure", page: "settings", tab: "onboarding" })).toBe("General");
+  });
+
+  it("builds legacy-compatible routes for visible destinations", () => {
+    expect(buildRouteForVisiblePage({ space: "observe", page: "sessions" }, "timeline")).toEqual({
+      space: "observe",
+      page: "sessions",
+    });
+    expect(
+      buildRouteForVisiblePage(
+        {
+          space: "operate",
+          page: "surface",
+          surface: "chat",
+          sessionId: "sess-1",
+          turnId: "turn-1",
+          approvalId: "approval-1",
+        },
+        "code",
+      ),
+    ).toEqual({
+      space: "operate",
+      page: "surface",
+      surface: "code",
+      sessionId: "sess-1",
+      turnId: "turn-1",
+      approvalId: "approval-1",
+    });
+    expect(buildRouteForVisiblePage({ space: "configure", page: "tools" }, "runtime")).toEqual({
+      space: "configure",
+      page: "settings",
+      tab: "runtime",
     });
   });
 });

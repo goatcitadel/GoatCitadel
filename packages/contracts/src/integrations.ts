@@ -70,6 +70,15 @@ export interface IntegrationCatalogEntry {
   docsUrl?: string;
   formSchema?: IntegrationFormSchema;
   pluginId?: string;
+  operatorActions?: IntegrationOperatorAction[];
+}
+
+export interface IntegrationOperatorAction {
+  actionId: string;
+  label: string;
+  description: string;
+  capability: string;
+  formSchema?: IntegrationFormSchema;
 }
 
 export interface IntegrationConnection {
@@ -111,6 +120,23 @@ export interface IntegrationConnectionUpdateInput {
   pluginEnabled?: boolean;
   lastSyncAt?: string;
   lastError?: string | null;
+}
+
+export interface IntegrationActionInvokeInput {
+  input?: Record<string, unknown>;
+}
+
+export type IntegrationActionInvokeStatus = "executed" | "blocked" | "failed";
+
+export interface IntegrationActionInvokeResult {
+  connectionId: string;
+  catalogId: string;
+  actionId: string;
+  status: IntegrationActionInvokeStatus;
+  message: string;
+  blockedReason?: string;
+  output?: Record<string, unknown>;
+  checkedAt: string;
 }
 
 export type DiscordRuntimeMode = "bridge" | "gateway";
