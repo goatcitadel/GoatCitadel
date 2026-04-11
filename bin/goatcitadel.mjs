@@ -58,6 +58,23 @@ const repoUrl = installArgs.repoUrl || defaultRepoUrl;
 const baseDir = resolveBaseDir(installArgs.installDir);
 const appDir = path.join(baseDir, "app");
 const binDir = path.join(baseDir, "bin");
+const packagedReleaseManifestPath = path.join(appDir, "release-manifest.json");
+const packagedGatewayDir = path.join(appDir, "gateway");
+const packagedGatewayEntry = path.join(packagedGatewayDir, "dist", "main.js");
+const packagedUiDistDir = path.join(appDir, "mission-control", "dist");
+const packagedUiServerEntry = path.join(appDir, "runtime", "ui-static-server.mjs");
+const packagedNodeExecutable = path.join(appDir, "runtime", "node", process.platform === "win32" ? "node.exe" : "node");
+const packagedTemplateConfigDir = path.join(appDir, "templates", "config");
+const packagedTemplateSkillsDir = path.join(appDir, "templates", "skills");
+const packagedTemplateWorkspacesDir = path.join(appDir, "templates", "workspaces");
+const packagedTemplateEnvPath = path.join(appDir, "templates", ".env.example");
+const packagedRuntimeRoot = path.join(baseDir, "runtime-root");
+const runtimeStateDir = path.join(baseDir, "runtime");
+const runtimeLogDir = path.join(runtimeStateDir, "logs");
+const gatewayPidPath = path.join(runtimeStateDir, "gateway.pid");
+const uiPidPath = path.join(runtimeStateDir, "ui.pid");
+const defaultGatewayUrl = "http://127.0.0.1:8787";
+const defaultUiUrl = "http://127.0.0.1:5173";
 const rest = installArgs.passthrough;
 const taskTitle = resolveTaskTitle(command);
 const verboseEnv = installArgs.verbose ? { GOATCITADEL_VERBOSE: "1" } : {};
@@ -85,11 +102,15 @@ async function main() {
     return;
   }
 
-  if (!fs.existsSync(path.join(appDir, "package.json"))) {
+  if (!isPackagedInstall() && !fs.existsSync(path.join(appDir, "package.json"))) {
     console.log("GoatCitadel is not installed yet. Bootstrapping now...");
     installOrUpdate();
   }
 
+  if (command === "launch") {
+    await launchGoatCitadel(rest);
+    return;
+  }
   if (command === "up") {
     ensureWorkspaceRuntimeBuilds();
     runPnpm(["--dir", appDir, "dev", ...rest], { env: runtimeProcessEnv });
@@ -425,6 +446,301 @@ function doctor(extraArgs = []) {
   runPnpm(["--dir", appDir, "--filter", "@goatcitadel/gateway", "run", "doctor", ...extraArgs], {
     env: runtimeProcessEnv,
   });
+}
+
+async function launchGoatCitadel(extraArgs = []) {
+  const gatewayUrl = process.env.GOATCITADEL_GATEWAY_URL || defaultGatewayUrl;
+  const uiUrl = process.env.GOATCITADEL_MISSION_CONTROL_URL || defaultUiUrl;
+
+  ensureLaunchRuntimeDirectories();
+
+  if (isPackagedInstall()) {
+    seedPackagedRuntimeRoot();
+    const nodeExecutable = resolvePackagedNodeExecutable();
+    await ensureGatewayReady({
+      packaged: true,
+      gatewayUrl,
+      nodeExecutable,
+    });
+    await ensureUiReady({
+      packaged: true,
+      gatewayUrl,
+      uiUrl,
+      nodeExecutable,
+    });
+  } else {
+    ensureWorkspaceRuntimeBuilds();
+    await ensureGatewayReady({
+      packaged: false,
+      gatewayUrl,
+    });
+    await ensureUiReady({
+      packaged: false,
+      gatewayUrl,
+      uiUrl,
+    });
+  }
+
+  const startupState = await fetchJson(`${gatewayUrl}/api/v1/onboarding/startup`);
+  const targetUrl = startupState?.completed
+    ? `${uiUrl}/?tab=dashboard`
+    : `${uiUrl}/?tab=onboarding`;
+  openBrowser(targetUrl);
+
+  if (extraArgs.includes("--wait")) {
+    console.log(`GoatCitadel is ready at ${targetUrl}`);
+  } else {
+    console.log(`Launching GoatCitadel at ${targetUrl}`);
+  }
+}
+
+function isPackagedInstall() {
+  return fs.existsSync(packagedReleaseManifestPath) &&
+    fs.existsSync(packagedGatewayEntry) &&
+    fs.existsSync(packagedUiDistDir) &&
+    fs.existsSync(packagedUiServerEntry);
+}
+
+function ensureLaunchRuntimeDirectories() {
+  fs.mkdirSync(runtimeStateDir, { recursive: true });
+  fs.mkdirSync(runtimeLogDir, { recursive: true });
+}
+
+function seedPackagedRuntimeRoot() {
+  fs.mkdirSync(packagedRuntimeRoot, { recursive: true });
+  seedDirectoryIfMissing(packagedTemplateConfigDir, path.join(packagedRuntimeRoot, "config"));
+  seedDirectoryIfMissing(packagedTemplateSkillsDir, path.join(packagedRuntimeRoot, "skills"));
+  seedDirectoryIfMissing(packagedTemplateWorkspacesDir, path.join(packagedRuntimeRoot, "workspaces"));
+  if (!fs.existsSync(path.join(packagedRuntimeRoot, ".env")) && fs.existsSync(packagedTemplateEnvPath)) {
+    fs.copyFileSync(packagedTemplateEnvPath, path.join(packagedRuntimeRoot, ".env"));
+  }
+  fs.mkdirSync(path.join(packagedRuntimeRoot, "data"), { recursive: true });
+  fs.mkdirSync(path.join(packagedRuntimeRoot, "artifacts"), { recursive: true });
+}
+
+function seedDirectoryIfMissing(sourceDir, destinationDir) {
+  if (!fs.existsSync(sourceDir)) {
+    return;
+  }
+  if (!fs.existsSync(destinationDir)) {
+    fs.cpSync(sourceDir, destinationDir, { recursive: true });
+    return;
+  }
+  copyMissingEntries(sourceDir, destinationDir);
+}
+
+function copyMissingEntries(sourceDir, destinationDir) {
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const destinationPath = path.join(destinationDir, entry.name);
+    if (entry.isDirectory()) {
+      if (!fs.existsSync(destinationPath)) {
+        fs.cpSync(sourcePath, destinationPath, { recursive: true });
+      } else {
+        copyMissingEntries(sourcePath, destinationPath);
+      }
+      continue;
+    }
+    if (!fs.existsSync(destinationPath)) {
+      fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+      fs.copyFileSync(sourcePath, destinationPath);
+    }
+  }
+}
+
+function resolvePackagedNodeExecutable() {
+  return fs.existsSync(packagedNodeExecutable) ? packagedNodeExecutable : process.execPath;
+}
+
+async function ensureGatewayReady({ packaged, gatewayUrl, nodeExecutable }) {
+  if (await waitForHttp(`${gatewayUrl}/health`, 1500, 2)) {
+    return;
+  }
+  if (packaged) {
+    startPackagedGateway(nodeExecutable, gatewayUrl);
+  } else {
+    startSourceGateway(gatewayUrl);
+  }
+  if (!(await waitForHttp(`${gatewayUrl}/health`, 180000))) {
+    throw new Error(`Gateway did not become healthy at ${gatewayUrl}`);
+  }
+}
+
+async function ensureUiReady({ packaged, gatewayUrl, uiUrl, nodeExecutable }) {
+  if (await waitForHttp(`${uiUrl}/health`, 1500, 2)) {
+    return;
+  }
+  if (packaged) {
+    startPackagedUi(nodeExecutable, uiUrl);
+  } else {
+    startSourceUi(gatewayUrl, uiUrl);
+  }
+  if (!(await waitForHttp(`${uiUrl}/health`, 180000))) {
+    throw new Error(`Mission Control did not become healthy at ${uiUrl}`);
+  }
+}
+
+function startPackagedGateway(nodeExecutable, gatewayUrl) {
+  const port = String(new URL(gatewayUrl).port || "8787");
+  writePidFile(gatewayPidPath, spawnDetachedProcess({
+    cmd: nodeExecutable,
+    args: [packagedGatewayEntry],
+    cwd: packagedGatewayDir,
+    env: {
+      ...runtimeProcessEnv,
+      GOATCITADEL_ROOT_DIR: packagedRuntimeRoot,
+      GOATCITADEL_DATABASE_DRIVER: "sqlite",
+      GATEWAY_HOST: "127.0.0.1",
+      GATEWAY_PORT: port,
+    },
+    stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
+    stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),
+  }));
+}
+
+function startPackagedUi(nodeExecutable, uiUrl) {
+  const port = String(new URL(uiUrl).port || "5173");
+  writePidFile(uiPidPath, spawnDetachedProcess({
+    cmd: nodeExecutable,
+    args: [packagedUiServerEntry],
+    cwd: appDir,
+    env: {
+      ...runtimeProcessEnv,
+      GOATCITADEL_UI_DIST_DIR: packagedUiDistDir,
+      GOATCITADEL_UI_HOST: "127.0.0.1",
+      GOATCITADEL_UI_PORT: port,
+    },
+    stdoutPath: path.join(runtimeLogDir, "mission-control.stdout.log"),
+    stderrPath: path.join(runtimeLogDir, "mission-control.stderr.log"),
+  }));
+}
+
+function startSourceGateway(gatewayUrl) {
+  const runner = resolvePnpmRunner();
+  const port = String(new URL(gatewayUrl).port || "8787");
+  writePidFile(gatewayPidPath, spawnDetachedProcess({
+    cmd: runner.cmd,
+    args: [...runner.prefix, "--dir", appDir, "dev:gateway"],
+    cwd: appDir,
+    env: {
+      ...runtimeProcessEnv,
+      GATEWAY_HOST: "127.0.0.1",
+      GATEWAY_PORT: port,
+    },
+    stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
+    stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),
+  }));
+}
+
+function startSourceUi(gatewayUrl, uiUrl) {
+  const runner = resolvePnpmRunner();
+  const port = String(new URL(uiUrl).port || "5173");
+  writePidFile(uiPidPath, spawnDetachedProcess({
+    cmd: runner.cmd,
+    args: [
+      ...runner.prefix,
+      "--dir",
+      appDir,
+      "--filter",
+      "@goatcitadel/mission-control",
+      "exec",
+      "vite",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      port,
+    ],
+    cwd: appDir,
+    env: {
+      ...runtimeProcessEnv,
+      VITE_GATEWAY_URL: gatewayUrl,
+    },
+    stdoutPath: path.join(runtimeLogDir, "mission-control.stdout.log"),
+    stderrPath: path.join(runtimeLogDir, "mission-control.stderr.log"),
+  }));
+}
+
+function spawnDetachedProcess({ cmd, args, cwd, env, stdoutPath, stderrPath }) {
+  const stdoutFd = fs.openSync(stdoutPath, "a");
+  const stderrFd = fs.openSync(stderrPath, "a");
+  const child = isWindowsBatchCommand(cmd)
+    ? spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", buildWindowsCommand([cmd, ...args])], {
+        cwd,
+        env,
+        detached: true,
+        windowsHide: true,
+        stdio: ["ignore", stdoutFd, stderrFd],
+      })
+    : spawn(cmd, args, {
+        cwd,
+        env,
+        detached: true,
+        windowsHide: true,
+        stdio: ["ignore", stdoutFd, stderrFd],
+      });
+  child.unref();
+  fs.closeSync(stdoutFd);
+  fs.closeSync(stderrFd);
+  return child.pid ?? 0;
+}
+
+function writePidFile(filePath, pid) {
+  if (!pid) {
+    return;
+  }
+  fs.writeFileSync(filePath, String(pid), "utf8");
+}
+
+async function waitForHttp(url, timeoutMs, attempts = 120) {
+  const startedAt = Date.now();
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        return true;
+      }
+    } catch {
+      // keep waiting
+    }
+    if (Date.now() - startedAt >= timeoutMs) {
+      break;
+    }
+    await sleep(Math.min(1500, Math.max(250, Math.floor(timeoutMs / Math.max(1, attempts)))));
+  }
+  return false;
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Request failed (${response.status}) for ${url}`);
+  }
+  return response.json();
+}
+
+async function sleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function openBrowser(url) {
+  try {
+    if (process.platform === "win32") {
+      spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "start", "\"\"", url], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      }).unref();
+      return;
+    }
+    if (process.platform === "darwin") {
+      spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
+      return;
+    }
+    spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
+  } catch (error) {
+    console.warn(`Unable to open browser automatically: ${error instanceof Error ? error.message : String(error)}`);
+    console.log(`Open ${url}`);
+  }
 }
 
 async function uninstallInstall() {
@@ -825,6 +1141,7 @@ Commands:
   install    Install GoatCitadel from GitHub [--install-dir <path>] [--repo <url>] [--skip-voice] [--voice-model <id>] [--verbose]
   update     Update existing install from GitHub [--install-dir <path>] [--repo <url>] [--skip-voice] [--voice-model <id>] [--verbose]
   uninstall  Remove a local GoatCitadel install [--install-dir <path>] [--force]
+  launch     Start the local stack if needed, wait for health, and open Mission Control
   up         Start gateway + mission control [--verbose]
   gateway    Start gateway only [--verbose]
   ui         Start mission control UI only
@@ -854,6 +1171,8 @@ function resolveTaskTitle(currentCommand) {
       return "Update";
     case "uninstall":
       return "Uninstall";
+    case "launch":
+      return "Launch";
     case "up":
       return "Dev";
     case "gateway":
