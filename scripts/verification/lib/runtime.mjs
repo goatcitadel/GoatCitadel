@@ -7,6 +7,8 @@ import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { repoRoot, sanitizeFilePart, spawnVerificationProcess, writeText } from "./shared.mjs";
 
+let gatewayWorkspaceBuildEnsured = false;
+
 export async function prepareVerificationRuntime(runId) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), `goatcitadel-verify-${sanitizeFilePart(runId)}-`));
   await fs.mkdir(path.join(tempRoot, "data"), { recursive: true });
@@ -21,6 +23,7 @@ export async function prepareVerificationRuntime(runId) {
 }
 
 export async function startVerificationStack(context, options = {}) {
+  await ensureGatewayWorkspaceBuild(context);
   const runtimeRoot = options.runtimeRoot ?? await prepareVerificationRuntime(context.runId);
   const gatewayPort = await resolveAvailablePort(Number(options.gatewayPort ?? 8787));
   const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
@@ -198,6 +201,96 @@ export function pnpmCommand() {
 
 export function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function ensureGatewayWorkspaceBuild(context) {
+  if (gatewayWorkspaceBuildEnsured) {
+    return;
+  }
+
+  const gatewayPackageJson = JSON.parse(
+    await fs.readFile(path.join(repoRoot, "apps", "gateway", "package.json"), "utf8"),
+  );
+  const workspacePackages = Object.keys(gatewayPackageJson.dependencies ?? {})
+    .filter((dependency) => dependency.startsWith("@goatcitadel/"))
+    .map((dependency) => {
+      const packageName = dependency.replace("@goatcitadel/", "");
+      return {
+        dependency,
+        packageName,
+        outputPath: path.join(repoRoot, "packages", packageName, "dist", "index.js"),
+      };
+    });
+  const missingWorkspacePackages = workspacePackages.filter(({ outputPath }) => !existsSync(outputPath));
+
+  if (missingWorkspacePackages.length === 0) {
+    gatewayWorkspaceBuildEnsured = true;
+    return;
+  }
+
+  const logLines = [
+    "missing outputs detected:",
+    ...missingWorkspacePackages.map(({ outputPath }) => outputPath),
+    "",
+    "$ pnpm --dir <repoRoot> --filter @goatcitadel/gateway... build",
+    "",
+  ];
+  const result = runPnpmSync(["--dir", repoRoot, "--filter", "@goatcitadel/gateway...", "build"]);
+  logLines.push(result.stdout ?? "", result.stderr ?? "", result.error ? `${result.error.name}: ${result.error.message}` : "");
+
+  let remainingMissingPackages = missingWorkspacePackages.filter(({ outputPath }) => !existsSync(outputPath));
+  for (const missingPackage of remainingMissingPackages) {
+    logLines.push(
+      "",
+      `$ pnpm --dir <repoRoot> --filter ${missingPackage.dependency} exec tsc -b tsconfig.json --force`,
+      "",
+    );
+    const forcedResult = runPnpmSync([
+      "--dir",
+      repoRoot,
+      "--filter",
+      missingPackage.dependency,
+      "exec",
+      "tsc",
+      "-b",
+      "tsconfig.json",
+      "--force",
+    ]);
+    logLines.push(
+      forcedResult.stdout ?? "",
+      forcedResult.stderr ?? "",
+      forcedResult.error ? `${forcedResult.error.name}: ${forcedResult.error.message}` : "",
+    );
+    if (forcedResult.error || forcedResult.status !== 0) {
+      const buildLogPath = path.join(context.artifactRoot, "diagnostics", "workspace-build.log");
+      await writeText(buildLogPath, logLines.join("\n"));
+      throw new Error(`Failed to build gateway workspace dependencies. See ${buildLogPath}`);
+    }
+  }
+
+  remainingMissingPackages = missingWorkspacePackages.filter(({ outputPath }) => !existsSync(outputPath));
+  const buildLogPath = path.join(context.artifactRoot, "diagnostics", "workspace-build.log");
+  await writeText(buildLogPath, logLines.join("\n"));
+  if (result.error || result.status !== 0 || remainingMissingPackages.length > 0) {
+    throw new Error(`Failed to build gateway workspace dependencies. See ${buildLogPath}`);
+  }
+
+  gatewayWorkspaceBuildEnsured = true;
+}
+
+function runPnpmSync(args) {
+  if (process.platform === "win32") {
+    return spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", pnpmCommand(), ...args], {
+      cwd: repoRoot,
+      env: process.env,
+      encoding: "utf8",
+    });
+  }
+  return spawnSync(pnpmCommand(), args, {
+    cwd: repoRoot,
+    env: process.env,
+    encoding: "utf8",
+  });
 }
 
 async function resolveAvailablePort(preferredPort) {
