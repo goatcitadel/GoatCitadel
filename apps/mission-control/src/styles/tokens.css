@@ -46,6 +46,12 @@
   --page-gap-loose: 28px;
 }
 
+:root[data-visual-regression="true"] {
+  --font-body: "Rajdhani", "Segoe UI", sans-serif;
+  --font-mono: "Rajdhani", monospace;
+  --font-reading: "Rajdhani", "Segoe UI", sans-serif;
+}
+
 [data-density="compact"] {
   --density-scale: 0.85;
 }

@@ -1886,6 +1886,7 @@ export async function runVisualRegressionLane(context, options = {}) {
       GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
       GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
       GOATCITADEL_MESH_NODE_ID: "build-main",
+      OPENAI_API_KEY: "sk-visual-regression",
     },
     uiEnv: {
       VITE_GOATCITADEL_VISUAL_REGRESSION_MODE: "true",
@@ -1893,6 +1894,7 @@ export async function runVisualRegressionLane(context, options = {}) {
   });
   try {
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-visual-regression");
+    await pinVisualRegressionProvider(stack.gatewayUrl);
     const browser = await chromium.launch({ headless: true });
     try {
       for (const variant of VISUAL_REGRESSION_VARIANTS) {
@@ -1922,6 +1924,11 @@ export async function runVisualRegressionLane(context, options = {}) {
                 if (route.readyText) {
                   await page.getByText(route.readyText, { exact: false }).first().waitFor({ timeout: 30000 });
                 }
+                await page.evaluate(async () => {
+                  if (document.fonts?.ready) {
+                    await document.fonts.ready;
+                  }
+                });
                 await page.waitForTimeout(1000);
                 const artifactSlug = `visual-regression-${route.slug}-${variant.slug}`;
                 const artifacts = await captureBrowserArtifacts(context, {
@@ -2439,6 +2446,21 @@ async function ensureOnboardingComplete(gatewayUrl, completedBy) {
     );
   }
   return onboardingStateResponse.body;
+}
+
+async function pinVisualRegressionProvider(gatewayUrl) {
+  const response = await requestJson(gatewayUrl, "/api/v1/onboarding/bootstrap", {
+    method: "POST",
+    body: {
+      llm: {
+        activeProviderId: "openai",
+      },
+      completedBy: "verification-visual-regression",
+      markComplete: true,
+    },
+  });
+  assertOk(response, "pin visual regression provider");
+  return response.body;
 }
 
 function emptyArtifacts(overrides = {}) {
