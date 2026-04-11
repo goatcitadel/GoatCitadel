@@ -19,6 +19,7 @@ async function main() {
       gatewayEnv: {
         GOATCITADEL_AUTH_MODE: "none",
         GOATCITADEL_DISABLE_SECRET_STORE: "true",
+        GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
       },
     });
 

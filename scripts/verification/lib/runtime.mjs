@@ -103,6 +103,7 @@ export async function waitForHttp(url, label, timeoutMs = 180000, handle = null)
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (handle?.child?.exitCode !== null) {
+      await handle.logsFlushed?.catch(() => undefined);
       const stdoutPath = handle.stdoutPath ? ` stdout: ${handle.stdoutPath}` : "";
       const stderrPath = handle.stderrPath ? ` stderr: ${handle.stderrPath}` : "";
       throw new Error(`${label} process exited before becoming ready.${stdoutPath}${stderrPath}`);
@@ -136,19 +137,32 @@ export async function startProcess(context, name, commandArgs, extraEnv) {
   });
   child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
   child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-  child.on("exit", async () => {
-    await writeText(stdoutPath, Buffer.concat(stdoutChunks).toString("utf8"));
-    await writeText(stderrPath, Buffer.concat(stderrChunks).toString("utf8"));
+  const logsFlushed = new Promise((resolve) => {
+    child.once("exit", async () => {
+      try {
+        await writeText(stdoutPath, Buffer.concat(stdoutChunks).toString("utf8"));
+        await writeText(stderrPath, Buffer.concat(stderrChunks).toString("utf8"));
+      } finally {
+        resolve();
+      }
+    });
   });
   return {
     child,
     stdoutPath,
     stderrPath,
+    logsFlushed,
   };
 }
 
 export async function stopProcess(handle) {
-  if (!handle?.child || handle.child.exitCode !== null) {
+  if (!handle?.child) {
+    return;
+  }
+  if (handle.child.exitCode !== null) {
+    await handle.logsFlushed?.catch(() => undefined);
+    handle.child.stdout?.destroy();
+    handle.child.stderr?.destroy();
     return;
   }
   if (process.platform === "win32") {
@@ -156,6 +170,7 @@ export async function stopProcess(handle) {
       stdio: "ignore",
     });
     await waitForExit(handle.child, 12000).catch(() => undefined);
+    await handle.logsFlushed?.catch(() => undefined);
     handle.child.stdout?.destroy();
     handle.child.stderr?.destroy();
     return;
@@ -165,6 +180,7 @@ export async function stopProcess(handle) {
     handle.child.kill("SIGKILL");
     await waitForExit(handle.child, 4000).catch(() => undefined);
   });
+  await handle.logsFlushed?.catch(() => undefined);
   handle.child.stdout?.destroy();
   handle.child.stderr?.destroy();
 }

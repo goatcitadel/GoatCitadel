@@ -1729,6 +1729,17 @@ export async function runBackupRoundtripLane(context, options = {}) {
             `backup restore CLI failed: ${clampString(restoreCommand.stderr || restoreCommand.stdout, 1200)}`,
           );
         }
+        const restoredConfigSummary = {};
+        for (const snapshot of configSnapshots) {
+          const restoredRaw = await fs.readFile(snapshot.absolutePath, "utf8");
+          if (restoredRaw !== snapshot.raw) {
+            throw new Error(`config file ${snapshot.relativePath} was not byte-restored`);
+          }
+          restoredConfigSummary[snapshot.relativePath] = {
+            ...configMutationSummary[snapshot.relativePath],
+            restored: true,
+          };
+        }
         stack = await startVerificationStack(context, {
           runtimeRoot,
           includeUi: false,
@@ -1792,15 +1803,9 @@ export async function runBackupRoundtripLane(context, options = {}) {
           );
         }
 
-        const restoredConfigSummary = {};
         for (const snapshot of configSnapshots) {
-          const restoredRaw = await fs.readFile(snapshot.absolutePath, "utf8");
-          if (restoredRaw !== snapshot.raw) {
-            throw new Error(`config file ${snapshot.relativePath} was not byte-restored`);
-          }
           restoredConfigSummary[snapshot.relativePath] = {
-            ...configMutationSummary[snapshot.relativePath],
-            restored: true,
+            ...restoredConfigSummary[snapshot.relativePath],
             manifestIncluded: configManifestChecks[snapshot.relativePath] === true,
           };
         }
