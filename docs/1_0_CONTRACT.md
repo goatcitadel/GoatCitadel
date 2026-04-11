@@ -12,7 +12,7 @@ The `1.0` promise is:
 
 - human-in-the-loop approvals for risky actions
 - truthful runtime state and replayable operator evidence
-- resumable execution for the adopted durable flow set
+- resumable execution for the shipped durable flow set
 - multi-provider operation with explicit runtime diagnostics and support truth
 - a Mission Control surface that is legible enough for real operator work, not just internal engineering use
 
@@ -41,8 +41,8 @@ The repo may make these claims at `1.0`:
 
 - Code Mode is a governed trusted-code surface with explicit operator approval and bounded artifacts.
 - Code Mode host isolation is best-effort and fail-closed when required isolation is unavailable.
-- Durable execution owns the adopted resumable flow set documented in [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./CANONICAL_RUNTIME_STATE_MODEL.md).
-- `MemoryLifecycleService` is the operator-facing memory lifecycle owner.
+- Durable execution owns the shipped Chat / Cowork / Code resumable flow set documented in [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./CANONICAL_RUNTIME_STATE_MODEL.md).
+- `MemoryLifecycleService` is the operator-facing memory lifecycle owner for context composition, learned-memory policy, and memory item list/edit/forget/history.
 - Provider secrets may persist in local env or config files when secure-store persistence is unavailable or disabled.
 
 The repo must not claim these at `1.0` unless separately proven and documented:
@@ -59,7 +59,8 @@ The repo must not claim these at `1.0` unless separately proven and documented:
 - REST and SSE contract changes are additive unless a separately documented migration window is announced.
 - Config evolution continues to flow through the managed GoatCitadel config sync path.
 - Storage migrations are forward-upgrade paths. Rollback across schema changes is not promised; restore from a verified backup is the supported recovery path.
-- Shipped backup operations include create, list, verify, and restore through the admin API/CLI surface.
+- Backup create, list, and verify are shipped through the admin API/CLI surface.
+- For filesystem-backed `1.0` runtimes, restore is offline CLI-only through the shared offline restore entrypoint; the live admin restore route remains additive-compatible by returning `offline_restore_required` with an offline restore hint instead of mutating the active runtime.
 - Minimum operator backup set remains:
   - `data/index.db`
   - `data/transcripts/*.jsonl`
@@ -88,13 +89,17 @@ GoatCitadel may not claim `1.0` until all of these are true:
 
 - `verify:operator:proof` is green
 - `verify:durable:recovery` is green and includes stack-backed restart/recovery proof
+- `verify:surface:regression` is green across the visible `Work / Observe / Tune` route set
+- `verify:catalog:parity` is green and executes real runtime-backed operator actions for the visible non-channel catalog classes it claims to cover
 - `verify:visual:regression` is green and compares checked-in dark/light desktop/mobile baselines for the visible shell and primary `Work / Observe / Tune` surfaces
 - `verify:backup:roundtrip` is green and restores the full minimum operator backup set (`data/index.db`, `data/transcripts/*.jsonl`, `data/audit/*.jsonl`, `config/*.json`)
+- `verify:api:compat` is green and fails on breaking REST route/schema or realtime event-envelope diffs
 - governance docs pass freshness validation against this contract
 - no visible primary surface still relies on raw JSON-only or raw table-only treatment as its main operator UI
 - Cowork and Code are visibly and functionally distinct from Chat
 - visible runtime and catalog surfaces expose readable health, diagnostics, and recovery actions
 - provider, channel, MCP, backup/restore, and extension/SDK parity checks are green for the visible catalog
+- repo-visible PR workflows exist for the blocking release-gate lanes; branch protection still must mark them as required outside the repo
 
 ## Source of Truth Order
 

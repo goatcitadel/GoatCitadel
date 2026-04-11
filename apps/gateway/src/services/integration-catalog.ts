@@ -1,25 +1,6 @@
-import type {
-  IntegrationCatalogEntry,
-  IntegrationFormSchema,
-  IntegrationFieldSchema,
-} from "@goatcitadel/contracts";
+/* eslint-disable max-lines -- Integration catalog shape stays centralized so visible catalog policy, forms, and runtime truth do not drift apart. */
+import type { IntegrationCatalogEntry, IntegrationFormSchema, IntegrationFieldSchema } from "@goatcitadel/contracts";
 import { entryWithOperatorActions } from "./integration-action-registry.js";
-
-const BUILT_IN_CHANNEL_RUNTIME_KEYS = new Set([
-  "discord",
-  "slack",
-  "telegram",
-  "whatsapp",
-  "google-chat",
-  "mattermost",
-  "signal",
-  "imessage",
-  "nextcloud-talk",
-  "line",
-  "zalo",
-  "zalouser",
-  "webchat",
-]);
 
 function localBridgeSchema(
   catalogId: string,
@@ -56,7 +37,8 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.discord": {
     catalogId: "channel.discord",
     title: "Discord",
-    description: "Gateway mode is the default for a real online Discord bot. Bridge remains available as an advanced webhook-only fallback.",
+    description:
+      "Gateway mode is the default for a real online Discord bot. Bridge remains available as an advanced webhook-only fallback.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", {
@@ -69,22 +51,26 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       text("botTokenEnv", "Bot Token ENV Var", {
         placeholder: "DISCORD_BOT_TOKEN",
         secretRef: true,
-        description: "Preferred path. Name of the environment variable that stores your Discord bot token. Bot-token setups default to gateway mode so the bot can appear online and route inbound traffic.",
+        description:
+          "Preferred path. Name of the environment variable that stores your Discord bot token. Bot-token setups default to gateway mode so the bot can appear online and route inbound traffic.",
       }),
       text("defaultChannelId", "Default Channel ID", {
         required: true,
         placeholder: "123456789012345678",
-        description: "Primary fallback channel for approvals, diagnostics, and default sends. In Discord, enable Developer Mode, right-click the channel, then choose Copy Channel ID.",
+        description:
+          "Primary fallback channel for approvals, diagnostics, and default sends. In Discord, enable Developer Mode, right-click the channel, then choose Copy Channel ID.",
       }),
       url("webhookUrl", "Webhook URL", {
         placeholder: "https://discord.com/api/webhooks/...",
         advanced: true,
-        description: "Advanced legacy bridge path. Webhook-only mode supports outbound sends and webhook-authored deletes, but not reactions, inbound routing, or online presence.",
+        description:
+          "Advanced legacy bridge path. Webhook-only mode supports outbound sends and webhook-authored deletes, but not reactions, inbound routing, or online presence.",
       }),
       text("defaultGuildId", "Default Guild ID", {
         advanced: true,
         placeholder: "987654321098765432",
-        description: "Optional seed guild for gateway allowlisting or bridge diagnostics. Most bridge users can leave this blank.",
+        description:
+          "Optional seed guild for gateway allowlisting or bridge diagnostics. Most bridge users can leave this blank.",
       }),
       select("inboundDmPolicy", "Inbound DM Policy", ["pairing", "open", "disabled"], "pairing", {
         advanced: true,
@@ -95,7 +81,8 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       json("guilds", "Guild Rules JSON", {
         advanced: true,
         defaultValue: "{}",
-        description: "Advanced gateway routing rules keyed by guild id. Example: {\"123\": {\"requireMention\": true, \"channels\": [\"456\"]}}",
+        description:
+          'Advanced gateway routing rules keyed by guild id. Example: {"123": {"requireMention": true, "channels": ["456"]}}',
       }),
       bool("enabled", "Enabled", true),
     ],
@@ -103,7 +90,8 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.slack": {
     catalogId: "channel.slack",
     title: "Slack Connection",
-    description: "Connect a Slack bot token, optional webhook fallback, and optional signing secret for inbound events.",
+    description:
+      "Connect a Slack bot token, optional webhook fallback, and optional signing secret for inbound events.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "Slack" }),
@@ -301,7 +289,8 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       url("baseUrl", "Base URL", {
         placeholder: "https://cloud.example.com",
         required: true,
-        description: "Public HTTPS origin for your Nextcloud Talk instance. Register GoatCitadel's webhook path under this reverse-proxied domain.",
+        description:
+          "Public HTTPS origin for your Nextcloud Talk instance. Register GoatCitadel's webhook path under this reverse-proxied domain.",
       }),
       text("tokenEnv", "Token ENV Var", {
         placeholder: "NEXTCLOUD_TALK_TOKEN",
@@ -312,7 +301,8 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       text("defaultRoomId", "Default Room ID", {
         placeholder: "room-id",
         required: true,
-        description: "Fallback room for manual sends and approval delivery. Regular inbound replies use the originating conversation automatically.",
+        description:
+          "Fallback room for manual sends and approval delivery. Regular inbound replies use the originating conversation automatically.",
       }),
       bool("enabled", "Enabled", true),
     ],
@@ -565,7 +555,8 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "platform.ios-canvas-camera-voice": {
     catalogId: "platform.ios-canvas-camera-voice",
     title: "iOS Canvas / Camera / Voice",
-    description: "Configure the device-facing companion registration used to surface iOS canvas, camera, and voice capabilities.",
+    description:
+      "Configure the device-facing companion registration used to surface iOS canvas, camera, and voice capabilities.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "iOS Companion" }),
@@ -584,78 +575,477 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       bool("enabled", "Enabled", true),
     ],
   },
-  "model_provider.openai": providerSchema("model_provider.openai", "OpenAI", "OPENAI_API_KEY", "https://api.openai.com/v1", "gpt-5.4-mini"),
-  "model_provider.openrouter": providerSchema("model_provider.openrouter", "OpenRouter", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1", "openai/gpt-5.4-mini"),
-  "model_provider.glm": providerSchema("model_provider.glm", "GLM (Z.AI)", "GLM_API_KEY", "https://api.z.ai/api/paas/v4", "glm-5"),
-  "model_provider.moonshot": providerSchema("model_provider.moonshot", "Moonshot", "MOONSHOT_API_KEY", "https://api.moonshot.ai/v1", "kimi-k2.5"),
-  "model_provider.lmstudio": providerSchema("model_provider.lmstudio", "LM Studio", "", "http://127.0.0.1:1234/v1", "local-model", true),
-  "model_provider.ollama": providerSchema("model_provider.ollama", "Ollama", "", "http://127.0.0.1:11434/v1", "llama3.2", true),
-  "model_provider.local-models": providerSchema("model_provider.local-models", "Local Models", "", "http://127.0.0.1:1234/v1", "local-model", true),
+  "model_provider.openai": providerSchema(
+    "model_provider.openai",
+    "OpenAI",
+    "OPENAI_API_KEY",
+    "https://api.openai.com/v1",
+    "gpt-5.4-mini",
+  ),
+  "model_provider.openrouter": providerSchema(
+    "model_provider.openrouter",
+    "OpenRouter",
+    "OPENROUTER_API_KEY",
+    "https://openrouter.ai/api/v1",
+    "openai/gpt-5.4-mini",
+  ),
+  "model_provider.glm": providerSchema(
+    "model_provider.glm",
+    "GLM (Z.AI)",
+    "GLM_API_KEY",
+    "https://api.z.ai/api/paas/v4",
+    "glm-5",
+  ),
+  "model_provider.moonshot": providerSchema(
+    "model_provider.moonshot",
+    "Moonshot",
+    "MOONSHOT_API_KEY",
+    "https://api.moonshot.ai/v1",
+    "kimi-k2.5",
+  ),
+  "model_provider.lmstudio": providerSchema(
+    "model_provider.lmstudio",
+    "LM Studio",
+    "",
+    "http://127.0.0.1:1234/v1",
+    "local-model",
+    true,
+  ),
+  "model_provider.ollama": providerSchema(
+    "model_provider.ollama",
+    "Ollama",
+    "",
+    "http://127.0.0.1:11434/v1",
+    "llama3.2",
+    true,
+  ),
+  "model_provider.local-models": providerSchema(
+    "model_provider.local-models",
+    "Local Models",
+    "",
+    "http://127.0.0.1:1234/v1",
+    "local-model",
+    true,
+  ),
 };
 
 export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   // Channels
-  entry("channel", "tui", "Terminal/TUI", "Interactive terminal channel for local operations.", "native", ["local"], ["chat", "commands"]),
-  entry("channel", "webchat", "Webchat", "Embedded web chat endpoint for browser clients.", "native", ["token", "basic"], ["chat", "sessions"]),
-  entry("channel", "discord", "Discord", "Discord bot integration with gateway mode by default and an advanced bridge fallback.", "beta", ["oauth", "bot-token"], ["chat", "threads", "attachments", "reactions", "unsend", "inbound"]),
+  entry(
+    "channel",
+    "tui",
+    "Terminal/TUI",
+    "Interactive terminal channel for local operations.",
+    "native",
+    ["local"],
+    ["chat", "commands"],
+  ),
+  entry(
+    "channel",
+    "webchat",
+    "Webchat",
+    "Embedded web chat endpoint for browser clients.",
+    "native",
+    ["token", "basic"],
+    ["chat", "sessions"],
+  ),
+  entry(
+    "channel",
+    "discord",
+    "Discord",
+    "Discord bot integration with gateway mode by default and an advanced bridge fallback.",
+    "beta",
+    ["oauth", "bot-token"],
+    ["chat", "threads", "attachments", "reactions", "unsend", "inbound"],
+  ),
   entry("channel", "signal", "Signal", "Signal messenger bridge.", "beta", ["device-link"], ["chat", "groups"]),
-  entry("channel", "whatsapp", "WhatsApp", "WhatsApp business bridge.", "beta", ["oauth", "token"], ["chat", "attachments", "direct", "reactions"]),
-  entry("channel", "telegram", "Telegram", "Telegram bot integration.", "beta", ["bot-token"], ["chat", "threads", "attachments", "reactions", "unsend", "typing"]),
-  entry("channel", "slack", "Slack", "Slack app/bot integration.", "beta", ["oauth"], ["chat", "threads", "mentions", "attachments", "reactions", "unsend"]),
-  entry("channel", "google-chat", "Google Chat", "Google Chat app and webhook integration.", "beta", ["oauth", "token"], ["chat", "spaces", "threads", "attachments"], { pluginId: "googlechat" }),
-  entry("channel", "mattermost", "Mattermost", "Mattermost bot/webhook integration.", "beta", ["token"], ["chat", "channels", "direct", "attachments", "reactions", "unsend"]),
-  entry("channel", "imessage", "iMessage", "iMessage bridge (platform dependent).", "beta", ["local-agent"], ["chat", "attachments", "reactions", "unsend", "replies"]),
-  entry("channel", "teams", "Microsoft Teams", "Teams bot/webhook integration.", "beta", ["oauth", "webhook"], ["chat", "threads", "attachments"], { pluginId: "msteams" }),
-  entry("channel", "nextcloud-talk", "Nextcloud Talk", "Nextcloud Talk bot bridge with signed webhooks and reactions.", "native", ["token"], ["chat", "rooms", "webhooks", "reactions"]),
-  entry("channel", "line", "LINE", "LINE Messaging API integration.", "beta", ["token"], ["chat", "groups", "rooms", "direct"]),
-  entry("channel", "zalo", "Zalo OA", "Zalo Official Account integration.", "beta", ["token"], ["chat", "official-account"]),
-  entry("channel", "zalouser", "Zalo User", "Zalo user-session bridge integration.", "beta", ["token"], ["chat", "attachments", "direct"]),
+  entry(
+    "channel",
+    "whatsapp",
+    "WhatsApp",
+    "WhatsApp business bridge.",
+    "beta",
+    ["oauth", "token"],
+    ["chat", "attachments", "direct", "reactions"],
+  ),
+  entry(
+    "channel",
+    "telegram",
+    "Telegram",
+    "Telegram bot integration.",
+    "beta",
+    ["bot-token"],
+    ["chat", "threads", "attachments", "reactions", "unsend", "typing"],
+  ),
+  entry(
+    "channel",
+    "slack",
+    "Slack",
+    "Slack app/bot integration.",
+    "beta",
+    ["oauth"],
+    ["chat", "threads", "mentions", "attachments", "reactions", "unsend"],
+  ),
+  entry(
+    "channel",
+    "google-chat",
+    "Google Chat",
+    "Google Chat app and webhook integration.",
+    "beta",
+    ["oauth", "token"],
+    ["chat", "spaces", "threads", "attachments"],
+    { pluginId: "googlechat" },
+  ),
+  entry(
+    "channel",
+    "mattermost",
+    "Mattermost",
+    "Mattermost bot/webhook integration.",
+    "beta",
+    ["token"],
+    ["chat", "channels", "direct", "attachments", "reactions", "unsend"],
+  ),
+  entry(
+    "channel",
+    "imessage",
+    "iMessage",
+    "iMessage bridge (platform dependent).",
+    "beta",
+    ["local-agent"],
+    ["chat", "attachments", "reactions", "unsend", "replies"],
+  ),
+  entry(
+    "channel",
+    "teams",
+    "Microsoft Teams",
+    "Teams bot/webhook integration.",
+    "beta",
+    ["oauth", "webhook"],
+    ["chat", "threads", "attachments"],
+    { pluginId: "msteams" },
+  ),
+  entry(
+    "channel",
+    "nextcloud-talk",
+    "Nextcloud Talk",
+    "Nextcloud Talk bot bridge with signed webhooks and reactions.",
+    "native",
+    ["token"],
+    ["chat", "rooms", "webhooks", "reactions"],
+  ),
+  entry(
+    "channel",
+    "line",
+    "LINE",
+    "LINE Messaging API integration.",
+    "beta",
+    ["token"],
+    ["chat", "groups", "rooms", "direct"],
+  ),
+  entry(
+    "channel",
+    "zalo",
+    "Zalo OA",
+    "Zalo Official Account integration.",
+    "beta",
+    ["token"],
+    ["chat", "official-account"],
+  ),
+  entry(
+    "channel",
+    "zalouser",
+    "Zalo User",
+    "Zalo user-session bridge integration.",
+    "beta",
+    ["token"],
+    ["chat", "attachments", "direct"],
+  ),
 
   // Model providers
-  entry("model_provider", "openai", "OpenAI", "Direct OpenAI provider support.", "native", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "anthropic", "Anthropic", "Anthropic provider via adapter or compatible proxy.", "beta", ["api-key"], ["messages", "chat-completions"]),
-  entry("model_provider", "google", "Google", "Google model provider via adapter/proxy.", "beta", ["api-key"], ["chat-completions"]),
+  entry(
+    "model_provider",
+    "openai",
+    "OpenAI",
+    "Direct OpenAI provider support.",
+    "native",
+    ["api-key"],
+    ["chat-completions"],
+  ),
+  entry(
+    "model_provider",
+    "anthropic",
+    "Anthropic",
+    "Anthropic provider via adapter or compatible proxy.",
+    "beta",
+    ["api-key"],
+    ["messages", "chat-completions"],
+  ),
+  entry(
+    "model_provider",
+    "google",
+    "Google",
+    "Google model provider via adapter/proxy.",
+    "beta",
+    ["api-key"],
+    ["chat-completions"],
+  ),
   entry("model_provider", "minimax", "MiniMax", "MiniMax provider route.", "beta", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "vercel", "Vercel AI Gateway", "Vercel AI Gateway compatible endpoint.", "beta", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "openrouter", "OpenRouter", "OpenRouter aggregated model endpoint.", "native", ["api-key"], ["chat-completions"]),
+  entry(
+    "model_provider",
+    "vercel",
+    "Vercel AI Gateway",
+    "Vercel AI Gateway compatible endpoint.",
+    "beta",
+    ["api-key"],
+    ["chat-completions"],
+  ),
+  entry(
+    "model_provider",
+    "openrouter",
+    "OpenRouter",
+    "OpenRouter aggregated model endpoint.",
+    "native",
+    ["api-key"],
+    ["chat-completions"],
+  ),
   entry("model_provider", "mistral", "Mistral", "Mistral provider route.", "beta", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "deepseek", "DeepSeek", "DeepSeek provider route.", "beta", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "glm", "GLM (Z.AI)", "GLM provider route via Z.AI OpenAI-compatible API.", "beta", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "moonshot", "Moonshot (Kimi API)", "Moonshot Kimi OpenAI-compatible provider route.", "beta", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "ollama", "Ollama", "Ollama local runtime via OpenAI-compatible endpoint.", "native", ["local"], ["chat-completions"]),
-  entry("model_provider", "perplexity", "Perplexity", "Perplexity provider route.", "beta", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "huggingface", "HuggingFace", "HuggingFace inference route.", "beta", ["api-key"], ["chat-completions"]),
-  entry("model_provider", "local-models", "Local Models", "Local model backends (LM Studio/Ollama/LocalAI).", "native", ["local"], ["chat-completions"]),
-  entry("model_provider", "npu-local", "NPU Local Sidecar", "Local ONNX Runtime GenAI sidecar for Windows ARM64 Snapdragon NPU acceleration.", "beta", ["local"], ["chat-completions", "npu"]),
+  entry(
+    "model_provider",
+    "deepseek",
+    "DeepSeek",
+    "DeepSeek provider route.",
+    "beta",
+    ["api-key"],
+    ["chat-completions"],
+  ),
+  entry(
+    "model_provider",
+    "glm",
+    "GLM (Z.AI)",
+    "GLM provider route via Z.AI OpenAI-compatible API.",
+    "beta",
+    ["api-key"],
+    ["chat-completions"],
+  ),
+  entry(
+    "model_provider",
+    "moonshot",
+    "Moonshot (Kimi API)",
+    "Moonshot Kimi OpenAI-compatible provider route.",
+    "beta",
+    ["api-key"],
+    ["chat-completions"],
+  ),
+  entry(
+    "model_provider",
+    "ollama",
+    "Ollama",
+    "Ollama local runtime via OpenAI-compatible endpoint.",
+    "native",
+    ["local"],
+    ["chat-completions"],
+  ),
+  entry(
+    "model_provider",
+    "perplexity",
+    "Perplexity",
+    "Perplexity provider route.",
+    "beta",
+    ["api-key"],
+    ["chat-completions"],
+  ),
+  entry(
+    "model_provider",
+    "huggingface",
+    "HuggingFace",
+    "HuggingFace inference route.",
+    "beta",
+    ["api-key"],
+    ["chat-completions"],
+  ),
+  entry(
+    "model_provider",
+    "local-models",
+    "Local Models",
+    "Local model backends (LM Studio/Ollama/LocalAI).",
+    "native",
+    ["local"],
+    ["chat-completions"],
+  ),
+  entry(
+    "model_provider",
+    "npu-local",
+    "NPU Local Sidecar",
+    "Local ONNX Runtime GenAI sidecar for Windows ARM64 Snapdragon NPU acceleration.",
+    "beta",
+    ["local"],
+    ["chat-completions", "npu"],
+  ),
 
   // Productivity
-  entry("productivity", "apple-notes", "Apple Notes", "Sync or publish notes to Apple Notes.", "beta", ["local-agent"], ["read", "write"]),
-  entry("productivity", "apple-reminders", "Apple Reminders", "Task/reminder sync with Apple Reminders.", "beta", ["local-agent"], ["read", "write"]),
-  entry("productivity", "things3", "Things 3", "Things 3 task integration.", "beta", ["local-agent"], ["read", "write"]),
-  entry("productivity", "notion", "Notion", "Notion workspace integration.", "beta", ["oauth", "token"], ["read", "write", "search"]),
-  entry("productivity", "obsidian", "Obsidian", "Obsidian vault integration.", "beta", ["local"], ["read", "write", "search"]),
+  entry(
+    "productivity",
+    "apple-notes",
+    "Apple Notes",
+    "Sync or publish notes to Apple Notes.",
+    "beta",
+    ["local-agent"],
+    ["read", "write"],
+  ),
+  entry(
+    "productivity",
+    "apple-reminders",
+    "Apple Reminders",
+    "Task/reminder sync with Apple Reminders.",
+    "beta",
+    ["local-agent"],
+    ["read", "write"],
+  ),
+  entry(
+    "productivity",
+    "things3",
+    "Things 3",
+    "Things 3 task integration.",
+    "beta",
+    ["local-agent"],
+    ["read", "write"],
+  ),
+  entry(
+    "productivity",
+    "notion",
+    "Notion",
+    "Notion workspace integration.",
+    "beta",
+    ["oauth", "token"],
+    ["read", "write", "search"],
+  ),
+  entry(
+    "productivity",
+    "obsidian",
+    "Obsidian",
+    "Obsidian vault integration.",
+    "beta",
+    ["local"],
+    ["read", "write", "search"],
+  ),
   entry("productivity", "bear", "Bear Notes", "Bear notes integration.", "beta", ["local-agent"], ["read", "write"]),
   entry("productivity", "trello", "Trello", "Trello board/task integration.", "beta", ["oauth"], ["read", "write"]),
-  entry("productivity", "github", "GitHub", "GitHub issue/pr/repo automation integration.", "native", ["token"], ["read", "write", "webhooks"]),
+  entry(
+    "productivity",
+    "github",
+    "GitHub",
+    "GitHub issue/pr/repo automation integration.",
+    "native",
+    ["token"],
+    ["read", "write", "webhooks"],
+  ),
 
   // Automation tools
-  entry("automation", "browser-chrome-control", "Browser Control", "Chrome/Chromium automation and capture flows.", "beta", ["local"], ["browse", "automation", "screenshots"]),
-  entry("automation", "canvas-a2ui", "Canvas + A2UI", "Visual canvas workspace and agent-to-ui interactions.", "beta", ["local"], ["scene-view", "selection", "inspect", "agent-apply"]),
-  entry("automation", "voice-wake-talk", "Voice Wake + Talk", "Wake-word and voice interaction pipeline.", "beta", ["local"], ["voice"]),
+  entry(
+    "automation",
+    "browser-chrome-control",
+    "Browser Control",
+    "Chrome/Chromium automation and capture flows.",
+    "beta",
+    ["local"],
+    ["browse", "automation", "screenshots"],
+  ),
+  entry(
+    "automation",
+    "canvas-a2ui",
+    "Canvas + A2UI",
+    "Visual canvas workspace and agent-to-ui interactions.",
+    "beta",
+    ["local"],
+    ["scene-view", "selection", "inspect", "agent-apply"],
+  ),
+  entry(
+    "automation",
+    "voice-wake-talk",
+    "Voice Wake + Talk",
+    "Wake-word and voice interaction pipeline.",
+    "beta",
+    ["local"],
+    ["voice"],
+  ),
   entry("automation", "gmail", "Gmail", "Gmail read/send integration.", "beta", ["oauth"], ["read", "write"]),
   entry("automation", "cron", "Cron Jobs", "Scheduled task orchestration.", "native", ["local"], ["scheduling"]),
-  entry("automation", "webhooks", "Webhooks", "Inbound/outbound webhook automation.", "native", ["token"], ["events", "automation"]),
+  entry(
+    "automation",
+    "webhooks",
+    "Webhooks",
+    "Inbound/outbound webhook automation.",
+    "native",
+    ["token"],
+    ["events", "automation"],
+  ),
   entry("automation", "weather", "Weather", "Weather data integration.", "native", ["none"], ["data"]),
-  entry("automation", "image-gen", "Image Generation", "Image generation model integration with generate/edit support.", "beta", ["api-key"], ["generation", "edits"]),
+  entry(
+    "automation",
+    "image-gen",
+    "Image Generation",
+    "Image generation model integration with generate/edit support.",
+    "beta",
+    ["api-key"],
+    ["generation", "edits"],
+  ),
   entry("automation", "gif-search", "GIF Search", "GIF search integration.", "beta", ["api-key"], ["search"]),
-  entry("automation", "peekaboo-screen", "Peekaboo Screen", "Screen capture and remote control integration.", "beta", ["local-agent"], ["capture", "control"]),
-  entry("automation", "camera-photo-video", "Camera", "Photo/video capture integration.", "beta", ["local-agent"], ["capture"]),
+  entry(
+    "automation",
+    "peekaboo-screen",
+    "Peekaboo Screen",
+    "Screen capture and remote control integration.",
+    "beta",
+    ["local-agent"],
+    ["capture", "control"],
+  ),
+  entry(
+    "automation",
+    "camera-photo-video",
+    "Camera",
+    "Photo/video capture integration.",
+    "beta",
+    ["local-agent"],
+    ["capture"],
+  ),
 
   // Platforms
-  entry("platform", "macos-menubar-voice", "macOS Menu Bar + Voice", "Native macOS app integration target.", "beta", ["local-agent"], ["voice", "tray"]),
-  entry("platform", "ios-canvas-camera-voice", "iOS Canvas/Camera/Voice", "Native iOS companion capabilities.", "beta", ["app-auth"], ["canvas", "camera", "voice"]),
-  entry("platform", "android-canvas-camera-screen", "Android Canvas/Camera/Screen", "Native Android companion capabilities.", "beta", ["app-auth"], ["canvas", "camera", "screen"]),
-  entry("platform", "windows-wsl2", "Windows (WSL2 Recommended)", "Windows host platform support.", "native", ["local"], ["desktop"]),
+  entry(
+    "platform",
+    "macos-menubar-voice",
+    "macOS Menu Bar + Voice",
+    "Native macOS app integration target.",
+    "beta",
+    ["local-agent"],
+    ["voice", "tray"],
+  ),
+  entry(
+    "platform",
+    "ios-canvas-camera-voice",
+    "iOS Canvas/Camera/Voice",
+    "Native iOS companion capabilities.",
+    "beta",
+    ["app-auth"],
+    ["canvas", "camera", "voice"],
+  ),
+  entry(
+    "platform",
+    "android-canvas-camera-screen",
+    "Android Canvas/Camera/Screen",
+    "Native Android companion capabilities.",
+    "beta",
+    ["app-auth"],
+    ["canvas", "camera", "screen"],
+  ),
+  entry(
+    "platform",
+    "windows-wsl2",
+    "Windows (WSL2 Recommended)",
+    "Windows host platform support.",
+    "native",
+    ["local"],
+    ["desktop"],
+  ),
   entry("platform", "linux-native", "Linux Native", "Linux native platform support.", "native", ["local"], ["desktop"]),
 ];
 
@@ -670,18 +1060,10 @@ export function resolveIntegrationCatalogMaturity(
   pluginIds: ReadonlySet<string>,
 ): IntegrationCatalogEntry["maturity"] {
   const pluginId = (entry.pluginId ?? entry.key).trim().toLowerCase();
-  if (entry.kind === "channel") {
-    if (entry.maturity === "planned") {
-      if (BUILT_IN_CHANNEL_RUNTIME_KEYS.has(entry.key)) {
-        return "planned";
-      }
-      return pluginIds.has(pluginId) ? "plugin" : "disabled";
-    }
-  }
   if (entry.maturity === "planned" && pluginIds.has(pluginId)) {
     return "plugin";
   }
-  return entry.maturity;
+  return entry.maturity === "planned" ? "disabled" : entry.maturity;
 }
 
 export function resolveIntegrationCatalogRuntimeAvailability(
@@ -690,9 +1072,6 @@ export function resolveIntegrationCatalogRuntimeAvailability(
 ): "runnable" | "blocked" {
   const resolvedMaturity = resolveIntegrationCatalogMaturity(entry, pluginIds);
   if (resolvedMaturity === "native" || resolvedMaturity === "beta" || resolvedMaturity === "plugin") {
-    return "runnable";
-  }
-  if (entry.kind === "channel" && entry.maturity === "planned" && BUILT_IN_CHANNEL_RUNTIME_KEYS.has(entry.key)) {
     return "runnable";
   }
   return "blocked";
@@ -785,9 +1164,7 @@ function validateCatalogSchemas(entries: IntegrationCatalogEntry[]): void {
     }
     for (const field of schema.fields) {
       if (!keyPattern.test(field.key)) {
-        throw new Error(
-          `Invalid integration form key "${field.key}" for catalog "${entry.catalogId}".`,
-        );
+        throw new Error(`Invalid integration form key "${field.key}" for catalog "${entry.catalogId}".`);
       }
     }
   }
@@ -821,19 +1198,11 @@ function providerSchema(
   };
 }
 
-function text(
-  key: string,
-  label: string,
-  options: Partial<IntegrationFieldSchema> = {},
-): IntegrationFieldSchema {
+function text(key: string, label: string, options: Partial<IntegrationFieldSchema> = {}): IntegrationFieldSchema {
   return { key, label, type: "text", ...options };
 }
 
-function url(
-  key: string,
-  label: string,
-  options: Partial<IntegrationFieldSchema> = {},
-): IntegrationFieldSchema {
+function url(key: string, label: string, options: Partial<IntegrationFieldSchema> = {}): IntegrationFieldSchema {
   return { key, label, type: "url", ...options };
 }
 
@@ -858,10 +1227,6 @@ function select(
   };
 }
 
-function json(
-  key: string,
-  label: string,
-  options: Partial<IntegrationFieldSchema> = {},
-): IntegrationFieldSchema {
+function json(key: string, label: string, options: Partial<IntegrationFieldSchema> = {}): IntegrationFieldSchema {
   return { key, label, type: "json", ...options };
 }

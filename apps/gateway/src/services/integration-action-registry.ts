@@ -1,4 +1,9 @@
-import type { IntegrationCatalogEntry, IntegrationFieldSchema, IntegrationFormSchema, IntegrationOperatorAction } from "@goatcitadel/contracts";
+import type {
+  IntegrationCatalogEntry,
+  IntegrationFieldSchema,
+  IntegrationFormSchema,
+  IntegrationOperatorAction,
+} from "@goatcitadel/contracts";
 
 const LOCAL_BRIDGE_CATALOG_IDS = new Set([
   "productivity.apple-notes",
@@ -37,7 +42,11 @@ const OPERATOR_ACTIONS_BY_CATALOG_ID: Record<string, IntegrationOperatorAction[]
       "Create a sample reminder through the configured Apple Reminders bridge.",
       "write",
       formSchema("action:productivity.apple-reminders.write", "Create sample reminder", [
-        text("title", "Title", { placeholder: "GoatCitadel follow-up", defaultValue: "GoatCitadel follow-up", required: true }),
+        text("title", "Title", {
+          placeholder: "GoatCitadel follow-up",
+          defaultValue: "GoatCitadel follow-up",
+          required: true,
+        }),
         text("notes", "Notes", { placeholder: "Created from Mission Control operator actions." }),
       ]),
     ),
@@ -80,9 +89,16 @@ const OPERATOR_ACTIONS_BY_CATALOG_ID: Record<string, IntegrationOperatorAction[]
       "Create a sample Trello card in the configured default list.",
       "write",
       formSchema("action:productivity.trello.write", "Create sample Trello card", [
-        text("name", "Card Name", { placeholder: "GoatCitadel operator card", defaultValue: "GoatCitadel operator card", required: true }),
+        text("name", "Card Name", {
+          placeholder: "GoatCitadel operator card",
+          defaultValue: "GoatCitadel operator card",
+          required: true,
+        }),
         textarea("desc", "Description", { placeholder: "Created from Mission Control operator actions." }),
-        text("listId", "List ID Override", { placeholder: "Optional override if defaultListId is not set", advanced: true }),
+        text("listId", "List ID Override", {
+          placeholder: "Optional override if defaultListId is not set",
+          advanced: true,
+        }),
       ]),
     ),
   ],
@@ -94,6 +110,37 @@ const OPERATOR_ACTIONS_BY_CATALOG_ID: Record<string, IntegrationOperatorAction[]
       "search",
       formSchema("action:automation.gif-search.search", "Search GIFs", [
         text("query", "Query", { placeholder: "happy goat", defaultValue: "happy goat", required: true }),
+      ]),
+    ),
+  ],
+  "automation.gmail": [
+    action(
+      "read",
+      "Read Messages",
+      "Fetch a small sample of messages from the configured Gmail connection.",
+      "read",
+      formSchema("action:automation.gmail.read", "Read Gmail messages", [
+        text("query", "Query", { placeholder: "label:inbox newer_than:7d", advanced: true }),
+        text("maxResults", "Max Results", { placeholder: "10", defaultValue: "10", advanced: true }),
+      ]),
+    ),
+    action(
+      "write",
+      "Send Test Email",
+      "Send a lightweight operator test message through the configured Gmail connection.",
+      "write",
+      formSchema("action:automation.gmail.write", "Send Gmail message", [
+        text("to", "Recipient", { placeholder: "ops@example.com", required: true }),
+        text("subject", "Subject", {
+          placeholder: "GoatCitadel operator check",
+          defaultValue: "GoatCitadel operator check",
+          required: true,
+        }),
+        textarea("bodyText", "Body", {
+          placeholder: "This is a GoatCitadel Gmail operator check.",
+          defaultValue: "This is a GoatCitadel Gmail operator check.",
+          required: true,
+        }),
       ]),
     ),
   ],
@@ -110,7 +157,12 @@ const OPERATOR_ACTIONS_BY_CATALOG_ID: Record<string, IntegrationOperatorAction[]
     ),
   ],
   "automation.camera-photo-video": [
-    action("capture", "Capture Preview", "Request a sample photo/video capture from the configured camera bridge.", "capture"),
+    action(
+      "capture",
+      "Capture Preview",
+      "Request a sample photo/video capture from the configured camera bridge.",
+      "capture",
+    ),
   ],
   "platform.macos-menubar-voice": [
     action(
@@ -119,10 +171,19 @@ const OPERATOR_ACTIONS_BY_CATALOG_ID: Record<string, IntegrationOperatorAction[]
       "Send a lightweight voice-path check to the configured macOS companion bridge.",
       "voice",
       formSchema("action:platform.macos-menubar-voice.voice", "Voice check", [
-        text("prompt", "Prompt", { placeholder: "Operator voice check", defaultValue: "Operator voice check", required: true }),
+        text("prompt", "Prompt", {
+          placeholder: "Operator voice check",
+          defaultValue: "Operator voice check",
+          required: true,
+        }),
       ]),
     ),
-    action("tray", "Tray Status", "Request current tray/runtime status from the configured macOS companion bridge.", "tray"),
+    action(
+      "tray",
+      "Tray Status",
+      "Request current tray/runtime status from the configured macOS companion bridge.",
+      "tray",
+    ),
   ],
   "platform.ios-canvas-camera-voice": [
     action(
@@ -131,17 +192,30 @@ const OPERATOR_ACTIONS_BY_CATALOG_ID: Record<string, IntegrationOperatorAction[]
       "Send a lightweight canvas message to the configured iOS companion bridge.",
       "canvas",
       formSchema("action:platform.ios-canvas-camera-voice.canvas", "Canvas check", [
-        text("content", "Content", { placeholder: "Operator canvas check", defaultValue: "Operator canvas check", required: true }),
+        text("content", "Content", {
+          placeholder: "Operator canvas check",
+          defaultValue: "Operator canvas check",
+          required: true,
+        }),
       ]),
     ),
-    action("camera", "Camera Check", "Request a sample camera capability check from the configured iOS companion bridge.", "camera"),
+    action(
+      "camera",
+      "Camera Check",
+      "Request a sample camera capability check from the configured iOS companion bridge.",
+      "camera",
+    ),
     action(
       "voice",
       "Voice Check",
       "Send a lightweight voice-path check to the configured iOS companion bridge.",
       "voice",
       formSchema("action:platform.ios-canvas-camera-voice.voice", "Voice check", [
-        text("prompt", "Prompt", { placeholder: "Operator voice check", defaultValue: "Operator voice check", required: true }),
+        text("prompt", "Prompt", {
+          placeholder: "Operator voice check",
+          defaultValue: "Operator voice check",
+          required: true,
+        }),
       ]),
     ),
   ],
@@ -151,10 +225,7 @@ export function getIntegrationOperatorActions(catalogId: string): IntegrationOpe
   return OPERATOR_ACTIONS_BY_CATALOG_ID[catalogId] ? [...OPERATOR_ACTIONS_BY_CATALOG_ID[catalogId]] : [];
 }
 
-export function getCatalogCapabilitiesFromOperatorActions(
-  catalogId: string,
-  fallbackCapabilities: string[],
-): string[] {
+export function getCatalogCapabilitiesFromOperatorActions(catalogId: string, fallbackCapabilities: string[]): string[] {
   const actions = getIntegrationOperatorActions(catalogId);
   if (actions.length === 0) {
     return fallbackCapabilities;
@@ -195,25 +266,15 @@ function formSchema(catalogId: string, title: string, fields: IntegrationFieldSc
   };
 }
 
-function text(
-  key: string,
-  label: string,
-  options: Partial<IntegrationFieldSchema> = {},
-): IntegrationFieldSchema {
+function text(key: string, label: string, options: Partial<IntegrationFieldSchema> = {}): IntegrationFieldSchema {
   return { key, label, type: "text", ...options };
 }
 
-function textarea(
-  key: string,
-  label: string,
-  options: Partial<IntegrationFieldSchema> = {},
-): IntegrationFieldSchema {
+function textarea(key: string, label: string, options: Partial<IntegrationFieldSchema> = {}): IntegrationFieldSchema {
   return { key, label, type: "textarea", ...options };
 }
 
-export function entryWithOperatorActions(
-  entry: IntegrationCatalogEntry,
-): IntegrationCatalogEntry {
+export function entryWithOperatorActions(entry: IntegrationCatalogEntry): IntegrationCatalogEntry {
   const operatorActions = getIntegrationOperatorActions(entry.catalogId);
   if (operatorActions.length === 0) {
     return entry;

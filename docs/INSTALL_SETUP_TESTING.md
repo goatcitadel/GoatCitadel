@@ -1,7 +1,7 @@
 # GoatCitadel Install, Setup, and Testing
 
-Last updated: 2026-03-05
-Target release: `0.9.0-beta.1`
+Last updated: 2026-04-11
+Target release: `1.0.0`
 
 Related guides:
 
@@ -12,7 +12,7 @@ Related guides:
 
 GoatCitadel supports three valid install paths:
 
-1. Installer-first: best for most users and public beta testers.
+1. Installer-first: best for most users and standard 1.0 deployments.
 2. Manual/dev install: best for contributors and raw GitHub validation.
 3. Docker/Compose: best for a safer single-host or shared-host runtime boundary.
 

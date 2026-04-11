@@ -538,7 +538,7 @@ async function withStdioMcpClient<T>(
         capabilities: {},
         clientInfo: {
           name: "goatcitadel-gateway",
-          version: "0.9.0-beta.1",
+          version: "1.0.0",
         },
       },
       signal,

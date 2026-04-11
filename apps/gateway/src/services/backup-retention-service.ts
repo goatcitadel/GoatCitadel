@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -18,6 +17,7 @@ import { buildBundledDockerContainerName } from "../bundled-postgres-runtime.js"
 import { verifyBackupAtPath } from "./gateway/backup-verify.js";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { resolveGatewayPostgresConnectionString } from "../postgres-runtime-config.js";
+import { resolveBackupDirectory, resolveBackupPathWithinDirectory } from "./backup-paths.js";
 
 const RETENTION_SETTINGS_KEY = "retention_policy";
 
@@ -40,19 +40,38 @@ export async function restoreBackupAtRuntime(
     confirm: boolean;
   },
 ): Promise<{ restored: boolean; backupId?: string; filesRestored: number }> {
+  return restoreBackupOffline({
+    rootDir: config.rootDir,
+    filePath: input.filePath,
+    confirm: input.confirm,
+  });
+}
+
+export async function restoreBackupOffline(input: {
+  rootDir: string;
+  filePath: string;
+  confirm: boolean;
+  backupDir?: string;
+}): Promise<{ restored: boolean; backupId?: string; filesRestored: number }> {
   if (!input.confirm) {
     throw new Error("Backup restore requires explicit confirm=true");
   }
 
-  const backupDir = path.resolve(resolveBackupDirectory());
-  const backupPath = path.resolve(backupDir, input.filePath);
-  ensurePathWithinRoot(backupPath, backupDir);
-  const verification = await verifyBackupAtRuntime(config, { filePath: input.filePath });
+  const runtimeRoot = path.resolve(input.rootDir);
+  const resolvedBackup = resolveBackupPathWithinDirectory(input.filePath, input.backupDir);
+  if (!resolvedBackup.ok) {
+    throw new Error(resolvedBackup.error);
+  }
+
+  const verification = await verifyBackupOffline({
+    filePath: input.filePath,
+    backupDir: input.backupDir,
+  });
   if (!verification.verified || !verification.manifest) {
     throw new Error(formatBackupVerifyFailure(verification));
   }
 
-  const payloadDir = path.join(backupPath, "payload");
+  const payloadDir = path.join(resolvedBackup.resolvedPath, "payload");
   const manifest = verification.manifest;
   if (manifest.files.some((file) => file.path === "database/postgres.dump")) {
     throw new Error(
@@ -60,22 +79,24 @@ export async function restoreBackupAtRuntime(
     );
   }
 
+  let filesRestored = 0;
   for (const file of manifest.files) {
     if (isEphemeralSqliteSidecar(file.path)) {
       continue;
     }
     const source = path.resolve(payloadDir, file.path);
     ensurePathWithinRoot(source, payloadDir);
-    const target = path.resolve(config.rootDir, file.path);
-    ensurePathWithinRoot(target, config.rootDir);
+    const target = path.resolve(runtimeRoot, file.path);
+    ensurePathWithinRoot(target, runtimeRoot);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.copyFile(source, target);
+    filesRestored += 1;
   }
 
   return {
     restored: true,
     backupId: manifest.backupId,
-    filesRestored: manifest.files.length,
+    filesRestored,
   };
 }
 
@@ -83,10 +104,18 @@ export async function verifyBackupAtRuntime(
   _config: GatewayRuntimeConfig,
   input: { filePath: string },
 ): Promise<BackupVerifyResponse> {
-  const backupDir = path.resolve(resolveBackupDirectory());
-  const backupPath = path.resolve(backupDir, input.filePath);
-  ensurePathWithinRoot(backupPath, backupDir);
-  return verifyBackupAtPath(backupPath);
+  return verifyBackupOffline(input);
+}
+
+export async function verifyBackupOffline(input: {
+  filePath: string;
+  backupDir?: string;
+}): Promise<BackupVerifyResponse> {
+  const resolvedBackup = resolveBackupPathWithinDirectory(input.filePath, input.backupDir);
+  if (!resolvedBackup.ok) {
+    throw new Error(resolvedBackup.error);
+  }
+  return verifyBackupAtPath(resolvedBackup.resolvedPath);
 }
 
 export class BackupRetentionService {
@@ -320,14 +349,6 @@ export class BackupRetentionService {
       stdio: ["ignore", "pipe", "pipe"],
     });
   }
-}
-
-function resolveBackupDirectory(): string {
-  const fromEnv = process.env.GOATCITADEL_BACKUP_DIR?.trim();
-  if (fromEnv) {
-    return path.resolve(fromEnv);
-  }
-  return path.join(os.homedir(), ".GoatCitadel", "backups");
 }
 
 // ── Module-level helpers ───────────────────────────────────────────────

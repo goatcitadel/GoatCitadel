@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { chromium } from "playwright";
 import sharp from "sharp";
@@ -6,6 +7,7 @@ import {
   clampString,
   maybeParseBool,
   maybeParseInt,
+  readJson,
   repoRoot,
   runCommand,
   runScenario,
@@ -55,14 +57,7 @@ const SURFACE_REGRESSION_ROUTES = [
   { slug: "tune-agents", href: "?space=configure&page=agents&tab=overview", readyText: "Agents" },
 ];
 
-const VISUAL_REGRESSION_ROUTES = [
-  { slug: "work-chat", href: "?space=operate&page=surface&surface=chat", readySelector: ".chat-v11.mode-chat" },
-  { slug: "work-cowork", href: "?space=operate&page=surface&surface=cowork", readySelector: ".chat-v11.mode-cowork" },
-  { slug: "work-code", href: "?space=operate&page=surface&surface=code", readySelector: ".chat-v11.mode-code" },
-  { slug: "observe-timeline", href: "?space=observe&page=activity&tab=activity", readyText: "Timeline" },
-  { slug: "observe-health", href: "?space=observe&page=costs", readyText: "Health" },
-  { slug: "tune-integrations", href: "?space=configure&page=integrations&tab=overview", readyText: "Integrations" },
-];
+const VISUAL_REGRESSION_ROUTES = SURFACE_REGRESSION_ROUTES;
 
 const VISUAL_REGRESSION_VARIANTS = [
   {
@@ -92,6 +87,8 @@ const VISUAL_REGRESSION_VARIANTS = [
 ];
 
 const VISUAL_BASELINE_DIR = path.join(repoRoot, "scripts", "verification", "baselines", "visual");
+const API_COMPAT_BASELINE_PATH = path.join(repoRoot, "scripts", "verification", "baselines", "api-compat", "rest-sse.json");
+const API_COMPAT_ALLOWLIST_PATH = path.join(repoRoot, "scripts", "verification", "baselines", "api-compat", "allowlist.json");
 const VISUAL_DIFF_PIXEL_DELTA = 18;
 const VISUAL_DIFF_RATIO_THRESHOLD = 0.005;
 
@@ -1320,10 +1317,17 @@ export async function runSurfaceRegressionLane(context, options = {}) {
 }
 
 export async function runCatalogParityLane(context, options = {}) {
-  const stack = await startVerificationStack(context, {
-    includeUi: false,
-  });
+  const fixture = await startCatalogParityFixtureServer();
+  let stack;
   try {
+    stack = await startVerificationStack(context, {
+      includeUi: false,
+      gatewayEnv: {
+        GOATCITADEL_TRELLO_API_BASE_URL: fixture.baseUrl,
+        GOATCITADEL_TENOR_API_BASE_URL: fixture.baseUrl,
+        GOATCITADEL_GMAIL_API_BASE_URL: fixture.baseUrl,
+      },
+    });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-catalog-parity");
     await runScenario(
       context,
@@ -1368,6 +1372,19 @@ export async function runCatalogParityLane(context, options = {}) {
           "platform.macos-menubar-voice",
           "platform.ios-canvas-camera-voice",
         ]);
+        const runtimeActionCatalogIds = [
+          "productivity.apple-notes",
+          "productivity.apple-reminders",
+          "productivity.things3",
+          "productivity.bear",
+          "productivity.trello",
+          "automation.gmail",
+          "automation.gif-search",
+          "automation.peekaboo-screen",
+          "automation.camera-photo-video",
+          "platform.macos-menubar-voice",
+          "platform.ios-canvas-camera-voice",
+        ];
         const targetedEntries = visibleItems.filter((item) => mandatoryVisibleIds.has(item.catalogId));
         const plannedEntries = visibleItems.filter((item) => item.maturity === "planned");
         const nonOperatorReady = targetedEntries.filter((item) => item.maturity !== "beta" && item.maturity !== "native");
@@ -1391,16 +1408,63 @@ export async function runCatalogParityLane(context, options = {}) {
         if (blockedWithoutSchema.length > 0) {
           throw new Error(`catalog parity found mandatory entries without guided form schema: ${blockedWithoutSchema.map((item) => item.catalogId).join(", ")}`);
         }
+        const runtimeActionResults = [];
+        for (const catalogId of runtimeActionCatalogIds) {
+          const entry = targetedEntries.find((item) => item.catalogId === catalogId);
+          if (!entry) {
+            throw new Error(`catalog parity could not find runtime action entry ${catalogId}`);
+          }
+          const operatorAction = Array.isArray(entry.operatorActions) ? entry.operatorActions[0] : undefined;
+          if (!operatorAction) {
+            throw new Error(`catalog parity expected ${catalogId} to expose at least one operator action`);
+          }
+          const createdConnection = await requestJson(stack.gatewayUrl, "/api/v1/integrations/connections", {
+            method: "POST",
+            body: {
+              catalogId,
+              label: `${entry.label} Verification`,
+              enabled: true,
+              status: "connected",
+              config: buildCatalogParityConnectionConfig(catalogId, fixture.baseUrl),
+            },
+          });
+          assertOk(createdConnection, `create ${catalogId} verification connection`);
+          const actionResult = await requestJson(
+            stack.gatewayUrl,
+            `/api/v1/integrations/connections/${encodeURIComponent(createdConnection.body?.connectionId ?? "")}/actions/${encodeURIComponent(operatorAction.actionId)}`,
+            {
+              method: "POST",
+              body: {
+                input: buildCatalogParityActionInput(catalogId, operatorAction.actionId),
+              },
+            },
+          );
+          assertOk(actionResult, `invoke ${catalogId}:${operatorAction.actionId}`);
+          if (actionResult.body?.status !== "executed") {
+            throw new Error(
+              `catalog parity action ${catalogId}:${operatorAction.actionId} returned ${actionResult.body?.status ?? "unknown"}: ${JSON.stringify(actionResult.body)}`,
+            );
+          }
+          runtimeActionResults.push({
+            catalogId,
+            actionId: operatorAction.actionId,
+            status: actionResult.body?.status,
+            message: actionResult.body?.message,
+            output: actionResult.body?.output,
+          });
+        }
         const artifactPath = path.join(context.artifactRoot, "diagnostics", "catalog-parity-visible-catalog.json");
         await writeJson(artifactPath, {
           checkedAt: new Date().toISOString(),
           targetedEntries,
           visibleCatalogCount: visibleItems.length,
+          runtimeActionResults,
         });
         return {
           status: "passed",
           metrics: {
             mandatoryVisibleCount: targetedEntries.length,
+            runtimeActionProofCount: runtimeActionResults.length,
           },
           artifacts: {
             diagnostics: [relativeToRun(context, artifactPath)],
@@ -1410,6 +1474,68 @@ export async function runCatalogParityLane(context, options = {}) {
             perf: [],
             playwright: [],
           },
+        };
+      },
+    );
+  } finally {
+    if (stack) {
+      await stopVerificationStack(stack);
+    }
+    await fixture.close();
+  }
+}
+
+export async function runApiCompatibilityLane(context, options = {}) {
+  const stack = await startVerificationStack(context, {
+    includeUi: false,
+  });
+  try {
+    await runScenario(
+      context,
+      {
+        id: "api-compat.rest-sse.additive-only",
+        lane: "api-compat",
+        title: "REST routes and SSE envelopes remain additive-only against the checked-in baseline",
+        subsystem: "contracts",
+      },
+      async () => {
+        const openApi = await requestJson(stack.gatewayUrl, "/api/v1/docs/openapi.json");
+        assertOk(openApi, "fetch openapi spec for compatibility lane");
+        const current = {
+          rest: snapshotRestContract(openApi.body),
+          sse: await snapshotRealtimeContract(),
+        };
+        const baseline = await readJson(API_COMPAT_BASELINE_PATH);
+        const allowlist = (await readJson(API_COMPAT_ALLOWLIST_PATH).catch(() => ({
+          removedRestPaths: [],
+          removedRestMethods: [],
+          removedRestResponses: [],
+          removedSseEventTypes: [],
+          removedSseEnvelopeFields: [],
+        })));
+        const issues = [
+          ...compareRestContract(baseline.rest ?? {}, current.rest, allowlist),
+          ...compareRealtimeContract(baseline.sse ?? {}, current.sse, allowlist),
+        ];
+        const artifactPath = path.join(context.artifactRoot, "diagnostics", "api-compat-rest-sse.json");
+        await writeJson(artifactPath, {
+          checkedAt: new Date().toISOString(),
+          baselinePath: API_COMPAT_BASELINE_PATH,
+          allowlistPath: API_COMPAT_ALLOWLIST_PATH,
+          current,
+          issues,
+        });
+        return {
+          status: issues.length > 0 ? "failed" : "passed",
+          error: issues.length > 0 ? issues.join("\n") : undefined,
+          metrics: {
+            restPathCount: Object.keys(current.rest).length,
+            sseEventTypeCount: current.sse.eventTypes.length,
+            sseEnvelopeFieldCount: current.sse.envelopeFields.length,
+          },
+          artifacts: emptyArtifacts({
+            diagnostics: [relativeToRun(context, artifactPath)],
+          }),
         };
       },
     );
@@ -1441,7 +1567,10 @@ export async function runBackupRoundtripLane(context, options = {}) {
         subsystem: "runtime",
       },
       async () => {
-        const configPath = path.join(runtimeRoot, "config", "llm-providers.json");
+        const runtimeRelativePath = (targetPath) => path.relative(runtimeRoot, targetPath).replaceAll("\\", "/");
+        const configDir = path.join(runtimeRoot, "config");
+        const configPath = path.join(configDir, "llm-providers.json");
+        const configSentinelPath = path.join(configDir, "verification-backup-roundtrip.json");
         const dbPath = path.join(runtimeRoot, "data", "index.db");
         const dbWalPath = `${dbPath}-wal`;
         const dbShmPath = `${dbPath}-shm`;
@@ -1449,7 +1578,48 @@ export async function runBackupRoundtripLane(context, options = {}) {
         const auditDir = path.join(runtimeRoot, "data", "audit");
         const transcriptPath = path.join(transcriptsDir, "verification-backup-roundtrip-session.jsonl");
         const auditPath = path.join(auditDir, "verification-backup-roundtrip.jsonl");
-        const originalConfigRaw = await fs.readFile(configPath, "utf8");
+        const transcriptSentinelRaw = `${JSON.stringify({
+          eventId: "backup-roundtrip-transcript",
+          sessionId: "verification-backup-roundtrip-session",
+          timestamp: "2026-04-10T00:00:00.000Z",
+          type: "message.user",
+          payload: { content: "transcript sentinel" },
+        })}\n`;
+        const auditSentinelRaw = `${JSON.stringify({
+          eventId: "backup-roundtrip-audit",
+          timestamp: "2026-04-10T00:00:00.000Z",
+          stream: "operator",
+          action: "backup-roundtrip-sentinel",
+        })}\n`;
+        const configSentinelRaw = `${JSON.stringify(
+          {
+            sentinel: "backup-roundtrip",
+            createdAt: "2026-04-10T00:00:00.000Z",
+            note: "verification config sentinel",
+          },
+          null,
+          2,
+        )}\n`;
+
+        await fs.writeFile(configSentinelPath, configSentinelRaw, "utf8");
+        const configFileNames = (await fs.readdir(configDir))
+          .filter((entry) => entry.toLowerCase().endsWith(".json"))
+          .sort((left, right) => left.localeCompare(right));
+        const configSnapshots = await Promise.all(
+          configFileNames.map(async (fileName) => {
+            const absolutePath = path.join(configDir, fileName);
+            return {
+              absolutePath,
+              relativePath: runtimeRelativePath(absolutePath),
+              raw: await fs.readFile(absolutePath, "utf8"),
+            };
+          }),
+        );
+        const providerConfigSnapshot = configSnapshots.find((item) => item.relativePath === "config/llm-providers.json");
+        if (!providerConfigSnapshot) {
+          throw new Error("backup roundtrip expected config/llm-providers.json in the runtime root");
+        }
+        const originalConfigRaw = providerConfigSnapshot.raw;
         const originalConfig = JSON.parse(originalConfigRaw);
         const targetProvider = Array.isArray(originalConfig.providers)
           ? (originalConfig.providers.find((item) => item?.providerId === "openai") ?? originalConfig.providers[0])
@@ -1468,25 +1638,8 @@ export async function runBackupRoundtripLane(context, options = {}) {
 
         await fs.mkdir(transcriptsDir, { recursive: true });
         await fs.mkdir(auditDir, { recursive: true });
-        await writeText(
-          transcriptPath,
-          `${JSON.stringify({
-            eventId: "backup-roundtrip-transcript",
-            sessionId: "verification-backup-roundtrip-session",
-            timestamp: "2026-04-10T00:00:00.000Z",
-            type: "message.user",
-            payload: { content: "transcript sentinel" },
-          })}\n`,
-        );
-        await writeText(
-          auditPath,
-          `${JSON.stringify({
-            eventId: "backup-roundtrip-audit",
-            timestamp: "2026-04-10T00:00:00.000Z",
-            stream: "operator",
-            action: "backup-roundtrip-sentinel",
-          })}\n`,
-        );
+        await writeText(transcriptPath, transcriptSentinelRaw);
+        await writeText(auditPath, auditSentinelRaw);
 
         const createdRetentionPolicy = await requestJson(stack.gatewayUrl, "/api/v1/admin/retention", {
           method: "PATCH",
@@ -1524,20 +1677,45 @@ export async function runBackupRoundtripLane(context, options = {}) {
         }
 
         await stopProcess(stack.gateway);
-        const mutatedConfig = {
-          ...originalConfig,
-          providers: Array.isArray(originalConfig.providers)
-            ? originalConfig.providers.map((provider) =>
-                provider?.providerId === targetProvider.providerId
-                  ? { ...provider, label: `${originalLabel}${mutatedMarker}` }
-                  : provider,
-              )
-            : originalConfig.providers,
-        };
-        await fs.writeFile(configPath, `${JSON.stringify(mutatedConfig, null, 2)}\n`, "utf8");
-        const mutatedConfigRaw = await fs.readFile(configPath, "utf8");
-        if (!mutatedConfigRaw.includes(mutatedMarker)) {
-          throw new Error("config mutation did not persist before restore");
+        const configMutationSummary = {};
+        for (const [index, snapshot] of configSnapshots.entries()) {
+          if (snapshot.relativePath === "config/llm-providers.json") {
+            const mutatedConfig = {
+              ...originalConfig,
+              providers: Array.isArray(originalConfig.providers)
+                ? originalConfig.providers.map((provider) =>
+                    provider?.providerId === targetProvider.providerId
+                      ? { ...provider, label: `${originalLabel}${mutatedMarker}` }
+                      : provider,
+                  )
+                : originalConfig.providers,
+            };
+            const mutatedRaw = `${JSON.stringify(mutatedConfig, null, 2)}\n`;
+            await fs.writeFile(snapshot.absolutePath, mutatedRaw, "utf8");
+            configMutationSummary[snapshot.relativePath] = {
+              mutation: "overwritten",
+              mutated: mutatedRaw !== snapshot.raw,
+            };
+            continue;
+          }
+          if (index % 2 === 0) {
+            const mutatedRaw = `${JSON.stringify({
+              mutated: true,
+              relativePath: snapshot.relativePath,
+              note: "verification backup mutation",
+            })}\n`;
+            await fs.writeFile(snapshot.absolutePath, mutatedRaw, "utf8");
+            configMutationSummary[snapshot.relativePath] = {
+              mutation: "overwritten",
+              mutated: mutatedRaw !== snapshot.raw,
+            };
+            continue;
+          }
+          await fs.rm(snapshot.absolutePath, { force: true });
+          configMutationSummary[snapshot.relativePath] = {
+            mutation: "deleted",
+            mutated: !(await exists(snapshot.absolutePath)),
+          };
         }
         await fs.rm(dbPath, { force: true });
         await fs.rm(dbWalPath, { force: true });
@@ -1547,8 +1725,16 @@ export async function runBackupRoundtripLane(context, options = {}) {
         const dbMissing = !(await exists(dbPath));
         const transcriptMissing = !(await exists(transcriptPath));
         const auditMissing = !(await exists(auditPath));
-        if (!dbMissing || !transcriptMissing || !auditMissing) {
-          throw new Error("database, transcript, or audit sentinels did not disappear during mutation step");
+        const configMutationFailed = Object.entries(configMutationSummary).filter(([, value]) => !value.mutated);
+        if (!dbMissing || !transcriptMissing || !auditMissing || configMutationFailed.length > 0) {
+          throw new Error(
+            `database, transcript, audit, or config sentinels did not disappear during mutation step: ${JSON.stringify({
+              dbMissing,
+              transcriptMissing,
+              auditMissing,
+              configMutationFailed,
+            })}`,
+          );
         }
         const restoreCommand = await runCommand(
           pnpmCommand(),
@@ -1584,8 +1770,8 @@ export async function runBackupRoundtripLane(context, options = {}) {
         });
 
         const restoredConfigRaw = await fs.readFile(configPath, "utf8");
-        if (restoredConfigRaw.includes(mutatedMarker)) {
-          throw new Error("config state did not return to its pre-backup content after restore");
+        if (restoredConfigRaw !== originalConfigRaw) {
+          throw new Error("config state did not return to its pre-backup byte content after restore");
         }
         const restoredRetentionPolicy = await requestJson(
           stack.gatewayUrl,
@@ -1601,28 +1787,45 @@ export async function runBackupRoundtripLane(context, options = {}) {
         }
         const restoredTranscriptRaw = await fs.readFile(transcriptPath, "utf8");
         const restoredAuditRaw = await fs.readFile(auditPath, "utf8");
-        if (!restoredTranscriptRaw.includes("backup-roundtrip-transcript")) {
-          throw new Error("transcript sentinel content was not restored");
+        if (restoredTranscriptRaw !== transcriptSentinelRaw) {
+          throw new Error("transcript sentinel content was not byte-restored");
         }
-        if (!restoredAuditRaw.includes("backup-roundtrip-audit")) {
-          throw new Error("audit sentinel content was not restored");
+        if (restoredAuditRaw !== auditSentinelRaw) {
+          throw new Error("audit sentinel content was not byte-restored");
         }
         const manifestPaths = Array.isArray(verifiedBackup.body?.manifest?.files)
           ? verifiedBackup.body.manifest.files.map((item) => String(item.path ?? ""))
           : [];
+        const configManifestChecks = Object.fromEntries(
+          configSnapshots.map((snapshot) => [snapshot.relativePath, manifestPaths.includes(snapshot.relativePath)]),
+        );
         const expectedManifestChecks = {
           database: manifestPaths.some((item) => item.endsWith("data/index.db")),
           transcripts: manifestPaths.some((item) => item.includes("data/transcripts/")),
           audit: manifestPaths.some((item) => item.includes("data/audit/")),
-          config: manifestPaths.some((item) => item.endsWith("config/llm-providers.json")),
+          config: Object.values(configManifestChecks).every(Boolean),
         };
         if (Object.values(expectedManifestChecks).some((value) => !value)) {
           throw new Error(`backup manifest missed part of the minimum backup set: ${JSON.stringify(expectedManifestChecks)}`);
         }
 
+        const restoredConfigSummary = {};
+        for (const snapshot of configSnapshots) {
+          const restoredRaw = await fs.readFile(snapshot.absolutePath, "utf8");
+          if (restoredRaw !== snapshot.raw) {
+            throw new Error(`config file ${snapshot.relativePath} was not byte-restored`);
+          }
+          restoredConfigSummary[snapshot.relativePath] = {
+            ...configMutationSummary[snapshot.relativePath],
+            restored: true,
+            manifestIncluded: configManifestChecks[snapshot.relativePath] === true,
+          };
+        }
+
         const outPath = path.join(context.artifactRoot, "diagnostics", "backup-roundtrip-runtime-config.json");
         await writeJson(outPath, {
           configPath,
+          configFiles: configSnapshots.map((snapshot) => snapshot.relativePath),
           transcriptPath,
           auditPath,
           originalConfigLabel: originalLabel,
@@ -1653,12 +1856,13 @@ export async function runBackupRoundtripLane(context, options = {}) {
             },
             config: {
               seeded: true,
-              mutated: mutatedConfigRaw.includes(mutatedMarker),
-              restored: !restoredConfigRaw.includes(mutatedMarker),
+              mutated: Object.values(configMutationSummary).every((value) => value.mutated),
+              restored: Object.values(restoredConfigSummary).every((value) => value.restored),
             },
           },
           manifestChecks: expectedManifestChecks,
-          restoredConfigRestored: !restoredConfigRaw.includes(mutatedMarker),
+          configManifestChecks,
+          configRestoreSummary: restoredConfigSummary,
         });
 
         return {
@@ -2466,6 +2670,233 @@ async function compareVisualBaseline(context, slug) {
       ? [relativeToRun(context, baselineArtifactPath)]
       : [relativeToRun(context, baselineArtifactPath), relativeToRun(context, diffPath)],
   };
+}
+
+function snapshotRestContract(openApiDocument) {
+  const paths = openApiDocument && typeof openApiDocument === "object" && openApiDocument.paths && typeof openApiDocument.paths === "object"
+    ? openApiDocument.paths
+    : {};
+  return Object.fromEntries(
+    Object.entries(paths)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([routePath, methods]) => [
+        routePath,
+        Object.fromEntries(
+          Object.entries(methods ?? {})
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([method, definition]) => [
+              method,
+              {
+                responses: Object.keys(definition?.responses ?? {}).sort(),
+              },
+            ]),
+        ),
+      ]),
+  );
+}
+
+async function snapshotRealtimeContract() {
+  const monitoringPath = path.join(repoRoot, "packages", "contracts", "src", "monitoring.ts");
+  const source = await fs.readFile(monitoringPath, "utf8");
+  const eventTypesMatch = source.match(/export type RealtimeEventType =([\s\S]*?);/);
+  const realtimeInterfaceMatch = source.match(/export interface RealtimeEvent \{([\s\S]*?)\n\}/);
+  const eventTypes = [...(eventTypesMatch?.[1]?.matchAll(/"([^"]+)"/g) ?? [])].map((match) => match[1]).sort();
+  const envelopeFields = (realtimeInterfaceMatch?.[1] ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*([a-zA-Z0-9_]+)\??:/)?.[1] ?? null)
+    .filter(Boolean)
+    .sort();
+  return {
+    eventTypes,
+    envelopeFields,
+  };
+}
+
+function compareRestContract(baseline, current, allowlist) {
+  const issues = [];
+  for (const [routePath, baselineMethods] of Object.entries(baseline)) {
+    if (!current[routePath]) {
+      if (!allowlist.removedRestPaths?.includes(routePath)) {
+        issues.push(`REST path removed: ${routePath}`);
+      }
+      continue;
+    }
+    for (const [method, baselineDefinition] of Object.entries(baselineMethods ?? {})) {
+      if (!current[routePath]?.[method]) {
+        const allowlistKey = `${String(method).toUpperCase()} ${routePath}`;
+        if (!allowlist.removedRestMethods?.includes(allowlistKey)) {
+          issues.push(`REST method removed: ${allowlistKey}`);
+        }
+        continue;
+      }
+      for (const responseCode of baselineDefinition?.responses ?? []) {
+        const allowlistKey = `${String(method).toUpperCase()} ${routePath} -> ${responseCode}`;
+        if (!current[routePath][method].responses.includes(responseCode) && !allowlist.removedRestResponses?.includes(allowlistKey)) {
+          issues.push(`REST response removed: ${allowlistKey}`);
+        }
+      }
+    }
+  }
+  return issues;
+}
+
+function compareRealtimeContract(baseline, current, allowlist) {
+  const issues = [];
+  for (const eventType of baseline.eventTypes ?? []) {
+    if (!current.eventTypes.includes(eventType) && !allowlist.removedSseEventTypes?.includes(eventType)) {
+      issues.push(`SSE event type removed: ${eventType}`);
+    }
+  }
+  for (const field of baseline.envelopeFields ?? []) {
+    if (!current.envelopeFields.includes(field) && !allowlist.removedSseEnvelopeFields?.includes(field)) {
+      issues.push(`SSE envelope field removed: ${field}`);
+    }
+  }
+  return issues;
+}
+
+async function startCatalogParityFixtureServer() {
+  const server = createServer(async (request, response) => {
+    const method = request.method ?? "GET";
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const chunks = [];
+    for await (const chunk of request) {
+      chunks.push(Buffer.from(chunk));
+    }
+    const rawBody = Buffer.concat(chunks).toString("utf8");
+    const parsedBody = rawBody.trim() ? safeJsonParse(rawBody) : undefined;
+
+    if (url.pathname === "/v1/integrations/actions" && method === "POST") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        message: "fixture bridge ok",
+        output: {
+          catalogId: parsedBody?.catalogId,
+          actionId: parsedBody?.actionId,
+          input: parsedBody?.input ?? {},
+        },
+      }));
+      return;
+    }
+    if (url.pathname === "/1/members/me/boards" && method === "GET") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify([{ id: "board-1", name: "Verification Board", url: "https://trello.test/board-1" }]));
+      return;
+    }
+    if (url.pathname === "/1/cards" && method === "POST") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "card-1", name: "Verification Card", url: "https://trello.test/card-1" }));
+      return;
+    }
+    if (url.pathname === "/v2/search" && method === "GET") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        results: [
+          {
+            id: "gif-1",
+            content_description: "Happy goat",
+            media_formats: {
+              gif: {
+                url: "https://media.example.test/happy-goat.gif",
+              },
+            },
+          },
+        ],
+      }));
+      return;
+    }
+    if (url.pathname === "/gmail/v1/users/me/messages" && method === "GET") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ messages: [{ id: "msg-1", threadId: "thread-1" }] }));
+      return;
+    }
+    if (url.pathname === "/gmail/v1/users/me/messages/send" && method === "POST") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "sent-1" }));
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not_found", path: url.pathname, method }));
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve(undefined));
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("catalog parity fixture server did not expose an address");
+  }
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: async () => {
+      await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve(undefined))));
+    },
+  };
+}
+
+function buildCatalogParityConnectionConfig(catalogId, fixtureBaseUrl) {
+  switch (catalogId) {
+    case "productivity.trello":
+      return {
+        apiKey: "trello-key",
+        token: "trello-token",
+        defaultListId: "list-123",
+      };
+    case "automation.gmail":
+      return {
+        accessToken: "gmail-token",
+      };
+    case "automation.gif-search":
+      return {
+        provider: "tenor",
+        apiKey: "tenor-key",
+      };
+    case "platform.ios-canvas-camera-voice":
+      return {
+        bridgeUrl: fixtureBaseUrl,
+        deviceId: "verification-ios-device",
+      };
+    default:
+      return {
+        bridgeUrl: fixtureBaseUrl,
+        authToken: "fixture-bridge-token",
+      };
+  }
+}
+
+function buildCatalogParityActionInput(catalogId, actionId) {
+  if (catalogId === "automation.gmail" && actionId === "write") {
+    return {
+      to: "ops@example.com",
+      subject: "GoatCitadel operator check",
+      bodyText: "This is a GoatCitadel Gmail operator check.",
+    };
+  }
+  if (catalogId === "automation.gif-search" && actionId === "search") {
+    return {
+      query: "happy goat",
+    };
+  }
+  if (catalogId === "platform.macos-menubar-voice" && actionId === "voice") {
+    return {
+      prompt: "Operator voice check",
+    };
+  }
+  if (catalogId === "platform.ios-canvas-camera-voice" && actionId === "canvas") {
+    return {
+      content: "Operator canvas check",
+    };
+  }
+  return {};
+}
+
+function safeJsonParse(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
 }
 
 async function measureLongTaskProfile(page, action) {

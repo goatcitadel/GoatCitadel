@@ -450,7 +450,7 @@ import {
   selectManagedVoiceModel,
 } from "../voice-runtime/installer.js";
 import { getManagedVoiceRuntimeStatus } from "../voice-runtime/status.js";
-import { normalizeMemoryForgetCriteria, serializePathWithinRoot } from "./security-utils.js";
+import { serializePathWithinRoot } from "./security-utils.js";
 import { buildVoiceControlStartFailure } from "./voice-control-guard.js";
 import { MediaVoiceService, detectAttachmentMediaType } from "./media-voice-service.js";
 import {
@@ -485,7 +485,6 @@ import * as discordPairingHelpers from "./discord-pairing-helpers.js";
 import * as discordRuntimeBridgeService from "./discord-runtime-bridge-service.js";
 import * as channelSetupService from "./channel-setup-service.js";
 import * as integrationDiagnosticsService from "./integration-diagnostics-service.js";
-import * as memoryItemHelpers from "./memory-item-helpers.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import * as onboardingMarkerHelpers from "./onboarding-marker-helpers.js";
 import * as guidanceDocumentHelpers from "./guidance-document-helpers.js";
@@ -1646,6 +1645,12 @@ export class GatewayService {
       context: this.memoryContextService,
       learned: this.chatLearnedMemoryService,
       maintenance: this.memoryMaintenanceService,
+      admin: {
+        gatewaySql: this.gatewaySql,
+        tryParseJson: (raw, fallback) => this.tryParseJson(raw, fallback),
+        requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+        publishRealtime: (channel, topic, payload) => this.publishRealtime(channel, topic, payload),
+      },
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
     });
   }
@@ -7026,144 +7031,15 @@ export class GatewayService {
       limit?: number;
     } = {},
   ): MemoryItemRecord[] {
-    this.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
-    const namespace = input.namespace?.trim();
-    const status = input.status && input.status !== "all" ? input.status : undefined;
-    const query = input.query?.trim().toLowerCase();
-    const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 200)));
-    const clauses = ["1 = 1"];
-    const params: Record<string, string | number | null> = { limit };
-    if (namespace) {
-      clauses.push("namespace = @namespace");
-      params.namespace = namespace;
-    }
-    if (status) {
-      clauses.push("status = @status");
-      params.status = status;
-    }
-    if (query) {
-      clauses.push("LOWER(title || CHAR(10) || content || CHAR(10) || namespace) LIKE @query");
-      params.query = `%${query}%`;
-    }
-
-    const rows = this.gatewaySql
-      .prepare(
-        `
-      SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
-             created_at, updated_at, forgotten_at
-      FROM memory_items
-      WHERE ${clauses.join(" AND ")}
-      ORDER BY updated_at DESC
-      LIMIT @limit
-    `,
-      )
-      .all(params) as Array<{
-      item_id: string;
-      namespace: string;
-      title: string;
-      content: string;
-      metadata_json: string | null;
-      pinned: number;
-      ttl_override_seconds: number | null;
-      expires_at: string | null;
-      status: MemoryItemRecord["status"];
-      created_at: string;
-      updated_at: string;
-      forgotten_at: string | null;
-    }>;
-
-    return rows.map((row) => this.mapMemoryItemRow(row));
+    return this.memoryLifecycleService.listMemoryItems(input);
   }
 
   public patchMemoryItem(itemId: string, patch: MemoryLifecyclePatch, actorId = "operator"): MemoryItemRecord {
-    this.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
-    const current = this.requireMemoryItem(itemId);
-    const now = new Date().toISOString();
-    const next = {
-      title: patch.title !== undefined ? patch.title.trim() : current.title,
-      content: patch.content !== undefined ? patch.content : current.content,
-      metadata: patch.metadata !== undefined ? patch.metadata : current.metadata,
-      pinned: patch.pinned !== undefined ? patch.pinned : current.pinned,
-      ttlOverrideSeconds:
-        patch.ttlOverrideSeconds === null
-          ? null
-          : patch.ttlOverrideSeconds !== undefined
-            ? Math.max(1, Math.min(31_536_000, Math.floor(patch.ttlOverrideSeconds)))
-            : (current.ttlOverrideSeconds ?? null),
-    };
-    this.gatewaySql
-      .prepare(
-        `
-      UPDATE memory_items
-      SET title = @title,
-          content = @content,
-          metadata_json = @metadataJson,
-          pinned = @pinned,
-          ttl_override_seconds = @ttlOverrideSeconds,
-          updated_at = @updatedAt
-      WHERE item_id = @itemId
-    `,
-      )
-      .run({
-        itemId,
-        title: next.title,
-        content: next.content,
-        metadataJson: JSON.stringify(next.metadata ?? {}),
-        pinned: next.pinned ? 1 : 0,
-        ttlOverrideSeconds: next.ttlOverrideSeconds,
-        updatedAt: now,
-      });
-    if (patch.pinned !== undefined) {
-      this.recordMemoryChange(itemId, "pin_changed", actorId, { pinned: next.pinned });
-    }
-    if (patch.ttlOverrideSeconds !== undefined) {
-      this.recordMemoryChange(itemId, "ttl_changed", actorId, { ttlOverrideSeconds: next.ttlOverrideSeconds });
-    }
-    this.recordMemoryChange(itemId, "updated", actorId, {
-      title: next.title,
-      metadata: next.metadata ?? {},
-    });
-    const updated = this.requireMemoryItem(itemId);
-    this.publishRealtime("system", "memory", {
-      type: "memory_item_updated",
-      itemId: updated.itemId,
-      namespace: updated.namespace,
-    });
-    return updated;
+    return this.memoryLifecycleService.patchMemoryItem(itemId, patch, actorId);
   }
 
   public forgetMemoryItem(itemId: string, actorId = "operator"): MemoryItemRecord {
-    this.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
-    const current = this.requireMemoryItem(itemId);
-    if (current.status === "forgotten") {
-      return current;
-    }
-    const now = new Date().toISOString();
-    this.gatewaySql
-      .prepare(
-        `
-      UPDATE memory_items
-      SET status = 'forgotten',
-          forgotten_at = @forgottenAt,
-          updated_at = @updatedAt
-      WHERE item_id = @itemId
-    `,
-      )
-      .run({
-        itemId,
-        forgottenAt: now,
-        updatedAt: now,
-      });
-    this.recordMemoryChange(itemId, "forgotten", actorId, {
-      previousStatus: current.status,
-    });
-    const forgotten = this.requireMemoryItem(itemId);
-    this.publishRealtime("system", "memory", {
-      type: "memory_item_forgotten",
-      itemId,
-      namespace: forgotten.namespace,
-    });
-    return forgotten;
+    return this.memoryLifecycleService.forgetMemoryItem(itemId, actorId);
   }
 
   public forgetMemory(
@@ -7174,61 +7050,11 @@ export class GatewayService {
       actorId?: string;
     } = {},
   ): { forgottenCount: number; itemIds: string[] } {
-    this.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
-    const criteria = normalizeMemoryForgetCriteria(input);
-    if (!criteria.hasCriteria) {
-      throw new Error("Memory forget requires at least one criterion: itemIds, namespace, or query.");
-    }
-    const actorId = input.actorId?.trim() || "operator";
-    let targets: string[];
-    if (criteria.hasItemIds) {
-      targets = criteria.itemIds;
-    } else {
-      targets = this.listMemoryItems({
-        namespace: criteria.namespace,
-        status: "active",
-        query: criteria.query,
-        limit: 2_000,
-      }).map((item) => item.itemId);
-    }
-    for (const itemId of targets) {
-      this.forgetMemoryItem(itemId, actorId);
-    }
-    return {
-      forgottenCount: targets.length,
-      itemIds: targets,
-    };
+    return this.memoryLifecycleService.forgetMemory(input);
   }
 
   public listMemoryItemHistory(itemId: string, limit = 200): MemoryChangeEvent[] {
-    this.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
-    const safeLimit = Math.max(1, Math.min(2_000, Math.floor(limit)));
-    const rows = this.gatewaySql
-      .prepare(
-        `
-      SELECT change_id, item_id, change_type, actor_id, payload_json, created_at
-      FROM memory_change_history
-      WHERE item_id = ?
-      ORDER BY created_at DESC
-      LIMIT ?
-    `,
-      )
-      .all(itemId, safeLimit) as Array<{
-      change_id: string;
-      item_id: string;
-      change_type: MemoryChangeEvent["changeType"];
-      actor_id: string | null;
-      payload_json: string | null;
-      created_at: string;
-    }>;
-    return rows.map((row) => ({
-      changeId: row.change_id,
-      itemId: row.item_id,
-      changeType: row.change_type,
-      actorId: row.actor_id ?? undefined,
-      payload: this.tryParseJson<Record<string, unknown>>(row.payload_json, {}),
-      createdAt: row.created_at,
-    }));
+    return this.memoryLifecycleService.listMemoryItemHistory(itemId, limit);
   }
 
   public listAgents(view: "active" | "archived" | "all" = "active", limit = 500): AgentProfileRecord[] {
@@ -8988,23 +8814,6 @@ export class GatewayService {
   }
 
   // normalizeReplayOverrides, replaceReplayOverrideSteps, computeReplayDiffSummary moved to ImprovementService
-
-  private requireMemoryItem(itemId: string): MemoryItemRecord {
-    return memoryItemHelpers.requireMemoryItem(this, itemId);
-  }
-
-  private mapMemoryItemRow(row: Parameters<typeof memoryItemHelpers.mapMemoryItemRow>[1]): MemoryItemRecord {
-    return memoryItemHelpers.mapMemoryItemRow(this, row);
-  }
-
-  private recordMemoryChange(
-    itemId: string,
-    changeType: MemoryChangeEvent["changeType"],
-    actorId: string | undefined,
-    payload: Record<string, unknown>,
-  ): MemoryChangeEvent {
-    return memoryItemHelpers.recordMemoryChange(this, itemId, changeType, actorId, payload);
-  }
 
   public recordConnectorHealthRun(report: ConnectorDiagnosticReport): void {
     return connectorDiagnosticsHelpers.recordConnectorHealthRun(this, report);

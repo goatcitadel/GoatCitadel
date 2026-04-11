@@ -1,0 +1,145 @@
+{
+  "rest": {
+    "/api/v1/admin/backups": {
+      "get": {
+        "responses": ["200"]
+      }
+    },
+    "/api/v1/admin/backups/create": {
+      "post": {
+        "responses": ["201"]
+      }
+    },
+    "/api/v1/admin/backups/restore": {
+      "post": {
+        "responses": ["409"]
+      }
+    },
+    "/api/v1/admin/backups/verify": {
+      "post": {
+        "responses": ["200"]
+      }
+    },
+    "/api/v1/admin/retention": {
+      "get": {
+        "responses": ["200"]
+      },
+      "patch": {
+        "responses": ["200"]
+      }
+    },
+    "/api/v1/admin/retention/prune": {
+      "post": {
+        "responses": ["200"]
+      }
+    },
+    "/api/v1/auth/install-token": {
+      "post": {
+        "responses": ["200"]
+      }
+    },
+    "/api/v1/auth/plan": {
+      "get": {
+        "responses": ["200"]
+      }
+    },
+    "/api/v1/chat/attachments": {
+      "post": {
+        "responses": ["201"]
+      }
+    },
+    "/api/v1/chat/projects": {
+      "get": {
+        "responses": ["200"]
+      },
+      "post": {
+        "responses": ["201"]
+      }
+    },
+    "/api/v1/chat/sessions": {
+      "get": {
+        "responses": ["200"]
+      },
+      "post": {
+        "responses": ["201"]
+      }
+    },
+    "/api/v1/chat/sessions/{sessionId}/agent-send": {
+      "post": {
+        "responses": ["200"]
+      }
+    },
+    "/api/v1/chat/sessions/{sessionId}/agent-send/stream": {
+      "post": {
+        "responses": ["200"]
+      }
+    },
+    "/api/v1/chat/sessions/{sessionId}/messages": {
+      "get": {
+        "responses": ["200"]
+      }
+    },
+    "/api/v1/events/stream": {
+      "get": {
+        "responses": ["200"]
+      }
+    },
+    "/api/v1/sessions": {
+      "get": {
+        "responses": ["200"]
+      }
+    },
+    "/api/v1/settings": {
+      "get": {
+        "responses": ["200"]
+      },
+      "patch": {
+        "responses": ["200"]
+      }
+    },
+    "/api/v1/tools/invoke": {
+      "post": {
+        "responses": ["200"]
+      }
+    },
+    "/health": {
+      "get": {
+        "responses": ["200"]
+      }
+    }
+  },
+  "sse": {
+    "eventTypes": [
+      "activity_logged",
+      "approval_created",
+      "approval_explained",
+      "approval_resolved",
+      "auth_device_request_created",
+      "auth_device_request_resolved",
+      "deliverable_added",
+      "orchestration_event",
+      "session_event",
+      "subagent_registered",
+      "subagent_updated",
+      "system",
+      "task_created",
+      "task_deleted",
+      "task_updated",
+      "tool_invoked"
+    ],
+    "envelopeFields": [
+      "correlationId",
+      "eventAuthority",
+      "eventClass",
+      "eventId",
+      "eventType",
+      "links",
+      "originSurface",
+      "payload",
+      "sequence",
+      "source",
+      "timestamp",
+      "traceId"
+    ]
+  }
+}

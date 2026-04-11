@@ -2,6 +2,14 @@ name: Verification Surface Regression
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/mission-control/**"
+      - "apps/gateway/**"
+      - "scripts/verification/**"
+      - ".github/workflows/verification-surface-regression.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
   push:
     branches:
       - main

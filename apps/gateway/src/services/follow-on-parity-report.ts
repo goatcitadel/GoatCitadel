@@ -47,7 +47,7 @@ interface BuildFollowOnParityReportInput {
 const FOLLOW_ON_ARTIFACT_FRESHNESS_WINDOW_DAYS = 7;
 const REFERENCE_INTEGRATION_PLUGIN_ID = "reference-integration-plugin";
 const REFERENCE_INTEGRATION_PLUGIN_SOURCE = "templates/integration-plugins/reference-integration-plugin";
-const PUBLISHED_EXTENSIONS_SDK_PACKAGE = "@goatcitadel/extensions-sdk@0.9.0-beta.1";
+const PUBLISHED_EXTENSIONS_SDK_PACKAGE = "@goatcitadel/extensions-sdk@1.0.0";
 const BROWSER_OPERATOR_RUN_ACTION =
   "Generate the browser proof-lane draft from System, then run the operator pass from Mission Control or the tool surface.";
 const BROWSER_CURRENT_PROOF_ACTION =
@@ -395,9 +395,9 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
         epicId: "GC-P2-11",
         label: "Extension / plugin SDK breadth",
         state: input.addonsCatalog.length > 0 || input.integrationPlugins.length > 0 ? "have_foundation" : "missing",
-        summary: `${input.addonsCatalog.length} add-ons are cataloged, ${input.installedAddons.length} are installed, ${input.integrationPlugins.length} integration plugins are registered (${enabledPluginCount} enabled), and ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} is now published to GitHub Packages as the current public beta author SDK.`,
+        summary: `${input.addonsCatalog.length} add-ons are cataloged, ${input.installedAddons.length} are installed, ${input.integrationPlugins.length} integration plugins are registered (${enabledPluginCount} enabled), and ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} is now published to GitHub Packages as the current public author SDK.`,
         nextSlice:
-          "Keep the published beta SDK package, the reference integration plugin lifecycle, and the exported starter-pack handoff green; only widen runtime guarantees deliberately.",
+          "Keep the published SDK package, the reference integration plugin lifecycle, and the exported starter-pack handoff green; only widen runtime guarantees deliberately.",
       }),
       buildEpicRecord({
         epicId: "GC-P2-12",
@@ -953,7 +953,7 @@ function buildPluginGuidance(
   const sdkSummary = !hasRegisteredBreadth
     ? `No add-on catalog entries or integration plugins are currently registered, so there is no live operator breadth yet; the author contract is explicit and ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} is published to GitHub Packages, but the local reference lifecycle still needs to be installed and exercised.`
     : referenceLifecycle.present && referenceLifecycle.enabled && referenceLifecycle.matchesReferenceSource
-      ? `${addonsCatalogCount} cataloged add-on(s), ${installedAddonCount} installed (${runningAddonCount} running), and ${pluginCount} integration plugin(s) (${enabledPluginCount} enabled) show operator breadth; the author contract is explicit and ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} is published to GitHub Packages as the current public beta SDK boundary.`
+      ? `${addonsCatalogCount} cataloged add-on(s), ${installedAddonCount} installed (${runningAddonCount} running), and ${pluginCount} integration plugin(s) (${enabledPluginCount} enabled) show operator breadth; the author contract is explicit and ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} is published to GitHub Packages as the current public SDK boundary.`
       : `${addonsCatalogCount} cataloged add-on(s), ${installedAddonCount} installed (${runningAddonCount} running), and ${pluginCount} integration plugin(s) (${enabledPluginCount} enabled) show operator breadth; the author contract is explicit and ${PUBLISHED_EXTENSIONS_SDK_PACKAGE} is published to GitHub Packages, but the local reference lifecycle still needs to be installed, enabled, and source-aligned before it counts as the repeatable smoke path.`;
 
   recommendedActions.push(

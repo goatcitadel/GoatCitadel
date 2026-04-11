@@ -32,6 +32,21 @@ const requiredHeadings = {
 
 const errors = [];
 
+const workspacePackageFiles = [
+  "package.json",
+  "apps/gateway/package.json",
+  "apps/mission-control/package.json",
+  "packages/contracts/package.json",
+  "packages/extensions-sdk/package.json",
+  "packages/gateway-core/package.json",
+  "packages/memory-core/package.json",
+  "packages/mesh-core/package.json",
+  "packages/orchestration/package.json",
+  "packages/policy-engine/package.json",
+  "packages/skills/package.json",
+  "packages/storage/package.json",
+];
+
 for (const relPath of requiredFiles) {
   const absPath = path.join(root, relPath);
   try {
@@ -84,17 +99,35 @@ if (!/verify:backup:roundtrip` must seed, mutate, restore, and verify all four c
 if (!/verify:visual:regression` must compare checked-in baselines/i.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must describe visual-regression as checked-in baseline comparison.");
 }
+if (/Remaining non-adopted chat flows/i.test(handbook)) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must not describe shipped operator chat flows as remaining non-adopted.");
+}
+if (!/offline_restore_required/i.test(handbook) || !/offline-only/i.test(handbook)) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must describe filesystem-backed restore as offline-only and name the offline_restore_required live-route response.");
+}
+if (!/verify:catalog:parity` must execute real operator actions/i.test(handbook)) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must describe catalog-parity as runtime action proof, not metadata-only checks.");
+}
+if (!/verify:api:compat` must snapshot REST schemas and realtime event envelopes/i.test(handbook)) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must describe the REST/SSE additive-compatibility lane.");
+}
 
 const runtimeStatePath = path.join(root, "docs", "CANONICAL_RUNTIME_STATE_MODEL.md");
 const runtimeState = await readFile(runtimeStatePath, "utf8");
 if (!/^Last updated:/m.test(runtimeState)) {
   errors.push("docs/CANONICAL_RUNTIME_STATE_MODEL.md must include a Last updated header.");
 }
-if (!/approval wait\/resume/i.test(runtimeState) || !/legacy traces without durable linkage/i.test(runtimeState)) {
-  errors.push("docs/CANONICAL_RUNTIME_STATE_MODEL.md must name the durably owned chat/approval flows and remaining compatibility fallbacks.");
+if (!/HTTP\/SSE send, retry, resume/i.test(runtimeState) || !/legacy traces without durable linkage/i.test(runtimeState)) {
+  errors.push("docs/CANONICAL_RUNTIME_STATE_MODEL.md must name the durably owned shipped Chat/Cowork/Code flows and remaining compatibility fallbacks.");
 }
 if (!/MemoryLifecycleService/.test(runtimeState)) {
   errors.push("docs/CANONICAL_RUNTIME_STATE_MODEL.md must name MemoryLifecycleService as the memory lifecycle owner.");
+}
+if (/Execution-engine adoption: \*\*in progress\*\*/i.test(runtimeState) || /Remaining non-adopted chat flows/i.test(runtimeState)) {
+  errors.push("docs/CANONICAL_RUNTIME_STATE_MODEL.md must not describe shipped durable operator paths as in-progress or non-adopted.");
+}
+if (!/memory item list\/edit\/forget\/history/i.test(runtimeState)) {
+  errors.push("docs/CANONICAL_RUNTIME_STATE_MODEL.md must describe MemoryLifecycleService as the owner of memory item list/edit/forget/history.");
 }
 
 const readme = await readFile(path.join(root, "README.md"), "utf8");
@@ -116,6 +149,21 @@ if (!/verify:visual:regression` compares checked-in shell and primary-surface ba
 if (!/verify:backup:roundtrip` now restores and verifies the full minimum operator backup set/i.test(readme)) {
   errors.push("README.md must describe verify:backup:roundtrip as restoring the full minimum operator backup set.");
 }
+if (/late beta/i.test(readme) || /release-0\.9/i.test(readme) || /before `1\.0`/i.test(readme)) {
+  errors.push("README.md must not describe GoatCitadel as beta or pre-1.0.");
+}
+if (!/release-1\.0\.0/i.test(readme)) {
+  errors.push("README.md must expose the 1.0.0 release badge.");
+}
+if (!/offline_restore_required/i.test(readme) || !/offline-only/i.test(readme)) {
+  errors.push("README.md must describe filesystem-backed restore as offline-only and name the offline_restore_required live-route response.");
+}
+if (!/verify:catalog:parity` now executes real operator actions/i.test(readme)) {
+  errors.push("README.md must describe verify:catalog:parity as runtime action proof.");
+}
+if (!/verify:api:compat` snapshots REST schemas and realtime event envelopes/i.test(readme)) {
+  errors.push("README.md must describe the REST/SSE compatibility lane.");
+}
 
 const installDoc = await readFile(path.join(root, "docs", "INSTALL_SETUP_TESTING.md"), "utf8");
 if (!/optional experimental infrastructure/i.test(installDoc) || !/not part of the current `1\.0` readiness bar/i.test(installDoc)) {
@@ -123,6 +171,9 @@ if (!/optional experimental infrastructure/i.test(installDoc) || !/not part of t
 }
 if (!/docs\/1_0_CONTRACT\.md/.test(installDoc)) {
   errors.push("docs/INSTALL_SETUP_TESTING.md must point readers to docs/1_0_CONTRACT.md for the current 1.0 scope and release gates.");
+}
+if (/Target release: `0\.9\.0-beta\.1`/i.test(installDoc) || /public beta testers/i.test(installDoc)) {
+  errors.push("docs/INSTALL_SETUP_TESTING.md must not describe the target release as beta.");
 }
 
 const channelGuide = await readFile(path.join(root, "docs", "COMMUNICATION_CHANNEL_SETUP_GUIDE.md"), "utf8");
@@ -140,6 +191,9 @@ if (/public SDK story is still partial/i.test(pluginSdkDoc) || /no published Typ
 if (!/@goatcitadel\/extensions-sdk/.test(pluginSdkDoc)) {
   errors.push("docs/PLUGIN_SDK_CONTRACT.md must name @goatcitadel/extensions-sdk explicitly.");
 }
+if (!/@goatcitadel\/extensions-sdk@1\.0\.0/.test(pluginSdkDoc)) {
+  errors.push("docs/PLUGIN_SDK_CONTRACT.md must describe the stable published 1.0.0 SDK package boundary.");
+}
 
 const contract = await readFile(path.join(root, "docs", "1_0_CONTRACT.md"), "utf8");
 if (!/local-first AI workbench/i.test(contract)) {
@@ -151,8 +205,8 @@ if (!/Work`: Chat, Cowork, Code, Tasks, Approvals/i.test(contract) || !/Observe`
 if (!/trusted-code surface/i.test(contract) || !/best-effort and fail-closed/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must keep the Code Mode security posture narrow and explicit.");
 }
-if (!/backup operations include create, list, verify, and restore/i.test(contract)) {
-  errors.push("docs/1_0_CONTRACT.md must describe the shipped backup create/list/verify/restore guarantee.");
+if (!/Backup create, list, and verify are shipped through the admin API\/CLI surface/i.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must describe the shipped backup create/list/verify guarantee.");
 }
 if (!/no visible `beta` or `native` non-channel integration may advertise .* matching operator actions/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must require visible non-channel beta/native integrations to advertise only capabilities backed by shipped operator actions.");
@@ -166,11 +220,27 @@ if (!/verify:visual:regression` is green and compares checked-in dark\/light des
 if (!/verify:backup:roundtrip` is green and restores the full minimum operator backup set/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must require backup-roundtrip proof for the full minimum backup set.");
 }
+if (!/offline CLI-only/i.test(contract) || !/offline_restore_required/i.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must describe filesystem-backed restore as offline CLI-only and name the blocked live-route response.");
+}
+if (!/verify:catalog:parity` is green and executes real runtime-backed operator actions/i.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must require catalog-parity runtime action proof.");
+}
+if (!/verify:api:compat` is green and fails on breaking REST route\/schema or realtime event-envelope diffs/i.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must require the REST/SSE additive-compatibility gate.");
+}
 if (!/mesh-core/i.test(contract) || !/smoke-only/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must keep mesh-core outside the readiness-bearing 1.0 story while it remains smoke-only.");
 }
 if (!/npu-sidecar/i.test(contract) || !/optional experimental infrastructure/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must keep the NPU sidecar outside the readiness-bearing 1.0 story while it remains experimental.");
+}
+
+for (const relPath of workspacePackageFiles) {
+  const parsed = JSON.parse(await readFile(path.join(root, relPath), "utf8"));
+  if (parsed.version !== "1.0.0") {
+    errors.push(`${relPath} must declare version 1.0.0 for the GoatCitadel 1.0 release branch.`);
+  }
 }
 
 if (errors.length > 0) {

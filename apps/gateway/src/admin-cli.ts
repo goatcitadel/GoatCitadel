@@ -7,7 +7,7 @@ import { repoHasConfigMarker } from "./config-files.js";
 import { loadLocalEnvFile } from "./env-file.js";
 import { loadGatewayConfig } from "./config.js";
 import { GatewayService } from "./services/gateway-service.js";
-import { restoreBackupAtRuntime, verifyBackupAtRuntime } from "./services/backup-retention-service.js";
+import { restoreBackupOffline, verifyBackupOffline } from "./services/backup-retention-service.js";
 
 loadLocalEnvFile();
 
@@ -25,11 +25,11 @@ async function main(): Promise<void> {
     return;
   }
 
-  const config = await loadGatewayConfig(resolveRootDir());
   if (group === "backup" && (action === "restore" || action === "verify")) {
-    await runOfflineBackupCommand(config, action, rest);
+    await runOfflineBackupCommand(action, rest);
     return;
   }
+  const config = await loadGatewayConfig(resolveRootDir());
   let bundledPostgres: BundledPostgresRuntimeHandle | undefined;
   if (config.assistant.database.driver === "postgres") {
     bundledPostgres = await ensureBundledPostgresRuntime(config);
@@ -57,11 +57,8 @@ async function main(): Promise<void> {
   }
 }
 
-async function runOfflineBackupCommand(
-  config: Awaited<ReturnType<typeof loadGatewayConfig>>,
-  action: string | undefined,
-  args: string[],
-): Promise<void> {
+async function runOfflineBackupCommand(action: string | undefined, args: string[]): Promise<void> {
+  const rootDir = resolveRootDir();
   if (action === "restore") {
     const filePath = readFlag(args, "--file");
     const confirm = args.includes("--confirm");
@@ -71,7 +68,8 @@ async function runOfflineBackupCommand(
     if (!confirm) {
       throw new Error("Restore requires --confirm");
     }
-    const restored = await restoreBackupAtRuntime(config, {
+    const restored = await restoreBackupOffline({
+      rootDir,
       filePath,
       confirm: true,
     });
@@ -84,7 +82,7 @@ async function runOfflineBackupCommand(
     if (!filePath) {
       throw new Error("Missing required --file <path>");
     }
-    const verified = await verifyBackupAtRuntime(config, {
+    const verified = await verifyBackupOffline({
       filePath,
     });
     console.log(JSON.stringify(verified, null, 2));

@@ -1,6 +1,6 @@
 # Plugin And Add-on SDK Contract
 
-Last updated: 2026-03-30
+Last updated: 2026-04-11
 Scope: `GC-P2-11` extension / plugin SDK breadth
 
 ## Purpose
@@ -148,7 +148,7 @@ Integration plugin authors should assume:
 
 These are still true after this document lands:
 
-- the published author package is `@goatcitadel/extensions-sdk`
+- the published author package is `@goatcitadel/extensions-sdk@1.0.0`
 - the source of that package lives in `packages/extensions-sdk/`
 - the repo-native starter-pack export path bundles the current contract doc plus reference scaffolds
 - the local installable reference integration-plugin scaffold lives in `templates/integration-plugins/reference-integration-plugin/`

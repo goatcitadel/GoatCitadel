@@ -2,6 +2,13 @@ name: Verification Backup Roundtrip
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/gateway/**"
+      - "scripts/verification/**"
+      - ".github/workflows/verification-backup-roundtrip.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
   push:
     branches:
       - main

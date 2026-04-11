@@ -18,7 +18,10 @@ function createConnection(overrides: Partial<IntegrationConnection> = {}): Integ
   };
 }
 
-function createHost(connection: IntegrationConnection, overrides: Partial<IntegrationActionHost> = {}): IntegrationActionHost {
+function createHost(
+  connection: IntegrationConnection,
+  overrides: Partial<IntegrationActionHost> = {},
+): IntegrationActionHost {
   return {
     storage: {
       integrationConnections: {
@@ -52,16 +55,21 @@ describe("integration-action-service", () => {
       },
     });
     const host = createHost(connection, {
-      fetchWithDiagnosticsTimeout: vi.fn(async () =>
-        new Response(JSON.stringify({
-          message: "bridge ok",
-          output: {
-            items: [{ title: "Sample note" }],
-          },
-        }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })),
+      fetchWithDiagnosticsTimeout: vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              message: "bridge ok",
+              output: {
+                items: [{ title: "Sample note" }],
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+      ),
     });
 
     const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "read");
@@ -91,7 +99,8 @@ describe("integration-action-service", () => {
         defaultListId: "list-123",
       },
     });
-    const fetchMock = vi.fn()
+    const fetchMock = vi
+      .fn()
       .mockResolvedValueOnce(
         new Response(JSON.stringify([{ id: "board-1", name: "Alpha board" }]), {
           status: 200,
@@ -114,7 +123,9 @@ describe("integration-action-service", () => {
     });
 
     expect(readResult.status).toBe("executed");
-    expect(readResult.output?.items).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Alpha board" })]));
+    expect(readResult.output?.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "Alpha board" })]),
+    );
     expect(writeResult.status).toBe("executed");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -138,5 +149,50 @@ describe("integration-action-service", () => {
     expect(result.status).toBe("blocked");
     expect(result.blockedReason).toBe("gif_api_key_missing");
     expect(result.message).toContain("API key");
+  });
+
+  it("executes Gmail read and write actions through the core-native Gmail runtime", async () => {
+    const connection = createConnection({
+      catalogId: "automation.gmail",
+      key: "gmail",
+      kind: "automation",
+      label: "Gmail",
+      config: {
+        accessToken: "gmail-token",
+      },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ messages: [{ id: "msg-1", threadId: "thread-1" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "sent-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: fetchMock,
+    });
+
+    const readResult = await invokeIntegrationConnectionAction(host, connection.connectionId, "read", {
+      input: { query: "label:inbox" },
+    });
+    const writeResult = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+      input: {
+        to: "ops@example.com",
+        subject: "GoatCitadel operator check",
+        bodyText: "This is a GoatCitadel Gmail operator check.",
+      },
+    });
+
+    expect(readResult.status).toBe("executed");
+    expect(readResult.output?.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: "msg-1" })]));
+    expect(writeResult.status).toBe("executed");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

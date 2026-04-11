@@ -55,7 +55,7 @@ export function buildExtensionStarterPackDraft(report: FollowOnParityReport): Ex
     "",
     "## Notes",
     "",
-    "- This starter pack complements the published beta SDK package; it is the repo-native handoff bundle for the current contract doc and scaffolds.",
+    "- This starter pack complements the published SDK package; it is the repo-native handoff bundle for the current contract doc and scaffolds.",
     "- Replace placeholder metadata, URLs, install commands, and runtime details before external use.",
     "- Keep the reference plugin lifecycle smoke-tested against the scaffolded source path.",
   ].join("\n");

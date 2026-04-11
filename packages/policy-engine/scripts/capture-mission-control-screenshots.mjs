@@ -324,7 +324,7 @@ async function waitForHttp(url, label) {
 }
 
 async function seedDemoData() {
-  const workspaceSlug = `public-beta-demo-${randomUUID().slice(0, 6)}`;
+  const workspaceSlug = `release-demo-${randomUUID().slice(0, 6)}`;
   const onboarding = await postJson("/api/v1/onboarding/bootstrap", {
     defaultToolProfile: "research",
     budgetMode: "balanced",
@@ -341,18 +341,18 @@ async function seedDemoData() {
       },
     },
     markComplete: true,
-    completedBy: "public-beta-demo",
+    completedBy: "release-demo",
   });
 
   const workspace = await postJson("/api/v1/workspaces", {
-    name: "Public Beta Demo",
+    name: "Release Demo",
     description: "Sanitized workspace used for README and gallery screenshots.",
     slug: workspaceSlug,
   });
 
   await putJson(`/api/v1/workspaces/${encodeURIComponent(workspace.workspaceId)}/guidance/goatcitadel`, {
     content: [
-      "# Public Beta Demo Guidance",
+      "# Release Demo Guidance",
       "",
       "- Favor concise operator updates.",
       "- Keep outputs practical and auditable.",
@@ -362,21 +362,21 @@ async function seedDemoData() {
 
   const session = await postJson("/api/v1/chat/sessions", {
     workspaceId: workspace.workspaceId,
-    title: "Public beta launch prep",
+    title: "1.0 release prep",
   });
 
   await seedChatMessages(session.sessionId);
 
   await postJson("/api/v1/tasks", {
     workspaceId: workspace.workspaceId,
-    title: "Validate installer-first public beta flow",
+    title: "Validate installer-first release flow",
     description: "Clone path second, installer path first, and record any friction.",
     priority: "high",
     status: "review",
   }).then(async (task) => {
     await postJson(`/api/v1/tasks/${encodeURIComponent(task.taskId)}/activities`, {
       activityType: "comment",
-      message: "Checklist trimmed to the highest-signal beta flows.",
+      message: "Checklist trimmed to the highest-signal release flows.",
       agentId: "operator",
     });
     await postJson(`/api/v1/tasks/${encodeURIComponent(task.taskId)}/deliverables`, {
@@ -388,8 +388,8 @@ async function seedDemoData() {
   });
 
   await postJson("/api/v1/cron/jobs", {
-    jobId: "public_beta_digest",
-    name: "Public beta readiness digest",
+    jobId: "release_readiness_digest",
+    name: "1.0 readiness digest",
     schedule: "0 6 * * * UTC",
     enabled: true,
   });
@@ -440,25 +440,25 @@ async function seedDemoData() {
 
   await postJson("/api/v1/knowledge/memory/write", {
     namespace: "release",
-    title: "Public beta launch rule",
+    title: "1.0 launch rule",
     content: "Manual testing starts only after install docs, installers, and validation gates are green.",
     tags: ["release", "policy"],
-    source: "public-beta-demo",
+    source: "release-demo",
     sessionId: session.sessionId,
   });
 
   await postJson("/api/v1/knowledge/memory/write", {
     namespace: "integrations",
     title: "Discord rollout order",
-    content: "Discord is the first external channel for public beta, with Slack second after sandbox validation.",
+    content: "Discord is the first external channel for 1.0 launch validation, with Slack second after sandbox validation.",
     tags: ["channels", "discord"],
-    source: "public-beta-demo",
+    source: "release-demo",
     sessionId: session.sessionId,
   });
 
   await postJson("/api/v1/memory/context/compose", {
     scope: "chat",
-    prompt: "Summarize the public beta launch posture and install priorities.",
+    prompt: "Summarize the 1.0 launch posture and install priorities.",
     sessionId: session.sessionId,
     workspace: workspace.workspaceId,
     maxContextTokens: 1200,
@@ -467,7 +467,7 @@ async function seedDemoData() {
   await postJson("/api/v1/files/upload", {
     relativePath: "workspace/demo/release-checklist.md",
     content: [
-      "# Public Beta Checklist",
+      "# 1.0 Release Checklist",
       "",
       "- Installer-first README",
       "- Manual clone path verified",
@@ -487,7 +487,7 @@ async function seedDemoData() {
   });
 
   await postJson("/api/v1/prompt-packs/import", {
-    name: "Public Beta Sanity Pack",
+    name: "1.0 Sanity Pack",
     sourceLabel: "public-share-demo",
     content: [
       "[TEST-01] Install flow clarity",
@@ -520,7 +520,7 @@ async function seedChatMessages(sessionId) {
         role: "user",
         actorType: "user",
         actorId: "operator",
-        content: "Give me a tight public beta readiness summary before I share the repo.",
+        content: "Give me a tight 1.0 readiness summary before I share the repo.",
         timestamp: new Date(baseTime).toISOString(),
       },
       {
@@ -663,7 +663,7 @@ async function writeGalleryIndex() {
   <body>
     <main class="wrap">
       <h1>GoatCitadel Mission Control Screenshots</h1>
-      <p>Regenerated from a sanitized public beta demo runtime. Folder: <code>docs/screenshots/mission-control</code></p>
+      <p>Regenerated from a sanitized 1.0 release demo runtime. Folder: <code>docs/screenshots/mission-control</code></p>
       <div class="grid">
 ${cards}
       </div>

@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { MemoryChangeEvent, MemoryItemRecord } from "@goatcitadel/contracts";
-import { MEMORY_ITEM_STATUS_VALUES, type GatewayService } from "./gateway-service.js";
+export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
 
-export type MemoryItemHost = GatewayService;
+export interface MemoryItemHost {
+  gatewaySql: {
+    prepare(sql: string): {
+      get(...args: unknown[]): unknown;
+      all(...args: unknown[]): unknown[];
+      run(...args: unknown[]): unknown;
+    };
+  };
+  tryParseJson<T>(raw: string | null | undefined, fallback: T): T;
+}
 
 interface MemoryItemRow {
   item_id: string;

@@ -2,6 +2,14 @@ name: Verification Operator Proof
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "scripts/verification/**"
+      - ".github/workflows/verification-operator-proof.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
   push:
     branches:
       - main

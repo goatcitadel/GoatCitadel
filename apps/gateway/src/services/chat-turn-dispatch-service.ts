@@ -90,10 +90,10 @@ export function shouldUseDurableExecution(
     return false;
   }
   const mode = prepared.normalized.mode ?? prepared.prefs.mode;
-  if (mode === "cowork" || mode === "code") {
+  if (mode === "chat" || mode === "cowork" || mode === "code") {
     return true;
   }
-  if (mode !== "chat" || !host.config.assistant.durable.chatAutoPromoteEnabled) {
+  if (mode !== undefined || !host.config.assistant.durable.chatAutoPromoteEnabled) {
     return false;
   }
   const webMode = prepared.normalized.webMode ?? prepared.prefs.webMode;

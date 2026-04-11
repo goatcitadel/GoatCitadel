@@ -11,7 +11,7 @@ Local workspace SDK package for GoatCitadel add-on and integration-plugin author
 
 ## Current Boundary
 
-- this package exists in the workspace and is also published to GitHub Packages as `@goatcitadel/extensions-sdk@0.9.0-beta.1` on the `beta` tag
+- this package exists in the workspace and is also published to GitHub Packages as `@goatcitadel/extensions-sdk@1.0.0` on the `latest` tag
 - broader runtime contracts still live in the main GoatCitadel repo contracts and gateway surfaces
 
 ## Release Workflow
@@ -34,7 +34,7 @@ For the next release, once GitHub Packages auth exists on the operator machine:
 The publish wrapper runs `lint`, `test`, and `build` before `pnpm publish`.
 It also derives the publish tag from the package version automatically:
 
-- prerelease versions such as `0.9.0-beta.1` publish with `--tag beta`
+- prerelease versions publish with `--tag beta`
 - stable versions publish with `--tag latest`
 
 If you need to publish directly from the package instead of the repo root:

@@ -164,7 +164,7 @@ describe("buildFollowOnParityReport", () => {
       capabilities: [],
     });
     expect(report.plugins.blockingIssues).toEqual([]);
-    expect(report.plugins.sdkSummary).toContain("@goatcitadel/extensions-sdk@0.9.0-beta.1");
+    expect(report.plugins.sdkSummary).toContain("@goatcitadel/extensions-sdk@1.0.0");
     expect(report.epics).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -174,7 +174,7 @@ describe("buildFollowOnParityReport", () => {
         expect.objectContaining({
           epicId: "GC-P2-11",
           state: "have_foundation",
-          summary: expect.stringContaining("@goatcitadel/extensions-sdk@0.9.0-beta.1"),
+          summary: expect.stringContaining("@goatcitadel/extensions-sdk@1.0.0"),
         }),
       ]),
     );

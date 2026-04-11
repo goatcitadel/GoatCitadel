@@ -2,7 +2,7 @@
 
 > Local-first AI operations console for chat, coding, orchestration, memory, tools, and approvals.
 
-[![Release](https://img.shields.io/badge/release-0.9.0--beta.1-1ec8a5?style=for-the-badge)](./CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-1.0.0-1ec8a5?style=for-the-badge)](./CHANGELOG.md)
 [![UI](https://img.shields.io/badge/ui-Mission%20Control-0f172a?style=for-the-badge)](./apps/mission-control)
 [![Runtime](https://img.shields.io/badge/runtime-Fastify%20Gateway-123c52?style=for-the-badge)](./apps/gateway)
 [![Local First](https://img.shields.io/badge/posture-local--first-2dd4bf?style=for-the-badge)](./docs/INSTALL_SETUP_TESTING.md)
@@ -109,11 +109,11 @@ If you need a non-local hostname in the Mission Control preview image, rebuild w
 
 ## Current status
 
-GoatCitadel is in late beta. The repo contains a real Mission Control shell, a working gateway, shared policy/orchestration packages, and extension scaffolding. It is already useful for local operator workflows, but the public surface is still being tightened and some contracts may continue to evolve before `1.0`.
+GoatCitadel now ships at the `1.0.0` bar defined in [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md). The repo contains the full Mission Control shell, the Fastify gateway, shared policy/orchestration packages, the published extensions SDK, and the blocking release-gate lanes required to keep the visible product contract honest.
 
 This repository intentionally favors truthful product claims over aspirational parity language. If something is still experimental, optional, or only partially proven, the docs should say so plainly.
 
-The current `1.0` promise, visible scope, trust posture, backup guarantees, and release gates are defined in [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md).
+The current `1.0` promise, visible scope, trust posture, additive API posture, backup guarantees, and release gates are defined in [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md).
 
 Safe claims today:
 
@@ -122,10 +122,13 @@ Safe claims today:
 - Code Mode host isolation is best-effort and fail-closed when required isolation is unavailable; it is still a trusted-code/manual-governed surface
 - Skills Hub and inline approvals now expose lifecycle, trust, provenance, and richer Code Mode inspection details
 - visible `beta` integrations in Mission Control now expose real operator actions backed by runtime handlers instead of diagnostics-only catalog shells
+- filesystem-backed restore is offline-only for `1.0`; the live admin restore route preserves compatibility by returning `offline_restore_required` instead of mutating an active runtime
 - Docker can add a stronger runtime isolation boundary for local/shared-host deployment when paired with auth and policy configuration
 - provider secrets may be stored in local env/config files when secure-store persistence is disabled or unavailable
-- `verify:visual:regression` compares checked-in shell and primary-surface baselines instead of only capturing screenshots
-- `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and config
+- `verify:visual:regression` compares checked-in shell and primary-surface baselines for the full visible `Work / Observe / Tune` footprint instead of only capturing screenshots
+- `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and every runtime `config/*.json` file
+- `verify:catalog:parity` now executes real operator actions for visible runtime-backed non-channel entries instead of stopping at metadata checks
+- `verify:api:compat` snapshots REST schemas and realtime event envelopes and fails on breaking diffs
 
 Not safe to over-claim yet:
 

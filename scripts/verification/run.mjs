@@ -2,6 +2,7 @@
 import path from "node:path";
 import { generateVerificationReview, loadManifestForReview } from "./lib/review.mjs";
 import {
+  runApiCompatibilityLane,
   runBackupRoundtripLane,
   runCatalogParityLane,
   runDeepCoreLane,
@@ -29,6 +30,7 @@ const VALID_LANES = new Set([
   "deep-core",
   "deep-ecosystem",
   "catalog-parity",
+  "api-compat",
   "operator-proof",
   "durable-recovery",
   "surface-regression",
@@ -81,6 +83,8 @@ async function main() {
       await runDeepEcosystemLane(context, { profile });
     } else if (lane === "catalog-parity") {
       await runCatalogParityLane(context, { profile });
+    } else if (lane === "api-compat") {
+      await runApiCompatibilityLane(context, { profile });
     } else if (lane === "operator-proof") {
       await runOperatorProofLane(context, { profile });
     } else if (lane === "durable-recovery") {
@@ -98,6 +102,7 @@ async function main() {
       await runDeepCoreLane(context, { profile });
       await runDeepEcosystemLane(context, { profile });
       await runCatalogParityLane(context, { profile });
+      await runApiCompatibilityLane(context, { profile });
       await runOperatorProofLane(context, { profile });
       await runDurableRecoveryLane(context, { profile });
       await runSurfaceRegressionLane(context, { profile });
@@ -143,6 +148,7 @@ function shouldGenerateReview(lane) {
     lane === "deep-core" ||
     lane === "deep-ecosystem" ||
     lane === "catalog-parity" ||
+    lane === "api-compat" ||
     lane === "operator-proof" ||
     lane === "durable-recovery" ||
     lane === "surface-regression" ||

@@ -1,6 +1,6 @@
 # Canonical Runtime State Model
 
-Last updated: 2026-04-10
+Last updated: 2026-04-11
 
 This document defines the repo-native authority model for the core runtime nouns that appear across Gateway, Mission Control, storage, and replay.
 
@@ -56,15 +56,15 @@ Authority:
 Implementation status:
 - Schema and storage repository: complete (migration v21).
 - Read-only diagnostics API: complete.
-- Execution-engine adoption: **in progress** — the adopted resumable chat flow set is now durably owned for approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics.
-- Queue consumers / idempotent worker runtime: **not yet complete**.
-- DLQ operator actions: **not yet complete**.
-- See `docs/DURABLE_RUNS_REPLAY_FOUNDATION.md` for the full activation checklist.
+- Shipped Chat / Cowork / Code HTTP/SSE send, retry, resume, approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics are durably owned for the `1.0` operator path.
+- Queue consumers / idempotent worker runtime for the shipped durable path: complete.
+- DLQ operator actions for the shipped durable path: complete.
+- See `docs/DURABLE_RUNS_REPLAY_FOUNDATION.md` for deeper implementation background.
 
 Notes:
-- A run records execution intent and outcome for the adopted resumable flow set. Non-adopted paths are called out explicitly rather than inferred.
-- Durable execution now owns worker startup, retry scheduling, wake/resume, dead-letter recovery mechanics, approval wait/resume wake effects, approval-linked proactive wakes, and durable-linked chat-turn stream resumption.
-- Remaining non-adopted chat flows are still explicit: HTTP/SSE entrypoints still prepare and enqueue chat sends and retries, and legacy traces without durable linkage still rely on compatibility resume behavior.
+- A run records execution intent and outcome for the shipped resumable operator flow set.
+- Durable execution now owns worker startup, retry scheduling, wake/resume, dead-letter recovery mechanics, approval wait/resume wake effects, approval-linked proactive wakes, and durable-linked chat-turn stream resumption for shipped Chat / Cowork / Code operator work.
+- Legacy traces without durable linkage may still require compatibility reads or resume fallbacks for historical rows, but new shipped operator sends do not bypass durable ownership.
 - Runs may be linked to sessions, turns, tasks, and approvals.
 - The `durableKernelV1Enabled` feature flag gates durable-run APIs. The `replayOverridesV1Enabled` flag (default: off) gates replay-with-overrides.
 
@@ -170,13 +170,13 @@ Authority:
 Implementation status:
 - QMD composition, distillation, and caching: complete.
 - Memory maintenance (retention, compaction, recommendations): feature-flagged behind `memoryMaintenanceV1Enabled`.
-- Learned-memory promotion, dedupe, workspace scope resolution, and maintenance recommendation suppression now route through lifecycle-owned policy helpers coordinated by `MemoryLifecycleService`.
+- Learned-memory promotion, dedupe, workspace scope resolution, maintenance recommendation suppression, memory item list/edit/forget/history, and shared write-policy decisions now route through lifecycle-owned policy helpers coordinated by `MemoryLifecycleService`.
 
 Notes:
-- `MemoryLifecycleService` is the operator-facing lifecycle owner for context composition, learned-memory entry points, maintenance policy/run orchestration, and shared dedupe/scope policy decisions.
+- `MemoryLifecycleService` is the operator-facing lifecycle owner for context composition, learned-memory entry points, maintenance policy/run orchestration, memory item list/edit/forget/history, and shared dedupe/scope/write policy decisions.
 - `MemoryContextService`, `ChatLearnedMemoryService`, and `MemoryMaintenanceService` remain focused collaborators behind that owner.
 - `ChatLearnedMemoryService` is storage-repo backed for learned-memory item persistence.
-- Remaining direct-SQL owners in core runtime-adjacent code still include `GatewayService`, `ImprovementService`, `PromptPackService`, `ChatProactiveService`, and selected migration/ops services such as `database-cutover-service.ts` and `gateway/cron-automation-service.ts`.
+- Remaining direct-SQL owners in core runtime-adjacent code no longer include `GatewayService` for `memory_items` lifecycle flows; selected migration and ops services may still touch adjacent stores outside the memory lifecycle owner boundary.
 
 ## Derived Views
 

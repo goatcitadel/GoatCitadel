@@ -3,10 +3,7 @@ import type {
   IntegrationActionInvokeResult,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
-import {
-  getIntegrationOperatorActions,
-  isLocalBridgeCatalogId,
-} from "./integration-action-registry.js";
+import { getIntegrationOperatorActions, isLocalBridgeCatalogId } from "./integration-action-registry.js";
 
 export interface IntegrationActionHost {
   storage: {
@@ -41,6 +38,8 @@ export async function invokeIntegrationConnectionAction(
     result = await invokeLocalBridgeAction(host, connection, actionId, request, checkedAt);
   } else if (connection.catalogId === "productivity.trello") {
     result = await invokeTrelloAction(host, connection, actionId, request, checkedAt);
+  } else if (connection.catalogId === "automation.gmail") {
+    result = await invokeGmailAction(host, connection, actionId, request, checkedAt);
   } else if (connection.catalogId === "automation.gif-search") {
     result = await invokeGifSearchAction(host, connection, actionId, request, checkedAt);
   } else {
@@ -74,10 +73,16 @@ async function invokeLocalBridgeAction(
   checkedAt: string,
 ): Promise<IntegrationActionInvokeResult> {
   const bridgeUrl =
-    host.readConnectionConfigValue(connection.config, "bridgeUrl")
-    ?? host.readConnectionConfigValue(connection.config, "baseUrl");
+    host.readConnectionConfigValue(connection.config, "bridgeUrl") ??
+    host.readConnectionConfigValue(connection.config, "baseUrl");
   if (!bridgeUrl) {
-    return blocked(connection, actionId, checkedAt, "Configure a local bridge URL before running this action.", "bridge_url_missing");
+    return blocked(
+      connection,
+      actionId,
+      checkedAt,
+      "Configure a local bridge URL before running this action.",
+      "bridge_url_missing",
+    );
   }
   const authHeader = resolveBearerAuth(host, connection.config);
   const candidates = [
@@ -113,7 +118,11 @@ async function invokeLocalBridgeAction(
         actionId,
         status: "executed",
         message: parsed.message ?? `${actionId} completed through the local bridge.`,
-        output: isRecord(parsed.output) ? parsed.output : parsed.output !== undefined ? { raw: parsed.output } : undefined,
+        output: isRecord(parsed.output)
+          ? parsed.output
+          : parsed.output !== undefined
+            ? { raw: parsed.output }
+            : undefined,
         checkedAt,
       };
     } catch (error) {
@@ -144,11 +153,17 @@ async function invokeTrelloAction(
   const apiKey = host.resolveConnectionSecret(connection.config, "apiKey", "apiKeyEnv");
   const token = host.resolveConnectionSecret(connection.config, "token", "tokenEnv");
   if (!apiKey || !token) {
-    return blocked(connection, actionId, checkedAt, "Configure Trello API key and token before running this action.", "trello_auth_missing");
+    return blocked(
+      connection,
+      actionId,
+      checkedAt,
+      "Configure Trello API key and token before running this action.",
+      "trello_auth_missing",
+    );
   }
 
   if (actionId === "read") {
-    const url = new URL("https://api.trello.com/1/members/me/boards");
+    const url = new URL("/1/members/me/boards", resolveTrelloApiBaseUrl());
     url.searchParams.set("fields", "name,url,closed");
     url.searchParams.set("key", apiKey);
     url.searchParams.set("token", token);
@@ -179,8 +194,7 @@ async function invokeTrelloAction(
     const name = readStringInput(request.input, "name") ?? "GoatCitadel operator card";
     const desc = readStringInput(request.input, "desc") ?? "Created from Mission Control operator actions.";
     const listId =
-      readStringInput(request.input, "listId")
-      ?? host.readConnectionConfigValue(connection.config, "defaultListId");
+      readStringInput(request.input, "listId") ?? host.readConnectionConfigValue(connection.config, "defaultListId");
     if (!listId) {
       return blocked(
         connection,
@@ -190,7 +204,7 @@ async function invokeTrelloAction(
         "trello_list_missing",
       );
     }
-    const url = new URL("https://api.trello.com/1/cards");
+    const url = new URL("/1/cards", resolveTrelloApiBaseUrl());
     url.searchParams.set("key", apiKey);
     url.searchParams.set("token", token);
     url.searchParams.set("idList", listId);
@@ -199,9 +213,15 @@ async function invokeTrelloAction(
     const response = await host.fetchWithDiagnosticsTimeout(url.toString(), { method: "POST" });
     const parsed = await parseResponse(response);
     if (!response.ok) {
-      return failed(connection, actionId, checkedAt, parsed.message ?? `Trello card create failed (${response.status}).`, {
-        provider: "trello",
-      });
+      return failed(
+        connection,
+        actionId,
+        checkedAt,
+        parsed.message ?? `Trello card create failed (${response.status}).`,
+        {
+          provider: "trello",
+        },
+      );
     }
     return {
       connectionId: connection.connectionId,
@@ -214,7 +234,125 @@ async function invokeTrelloAction(
     };
   }
 
-  return blocked(connection, actionId, checkedAt, `Unsupported Trello operator action: ${actionId}.`, "action_unsupported");
+  return blocked(
+    connection,
+    actionId,
+    checkedAt,
+    `Unsupported Trello operator action: ${actionId}.`,
+    "action_unsupported",
+  );
+}
+
+async function invokeGmailAction(
+  host: IntegrationActionHost,
+  connection: IntegrationConnection,
+  actionId: string,
+  request: IntegrationActionInvokeInput,
+  checkedAt: string,
+): Promise<IntegrationActionInvokeResult> {
+  const token = host.resolveConnectionSecret(connection.config, "accessToken", "accessTokenEnv");
+  if (!token) {
+    return blocked(
+      connection,
+      actionId,
+      checkedAt,
+      "Configure a Gmail access token before running operator actions.",
+      "gmail_auth_missing",
+    );
+  }
+
+  if (actionId === "read") {
+    const url = new URL("/gmail/v1/users/me/messages", resolveGmailApiBaseUrl());
+    const query = readStringInput(request.input, "query");
+    if (query) {
+      url.searchParams.set("q", query);
+    }
+    url.searchParams.set("maxResults", readStringInput(request.input, "maxResults") ?? "10");
+    const response = await host.fetchWithDiagnosticsTimeout(url.toString(), {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    const parsed = await parseResponse(response);
+    if (!response.ok) {
+      return failed(connection, actionId, checkedAt, parsed.message ?? `Gmail read failed (${response.status}).`, {
+        provider: "gmail",
+      });
+    }
+    const body = isRecord(parsed.output) ? parsed.output : {};
+    const items = Array.isArray(body.messages) ? body.messages.slice(0, 10) : [];
+    return {
+      connectionId: connection.connectionId,
+      catalogId: connection.catalogId,
+      actionId,
+      status: "executed",
+      message: `Fetched ${items.length} Gmail message${items.length === 1 ? "" : "s"}.`,
+      output: {
+        provider: "gmail",
+        items,
+      },
+      checkedAt,
+    };
+  }
+
+  if (actionId === "write") {
+    const to = readStringInput(request.input, "to");
+    const subject = readStringInput(request.input, "subject");
+    const bodyText = readStringInput(request.input, "bodyText");
+    if (!to || !subject || !bodyText) {
+      return blocked(
+        connection,
+        actionId,
+        checkedAt,
+        "Provide recipient, subject, and body text before sending a Gmail operator test.",
+        "gmail_message_incomplete",
+      );
+    }
+    const rawMessage = [
+      `To: ${to}`,
+      `Subject: ${subject}`,
+      'Content-Type: text/plain; charset="UTF-8"',
+      "",
+      bodyText,
+    ].join("\r\n");
+    const response = await host.fetchWithDiagnosticsTimeout(
+      new URL("/gmail/v1/users/me/messages/send", resolveGmailApiBaseUrl()).toString(),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          raw: Buffer.from(rawMessage).toString("base64url"),
+        }),
+      },
+    );
+    const parsed = await parseResponse(response);
+    if (!response.ok) {
+      return failed(connection, actionId, checkedAt, parsed.message ?? `Gmail send failed (${response.status}).`, {
+        provider: "gmail",
+      });
+    }
+    return {
+      connectionId: connection.connectionId,
+      catalogId: connection.catalogId,
+      actionId,
+      status: "executed",
+      message: "Sent a Gmail operator test message through the configured connection.",
+      output: isRecord(parsed.output) ? parsed.output : { raw: parsed.output },
+      checkedAt,
+    };
+  }
+
+  return blocked(
+    connection,
+    actionId,
+    checkedAt,
+    `Unsupported Gmail operator action: ${actionId}.`,
+    "action_unsupported",
+  );
 }
 
 async function invokeGifSearchAction(
@@ -225,18 +363,28 @@ async function invokeGifSearchAction(
   checkedAt: string,
 ): Promise<IntegrationActionInvokeResult> {
   if (actionId !== "search") {
-    return blocked(connection, actionId, checkedAt, `Unsupported GIF search operator action: ${actionId}.`, "action_unsupported");
+    return blocked(
+      connection,
+      actionId,
+      checkedAt,
+      `Unsupported GIF search operator action: ${actionId}.`,
+      "action_unsupported",
+    );
   }
   const provider = (host.readConnectionConfigValue(connection.config, "provider") ?? "tenor").trim().toLowerCase();
   const apiKey = host.resolveConnectionSecret(connection.config, "apiKey", "apiKeyEnv");
   if (!apiKey) {
-    return blocked(connection, actionId, checkedAt, "Configure a GIF provider API key before running search.", "gif_api_key_missing");
+    return blocked(
+      connection,
+      actionId,
+      checkedAt,
+      "Configure a GIF provider API key before running search.",
+      "gif_api_key_missing",
+    );
   }
   const query = readStringInput(request.input, "query") ?? "happy goat";
   const locale = host.readConnectionConfigValue(connection.config, "defaultLocale") ?? "en_US";
-  const url = provider === "giphy"
-    ? buildGiphyUrl(apiKey, query)
-    : buildTenorUrl(apiKey, query, locale);
+  const url = provider === "giphy" ? buildGiphyUrl(apiKey, query) : buildTenorUrl(apiKey, query, locale);
   const response = await host.fetchWithDiagnosticsTimeout(url, { method: "GET" });
   const parsed = await parseResponse(response);
   if (!response.ok) {
@@ -245,9 +393,7 @@ async function invokeGifSearchAction(
       query,
     });
   }
-  const items = provider === "giphy"
-    ? normalizeGiphyResults(parsed.output)
-    : normalizeTenorResults(parsed.output);
+  const items = provider === "giphy" ? normalizeGiphyResults(parsed.output) : normalizeTenorResults(parsed.output);
   return {
     connectionId: connection.connectionId,
     catalogId: connection.catalogId,
@@ -299,14 +445,11 @@ function failed(
   };
 }
 
-function resolveBearerAuth(
-  host: IntegrationActionHost,
-  config: Record<string, unknown>,
-): string | undefined {
+function resolveBearerAuth(host: IntegrationActionHost, config: Record<string, unknown>): string | undefined {
   const token =
-    host.resolveConnectionSecret(config, "authToken", "authTokenEnv")
-    ?? host.resolveConnectionSecret(config, "accessToken", "accessTokenEnv")
-    ?? host.resolveConnectionSecret(config, "token", "tokenEnv");
+    host.resolveConnectionSecret(config, "authToken", "authTokenEnv") ??
+    host.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
+    host.resolveConnectionSecret(config, "token", "tokenEnv");
   return token ? `Bearer ${token}` : undefined;
 }
 
@@ -346,7 +489,7 @@ function readStringInput(input: Record<string, unknown> | undefined, key: string
 }
 
 function buildTenorUrl(apiKey: string, query: string, locale: string): string {
-  const url = new URL("https://tenor.googleapis.com/v2/search");
+  const url = new URL("/v2/search", resolveTenorApiBaseUrl());
   url.searchParams.set("key", apiKey);
   url.searchParams.set("q", query);
   url.searchParams.set("limit", "5");
@@ -355,7 +498,7 @@ function buildTenorUrl(apiKey: string, query: string, locale: string): string {
 }
 
 function buildGiphyUrl(apiKey: string, query: string): string {
-  const url = new URL("https://api.giphy.com/v1/gifs/search");
+  const url = new URL("/v1/gifs/search", resolveGiphyApiBaseUrl());
   url.searchParams.set("api_key", apiKey);
   url.searchParams.set("q", query);
   url.searchParams.set("limit", "5");
@@ -421,4 +564,25 @@ function readGiphyMediaUrl(item: Record<string, unknown>): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function resolveTrelloApiBaseUrl(): string {
+  return resolveApiBaseUrl("GOATCITADEL_TRELLO_API_BASE_URL", "https://api.trello.com");
+}
+
+function resolveTenorApiBaseUrl(): string {
+  return resolveApiBaseUrl("GOATCITADEL_TENOR_API_BASE_URL", "https://tenor.googleapis.com");
+}
+
+function resolveGiphyApiBaseUrl(): string {
+  return resolveApiBaseUrl("GOATCITADEL_GIPHY_API_BASE_URL", "https://api.giphy.com");
+}
+
+function resolveGmailApiBaseUrl(): string {
+  return resolveApiBaseUrl("GOATCITADEL_GMAIL_API_BASE_URL", "https://gmail.googleapis.com");
+}
+
+function resolveApiBaseUrl(envKey: string, fallback: string): string {
+  const override = process.env[envKey]?.trim();
+  return override && override.length > 0 ? override : fallback;
 }

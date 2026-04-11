@@ -8,6 +8,8 @@ const allowlist = new Set([
   "apps/gateway/src/services/database-cutover-service.ts",
   "apps/gateway/src/services/gateway-service.ts",
   "apps/gateway/src/services/improvement-service.ts",
+  "apps/gateway/src/services/memory-item-helpers.ts",
+  "apps/gateway/src/services/memory-lifecycle-service.ts",
   "apps/gateway/src/services/prompt-pack-service.ts",
   "apps/gateway/src/services/chat-proactive-service.ts",
   "apps/gateway/src/services/gateway/cron-automation-service.ts",

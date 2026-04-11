@@ -1,7 +1,6 @@
-import os from "node:os";
-import path from "node:path";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { resolveBackupPathWithinDirectory } from "../services/backup-paths.js";
 
 const retentionPatchSchema = z.object({
   realtimeEventsDays: z.coerce.number().int().positive().max(365).optional(),
@@ -67,10 +66,10 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       patch.backupsKeep = body.backupsKeep;
     }
     if (body.transcriptsDays !== undefined) {
-      patch.transcriptsDays = body.transcriptsDays === "off" ? undefined : body.transcriptsDays ?? undefined;
+      patch.transcriptsDays = body.transcriptsDays === "off" ? undefined : (body.transcriptsDays ?? undefined);
     }
     if (body.auditDays !== undefined) {
-      patch.auditDays = body.auditDays === "off" ? undefined : body.auditDays ?? undefined;
+      patch.auditDays = body.auditDays === "off" ? undefined : (body.auditDays ?? undefined);
     }
     const updated = fastify.gateway.updateRetentionPolicy(patch);
     return reply.send(updated);
@@ -114,15 +113,19 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const jailed = resolveBackupPathWithinRoot(parsed.data.filePath);
+    const jailed = resolveBackupPathWithinDirectory(parsed.data.filePath);
     if (!jailed.ok) {
       return reply.code(400).send({ error: jailed.error });
     }
-    try {
-      return reply.send(await fastify.gateway.restoreBackup(parsed.data));
-    } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
-    }
+    return reply.code(409).send({
+      error: "offline_restore_required",
+      code: "offline_restore_required",
+      message: "Filesystem-backed backup restore is only supported while the GoatCitadel gateway is offline.",
+      maintenanceRequired: true,
+      supportedMode: "offline",
+      filePath: jailed.resolvedPath,
+      cliHint: `pnpm admin backup restore --file "${parsed.data.filePath}" --confirm`,
+    });
   });
 
   fastify.post("/api/v1/admin/backups/verify", async (request, reply) => {
@@ -130,7 +133,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const jailed = resolveBackupPathWithinRoot(parsed.data.filePath);
+    const jailed = resolveBackupPathWithinDirectory(parsed.data.filePath);
     if (!jailed.ok) {
       return reply.code(400).send({ error: jailed.error });
     }
@@ -170,16 +173,3 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 };
-
-function resolveBackupPathWithinRoot(filePath: string): { ok: true; resolvedPath: string } | { ok: false; error: string } {
-  const backupRoot = path.resolve(path.join(os.homedir(), ".GoatCitadel", "backups"));
-  const resolvedPath = path.resolve(backupRoot, filePath);
-  const relative = path.relative(backupRoot, resolvedPath);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    return {
-      ok: false,
-      error: "Backup file path must stay within the GoatCitadel backup directory.",
-    };
-  }
-  return { ok: true, resolvedPath };
-}

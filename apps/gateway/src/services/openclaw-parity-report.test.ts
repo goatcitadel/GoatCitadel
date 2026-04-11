@@ -40,9 +40,7 @@ function buildFollowOnParityMock(): FollowOnParityReport {
         freshness: "missing",
         matchedCurrentProfile: false,
       },
-      blockingIssues: [
-        "Browser control catalog maturity is not yet at a shipped operator-ready level.",
-      ],
+      blockingIssues: ["Browser control catalog maturity is not yet at a shipped operator-ready level."],
       recommendedActions: [],
     },
     voice: {
@@ -73,7 +71,7 @@ function buildFollowOnParityMock(): FollowOnParityReport {
     plugins: {
       totalCount: 1,
       enabledCount: 1,
-      sdkSummary: "Local SDK exists and the published beta boundary is explicit.",
+      sdkSummary: "Local SDK exists and the published stable boundary is explicit.",
       referenceLifecycle: {
         referencePluginId: "reference-integration-plugin",
         present: true,
@@ -170,8 +168,8 @@ function buildFollowOnParityMock(): FollowOnParityReport {
         epicId: "GC-P2-11",
         label: "Extension / plugin SDK breadth",
         state: "partial",
-        summary: "Local SDK exists and the published beta boundary is explicit.",
-        nextSlice: "Keep the published beta SDK package green.",
+        summary: "Local SDK exists and the published stable boundary is explicit.",
+        nextSlice: "Keep the published SDK package green.",
       },
       {
         epicId: "GC-P2-12",
@@ -238,12 +236,14 @@ describe("buildOpenclawParityProgramReport", () => {
     });
 
     const voice = report.epics.find((epic) => epic.epicId === "GC-P2-12");
-    expect(voice?.blockers).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: "manual_operator",
-        summary: expect.stringContaining("Voice proof artifact is still missing"),
-      }),
-    ]));
+    expect(voice?.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "manual_operator",
+          summary: expect.stringContaining("Voice proof artifact is still missing"),
+        }),
+      ]),
+    );
     expect(report.completedEpicIds).toEqual(expect.arrayContaining(["GC-P0-02", "GC-P0-03", "GC-P1-04"]));
     expect(report.openEpicIds).not.toEqual(expect.arrayContaining(["GC-P0-02", "GC-P0-03", "GC-P1-04"]));
   });
@@ -272,11 +272,11 @@ describe("buildOpenclawParityProgramReport", () => {
         },
         blockingIssues: [],
       },
-      epics: base.epics.map((epic) => (
+      epics: base.epics.map((epic) =>
         epic.epicId === "GC-P0-07" || epic.epicId === "GC-P1-08"
           ? { ...epic, state: "have_foundation" as const }
-          : epic
-      )),
+          : epic,
+      ),
     });
 
     const canvas = report.epics.find((epic) => epic.epicId === "GC-P0-07");
@@ -313,15 +313,15 @@ describe("buildOpenclawParityProgramReport", () => {
           missingProfiles: ["trusted_local", "remote_hardened"],
         },
       },
-      epics: base.epics.map((epic) => (
+      epics: base.epics.map((epic) =>
         epic.epicId === "GC-P2-12"
           ? {
-            ...epic,
-            state: "have_foundation" as const,
-            summary: "Voice runtime is ready on tiny.en and current operator proof is on file for local_dev.",
-          }
-          : epic
-      )),
+              ...epic,
+              state: "have_foundation" as const,
+              summary: "Voice runtime is ready on tiny.en and current operator proof is on file for local_dev.",
+            }
+          : epic,
+      ),
     });
 
     const voice = report.epics.find((epic) => epic.epicId === "GC-P2-12");
@@ -361,15 +361,16 @@ describe("buildOpenclawParityProgramReport", () => {
           missingProfiles: [],
         },
       },
-      epics: base.epics.map((epic) => (
+      epics: base.epics.map((epic) =>
         epic.epicId === "GC-P2-12"
           ? {
-            ...epic,
-            state: "have_foundation" as const,
-            summary: "Voice runtime is ready on tiny.en and current operator proof now covers local_dev, trusted_local, and remote_hardened.",
-          }
-          : epic
-      )),
+              ...epic,
+              state: "have_foundation" as const,
+              summary:
+                "Voice runtime is ready on tiny.en and current operator proof now covers local_dev, trusted_local, and remote_hardened.",
+            }
+          : epic,
+      ),
     });
 
     const voice = report.epics.find((epic) => epic.epicId === "GC-P2-12");
@@ -400,15 +401,15 @@ describe("buildOpenclawParityProgramReport", () => {
         },
         blockingIssues: [],
       },
-      epics: base.epics.map((epic) => (
+      epics: base.epics.map((epic) =>
         epic.epicId === "GC-P0-06"
           ? {
-            ...epic,
-            state: "have_foundation" as const,
-            summary: "8 browser tools are registered and current operator proof is on file for trusted_local.",
-          }
-          : epic
-      )),
+              ...epic,
+              state: "have_foundation" as const,
+              summary: "8 browser tools are registered and current operator proof is on file for trusted_local.",
+            }
+          : epic,
+      ),
     });
 
     const browser = report.epics.find((epic) => epic.epicId === "GC-P0-06");

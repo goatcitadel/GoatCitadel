@@ -4,11 +4,11 @@ const EXTENSION_CONTRACT_PATH = "docs/PLUGIN_SDK_CONTRACT.md";
 const EXTENSION_SDK_PACKAGE_PATH = "packages/extensions-sdk";
 const EXTENSION_TEMPLATE_PATH = "templates/verification/extension-sdk-brief.md";
 const EXTENSION_ARTIFACT_ROOT = "artifacts/follow-on-parity/extensions";
-const PUBLISHED_EXTENSIONS_SDK_PACKAGE = "@goatcitadel/extensions-sdk@0.9.0-beta.1";
+const PUBLISHED_EXTENSIONS_SDK_PACKAGE = "@goatcitadel/extensions-sdk@1.0.0";
 
 export function buildExtensionSdkBrief(report: FollowOnParityReport): ExtensionSdkBriefDraft {
   const generatedAt = new Date().toISOString();
-  const summary = `${report.plugins.sdkSummary} The public beta package already exists; the remaining decision is whether and when to widen the runtime contract beyond the current explicit boundary.`;
+  const summary = `${report.plugins.sdkSummary} The stable public package already exists; the remaining decision is whether and when to widen the runtime contract beyond the current explicit boundary.`;
 
   return {
     generatedAt,
@@ -52,7 +52,7 @@ export function buildExtensionSdkBrief(report: FollowOnParityReport): ExtensionS
       "",
       "## Decision Gate",
       "1. Decide whether the runtime contract should stay at the current explicit boundary or widen in specific, deliberate slices.",
-      "2. Keep the published beta SDK package, starter-pack export, and reference integration-plugin install and enable/disable path green while that decision is pending.",
+      "2. Keep the published SDK package, starter-pack export, and reference integration-plugin install and enable/disable path green while that decision is pending.",
       "",
     ].join("\n"),
   };

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { BackupManifestRecord } from "@goatcitadel/contracts";
-import { createBackup, listBackups, restoreBackup, verifyBackup } from "../api/client";
-import { ConfirmModal } from "../components/ConfirmModal";
+import { createBackup, listBackups, verifyBackup } from "../api/client";
 import { FieldHelp } from "../components/FieldHelp";
 import { Panel } from "../components/Panel";
 import { SectionTitle } from "../components/SectionTitle";
@@ -14,10 +13,9 @@ import { SettingsPage } from "./SettingsPage";
 export function RuntimeHubPage() {
   const [backups, setBackups] = useState<BackupManifestRecord[]>([]);
   const [backupPath, setBackupPath] = useState("");
-  const [busy, setBusy] = useState<null | "create" | "verify" | "restore">(null);
+  const [busy, setBusy] = useState<null | "create" | "verify">(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmRestoreOpen, setConfirmRestoreOpen] = useState(false);
 
   const loadBackups = useCallback(async () => {
     try {
@@ -37,6 +35,9 @@ export function RuntimeHubPage() {
   const selectedBackupPath = backupPath.trim();
 
   const canVerifyOrRestore = selectedBackupPath.length > 0;
+  const restoreCommand = selectedBackupPath
+    ? `pnpm admin backup restore --file "${selectedBackupPath}" --confirm`
+    : 'pnpm admin backup restore --file "<backup-path>" --confirm';
   const backupSummary = useMemo(() => {
     if (!latestBackup) {
       return "No backups recorded yet.";
@@ -78,25 +79,6 @@ export function RuntimeHubPage() {
     }
   };
 
-  const handleRestoreBackup = async () => {
-    setBusy("restore");
-    setStatus(null);
-    setError(null);
-    try {
-      const restored = await restoreBackup(selectedBackupPath, true);
-      setStatus(
-        restored.restored
-          ? `Restored ${restored.filesRestored} files from ${restored.backupId ?? "the selected backup"}.`
-          : "Restore request completed without applying changes.",
-      );
-      setConfirmRestoreOpen(false);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  };
-
   return (
     <section className="space-page stack-lg">
       <SectionTitle
@@ -106,10 +88,17 @@ export function RuntimeHubPage() {
       {error ? <p className="error">{error}</p> : null}
       {status ? <p className="status-banner">{status}</p> : null}
       <SettingsPage activeTab="runtime" />
-      <Panel title="Backups" subtitle="Create, inspect, verify, and restore runtime backups without leaving Mission Control.">
+      <Panel
+        title="Backups"
+        subtitle="Create, inspect, and verify runtime backups here. Filesystem restore stays offline-only for 1.0."
+      >
         <div className="workflow-summary-strip">
-          <StatusChip tone={latestBackup ? "success" : "warning"}>{latestBackup ? "Backup history loaded" : "No backup history"}</StatusChip>
-          <StatusChip tone="muted">{backups.length} recent manifest{backups.length === 1 ? "" : "s"}</StatusChip>
+          <StatusChip tone={latestBackup ? "success" : "warning"}>
+            {latestBackup ? "Backup history loaded" : "No backup history"}
+          </StatusChip>
+          <StatusChip tone="muted">
+            {backups.length} recent manifest{backups.length === 1 ? "" : "s"}
+          </StatusChip>
         </div>
         <p className="office-subtitle">{backupSummary}</p>
         <div className="stack-sm">
@@ -122,19 +111,34 @@ export function RuntimeHubPage() {
             />
           </label>
           <FieldHelp>
-            Creating a backup fills this path automatically. Verification and restore use the current path so operators can inspect a fresh backup or a known archive.
+            Creating a backup fills this path automatically. Verification runs here. Restore remains an offline CLI
+            operation so the gateway cannot overwrite active runtime files while it is serving.
           </FieldHelp>
           <div className="actions">
-            <button type="button" className="gc-button" onClick={() => void handleCreateBackup()} disabled={busy !== null}>
+            <button
+              type="button"
+              className="gc-button"
+              onClick={() => void handleCreateBackup()}
+              disabled={busy !== null}
+            >
               {busy === "create" ? "Creating..." : "Create backup"}
             </button>
-            <button type="button" className="gc-button" onClick={() => void handleVerifyBackup()} disabled={!canVerifyOrRestore || busy !== null}>
+            <button
+              type="button"
+              className="gc-button"
+              onClick={() => void handleVerifyBackup()}
+              disabled={!canVerifyOrRestore || busy !== null}
+            >
               {busy === "verify" ? "Verifying..." : "Verify backup"}
             </button>
-            <button type="button" className="gc-button danger" onClick={() => setConfirmRestoreOpen(true)} disabled={!canVerifyOrRestore || busy !== null}>
-              Restore backup
-            </button>
           </div>
+          <label className="chat-v11-field">
+            <span>Offline restore command</span>
+            <input value={restoreCommand} readOnly />
+          </label>
+          <FieldHelp>
+            Stop the gateway first, then run this command from the repo root to restore the selected backup safely.
+          </FieldHelp>
           {backups.length > 0 ? (
             <ul className="compact-list">
               {backups.slice(0, 6).map((backup) => (
@@ -153,18 +157,6 @@ export function RuntimeHubPage() {
       <MeshPage />
       <LlamaCppPage />
       <NpuPage />
-      <ConfirmModal
-        open={confirmRestoreOpen}
-        title="Restore Backup"
-        message="Restore the selected backup into the current runtime root now? This should only be used when you intentionally want to replace local runtime state."
-        confirmLabel={busy === "restore" ? "Restoring..." : "Restore"}
-        danger
-        pending={busy === "restore"}
-        cancelDisabled={busy === "restore"}
-        disableDismiss={busy === "restore"}
-        onCancel={() => setConfirmRestoreOpen(false)}
-        onConfirm={() => void handleRestoreBackup()}
-      />
     </section>
   );
 }

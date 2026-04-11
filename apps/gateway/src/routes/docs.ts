@@ -47,7 +47,9 @@ function buildOpenApiSpec(): Record<string, unknown> {
     ],
     paths: {
       "/health": { get: { summary: "Health check", responses: { "200": { description: "ok" } } } },
-      "/api/v1/events/stream": { get: { summary: "Realtime event stream (SSE)", responses: { "200": { description: "stream" } } } },
+      "/api/v1/events/stream": {
+        get: { summary: "Realtime event stream (SSE)", responses: { "200": { description: "stream" } } },
+      },
       "/api/v1/sessions": { get: { summary: "List sessions", responses: { "200": { description: "Session list" } } } },
       "/api/v1/chat/projects": {
         get: { summary: "List chat projects", responses: { "200": { description: "Project list" } } },
@@ -61,10 +63,16 @@ function buildOpenApiSpec(): Record<string, unknown> {
         get: { summary: "List chat messages", responses: { "200": { description: "Message list" } } },
       },
       "/api/v1/chat/sessions/{sessionId}/agent-send": {
-        post: { summary: "Send chat message through the branch-aware agent path", responses: { "200": { description: "Message sent" } } },
+        post: {
+          summary: "Send chat message through the branch-aware agent path",
+          responses: { "200": { description: "Message sent" } },
+        },
       },
       "/api/v1/chat/sessions/{sessionId}/agent-send/stream": {
-        post: { summary: "Send chat message with streamed branch-aware response", responses: { "200": { description: "SSE chunk stream" } } },
+        post: {
+          summary: "Send chat message with streamed branch-aware response",
+          responses: { "200": { description: "SSE chunk stream" } },
+        },
       },
       "/api/v1/chat/attachments": {
         post: { summary: "Upload chat attachment", responses: { "201": { description: "Attachment uploaded" } } },
@@ -74,10 +82,16 @@ function buildOpenApiSpec(): Record<string, unknown> {
         patch: { summary: "Update runtime settings", responses: { "200": { description: "Updated settings" } } },
       },
       "/api/v1/auth/plan": {
-        get: { summary: "Inspect resolved gateway auth credential sources", responses: { "200": { description: "Auth credential plan" } } },
+        get: {
+          summary: "Inspect resolved gateway auth credential sources",
+          responses: { "200": { description: "Auth credential plan" } },
+        },
       },
       "/api/v1/auth/install-token": {
-        post: { summary: "Resolve or generate the install token for token-mode gateways", responses: { "200": { description: "Install token resolution" } } },
+        post: {
+          summary: "Resolve or generate the install token for token-mode gateways",
+          responses: { "200": { description: "Install token resolution" } },
+        },
       },
       "/api/v1/admin/retention": {
         get: { summary: "Get retention policy", responses: { "200": { description: "Retention policy" } } },
@@ -93,10 +107,18 @@ function buildOpenApiSpec(): Record<string, unknown> {
         post: { summary: "Create backup", responses: { "201": { description: "Backup created" } } },
       },
       "/api/v1/admin/backups/restore": {
-        post: { summary: "Restore backup", responses: { "200": { description: "Backup restored" } } },
+        post: {
+          summary: "Restore backup (offline-only for filesystem runtimes)",
+          responses: {
+            "409": { description: "Offline restore required while the gateway is serving" },
+          },
+        },
       },
       "/api/v1/admin/backups/verify": {
-        post: { summary: "Verify backup manifest and payload integrity", responses: { "200": { description: "Backup verification result" } } },
+        post: {
+          summary: "Verify backup manifest and payload integrity",
+          responses: { "200": { description: "Backup verification result" } },
+        },
       },
       "/api/v1/tools/invoke": {
         post: { summary: "Invoke tool", responses: { "200": { description: "Tool result" } } },

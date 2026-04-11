@@ -19,12 +19,13 @@ Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFL
 
 ## Current Runtime Truth
 
-- Durable execution is the canonical owner for the adopted resumable flow set: approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics.
-- Remaining non-adopted chat flows are still explicit: HTTP/SSE entrypoints prepare and enqueue chat sends and retries, and legacy traces without durable linkage still rely on compatibility resume behavior.
-- `MemoryLifecycleService` is the operator-facing memory lifecycle owner. `MemoryContextService`, `ChatLearnedMemoryService`, and `MemoryMaintenanceService` remain collaborators behind that boundary instead of separate policy owners.
+- Durable execution is the canonical owner for the shipped resumable Chat / Cowork / Code flow set: HTTP/SSE send entrypoints, approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics.
+- Legacy traces without durable linkage may still use compatibility reads or resume fallbacks for historical records, but shipped operator sends and retries no longer rely on a non-durable ownership path.
+- `MemoryLifecycleService` is the operator-facing memory lifecycle owner for context composition, learned-memory policy, and memory item list/edit/forget/history. `MemoryContextService`, `ChatLearnedMemoryService`, and `MemoryMaintenanceService` remain collaborators behind that boundary instead of separate policy owners.
 - `packages/mesh-core` is currently smoke-only and does not count toward the `1.0` readiness bar while it still relies on `--passWithNoTests`.
 - `apps/npu-sidecar` is optional experimental infrastructure and is not part of the current `1.0` bar.
 - Visible `beta` and `native` non-channel integrations derive their advertised capabilities from the operator-action runtime registry; Mission Control should not surface diagnostics-only shells for those entries.
+- Filesystem-backed backup restore is offline-only for `1.0`; the live admin restore route must fail closed with `offline_restore_required` while the gateway is serving.
 
 ## 0. OpenClaw-Informed Hardening Deltas (Current Cycle)
 
@@ -737,8 +738,10 @@ Minimum backup set:
 
 Release-proof expectation:
 
-- `verify:backup:roundtrip` must seed, mutate, restore, and verify all four classes above.
+- `verify:backup:roundtrip` must seed, mutate, restore, and verify all four classes above, including every runtime `config/*.json` file present at backup time.
 - `verify:visual:regression` must compare checked-in baselines for the shell and primary `Work / Observe / Tune` surfaces, not just capture screenshots.
+- `verify:catalog:parity` must execute real operator actions for the visible runtime-backed non-channel classes it claims to cover.
+- `verify:api:compat` must snapshot REST schemas and realtime event envelopes and fail on breaking diffs.
 
 If `index.db` is lost but logs remain:
 

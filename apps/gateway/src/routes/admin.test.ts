@@ -54,7 +54,7 @@ describe("admin routes", () => {
     expect(pruneRetention).toHaveBeenCalledWith({ dryRun: false });
   });
 
-  it("returns backup restore errors as 400s", async () => {
+  it("rejects backup restore traversal before reaching the gateway", async () => {
     const restoreBackup = vi.fn(async () => {
       throw new Error("restore blocked: file path outside workspace");
     });
@@ -75,6 +75,34 @@ describe("admin routes", () => {
     expect(response.json()).toMatchObject({
       error: "Backup file path must stay within the GoatCitadel backup directory.",
     });
+    expect(restoreBackup).not.toHaveBeenCalled();
+  });
+
+  it("blocks live backup restore and points operators to the offline CLI path", async () => {
+    const restoreBackup = vi.fn(async () => ({
+      restored: true,
+    }));
+    app = Fastify();
+    app.decorate("gateway", { restoreBackup } as never);
+    await app.register(adminRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/backups/restore",
+      payload: {
+        filePath: "example.backup",
+        confirm: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: "offline_restore_required",
+      code: "offline_restore_required",
+      maintenanceRequired: true,
+      supportedMode: "offline",
+    });
+    expect(response.json().cliHint).toContain("pnpm admin backup restore");
     expect(restoreBackup).not.toHaveBeenCalled();
   });
 

@@ -27,7 +27,7 @@ describe("integration-catalog", () => {
     }
   });
 
-  it("only upgrades planned channels to plugin when the matching plugin is installed", () => {
+  it("only upgrades planned catalog entries to plugin when the matching plugin is installed", () => {
     const plannedPluginChannel: IntegrationCatalogEntry = {
       ...requireCatalogEntry("channel.discord"),
       key: "custom-bridge",
@@ -40,7 +40,9 @@ describe("integration-catalog", () => {
     expect(resolveIntegrationCatalogRuntimeAvailability(plannedPluginChannel, new Set())).toBe("blocked");
     expect(resolveIntegrationCatalogMaturity(plannedPluginChannel, new Set(["slack"]))).toBe("disabled");
     expect(resolveIntegrationCatalogMaturity(plannedPluginChannel, new Set(["custombridge"]))).toBe("plugin");
-    expect(resolveIntegrationCatalogRuntimeAvailability(plannedPluginChannel, new Set(["custombridge"]))).toBe("runnable");
+    expect(resolveIntegrationCatalogRuntimeAvailability(plannedPluginChannel, new Set(["custombridge"]))).toBe(
+      "runnable",
+    );
   });
 
   it("exposes the required Signal bridge URL in the guided setup form", () => {
@@ -215,6 +217,7 @@ describe("integration-catalog", () => {
       "productivity.things3",
       "productivity.bear",
       "productivity.trello",
+      "automation.gmail",
       "automation.gif-search",
       "automation.peekaboo-screen",
       "automation.camera-photo-video",
