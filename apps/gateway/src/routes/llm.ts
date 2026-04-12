@@ -1,12 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { createProviderRuntime } from "../services/provider-runtime-service.js";
 
-const llmApiStyleSchema = z.enum([
-  "openai-chat-completions",
-  "openai-responses",
-  "anthropic-messages",
-]);
+const llmApiStyleSchema = z.enum(["openai-chat-completions", "openai-responses", "anthropic-messages"]);
 
 const providerRequestAuthSchema = z.discriminatedUnion("type", [
   z.object({
@@ -47,53 +42,59 @@ const providerProxyAuthSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-const providerRequestTlsSchema = z.object({
-  insecureSkipVerify: z.boolean().optional(),
-  caCertPath: z.string().min(1).optional(),
-  clientCertPath: z.string().min(1).optional(),
-  clientKeyPath: z.string().min(1).optional(),
-  serverName: z.string().min(1).optional(),
-}).superRefine((value, ctx) => {
-  if (Boolean(value.clientCertPath) !== Boolean(value.clientKeyPath)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "clientCertPath and clientKeyPath must be provided together",
-    });
-  }
-  if (value.insecureSkipVerify && value.caCertPath) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "caCertPath cannot be combined with insecureSkipVerify",
-    });
-  }
-});
+const providerRequestTlsSchema = z
+  .object({
+    insecureSkipVerify: z.boolean().optional(),
+    caCertPath: z.string().min(1).optional(),
+    clientCertPath: z.string().min(1).optional(),
+    clientKeyPath: z.string().min(1).optional(),
+    serverName: z.string().min(1).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (Boolean(value.clientCertPath) !== Boolean(value.clientKeyPath)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "clientCertPath and clientKeyPath must be provided together",
+      });
+    }
+    if (value.insecureSkipVerify && value.caCertPath) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "caCertPath cannot be combined with insecureSkipVerify",
+      });
+    }
+  });
 
 const providerRequestSchema = z.object({
   headers: z.record(z.string()).optional(),
   auth: providerRequestAuthSchema.optional(),
-  proxy: z.object({
-    url: z.string().url(),
-    bypassHosts: z.array(z.string().min(1)).optional(),
-    auth: providerProxyAuthSchema.optional(),
-    tls: providerRequestTlsSchema.optional(),
-  }).optional(),
+  proxy: z
+    .object({
+      url: z.string().url(),
+      bypassHosts: z.array(z.string().min(1)).optional(),
+      auth: providerProxyAuthSchema.optional(),
+      tls: providerRequestTlsSchema.optional(),
+    })
+    .optional(),
   tls: providerRequestTlsSchema.optional(),
 });
 
 const updateConfigSchema = z.object({
   activeProviderId: z.string().optional(),
   activeModel: z.string().optional(),
-  upsertProvider: z.object({
-    providerId: z.string().min(1),
-    label: z.string().min(1).optional(),
-    baseUrl: z.string().url().optional(),
-    apiStyle: llmApiStyleSchema.optional(),
-    defaultModel: z.string().min(1).optional(),
-    apiKey: z.string().min(1).optional(),
-    apiKeyEnv: z.string().min(1).optional(),
-    request: providerRequestSchema.optional(),
-    headers: z.record(z.string()).optional(),
-  }).optional(),
+  upsertProvider: z
+    .object({
+      providerId: z.string().min(1),
+      label: z.string().min(1).optional(),
+      baseUrl: z.string().url().optional(),
+      apiStyle: llmApiStyleSchema.optional(),
+      defaultModel: z.string().min(1).optional(),
+      apiKey: z.string().min(1).optional(),
+      apiKeyEnv: z.string().min(1).optional(),
+      request: providerRequestSchema.optional(),
+      headers: z.record(z.string()).optional(),
+    })
+    .optional(),
 });
 
 const modelQuerySchema = z.object({
@@ -135,27 +136,35 @@ const imageGenerationSchema = z.object({
 const chatCompletionSchema = z.object({
   providerId: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
-  messages: z.array(z.object({
-    role: z.enum(["system", "developer", "user", "assistant", "tool"]),
-    content: z.union([z.string(), z.array(z.record(z.unknown()))]),
-    name: z.string().optional(),
-    tool_call_id: z.string().optional(),
-  })).min(1),
-  memory: z.object({
-    enabled: z.boolean().optional(),
-    mode: z.enum(["qmd", "off"]).optional(),
-    sessionId: z.string().min(1).optional(),
-    taskId: z.string().min(1).optional(),
-    workspace: z.string().min(1).optional(),
-    maxContextTokens: z.number().int().positive().optional(),
-    forceRefresh: z.boolean().optional(),
-  }).optional(),
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(["system", "developer", "user", "assistant", "tool"]),
+        content: z.union([z.string(), z.array(z.record(z.unknown()))]),
+        name: z.string().optional(),
+        tool_call_id: z.string().optional(),
+      }),
+    )
+    .min(1),
+  memory: z
+    .object({
+      enabled: z.boolean().optional(),
+      mode: z.enum(["qmd", "off"]).optional(),
+      sessionId: z.string().min(1).optional(),
+      taskId: z.string().min(1).optional(),
+      workspace: z.string().min(1).optional(),
+      maxContextTokens: z.number().int().positive().optional(),
+      forceRefresh: z.boolean().optional(),
+    })
+    .optional(),
   temperature: z.number().optional(),
   top_p: z.number().optional(),
   max_tokens: z.number().int().positive().optional(),
-  reasoning: z.object({
-    effort: z.enum(["none", "low", "medium", "high", "xhigh"]),
-  }).optional(),
+  reasoning: z
+    .object({
+      effort: z.enum(["none", "low", "medium", "high", "xhigh"]),
+    })
+    .optional(),
   verbosity: z.enum(["low", "medium", "high"]).optional(),
   stream: z.boolean().optional(),
   tools: z.array(z.record(z.unknown())).optional(),
@@ -168,22 +177,12 @@ const chatCompletionSchema = z.object({
 });
 
 export const llmRoutes: FastifyPluginAsync = async (fastify) => {
-  const providerRuntime = createProviderRuntime({
-    listProviders: () => fastify.gateway.listLlmProviders(),
-    getConfigWithDetails: () => fastify.gateway.getLlmConfigWithDetails(),
-    updateConfig: (input) => fastify.gateway.updateLlmConfig(input),
-    listModels: (providerId) => fastify.gateway.listLlmModels(providerId),
-    previewModels: (input) => fastify.gateway.previewLlmModels(input),
-    generateImage: (input) => fastify.gateway.generateImage(input),
-    createChatCompletion: (input) => fastify.gateway.createChatCompletion(input),
-  });
-
   fastify.get("/api/v1/llm/providers", async (_request, reply) => {
-    return reply.send({ items: providerRuntime.listProviders() });
+    return reply.send({ items: fastify.gateway.listLlmProviders() });
   });
 
   fastify.get("/api/v1/llm/config", async (_request, reply) => {
-    return reply.send(providerRuntime.getConfigWithDetails());
+    return reply.send(fastify.gateway.getLlmConfigWithDetails());
   });
 
   fastify.patch("/api/v1/llm/config", async (request, reply) => {
@@ -192,7 +191,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(providerRuntime.updateConfig(parsed.data));
+      return reply.send(fastify.gateway.updateLlmConfig(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -205,7 +204,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send({ items: await providerRuntime.listModels(parsed.data.providerId) });
+      return reply.send({ items: await fastify.gateway.listLlmModels(parsed.data.providerId) });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -218,7 +217,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(await providerRuntime.previewModels(parsed.data));
+      return reply.send(await fastify.gateway.previewLlmModels(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -231,7 +230,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(await providerRuntime.generateImage(parsed.data));
+      return reply.send(await fastify.gateway.generateImage(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -244,7 +243,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const result = await providerRuntime.createChatCompletion(parsed.data);
+      const result = await fastify.gateway.createChatCompletion(parsed.data);
       return reply.send(result);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

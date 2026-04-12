@@ -53,8 +53,11 @@ describe("DurableRunService", () => {
     });
     const service = new DurableRunService(createContext(runs, checkpoints, timeline) as unknown as ServiceContext, {
       backgroundTasks,
-      executeWorkflow,
-      isWorkflowRecoverable: () => ({ recoverable: true }),
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
     });
 
     service.startWorker();
@@ -70,6 +73,49 @@ describe("DurableRunService", () => {
     expect(runs.get("run-1")?.status).toBe("completed");
     expect(checkpoints.map((item) => item.checkpointKind)).toContain("run_started");
     expect(timeline.map((item) => item.eventType)).toContain("run_started");
+  });
+
+  it("marks unrecoverable orphaned runs through the workflow registry", async () => {
+    const runs = new Map<string, DurableRunRecord>([
+      [
+        "run-unrecoverable",
+        {
+          ...createRun("run-unrecoverable", "running", "hook.delivery"),
+          leaseOwnerId: "worker-old",
+          leaseHeartbeatAt: "2026-03-14T00:00:00.000Z",
+          leaseExpiresAt: "2026-03-14T00:00:01.000Z",
+        },
+      ],
+    ]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const markWorkflowUnrecoverable = vi.fn(async () => undefined);
+    const service = new DurableRunService(createContext(runs, checkpoints, timeline) as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow: vi.fn(async () => undefined),
+        isWorkflowRecoverable: () => ({
+          recoverable: false,
+          reason: "hook delivery payload invalid",
+        }),
+        markWorkflowUnrecoverable,
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    expect(markWorkflowUnrecoverable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-unrecoverable",
+        workflowKey: "hook.delivery",
+        status: "failed",
+      }),
+      "hook delivery payload invalid",
+    );
+    expect(runs.get("run-unrecoverable")?.status).toBe("failed");
+    expect(timeline.map((item) => item.eventType)).toContain("run_failed");
   });
 
   it("waits until retry backoff is due before claiming queued runs", async () => {
@@ -91,7 +137,11 @@ describe("DurableRunService", () => {
       createContext(runs, checkpoints, timeline, { retries }) as unknown as ServiceContext,
       {
         backgroundTasks,
-        executeWorkflow,
+        workflowRegistry: {
+          executeWorkflow,
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
       },
     );
 
@@ -130,7 +180,11 @@ describe("DurableRunService", () => {
       createContext(runs, checkpoints, timeline, { deadLetters }) as unknown as ServiceContext,
       {
         backgroundTasks,
-        executeWorkflow,
+        workflowRegistry: {
+          executeWorkflow,
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
       },
     );
 
@@ -146,6 +200,67 @@ describe("DurableRunService", () => {
     });
     expect(timeline.map((item) => item.eventType)).toContain("dead_letter_recovered");
     expect(timeline.map((item) => item.eventType)).toContain("run_started");
+  });
+
+  it("skips waking waiting runs when the correlation id does not match", () => {
+    const run = createRun("run-wait", "waiting", "approval.wait");
+    run.metadata = {
+      waitForEvent: {
+        eventKey: "approval.resolved",
+        correlationId: "approval-expected",
+      },
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const publishRealtime = vi.fn();
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
+    );
+
+    const result = service.wakeDurableRun(run.runId, {
+      eventKey: "approval.resolved",
+      correlationId: "approval-other",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "skipped_correlation_mismatch",
+      runId: "run-wait",
+    });
+    expect(runs.get(run.runId)?.status).toBe("waiting");
+    expect(timeline).toEqual([]);
+    expect(publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("emits a durable retry scheduled signal when manual retry queues another attempt", () => {
+    const run = createRun("run-retry", "failed", "connector.delivery");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const publishRealtime = vi.fn();
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
+    );
+
+    const retried = service.retryDurableRun(run.runId, "manual_retry", "operator-1");
+
+    expect(retried.status).toBe("queued");
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "durable",
+      expect.objectContaining({
+        type: "durable_run_retry_scheduled",
+        runId: "run-retry",
+        attemptNo: 1,
+      }),
+      expect.objectContaining({
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: expect.objectContaining({
+          runId: "run-retry",
+        }),
+      }),
+    );
   });
 });
 
@@ -165,6 +280,12 @@ function createContext(
         resolution_note?: string;
       }
     >;
+    publishRealtime?: (
+      eventType: string,
+      source: string,
+      payload: Record<string, unknown>,
+      options?: Record<string, unknown>,
+    ) => void;
   },
 ) {
   const retries = options?.retries ?? new Map<string, DurableRetryRecord[]>();
@@ -192,6 +313,11 @@ function createContext(
           [...runs.values()].filter((run) => run.status === status).map((run) => run.runId),
         listCheckpoints: () => [],
         listRetries: (runId: string) => retries.get(runId) ?? [],
+        upsertRetry: (input: DurableRetryRecord) => {
+          const current = retries.get(input.runId) ?? [];
+          retries.set(input.runId, [...current.filter((item) => item.attemptNo !== input.attemptNo), input]);
+          return input;
+        },
         getRun: (runId: string) => {
           const run = runs.get(runId);
           if (!run) {
@@ -364,7 +490,7 @@ function createContext(
     llmService: {},
     policyEngine: {},
     gatewaySql: {} as never,
-    publishRealtime: () => undefined,
+    publishRealtime: options?.publishRealtime ?? (() => undefined),
     requireFeatureEnabled: () => undefined,
     isFeatureEnabled: () => true,
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId ?? "default",

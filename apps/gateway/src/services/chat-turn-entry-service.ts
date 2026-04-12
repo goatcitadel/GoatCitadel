@@ -1,21 +1,25 @@
 /**
  * Chat turn public-entry helpers.
  *
- * Step 8d/8e of the gateway-service decomposition plan: extracts the public
- * agent chat-turn entry points (`agentSendChatMessage`, the stream variants,
- * retry/edit/cancel/resume) and the big inline LLM execution body from
- * `agentSendChatMessage`. Pure functions over a `GatewayService` host.
+ * Public agent chat-turn entry points over the narrowed chat runtime host.
  */
 
 import { randomUUID } from "node:crypto";
+import type { TurnRuntime } from "@goatcitadel/orchestration";
 import type {
+  ChatCapabilityUpgradeSuggestion,
   ChatCancelTurnResponse,
+  ChatStreamChunkDraft,
+  ChatTurnBranchKind,
   ChatMessageRecord,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
+  ChatSpecialistCandidateSuggestionRecord,
   ChatStreamChunk,
   ChatTurnTraceRecord,
+  ProactiveRunRecord,
 } from "@goatcitadel/contracts";
+import type { SessionAutonomyPrefsRecord } from "@goatcitadel/storage";
 import { looksLowConfidenceResponse } from "./learned-memory-utils.js";
 import {
   buildEmptyAssistantTurnFallbackText,
@@ -24,10 +28,101 @@ import {
   detectDelegationRoles,
   inferDegradedAssistantTurnFailure,
 } from "./gateway-service.js";
-import type { GatewayService } from "./gateway-service.js";
+import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
+import type { ChatTurnPrepHost, PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 
-export type ChatTurnEntryHost = GatewayService;
+type ChatTurnProactiveTriggerInput = {
+  source?: "scheduler" | "manual" | "chat";
+  reason?: string;
+  prefs?: SessionAutonomyPrefsRecord;
+};
+
+export interface ChatTurnEntryHost
+  extends
+    Omit<ChatTurnPrepHost, "storage">,
+    Omit<chatTurnDispatchService.ChatTurnDispatchHost, "storage" | "turnRuntime"> {
+  readonly storage: ChatTurnPrepHost["storage"] & chatTurnDispatchService.ChatTurnDispatchHost["storage"];
+  readonly turnRuntime: Pick<TurnRuntime, "run" | "runStream">;
+  prepareAgentChatTurn(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+    options?: {
+      branchKind?: ChatTurnBranchKind;
+      sourceTurnId?: string;
+      parentTurnId?: string;
+      existingUserMessage?: ChatMessageRecord;
+      ingestUserMessage?: boolean;
+      turnId?: string;
+      assistantMessageId?: string;
+    },
+  ): Promise<PreparedAgentChatTurn>;
+  withChatTurnWriteLease<T>(sessionId: string, operation: string, task: () => Promise<T>): Promise<T>;
+  withChatTurnWriteLeaseStream(
+    sessionId: string,
+    operation: string,
+    factory: () => AsyncGenerator<ChatStreamChunk>,
+  ): AsyncGenerator<ChatStreamChunk>;
+  withEphemeralStreamEnvelope(
+    stream: AsyncGenerator<ChatStreamChunkDraft>,
+    runId?: string,
+  ): AsyncGenerator<ChatStreamChunk>;
+  streamPersistedChatTurnEvents(
+    sessionId: string,
+    turnId: string,
+    options?: {
+      sinceEventId?: string;
+      liveTail?: boolean;
+    },
+  ): AsyncGenerator<ChatStreamChunk>;
+  requireChatTurnContext(
+    sessionId: string,
+    turnId: string,
+  ): Promise<{
+    trace: ChatTurnTraceRecord;
+    userMessage: ChatMessageRecord;
+    assistantMessage?: ChatMessageRecord;
+  }>;
+  beginActiveChatTurnExecution(sessionId: string, turnId: string, operation: string): AbortController;
+  endActiveChatTurnExecution(turnId: string, controller: AbortController): void;
+  getActiveChatTurnExecution(turnId: string):
+    | {
+        sessionId: string;
+        controller: AbortController;
+      }
+    | undefined;
+  markChatTurnCancelled(sessionId: string, turnId: string, cancelledBy?: string): ChatTurnTraceRecord;
+  collectCapabilityUpgradeSuggestions(input: {
+    sessionId: string;
+    content: string;
+    assistantText: string;
+    trace?: ChatTurnTraceRecord;
+  }): Promise<ChatCapabilityUpgradeSuggestion[]>;
+  collectSpecialistCandidateSuggestions(input: {
+    sessionId: string;
+    mode: NonNullable<PreparedAgentChatTurn["normalized"]["mode"]> | PreparedAgentChatTurn["prefs"]["mode"];
+    content: string;
+    capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
+    trace: ChatTurnTraceRecord;
+  }): ChatSpecialistCandidateSuggestionRecord[];
+  recordCapabilityGapFromTrace(input: {
+    sessionId: string;
+    turnId: string;
+    content: string;
+    trace: ChatTurnTraceRecord;
+  }): void;
+  extractAndPersistLearnedMemory(
+    sessionId: string,
+    content: string,
+    source: {
+      role: "user" | "assistant";
+      sourceRef: string;
+      trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
+    },
+  ): void;
+  isReplayScratchSession(sessionId: string): boolean;
+  triggerChatSessionProactive(sessionId: string, input?: ChatTurnProactiveTriggerInput): Promise<ProactiveRunRecord>;
+}
 
 export interface ChatTurnResumeHost {
   readonly storage: {
@@ -121,7 +216,7 @@ async function runAgentSendChatMessageLlmPath(
   host: ChatTurnEntryHost,
   sessionId: string,
   input: ChatSendMessageRequest,
-  prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
+  prepared: PreparedAgentChatTurn,
 ): Promise<ChatSendMessageResponse> {
   const controller = host.beginActiveChatTurnExecution(sessionId, prepared.turnId, "agent-send");
   try {
@@ -258,12 +353,17 @@ async function runAgentSendChatMessageLlmPath(
       });
       if (turnResult.turnTrace.status !== "cancelled") {
         host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-        host.publishRealtime("chat_thread_updated", "chat", {
-          type: "chat_thread_turn_appended",
-          sessionId,
-          turnId,
-          activeLeafTurnId: turnId,
-        });
+        host.publishRealtime(
+          "chat_thread_updated",
+          "chat",
+          {
+            type: "chat_thread_turn_appended",
+            sessionId,
+            turnId,
+            activeLeafTurnId: turnId,
+          },
+          buildChatTurnRealtimeOptions({ sessionId, turnId }),
+        );
       }
       return {
         sessionId,
@@ -376,12 +476,17 @@ async function runAgentSendChatMessageLlmPath(
       trace: hydratedTrace,
     });
     host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-    host.publishRealtime("chat_thread_updated", "chat", {
-      type: "chat_thread_turn_appended",
-      sessionId,
-      turnId,
-      activeLeafTurnId: turnId,
-    });
+    host.publishRealtime(
+      "chat_thread_updated",
+      "chat",
+      {
+        type: "chat_thread_turn_appended",
+        sessionId,
+        turnId,
+        activeLeafTurnId: turnId,
+      },
+      buildChatTurnRealtimeOptions({ sessionId, turnId }),
+    );
     const delegationDetection = detectDelegationRoles(prepared.content);
     if (
       !host.isReplayScratchSession(sessionId) &&

@@ -71,4 +71,74 @@ describe("durable routes", () => {
     expect(valid.statusCode).toBe(200);
     expect(listDurableRunCheckpoints).toHaveBeenCalledWith("run-1", 10);
   });
+
+  it("falls back to the request ip when recovering a dead letter without actorId", async () => {
+    const recoverDurableDeadLetter = vi.fn(() => ({
+      runId: "run-1",
+      workflowKey: "connector.delivery",
+      status: "queued",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 2,
+      payload: {},
+      metadata: {},
+      createdAt: "2026-04-12T00:00:00.000Z",
+      updatedAt: "2026-04-12T00:01:00.000Z",
+    }));
+
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("gateway", {
+      recoverDurableDeadLetter,
+    } as never);
+    await app.register(durableRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/durable/dead-letters/dead-1/recover",
+      payload: {
+        maxAttempts: 5,
+      },
+      remoteAddress: "127.0.0.1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(recoverDurableDeadLetter).toHaveBeenCalledWith("dead-1", "ip:127.0.0.1", {
+      maxAttempts: 5,
+    });
+  });
+
+  it("falls back to the request ip when retrying a durable run without actorId", async () => {
+    const retryDurableRun = vi.fn(() => ({
+      runId: "run-2",
+      workflowKey: "connector.delivery",
+      status: "queued",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 2,
+      payload: {},
+      metadata: {},
+      createdAt: "2026-04-12T00:00:00.000Z",
+      updatedAt: "2026-04-12T00:01:00.000Z",
+    }));
+
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("gateway", {
+      retryDurableRun,
+    } as never);
+    await app.register(durableRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/durable/runs/run-2/retry",
+      payload: {
+        reason: "manual_retry",
+      },
+      remoteAddress: "127.0.0.1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(retryDurableRun).toHaveBeenCalledWith("run-2", "manual_retry", "ip:127.0.0.1");
+  });
 });

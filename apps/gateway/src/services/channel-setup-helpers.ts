@@ -13,9 +13,10 @@ import {
   resolveReusableChannelSetupTestResult,
   type ChannelSetupRecentTestCacheEntry,
 } from "./channel-setup-test-cache.js";
-import type { GatewayService } from "./gateway-service.js";
 
-export type ChannelSetupHost = Pick<GatewayService, "getIntegrationConnection">;
+export interface ChannelSetupHost {
+  getIntegrationConnection(connectionId: string): IntegrationConnection;
+}
 
 export function buildDefaultChannelSetupDraft(definition: ChannelSetupDefinition): Record<string, unknown> {
   const defaults: Record<string, unknown> = {};

@@ -1,8 +1,8 @@
 /**
  * LLM completion service.
  *
- * Body-move home for createChatCompletion / createChatCompletionStream
- * (Step 6 of the gateway-service decomposition plan).
+ * Owns completion shaping, fallback, hook coordination, and memory-aware
+ * request assembly behind an explicit runtime host.
  */
 
 import { randomUUID } from "node:crypto";
@@ -12,8 +12,11 @@ import type {
   ChatTurnTraceRecord,
   MemoryContextPack,
 } from "@goatcitadel/contracts";
+import type { GatewayRuntimeConfig } from "../config.js";
 import { shouldAllowCrossProviderFallback } from "./chat-session-utils.js";
-import type { GatewayService } from "./gateway-service.js";
+import type { HooksService } from "./hooks-service.js";
+import type { LlmService } from "./llm-service.js";
+import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import {
   CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT,
   buildMemoryContextSystemMessage,
@@ -28,7 +31,56 @@ import {
   shouldRetryTransientProviderError,
 } from "./gateway-service.js";
 
-export type LlmCompletionHost = GatewayService;
+type LlmRequestHookPatch = {
+  providerId?: string;
+  model?: string;
+  prependMessages?: ChatCompletionRequest["messages"];
+  appendMessages?: ChatCompletionRequest["messages"];
+  tools?: Array<Record<string, unknown>>;
+  toolChoice?: string | Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+};
+
+export interface LlmCompletionHost {
+  readonly config: Pick<GatewayRuntimeConfig, "assistant">;
+  readonly memoryLifecycleService: Pick<MemoryLifecycleService, "composeContext">;
+  readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
+  readonly llmService: Pick<
+    LlmService,
+    "chatCompletions" | "chatCompletionsStream" | "getRuntimeConfig" | "resolveExecutionApiStyle"
+  >;
+  resolveMemoryWorkspaceRelativeDir(workspace: string | undefined, sessionId: string | undefined): string;
+  resolveChatCompletionHookWorkspaceId(request: ChatCompletionRequest): string;
+  parseLlmModelSelectHookPatch(value: unknown):
+    | {
+        providerId?: string;
+        model?: string;
+      }
+    | undefined;
+  parseLlmRequestHookPatch(value: unknown): LlmRequestHookPatch | undefined;
+  mergeLlmRequestHookPatch(current: LlmRequestHookPatch | undefined, next: LlmRequestHookPatch): LlmRequestHookPatch;
+  applyLlmRequestHookPatch(request: ChatCompletionRequest, patch: LlmRequestHookPatch): ChatCompletionRequest;
+  persistContextManifestForCompletionRequest(input: {
+    request: ChatCompletionRequest;
+    memoryContext?: MemoryContextPack;
+  }): void;
+  resolveFallbackTargets(
+    runtime: ReturnType<LlmService["getRuntimeConfig"]>,
+    primaryProviderId: string,
+    primaryModel: string,
+  ): Array<{ providerId: string; model: string }>;
+  recordDevDiagnostic(input: {
+    level: "debug" | "info" | "warn" | "error";
+    category: string;
+    event: string;
+    message: string;
+    sessionId?: string;
+    providerId?: string;
+    modelId?: string;
+    context?: Record<string, unknown>;
+  }): void;
+  publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): void;
+}
 
 export async function createChatCompletion(
   host: LlmCompletionHost,

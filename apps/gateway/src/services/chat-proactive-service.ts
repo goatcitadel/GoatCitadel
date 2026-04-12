@@ -5,6 +5,7 @@ import { logger } from "@goatcitadel/gateway-core";
 const log = logger.child("chat-proactive-service");
 import {
   DEFAULT_SESSION_AUTONOMY_PREFS,
+  type Storage,
   type SessionAutonomyPrefsPatchInput,
   type SessionAutonomyPrefsRecord,
 } from "@goatcitadel/storage";
@@ -22,12 +23,13 @@ import type {
   ProactiveRunStatus,
   ProactiveStopReason,
   ProactiveTriggerSource,
+  RealtimeEvent,
   SessionMeta,
   TaskRecord,
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import type { ServiceContext } from "./service-context.js";
+import type { RuntimeSettings } from "./gateway-service.js";
 
 // ── constants ────────────────────────────────────────────────────────
 const PROACTIVE_SCHEDULER_INTERVAL_MS = 120_000;
@@ -114,12 +116,63 @@ export interface ChatProactiveServiceCallbacks {
   closing: boolean;
 }
 
+export interface ChatProactiveServiceContext {
+  readonly storage: Pick<
+    Storage,
+    | "approvals"
+    | "chatMessages"
+    | "chatSessionMeta"
+    | "chatSessionPrefs"
+    | "durableRuns"
+    | "pendingApprovalActions"
+    | "sessionAutonomyPrefs"
+    | "tasks"
+  >;
+  readonly gatewaySql: Storage["gatewaySql"];
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
+  publishRealtime(
+    channel: string,
+    topic: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
+}
+
 function safeJsonParse<T>(raw: string, fallback: T): T {
   try {
     return JSON.parse(raw) as T;
   } catch {
     return fallback;
   }
+}
+
+function buildTaskRealtimeLinks(task?: TaskRecord, fallbackTaskId?: string): NonNullable<RealtimeEvent["links"]> {
+  return {
+    ...(task?.taskId || fallbackTaskId ? { taskId: task?.taskId ?? fallbackTaskId } : {}),
+    ...(task?.workspaceId ? { workspaceId: task.workspaceId } : {}),
+    ...(task?.proactiveContext?.sessionId ? { sessionId: task.proactiveContext.sessionId } : {}),
+    ...(task?.proactiveContext?.durableRunId ? { runId: task.proactiveContext.durableRunId } : {}),
+    ...(task?.proactiveContext?.proactiveRunId ? { proactiveRunId: task.proactiveContext.proactiveRunId } : {}),
+    ...(task?.proactiveContext?.approvalId ? { approvalId: task.proactiveContext.approvalId } : {}),
+  };
+}
+
+function buildProactiveRealtimeLinks(input: {
+  sessionId?: string;
+  workspaceId?: string;
+  proactiveRunId?: string;
+  durableRunId?: string;
+  taskId?: string;
+  approvalId?: string;
+}): NonNullable<RealtimeEvent["links"]> {
+  return {
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+    ...(input.proactiveRunId ? { proactiveRunId: input.proactiveRunId } : {}),
+    ...(input.durableRunId ? { runId: input.durableRunId } : {}),
+    ...(input.taskId ? { taskId: input.taskId } : {}),
+    ...(input.approvalId ? { approvalId: input.approvalId } : {}),
+  };
 }
 
 interface ProactiveRunRow {
@@ -173,7 +226,7 @@ export class ChatProactiveService {
   private scheduler?: ReturnType<typeof setInterval>;
 
   constructor(
-    private readonly ctx: ServiceContext,
+    private readonly ctx: ChatProactiveServiceContext,
     private readonly callbacks: ChatProactiveServiceCallbacks,
   ) {}
 
@@ -793,11 +846,28 @@ export class ChatProactiveService {
       createdAt: now,
     });
     this.recordDurableTimelineEvent(run.runId, "run_waiting", checkpointState);
-    this.ctx.publishRealtime("system", "durable", {
-      type: "durable_run_waiting",
-      runId: run.runId,
-      checkpoint: checkpointState,
-    });
+    const checkpointRecord = checkpointState as Record<string, unknown>;
+    const proactiveState = toPlainRecord(checkpointRecord.proactive);
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_waiting",
+        runId: run.runId,
+        checkpoint: checkpointState,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: buildProactiveRealtimeLinks({
+          durableRunId: run.runId,
+          proactiveRunId:
+            typeof checkpointRecord.proactiveRunId === "string" ? checkpointRecord.proactiveRunId : undefined,
+          approvalId: typeof checkpointRecord.approvalId === "string" ? checkpointRecord.approvalId : undefined,
+          taskId: typeof proactiveState?.taskId === "string" ? proactiveState.taskId : undefined,
+        }),
+      },
+    );
     return updated;
   }
 
@@ -818,11 +888,26 @@ export class ChatProactiveService {
       createdAt: now,
     });
     this.recordDurableTimelineEvent(runId, "run_completed", checkpointState);
-    this.ctx.publishRealtime("system", "durable", {
-      type: "durable_run_completed",
-      runId,
-      checkpoint: checkpointState,
-    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_completed",
+        runId,
+        checkpoint: checkpointState,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: buildProactiveRealtimeLinks({
+          durableRunId: runId,
+          proactiveRunId:
+            typeof checkpointState.proactiveRunId === "string" ? checkpointState.proactiveRunId : undefined,
+          approvalId: typeof checkpointState.approvalId === "string" ? checkpointState.approvalId : undefined,
+          taskId: typeof checkpointState.taskId === "string" ? checkpointState.taskId : undefined,
+        }),
+      },
+    );
   }
 
   private findActiveProactiveTickRun(sessionId: string): ProactiveRunRecord | undefined {
@@ -875,7 +960,16 @@ export class ChatProactiveService {
           proactiveRunId: input.runId,
         },
       });
-      this.ctx.publishRealtime("task_updated", "tasks", { task: updated });
+      this.ctx.publishRealtime(
+        "task_updated",
+        "tasks",
+        { task: updated },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: buildTaskRealtimeLinks(updated),
+        },
+      );
       return updated;
     }
 
@@ -899,7 +993,16 @@ export class ChatProactiveService {
         proactiveRunId: input.runId,
       },
     });
-    this.ctx.publishRealtime("task_created", "tasks", { task: created });
+    this.ctx.publishRealtime(
+      "task_created",
+      "tasks",
+      { task: created },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: buildTaskRealtimeLinks(created),
+      },
+    );
     return created;
   }
 
@@ -931,7 +1034,16 @@ export class ChatProactiveService {
         externalReferenceRoots: patch.externalReferenceRoots,
       },
     });
-    this.ctx.publishRealtime("task_updated", "tasks", { task: updated });
+    this.ctx.publishRealtime(
+      "task_updated",
+      "tasks",
+      { task: updated },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: buildTaskRealtimeLinks(updated),
+      },
+    );
     return updated;
   }
 
@@ -1360,11 +1472,25 @@ export class ChatProactiveService {
             reason: "planner_no_action",
           },
         );
-        this.ctx.publishRealtime("proactive_no_action", "chat", {
-          sessionId,
-          runId: proactiveRunId,
-          reason: completed.reasoningSummary,
-        });
+        this.ctx.publishRealtime(
+          "proactive_no_action",
+          "chat",
+          {
+            sessionId,
+            runId: proactiveRunId,
+            reason: completed.reasoningSummary,
+          },
+          {
+            eventClass: "operational_signal",
+            eventAuthority: "retained_stream",
+            links: buildProactiveRealtimeLinks({
+              sessionId,
+              workspaceId: this.getSessionWorkspaceId(sessionId),
+              proactiveRunId,
+              durableRunId: run.runId,
+            }),
+          },
+        );
         this.touchSessionProactiveTick(sessionId, proactiveRunId);
         return completed;
       }
@@ -1419,11 +1545,26 @@ export class ChatProactiveService {
             reason: "suggest_only",
           },
         );
-        this.ctx.publishRealtime("proactive_suggestion_created", "chat", {
-          sessionId,
-          runId: proactiveRunId,
-          actionCount: actions.length,
-        });
+        this.ctx.publishRealtime(
+          "proactive_suggestion_created",
+          "chat",
+          {
+            sessionId,
+            runId: proactiveRunId,
+            actionCount: actions.length,
+          },
+          {
+            eventClass: "operational_signal",
+            eventAuthority: "retained_stream",
+            links: buildProactiveRealtimeLinks({
+              sessionId,
+              workspaceId: this.getSessionWorkspaceId(sessionId),
+              proactiveRunId,
+              durableRunId: run.runId,
+              taskId: linkedTaskId,
+            }),
+          },
+        );
         this.touchSessionProactiveTick(sessionId, proactiveRunId);
         return suggested;
       }
@@ -1448,12 +1589,27 @@ export class ChatProactiveService {
           linkedDurableRunId: run.runId,
           error: resolution.reason,
         });
-        this.ctx.publishRealtime("proactive_action_blocked", "chat", {
-          sessionId,
-          runId: proactiveRunId,
-          actionId: action.actionId,
-          reason: resolution.reason,
-        });
+        this.ctx.publishRealtime(
+          "proactive_action_blocked",
+          "chat",
+          {
+            sessionId,
+            runId: proactiveRunId,
+            actionId: action.actionId,
+            reason: resolution.reason,
+          },
+          {
+            eventClass: "operational_signal",
+            eventAuthority: "retained_stream",
+            links: buildProactiveRealtimeLinks({
+              sessionId,
+              workspaceId: this.getSessionWorkspaceId(sessionId),
+              proactiveRunId,
+              durableRunId: run.runId,
+              taskId: linkedTaskId,
+            }),
+          },
+        );
         continue;
       }
 
@@ -1571,11 +1727,26 @@ export class ChatProactiveService {
       });
     }
     if (executedCount > 0) {
-      this.ctx.publishRealtime("proactive_action_executed", "chat", {
-        sessionId,
-        runId: proactiveRunId,
-        actionCount: executedCount,
-      });
+      this.ctx.publishRealtime(
+        "proactive_action_executed",
+        "chat",
+        {
+          sessionId,
+          runId: proactiveRunId,
+          actionCount: executedCount,
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: buildProactiveRealtimeLinks({
+            sessionId,
+            workspaceId: this.getSessionWorkspaceId(sessionId),
+            proactiveRunId,
+            durableRunId: run.runId,
+            taskId: linkedTaskId,
+          }),
+        },
+      );
     }
     this.touchSessionProactiveTick(sessionId, proactiveRunId);
     return completed;
@@ -1725,13 +1896,27 @@ export class ChatProactiveService {
       startedAt: now,
     };
     this.insertProactiveRun(initialRun);
-    this.ctx.publishRealtime("proactive_tick_started", "chat", {
-      sessionId,
-      runId: proactiveRunId,
-      durableRunId: durableRun.runId,
-      mode: prefs.proactiveMode,
-      source,
-    });
+    this.ctx.publishRealtime(
+      "proactive_tick_started",
+      "chat",
+      {
+        sessionId,
+        runId: proactiveRunId,
+        durableRunId: durableRun.runId,
+        mode: prefs.proactiveMode,
+        source,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: buildProactiveRealtimeLinks({
+          sessionId,
+          workspaceId: this.getSessionWorkspaceId(sessionId),
+          proactiveRunId,
+          durableRunId: durableRun.runId,
+        }),
+      },
+    );
     this.callbacks.requestDurableRunProcessing(durableRun.runId);
     return this.readProactiveRun(proactiveRunId);
   }

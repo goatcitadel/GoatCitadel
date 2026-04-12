@@ -1,17 +1,20 @@
 /**
  * Chat turn user-message & attachment content builders.
  *
- * Step 8a-bis of the gateway-service decomposition plan: extracts the
- * user-message prompt builder, attachment resolver, and attachment
- * prompt-context / message-parts helpers as pure functions over a
- * GatewayService host.
+ * Pure user-message prompt building and attachment-content helpers for the
+ * chat runtime.
  */
 
 import type { ChatAttachmentRecord, ChatInputPart, ChatMessageRecord } from "@goatcitadel/contracts";
-import type { GatewayService } from "./gateway-service.js";
+import type { Storage } from "@goatcitadel/storage";
 import { isImageMimeType } from "./gateway-service.js";
 
-export type ChatTurnUserMessageHost = GatewayService;
+export interface ChatTurnUserMessageHost {
+  readonly storage: Pick<Storage, "chatAttachments">;
+  readChatAttachmentContent(attachmentId: string): Promise<{
+    bytes: Buffer;
+  }>;
+}
 
 export function buildUserMessagePrompt(message: ChatMessageRecord): string {
   const baseContent = message.content.trim();

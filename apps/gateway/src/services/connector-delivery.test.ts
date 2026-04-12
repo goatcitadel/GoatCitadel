@@ -11,18 +11,22 @@ import { dispatchConnectorDelivery } from "./connector-delivery.js";
 
 describe("dispatchConnectorDelivery", () => {
   it("sends outbound channel messages through integration connectors", async () => {
-    const commsSend = vi.fn(async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
-      outcome: "executed",
-      auditEventId: "audit-1",
-      policyReason: "allowed",
-      result: { deliveryId: "delivery-1", status: "sent" },
-    }));
+    const commsSend = vi.fn(
+      async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "audit-1",
+        policyReason: "allowed",
+        result: { deliveryId: "delivery-1", status: "sent" },
+      }),
+    );
     const commsReact = vi.fn();
     const commsUnsend = vi.fn();
-    const invokeMcpTool = vi.fn(async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
-      ok: true,
-      output: {},
-    }));
+    const invokeMcpTool = vi.fn(
+      async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
+        ok: true,
+        output: {},
+      }),
+    );
     const publishRealtime = vi.fn();
 
     const result = await dispatchConnectorDelivery(
@@ -59,12 +63,14 @@ describe("dispatchConnectorDelivery", () => {
   });
 
   it("normalizes Discord connector targets before dispatch", async () => {
-    const commsSend = vi.fn(async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
-      outcome: "executed",
-      auditEventId: "audit-1",
-      policyReason: "allowed",
-      result: { deliveryId: "delivery-1", status: "sent" },
-    }));
+    const commsSend = vi.fn(
+      async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "audit-1",
+        policyReason: "allowed",
+        result: { deliveryId: "delivery-1", status: "sent" },
+      }),
+    );
 
     await dispatchConnectorDelivery(
       createConnector("integration_connection", "integration:discord-1", "discord-1", ["outbound_messages"], {
@@ -85,19 +91,23 @@ describe("dispatchConnectorDelivery", () => {
       },
     );
 
-    expect(commsSend).toHaveBeenCalledWith(expect.objectContaining({
-      connectionId: "discord-1",
-      target: "channel:1234567890",
-    }));
+    expect(commsSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "discord-1",
+        target: "channel:1234567890",
+      }),
+    );
   });
 
   it("normalizes WhatsApp direct targets before dispatch", async () => {
-    const commsSend = vi.fn(async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
-      outcome: "executed",
-      auditEventId: "audit-1",
-      policyReason: "allowed",
-      result: { deliveryId: "delivery-1", status: "sent" },
-    }));
+    const commsSend = vi.fn(
+      async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "audit-1",
+        policyReason: "allowed",
+        result: { deliveryId: "delivery-1", status: "sent" },
+      }),
+    );
 
     await dispatchConnectorDelivery(
       createConnector("integration_connection", "integration:whatsapp-1", "whatsapp-1", ["outbound_messages"], {
@@ -118,19 +128,23 @@ describe("dispatchConnectorDelivery", () => {
       },
     );
 
-    expect(commsSend).toHaveBeenCalledWith(expect.objectContaining({
-      connectionId: "whatsapp-1",
-      target: "+15551234567",
-    }));
+    expect(commsSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "whatsapp-1",
+        target: "+15551234567",
+      }),
+    );
   });
 
   it("rejects invalid WhatsApp JID-shaped targets", async () => {
-    const commsSend = vi.fn(async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
-      outcome: "executed",
-      auditEventId: "audit-1",
-      policyReason: "allowed",
-      result: { deliveryId: "delivery-1", status: "sent" },
-    }));
+    const commsSend = vi.fn(
+      async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "audit-1",
+        policyReason: "allowed",
+        result: { deliveryId: "delivery-1", status: "sent" },
+      }),
+    );
 
     await expect(() =>
       dispatchConnectorDelivery(
@@ -150,7 +164,8 @@ describe("dispatchConnectorDelivery", () => {
           invokeMcpTool: vi.fn(),
           publishRealtime: vi.fn(),
         },
-      )).rejects.toThrow("payload.target must be a WhatsApp E.164 number");
+      ),
+    ).rejects.toThrow("payload.target must be a WhatsApp E.164 number");
   });
 
   it("invokes MCP tools through MCP connectors", async () => {
@@ -159,10 +174,12 @@ describe("dispatchConnectorDelivery", () => {
     const commsReact = vi.fn(async () => ({}));
     const commsUnsend = vi.fn(async () => ({}));
     const commsTyping = vi.fn(async () => createTypingResult());
-    const invokeMcpTool = vi.fn(async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
-      ok: true,
-      output: { toolResult: "ok" },
-    }));
+    const invokeMcpTool = vi.fn(
+      async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
+        ok: true,
+        output: { toolResult: "ok" },
+      }),
+    );
     const publishRealtime = vi.fn();
 
     const result = await dispatchConnectorDelivery(
@@ -204,10 +221,12 @@ describe("dispatchConnectorDelivery", () => {
     const commsReact = vi.fn(async () => ({}));
     const commsUnsend = vi.fn(async () => ({}));
     const commsTyping = vi.fn(async () => createTypingResult());
-    const invokeMcpTool = vi.fn(async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
-      ok: true,
-      output: {},
-    }));
+    const invokeMcpTool = vi.fn(
+      async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
+        ok: true,
+        output: {},
+      }),
+    );
     const publishRealtime = vi.fn();
 
     const result = await dispatchConnectorDelivery(
@@ -228,11 +247,23 @@ describe("dispatchConnectorDelivery", () => {
       },
     );
 
-    expect(publishRealtime).toHaveBeenCalledWith("approval_delivery_requested", "approvals", {
-      connectorId: "browser:mission-control",
-      action: "realtime.emit",
-      approvalId: "approval-1",
-    });
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "approval_delivery_requested",
+      "approvals",
+      {
+        connectorId: "browser:mission-control",
+        action: "realtime.emit",
+        approvalId: "approval-1",
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: {
+          connectorId: "browser:mission-control",
+          approvalId: "approval-1",
+        },
+      },
+    );
     expect(result).toMatchObject({
       capabilityId: "interactive_actions",
       dispatchKind: "browser_realtime",
@@ -245,10 +276,12 @@ describe("dispatchConnectorDelivery", () => {
     const commsReact = vi.fn(async () => ({}));
     const commsUnsend = vi.fn(async () => ({}));
     const commsTyping = vi.fn(async () => createTypingResult());
-    const invokeMcpTool = vi.fn(async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
-      ok: true,
-      output: {},
-    }));
+    const invokeMcpTool = vi.fn(
+      async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
+        ok: true,
+        output: {},
+      }),
+    );
     const publishRealtime = vi.fn();
 
     await expect(() =>
@@ -267,16 +300,20 @@ describe("dispatchConnectorDelivery", () => {
           invokeMcpTool,
           publishRealtime,
         },
-      )).rejects.toThrow("capability outbound_messages is unavailable");
+      ),
+    ).rejects.toThrow("capability outbound_messages is unavailable");
   });
 
   it("routes interactive channel reactions through integration connectors", async () => {
-    const commsReact = vi.fn(async () => ({
-      outcome: "executed",
-      auditEventId: "audit-react",
-      policyReason: "allowed",
-      result: { deliveryId: "delivery-react", status: "sent" },
-    } satisfies ToolInvokeResult));
+    const commsReact = vi.fn(
+      async () =>
+        ({
+          outcome: "executed",
+          auditEventId: "audit-react",
+          policyReason: "allowed",
+          result: { deliveryId: "delivery-react", status: "sent" },
+        }) satisfies ToolInvokeResult,
+    );
 
     const result = await dispatchConnectorDelivery(
       createConnector("integration_connection", "integration:imessage-1", "imessage-1", ["interactive_actions"], {
@@ -299,13 +336,15 @@ describe("dispatchConnectorDelivery", () => {
       },
     );
 
-    expect(commsReact).toHaveBeenCalledWith(expect.objectContaining({
-      connectionId: "imessage-1",
-      target: "imessage:+15551234567",
-      messageId: "msg-123",
-      reaction: "love",
-      partIndex: 1,
-    }));
+    expect(commsReact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "imessage-1",
+        target: "imessage:+15551234567",
+        messageId: "msg-123",
+        reaction: "love",
+        partIndex: 1,
+      }),
+    );
     expect(result).toMatchObject({
       capabilityId: "interactive_actions",
       dispatchKind: "integration_channel_action",
@@ -313,12 +352,15 @@ describe("dispatchConnectorDelivery", () => {
   });
 
   it("routes interactive channel unsend requests through integration connectors", async () => {
-    const commsUnsend = vi.fn(async () => ({
-      outcome: "executed",
-      auditEventId: "audit-unsend",
-      policyReason: "allowed",
-      result: { deliveryId: "delivery-unsend", status: "sent" },
-    } satisfies ToolInvokeResult));
+    const commsUnsend = vi.fn(
+      async () =>
+        ({
+          outcome: "executed",
+          auditEventId: "audit-unsend",
+          policyReason: "allowed",
+          result: { deliveryId: "delivery-unsend", status: "sent" },
+        }) satisfies ToolInvokeResult,
+    );
 
     const result = await dispatchConnectorDelivery(
       createConnector("integration_connection", "integration:imessage-1", "imessage-1", ["interactive_actions"], {
@@ -339,11 +381,13 @@ describe("dispatchConnectorDelivery", () => {
       },
     );
 
-    expect(commsUnsend).toHaveBeenCalledWith(expect.objectContaining({
-      connectionId: "imessage-1",
-      messageId: "msg-456",
-      partIndex: 0,
-    }));
+    expect(commsUnsend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "imessage-1",
+        messageId: "msg-456",
+        partIndex: 0,
+      }),
+    );
     expect(result).toMatchObject({
       capabilityId: "interactive_actions",
       dispatchKind: "integration_channel_action",
@@ -351,12 +395,15 @@ describe("dispatchConnectorDelivery", () => {
   });
 
   it("routes explicit channel replies through integration connectors", async () => {
-    const commsReply = vi.fn(async () => ({
-      outcome: "executed",
-      auditEventId: "audit-reply",
-      policyReason: "allowed",
-      result: { deliveryId: "delivery-reply", status: "sent" },
-    } satisfies ToolInvokeResult));
+    const commsReply = vi.fn(
+      async () =>
+        ({
+          outcome: "executed",
+          auditEventId: "audit-reply",
+          policyReason: "allowed",
+          result: { deliveryId: "delivery-reply", status: "sent" },
+        }) satisfies ToolInvokeResult,
+    );
 
     const result = await dispatchConnectorDelivery(
       createConnector("integration_connection", "integration:slack-1", "slack-1", ["outbound_messages"], {
@@ -378,12 +425,14 @@ describe("dispatchConnectorDelivery", () => {
       },
     );
 
-    expect(commsReply).toHaveBeenCalledWith(expect.objectContaining({
-      connectionId: "slack-1",
-      target: "#ops",
-      replyToMessageId: "1712345678.000200",
-      message: "reply body",
-    }));
+    expect(commsReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "slack-1",
+        target: "#ops",
+        replyToMessageId: "1712345678.000200",
+        message: "reply body",
+      }),
+    );
     expect(result).toMatchObject({
       capabilityId: "outbound_messages",
       dispatchKind: "integration_channel_send",
@@ -418,11 +467,13 @@ describe("dispatchConnectorDelivery", () => {
       },
     );
 
-    expect(commsTyping).toHaveBeenCalledWith(expect.objectContaining({
-      connectionId: "discord-1",
-      target: "channel:123",
-      durationMs: 4000,
-    }));
+    expect(commsTyping).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "discord-1",
+        target: "channel:123",
+        durationMs: 4000,
+      }),
+    );
     expect(result).toMatchObject({
       capabilityId: "interactive_actions",
       dispatchKind: "integration_channel_action",

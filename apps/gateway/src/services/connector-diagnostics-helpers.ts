@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { ConnectorDiagnosticReport } from "@goatcitadel/contracts";
-import type { GatewayService } from "./gateway-service.js";
+import type { Storage } from "@goatcitadel/storage";
 
-export type ConnectorDiagnosticsHost = GatewayService;
+export interface ConnectorDiagnosticsHost {
+  readonly gatewaySql: Storage["gatewaySql"];
+}
 
 export function recordConnectorHealthRun(host: ConnectorDiagnosticsHost, report: ConnectorDiagnosticReport): void {
   host.gatewaySql

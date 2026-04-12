@@ -1,5 +1,10 @@
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
-import type { ChannelProbeReport, ConnectorDiagnosticReport, IntegrationConnection } from "@goatcitadel/contracts";
+import type {
+  ChannelProbeReport,
+  ConnectorDiagnosticReport,
+  DiscordRuntimeStatus,
+  IntegrationConnection,
+} from "@goatcitadel/contracts";
 import {
   runDiscordBotLiveChecks,
   runIMessageBridgeLiveChecks,
@@ -17,17 +22,25 @@ import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
-import type { GatewayService } from "./gateway-service.js";
 
-export interface IntegrationDiagnosticsHost extends Pick<
-  GatewayService,
-  | "fetchWithDiagnosticsTimeout"
-  | "getDiscordRuntimeStatus"
-  | "isConnectionUrlAllowlisted"
-  | "readConnectionConfigValue"
-  | "resolveConnectionSecret"
-> {
-  config: Pick<GatewayService["config"], "toolPolicy">;
+export interface IntegrationDiagnosticsHost {
+  readonly config: {
+    toolPolicy: {
+      tools: {
+        profile: string;
+      };
+      sandbox: {
+        networkAllowlist: string[];
+      };
+    };
+  };
+  fetchWithDiagnosticsTimeout(url: string, init?: RequestInit): Promise<Response>;
+  getDiscordRuntimeStatus(
+    connectionId: string,
+  ): Pick<DiscordRuntimeStatus, "ready" | "lastError" | "connectedBotTag"> | undefined;
+  isConnectionUrlAllowlisted(urlValue: string): boolean;
+  readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
+  resolveConnectionSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined;
 }
 
 export function buildIntegrationConnectionChecks(
@@ -270,9 +283,10 @@ export function buildIntegrationConnectionChecks(
       requireText("auth", "Gmail refresh token handle", host.readConnectionConfigValue(config, "refreshTokenHandle"));
       checks.push({
         key: "auth_mode",
-        status: hasConnectionEnvValue(host, config, "clientIdEnv") && hasConnectionEnvValue(host, config, "clientSecretEnv")
-          ? "pass"
-          : "warn",
+        status:
+          hasConnectionEnvValue(host, config, "clientIdEnv") && hasConnectionEnvValue(host, config, "clientSecretEnv")
+            ? "pass"
+            : "warn",
         message:
           hasConnectionEnvValue(host, config, "clientIdEnv") && hasConnectionEnvValue(host, config, "clientSecretEnv")
             ? "OAuth client env references are configured."
@@ -283,9 +297,10 @@ export function buildIntegrationConnectionChecks(
       requireText("provider", "GIF search provider", host.readConnectionConfigValue(config, "provider"), "warn");
       checks.push({
         key: "auth",
-        status: hasConnectionEnvValue(host, config, "apiKeyEnv") || host.readConnectionConfigValue(config, "apiKey")
-          ? "pass"
-          : "fail",
+        status:
+          hasConnectionEnvValue(host, config, "apiKeyEnv") || host.readConnectionConfigValue(config, "apiKey")
+            ? "pass"
+            : "fail",
         message:
           hasConnectionEnvValue(host, config, "apiKeyEnv") || host.readConnectionConfigValue(config, "apiKey")
             ? "GIF search API key is configured."
@@ -293,15 +308,17 @@ export function buildIntegrationConnectionChecks(
       });
     }
     if (connection.key === "peekaboo-screen" || connection.key === "camera-photo-video") {
-      const bridgeUrl = host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
+      const bridgeUrl =
+        host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
       checkUrl("url", "Local bridge URL", bridgeUrl, true);
       checks.push({
         key: "bridge_auth",
-        status: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl)
-          || host.readConnectionConfigValue(config, "authToken")
-          || hasConnectionEnvValue(host, config, "authTokenEnv")
-          ? "pass"
-          : "warn",
+        status:
+          connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl) ||
+          host.readConnectionConfigValue(config, "authToken") ||
+          hasConnectionEnvValue(host, config, "authTokenEnv")
+            ? "pass"
+            : "warn",
         message: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl)
           ? "Local bridge URL is configured."
           : host.readConnectionConfigValue(config, "authToken") || hasConnectionEnvValue(host, config, "authTokenEnv")
@@ -325,7 +342,8 @@ export function buildIntegrationConnectionChecks(
       requireText("target", "Default Trello board", host.readConnectionConfigValue(config, "defaultBoardId"), "warn");
     }
     if (["apple-notes", "apple-reminders", "things3", "bear"].includes(connection.key)) {
-      const bridgeUrl = host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
+      const bridgeUrl =
+        host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
       checkUrl("url", "Local bridge URL", bridgeUrl, true);
       checks.push({
         key: "host_requirement",
@@ -337,7 +355,8 @@ export function buildIntegrationConnectionChecks(
     }
   } else if (connection.kind === "platform") {
     if (connection.key === "macos-menubar-voice") {
-      const bridgeUrl = host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
+      const bridgeUrl =
+        host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
       checkUrl("url", "macOS bridge URL", bridgeUrl, true);
       checks.push({
         key: "host_requirement",
@@ -352,13 +371,13 @@ export function buildIntegrationConnectionChecks(
       checks.push({
         key: "companion",
         status:
-          host.readConnectionConfigValue(config, "companionSessionId")
-          || host.readConnectionConfigValue(config, "bridgeUrl")
+          host.readConnectionConfigValue(config, "companionSessionId") ||
+          host.readConnectionConfigValue(config, "bridgeUrl")
             ? "pass"
             : "warn",
         message:
-          host.readConnectionConfigValue(config, "companionSessionId")
-          || host.readConnectionConfigValue(config, "bridgeUrl")
+          host.readConnectionConfigValue(config, "companionSessionId") ||
+          host.readConnectionConfigValue(config, "bridgeUrl")
             ? "A companion session or bridge target is configured."
             : "Pair an iOS companion session or bridge target before claiming this capability as ready.",
       });

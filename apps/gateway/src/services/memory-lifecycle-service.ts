@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type {
   ChatTurnTraceRecord,
   DurableRunRecord,
@@ -19,11 +21,18 @@ import type {
   MemoryQmdStatsResponse,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
+import { assertWritePathInJail } from "@goatcitadel/policy-engine";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { MemoryContextService } from "./memory-context-service.js";
 import { mapMemoryItemRow, recordMemoryChange, requireMemoryItem, type MemoryItemHost } from "./memory-item-helpers.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { normalizeMemoryForgetCriteria } from "./security-utils.js";
+
+export interface MemoryFileEntry {
+  relativePath: string;
+  size: number;
+  modifiedAt: string;
+}
 
 interface MemoryLifecycleAdminDependencies extends MemoryItemHost {
   requireFeatureEnabled(flag: string): void;
@@ -35,6 +44,12 @@ export interface MemoryLifecycleDependencies {
   readonly learned: ChatLearnedMemoryService;
   readonly maintenance: MemoryMaintenanceService;
   readonly admin: MemoryLifecycleAdminDependencies;
+  readonly files?: {
+    rootDir: string;
+    workspaceDir: string;
+    writeJailRoots: string[];
+    normalizeRelativePath(relativePath: string): string;
+  };
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
 }
 
@@ -45,6 +60,42 @@ export interface MemoryLifecycleDependencies {
  */
 export class MemoryLifecycleService {
   public constructor(private readonly deps: MemoryLifecycleDependencies) {}
+
+  public async listMemoryFiles(relativeDir = "memory"): Promise<MemoryFileEntry[]> {
+    if (!this.deps.files) {
+      throw new Error("Memory lifecycle file access is not configured.");
+    }
+    const normalized = this.deps.files.normalizeRelativePath(relativeDir);
+    const baseDir = path.resolve(this.deps.files.rootDir, this.deps.files.workspaceDir, normalized);
+    assertWritePathInJail(baseDir, this.deps.files.writeJailRoots);
+
+    let entries: Array<{ isFile(): boolean; name: string }>;
+    try {
+      entries = await fs.readdir(baseDir, { withFileTypes: true, encoding: "utf8" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    }
+
+    const files: MemoryFileEntry[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      const fullPath = path.join(baseDir, entry.name);
+      const stat = await fs.stat(fullPath);
+      files.push({
+        relativePath: path.posix.join(normalized, entry.name),
+        size: stat.size,
+        modifiedAt: stat.mtime.toISOString(),
+      });
+    }
+
+    files.sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
+    return files;
+  }
 
   public listMemoryItems(
     input: {

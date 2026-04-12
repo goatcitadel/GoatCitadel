@@ -12,15 +12,26 @@ import {
   type ChatSessionWorkbenchTreeEntry,
   type ChatSessionWorkbenchTreeResponse,
 } from "@goatcitadel/contracts";
+import type { Storage } from "@goatcitadel/storage";
 import { WorktreeManager } from "@goatcitadel/orchestration";
 import { assertExistingPathRealpathAllowed, assertWritePathInJail } from "@goatcitadel/policy-engine";
+import type { GatewayRuntimeConfig } from "../config.js";
 import { serializePathWithinRoot } from "./security-utils.js";
-import type { GatewayService } from "./gateway-service.js";
 
 const MAX_TREE_ITEMS = 250;
 const MAX_FILE_BYTES = 256 * 1024;
 
-export type ChatWorkbenchHost = GatewayService;
+type ChatWorkbenchStorage = Pick<
+  Storage,
+  "chatProjects" | "chatSessionProjects" | "chatSessionWorkbench" | "codeModeRuns"
+>;
+
+export interface ChatWorkbenchHost {
+  readonly config: GatewayRuntimeConfig;
+  readonly storage: ChatWorkbenchStorage;
+  requireChatSession(sessionId: string): void;
+  publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): void;
+}
 
 export async function getChatSessionWorkbench(
   host: ChatWorkbenchHost,

@@ -1,11 +1,8 @@
+/* eslint-disable max-lines -- Streaming remains centralized so turn persistence, SSE replay, and completion sequencing stay auditable together. */
 /**
  * Chat turn streaming execution.
  *
- * Step 8c of the gateway-service decomposition plan: extracts the streaming
- * generator (`streamPreparedAgentChatTurn`) and its execution helpers
- * (`executePreparedModeOrchestration`, `executeDelegatedPlanStep`,
- * `collectOrchestrationToolRuns`). These helpers depend on a bounded host
- * contract instead of the full GatewayService type.
+ * Streaming chat-turn execution over the bounded runtime host.
  */
 
 import { randomUUID } from "node:crypto";
@@ -26,6 +23,7 @@ import type {
   ChatToolRunRecord,
   ChatTurnTraceRecord,
   GatewayEventInput,
+  RealtimeEvent,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { TurnRuntime } from "@goatcitadel/orchestration";
@@ -50,6 +48,7 @@ import {
   truncateSummaryLine,
   type PreparedChatExecutionPlanResolution,
 } from "./gateway-service.js";
+import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 
 type ChatTurnStreamStorage = Pick<
@@ -111,7 +110,12 @@ export interface ChatTurnStreamHost {
     capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
     trace: ChatTurnTraceRecord;
   }): ChatSpecialistCandidateSuggestionRecord[];
-  publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): void;
+  publishRealtime(
+    channel: string,
+    topic: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
   extractAndPersistLearnedMemory(
     sessionId: string,
     content: string,
@@ -797,12 +801,17 @@ export async function* streamPreparedAgentChatTurn(
         turnId,
         trace: hydratedTrace,
       };
-      host.publishRealtime("chat_thread_updated", "chat", {
-        type: threadEventType,
-        sessionId,
-        turnId,
-        activeLeafTurnId: turnId,
-      });
+      host.publishRealtime(
+        "chat_thread_updated",
+        "chat",
+        {
+          type: threadEventType,
+          sessionId,
+          turnId,
+          activeLeafTurnId: turnId,
+        },
+        buildChatTurnRealtimeOptions({ sessionId, turnId }),
+      );
       host.extractAndPersistLearnedMemory(sessionId, prepared.content, {
         role: "user",
         sourceRef: prepared.userEventId,
@@ -921,12 +930,17 @@ export async function* streamPreparedAgentChatTurn(
 
     if (approvalRequired) {
       host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
-      host.publishRealtime("chat_thread_updated", "chat", {
-        type: threadEventType,
-        sessionId,
-        turnId,
-        activeLeafTurnId: turnId,
-      });
+      host.publishRealtime(
+        "chat_thread_updated",
+        "chat",
+        {
+          type: threadEventType,
+          sessionId,
+          turnId,
+          activeLeafTurnId: turnId,
+        },
+        buildChatTurnRealtimeOptions({ sessionId, turnId }),
+      );
       const traceWithMeta = host.storage.chatTurnTraces.patch(turnId, {
         retrieval: prepared.retrievalTrace,
         reflection: {
@@ -1078,12 +1092,17 @@ export async function* streamPreparedAgentChatTurn(
         turnId,
         trace: hydratedTrace,
       };
-      host.publishRealtime("chat_thread_updated", "chat", {
-        type: threadEventType,
-        sessionId,
-        turnId,
-        activeLeafTurnId: turnId,
-      });
+      host.publishRealtime(
+        "chat_thread_updated",
+        "chat",
+        {
+          type: threadEventType,
+          sessionId,
+          turnId,
+          activeLeafTurnId: turnId,
+        },
+        buildChatTurnRealtimeOptions({ sessionId, turnId }),
+      );
       host.extractAndPersistLearnedMemory(sessionId, prepared.content, {
         role: "user",
         sourceRef: prepared.userEventId,

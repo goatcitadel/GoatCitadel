@@ -255,6 +255,70 @@ describe("approval-resolution-effects-service", () => {
       }),
     );
   });
+
+  it("emits explicit retained-stream metadata when an approval wait wake is skipped", async () => {
+    const publishRealtime = vi.fn();
+    const skipEffect = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { failEffect: vi.fn(), skipEffect, completeEffect: vi.fn() },
+          approvalWaitRuns: { markResolved: vi.fn() },
+        },
+        publishRealtime,
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(
+          (): DurableWakeResult => ({
+            runId: "durable-1",
+            eventKey: "approval.resolved",
+            outcome: "skipped_paused",
+            detail: "Durable run durable-1 is operator-paused.",
+          }),
+        ),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+
+    await (
+      service as unknown as {
+        handleWakeEffect(effect: ApprovalEffectRecord, resolveApprovalWait: boolean): Promise<void>;
+      }
+    ).handleWakeEffect(
+      createEffect({
+        effectKind: "approval_wait_wake",
+        targetKind: "durable_run",
+        targetId: "durable-1",
+      }),
+      true,
+    );
+
+    expect(skipEffect).toHaveBeenCalledOnce();
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "approval_wait_wake_skipped",
+      "approvals",
+      expect.objectContaining({
+        approvalId: "approval-1",
+        effectKind: "approval_wait_wake",
+        targetId: "durable-1",
+        reason: "skipped_paused",
+      }),
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: {
+          approvalId: "approval-1",
+          runId: "durable-1",
+        },
+      },
+    );
+  });
 });
 
 function createEffect(overrides: Partial<ApprovalEffectRecord>): ApprovalEffectRecord {

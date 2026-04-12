@@ -48,6 +48,7 @@ import type {
   PromptPackTestRecord,
   PromptPackToolTier,
   PromptPackVerdict,
+  RealtimeEvent,
   ToolGrantConstraints,
   ReplayRegressionResult,
   ReplayRegressionRun,
@@ -57,7 +58,9 @@ import {
   chatModeRequiresProjectBinding,
   getChatModePreset,
 } from "@goatcitadel/contracts";
-import type { ServiceContext } from "./service-context.js";
+import type { Storage } from "@goatcitadel/storage";
+import type { GatewayRuntimeConfig } from "../config.js";
+import type { RuntimeSettings } from "./gateway-service.js";
 import { parseLooseJsonRecord } from "./json-record-parser.js";
 import { resolveProjectRootForToolContext } from "./tool-path-resolution.js";
 
@@ -88,6 +91,29 @@ const PROMPT_PACK_PROJECT_WORKSPACE_PATH = "fixtures/prompt-pack-workspace";
 const PROMPT_PACK_REPO_PROJECT_NAME = "Prompt Lab Repo";
 const PROMPT_PACK_REPO_PROJECT_DESCRIPTION = "Auto-created project binding for prompt-pack repo evaluations.";
 const PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH = "__prompt_pack_repo__";
+
+export interface PromptPackServiceContext {
+  readonly storage: Pick<
+    Storage,
+    | "chatProjects"
+    | "promptPackAutoScoresV2"
+    | "promptPackHumanReviewsV2"
+    | "promptPackRuns"
+    | "promptPacks"
+    | "promptPackScores"
+    | "toolGrants"
+  >;
+  readonly gatewaySql: Storage["gatewaySql"];
+  readonly config: GatewayRuntimeConfig;
+  normalizeWorkspaceId(workspaceId?: string): string;
+  requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
+  publishRealtime(
+    channel: string,
+    topic: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
+}
 
 // ── row types ────────────────────────────────────────────────────────
 interface PromptPackBenchmarkRunRow {
@@ -293,7 +319,7 @@ const PROMPT_PACK_EXPLICIT_TOOL_NAMES = [
  */
 export class PromptPackService {
   constructor(
-    private readonly ctx: ServiceContext,
+    private readonly ctx: PromptPackServiceContext,
     private readonly deps: PromptPackServiceDeps,
   ) {}
 

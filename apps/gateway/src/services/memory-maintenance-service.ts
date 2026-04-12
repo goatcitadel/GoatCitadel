@@ -81,9 +81,20 @@ interface DueEvaluation {
   thresholdsMet: boolean;
 }
 
+export type MemoryMaintenanceServiceContext = Pick<
+  ServiceContext,
+  | "storage"
+  | "config"
+  | "llmService"
+  | "publishRealtime"
+  | "requireFeatureEnabled"
+  | "isFeatureEnabled"
+  | "normalizeWorkspaceId"
+>;
+
 export class MemoryMaintenanceService {
   public constructor(
-    private readonly ctx: ServiceContext,
+    private readonly ctx: MemoryMaintenanceServiceContext,
     private readonly callbacks: MemoryMaintenanceServiceCallbacks,
   ) {}
 
@@ -933,7 +944,12 @@ export class MemoryMaintenanceService {
     item: Pick<MemoryItemRecord, "namespace" | "metadata"> & { metadata: Record<string, unknown> },
     workspaceId: string,
   ): boolean {
-    return matchesMemoryWorkspaceScope(item, workspaceId, this.normalizeWorkspaceId.bind(this), DEFAULT_MEMORY_WORKSPACE_ID);
+    return matchesMemoryWorkspaceScope(
+      item,
+      workspaceId,
+      this.normalizeWorkspaceId.bind(this),
+      DEFAULT_MEMORY_WORKSPACE_ID,
+    );
   }
 
   private async generateConsolidatedArtifact(input: {
@@ -1264,7 +1280,9 @@ function getWorkspaceMemoryRelativeDir(workspaceId: string): string {
 }
 
 function getWorkspaceMaintenanceRelativeDir(workspaceId: string): string {
-  return workspaceId === DEFAULT_MEMORY_WORKSPACE_ID ? "memory/maintenance" : `workspaces/${workspaceId}/memory/maintenance`;
+  return workspaceId === DEFAULT_MEMORY_WORKSPACE_ID
+    ? "memory/maintenance"
+    : `workspaces/${workspaceId}/memory/maintenance`;
 }
 
 function isProviderLikelyLocal(baseUrl: string): boolean {

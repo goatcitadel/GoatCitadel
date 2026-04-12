@@ -1,17 +1,123 @@
 /**
  * Orchestration lifecycle service.
  *
- * Holds the moved bodies for GatewayService's orchestration plan/run/phase
- * control surface (Step 8g of the gateway-service decomposition plan).
- *
- * Pattern reference: chat-turn-prep-service.ts, approval-lifecycle-service.ts.
+ * Owns orchestration plan/run/phase lifecycle behavior behind an explicit host
+ * contract while GatewayService remains the composition root.
  */
 
-import { type OrchestrationPlan, type OrchestrationRun } from "@goatcitadel/contracts";
+import {
+  type HookTrigger,
+  type OrchestrationPlan,
+  type OrchestrationRun,
+  type RealtimeEvent,
+} from "@goatcitadel/contracts";
+import type { OrchestrationEngine } from "@goatcitadel/orchestration";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
-import { DEFAULT_WORKSPACE_ID, findPlanPhase, type GatewayService } from "./gateway-service.js";
 
-export type OrchestrationLifecycleHost = GatewayService;
+const DEFAULT_WORKSPACE_ID = "default";
+
+type OrchestrationRunHookPatch = {
+  maxIterations?: number;
+  maxRuntimeMinutes?: number;
+  maxCostUsd?: number;
+};
+
+type OrchestrationPhaseHookPatch = {
+  ownerAgentId?: string;
+  specPath?: string;
+  loopMode?: "fresh-context" | "compaction";
+  requiresApproval?: boolean;
+};
+
+export interface OrchestrationLifecycleHost {
+  readonly config: {
+    assistant: {
+      memory: {
+        enabled: boolean;
+        qmd: {
+          applyToOrchestration: boolean;
+        };
+      };
+    };
+  };
+  readonly storage: {
+    orchestration: {
+      upsertPlan(plan: OrchestrationPlan): void;
+      getPlan(planId: string): OrchestrationPlan;
+      createRun(run: OrchestrationRun): OrchestrationRun;
+      findLatestRunByPlan(planId: string): OrchestrationRun | undefined;
+      updateRun(run: OrchestrationRun): OrchestrationRun;
+      appendRunEvent(runId: string, event: string, payload: Record<string, unknown>): void;
+      listCheckpoints(runId: string): OrchestrationCheckpoint[];
+      getRun(runId: string): OrchestrationRun;
+    };
+  };
+  readonly orchestrationEngine: Pick<OrchestrationEngine, "approvePhase" | "createRun" | "startRun">;
+  readonly hooksService: {
+    runInlineHooks<T extends Record<string, unknown>>(input: {
+      workspaceId?: string;
+      trigger: HookTrigger;
+      entityType: string;
+      entityId: string;
+      payload: Record<string, unknown>;
+      parsePatch?: (value: Record<string, unknown>) => T | undefined;
+      mergePatch?: (current: T | undefined, next: T) => T;
+    }): Promise<{ blockedBy?: { reason: string }; patch?: T }>;
+    enqueueAfterHooks(input: {
+      workspaceId?: string;
+      trigger: HookTrigger;
+      entityType: string;
+      entityId: string;
+      payload: Record<string, unknown>;
+    }): void;
+  };
+  createCheckpoint(
+    input: Omit<OrchestrationCheckpoint, "checkpointId" | "createdAt" | "gitRef">,
+  ): OrchestrationCheckpoint;
+  publishRealtime(
+    channel: string,
+    topic: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
+  scheduleOrchestrationMemoryContext(plan: OrchestrationPlan, run: OrchestrationRun): void;
+  parseOrchestrationRunHookPatch(value: Record<string, unknown>): OrchestrationRunHookPatch | undefined;
+  parseOrchestrationPhaseHookPatch(value: Record<string, unknown>): OrchestrationPhaseHookPatch | undefined;
+  applyOrchestrationPhaseHookPatch(
+    plan: OrchestrationPlan,
+    phaseId: string,
+    patch: OrchestrationPhaseHookPatch,
+  ): OrchestrationPlan;
+}
+
+function buildOrchestrationRealtimeLinks(input: { runId: string }): NonNullable<RealtimeEvent["links"]> {
+  return {
+    runId: input.runId,
+  };
+}
+
+function publishOrchestrationRealtime(
+  host: OrchestrationLifecycleHost,
+  payload: {
+    runId: string;
+    planId?: string;
+    event: string;
+    status: string;
+    waveId?: string;
+    phaseId?: string;
+    approvedBy?: string;
+    nextWaveId?: string;
+    nextPhaseId?: string;
+  },
+): void {
+  host.publishRealtime("orchestration_event", "orchestration", payload, {
+    eventClass: "domain_fact",
+    eventAuthority: "retained_stream",
+    links: buildOrchestrationRealtimeLinks({
+      runId: payload.runId,
+    }),
+  });
+}
 
 export function createOrchestrationPlan(host: OrchestrationLifecycleHost, plan: OrchestrationPlan): OrchestrationRun {
   host.storage.orchestration.upsertPlan(plan);
@@ -29,7 +135,7 @@ export function createOrchestrationPlan(host: OrchestrationLifecycleHost, plan: 
     status: persisted.status,
   });
 
-  host.publishRealtime("orchestration_event", "orchestration", {
+  publishOrchestrationRealtime(host, {
     runId: persisted.runId,
     planId: persisted.planId,
     event: "run_created",
@@ -107,7 +213,7 @@ export async function runOrchestrationPlan(
     phaseId: persisted.currentPhaseId,
   });
 
-  host.publishRealtime("orchestration_event", "orchestration", {
+  publishOrchestrationRealtime(host, {
     runId: persisted.runId,
     planId,
     event: "run_started",
@@ -232,15 +338,15 @@ export async function approvePhase(
     totalCostUsd: persisted.totalCostUsd,
   });
 
-  host.publishRealtime("orchestration_event", "orchestration", {
+  publishOrchestrationRealtime(host, {
     runId,
     planId: plan.planId,
     event: "phase_approved",
     phaseId,
     approvedBy,
     status: persisted.status,
-    currentWaveId: persisted.currentWaveId,
-    currentPhaseId: persisted.currentPhaseId,
+    nextWaveId: persisted.currentWaveId,
+    nextPhaseId: persisted.currentPhaseId,
   });
 
   if (host.config.assistant.memory.enabled && host.config.assistant.memory.qmd.applyToOrchestration) {
@@ -276,6 +382,3 @@ export function getRun(host: OrchestrationLifecycleHost, runId: string): Orchest
 export function listRunCheckpoints(host: OrchestrationLifecycleHost, runId: string): OrchestrationCheckpoint[] {
   return host.storage.orchestration.listCheckpoints(runId);
 }
-
-// Keep the helper available even though it is not yet used in extracted bodies.
-void findPlanPhase;

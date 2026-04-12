@@ -173,6 +173,12 @@ function normalizeResult(result) {
 async function executeRun(params) {
   const deadlineAt =
     typeof params?.deadlineAt === "number" && Number.isFinite(params.deadlineAt) ? params.deadlineAt : undefined;
+  if (typeof deadlineAt === "number" && Date.now() > deadlineAt) {
+    throw {
+      code: "RUN_DEADLINE_EXCEEDED",
+      message: "Code Mode wrapper deadline exceeded before invocation.",
+    };
+  }
   const capabilities = deepFreeze(buildCapabilities(params?.wrapperManifest, deadlineAt));
   const input = deepFreeze(params?.input && typeof params.input === "object" ? params.input : {});
   const context = deepFreeze({

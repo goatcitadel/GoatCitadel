@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
-import type { GatewayService } from "./gateway-service.js";
 
-export type OnboardingMarkerHost = GatewayService;
+export interface OnboardingMarkerHost {
+  readonly onboardingMarkerPath: string;
+  onboardingMarker: {
+    completedAt?: string;
+    completedBy?: string;
+  };
+}
 
 export async function loadOnboardingMarker(host: OnboardingMarkerHost): Promise<void> {
   let raw: string;

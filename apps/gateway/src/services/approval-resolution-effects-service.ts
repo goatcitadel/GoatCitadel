@@ -3,11 +3,12 @@ import type {
   ApprovalEffectRecord,
   ApprovalInboxItemState,
   ApprovalRequest,
+  RealtimeEvent,
   ApprovalResolveInput,
   DurableWakeResult,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import type { ServiceContext } from "./service-context.js";
+import type { Storage } from "@goatcitadel/storage";
 
 const APPROVAL_EFFECT_LEASE_TTL_MS = 15_000;
 const APPROVAL_EFFECT_HEARTBEAT_MS = 5_000;
@@ -47,6 +48,25 @@ export interface ApprovalEffectsServiceDeps {
   resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): string;
 }
 
+export interface ApprovalEffectsServiceContext {
+  readonly storage: Pick<
+    Storage,
+    | "approvalEffects"
+    | "approvals"
+    | "approvalWaitRuns"
+    | "pendingApprovalActions"
+    | "approvalInbox"
+    | "chatInlineApprovals"
+    | "chatTurnTraces"
+  >;
+  publishRealtime(
+    channel: string,
+    topic: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
+}
+
 export class ApprovalEffectsService {
   private workerActive = false;
   private workerRequested = false;
@@ -54,7 +74,7 @@ export class ApprovalEffectsService {
   private readonly workerId = randomUUID();
 
   public constructor(
-    private readonly ctx: ServiceContext,
+    private readonly ctx: ApprovalEffectsServiceContext,
     private readonly deps: ApprovalEffectsServiceDeps,
   ) {}
 

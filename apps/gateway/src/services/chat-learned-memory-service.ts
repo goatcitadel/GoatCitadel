@@ -6,12 +6,9 @@ import type {
   LearnedMemoryUpdateInput,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
+import type { Storage } from "@goatcitadel/storage";
 import { extractLearnedMemoryCandidates, shouldExtractLearnedMemoryContent } from "./learned-memory-utils.js";
-import {
-  clampMemoryConfidence,
-  decideLearnedMemoryWrite,
-} from "./memory-lifecycle-policy.js";
-import type { ServiceContext } from "./service-context.js";
+import { clampMemoryConfidence, decideLearnedMemoryWrite } from "./memory-lifecycle-policy.js";
 
 // ── pure helpers ─────────────────────────────────────────────────────
 
@@ -55,13 +52,17 @@ function extractStringFromUnknown(value: unknown): string {
 
 // ── service class ────────────────────────────────────────────────────
 
+export interface ChatLearnedMemoryServiceContext {
+  readonly storage: Pick<Storage, "sessions" | "learnedMemory" | "chatTurnTraces" | "chatToolRuns">;
+}
+
 /**
  * Encapsulates learned-memory extraction, listing, updating, and
  * rebuild logic. Uses the LearnedMemoryRepository from packages/storage
  * for all persistence operations.
  */
 export class ChatLearnedMemoryService {
-  constructor(private readonly ctx: ServiceContext) {}
+  constructor(private readonly ctx: ChatLearnedMemoryServiceContext) {}
 
   // ── public API ─────────────────────────────────────────────────────
 

@@ -22,10 +22,12 @@ import {
   type ApprovalResolveInput,
   type ConnectorRecord,
   type DurableWakeResult,
+  type RemoteActionType,
   type RealtimeEvent,
   type ToolGrantCreateInput,
   type ToolGrantRecord,
   type ToolInvokeResult,
+  ValidationError,
 } from "@goatcitadel/contracts";
 import { DEVICE_ACCESS_APPROVAL_KIND } from "./device-access-helpers.js";
 
@@ -90,20 +92,12 @@ export interface ApprovalLifecycleHost {
   requireConnectorRecord(connectorId: string): ConnectorRecord;
   consumeRemoteActionToken(
     token: string,
-    actionType: string,
-  ): { tokenId: string; approvalId?: string; mutation?: Record<string, unknown> };
+    actionType: RemoteActionType,
+  ): { tokenId: string; connectorId: string; approvalId?: string; mutation?: Record<string, unknown> };
   consumeRemoteActionTokenById(
     tokenId: string,
-    actionType: string,
-  ): { tokenId: string; approvalId?: string; mutation?: Record<string, unknown> };
-  resolveApprovalWithConsumedRemoteToken(
-    tokenRecord: { tokenId: string; approvalId?: string; mutation?: Record<string, unknown> },
-    input: {
-      decision: ApprovalResolveInput["decision"];
-      editedPayload?: Record<string, unknown>;
-      resolutionNote?: string;
-    },
-  ): Promise<ApprovalResolveResult>;
+    actionType: RemoteActionType,
+  ): { tokenId: string; connectorId: string; approvalId?: string; mutation?: Record<string, unknown> };
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<ApprovalResolveResult>;
   resolveDeviceAccessApproval(current: ApprovalRequest, input: ApprovalResolveInput): Promise<ApprovalResolveResult>;
   executeCodeModePendingApproval(approvalId: string): Promise<ToolInvokeResult | undefined>;
@@ -256,6 +250,47 @@ export function createApprovalRemoteActionToken(
   };
 }
 
+export async function resolveApprovalWithConsumedRemoteToken(
+  host: ApprovalLifecycleHost,
+  tokenRecord: {
+    tokenId: string;
+    connectorId: string;
+    approvalId?: string;
+    mutation?: Record<string, unknown>;
+  },
+  input: {
+    decision: ApprovalResolveInput["decision"];
+    editedPayload?: Record<string, unknown>;
+    resolutionNote?: string;
+  },
+): Promise<ApprovalResolveResult> {
+  const approvalId = tokenRecord.approvalId ?? String(tokenRecord.mutation?.approvalId ?? "").trim();
+  if (!approvalId) {
+    throw new ValidationError({
+      message: "Remote action token is missing an approval binding.",
+    });
+  }
+  const resolvedBy = `connector:${tokenRecord.connectorId}`;
+  void host.storage.audit.append("approvals", {
+    event: "approval.remote_token.consume",
+    approvalId,
+    connectorId: tokenRecord.connectorId,
+    tokenId: tokenRecord.tokenId,
+    decision: input.decision,
+    resolvedBy,
+  });
+  host.storage.approvals.mergeLinkage(approvalId, {
+    connectorId: tokenRecord.connectorId,
+    tokenId: tokenRecord.tokenId,
+  });
+  return host.resolveApproval(approvalId, {
+    decision: input.decision,
+    editedPayload: input.editedPayload,
+    resolutionNote: input.resolutionNote,
+    resolvedBy,
+  });
+}
+
 export async function resolveApprovalWithRemoteToken(
   host: ApprovalLifecycleHost,
   input: {
@@ -266,7 +301,7 @@ export async function resolveApprovalWithRemoteToken(
   },
 ): Promise<ApprovalResolveResult> {
   const tokenRecord = host.consumeRemoteActionToken(input.token, "approval.resolve");
-  return host.resolveApprovalWithConsumedRemoteToken(tokenRecord, input);
+  return resolveApprovalWithConsumedRemoteToken(host, tokenRecord, input);
 }
 
 export async function resolveApprovalWithRemoteTokenId(
@@ -279,7 +314,7 @@ export async function resolveApprovalWithRemoteTokenId(
   },
 ): Promise<ApprovalResolveResult> {
   const tokenRecord = host.consumeRemoteActionTokenById(input.tokenId, "approval.resolve");
-  return host.resolveApprovalWithConsumedRemoteToken(tokenRecord, input);
+  return resolveApprovalWithConsumedRemoteToken(host, tokenRecord, input);
 }
 
 export async function resolveApprovalsBulk(

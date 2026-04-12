@@ -1,14 +1,40 @@
 import { randomUUID } from "node:crypto";
 import type {
+  McpToolRecord,
   McpOAuthStartResponse,
   McpServerCreateInput,
   McpServerPolicy,
   McpServerRecord,
   McpServerUpdateInput,
 } from "@goatcitadel/contracts";
-import { inferMcpCategory, normalizeMcpPolicy, type GatewayService } from "./gateway-service.js";
+import type { Storage } from "@goatcitadel/storage";
+import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
 
-export type McpServerAdminHost = GatewayService;
+interface McpAuthStateRecord {
+  accessTokenRef?: string;
+  refreshTokenRef?: string;
+  tokenExpiresAt?: string;
+  oauthState?: string;
+  scopes?: string[];
+  updatedAt: string;
+  lastCodePreview?: string;
+}
+
+export interface McpServerAdminHost {
+  readonly storage: {
+    approvalInbox: Pick<Storage["approvalInbox"], "deleteByReceiver">;
+  };
+  readMcpServers(): McpServerRecord[];
+  writeMcpServers(servers: McpServerRecord[]): void;
+  patchMcpServerState(serverId: string, patch: Partial<McpServerRecord>): McpServerRecord;
+  readMcpTools(): McpToolRecord[];
+  writeMcpTools(tools: McpToolRecord[]): void;
+  resolveConnectedMcpTools(server: McpServerRecord, existing: McpToolRecord[]): Promise<McpToolRecord[]>;
+  requireMcpServer(serverId: string): McpServerRecord;
+  readMcpAuthState(): Record<string, McpAuthStateRecord>;
+  writeMcpAuthState(state: Record<string, McpAuthStateRecord>): void;
+  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
+}
 
 export function createMcpServer(host: McpServerAdminHost, input: McpServerCreateInput): McpServerRecord {
   const now = new Date().toISOString();

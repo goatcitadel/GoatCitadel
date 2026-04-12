@@ -6,11 +6,11 @@ import type { LlmService } from "./llm-service.js";
 import type { RuntimeSettings } from "./gateway-service.js";
 
 /**
- * Shared dependency bag passed to extracted sub-services.
+ * Transitional shared dependency bag for services that still need more than a
+ * tiny local contract.
  *
- * Every field mirrors a property (or thin wrapper) that GatewayService
- * already exposes internally.  Extracted services receive a readonly
- * reference instead of holding a back-pointer to the whole God Object.
+ * New or newly-narrowed services should prefer dedicated local interfaces or
+ * `Pick<>` contracts over accepting this full bag by default.
  */
 export interface ServiceContext {
   readonly storage: Storage;

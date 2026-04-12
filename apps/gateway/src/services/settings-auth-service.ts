@@ -2,22 +2,13 @@
 /**
  * Settings/auth service.
  *
- * Body-move home for the cleanly-extractable members of the
- * GatewayService settings/auth surface (Step 4 of the gateway-service
- * decomposition plan).
+ * Contract-backed home for the settings/auth runtime surface that still
+ * composes through GatewayService.
  *
- * Step 4a moved `getAuthRuntimeSettings` + `updateAuthSettings`.
- * Step 4b (this file) adds the 6 device-access / companion-session
- * methods that depend exclusively on `device-access-helpers.ts`
- * primitives plus a small set of `/** @internal *\/` GatewayService
- * surfaces (`gatewaySql`, `storage`, `createApproval`, `resolveApproval`,
- * `publishRealtime`, `getAuthDeviceRequestById`,
- * `expireDeviceAccessRequestIfNeeded`, `getActiveAuthDeviceGrantById`).
- *
- * `getSettings` and `updateSettings` are intentionally NOT moved here:
- * `updateSettings` (348 lines) calls ~15 additional private members on
- * GatewayService (mesh/npu/llm/persist/feature-flag helpers) and would
- * require a separate promotion pass. Deferred to a follow-on session.
+ * The file now exposes two real host contracts instead of accepting the
+ * full GatewayService as a disguised host:
+ * - `SettingsRuntimeHost` for runtime config reads/updates
+ * - `SettingsAuthRuntimeHost` for device-access and companion-session flows
  *
  * Pattern reference: comms-service.ts, memory-facade-service.ts.
  */
@@ -29,6 +20,8 @@ import {
   ConflictError,
   NotFoundError,
   ValidationError,
+  type ApprovalCreateInput,
+  type ApprovalResolveInput,
   type AuthRuntimeSettings,
   type AuthSettingsUpdateInput,
   type CompanionAuditEventRecord,
@@ -48,6 +41,9 @@ import {
   type FilesystemReadAccessMode,
   type LlmProviderRequestConfig,
 } from "@goatcitadel/contracts";
+import type { MeshService } from "@goatcitadel/mesh-core";
+import type { Storage } from "@goatcitadel/storage";
+import type { GatewayRuntimeConfig } from "../config.js";
 import { persistProviderApiKeyWithFallback } from "./provider-secret-persistence.js";
 
 const settingsLog = logger.child("settings-auth-service");
@@ -64,6 +60,8 @@ import {
   DEVICE_ACCESS_REQUEST_POLL_AFTER_MS,
   DEVICE_ACCESS_REQUEST_TTL_MS,
   DEVICE_ACCESS_SECRET_BYTES,
+  type AuthDeviceGrantRecord,
+  type AuthDeviceRequestRecord,
   assertCompanionSigningPublicKeyPem,
   hashSensitiveToken,
   inferPlatformFromUserAgent,
@@ -80,6 +78,9 @@ import {
   createGatewayAuthCredentialPlan,
   readAssistantAuthConfigSnapshotSync,
 } from "./gateway/auth-credential-planner.js";
+import type { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
+import type { LlmRuntimeUpdateInput, LlmService } from "./llm-service.js";
+import type { NpuSidecarService } from "./npu-sidecar-service.js";
 import {
   buildCompanionSigningPayload,
   decodeBase64Url,
@@ -94,13 +95,50 @@ import {
   toCompanionSessionAdminRecord,
   toCompanionSessionInfoResponse,
   type CompanionAccessValidationResult,
-  type GatewayService,
+  type CompanionSessionRecord,
   type RuntimeSettings,
 } from "./gateway-service.js";
 
-export type SettingsAuthHost = GatewayService;
+export interface SettingsRuntimeHost {
+  readonly config: GatewayRuntimeConfig;
+  readonly llmService: Pick<
+    LlmService,
+    | "deleteProviderApiKey"
+    | "getRuntimeConfig"
+    | "getProviderSecretStatus"
+    | "setProviderApiKey"
+    | "updateNetworkAllowlist"
+    | "updateRuntimeConfig"
+  >;
+  readonly meshService: Pick<MeshService, "updateOptions">;
+  readonly npuSidecar: Pick<NpuSidecarService, "getStatus" | "updateConfig" | "stop" | "start">;
+  readonly llamaCppRuntime: Pick<LlamaCppRuntimeService, "getStatus" | "updateConfig" | "stop" | "start">;
+  readFeatureFlags(): RuntimeSettings["features"];
+  updateFeatureFlags(patch: Partial<RuntimeSettings["features"]>): RuntimeSettings["features"];
+  assertDeploymentProfileUpdate(input: UpdateSettingsInput): void;
+  assertFirecrawlRuntimeUpdate(input: UpdateSettingsInput): void;
+  persistLlmConfig(): void;
+  persistToolPolicyConfig(): void;
+  persistBudgetsConfig(): void;
+  persistAssistantConfig(): void;
+}
 
-export function getSettings(host: SettingsAuthHost): RuntimeSettings {
+export interface SettingsAuthRuntimeHost {
+  readonly config: GatewayRuntimeConfig;
+  readonly gatewaySql: Storage["gatewaySql"];
+  readonly storage: Pick<Storage, "audit" | "runImmediateTransaction">;
+  createApproval(input: ApprovalCreateInput): Promise<{ approvalId: string }>;
+  resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<unknown>;
+  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
+  getAuthDeviceRequestById(requestId: string): AuthDeviceRequestRecord | undefined;
+  expireDeviceAccessRequestIfNeeded(request: AuthDeviceRequestRecord): Promise<AuthDeviceRequestRecord>;
+  getActiveAuthDeviceGrantById(grantId: string): AuthDeviceGrantRecord | undefined;
+  getActiveCompanionSessionByRefreshToken(refreshToken: string): CompanionSessionRecord | undefined;
+  getActiveCompanionSessionById(sessionId: string): CompanionSessionRecord | undefined;
+  getCompanionSessionById(sessionId: string): CompanionSessionRecord | undefined;
+}
+
+export function getSettings(host: SettingsRuntimeHost): RuntimeSettings {
   const features = host.readFeatureFlags();
   return {
     environment: host.config.assistant.environment,
@@ -254,7 +292,7 @@ export interface UpdateSettingsInput {
   features?: Partial<RuntimeSettings["features"]>;
 }
 
-export function updateSettings(host: SettingsAuthHost, input: UpdateSettingsInput): RuntimeSettings {
+export function updateSettings(host: SettingsRuntimeHost, input: UpdateSettingsInput): RuntimeSettings {
   host.assertDeploymentProfileUpdate(input);
   host.assertFirecrawlRuntimeUpdate(input);
 
@@ -540,7 +578,7 @@ export function updateSettings(host: SettingsAuthHost, input: UpdateSettingsInpu
       });
       llmInput.upsertProvider.apiKey = undefined;
     }
-    host.llmService.updateRuntimeConfig(llmInput);
+    host.llmService.updateRuntimeConfig(llmInput satisfies LlmRuntimeUpdateInput);
     host.persistLlmConfig();
   }
 
@@ -557,7 +595,7 @@ export function updateSettings(host: SettingsAuthHost, input: UpdateSettingsInpu
   return getSettings(host);
 }
 
-export function getAuthRuntimeSettings(host: SettingsAuthHost): AuthRuntimeSettings {
+export function getAuthRuntimeSettings(host: SettingsRuntimeHost): AuthRuntimeSettings {
   const plan = createGatewayAuthCredentialPlan({
     runtimeConfig: host.config,
     env: process.env,
@@ -574,7 +612,7 @@ export function getAuthRuntimeSettings(host: SettingsAuthHost): AuthRuntimeSetti
   };
 }
 
-export function updateAuthSettings(host: SettingsAuthHost, input: AuthSettingsUpdateInput): AuthRuntimeSettings {
+export function updateAuthSettings(host: SettingsRuntimeHost, input: AuthSettingsUpdateInput): AuthRuntimeSettings {
   if (input.mode) {
     host.config.assistant.auth.mode = input.mode;
   }
@@ -594,11 +632,11 @@ export function updateAuthSettings(host: SettingsAuthHost, input: AuthSettingsUp
 }
 
 // ---------------------------------------------------------------------------
-// Device access — Step 4b body moves
+// Device access runtime
 // ---------------------------------------------------------------------------
 
 export async function createDeviceAccessRequest(
-  host: SettingsAuthHost,
+  host: SettingsAuthRuntimeHost,
   input: DeviceAccessRequestCreateInput,
   context: {
     requestedOrigin?: string;
@@ -737,7 +775,7 @@ export async function createDeviceAccessRequest(
 }
 
 export async function getDeviceAccessRequestStatus(
-  host: SettingsAuthHost,
+  host: SettingsAuthRuntimeHost,
   requestId: string,
   requestSecret: string,
 ): Promise<DeviceAccessRequestStatusResponse> {
@@ -777,7 +815,7 @@ export async function getDeviceAccessRequestStatus(
   return mapDeviceAccessStatusResponse(current);
 }
 
-export function listDeviceAccessGrants(host: SettingsAuthHost): DeviceAccessGrantContractRecord[] {
+export function listDeviceAccessGrants(host: SettingsAuthRuntimeHost): DeviceAccessGrantContractRecord[] {
   const rows = host.gatewaySql
     .prepare(
       `
@@ -794,7 +832,7 @@ export function listDeviceAccessGrants(host: SettingsAuthHost): DeviceAccessGran
 }
 
 export async function revokeDeviceAccessGrant(
-  host: SettingsAuthHost,
+  host: SettingsAuthRuntimeHost,
   grantId: string,
   revokedBy: string,
 ): Promise<DeviceAccessGrantContractRecord> {
@@ -878,7 +916,7 @@ export async function revokeDeviceAccessGrant(
 }
 
 export function validateDeviceAccessToken(
-  host: SettingsAuthHost,
+  host: SettingsAuthRuntimeHost,
   token: string,
 ): { actorId: string; deviceId: string; grantId: string } | undefined {
   const tokenHash = hashSensitiveToken(token);
@@ -925,7 +963,7 @@ export function validateDeviceAccessToken(
 }
 
 export async function exchangeCompanionSessionFromDeviceGrant(
-  host: SettingsAuthHost,
+  host: SettingsAuthRuntimeHost,
   grantId: string,
   input: CompanionSessionExchangeInput,
 ): Promise<CompanionSessionExchangeResponse> {
@@ -1046,7 +1084,7 @@ export async function exchangeCompanionSessionFromDeviceGrant(
 }
 
 export async function rotateCompanionSession(
-  host: SettingsAuthHost,
+  host: SettingsAuthRuntimeHost,
   input: CompanionSessionRefreshInput,
 ): Promise<CompanionSessionRefreshResponse> {
   const refreshToken = input.refreshToken.trim();
@@ -1124,7 +1162,10 @@ export async function rotateCompanionSession(
   };
 }
 
-export function getCompanionSessionInfo(host: SettingsAuthHost, sessionId: string): CompanionSessionInfoResponse {
+export function getCompanionSessionInfo(
+  host: SettingsAuthRuntimeHost,
+  sessionId: string,
+): CompanionSessionInfoResponse {
   const session = host.getActiveCompanionSessionById(sessionId);
   if (!session) {
     throw new NotFoundError("Companion session not found.");
@@ -1133,7 +1174,7 @@ export function getCompanionSessionInfo(host: SettingsAuthHost, sessionId: strin
 }
 
 export function listCompanionSessions(
-  host: SettingsAuthHost,
+  host: SettingsAuthRuntimeHost,
   options?: {
     view?: "active" | "all";
     grantId?: string;
@@ -1190,7 +1231,10 @@ export function listCompanionSessions(
   };
 }
 
-export function getCompanionSessionRecord(host: SettingsAuthHost, sessionId: string): CompanionSessionAdminRecord {
+export function getCompanionSessionRecord(
+  host: SettingsAuthRuntimeHost,
+  sessionId: string,
+): CompanionSessionAdminRecord {
   const session = host.getCompanionSessionById(sessionId);
   if (!session) {
     throw new NotFoundError("Companion session not found.");
@@ -1199,7 +1243,7 @@ export function getCompanionSessionRecord(host: SettingsAuthHost, sessionId: str
 }
 
 export async function revokeCompanionSession(
-  host: SettingsAuthHost,
+  host: SettingsAuthRuntimeHost,
   sessionId: string,
   revokedBy: string,
 ): Promise<CompanionSessionRevokeResponse> {
@@ -1257,7 +1301,7 @@ export async function revokeCompanionSession(
 }
 
 export async function listCompanionAuditEvents(
-  host: SettingsAuthHost,
+  host: SettingsAuthRuntimeHost,
   options?: {
     sessionId?: string;
     grantId?: string;
@@ -1303,7 +1347,7 @@ export async function listCompanionAuditEvents(
 }
 
 export function validateCompanionAccessToken(
-  host: SettingsAuthHost,
+  host: SettingsAuthRuntimeHost,
   token: string,
 ): CompanionAccessValidationResult | undefined {
   const tokenHash = hashSensitiveToken(token);
@@ -1383,7 +1427,7 @@ export function validateCompanionAccessToken(
 }
 
 export function verifyCompanionRequestSignature(
-  host: SettingsAuthHost,
+  host: SettingsAuthRuntimeHost,
   input: {
     sessionId: string;
     method: string;

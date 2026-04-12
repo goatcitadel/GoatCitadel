@@ -3,6 +3,7 @@ import type {
   DurableCheckpointRecord,
   DurableDeadLetterRecord,
   DurableDiagnosticsResponse,
+  RealtimeEvent,
   DurableRetryPolicy,
   DurableRunCreateRequest,
   DurableRunRecord,
@@ -10,6 +11,12 @@ import type {
   DurableWakeResult,
 } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
+import type { DurableWorkflowExecutorRegistry } from "./durable-execution-service.js";
+
+export type DurableRunServiceContext = Pick<
+  ServiceContext,
+  "config" | "storage" | "publishRealtime" | "requireFeatureEnabled"
+>;
 
 const DURABLE_RETRY_POLICY_DEFAULT: DurableRetryPolicy = {
   maxAttempts: 3,
@@ -22,6 +29,14 @@ const DURABLE_WORKER_POLL_MIN_MS = 750;
 const DURABLE_WORKER_POLL_JITTER_MS = 500;
 const DURABLE_LEASE_HEARTBEAT_MS = 5_000;
 
+function buildDurableRealtimeOptions(runId: string): Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links"> {
+  return {
+    eventClass: "domain_fact",
+    eventAuthority: "retained_stream",
+    links: { runId },
+  };
+}
+
 /**
  * Encapsulates all durable-run lifecycle operations previously inlined
  * in GatewayService.
@@ -33,12 +48,13 @@ export class DurableRunService {
   private readonly workerId = randomUUID();
 
   constructor(
-    private readonly ctx: ServiceContext,
+    private readonly ctx: DurableRunServiceContext,
     private readonly deps?: {
       backgroundTasks: Set<Promise<void>>;
-      executeWorkflow: (run: DurableRunRecord) => Promise<void>;
-      isWorkflowRecoverable?: (run: DurableRunRecord) => { recoverable: boolean; reason?: string };
-      markWorkflowUnrecoverable?: (run: DurableRunRecord, reason: string) => Promise<void> | void;
+      workflowRegistry: Pick<
+        DurableWorkflowExecutorRegistry,
+        "executeWorkflow" | "isWorkflowRecoverable" | "markWorkflowUnrecoverable"
+      >;
       onRunFailed?: (run: DurableRunRecord, message: string) => Promise<void> | void;
     },
   ) {}
@@ -169,12 +185,17 @@ export class DurableRunService {
         waitForEvent: input.waitForEvent ?? null,
       });
     }
-    this.ctx.publishRealtime("system", "durable", {
-      type: "durable_run_created",
-      runId: run.runId,
-      workflowKey: run.workflowKey,
-      status: run.status,
-    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_created",
+        runId: run.runId,
+        workflowKey: run.workflowKey,
+        status: run.status,
+      },
+      buildDurableRealtimeOptions(run.runId),
+    );
     return run;
   }
 
@@ -200,11 +221,16 @@ export class DurableRunService {
         previousStatus: current.status,
       });
     });
-    this.ctx.publishRealtime("system", "durable", {
-      type: "durable_run_paused",
-      runId,
-      actorId,
-    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_paused",
+        runId,
+        actorId,
+      },
+      buildDurableRealtimeOptions(runId),
+    );
     return next;
   }
 
@@ -236,11 +262,16 @@ export class DurableRunService {
         previousStatus: current.status,
       });
     });
-    this.ctx.publishRealtime("system", "durable", {
-      type: "durable_run_resumed",
-      runId,
-      actorId,
-    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_resumed",
+        runId,
+        actorId,
+      },
+      buildDurableRealtimeOptions(runId),
+    );
     return next;
   }
 
@@ -267,11 +298,16 @@ export class DurableRunService {
         previousStatus: current.status,
       });
     });
-    this.ctx.publishRealtime("system", "durable", {
-      type: "durable_run_cancelled",
-      runId,
-      actorId,
-    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_cancelled",
+        runId,
+        actorId,
+      },
+      buildDurableRealtimeOptions(runId),
+    );
     return next;
   }
 
@@ -303,11 +339,16 @@ export class DurableRunService {
         actorId,
         reason: deadLetter.reason,
       });
-      this.ctx.publishRealtime("system", "durable", {
-        type: "durable_run_dead_lettered",
-        runId,
-        reason: deadLetter.reason,
-      });
+      this.ctx.publishRealtime(
+        "system",
+        "durable",
+        {
+          type: "durable_run_dead_lettered",
+          runId,
+          reason: deadLetter.reason,
+        },
+        buildDurableRealtimeOptions(runId),
+      );
       return deadLettered;
     }
     const delayMs = this.computeDurableRetryDelayMs(current, attemptNo);
@@ -334,12 +375,17 @@ export class DurableRunService {
       lastError: undefined,
       expectedVersion: current.version,
     });
-    this.ctx.publishRealtime("system", "durable", {
-      type: "durable_run_retry_scheduled",
-      runId,
-      attemptNo,
-      nextRetryAt,
-    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_retry_scheduled",
+        runId,
+        attemptNo,
+        nextRetryAt,
+      },
+      buildDurableRealtimeOptions(runId),
+    );
     return next;
   }
 
@@ -424,11 +470,16 @@ export class DurableRunService {
       correlationId: event.correlationId,
       payload: event.payload ?? {},
     });
-    this.ctx.publishRealtime("system", "durable", {
-      type: "durable_run_woken",
-      runId,
-      eventKey: event.eventKey,
-    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_woken",
+        runId,
+        eventKey: event.eventKey,
+      },
+      buildDurableRealtimeOptions(runId),
+    );
     return {
       runId,
       eventKey: event.eventKey,
@@ -471,11 +522,16 @@ export class DurableRunService {
         ...(newMaxAttempts ? { maxAttemptsOverride: newMaxAttempts } : {}),
       });
     });
-    this.ctx.publishRealtime("system", "durable", {
-      type: "durable_dead_letter_recovered",
-      runId: deadLetter.runId,
-      deadLetterId: entryId,
-    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_dead_letter_recovered",
+        runId: deadLetter.runId,
+        deadLetterId: entryId,
+      },
+      buildDurableRealtimeOptions(deadLetter.runId),
+    );
     this.requestRunProcessing(deadLetter.runId);
     return next;
   }
@@ -542,10 +598,10 @@ export class DurableRunService {
     const runningRunIds = this.ctx.storage.durableRuns.listExpiredRunningRunIds(new Date().toISOString());
     for (const runId of runningRunIds) {
       const run = this.ctx.storage.durableRuns.getRun(runId);
-      const recoverability = this.deps.isWorkflowRecoverable?.(run) ?? { recoverable: true };
+      const recoverability = this.deps.workflowRegistry.isWorkflowRecoverable(run);
       if (!recoverability.recoverable) {
         await this.failWorkflowRun(run, recoverability.reason ?? "Run could not be recovered after restart.");
-        await this.deps.markWorkflowUnrecoverable?.(
+        await this.deps.workflowRegistry.markWorkflowUnrecoverable(
           this.ctx.storage.durableRuns.getRun(run.runId),
           recoverability.reason ?? "Run could not be recovered after restart.",
         );
@@ -576,7 +632,7 @@ export class DurableRunService {
       }
       try {
         await this.executeWithLeaseHeartbeat(run, () =>
-          this.executeWithTimeout(deps.executeWorkflow(run), timeoutMs, run.runId),
+          this.executeWithTimeout(deps.workflowRegistry.executeWorkflow(run), timeoutMs, run.runId),
         );
       } catch (error) {
         await this.failWorkflowRun(run, error instanceof Error ? error.message : "Durable workflow execution failed.");
@@ -678,11 +734,16 @@ export class DurableRunService {
       workflowKey: run.workflowKey,
       status: run.status,
     });
-    this.ctx.publishRealtime("system", "durable", {
-      type: "durable_run_started",
-      runId: run.runId,
-      workflowKey: run.workflowKey,
-    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_started",
+        runId: run.runId,
+        workflowKey: run.workflowKey,
+      },
+      buildDurableRealtimeOptions(run.runId),
+    );
     return run;
   }
 
@@ -726,11 +787,16 @@ export class DurableRunService {
         error: message,
       });
     });
-    this.ctx.publishRealtime("system", "durable", {
-      type: "durable_run_failed",
-      runId: failed.runId,
-      error: message,
-    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_failed",
+        runId: failed.runId,
+        error: message,
+      },
+      buildDurableRealtimeOptions(failed.runId),
+    );
     await this.deps?.onRunFailed?.(failed, message);
   }
 

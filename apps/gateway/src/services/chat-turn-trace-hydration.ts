@@ -1,16 +1,22 @@
 /**
  * Chat turn trace hydration helpers.
  *
- * Step 8a of the gateway-service decomposition plan: read-only trace
- * hydration and branch/tree derivation helpers extracted from
- * GatewayService. Pure functions over a minimal storage Host interface.
+ * Read-only trace hydration and branch/tree derivation helpers over a minimal
+ * storage host.
  */
 
 import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import type { Storage } from "@goatcitadel/storage";
 import { resolveNewestLeafTurnId } from "./chat-thread-utils.js";
-import type { GatewayService } from "./gateway-service.js";
 
-export type ChatTurnTraceHydrationHost = GatewayService;
+type ChatTurnTraceHydrationStorage = Pick<
+  Storage,
+  "chatExecutionPlans" | "chatSessionBranchState" | "chatToolRuns" | "chatTurnTraces"
+>;
+
+export interface ChatTurnTraceHydrationHost {
+  readonly storage: ChatTurnTraceHydrationStorage;
+}
 
 export function createHydratedChatTurnTrace(
   host: ChatTurnTraceHydrationHost,

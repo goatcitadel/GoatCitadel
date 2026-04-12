@@ -3,14 +3,28 @@ import type {
   McpServerTemplateRecord,
   McpTemplateDiscoveryResult,
 } from "@goatcitadel/contracts";
-import { MCP_SERVER_TEMPLATES, type GatewayService } from "./gateway-service.js";
 
-export type McpDiagnosticsHost = GatewayService;
+export interface McpDiagnosticsHost {
+  requireFeatureEnabled(flag: string): void;
+  listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }>;
+  requireMcpServer(serverId: string): {
+    enabled: boolean;
+    status: string;
+    transport: string;
+    command?: string;
+    url?: string;
+    policy: {
+      blockedToolPatterns: string[];
+      allowedToolPatterns: string[];
+    };
+  };
+  pickConnectorDiagnosticAction(checks: ConnectorDiagnosticReport["checks"]): string | undefined;
+  recordConnectorHealthRun(report: ConnectorDiagnosticReport): void;
+}
 
 export function listMcpTemplateDiscovery(host: McpDiagnosticsHost): McpTemplateDiscoveryResult[] {
   host.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
-  const installed = new Map(host.readMcpServers().map((server) => [server.label.toLowerCase(), server]));
-  return MCP_SERVER_TEMPLATES.map((template: McpServerTemplateRecord) => {
+  return host.listMcpTemplates().map((template: McpServerTemplateRecord & { installed: boolean }) => {
     const checks: McpTemplateDiscoveryResult["dependencyChecks"] = [];
     if (template.transport === "stdio") {
       checks.push({
@@ -51,7 +65,7 @@ export function listMcpTemplateDiscovery(host: McpDiagnosticsHost): McpTemplateD
     return {
       templateId: template.templateId,
       label: template.label,
-      installed: installed.has(template.label.toLowerCase()),
+      installed: template.installed,
       readiness,
       dependencyChecks: checks,
     };

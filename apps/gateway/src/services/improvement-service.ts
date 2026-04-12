@@ -5,8 +5,10 @@ import {
   type ApprovalCreateInput,
   type ApprovalRequest,
   type DurableRunRecord,
+  type RealtimeEvent,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
+import type { Storage } from "@goatcitadel/storage";
 
 const log = logger.child("improvement-service");
 import type {
@@ -53,7 +55,7 @@ import type {
   TranscriptEvent,
   WeeklyImprovementReportRecord,
 } from "@goatcitadel/contracts";
-import type { ServiceContext } from "./service-context.js";
+import type { RuntimeSettings } from "./gateway-service.js";
 
 // ── constants ────────────────────────────────────────────────────────
 const IMPROVEMENT_WEEKLY_TIME_ZONE = "America/Los_Angeles";
@@ -118,6 +120,20 @@ const IMPROVEMENT_SIGNAL_SCHEMA_VERSION = "1.1.1";
 const IMPROVEMENT_EVALUATOR_VERSION = "improvement-ledger-v1.1.1";
 const IMPROVEMENT_SIGNAL_METADATA_MAX_BYTES = 4 * 1024;
 const IMPROVEMENT_SIGNAL_EVIDENCE_REF_LIMIT = 8;
+
+export interface ImprovementServiceContext {
+  readonly storage: Pick<Storage, "approvals" | "chatTurnTraces" | "cronJobs" | "systemSettings">;
+  readonly gatewaySql: Storage["gatewaySql"];
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
+  requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
+  normalizeWorkspaceId(workspaceId?: string): string;
+  publishRealtime(
+    channel: string,
+    topic: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
+}
 const IMPROVEMENT_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const IMPROVEMENT_WATCH_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -462,7 +478,7 @@ export class ImprovementService {
   private scheduler?: ReturnType<typeof setInterval>;
 
   constructor(
-    private readonly ctx: ServiceContext,
+    private readonly ctx: ImprovementServiceContext,
     private readonly callbacks: ImprovementServiceCallbacks,
   ) {
     this.ensureCapabilityGapTables();

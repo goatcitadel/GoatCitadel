@@ -164,7 +164,7 @@ describe("ChatProactiveService", () => {
     vi.setSystemTime(new Date("2026-04-04T19:00:00.000Z"));
     try {
       const harness = createHarness();
-      const { service, durableRunService, invokeTool, state } = harness;
+      const { service, durableRunService, invokeTool, state, publishRealtime } = harness;
       const planSpy = vi.spyOn(
         service as unknown as { planProactiveActions: (sessionId: string) => Promise<unknown> },
         "planProactiveActions",
@@ -220,6 +220,46 @@ describe("ChatProactiveService", () => {
       expect(blockedRun.stopReason).toBe("approval_block");
       expect(blockedActions.map((action) => action.status)).toEqual(["executed", "blocked"]);
       expect(invokeTool).toHaveBeenCalledTimes(2);
+      expect(publishRealtime).toHaveBeenCalledWith(
+        "proactive_tick_started",
+        "chat",
+        expect.objectContaining({
+          sessionId: state.session.sessionId,
+          runId: started.runId,
+          durableRunId: parentRunId,
+        }),
+        expect.objectContaining({
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: expect.objectContaining({
+            sessionId: state.session.sessionId,
+            proactiveRunId: started.runId,
+            runId: parentRunId,
+            workspaceId: "default",
+          }),
+        }),
+      );
+      expect(publishRealtime).toHaveBeenCalledWith(
+        "task_created",
+        "tasks",
+        expect.objectContaining({
+          task: expect.objectContaining({
+            proactiveContext: expect.objectContaining({
+              proactiveRunId: started.runId,
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: expect.objectContaining({
+            sessionId: state.session.sessionId,
+            proactiveRunId: started.runId,
+            taskId: blockedRun.linkedTaskId,
+            workspaceId: "default",
+          }),
+        }),
+      );
       expect(waitingCheckpoint?.state).toMatchObject({
         waitForEvent: { eventKey: "approval.resolved", correlationId: approvalId },
         proactive: {
@@ -349,13 +389,14 @@ function createHarness(options?: { durableKernelV1Enabled?: boolean }) {
     timeline: [],
   };
   const storage = createStorage(state);
+  const publishRealtime = vi.fn();
   const ctx = {
     storage,
     config: { assistant: { durable: { enabled: true } } },
     llmService: {},
     policyEngine: {},
     gatewaySql: { prepare: (sql: string) => createStatement(sql, state) },
-    publishRealtime: () => undefined,
+    publishRealtime,
     requireFeatureEnabled: () => undefined,
     isFeatureEnabled: (flag: keyof RuntimeSettings["features"]) =>
       flag !== "durableKernelV1Enabled" || options?.durableKernelV1Enabled !== false,
@@ -380,7 +421,14 @@ function createHarness(options?: { durableKernelV1Enabled?: boolean }) {
     backgroundTasks,
     closing: false,
   };
-  return { state, storage, service: new ChatProactiveService(ctx, callbacks), durableRunService, invokeTool };
+  return {
+    state,
+    storage,
+    service: new ChatProactiveService(ctx, callbacks),
+    durableRunService,
+    invokeTool,
+    publishRealtime,
+  };
 }
 
 function createStorage(state: HarnessState) {

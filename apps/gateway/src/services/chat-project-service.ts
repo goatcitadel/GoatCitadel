@@ -1,13 +1,23 @@
-import type { ChatProjectRecord } from "@goatcitadel/contracts";
-import type { ServiceContext } from "./service-context.js";
+import type { ChatProjectRecord, RealtimeEvent } from "@goatcitadel/contracts";
+import type { Storage } from "@goatcitadel/storage";
+
+export interface ChatProjectServiceContext {
+  readonly storage: Pick<Storage, "chatProjects">;
+  normalizeWorkspaceId(workspaceId?: string): string | undefined;
+  publishRealtime(
+    channel: string,
+    topic: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
+}
 
 /**
- * Encapsulates all chat-project CRUD operations previously inlined in
- * GatewayService.  Receives a {@link ServiceContext} so it can reach
- * storage and realtime without holding a reference to the full gateway.
+ * Encapsulates chat-project CRUD behind the narrow storage/workspace/realtime
+ * dependencies it actually needs.
  */
 export class ChatProjectService {
-  constructor(private readonly ctx: ServiceContext) {}
+  constructor(private readonly ctx: ChatProjectServiceContext) {}
 
   listChatProjects(
     view: "active" | "archived" | "all" = "active",
@@ -37,13 +47,16 @@ export class ChatProjectService {
     return created;
   }
 
-  updateChatProject(projectId: string, input: {
-    workspaceId?: string;
-    name?: string;
-    description?: string;
-    workspacePath?: string;
-    color?: string;
-  }): ChatProjectRecord {
+  updateChatProject(
+    projectId: string,
+    input: {
+      workspaceId?: string;
+      name?: string;
+      description?: string;
+      workspacePath?: string;
+      color?: string;
+    },
+  ): ChatProjectRecord {
     const updated = this.ctx.storage.chatProjects.update(projectId, {
       ...input,
       workspaceId: input.workspaceId ? this.ctx.normalizeWorkspaceId(input.workspaceId) : undefined,

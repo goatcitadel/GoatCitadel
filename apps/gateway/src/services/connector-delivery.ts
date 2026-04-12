@@ -12,6 +12,7 @@ import {
   type ConnectorRecord,
   type McpInvokeRequest,
   type McpInvokeResponse,
+  type RealtimeEvent,
   type ToolInvokeResult,
 } from "@goatcitadel/contracts";
 
@@ -33,14 +34,21 @@ export async function dispatchConnectorDelivery(
     commsUnsend: (input: ChannelUnsendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsTyping: (input: ChannelTypingInput) => Promise<ChannelTypingResult | Record<string, unknown>>;
     invokeMcpTool: (input: McpInvokeRequest) => Promise<McpInvokeResponse>;
-    publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+    publishRealtime: (
+      eventType: string,
+      source: string,
+      payload: Record<string, unknown>,
+      options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+    ) => void;
   },
 ): Promise<ConnectorDeliveryDispatchResult> {
   requireActiveConnector(connector);
 
   switch (connector.connectorType) {
     case "integration_connection":
-      if (!["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"].includes(payload.action)) {
+      if (
+        !["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"].includes(payload.action)
+      ) {
         throw new ValidationError({
           message: `Connector delivery action ${payload.action} is not supported for integration connectors.`,
         });
@@ -185,9 +193,10 @@ async function dispatchIntegrationChannelAction(
     });
   }
   return {
-    capabilityId: payload.action === "channel.send" || payload.action === "channel.reply"
-      ? "outbound_messages"
-      : "interactive_actions",
+    capabilityId:
+      payload.action === "channel.send" || payload.action === "channel.reply"
+        ? "outbound_messages"
+        : "interactive_actions",
     dispatchKind,
     result: unwrapToolInvokeResult(result),
   };
@@ -221,17 +230,31 @@ async function dispatchMcpInvoke(
 function dispatchBrowserRealtime(
   connector: ConnectorRecord,
   payload: ConnectorDeliveryWorkflowPayload,
-  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void,
+  publishRealtime: (
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ) => void,
 ): ConnectorDeliveryDispatchResult {
   const actionPayload = payload.payload ?? {};
   const eventType = optionalString(actionPayload.eventType) ?? "connector_delivery_browser_event";
   const source = optionalString(actionPayload.source) ?? "connectors";
   const eventPayload = normalizeRecord(actionPayload.payload);
-  publishRealtime(eventType, source, {
-    connectorId: connector.connectorId,
-    action: payload.action,
-    ...eventPayload,
-  });
+  publishRealtime(
+    eventType,
+    source,
+    {
+      connectorId: connector.connectorId,
+      action: payload.action,
+      ...eventPayload,
+    },
+    {
+      eventClass: "operational_signal",
+      eventAuthority: "retained_stream",
+      links: buildConnectorRealtimeLinks(connector.connectorId, eventPayload ?? {}),
+    },
+  );
   return {
     capabilityId: "interactive_actions",
     dispatchKind: "browser_realtime",
@@ -301,7 +324,8 @@ function normalizeWhatsAppDeliveryTarget(target: string): string {
   const normalized = normalizeWhatsAppTarget(target);
   if (!normalized) {
     throw new ValidationError({
-      message: 'payload.target must be a WhatsApp E.164 number like "+15551234567" or a group JID like "120363123456789@g.us".',
+      message:
+        'payload.target must be a WhatsApp E.164 number like "+15551234567" or a group JID like "120363123456789@g.us".',
     });
   }
   return normalized;
@@ -316,8 +340,7 @@ function normalizeWhatsAppTarget(value: string): string | null {
     const localPart = candidate.slice(0, candidate.length - "@g.us".length);
     return `${localPart}@g.us`;
   }
-  const userMatch = candidate.match(/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i)
-    ?? candidate.match(/^(\d+)@lid$/i);
+  const userMatch = candidate.match(/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i) ?? candidate.match(/^(\d+)@lid$/i);
   if (userMatch) {
     const phone = userMatch[1];
     return typeof phone === "string" ? normalizeE164Like(phone) : null;
@@ -396,11 +419,30 @@ function unwrapToolInvokeResult(result: ConnectorActionResult): Record<string, u
     if (invokeResult.outcome !== "executed") {
       throw new Error(invokeResult.policyReason || `Tool execution returned ${invokeResult.outcome}.`);
     }
-    return invokeResult.result ?? {
-      outcome: invokeResult.outcome,
-      auditEventId: invokeResult.auditEventId,
-      policyReason: invokeResult.policyReason,
-    };
+    return (
+      invokeResult.result ?? {
+        outcome: invokeResult.outcome,
+        auditEventId: invokeResult.auditEventId,
+        policyReason: invokeResult.policyReason,
+      }
+    );
   }
   return { ...result };
+}
+
+function buildConnectorRealtimeLinks(
+  connectorId: string,
+  payload: Record<string, unknown>,
+): NonNullable<RealtimeEvent["links"]> {
+  return {
+    connectorId,
+    ...(optionalString(payload.sessionId) ? { sessionId: optionalString(payload.sessionId) } : {}),
+    ...(optionalString(payload.runId) ? { runId: optionalString(payload.runId) } : {}),
+    ...(optionalString(payload.proactiveRunId) ? { proactiveRunId: optionalString(payload.proactiveRunId) } : {}),
+    ...(optionalString(payload.approvalId) ? { approvalId: optionalString(payload.approvalId) } : {}),
+    ...(optionalString(payload.taskId) ? { taskId: optionalString(payload.taskId) } : {}),
+    ...(optionalString(payload.workspaceId) ? { workspaceId: optionalString(payload.workspaceId) } : {}),
+    ...(optionalString(payload.messageId) ? { messageId: optionalString(payload.messageId) } : {}),
+    ...(optionalString(payload.turnId) ? { turnId: optionalString(payload.turnId) } : {}),
+  };
 }

@@ -1,10 +1,10 @@
 /**
- * Device-access + companion-session shared constants, types, and pure
- * helpers extracted from gateway-service.ts as part of Step 4b
- * (gateway-service decomposition prerequisite). These pieces are imported
- * by both gateway-service.ts (for the cross-cutting features that still
- * live there: approvals, OAuth, companion runtime) and
- * settings-auth-service.ts (for the body-moved device-access methods).
+ * Shared constants, types, and pure helpers for device-access and
+ * companion-session flows.
+ *
+ * These helpers are intentionally shared by gateway-service.ts and
+ * settings-auth-service.ts because both still participate in the same
+ * auth/runtime surface.
  */
 
 import { createHash, createPublicKey, timingSafeEqual } from "node:crypto";

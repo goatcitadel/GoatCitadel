@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveSessionRoute } from "@goatcitadel/gateway-core";
-import type { ChatSessionRecord } from "@goatcitadel/contracts";
-import type { GatewayService } from "./gateway-service.js";
+import type { ChatSessionPrefsRecord, ChatSessionRecord } from "@goatcitadel/contracts";
 
 const DEFAULT_DISCORD_WORKSPACE_ID = "default";
 const DISCORD_ROUTE_SESSIONS_SETTING_KEY = "discord_route_sessions_v1";
@@ -15,31 +14,88 @@ export interface DiscordRouteSessionRecord {
   updatedAt: string;
 }
 
-export interface DiscordRuntimeBridgeHost extends Pick<
-  GatewayService,
-  | "assignChatSessionProject"
-  | "ensureChatSessionRuntimeGrants"
-  | "getChatSessionPrefs"
-  | "ingestChannelMessage"
-  | "isChatTurnWriteConflict"
-  | "operatorSummaryCache"
-  | "parseChatCommand"
-  | "recordDevDiagnostic"
-  | "requireChatSession"
-  | "respondToExistingChatMessage"
-  | "setChatSessionBinding"
-  | "updateChatSession"
-  | "updateChatSessionPrefs"
-> {
-  storage: Pick<
-    GatewayService["storage"],
-    | "chatSessionBindings"
-    | "chatSessionMeta"
-    | "chatSessionPrefs"
-    | "chatSessionProjects"
-    | "sessions"
-    | "systemSettings"
-  >;
+export interface DiscordRuntimeBridgeHost {
+  readonly storage: {
+    chatSessionBindings: {
+      upsert(
+        input: {
+          sessionId: string;
+          workspaceId: string;
+          transport: "integration";
+          connectionId: string;
+          target: string;
+          writable: boolean;
+        },
+        now?: string,
+      ): void;
+    };
+    chatSessionMeta: {
+      ensure(sessionId: string, now?: string, workspaceId?: string): { workspaceId?: string };
+    };
+    chatSessionPrefs: {
+      ensure(sessionId: string, now?: string): void;
+    };
+    chatSessionProjects: {
+      get(sessionId: string): { projectId: string } | undefined;
+    };
+    sessions: {
+      upsert(input: {
+        sessionId: string;
+        sessionKey: string;
+        kind: string;
+        channel: string;
+        account: string;
+        displayName?: string;
+        timestamp: string;
+      }): unknown;
+    };
+    systemSettings: {
+      get<T>(key: string): { value: T } | undefined;
+      set(key: string, value: unknown): void;
+    };
+  };
+  readonly operatorSummaryCache: {
+    invalidate(): void;
+  };
+  assignChatSessionProject(sessionId: string, projectId?: string): unknown;
+  ensureChatSessionRuntimeGrants(sessionId: string): void;
+  getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord;
+  ingestChannelMessage(
+    channel: string,
+    dedupeKey: string,
+    input: {
+      eventId: string;
+      account: string;
+      peer?: string;
+      room?: string;
+      threadId?: string;
+      actorId: string;
+      actorType: "user";
+      content: string;
+      displayName?: string;
+      metadata?: Record<string, unknown>;
+    },
+  ): Promise<{ deduped: boolean; session: { sessionId: string } }>;
+  isChatTurnWriteConflict(error: unknown): boolean;
+  parseChatCommand(sessionId: string, commandText: string): Promise<{ message: string }>;
+  recordDevDiagnostic(input: {
+    level: "info" | "warn" | "error";
+    category: string;
+    event: string;
+    message: string;
+    context?: Record<string, unknown>;
+  }): void;
+  requireChatSession(sessionId: string): ChatSessionRecord;
+  respondToExistingChatMessage(sessionId: string, sourceMessageId: string): Promise<unknown>;
+  setChatSessionBinding(input: {
+    sessionId: string;
+    transport: "integration";
+    connectionId: string;
+    target: string;
+    writable: boolean;
+  }): void;
+  updateChatSession(sessionId: string, patch: { title?: string }): unknown;
+  updateChatSessionPrefs(sessionId: string, patch: Record<string, unknown>): unknown;
 }
 
 export function readDiscordRouteSessions(host: DiscordRuntimeBridgeHost): DiscordRouteSessionRecord[] {
@@ -276,7 +332,7 @@ export async function handleDiscordRuntimeInbound(
               sessionId: ingestResult.session.sessionId,
               sourceMessageId: input.sourceMessageId,
               attempt,
-              error: error.message,
+              error: error instanceof Error ? error.message : String(error),
             },
           });
           return;

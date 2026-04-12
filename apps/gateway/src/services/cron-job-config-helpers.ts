@@ -11,15 +11,20 @@ import {
   normalizeCronJobName,
   normalizeCronSchedule,
 } from "./gateway/cron-automation-service.js";
+import type { Storage } from "@goatcitadel/storage";
+import type { GatewayRuntimeConfig } from "../config.js";
 import {
   COST_REPORT_HOURLY_SCHEDULE_LABEL,
   MEMORY_FLUSH_DAILY_SCHEDULE_LABEL,
   PRIVATE_BETA_BACKUP_SCHEDULE_LABEL,
   UPDATE_REVIEW_DAILY_SCHEDULE_LABEL,
-  type GatewayService,
-} from "./gateway-service.js";
+} from "./cron-job-schedule-labels.js";
 
-export type CronJobConfigHost = GatewayService;
+export interface CronJobConfigHost {
+  readonly config: Pick<GatewayRuntimeConfig, "rootDir">;
+  readonly storage: Pick<Storage, "cronJobs" | "runImmediateTransaction">;
+  persistUnifiedConfig(): void;
+}
 
 export function getCronJobsConfigPath(host: CronJobConfigHost): string {
   return path.join(host.config.rootDir, "config", "cron-jobs.json");

@@ -1,9 +1,9 @@
 /**
  * Chat slash-command parser/dispatcher.
  *
- * Body-move home for `parseChatCommand`, previously a 670-line method on
- * GatewayService. The function is dispatch-style: parses the leading
- * slash command and delegates to existing public host methods.
+ * Parses chat slash commands and dispatches them through an explicit command
+ * runtime host. Pure parsing helpers stay separate from mutable command
+ * execution.
  */
 
 import type {
@@ -16,19 +16,146 @@ import type {
   ChatThinkingLevel,
   ChatWebMode,
   McpServerRecord,
+  McpServerTemplateRecord,
   ResearchSummaryRecord,
 } from "@goatcitadel/contracts";
+import { parseDelegateCommand, parsePipelineCommand, parseSlashCommand } from "./chat-command-helpers.js";
 import { parseChatModelCommandTarget } from "./chat-model-command.js";
 import { normalizePromptTestCode, clampPromptScore } from "./prompt-pack-service.js";
-import {
-  MCP_SERVER_TEMPLATES,
-  parseDelegateCommand,
-  parsePipelineCommand,
-  parseSlashCommand,
-  type GatewayService,
-} from "./gateway-service.js";
 
-export type ChatCommandHost = GatewayService;
+export interface ChatCommandHost {
+  readonly storage: {
+    chatSessionMeta: {
+      ensure(sessionId: string): { workspaceId?: string };
+    };
+    chatSessionProjects: {
+      get(sessionId: string): { projectId: string } | undefined;
+    };
+  };
+  assignChatSessionProject(sessionId: string, projectId?: string): { projectId?: string };
+  connectMcpServer(serverId: string): Promise<McpServerRecord>;
+  createChatSession(input: { workspaceId?: string; title?: string; projectId?: string }): ChatSessionRecord;
+  createMcpServer(input: {
+    label: string;
+    transport: McpServerRecord["transport"];
+    command?: string;
+    args?: string[];
+    url?: string;
+    authType?: McpServerRecord["authType"];
+    enabled?: boolean;
+    category?: McpServerRecord["category"];
+    trustTier?: McpServerRecord["trustTier"];
+    costTier?: McpServerRecord["costTier"];
+    policy?: McpServerRecord["policy"];
+  }): McpServerRecord;
+  disconnectMcpServer(serverId: string): McpServerRecord;
+  getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord;
+  getMemoryMaintenanceStatus(workspaceId: string): {
+    policy: {
+      enabled: boolean;
+      runMode: string;
+      timingStrategy: string;
+      providerId?: string;
+      model?: string;
+      executionTarget: string;
+      unavailableModelPolicy: string;
+      schedule?: { frequency: string; hour: number; minute: number };
+      timeZone: string;
+    };
+    state: { changedSessionCount: number };
+    lastRun?: { status: string; updatedAt: string };
+    nextDueAt?: string;
+  };
+  getSession(sessionId: string): unknown;
+  getSettings(): {
+    llm: {
+      activeProviderId?: string;
+      activeModel?: string;
+    };
+  };
+  installSkillImport(input: { sourceRef: string; confirmHighRisk?: boolean }): Promise<{ installedSkillId?: string }>;
+  listChatCommandCatalog(): Array<{ usage: string; description: string }>;
+  listMcpServers(): McpServerRecord[];
+  listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }>;
+  listSkills(): Array<{ skillId: string; state: string; note?: string }>;
+  listSkillSources(
+    query: string,
+    limit: number,
+  ): Promise<{
+    items: Array<{
+      name: string;
+      sourceProvider: string;
+      installability?: string;
+      matchReason?: string;
+      sourceUrl: string;
+    }>;
+  }>;
+  lookupSkillSources(
+    query: string,
+    limit: number,
+  ): Promise<{
+    bestMatch?: {
+      name: string;
+      sourceProvider: string;
+      matchReason?: string;
+      installability?: string;
+      sourceUrl: string;
+      upstreamUrl?: string;
+      installHint?: string;
+    };
+    items: Array<{
+      name: string;
+      sourceProvider: string;
+      matchReason?: string;
+      installability?: string;
+      sourceUrl: string;
+      upstreamUrl?: string;
+      installHint?: string;
+    }>;
+  }>;
+  normalizeWorkspaceId(workspaceId?: string): string;
+  resolveChatToolApproval(sessionId: string, approvalId: string, decision: "approve" | "reject"): Promise<unknown>;
+  runChatDelegation(
+    sessionId: string,
+    input: {
+      objective: string;
+      roles: string[];
+      mode: "sequential";
+    },
+  ): Promise<{ runId: string; steps: unknown[] }>;
+  runChatResearch(
+    sessionId: string,
+    input: {
+      query: string;
+      mode: "quick";
+    },
+  ): Promise<ResearchSummaryRecord>;
+  runMemoryMaintenanceNow(input: { workspaceId: string; triggerSource: "manual" }): { runId: string };
+  runPromptPackFromChat(sessionId: string, selector: string): Promise<unknown[]>;
+  scorePromptPackLatestRunByCode(input: {
+    sessionId?: string;
+    testCode: string;
+    routingScore: 0 | 1 | 2;
+    honestyScore: 0 | 1 | 2;
+    handoffScore: 0 | 1 | 2;
+    robustnessScore: 0 | 1 | 2;
+    usabilityScore: 0 | 1 | 2;
+    notes?: string;
+  }): Promise<{ overrideVerdict?: string }>;
+  setSkillState(
+    skillId: string,
+    state: "enabled" | "sleep" | "disabled",
+    reason: string,
+  ): { skillId: string; state: string };
+  updateChatSessionPrefs(sessionId: string, patch: Record<string, unknown>): ChatSessionPrefsRecord;
+  updateChatSessionProactivePolicy(sessionId: string, patch: Record<string, unknown>): { mode: ChatProactiveMode };
+  validateSkillImport(input: { sourceRef: string }): Promise<{
+    valid: boolean;
+    errors: string[];
+    riskLevel?: string;
+    inferredSkillName?: string;
+  }>;
+}
 
 export type ChatCommandResult = {
   ok: boolean;
@@ -587,7 +714,7 @@ export async function parseChatCommand(
       if (!templateId) {
         return { ok: false, command, args, message: "Usage: /mcp add-template <templateId>" };
       }
-      const template = MCP_SERVER_TEMPLATES.find((item) => item.templateId.toLowerCase() === templateId);
+      const template = host.listMcpTemplates().find((item) => item.templateId.toLowerCase() === templateId);
       if (!template) {
         return { ok: false, command, args, message: `Unknown MCP template ${templateId}.` };
       }

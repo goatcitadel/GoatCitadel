@@ -1,8 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { DiscordPairingRecord } from "@goatcitadel/contracts";
-import type { GatewayService } from "./gateway-service.js";
 
-export type DiscordPairingHost = GatewayService;
+export interface DiscordPairingHost {
+  readDiscordPairings(): DiscordPairingRecord[];
+  writeDiscordPairings(records: DiscordPairingRecord[]): void;
+}
 
 export function generateDiscordPairingCode(): string {
   return randomBytes(3).toString("hex").toUpperCase();

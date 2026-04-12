@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { GuidanceDocType, GuidanceDocumentRecord } from "@goatcitadel/contracts";
-import { GUIDANCE_DOC_FILE_MAP, type GatewayService } from "./gateway-service.js";
+import type { GatewayRuntimeConfig } from "../config.js";
+import { GUIDANCE_DOC_FILE_MAP } from "./guidance-doc-files.js";
 
-export type GuidanceDocumentHost = GatewayService;
+export interface GuidanceDocumentHost {
+  readonly config: Pick<GatewayRuntimeConfig, "rootDir">;
+  normalizeWorkspaceId(workspaceId?: string): string;
+}
 
 export function resolveGuidancePath(
   host: GuidanceDocumentHost,

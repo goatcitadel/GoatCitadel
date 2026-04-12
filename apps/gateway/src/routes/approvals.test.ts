@@ -183,6 +183,74 @@ describe("approvals routes", () => {
     });
   });
 
+  it("uses request actor fallback when bulk-resolve omits resolvedBy", async () => {
+    const resolveApprovalsBulk = vi.fn(async () => ({
+      decision: "approve",
+      status: "pending",
+      resolvedCount: 1,
+      skippedCount: 0,
+      failedCount: 0,
+      results: [],
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      resolveApprovalsBulk,
+    } as never);
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals/bulk-resolve",
+      payload: {
+        decision: "approve",
+      },
+      remoteAddress: "127.0.0.1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(resolveApprovalsBulk).toHaveBeenCalledWith({
+      decision: "approve",
+      resolvedBy: "ip:127.0.0.1",
+    });
+  });
+
+  it("uses request actor fallback when issuing remote action tokens", async () => {
+    const createApprovalRemoteActionToken = vi.fn(() => ({
+      approvalId: "apr_123",
+      connectorId: "mission-control",
+      tokenId: "rat_123",
+      token: "grat_token",
+      actionType: "approval.resolve",
+      mutation: { approvalId: "apr_123" },
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      state: "pending",
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      createApprovalRemoteActionToken,
+    } as never);
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals/3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d/remote-token",
+      payload: {
+        connectorId: "mission-control",
+      },
+      remoteAddress: "127.0.0.1",
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(createApprovalRemoteActionToken).toHaveBeenCalledWith(
+      "3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d",
+      expect.objectContaining({
+        connectorId: "mission-control",
+        issuedBy: "ip:127.0.0.1",
+      }),
+    );
+  });
+
   it("returns replay snapshots with an explicit durable run id", async () => {
     const getApprovalReplay = vi.fn(() => ({
       approval: {

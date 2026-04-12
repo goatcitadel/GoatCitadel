@@ -1,11 +1,8 @@
 /**
  * Chat turn dispatch helpers.
  *
- * Step 8d (partial) of the gateway-service decomposition plan: extracts the
- * dispatch helpers that route a prepared chat turn through the LLM stream,
- * the durable execution path, or the integration transport. The gateway stays
- * the composition root, but these helpers now depend on an explicit host
- * contract instead of the full GatewayService type.
+ * Routes prepared chat turns through the narrowed runtime host without
+ * depending on the full gateway facade.
  */
 
 import { randomUUID } from "node:crypto";
@@ -14,6 +11,7 @@ import type {
   ChannelSendInput,
   ChatCitationRecord,
   ChatMessageRecord,
+  RealtimeEvent,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
   ChatSessionBindingRecord,
@@ -30,6 +28,7 @@ import {
   type InspectableChatStreamChunk,
   type PreparedChatExecutionPlanResolution,
 } from "./gateway-service.js";
+import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
 
@@ -70,7 +69,12 @@ export interface ChatTurnDispatchHost extends chatTurnStreamService.ChatTurnStre
   commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<unknown>;
   updateActiveLeafOrThrow(sessionId: string, previousActiveTurnId: string | undefined, nextActiveTurnId: string): void;
-  publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): void;
+  publishRealtime(
+    channel: string,
+    topic: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
 }
 
 export function isDurableExecutionEnabled(host: ChatTurnDispatchHost): boolean {
@@ -435,12 +439,17 @@ export async function sendPreparedIntegrationChatTurn(
       citations: [],
     };
     host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, prepared.turnId);
-    host.publishRealtime("chat_thread_updated", "chat", {
-      type: threadEventType,
-      sessionId,
-      turnId: prepared.turnId,
-      activeLeafTurnId: prepared.turnId,
-    });
+    host.publishRealtime(
+      "chat_thread_updated",
+      "chat",
+      {
+        type: threadEventType,
+        sessionId,
+        turnId: prepared.turnId,
+        activeLeafTurnId: prepared.turnId,
+      },
+      buildChatTurnRealtimeOptions({ sessionId, turnId: prepared.turnId }),
+    );
     return {
       sessionId,
       userMessage: prepared.userMessage,

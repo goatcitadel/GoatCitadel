@@ -55,6 +55,7 @@ import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
 import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
+import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import type {
   DatabaseCutoverProfile,
   DatabaseCutoverResponse,
@@ -272,7 +273,6 @@ import type {
   OrchestrationRun,
   PendingApprovalAction,
   RealtimeEvent,
-  RuntimeLifecycleFieldSource,
   RuntimeLifecycleResponse,
   RetentionPolicy,
   RetentionPruneResult,
@@ -473,7 +473,6 @@ import {
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
 import * as cronSchedulerService from "./cron-scheduler-service.js";
-import * as approvalLifecycleService from "./approval-lifecycle-service.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
@@ -508,7 +507,8 @@ import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
-import * as chatTurnEntryService from "./chat-turn-entry-service.js";
+import { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
+import { ToolInvocationCoordinatorService } from "./tool-invocation-coordinator-service.js";
 import {
   ChatTurnExecutionRegistry,
   type ActiveChatTurnExecution,
@@ -529,6 +529,7 @@ import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
+import { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import type { CodeModeApprovalQueueItem } from "./capability-system-service.js";
 import { ReplayExecutionSkippedError } from "./replay-execution.js";
@@ -582,7 +583,6 @@ import {
   MCP_APPROVAL_DELIVERY_TOOL_NAME,
   MCP_APPROVAL_INBOX_URL,
   createInternalMcpApprovalInboxTools,
-  handleInternalMcpApprovalInboxInvoke,
   isInternalMcpApprovalInboxServer,
 } from "./mcp-approval-inbox.js";
 import {
@@ -1385,9 +1385,14 @@ export class GatewayService {
   /** @internal */ public readonly discordRuntimeService: DiscordRuntimeService;
   private readonly chatProjectService: ChatProjectService;
   /** @internal */ public readonly durableRunService: DurableRunService;
+  private readonly durableWorkflowRegistry: durableExecutionService.DurableWorkflowExecutorRegistry;
   /** @internal */ public readonly hooksService: HooksService;
   /** @internal */ public readonly approvalWaitRunService: ApprovalWaitRunService;
   /** @internal */ public readonly approvalEffectsService: ApprovalEffectsService;
+  private readonly approvalRuntime: ApprovalRuntimeService;
+  private readonly chatTurnRuntime: ChatTurnRuntimeService;
+  private readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
+  private readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
   private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
   private readonly promptPackService: PromptPackService;
   /** @internal */ public readonly chatProactiveService: ChatProactiveService;
@@ -1441,7 +1446,9 @@ export class GatewayService {
       storage: this.storage,
       backgroundTasks: this.backgroundTasks,
       isClosing: () => this.closing,
-      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+      publishRealtime: (eventType, source, payload) => {
+        this.publishRealtime(eventType, source, payload);
+      },
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
       readChatAttachmentContent: (id) => this.readChatAttachmentContent(id),
       getChatAttachment: (id) => this.getChatAttachment(id),
@@ -1468,7 +1475,9 @@ export class GatewayService {
       readSkillStates: () => this.readSkillStates(),
       invokeTool: (request) => this.invokeTool(request),
       createApproval: (input) => this.createApproval(input),
-      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+      publishRealtime: (eventType, source, payload) => {
+        this.publishRealtime(eventType, source, payload);
+      },
       readPolicySnapshot: () => ({
         toolPolicy: this.config.toolPolicy,
         features: this.readFeatureFlags(),
@@ -1484,7 +1493,9 @@ export class GatewayService {
       storage: this.storage,
       rootDir: config.rootDir,
       createChatCompletion: (request) => this.createChatCompletion(request),
-      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+      publishRealtime: (eventType, source, payload) => {
+        this.publishRealtime(eventType, source, payload);
+      },
     });
     this.memoryContextService = new MemoryContextService(
       this.storage,
@@ -1568,7 +1579,9 @@ export class GatewayService {
     this.cronAutomationService = new CronAutomationService({
       storage: this.storage,
       persistCronJobsConfig: () => this.persistCronJobsConfig(),
-      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload ?? {}),
+      publishRealtime: (eventType, source, payload) => {
+        this.publishRealtime(eventType, source, payload ?? {});
+      },
       requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       runHandlers: {
@@ -1590,7 +1603,7 @@ export class GatewayService {
       },
     });
 
-    // ── extracted sub-services (Phase 2 facade pattern) ──────────
+    // ── extracted sub-services and narrowed runtime contexts ─────
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     const serviceCtx: ServiceContext = buildGatewayServiceContext({
@@ -1598,7 +1611,9 @@ export class GatewayService {
       config: this.config,
       llmService: this.llmService,
       policyEngine: this.policyEngine,
-      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+      publishRealtime: (eventType, source, payload, options) => {
+        this.publishRealtime(eventType, source, payload, options);
+      },
       requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
@@ -1606,10 +1621,10 @@ export class GatewayService {
     this.chatProjectService = new ChatProjectService(serviceCtx);
     this.durableRunService = new DurableRunService(serviceCtx, {
       backgroundTasks: this.backgroundTasks,
-      executeWorkflow: (run) => this.executeDurableWorkflowRun(run),
-      isWorkflowRecoverable: (run) => this.isDurableWorkflowRecoverable(run),
-      markWorkflowUnrecoverable: async (run, reason) => {
-        await this.markDurableWorkflowUnrecoverable(run, reason);
+      workflowRegistry: {
+        executeWorkflow: (run) => this.durableWorkflowRegistry.executeWorkflow(run),
+        isWorkflowRecoverable: (run) => this.durableWorkflowRegistry.isWorkflowRecoverable(run),
+        markWorkflowUnrecoverable: (run, reason) => this.durableWorkflowRegistry.markWorkflowUnrecoverable(run, reason),
       },
       onRunFailed: async (run, message) => {
         this.improvementService.recordDurableRunFailureSignal({
@@ -1667,6 +1682,83 @@ export class GatewayService {
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
     });
+    this.approvalRuntime = new ApprovalRuntimeService({
+      storage: this.storage,
+      policyEngine: this.policyEngine,
+      hooksService: this.hooksService,
+      approvalWaitRunService: this.approvalWaitRunService,
+      publishRealtime: (eventType, source, payload, options) =>
+        this.publishRealtime(eventType, source, payload, options),
+      requireConnectorRecord: (connectorId) => this.requireConnectorRecord(connectorId),
+      consumeRemoteActionToken: (token, actionType) => this.consumeRemoteActionToken(token, actionType),
+      consumeRemoteActionTokenById: (tokenId, actionType) => this.consumeRemoteActionTokenById(tokenId, actionType),
+      resolveApproval: (approvalId, input) => this.approvalRuntime.resolveApproval(approvalId, input),
+      resolveDeviceAccessApproval: (current, input) => this.resolveDeviceAccessApproval(current, input),
+      executeCodeModePendingApproval: (approvalId) => this.executeCodeModePendingApproval(approvalId),
+      resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
+      parseApprovalCreateHookPatch: (value) => this.parseApprovalCreateHookPatch(value as Record<string, unknown>),
+      scheduleApprovalExplanation: (approval) => this.scheduleApprovalExplanation(approval),
+      findProactiveDurableRunIdsForApproval: (approvalId) => this.findProactiveDurableRunIdsForApproval(approvalId),
+      wakeDurableRun: (runId, event) => this.wakeDurableRun(runId, event),
+      recordApprovalResolution: (approval, input) => this.recordApprovalResolution(approval, input),
+      enqueueApprovalResolutionEffects: (approval, input) => this.enqueueApprovalResolutionEffects(approval, input),
+      enqueueApprovalRemoteTokenDelivery: (approval, connector, tokenRecord) =>
+        this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
+    });
+    this.chatTurnRuntime = new ChatTurnRuntimeService(this);
+    this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
+      approvalInbox: this.storage.approvalInbox,
+      policyEngine: this.policyEngine,
+      hooksService: this.hooksService,
+      normalizeToolInvokeRequest: (request) =>
+        this.applyRuntimeBrowserBackendDefaults(
+          this.resolveToolInvokeRequestPaths({
+            ...request,
+            workspaceId:
+              request.workspaceId ??
+              this.storage.chatSessionMeta.get(request.sessionId)?.workspaceId ??
+              DEFAULT_WORKSPACE_ID,
+          }),
+        ),
+      isValidToolName: (name) => isValidToolName(name),
+      evaluateToolDeploymentGuard: (request) =>
+        evaluateDeploymentProfileToolAccess(this.config.assistant.deploymentProfile, request.toolName, request.args),
+      resolveToolHookWorkspaceId: (request) => this.resolveToolHookWorkspaceId(request),
+      parseToolCallHookPatch: (value) => this.parseToolCallHookPatch(value),
+      primeToolApprovalLifecycle: (approvalId, request) =>
+        this.primeApprovalLifecycle(
+          approvalId,
+          this.buildApprovalLinkage({
+            sessionId: request.sessionId,
+            taskId: request.taskId,
+            toolName: request.toolName,
+            actionType: "tool.invoke",
+          }),
+        ),
+      scheduleApprovalExplanationById: (approvalId) => this.scheduleApprovalExplanationById(approvalId),
+      publishRealtime: (eventType, source, payload, options) =>
+        this.publishRealtime(eventType, source, payload, options),
+      requireMcpServer: (serverId) => this.requireMcpServer(serverId),
+      listMcpTools: (serverId) => this.listMcpTools(serverId),
+      matchesWildcard: (value, pattern) => wildcardMatch(value, pattern),
+      isMcpToolApproved: (serverId, toolName) => this.isMcpToolApproved(serverId, toolName),
+      invokeMcpRuntimeTool: (server, input) => invokeMcpRuntimeTool(server, input),
+      resolveApprovalWithRemoteTokenId: (input) => this.resolveApprovalWithRemoteTokenId(input),
+      applyMcpRedaction: (output, mode) => applyMcpRedaction(output, mode),
+    });
+    this.runtimeLifecycleReadService = new RuntimeLifecycleReadService({
+      getApproval: (approvalId) => this.storage.approvals.get(approvalId),
+      getApprovalWaitRunId: (approvalId) => this.storage.approvalWaitRuns.getRunId(approvalId),
+      getDurableRun: (runId) => this.storage.durableRuns.getRun(runId),
+      findDurableRunMaybe: (runId) => this.findDurableRunMaybe(runId),
+      findTask: (taskId) => this.storage.tasks.find(taskId),
+      getTurnTrace: (turnId) => this.storage.chatTurnTraces.get(turnId),
+      listHydratedChatTurnTraces: (sessionId, limit) => this.listHydratedChatTurnTraces(sessionId, limit),
+      getSession: (sessionId) => this.getSession(sessionId),
+      getSessionSummary: (sessionId) => this.getSessionSummary(sessionId),
+      listChatSessionProactiveRuns: (sessionId, limit) => this.listChatSessionProactiveRuns(sessionId, limit),
+      listApprovalEffects: (approvalId) => this.approvalEffectsService.listByApproval(approvalId),
+    });
     this.improvementService = new ImprovementService(serviceCtx, {
       createApproval: (input) => this.createApproval(input),
       captureRepairPolicySnapshot: (targetKey) => this.captureRepairPolicySnapshot(targetKey),
@@ -1696,14 +1788,141 @@ export class GatewayService {
         gatewaySql: this.gatewaySql,
         tryParseJson: (raw, fallback) => this.tryParseJson(raw, fallback),
         requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
-        publishRealtime: (channel, topic, payload) => this.publishRealtime(channel, topic, payload),
+        publishRealtime: (channel, topic, payload) => {
+          this.publishRealtime(channel, topic, payload);
+        },
+      },
+      files: {
+        rootDir: config.rootDir,
+        workspaceDir: config.assistant.workspaceDir,
+        writeJailRoots: config.toolPolicy.sandbox.writeJailRoots,
+        normalizeRelativePath: (relativePath) => this.normalizeRelativePath(relativePath),
       },
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
     });
+    this.durableWorkflowRegistry = durableExecutionService.createDurableWorkflowExecutorRegistry(
+      durableExecutionService.buildDurableWorkflowExecutors({
+        memoryMaintenance: {
+          storage: this.storage,
+          memoryLifecycleService: this.memoryLifecycleService,
+          publishRealtime: (eventType, source, payload, options) => {
+            this.publishRealtime(eventType, source, payload, options);
+          },
+          recordDurableTimelineEvent: (runId, eventType, payload) =>
+            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordImprovementDurableRunCompletion: (run, checkpointState) =>
+            this.recordImprovementDurableRunCompletion(run, checkpointState),
+        },
+        chatTurn: this.buildDurableChatTurnWorkflowHost(),
+        proactiveTick: {
+          chatProactiveService: this.chatProactiveService,
+          gatewaySql: this.gatewaySql,
+          listChatSessionProactiveRuns: (sessionId, limit) => this.listChatSessionProactiveRuns(sessionId, limit),
+          publishRealtime: (eventType, source, payload, options) => {
+            this.publishRealtime(eventType, source, payload, options);
+          },
+        },
+        approvalWait: {
+          storage: this.storage,
+          publishRealtime: (eventType, source, payload, options) => {
+            this.publishRealtime(eventType, source, payload, options);
+          },
+          recordDurableTimelineEvent: (runId, eventType, payload) =>
+            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordImprovementDurableRunCompletion: (run, checkpointState) =>
+            this.recordImprovementDurableRunCompletion(run, checkpointState),
+        },
+        connectorDelivery: {
+          storage: this.storage,
+          requireConnectorRecord: (connectorId) => this.requireConnectorRecord(connectorId),
+          commsSend: (input) => this.commsSend(input),
+          commsReply: (input) => this.commsReply(input),
+          commsReact: (input) => this.commsReact(input),
+          commsUnsend: (input) => this.commsUnsend(input),
+          commsTyping: (input) => this.commsTyping(input),
+          invokeMcpTool: (input) => this.invokeMcpTool(input),
+          publishRealtime: (eventType, source, payload, options) => {
+            this.publishRealtime(eventType, source, payload, options);
+          },
+          recordDurableTimelineEvent: (runId, eventType, payload) =>
+            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordImprovementDurableRunCompletion: (run, checkpointState) =>
+            this.recordImprovementDurableRunCompletion(run, checkpointState),
+        },
+        hookDelivery: {
+          storage: this.storage,
+          hooksService: this.hooksService,
+          durableRunService: this.durableRunService,
+          computeDurableRetryDelayMs: (current, attemptNo) => this.computeDurableRetryDelayMs(current, attemptNo),
+          publishRealtime: (eventType, source, payload, options) => {
+            this.publishRealtime(eventType, source, payload, options);
+          },
+          recordDurableTimelineEvent: (runId, eventType, payload) =>
+            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordImprovementDurableRunCompletion: (run, checkpointState) =>
+            this.recordImprovementDurableRunCompletion(run, checkpointState),
+        },
+      }),
+    );
   }
 
   public isDevDiagnosticsEnabled(): boolean {
     return this.devDiagnostics.isEnabled();
+  }
+
+  private buildDurableChatTurnWorkflowHost(): durableExecutionService.DurableChatTurnWorkflowHost {
+    return {
+      config: this.config,
+      storage: this.storage,
+      backgroundTasks: this.backgroundTasks,
+      turnRuntime: this.turnRuntime,
+      resolvePreparedTurnOrchestration: (prepared) => this.resolvePreparedTurnOrchestration(prepared),
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      buildChatOrchestrationSummary: (input) => this.buildChatOrchestrationSummary(input),
+      createChatSession: (input) => this.createChatSession(input),
+      inheritDelegatedSessionToolGrants: (sessionId, delegatedSessionId) =>
+        this.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),
+      updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
+      agentSendChatMessage: (sessionId, input) => this.agentSendChatMessage(sessionId, input),
+      beginActiveChatTurnExecution: (sessionId, turnId, operation) =>
+        this.beginActiveChatTurnExecution(sessionId, turnId, operation),
+      endActiveChatTurnExecution: (turnId, controller) => this.endActiveChatTurnExecution(turnId, controller),
+      ingestEvent: (idempotencyKey, payload) => this.ingestEvent(idempotencyKey, payload),
+      updateActiveLeafOrThrow: (sessionId, previousActiveTurnId, nextActiveTurnId) =>
+        this.updateActiveLeafOrThrow(sessionId, previousActiveTurnId, nextActiveTurnId),
+      collectCapabilityUpgradeSuggestions: (input) => this.collectCapabilityUpgradeSuggestions(input),
+      collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
+      publishRealtime: (channel, topic, payload, options) => this.publishRealtime(channel, topic, payload, options),
+      extractAndPersistLearnedMemory: (sessionId, content, source) =>
+        this.extractAndPersistLearnedMemory(sessionId, content, source),
+      scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
+        this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
+      markChatTurnCancelled: (sessionId, turnId) => this.markChatTurnCancelled(sessionId, turnId),
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+      streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
+        this.streamPersistedChatTurnEvents(sessionId, turnId, options),
+      persistChatStreamChunk: (chunk, durableRunId) => {
+        if (!chunk.turnId) {
+          throw new Error("Persistable chat stream chunk is missing a turn id.");
+        }
+        this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId);
+      },
+      createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
+      finalizeDurableChatRun: (runId, prepared, trace) => this.finalizeDurableChatRun(runId, prepared, trace),
+      completeActiveChatTurnStream: (turnId) => this.completeActiveChatTurnStream(turnId),
+      closeActiveChatTurnStream: (turnId) => this.closeActiveChatTurnStream(turnId),
+      beginDurableChatRun: (prepared, input, threadEventType) =>
+        this.beginDurableChatRun(prepared, input, threadEventType),
+      registerActiveChatTurnStream: (sessionId, turnId, durableRunId) =>
+        this.registerActiveChatTurnStream(sessionId, turnId, durableRunId),
+      ensureSessionInternalToolGrant: (sessionId, toolName, reason) =>
+        this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
+      requireExecutedToolResult: (toolName, result) => this.requireExecutedToolResult(toolName, result),
+      commsSend: (input) => this.commsSend(input),
+      prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
+    };
   }
 
   private async persistChatToolArtifact(input: {
@@ -2163,293 +2382,7 @@ export class GatewayService {
     approvalId?: string;
     taskId?: string;
   }): Promise<RuntimeLifecycleResponse> {
-    const linked = {
-      sessionIds: new Set<string>(),
-      turnIds: new Set<string>(),
-      runIds: new Set<string>(),
-      proactiveRunIds: new Set<string>(),
-      approvalIds: new Set<string>(),
-      taskIds: new Set<string>(),
-      workspaceIds: new Set<string>(),
-    };
-
-    let sessionId = normalizeLifecycleId(input.sessionId);
-    const turnId = normalizeLifecycleId(input.turnId);
-    let runId = normalizeLifecycleId(input.runId);
-    let approvalId = normalizeLifecycleId(input.approvalId);
-    let taskId = normalizeLifecycleId(input.taskId);
-    const fallbackSources = new Set<RuntimeLifecycleFieldSource>();
-    const resolution: NonNullable<RuntimeLifecycleResponse["resolution"]> = {
-      sessionIdSource: sessionId ? "query" : undefined,
-      turnIdSource: turnId ? "query" : undefined,
-      runIdSource: runId ? "query" : undefined,
-      approvalIdSource: approvalId ? "query" : undefined,
-      taskIdSource: taskId ? "query" : undefined,
-      fallbackSources: [],
-    };
-
-    let approval: ApprovalRequest | undefined;
-    if (approvalId) {
-      approval = this.storage.approvals.get(approvalId);
-      collectLifecycleLinksFromUnknown(linked, approval.linkage);
-      collectLifecycleLinksFromUnknown(linked, approval.payload);
-      collectLifecycleLinksFromUnknown(linked, approval.preview);
-      if (!sessionId && approval.linkage?.sessionId) {
-        sessionId = approval.linkage.sessionId;
-        resolution.sessionIdSource = "approval_linkage";
-      }
-      if (!taskId && approval.linkage?.taskId) {
-        taskId = approval.linkage.taskId;
-        resolution.taskIdSource = "approval_linkage";
-      }
-      if (approval.linkage?.proactiveRunId) {
-        linked.proactiveRunIds.add(approval.linkage.proactiveRunId);
-      }
-      if (!runId && approval.linkage?.durableRunId) {
-        runId = approval.linkage.durableRunId;
-        resolution.runIdSource = "approval_linkage";
-      }
-      if (!runId) {
-        const approvalWaitRunId = this.storage.approvalWaitRuns.getRunId(approvalId);
-        if (approvalWaitRunId) {
-          runId = approvalWaitRunId;
-          resolution.runIdSource = "approval_wait_run";
-        }
-      }
-      if (!turnId) {
-        const payloadTurnId = typeof approval.payload?.turnId === "string" ? approval.payload.turnId.trim() : "";
-        if (payloadTurnId) {
-          linked.turnIds.add(payloadTurnId);
-          fallbackSources.add("fallback_payload");
-        }
-      }
-      if (approval.preview) {
-        fallbackSources.add("fallback_preview");
-      }
-    }
-
-    let durableRun: DurableRunRecord | undefined;
-    if (runId) {
-      durableRun = this.storage.durableRuns.getRun(runId);
-      collectLifecycleLinksFromUnknown(linked, durableRun.payload);
-      collectLifecycleLinksFromUnknown(linked, durableRun.metadata);
-      if (!sessionId) {
-        const payloadSessionId = findLifecycleString(durableRun.payload, ["sessionId"]);
-        if (payloadSessionId) {
-          sessionId = payloadSessionId;
-          resolution.sessionIdSource = "durable_payload";
-        }
-      }
-      if (!taskId) {
-        const payloadTaskId = findLifecycleString(durableRun.payload, ["taskId"]);
-        if (payloadTaskId) {
-          taskId = payloadTaskId;
-          resolution.taskIdSource = "durable_payload";
-        }
-      }
-    }
-
-    let task: TaskRecord | undefined;
-    if (taskId) {
-      task = this.storage.tasks.find(taskId);
-      if (task) {
-        linked.taskIds.add(task.taskId);
-        if (task.workspaceId) {
-          linked.workspaceIds.add(task.workspaceId);
-        }
-        collectLifecycleLinksFromUnknown(linked, task.proactiveContext);
-        if (!sessionId && task.proactiveContext?.sessionId) {
-          sessionId = task.proactiveContext.sessionId;
-          resolution.sessionIdSource = "task_context";
-        }
-        if (!runId && task.proactiveContext?.durableRunId) {
-          runId = task.proactiveContext.durableRunId;
-          resolution.runIdSource = "task_context";
-        }
-        if (!approvalId && task.proactiveContext?.approvalId) {
-          approvalId = task.proactiveContext.approvalId;
-          resolution.approvalIdSource = "task_context";
-        }
-        if (task.proactiveContext?.proactiveRunId) {
-          linked.proactiveRunIds.add(task.proactiveContext.proactiveRunId);
-        }
-      }
-    }
-
-    const turns = turnId
-      ? [this.storage.chatTurnTraces.get(turnId)]
-      : sessionId
-        ? this.listHydratedChatTurnTraces(sessionId, 200)
-        : [];
-    for (const turn of turns) {
-      linked.sessionIds.add(turn.sessionId);
-      linked.turnIds.add(turn.turnId);
-      if (turn.durable?.runId) {
-        linked.runIds.add(turn.durable.runId);
-      }
-      for (const toolRun of turn.toolRuns ?? []) {
-        if (toolRun.approvalId) {
-          linked.approvalIds.add(toolRun.approvalId);
-        }
-      }
-    }
-    if (!sessionId && turns[0]?.sessionId) {
-      sessionId = turns[0].sessionId;
-    }
-
-    if (!runId && linked.runIds.size > 0) {
-      const linkedRunId = Array.from(linked.runIds)[0];
-      if (linkedRunId) {
-        runId = linkedRunId;
-        resolution.runIdSource ??= "turn_trace";
-        durableRun ??= this.storage.durableRuns.getRun(linkedRunId);
-        collectLifecycleLinksFromUnknown(linked, durableRun.payload);
-        collectLifecycleLinksFromUnknown(linked, durableRun.metadata);
-      }
-    }
-    if (!approvalId && linked.approvalIds.size > 0) {
-      const linkedApprovalId = Array.from(linked.approvalIds)[0];
-      if (linkedApprovalId) {
-        approvalId = linkedApprovalId;
-        resolution.approvalIdSource ??= "turn_trace";
-        approval ??= this.storage.approvals.get(linkedApprovalId);
-        collectLifecycleLinksFromUnknown(linked, approval.linkage);
-      }
-    }
-    if (!taskId && linked.taskIds.size > 0) {
-      const linkedTaskId = Array.from(linked.taskIds)[0];
-      if (linkedTaskId) {
-        taskId = linkedTaskId;
-        resolution.taskIdSource ??= "turn_trace";
-        task ??= this.storage.tasks.find(linkedTaskId);
-      }
-    }
-    if (approval?.approvalId) {
-      linked.approvalIds.add(approval.approvalId);
-    }
-    if (durableRun?.runId) {
-      linked.runIds.add(durableRun.runId);
-    }
-
-    let session: SessionMeta | undefined;
-    let sessionSummary: SessionSummary | undefined;
-    if (sessionId) {
-      session = this.getSession(sessionId);
-      sessionSummary = await this.getSessionSummary(sessionId);
-      linked.sessionIds.add(session.sessionId);
-    }
-
-    const toolRuns = turns.flatMap((turn) => turn.toolRuns ?? []);
-    for (const toolRun of toolRuns) {
-      linked.turnIds.add(toolRun.turnId);
-      linked.sessionIds.add(toolRun.sessionId);
-      if (toolRun.approvalId) {
-        linked.approvalIds.add(toolRun.approvalId);
-      }
-    }
-
-    if (approval?.linkage?.workspaceId) {
-      linked.workspaceIds.add(approval.linkage.workspaceId);
-    }
-    if (approval?.linkage?.taskId) {
-      linked.taskIds.add(approval.linkage.taskId);
-    }
-    if (approval?.linkage?.durableRunId) {
-      linked.runIds.add(approval.linkage.durableRunId);
-    }
-
-    const proactiveRuns = sessionId
-      ? this.listChatSessionProactiveRuns(sessionId, 50).filter((run) => {
-          if (taskId && run.linkedTaskId === taskId) {
-            return true;
-          }
-          if (approvalId && run.approvalId === approvalId) {
-            return true;
-          }
-          if (runId && (run.runId === runId || run.linkedDurableRunId === runId)) {
-            return true;
-          }
-          return !taskId && !approvalId && !runId;
-        })
-      : [];
-    for (const proactiveRun of proactiveRuns) {
-      linked.proactiveRunIds.add(proactiveRun.runId);
-      if (proactiveRun.linkedDurableRunId) {
-        linked.runIds.add(proactiveRun.linkedDurableRunId);
-      }
-    }
-
-    const proactiveDurableRunId =
-      proactiveRuns
-        .map((candidate) => candidate.linkedDurableRunId)
-        .find((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0) ??
-      task?.proactiveContext?.durableRunId;
-    const approvalWaitDurableRunId = approvalId ? this.storage.approvalWaitRuns.getRunId(approvalId) : undefined;
-    const proactiveDurableRun = proactiveDurableRunId
-      ? durableRun?.runId === proactiveDurableRunId
-        ? durableRun
-        : this.findDurableRunMaybe(proactiveDurableRunId)
-      : undefined;
-    const approvalWaitDurableRun = approvalWaitDurableRunId
-      ? durableRun?.runId === approvalWaitDurableRunId
-        ? durableRun
-        : this.findDurableRunMaybe(approvalWaitDurableRunId)
-      : undefined;
-    const approvalEffects = approvalId ? this.approvalEffectsService.listByApproval(approvalId) : [];
-
-    return {
-      query: {
-        sessionId,
-        turnId,
-        runId,
-        approvalId,
-        taskId,
-      },
-      resolution: {
-        ...resolution,
-        fallbackSources: Array.from(fallbackSources),
-      },
-      linked: {
-        sessionIds: Array.from(linked.sessionIds),
-        turnIds: Array.from(linked.turnIds),
-        runIds: Array.from(linked.runIds),
-        proactiveRunIds: Array.from(linked.proactiveRunIds),
-        approvalIds: Array.from(linked.approvalIds),
-        taskIds: Array.from(linked.taskIds),
-        workspaceIds: Array.from(linked.workspaceIds),
-      },
-      session,
-      sessionSummary,
-      task,
-      approval,
-      durableRun,
-      proactiveDurableRun,
-      approvalWaitDurableRun,
-      proactiveRuns,
-      approvalEffects,
-      turns: turns.map((turn) => ({
-        turnId: turn.turnId,
-        sessionId: turn.sessionId,
-        userMessageId: turn.userMessageId,
-        parentTurnId: turn.parentTurnId,
-        assistantMessageId: turn.assistantMessageId,
-        status: turn.status,
-        mode: turn.mode,
-        startedAt: turn.startedAt,
-        finishedAt: turn.finishedAt,
-        durableRunId: turn.durable?.runId,
-      })),
-      toolRuns: toolRuns.map((toolRun) => ({
-        toolRunId: toolRun.toolRunId,
-        turnId: toolRun.turnId,
-        sessionId: toolRun.sessionId,
-        toolName: toolRun.toolName,
-        status: toolRun.status,
-        approvalId: toolRun.approvalId,
-        startedAt: toolRun.startedAt,
-        finishedAt: toolRun.finishedAt,
-      })),
-    };
+    return this.runtimeLifecycleReadService.getRuntimeLifecycle(input);
   }
 
   public listChatProjects(
@@ -2738,12 +2671,24 @@ export class GatewayService {
       state.childrenByTurnId,
     );
     this.storage.chatSessionBranchState.setActiveLeaf(sessionId, newestLeafTurnId);
-    this.publishRealtime("chat_thread_updated", "chat", {
-      type: "chat_thread_branch_selected",
-      sessionId,
-      turnId,
-      activeLeafTurnId: newestLeafTurnId,
-    });
+    this.publishRealtime(
+      "chat_thread_updated",
+      "chat",
+      {
+        type: "chat_thread_branch_selected",
+        sessionId,
+        turnId,
+        activeLeafTurnId: newestLeafTurnId,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: {
+          sessionId,
+          turnId,
+        },
+      },
+    );
     return buildChatThreadResponse({
       sessionId,
       activeLeafTurnId: newestLeafTurnId,
@@ -3397,11 +3342,23 @@ export class GatewayService {
         cancelledBy,
       },
     });
-    this.publishRealtime("chat_thread_updated", "chat", {
-      type: "chat_thread_turn_cancelled",
-      sessionId,
-      turnId,
-    });
+    this.publishRealtime(
+      "chat_thread_updated",
+      "chat",
+      {
+        type: "chat_thread_turn_cancelled",
+        sessionId,
+        turnId,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: {
+          sessionId,
+          turnId,
+        },
+      },
+    );
     return this.createHydratedChatTurnTrace(turnId, trace);
   }
 
@@ -4949,7 +4906,7 @@ export class GatewayService {
     resumedTurnId?: string;
     resumedRunId?: string;
   }> {
-    return approvalLifecycleService.resolveChatToolApproval(this, sessionId, approvalId, decision, options);
+    return this.approvalRuntime.resolveChatToolApproval(sessionId, approvalId, decision, options);
   }
 
   /** @internal */ public async requireChatTurnContext(
@@ -5169,7 +5126,7 @@ export class GatewayService {
     sessionId: string,
     input: ChatSendMessageRequest,
   ): Promise<ChatSendMessageResponse> {
-    return chatTurnEntryService.agentSendChatMessage(this, sessionId, input);
+    return this.chatTurnRuntime.agentSendChatMessage(sessionId, input);
   }
 
   public async *agentSendChatMessageStream(
@@ -5177,7 +5134,7 @@ export class GatewayService {
     input: ChatSendMessageRequest,
     _signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
-    yield* chatTurnEntryService.agentSendChatMessageStream(this, sessionId, input);
+    yield* this.chatTurnRuntime.agentSendChatMessageStream(sessionId, input);
   }
 
   public async retryChatTurn(
@@ -5185,7 +5142,7 @@ export class GatewayService {
     turnId: string,
     overrides: Partial<ChatSendMessageRequest> = {},
   ): Promise<ChatSendMessageResponse> {
-    return chatTurnEntryService.retryChatTurn(this, sessionId, turnId, overrides);
+    return this.chatTurnRuntime.retryChatTurn(sessionId, turnId, overrides);
   }
 
   private async retryChatTurnInScratchSession(
@@ -5380,7 +5337,7 @@ export class GatewayService {
     overrides: Partial<ChatSendMessageRequest> = {},
     _signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
-    yield* chatTurnEntryService.retryChatTurnStream(this, sessionId, turnId, overrides);
+    yield* this.chatTurnRuntime.retryChatTurnStream(sessionId, turnId, overrides);
   }
 
   public async editChatTurn(
@@ -5388,7 +5345,7 @@ export class GatewayService {
     turnId: string,
     input: ChatSendMessageRequest,
   ): Promise<ChatSendMessageResponse> {
-    return chatTurnEntryService.editChatTurn(this, sessionId, turnId, input);
+    return this.chatTurnRuntime.editChatTurn(sessionId, turnId, input);
   }
 
   public async *editChatTurnStream(
@@ -5397,7 +5354,7 @@ export class GatewayService {
     input: ChatSendMessageRequest,
     _signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
-    yield* chatTurnEntryService.editChatTurnStream(this, sessionId, turnId, input);
+    yield* this.chatTurnRuntime.editChatTurnStream(sessionId, turnId, input);
   }
 
   public async cancelChatTurn(
@@ -5405,7 +5362,7 @@ export class GatewayService {
     turnId: string,
     cancelledBy?: string,
   ): Promise<ChatCancelTurnResponse> {
-    return chatTurnEntryService.cancelChatTurn(this, sessionId, turnId, cancelledBy);
+    return this.chatTurnRuntime.cancelChatTurn(sessionId, turnId, cancelledBy);
   }
 
   /** @internal */ public async collectCapabilityUpgradeSuggestions(input: {
@@ -5717,25 +5674,13 @@ export class GatewayService {
     );
   }
 
-  private async executeDurableWorkflowRun(run: DurableRunRecord): Promise<void> {
-    return durableExecutionService.executeDurableWorkflowRun(this, run);
-  }
-
-  private isDurableWorkflowRecoverable(run: DurableRunRecord): { recoverable: boolean; reason?: string } {
-    return durableExecutionService.isDurableWorkflowRecoverable(this, run);
-  }
-
-  private async markDurableWorkflowUnrecoverable(run: DurableRunRecord, reason: string): Promise<void> {
-    return durableExecutionService.markDurableWorkflowUnrecoverable(this, run, reason);
-  }
-
   public async *resumeAgentChatTurnStream(
     sessionId: string,
     turnId: string,
     sinceEventId?: string,
     _signal?: AbortSignal,
   ): AsyncGenerator<ChatStreamChunk> {
-    yield* chatTurnEntryService.resumeAgentChatTurnStream(this, sessionId, turnId, sinceEventId);
+    yield* this.chatTurnRuntime.resumeAgentChatTurnStream(sessionId, turnId, sinceEventId);
   }
 
   private async sendPreparedIntegrationChatTurn(
@@ -5910,154 +5855,7 @@ export class GatewayService {
   }
 
   public async invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
-    if (!isValidToolName(request.toolName)) {
-      return {
-        outcome: "blocked",
-        policyReason: "blocked: invalid tool name format",
-        auditEventId: randomUUID(),
-      };
-    }
-    const normalizedRequest = this.applyRuntimeBrowserBackendDefaults(
-      this.resolveToolInvokeRequestPaths({
-        ...request,
-        workspaceId:
-          request.workspaceId ??
-          this.storage.chatSessionMeta.get(request.sessionId)?.workspaceId ??
-          DEFAULT_WORKSPACE_ID,
-      }),
-    );
-    const toolHookWorkspaceId = this.resolveToolHookWorkspaceId(normalizedRequest);
-    const toolHookEntityId = `${normalizedRequest.sessionId}:${randomUUID()}`;
-    const deploymentGuard = evaluateDeploymentProfileToolAccess(
-      this.config.assistant.deploymentProfile,
-      normalizedRequest.toolName,
-      normalizedRequest.args,
-    );
-    if (deploymentGuard) {
-      return {
-        outcome: "blocked",
-        policyReason: `blocked: ${deploymentGuard.reason}`,
-        auditEventId: randomUUID(),
-      };
-    }
-
-    const beforeHook = await this.hooksService.runInlineHooks<{
-      toolName?: string;
-      args?: Record<string, unknown>;
-    }>({
-      workspaceId: toolHookWorkspaceId,
-      trigger: "tool.call.before",
-      entityType: "tool_call",
-      entityId: toolHookEntityId,
-      payload: {
-        toolName: normalizedRequest.toolName,
-        args: normalizedRequest.args,
-        agentId: normalizedRequest.agentId,
-        sessionId: normalizedRequest.sessionId,
-        taskId: normalizedRequest.taskId,
-      },
-      parsePatch: (value) => this.parseToolCallHookPatch(value),
-      mergePatch: (current, next) => ({
-        ...(current ?? {}),
-        ...next,
-      }),
-    });
-    if (beforeHook.blockedBy) {
-      return {
-        outcome: "blocked",
-        policyReason: `hook blocked: ${beforeHook.blockedBy.reason}`,
-        auditEventId: randomUUID(),
-      };
-    }
-
-    const hookableRequest = beforeHook.patch
-      ? {
-          ...normalizedRequest,
-          ...(beforeHook.patch.toolName ? { toolName: beforeHook.patch.toolName } : {}),
-          ...(beforeHook.patch.args ? { args: beforeHook.patch.args } : {}),
-        }
-      : normalizedRequest;
-
-    let result: ToolInvokeResult;
-    try {
-      result = await this.policyEngine.invoke(hookableRequest);
-    } catch (error) {
-      this.hooksService.enqueueAfterHooks({
-        workspaceId: toolHookWorkspaceId,
-        trigger: "tool.call.error",
-        entityType: "tool_call",
-        entityId: toolHookEntityId,
-        payload: {
-          toolName: hookableRequest.toolName,
-          args: hookableRequest.args,
-          sessionId: hookableRequest.sessionId,
-          taskId: hookableRequest.taskId,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
-      throw error;
-    }
-
-    let approvalForResult: ApprovalRequest | undefined;
-    if (result.outcome === "approval_required" && result.approvalId) {
-      approvalForResult = this.primeApprovalLifecycle(
-        result.approvalId,
-        this.buildApprovalLinkage({
-          sessionId: hookableRequest.sessionId,
-          taskId: hookableRequest.taskId,
-          toolName: hookableRequest.toolName,
-          actionType: "tool.invoke",
-        }),
-      );
-    }
-
-    this.publishRealtime(
-      "tool_invoked",
-      "policy",
-      {
-        toolName: hookableRequest.toolName,
-        sessionId: hookableRequest.sessionId,
-        agentId: hookableRequest.agentId,
-        taskId: hookableRequest.taskId,
-        outcome: result.outcome,
-        policyReason: result.policyReason,
-        approvalId: result.approvalId,
-        auditEventId: result.auditEventId,
-      },
-      {
-        eventClass: "operational_signal",
-        eventAuthority: "retained_stream",
-        links: {
-          sessionId: hookableRequest.sessionId,
-          taskId: hookableRequest.taskId,
-          approvalId: result.approvalId,
-          runId: approvalForResult?.linkage?.durableRunId,
-        },
-      },
-    );
-
-    if (result.outcome === "approval_required" && result.approvalId) {
-      this.scheduleApprovalExplanationById(result.approvalId);
-    }
-
-    this.hooksService.enqueueAfterHooks({
-      workspaceId: toolHookWorkspaceId,
-      trigger: "tool.call.after",
-      entityType: "tool_call",
-      entityId: toolHookEntityId,
-      payload: {
-        toolName: hookableRequest.toolName,
-        args: hookableRequest.args,
-        sessionId: hookableRequest.sessionId,
-        taskId: hookableRequest.taskId,
-        outcome: result.outcome,
-        policyReason: result.policyReason,
-        approvalId: result.approvalId,
-        result: result.result,
-      },
-    });
-
-    return result;
+    return this.toolInvocationCoordinator.invokeTool(request);
   }
 
   private resolveToolInvokeRequestPaths(request: ToolInvokeRequest): ToolInvokeRequest {
@@ -6136,19 +5934,19 @@ export class GatewayService {
     scopeRef?: string,
     limit = 200,
   ): ToolGrantRecord[] {
-    return approvalLifecycleService.listToolGrants(this, scope, scopeRef, limit);
+    return this.approvalRuntime.listToolGrants(scope, scopeRef, limit);
   }
 
   public createToolGrant(input: ToolGrantCreateInput): ToolGrantRecord {
-    return approvalLifecycleService.createToolGrant(this, input);
+    return this.approvalRuntime.createToolGrant(input);
   }
 
   public revokeToolGrant(grantId: string): boolean {
-    return approvalLifecycleService.revokeToolGrant(this, grantId);
+    return this.approvalRuntime.revokeToolGrant(grantId);
   }
 
   public async createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest> {
-    return approvalLifecycleService.createApproval(this, input);
+    return this.approvalRuntime.createApproval(input);
   }
 
   public createApprovalRemoteActionToken(
@@ -6159,7 +5957,7 @@ export class GatewayService {
       expiresInMs?: number;
     },
   ): RemoteApprovalActionTokenIssueResult {
-    return approvalLifecycleService.createApprovalRemoteActionToken(this, approvalId, input);
+    return this.approvalRuntime.createApprovalRemoteActionToken(approvalId, input);
   }
 
   public async resolveApprovalWithRemoteToken(input: {
@@ -6168,7 +5966,7 @@ export class GatewayService {
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
   }): Promise<ApprovalResolveResult> {
-    return approvalLifecycleService.resolveApprovalWithRemoteToken(this, input);
+    return this.approvalRuntime.resolveApprovalWithRemoteToken(input);
   }
 
   public async resolveApprovalWithRemoteTokenId(input: {
@@ -6177,54 +5975,19 @@ export class GatewayService {
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
   }): Promise<ApprovalResolveResult> {
-    return approvalLifecycleService.resolveApprovalWithRemoteTokenId(this, input);
-  }
-
-  /** @internal */ public async resolveApprovalWithConsumedRemoteToken(
-    tokenRecord: RemoteActionTokenRecord,
-    input: {
-      decision: ApprovalResolveInput["decision"];
-      editedPayload?: Record<string, unknown>;
-      resolutionNote?: string;
-    },
-  ): Promise<ApprovalResolveResult> {
-    const approvalId = tokenRecord.approvalId ?? String(tokenRecord.mutation.approvalId ?? "").trim();
-    if (!approvalId) {
-      throw new ValidationError({
-        message: "Remote action token is missing an approval binding.",
-      });
-    }
-    const resolvedBy = `connector:${tokenRecord.connectorId}`;
-    void this.storage.audit.append("approvals", {
-      event: "approval.remote_token.consume",
-      approvalId,
-      connectorId: tokenRecord.connectorId,
-      tokenId: tokenRecord.tokenId,
-      decision: input.decision,
-      resolvedBy,
-    });
-    this.storage.approvals.mergeLinkage(approvalId, {
-      connectorId: tokenRecord.connectorId,
-      tokenId: tokenRecord.tokenId,
-    });
-    return this.resolveApproval(approvalId, {
-      decision: input.decision,
-      editedPayload: input.editedPayload,
-      resolutionNote: input.resolutionNote,
-      resolvedBy,
-    });
+    return this.approvalRuntime.resolveApprovalWithRemoteTokenId(input);
   }
 
   public listApprovals(status?: ApprovalRequest["status"], limit = 100): ApprovalRequest[] {
-    return approvalLifecycleService.listApprovals(this, status, limit);
+    return this.approvalRuntime.listApprovals(status, limit);
   }
 
   public async resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult> {
-    return approvalLifecycleService.resolveApprovalsBulk(this, input);
+    return this.approvalRuntime.resolveApprovalsBulk(input);
   }
 
   public getApprovalReplay(approvalId: string, replayedBy = "operator"): ApprovalReplayResult {
-    return approvalLifecycleService.getApprovalReplay(this, approvalId, replayedBy);
+    return this.approvalRuntime.getApprovalReplay(approvalId, replayedBy);
   }
 
   /** @internal */ public findProactiveDurableRunIdsForApproval(approvalId: string): string[] {
@@ -6243,7 +6006,7 @@ export class GatewayService {
   }
 
   public async resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<ApprovalResolveResult> {
-    return approvalLifecycleService.resolveApproval(this, approvalId, input);
+    return this.approvalRuntime.resolveApproval(approvalId, input);
   }
 
   /** @internal */ public ensureApprovalWaitDurableRun(approval: ApprovalRequest): DurableRunRecord | undefined {
@@ -6312,6 +6075,20 @@ export class GatewayService {
 
   /** @internal */ public buildApprovalRealtimeLinks(approval: ApprovalRequest): NonNullable<RealtimeEvent["links"]> {
     return this.approvalWaitRunService.buildApprovalRealtimeLinks(approval);
+  }
+
+  /** @internal */ public buildTaskRealtimeLinks(
+    task?: TaskRecord,
+    fallbackTaskId?: string,
+  ): NonNullable<RealtimeEvent["links"]> {
+    return {
+      ...(task?.taskId || fallbackTaskId ? { taskId: task?.taskId ?? fallbackTaskId } : {}),
+      ...(task?.workspaceId ? { workspaceId: task.workspaceId } : {}),
+      ...(task?.proactiveContext?.sessionId ? { sessionId: task.proactiveContext.sessionId } : {}),
+      ...(task?.proactiveContext?.durableRunId ? { runId: task.proactiveContext.durableRunId } : {}),
+      ...(task?.proactiveContext?.proactiveRunId ? { proactiveRunId: task.proactiveContext.proactiveRunId } : {}),
+      ...(task?.proactiveContext?.approvalId ? { approvalId: task.proactiveContext.approvalId } : {}),
+    };
   }
 
   /** @internal */ public enqueueApprovalResolutionEffects(
@@ -6764,9 +6541,18 @@ export class GatewayService {
       ...input,
       workspaceId: this.normalizeWorkspaceId(input.workspaceId),
     });
-    this.publishRealtime("task_created", "tasks", {
-      task: created,
-    });
+    this.publishRealtime(
+      "task_created",
+      "tasks",
+      {
+        task: created,
+      },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: this.buildTaskRealtimeLinks(created),
+      },
+    );
     return created;
   }
 
@@ -6781,16 +6567,35 @@ export class GatewayService {
     }
 
     const updated = this.storage.tasks.update(taskId, input);
-    this.publishRealtime("task_updated", "tasks", {
-      task: updated,
-    });
+    this.publishRealtime(
+      "task_updated",
+      "tasks",
+      {
+        task: updated,
+      },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: this.buildTaskRealtimeLinks(updated),
+      },
+    );
     return updated;
   }
 
   public softDeleteTask(taskId: string, deletedBy?: string, deleteReason?: string): boolean {
+    const existing = this.storage.tasks.find(taskId);
     const deleted = this.storage.tasks.softDelete(taskId, deletedBy, deleteReason);
     if (deleted) {
-      this.publishRealtime("task_deleted", "tasks", { taskId, mode: "soft" });
+      this.publishRealtime(
+        "task_deleted",
+        "tasks",
+        { taskId, mode: "soft" },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: this.buildTaskRealtimeLinks(existing, taskId),
+        },
+      );
     }
     return deleted;
   }
@@ -6798,15 +6603,34 @@ export class GatewayService {
   public restoreTask(taskId: string): boolean {
     const restored = this.storage.tasks.restore(taskId);
     if (restored) {
-      this.publishRealtime("task_restored", "tasks", { taskId });
+      this.publishRealtime(
+        "task_restored",
+        "tasks",
+        { taskId },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: this.buildTaskRealtimeLinks(this.storage.tasks.find(taskId), taskId),
+        },
+      );
     }
     return restored;
   }
 
   public hardDeleteTask(taskId: string): boolean {
+    const existing = this.storage.tasks.find(taskId);
     const deleted = this.storage.tasks.hardDelete(taskId);
     if (deleted) {
-      this.publishRealtime("task_deleted", "tasks", { taskId, mode: "hard" });
+      this.publishRealtime(
+        "task_deleted",
+        "tasks",
+        { taskId, mode: "hard" },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: this.buildTaskRealtimeLinks(existing, taskId),
+        },
+      );
     }
     return deleted;
   }
@@ -6817,12 +6641,21 @@ export class GatewayService {
   }
 
   public appendTaskActivity(taskId: string, input: TaskActivityCreateInput): TaskActivityRecord {
-    this.storage.tasks.get(taskId);
+    const task = this.storage.tasks.get(taskId);
     const activity = this.storage.taskActivities.append(taskId, input);
-    this.publishRealtime("activity_logged", "tasks", {
-      taskId,
-      activity,
-    });
+    this.publishRealtime(
+      "activity_logged",
+      "tasks",
+      {
+        taskId,
+        activity,
+      },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: this.buildTaskRealtimeLinks(task),
+      },
+    );
     return activity;
   }
 
@@ -6832,12 +6665,21 @@ export class GatewayService {
   }
 
   public appendTaskDeliverable(taskId: string, input: TaskDeliverableCreateInput): TaskDeliverableRecord {
-    this.storage.tasks.get(taskId);
+    const task = this.storage.tasks.get(taskId);
     const deliverable = this.storage.taskDeliverables.append(taskId, input);
-    this.publishRealtime("deliverable_added", "tasks", {
-      taskId,
-      deliverable,
-    });
+    this.publishRealtime(
+      "deliverable_added",
+      "tasks",
+      {
+        taskId,
+        deliverable,
+      },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: this.buildTaskRealtimeLinks(task),
+      },
+    );
     return deliverable;
   }
 
@@ -6847,12 +6689,21 @@ export class GatewayService {
   }
 
   public registerTaskSubagent(taskId: string, input: TaskSubagentCreateInput): TaskSubagentSession {
-    this.storage.tasks.get(taskId);
+    const task = this.storage.tasks.get(taskId);
     const session = this.storage.taskSubagents.create(taskId, input);
-    this.publishRealtime("subagent_registered", "tasks", {
-      taskId,
-      session,
-    });
+    this.publishRealtime(
+      "subagent_registered",
+      "tasks",
+      {
+        taskId,
+        session,
+      },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: this.buildTaskRealtimeLinks(task),
+      },
+    );
     return session;
   }
 
@@ -6862,10 +6713,19 @@ export class GatewayService {
       endedAt: input.endedAt ?? (input.status && input.status !== "active" ? new Date().toISOString() : undefined),
     });
 
-    this.publishRealtime("subagent_updated", "tasks", {
-      taskId: updated.taskId,
-      session: updated,
-    });
+    this.publishRealtime(
+      "subagent_updated",
+      "tasks",
+      {
+        taskId: updated.taskId,
+        session: updated,
+      },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: this.buildTaskRealtimeLinks(this.storage.tasks.find(updated.taskId), updated.taskId),
+      },
+    );
     return updated;
   }
 
@@ -7118,37 +6978,7 @@ export class GatewayService {
   }
 
   public async listMemoryFiles(relativeDir = "memory"): Promise<MemoryFileEntry[]> {
-    const normalized = this.normalizeRelativePath(relativeDir);
-    const baseDir = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, normalized);
-    assertWritePathInJail(baseDir, this.config.toolPolicy.sandbox.writeJailRoots);
-
-    let entries: Array<{ isFile: () => boolean; name: string }>;
-    try {
-      entries = await fs.readdir(baseDir, { withFileTypes: true, encoding: "utf8" });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return [];
-      }
-      throw error;
-    }
-
-    const files: MemoryFileEntry[] = [];
-    for (const entry of entries) {
-      if (!entry.isFile()) {
-        continue;
-      }
-
-      const fullPath = path.join(baseDir, entry.name);
-      const stat = await fs.stat(fullPath);
-      files.push({
-        relativePath: path.posix.join(normalized, entry.name),
-        size: stat.size,
-        modifiedAt: stat.mtime.toISOString(),
-      });
-    }
-
-    files.sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt));
-    return files;
+    return this.memoryLifecycleService.listMemoryFiles(relativeDir);
   }
 
   public async listWorkspaceFiles(relativeDir = ".", maxItems = 1000): Promise<MemoryFileEntry[]> {
@@ -8282,145 +8112,7 @@ export class GatewayService {
   }
 
   public async invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse> {
-    const server = this.requireMcpServer(input.serverId);
-    if (!server.enabled || server.status !== "connected") {
-      return {
-        ok: false,
-        error: "MCP server is not connected.",
-      };
-    }
-    if (server.trustTier === "quarantined") {
-      return {
-        ok: false,
-        error: `MCP server ${server.label} is quarantined and cannot execute tools.`,
-      };
-    }
-    const tools = this.listMcpTools(input.serverId);
-    const tool = tools.find((item) => item.toolName === input.toolName && item.enabled);
-    if (!tool) {
-      return {
-        ok: false,
-        error: `MCP tool ${input.toolName} is not enabled on server ${input.serverId}.`,
-      };
-    }
-    if (server.policy.blockedToolPatterns.some((pattern) => wildcardMatch(input.toolName, pattern))) {
-      return {
-        ok: false,
-        error: `MCP policy blocked tool ${input.toolName} on server ${server.serverId}.`,
-      };
-    }
-    if (
-      server.policy.allowedToolPatterns.length > 0 &&
-      !server.policy.allowedToolPatterns.some((pattern) => wildcardMatch(input.toolName, pattern))
-    ) {
-      return {
-        ok: false,
-        error: `MCP policy does not allow tool ${input.toolName} on server ${server.serverId}.`,
-      };
-    }
-
-    if (server.policy.requireFirstToolApproval && !this.isMcpToolApproved(input.serverId, input.toolName)) {
-      return {
-        ok: false,
-        error: `First-use approval required for ${input.toolName}. Approve this tool in MCP policy or disable first-use approval.`,
-      };
-    }
-
-    const policyAgentId = input.agentId?.trim() || "operator";
-    const policySessionId = input.sessionId?.trim() || `mcp:${input.serverId}`;
-    const access = this.policyEngine.evaluateAccess({
-      toolName: "mcp.invoke",
-      args: {
-        serverId: input.serverId,
-        toolName: input.toolName,
-        arguments: input.arguments ?? {},
-      },
-      agentId: policyAgentId,
-      sessionId: policySessionId,
-      taskId: input.taskId,
-    });
-    if (!access.allowed) {
-      return {
-        ok: false,
-        error: `MCP invoke blocked by policy: ${access.reasonCodes.join(", ")}`,
-        policyReason: "blocked by tool policy",
-        reasonCodes: access.reasonCodes,
-      };
-    }
-    if (access.requiresApproval) {
-      const decision = await this.policyEngine.invoke({
-        toolName: "mcp.invoke",
-        args: {
-          serverId: input.serverId,
-          toolName: input.toolName,
-          arguments: input.arguments ?? {},
-        },
-        agentId: policyAgentId,
-        sessionId: policySessionId,
-        taskId: input.taskId,
-        consentContext: {
-          source: "agent",
-          reason: `MCP tool invoke ${input.serverId}/${input.toolName}`,
-        },
-      });
-      if (decision.outcome === "approval_required") {
-        return {
-          ok: false,
-          error: "MCP invoke requires approval.",
-          approvalRequired: true,
-          approvalId: decision.approvalId,
-          policyReason: decision.policyReason,
-          reasonCodes: access.reasonCodes,
-        };
-      }
-      if (decision.outcome === "blocked") {
-        return {
-          ok: false,
-          error: decision.policyReason,
-          policyReason: decision.policyReason,
-          reasonCodes: access.reasonCodes,
-        };
-      }
-    }
-
-    const runtime = isInternalMcpApprovalInboxServer(server)
-      ? await handleInternalMcpApprovalInboxInvoke(server, input, {
-          approvalInbox: this.storage.approvalInbox,
-          resolveApprovalWithRemoteTokenId: (request) => this.resolveApprovalWithRemoteTokenId(request),
-        })
-      : await invokeMcpRuntimeTool(server, {
-          toolName: input.toolName,
-          arguments: input.arguments,
-          signal: input.signal,
-        });
-    const output = runtime.output
-      ? {
-          serverId: input.serverId,
-          toolName: input.toolName,
-          arguments: input.arguments ?? {},
-          ...runtime.output,
-        }
-      : undefined;
-    const redactedOutput = output ? applyMcpRedaction(output, server.policy.redactionMode) : undefined;
-    this.publishRealtime("tool_invoked", "mcp", {
-      type: "mcp_tool_invoked",
-      serverId: input.serverId,
-      toolName: input.toolName,
-      sessionId: input.sessionId,
-      taskId: input.taskId,
-      trustTier: server.trustTier,
-    });
-    if (!runtime.ok) {
-      return {
-        ok: false,
-        output: redactedOutput,
-        error: runtime.error ?? `MCP tool ${input.toolName} failed.`,
-      };
-    }
-    return {
-      ok: true,
-      output: redactedOutput,
-    };
+    return this.toolInvocationCoordinator.invokeMcpTool(input);
   }
 
   public createMediaJob(input: MediaCreateJobRequest): MediaJobRecord {
@@ -10141,19 +9833,41 @@ export class GatewayService {
         workspace: "memory",
       })
       .then((pack) => {
-        this.publishRealtime("memory_qmd_generated", "orchestration", {
-          runId: run.runId,
-          phaseId: phase.phaseId,
-          contextId: pack.contextId,
-          status: pack.quality.status,
-        });
+        this.publishRealtime(
+          "memory_qmd_generated",
+          "orchestration",
+          {
+            runId: run.runId,
+            phaseId: phase.phaseId,
+            contextId: pack.contextId,
+            status: pack.quality.status,
+          },
+          {
+            eventClass: "operational_signal",
+            eventAuthority: "retained_stream",
+            links: {
+              runId: run.runId,
+            },
+          },
+        );
       })
       .catch((error) => {
-        this.publishRealtime("memory_qmd_failed", "orchestration", {
-          runId: run.runId,
-          phaseId: phase.phaseId,
-          error: (error as Error).message,
-        });
+        this.publishRealtime(
+          "memory_qmd_failed",
+          "orchestration",
+          {
+            runId: run.runId,
+            phaseId: phase.phaseId,
+            error: (error as Error).message,
+          },
+          {
+            eventClass: "operational_signal",
+            eventAuthority: "retained_stream",
+            links: {
+              runId: run.runId,
+            },
+          },
+        );
       })
       .finally(() => {
         this.backgroundTasks.delete(task);
@@ -14470,66 +14184,6 @@ function inferToolArtifactExtension(contentType?: string): string {
     return ".md";
   }
   return ".txt";
-}
-
-function normalizeLifecycleId(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
-}
-
-function collectLifecycleLinksFromUnknown(
-  linked: {
-    sessionIds: Set<string>;
-    turnIds: Set<string>;
-    runIds: Set<string>;
-    proactiveRunIds: Set<string>;
-    approvalIds: Set<string>;
-    taskIds: Set<string>;
-    workspaceIds: Set<string>;
-  },
-  payload: unknown,
-): void {
-  const sessionId = findLifecycleString(payload, ["sessionId"]);
-  const turnId = findLifecycleString(payload, ["turnId"]);
-  const runId = findLifecycleString(payload, ["runId", "durableRunId", "durable_run_id"]);
-  const proactiveRunId = findLifecycleString(payload, ["proactiveRunId"]);
-  const approvalId = findLifecycleString(payload, ["approvalId"]);
-  const taskId = findLifecycleString(payload, ["taskId"]);
-  const workspaceId = findLifecycleString(payload, ["workspaceId"]);
-
-  if (sessionId) linked.sessionIds.add(sessionId);
-  if (turnId) linked.turnIds.add(turnId);
-  if (runId) linked.runIds.add(runId);
-  if (proactiveRunId) linked.proactiveRunIds.add(proactiveRunId);
-  if (approvalId) linked.approvalIds.add(approvalId);
-  if (taskId) linked.taskIds.add(taskId);
-  if (workspaceId) linked.workspaceIds.add(workspaceId);
-}
-
-function findLifecycleString(payload: unknown, keys: string[]): string | undefined {
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-  const stack: unknown[] = [payload];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current || typeof current !== "object") {
-      continue;
-    }
-    const record = current as Record<string, unknown>;
-    for (const key of keys) {
-      const candidate = record[key];
-      if (typeof candidate === "string" && candidate.trim().length > 0) {
-        return candidate.trim();
-      }
-    }
-    for (const value of Object.values(record)) {
-      if (value && typeof value === "object") {
-        stack.push(value);
-      }
-    }
-  }
-  return undefined;
 }
 
 function wait(ms: number): Promise<void> {

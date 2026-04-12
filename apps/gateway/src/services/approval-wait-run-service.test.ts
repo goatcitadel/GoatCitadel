@@ -22,6 +22,35 @@ describe("ApprovalWaitRunService", () => {
     });
   });
 
+  it("builds realtime links from canonical approval linkage", () => {
+    const harness = createHarness();
+
+    const links = harness.service.buildApprovalRealtimeLinks(
+      createApproval({
+        linkage: {
+          sessionId: "session-1",
+          taskId: "task-1",
+          durableRunId: "run-42",
+          proactiveRunId: "proactive-1",
+          workspaceId: "workspace-1",
+          connectorId: "connector-1",
+          tokenId: "token-1",
+        },
+      }),
+    );
+
+    expect(links).toEqual({
+      approvalId: "approval-1",
+      sessionId: "session-1",
+      taskId: "task-1",
+      runId: "run-42",
+      proactiveRunId: "proactive-1",
+      workspaceId: "workspace-1",
+      connectorId: "connector-1",
+      tokenId: "token-1",
+    });
+  });
+
   it("creates and links a durable approval wait run outside GatewayService", () => {
     const harness = createHarness();
     const approval = createApproval();
@@ -43,6 +72,27 @@ describe("ApprovalWaitRunService", () => {
     });
     expect(harness.approvalWaitRuns.getRunId("approval-1")).toBe("run-1");
   });
+
+  it("primes approval lifecycle by attaching linkage and durable run id", () => {
+    const harness = createHarness({
+      attribution: {
+        correlationId: "corr-2",
+        traceId: "trace-2",
+      },
+    });
+
+    const approval = harness.service.primeApprovalLifecycle("approval-1", {
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+    });
+
+    expect(approval.linkage).toMatchObject({
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      durableRunId: "run-1",
+    });
+    expect(harness.approvalWaitRuns.getRunId("approval-1")).toBe("run-1");
+  });
 });
 
 function createHarness(
@@ -52,8 +102,10 @@ function createHarness(
 ) {
   const createdRuns: DurableRunCreateRequest[] = [];
   const approvalWaitRuns = createApprovalWaitRunStore();
+  const approvals = createApprovalsStore([createApproval()]);
   const ctx = {
     storage: {
+      approvals,
       approvalWaitRuns,
     },
     isFeatureEnabled: vi.fn((flag: string) => flag === "durableKernelV1Enabled"),
@@ -69,9 +121,38 @@ function createHarness(
   });
 
   return {
+    approvals,
     approvalWaitRuns,
     createdRuns,
     service,
+  };
+}
+
+function createApprovalsStore(initial: ApprovalRequest[]) {
+  const rows = new Map(initial.map((approval) => [approval.approvalId, approval]));
+  return {
+    get: (approvalId: string) => {
+      const approval = rows.get(approvalId);
+      if (!approval) {
+        throw new Error(`Unknown approval ${approvalId}`);
+      }
+      return approval;
+    },
+    mergeLinkage: (approvalId: string, linkage: NonNullable<ApprovalRequest["linkage"]>) => {
+      const current = rows.get(approvalId);
+      if (!current) {
+        throw new Error(`Unknown approval ${approvalId}`);
+      }
+      const next = {
+        ...current,
+        linkage: {
+          ...(current.linkage ?? {}),
+          ...linkage,
+        },
+      };
+      rows.set(approvalId, next);
+      return next;
+    },
   };
 }
 

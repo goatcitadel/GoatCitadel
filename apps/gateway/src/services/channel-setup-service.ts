@@ -9,6 +9,7 @@ import type {
   ChannelSetupTestResult,
   ChannelSetupValidationResult,
   ConnectorDiagnosticReport,
+  IntegrationConnection,
 } from "@goatcitadel/contracts";
 import {
   buildChannelSetupValidationResult,
@@ -20,20 +21,44 @@ import {
   listChannelSetupDefinitions as listChannelSetupDefinitionCatalogs,
   requireChannelSetupDefinition,
 } from "./channel-setup-definitions.js";
-import { buildChannelSetupRecentTestSignature } from "./channel-setup-test-cache.js";
-import type { GatewayService } from "./gateway-service.js";
+import {
+  buildChannelSetupRecentTestSignature,
+  type ChannelSetupRecentTestCacheEntry,
+} from "./channel-setup-test-cache.js";
 
-export interface ChannelSetupHost extends Pick<
-  GatewayService,
-  | "buildIntegrationConnectionChecks"
-  | "createIntegrationConnection"
-  | "getIntegrationConnection"
-  | "recordDevDiagnostic"
-  | "runIntegrationConnectionLiveChecks"
-  | "updateIntegrationConnection"
-> {
-  recentChannelSetupTests: GatewayService["recentChannelSetupTests"];
-  storage: Pick<GatewayService["storage"], "channelSetupDrafts">;
+export interface ChannelSetupHost {
+  readonly storage: {
+    channelSetupDrafts: {
+      create(input: Partial<ChannelSetupDraft> & Pick<ChannelSetupDraft, "catalogId">): ChannelSetupDraft;
+      get(draftId: string): ChannelSetupDraft;
+      update(draftId: string, patch: Partial<ChannelSetupDraft>): ChannelSetupDraft;
+      delete(draftId: string): void;
+      listByCatalog(catalogId: string, limit: number): ChannelSetupDraft[];
+      listByConnection(connectionId: string, limit: number): ChannelSetupDraft[];
+    };
+  };
+  readonly recentChannelSetupTests: Map<string, ChannelSetupRecentTestCacheEntry>;
+  buildIntegrationConnectionChecks(connection: IntegrationConnection): ConnectorDiagnosticReport["checks"];
+  createIntegrationConnection(input: {
+    catalogId: string;
+    label: string;
+    enabled: boolean;
+    status: "connected";
+    config: Record<string, unknown>;
+  }): IntegrationConnection;
+  getIntegrationConnection(connectionId: string): IntegrationConnection;
+  recordDevDiagnostic(input: {
+    level: "info" | "warn" | "error";
+    category: string;
+    event: string;
+    message: string;
+    context?: Record<string, unknown>;
+  }): void;
+  runIntegrationConnectionLiveChecks(
+    connection: IntegrationConnection,
+    options: { includeSandboxSend: boolean },
+  ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ConnectorDiagnosticReport["probe"] }>;
+  updateIntegrationConnection(connectionId: string, patch: Partial<IntegrationConnection>): IntegrationConnection;
 }
 
 export function getChannelSetupDefinition(_host: ChannelSetupHost, catalogId: string): ChannelSetupDefinition {
@@ -304,12 +329,12 @@ export async function finalizeChannelSetupDraft(
   }
 
   const payload = {
-    label: draft.label,
-    enabled: draft.enabled,
+    label: draft.label ?? runtime.definition.catalog.label,
+    enabled: draft.enabled ?? true,
     status: "connected" as const,
     config: buildEphemeralChannelConnection(host, draft).config,
     lastSyncAt: test.checkedAt,
-    lastError: null,
+    lastError: undefined,
   };
 
   const connection = draft.connectionId

@@ -47,12 +47,17 @@ interface CircuitBreakerState {
   trippedAt?: number;
 }
 
+export type HooksServiceContext = Pick<
+  ServiceContext,
+  "storage" | "publishRealtime" | "normalizeWorkspaceId" | "isFeatureEnabled"
+>;
+
 export class HooksService {
   private readonly activeExecutions = new Set<string>();
   private readonly circuitBreakers = new Map<string, CircuitBreakerState>();
 
   public constructor(
-    private readonly ctx: ServiceContext,
+    private readonly ctx: HooksServiceContext,
     private readonly deps: {
       createDurableRun: (input: DurableRunCreateRequest) => { runId: string; status: string };
       requestDurableRunProcessing: (runId: string) => void;

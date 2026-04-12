@@ -3,8 +3,8 @@
  *
  * Previously duplicated byte-identically across line-webhook.ts,
  * nextcloud-talk-webhook.ts, slack-webhook.ts, telegram-webhook.ts and
- * whatsapp-webhook.ts. Consolidated here as the first step of Step 11
- * (webhook handler consolidation).
+ * whatsapp-webhook.ts. Consolidated here so webhook handlers share one
+ * normalization surface.
  */
 
 import { createHash, timingSafeEqual } from "node:crypto";

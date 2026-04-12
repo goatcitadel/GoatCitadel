@@ -6,8 +6,6 @@
  *   - artifact path naming (date slice + sanitized timestamp)
  *   - blocking-issues aggregation from a step list
  *   - markdown header + step-list footer formatting
- *
- * Step 12 of the gateway-service decomposition plan.
  */
 
 import type { FollowOnProofLaneStepRecord } from "@goatcitadel/contracts";

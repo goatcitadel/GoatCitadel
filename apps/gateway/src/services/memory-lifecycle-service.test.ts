@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 
@@ -214,5 +217,42 @@ describe("MemoryLifecycleService", () => {
       "memory",
       expect.objectContaining({ type: "memory_item_forgotten", itemId: "item-1" }),
     );
+  });
+
+  it("owns operator-facing memory file listing", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gc-memory-lifecycle-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "older.md"), "old", "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await fs.writeFile(path.join(memoryDir, "newer.md"), "new content", "utf8");
+
+    const service = new MemoryLifecycleService({
+      context: {} as never,
+      learned: {} as never,
+      maintenance: {} as never,
+      admin: {
+        gatewaySql: {} as never,
+        tryParseJson: vi.fn(),
+        requireFeatureEnabled: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+      files: {
+        rootDir: tempRoot,
+        workspaceDir: "workspace",
+        writeJailRoots: [workspaceDir],
+        normalizeRelativePath: (relativePath) => relativePath,
+      },
+      readTranscriptOrEmpty: vi.fn(async () => []),
+    });
+
+    try {
+      const items = await service.listMemoryFiles();
+      expect(items.map((item) => item.relativePath)).toEqual(["memory/newer.md", "memory/older.md"]);
+      expect(items[0]?.size).toBe(Buffer.byteLength("new content"));
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });

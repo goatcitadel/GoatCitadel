@@ -1,10 +1,6 @@
 /**
- * Cron scheduler façade — pure delegation to CronAutomationService.
- *
- * Step 1 of the gateway-service decomposition plan: extracts the 10
- * cron-related public methods of GatewayService into a thin module so the
- * cron API surface lives in one place. The methods are pure delegations,
- * so the body moves are zero-risk.
+ * Cron scheduler delegates to CronAutomationService so the cron-facing API
+ * surface stays in one place.
  */
 
 import type { CronJobRecord, CronReviewItem, CronRunDiff } from "@goatcitadel/contracts";
