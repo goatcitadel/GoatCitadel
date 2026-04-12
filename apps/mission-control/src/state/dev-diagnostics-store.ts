@@ -74,6 +74,7 @@ const eventTimestamps = new Map<string, number>();
 const diagnosticsEnabled = resolveDevDiagnosticsEnabled();
 const verboseDiagnostics = resolveDevDiagnosticsVerbose();
 const maxItems = resolveBufferSize(readEnv("VITE_GOATCITADEL_DEV_DIAGNOSTICS_CLIENT_BUFFER"), DEFAULT_BUFFER_SIZE);
+const echoDiagnosticsToConsole = resolveConsoleDiagnosticsEchoEnabled();
 
 let state: DevDiagnosticsState = {
   enabled: diagnosticsEnabled,
@@ -427,8 +428,19 @@ function readEnv(key: string): string | undefined {
 }
 
 function debugLogDiagnosticEvent(event: DevDiagnosticsEvent): void {
+  if (!echoDiagnosticsToConsole) {
+    return;
+  }
   // eslint-disable-next-line no-console
   console.debug("[goatcitadel:dev-diagnostics]", event);
+}
+
+function resolveConsoleDiagnosticsEchoEnabled(): boolean {
+  return !isTestRuntime();
+}
+
+function isTestRuntime(): boolean {
+  return import.meta.env.MODE === "test";
 }
 
 const SENSITIVE_KEY_PATTERN =

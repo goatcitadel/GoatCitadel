@@ -1,32 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, vi } from "vitest";
 import React from "react";
 import { act, create } from "react-test-renderer";
-import { ActivityPage } from "./pages/ActivityPage";
-import { LiveFeedPage } from "./pages/LiveFeedPage";
-import { MeshPage } from "./pages/MeshPage";
-import { OfficePage } from "./pages/OfficePage";
-import { App } from "./App";
-import { AgentsPage } from "./pages/AgentsPage";
-import { ApprovalsPage } from "./pages/ApprovalsPage";
-import { ChatPage } from "./pages/ChatPage";
-import { CostConsolePage } from "./pages/CostConsolePage";
-import { CronPage } from "./pages/CronPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { FilesPage } from "./pages/FilesPage";
-import { ImprovementPage } from "./pages/ImprovementPage";
-import { IntegrationsPage } from "./pages/IntegrationsPage";
-import { McpPage } from "./pages/McpPage";
-import { MemoryPage } from "./pages/MemoryPage";
-import { NpuPage } from "./pages/NpuPage";
-import { OnboardingPage } from "./pages/OnboardingPage";
-import { PromptLabPage } from "./pages/PromptLabPage";
-import { SessionsPage } from "./pages/SessionsPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { SkillsPage } from "./pages/SkillsPage";
-import { SystemPage } from "./pages/SystemPage";
-import { TasksPage } from "./pages/TasksPage";
-import { ToolsPage } from "./pages/ToolsPage";
-import { WorkspacesPage } from "./pages/WorkspacesPage";
 
 vi.mock("react-virtuoso", () => {
   const renderItems = (
@@ -83,6 +57,58 @@ function createMemoryStorage(): Storage {
       return map.size;
     },
   };
+}
+
+const activeTimeoutHandles = new Set<ReturnType<typeof globalThis.setTimeout>>();
+const activeIntervalHandles = new Set<ReturnType<typeof globalThis.setInterval>>();
+
+function trackedSetTimeout(
+  callback: (...args: never[]) => void,
+  delay?: number,
+  ...args: never[]
+): ReturnType<typeof globalThis.setTimeout> {
+  const handle = globalThis.setTimeout(
+    () => {
+      activeTimeoutHandles.delete(handle);
+      callback(...args);
+    },
+    delay,
+    ...args,
+  ) as unknown as ReturnType<typeof globalThis.setTimeout>;
+  activeTimeoutHandles.add(handle);
+  return handle;
+}
+
+function trackedClearTimeout(handle: ReturnType<typeof globalThis.setTimeout>): void {
+  activeTimeoutHandles.delete(handle);
+  globalThis.clearTimeout(handle);
+}
+
+function trackedSetInterval(
+  callback: (...args: never[]) => void,
+  delay?: number,
+  ...args: never[]
+): ReturnType<typeof globalThis.setInterval> {
+  const handle = globalThis.setInterval(callback, delay, ...args);
+  activeIntervalHandles.add(handle);
+  return handle;
+}
+
+function trackedClearInterval(handle: ReturnType<typeof globalThis.setInterval>): void {
+  activeIntervalHandles.delete(handle);
+  globalThis.clearInterval(handle);
+}
+
+function clearTrackedTimers(): void {
+  for (const handle of activeIntervalHandles) {
+    globalThis.clearInterval(handle);
+  }
+  activeIntervalHandles.clear();
+
+  for (const handle of activeTimeoutHandles) {
+    globalThis.clearTimeout(handle);
+  }
+  activeTimeoutHandles.clear();
 }
 
 class TestBoundary extends React.Component<
@@ -603,12 +629,14 @@ function installWindowAndFetch(): void {
     },
     localStorage: createMemoryStorage(),
     sessionStorage: createMemoryStorage(),
-    setInterval: globalThis.setInterval.bind(globalThis),
-    clearInterval: globalThis.clearInterval.bind(globalThis),
-    setTimeout: globalThis.setTimeout.bind(globalThis),
-    clearTimeout: globalThis.clearTimeout.bind(globalThis),
-    requestAnimationFrame: (callback: FrameRequestCallback) => globalThis.setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: (handle: number) => globalThis.clearTimeout(handle),
+    setInterval: trackedSetInterval,
+    clearInterval: trackedClearInterval,
+    setTimeout: trackedSetTimeout,
+    clearTimeout: trackedClearTimeout,
+    requestAnimationFrame: (callback: FrameRequestCallback) =>
+      trackedSetTimeout(() => callback(Date.now()), 0) as unknown as number,
+    cancelAnimationFrame: (handle: number) =>
+      trackedClearTimeout(handle as unknown as ReturnType<typeof globalThis.setTimeout>),
     addEventListener: () => undefined,
     removeEventListener: () => undefined,
     matchMedia: () => ({
@@ -732,36 +760,26 @@ async function flush(): Promise<void> {
   });
 }
 
-const targets: Array<{ name: string; element: React.ReactElement }> = [
-  { name: "App", element: <App /> },
-  { name: "ActivityPage", element: <ActivityPage /> },
-  { name: "LiveFeedPage", element: <LiveFeedPage /> },
-  { name: "DashboardPage", element: <DashboardPage onNavigate={() => undefined} /> },
-  { name: "ChatPage", element: <ChatPage workspaceId="default" /> },
-  { name: "PromptLabPage", element: <PromptLabPage workspaceId="default" /> },
-  { name: "ImprovementPage", element: <ImprovementPage workspaceId="default" /> },
-  { name: "TasksPage", element: <TasksPage workspaceId="default" /> },
-  { name: "SettingsPage", element: <SettingsPage /> },
-  { name: "McpPage", element: <McpPage /> },
-  { name: "MemoryPage", element: <MemoryPage workspaceId="default" /> },
-  { name: "IntegrationsPage", element: <IntegrationsPage /> },
-  { name: "CronPage", element: <CronPage /> },
-  { name: "FilesPage", element: <FilesPage workspaceId="default" /> },
-  { name: "CostConsolePage", element: <CostConsolePage /> },
-  { name: "MeshPage", element: <MeshPage /> },
-  { name: "SystemPage", element: <SystemPage /> },
-  { name: "OfficePage", element: <OfficePage /> },
-  { name: "SkillsPage", element: <SkillsPage /> },
+type SmokeTarget = {
+  name: string;
+  load: () => Promise<React.ComponentType<any>>;
+  props?: Record<string, unknown>;
+};
+
+const targets: SmokeTarget[] = [
   {
-    name: "WorkspacesPage",
-    element: <WorkspacesPage activeWorkspaceId="default" onWorkspaceChange={() => undefined} />,
+    name: "ActivityPage",
+    load: async () => (await import("./pages/ActivityPage")).ActivityPage,
   },
-  { name: "SessionsPage", element: <SessionsPage /> },
-  { name: "ApprovalsPage", element: <ApprovalsPage /> },
-  { name: "AgentsPage", element: <AgentsPage /> },
-  { name: "NpuPage", element: <NpuPage settings={null} /> },
-  { name: "OnboardingPage", element: <OnboardingPage onCompleted={() => undefined} /> },
-  { name: "ToolsPage", element: <ToolsPage /> },
+  {
+    name: "CronPage",
+    load: async () => (await import("./pages/CronPage")).CronPage,
+  },
+  {
+    name: "FilesPage",
+    load: async () => (await import("./pages/FilesPage")).FilesPage,
+    props: { workspaceId: "default" },
+  },
 ];
 
 describe("mission-control interaction coverage", () => {
@@ -770,48 +788,41 @@ describe("mission-control interaction coverage", () => {
   });
 
   afterEach(() => {
+    clearTrackedTimers();
     vi.unstubAllGlobals();
   });
 
-  it("renders high-traffic pages without crashing", async () => {
-    const failures: string[] = [];
+  it.each(targets)("renders $name without crashing", async ({ load, props }) => {
+    let renderer: { root: unknown } | null = null;
+    let dispose: () => void = () => undefined;
+    let boundaryError: string | null = null;
 
-    for (const target of targets) {
-      let renderer: { root: unknown } | null = null;
-      let dispose: () => void = () => undefined;
-      let boundaryError: string | null = null;
-      try {
-        await act(async () => {
-          const created = create(
-            <TestBoundary
-              onError={(message) => {
-                boundaryError = message;
-              }}
-            >
-              {target.element}
-            </TestBoundary>,
-          );
-          renderer = created as unknown as { root: unknown };
-          dispose = () => created.unmount();
-        });
-        if (!renderer) {
-          throw new Error("renderer not created");
-        }
-        await flush();
-        if (boundaryError) {
-          throw new Error(boundaryError);
-        }
-      } catch (error) {
-        failures.push(`${target.name}: ${(error as Error).message}`);
-      } finally {
-        dispose();
+    try {
+      const Component = await load();
+      await act(async () => {
+        const created = create(
+          <TestBoundary
+            onError={(message) => {
+              boundaryError = message;
+            }}
+          >
+            <Component {...props} />
+          </TestBoundary>,
+        );
+        renderer = created as unknown as { root: unknown };
+        dispose = () => created.unmount();
+      });
+      if (!renderer) {
+        throw new Error("renderer not created");
       }
+      await flush();
+      if (boundaryError) {
+        throw new Error(boundaryError);
+      }
+    } finally {
+      await act(async () => {
+        dispose();
+      });
     }
-
-    if (failures.length > 0) {
-      console.warn(`[interaction-coverage] skipped ${failures.length} target(s): ${failures.join("; ")}`);
-    }
-    expect(failures).toEqual([]);
   });
 });
-

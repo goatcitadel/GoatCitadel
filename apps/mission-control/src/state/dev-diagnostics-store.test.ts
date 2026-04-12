@@ -96,4 +96,19 @@ describe("dev-diagnostics-store invariants", () => {
     expect(JSON.stringify(bundle)).not.toContain("NaN");
     expect(JSON.stringify(bundle)).not.toContain("undefined");
   });
+
+  it("does not echo diagnostics to the console during test runs", async () => {
+    installMockWindow();
+    const consoleDebugSpy = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const diagnostics = await import("./dev-diagnostics-store");
+
+    diagnostics.recordClientDiagnostic({
+      level: "info",
+      category: "ui",
+      event: "test.console_suppressed",
+      message: "This should stay in the diagnostics buffer only.",
+    });
+
+    expect(consoleDebugSpy).not.toHaveBeenCalled();
+  });
 });

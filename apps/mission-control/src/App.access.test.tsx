@@ -107,6 +107,58 @@ function createMemoryStorage(): Storage {
   };
 }
 
+const activeTimeoutHandles = new Set<ReturnType<typeof globalThis.setTimeout>>();
+const activeIntervalHandles = new Set<ReturnType<typeof globalThis.setInterval>>();
+
+function trackedSetTimeout(
+  callback: (...args: never[]) => void,
+  delay?: number,
+  ...args: never[]
+): ReturnType<typeof globalThis.setTimeout> {
+  const handle = globalThis.setTimeout(
+    () => {
+      activeTimeoutHandles.delete(handle);
+      callback(...args);
+    },
+    delay,
+    ...args,
+  ) as unknown as ReturnType<typeof globalThis.setTimeout>;
+  activeTimeoutHandles.add(handle);
+  return handle;
+}
+
+function trackedClearTimeout(handle: ReturnType<typeof globalThis.setTimeout>): void {
+  activeTimeoutHandles.delete(handle);
+  globalThis.clearTimeout(handle);
+}
+
+function trackedSetInterval(
+  callback: (...args: never[]) => void,
+  delay?: number,
+  ...args: never[]
+): ReturnType<typeof globalThis.setInterval> {
+  const handle = globalThis.setInterval(callback, delay, ...args);
+  activeIntervalHandles.add(handle);
+  return handle;
+}
+
+function trackedClearInterval(handle: ReturnType<typeof globalThis.setInterval>): void {
+  activeIntervalHandles.delete(handle);
+  globalThis.clearInterval(handle);
+}
+
+function clearTrackedTimers(): void {
+  for (const handle of activeIntervalHandles) {
+    globalThis.clearInterval(handle);
+  }
+  activeIntervalHandles.clear();
+
+  for (const handle of activeTimeoutHandles) {
+    globalThis.clearTimeout(handle);
+  }
+  activeTimeoutHandles.clear();
+}
+
 function installMockWindow(): void {
   const location = {
     protocol: "http:",
@@ -132,12 +184,14 @@ function installMockWindow(): void {
     },
     localStorage: createMemoryStorage(),
     sessionStorage: createMemoryStorage(),
-    setInterval: globalThis.setInterval.bind(globalThis),
-    clearInterval: globalThis.clearInterval.bind(globalThis),
-    setTimeout: globalThis.setTimeout.bind(globalThis),
-    clearTimeout: globalThis.clearTimeout.bind(globalThis),
-    requestAnimationFrame: (callback: FrameRequestCallback) => globalThis.setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: (handle: number) => globalThis.clearTimeout(handle),
+    setInterval: trackedSetInterval,
+    clearInterval: trackedClearInterval,
+    setTimeout: trackedSetTimeout,
+    clearTimeout: trackedClearTimeout,
+    requestAnimationFrame: (callback: FrameRequestCallback) =>
+      trackedSetTimeout(() => callback(Date.now()), 0) as unknown as number,
+    cancelAnimationFrame: (handle: number) =>
+      trackedClearTimeout(handle as unknown as ReturnType<typeof globalThis.setTimeout>),
     addEventListener: () => undefined,
     removeEventListener: () => undefined,
     matchMedia: () => ({
@@ -182,6 +236,27 @@ function installMockWindow(): void {
 
 function renderTreeText(renderer: ReactTestRenderer): string {
   return JSON.stringify(renderer.toJSON());
+}
+
+const mountedRenderers = new Set<ReactTestRenderer>();
+
+function mount(element: React.ReactElement): ReactTestRenderer {
+  const renderer = create(element);
+  mountedRenderers.add(renderer);
+  return renderer;
+}
+
+async function unmountMountedRenderers(): Promise<void> {
+  if (mountedRenderers.size === 0) {
+    return;
+  }
+
+  await act(async () => {
+    for (const renderer of mountedRenderers) {
+      renderer.unmount();
+    }
+    mountedRenderers.clear();
+  });
 }
 
 function flattenNodeText(value: unknown): string {
@@ -362,7 +437,9 @@ describe("App gateway access gate", () => {
     chatPageMock.mockReset();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await unmountMountedRenderers();
+    clearTrackedTimers();
     vi.clearAllMocks();
     vi.unstubAllGlobals();
   });
@@ -378,7 +455,7 @@ describe("App gateway access gate", () => {
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<App />);
+      renderer = mount(<App />);
     });
     await flush();
 
@@ -394,7 +471,7 @@ describe("App gateway access gate", () => {
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<App />);
+      renderer = mount(<App />);
     });
     await flush();
 
@@ -415,7 +492,7 @@ describe("App gateway access gate", () => {
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<App />);
+      renderer = mount(<App />);
     });
     await flush();
 
@@ -450,7 +527,7 @@ describe("App gateway access gate", () => {
 
       let renderer: ReactTestRenderer;
       await act(async () => {
-        renderer = create(<App />);
+        renderer = mount(<App />);
       });
       await flush();
 
@@ -531,7 +608,7 @@ describe("App gateway access gate", () => {
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = create(
+      renderer = mount(
         <UiPreferencesProvider>
           <App />
         </UiPreferencesProvider>,
@@ -557,7 +634,7 @@ describe("App gateway access gate", () => {
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<App />);
+      renderer = mount(<App />);
     });
     await flush();
 
@@ -579,7 +656,7 @@ describe("App gateway access gate", () => {
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<App />);
+      renderer = mount(<App />);
     });
     await flush();
 
@@ -623,7 +700,7 @@ describe("App gateway access gate", () => {
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<App />);
+      renderer = mount(<App />);
     });
     await flush();
 
@@ -748,7 +825,7 @@ describe("App gateway access gate", () => {
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<App />);
+      renderer = mount(<App />);
     });
     await flush();
 
@@ -893,7 +970,7 @@ describe("App gateway access gate", () => {
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<App />);
+      renderer = mount(<App />);
     });
     await flush();
 
