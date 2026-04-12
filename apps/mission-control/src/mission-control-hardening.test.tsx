@@ -267,7 +267,7 @@ beforeEach(() => {
       {
         serverId: "srv-1",
         label: "Primary MCP",
-        transport: "http",
+        transport: "stdio",
         status: "connected",
         enabled: true,
         category: "development",
@@ -280,7 +280,7 @@ beforeEach(() => {
           blockedToolPatterns: [],
           notes: "original note",
         },
-        url: "https://mcp.example.test",
+        command: "npx @modelcontextprotocol/server-filesystem .",
         authType: "none",
       },
     ],
@@ -417,6 +417,89 @@ describe("mission-control hardening", () => {
 
     expect(renderer!.root.findByProps({ id: "mcpPolicyNotes" }).props.value).toBe("edited note");
     expect(findButton(renderer!.root, "Save Policy").props.disabled).toBe(false);
+  });
+
+  it("keeps unsupported remote MCP transports out of the visible 1.0 authoring surface", async () => {
+    testState.api.fetchMcpServers.mockResolvedValue({
+      items: [
+        {
+          serverId: "srv-hidden",
+          label: "Legacy Remote MCP",
+          transport: "http",
+          status: "connected",
+          enabled: true,
+          category: "development",
+          trustTier: "restricted",
+          costTier: "mixed",
+          policy: {
+            requireFirstToolApproval: true,
+            redactionMode: "strict",
+            allowedToolPatterns: [],
+            blockedToolPatterns: [],
+          },
+          url: "https://api.githubcopilot.com/mcp/",
+          authType: "oauth2",
+        },
+      ],
+    });
+    testState.api.fetchMcpTemplates.mockResolvedValue({
+      items: [
+        {
+          templateId: "github",
+          label: "GitHub",
+          description: "Remote GitHub MCP",
+          transport: "http",
+          url: "https://api.githubcopilot.com/mcp/",
+          authType: "oauth2",
+          category: "development",
+          trustTier: "restricted",
+          costTier: "mixed",
+          policy: {
+            requireFirstToolApproval: true,
+            redactionMode: "strict",
+            allowedToolPatterns: [],
+            blockedToolPatterns: [],
+          },
+          enabledByDefault: false,
+          installed: false,
+        },
+        {
+          templateId: "filesystem",
+          label: "Filesystem (Local)",
+          description: "Local files",
+          transport: "stdio",
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "."],
+          authType: "none",
+          category: "development",
+          trustTier: "restricted",
+          costTier: "free",
+          policy: {
+            requireFirstToolApproval: true,
+            redactionMode: "basic",
+            allowedToolPatterns: [],
+            blockedToolPatterns: [],
+          },
+          enabledByDefault: false,
+          installed: false,
+        },
+      ],
+    });
+
+    let renderer: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<McpPage />);
+    });
+    await flush();
+
+    const transportSelect = renderer!.root.findByProps({ id: "mcpTransport" });
+    const transportOptions = transportSelect.findAllByType("option").map((node) => node.props.value);
+    const paragraphs = renderer!.root.findAllByType("p").map((node) => textContent(node));
+
+    expect(transportOptions).toEqual(["stdio"]);
+    expect(paragraphs.some((text) => text.includes("Remote GitHub MCP"))).toBe(false);
+    expect(paragraphs.some((text) => text.includes("Local files"))).toBe(true);
+    expect(textContent(renderer!.root)).not.toContain("Legacy Remote MCP");
   });
 
   it("keeps prompt lab refresh enabled while idle and preserves the selected pack on refresh", async () => {

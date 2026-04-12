@@ -42,36 +42,40 @@ describe("channel setup definitions", () => {
   it("lists the guided definitions for the supported rollout channels", () => {
     const catalogIds = listChannelSetupDefinitions().map((definition) => definition.catalog.catalogId);
 
-    expect(catalogIds).toEqual(expect.arrayContaining([
-      "channel.discord",
-      "channel.slack",
-      "channel.telegram",
-      "channel.google-chat",
-      "channel.teams",
-      "channel.whatsapp",
-      "channel.signal",
-      "channel.mattermost",
-      "channel.imessage",
-      "channel.nextcloud-talk",
-      "channel.line",
-      "channel.zalo",
-      "channel.zalouser",
-    ]));
+    expect(catalogIds).toEqual(
+      expect.arrayContaining([
+        "channel.discord",
+        "channel.slack",
+        "channel.telegram",
+        "channel.google-chat",
+        "channel.teams",
+        "channel.whatsapp",
+        "channel.signal",
+        "channel.mattermost",
+        "channel.imessage",
+        "channel.nextcloud-talk",
+        "channel.line",
+        "channel.zalo",
+        "channel.zalouser",
+      ]),
+    );
   });
 
   it("hydrates Discord connections without rehydrating configured secrets", () => {
     const definition = requireChannelSetupDefinition("channel.discord");
-    const hydrated = definition.hydrate(createConnection({
-      catalogId: "channel.discord",
-      key: "discord",
-      label: "Discord Primary",
-      config: {
-        botToken: "discord-secret-token",
-        runtimeMode: "bridge",
-        defaultChannelId: "123456789012345678",
-        defaultGuildId: "987654321098765432",
-      },
-    }));
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.discord",
+        key: "discord",
+        label: "Discord Primary",
+        config: {
+          botToken: "discord-secret-token",
+          runtimeMode: "bridge",
+          defaultChannelId: "123456789012345678",
+          defaultGuildId: "987654321098765432",
+        },
+      }),
+    );
 
     expect(hydrated.hydration.status).toBe("opaque-secret");
     expect(hydrated.hydration.fieldState.botToken).toBe("configured");
@@ -89,10 +93,14 @@ describe("channel setup definitions", () => {
   it("accepts saved Discord secret state during repair or retest without re-entry", () => {
     const definition = requireChannelSetupDefinition("channel.discord");
     const issues = definition.validate({
-      ...createDraft("channel.discord", {
-        runtimeMode: "bridge",
-        defaultChannelId: "123456789012345678",
-      }, "retest"),
+      ...createDraft(
+        "channel.discord",
+        {
+          runtimeMode: "bridge",
+          defaultChannelId: "123456789012345678",
+        },
+        "retest",
+      ),
       hydration: {
         status: "opaque-secret",
         warnings: [],
@@ -108,51 +116,61 @@ describe("channel setup definitions", () => {
 
   it("defaults new Discord bot-token drafts to gateway mode without asking for runtime selection", () => {
     const definition = requireChannelSetupDefinition("channel.discord");
-    const normalized = definition.normalize(createDraft("channel.discord", {
-      botTokenEnv: "DISCORD_BOT_TOKEN",
-      defaultChannelId: "123456789012345678",
-      defaultGuildId: "987654321098765432",
-    }));
+    const normalized = definition.normalize(
+      createDraft("channel.discord", {
+        botTokenEnv: "DISCORD_BOT_TOKEN",
+        defaultChannelId: "123456789012345678",
+        defaultGuildId: "987654321098765432",
+      }),
+    );
 
-    expect(normalized).toEqual(expect.objectContaining({
-      runtimeMode: "gateway",
-      botTokenEnv: "DISCORD_BOT_TOKEN",
-      defaultChannelId: "123456789012345678",
-      inboundDmPolicy: "pairing",
-      guildPolicy: "allowlist",
-    }));
+    expect(normalized).toEqual(
+      expect.objectContaining({
+        runtimeMode: "gateway",
+        botTokenEnv: "DISCORD_BOT_TOKEN",
+        defaultChannelId: "123456789012345678",
+        inboundDmPolicy: "pairing",
+        guildPolicy: "allowlist",
+      }),
+    );
   });
 
   it("infers gateway mode for existing Discord bot-token connections that lack an explicit runtime mode", () => {
     const definition = requireChannelSetupDefinition("channel.discord");
-    const hydrated = definition.hydrate(createConnection({
-      catalogId: "channel.discord",
-      key: "discord",
-      label: "Discord Primary",
-      config: {
-        botToken: "discord-secret-token",
-        defaultChannelId: "123456789012345678",
-      },
-    }));
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.discord",
+        key: "discord",
+        label: "Discord Primary",
+        config: {
+          botToken: "discord-secret-token",
+          defaultChannelId: "123456789012345678",
+        },
+      }),
+    );
 
-    expect(hydrated.draft).toEqual(expect.objectContaining({
-      runtimeMode: "gateway",
-      defaultChannelId: "123456789012345678",
-    }));
+    expect(hydrated.draft).toEqual(
+      expect.objectContaining({
+        runtimeMode: "gateway",
+        defaultChannelId: "123456789012345678",
+      }),
+    );
   });
 
   it("hydrates Telegram connections without rehydrating bot tokens", () => {
     const definition = requireChannelSetupDefinition("channel.telegram");
-    const hydrated = definition.hydrate(createConnection({
-      catalogId: "channel.telegram",
-      key: "telegram",
-      label: "Telegram Primary",
-      config: {
-        botToken: "123456789:telegram-secret-token",
-        defaultChatId: "123456789",
-        parseMode: "MarkdownV2",
-      },
-    }));
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.telegram",
+        key: "telegram",
+        label: "Telegram Primary",
+        config: {
+          botToken: "123456789:telegram-secret-token",
+          defaultChatId: "123456789",
+          parseMode: "MarkdownV2",
+        },
+      }),
+    );
 
     expect(hydrated.hydration.status).toBe("opaque-secret");
     expect(hydrated.hydration.fieldState.botToken).toBe("configured");
@@ -166,10 +184,14 @@ describe("channel setup definitions", () => {
   it("accepts saved Telegram secret state during repair or retest without re-entry", () => {
     const definition = requireChannelSetupDefinition("channel.telegram");
     const issues = definition.validate({
-      ...createDraft("channel.telegram", {
-        defaultChatId: "123456789",
-        parseMode: "Markdown",
-      }, "retest"),
+      ...createDraft(
+        "channel.telegram",
+        {
+          defaultChatId: "123456789",
+          parseMode: "Markdown",
+        },
+        "retest",
+      ),
       hydration: {
         status: "opaque-secret",
         warnings: [],
@@ -185,99 +207,115 @@ describe("channel setup definitions", () => {
 
   it("preserves env-backed Telegram auth during edit flows without forcing secret re-entry", () => {
     const definition = requireChannelSetupDefinition("channel.telegram");
-    const hydrated = definition.hydrate(createConnection({
-      catalogId: "channel.telegram",
-      key: "telegram",
-      label: "Telegram Primary",
-      config: {
-        tokenEnv: "TELEGRAM_BOT_TOKEN",
-        defaultChatId: "@ops_channel",
-        parseMode: "MarkdownV2",
-      },
-    }));
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.telegram",
+        key: "telegram",
+        label: "Telegram Primary",
+        config: {
+          tokenEnv: "TELEGRAM_BOT_TOKEN",
+          defaultChatId: "@ops_channel",
+          parseMode: "MarkdownV2",
+        },
+      }),
+    );
     const draft = {
       ...createDraft("channel.telegram", hydrated.draft, "edit"),
       hydration: hydrated.hydration,
     };
 
     expect(definition.validate(draft)).toEqual([]);
-    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
-      botTokenEnv: "TELEGRAM_BOT_TOKEN",
-      defaultChatId: "@ops_channel",
-      parseMode: "MarkdownV2",
-    }));
+    expect(definition.normalize(draft)).toEqual(
+      expect.objectContaining({
+        botTokenEnv: "TELEGRAM_BOT_TOKEN",
+        defaultChatId: "@ops_channel",
+        parseMode: "MarkdownV2",
+      }),
+    );
   });
 
   it("preserves Telegram webhook secret env references during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.telegram");
-    const hydrated = definition.hydrate(createConnection({
-      catalogId: "channel.telegram",
-      key: "telegram",
-      label: "Telegram Primary",
-      config: {
-        tokenEnv: "TELEGRAM_BOT_TOKEN",
-        webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET",
-        defaultChatId: "@ops_channel",
-        parseMode: "MarkdownV2",
-      },
-    }));
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.telegram",
+        key: "telegram",
+        label: "Telegram Primary",
+        config: {
+          tokenEnv: "TELEGRAM_BOT_TOKEN",
+          webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET",
+          defaultChatId: "@ops_channel",
+          parseMode: "MarkdownV2",
+        },
+      }),
+    );
     const draft = {
       ...createDraft("channel.telegram", hydrated.draft, "edit"),
       hydration: hydrated.hydration,
     };
 
     expect(definition.validate(draft)).toEqual([]);
-    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
-      botTokenEnv: "TELEGRAM_BOT_TOKEN",
-      webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET",
-      defaultChatId: "@ops_channel",
-    }));
+    expect(definition.normalize(draft)).toEqual(
+      expect.objectContaining({
+        botTokenEnv: "TELEGRAM_BOT_TOKEN",
+        webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET",
+        defaultChatId: "@ops_channel",
+      }),
+    );
   });
 
   it("requires a Slack auth path and a default channel", () => {
     const definition = requireChannelSetupDefinition("channel.slack");
     const issues = definition.validate(createDraft("channel.slack", {}));
 
-    expect(issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        key: "slack_auth_missing",
-        failureCategory: "missing_input",
-      }),
-      expect.objectContaining({
-        fieldKey: "defaultChannel",
-        failureCategory: "missing_input",
-      }),
-    ]));
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "slack_auth_missing",
+          failureCategory: "missing_input",
+        }),
+        expect.objectContaining({
+          fieldKey: "defaultChannel",
+          failureCategory: "missing_input",
+        }),
+      ]),
+    );
   });
 
   it("preserves env-backed Slack auth during edit flows without forcing secret re-entry", () => {
     const definition = requireChannelSetupDefinition("channel.slack");
-    const hydrated = definition.hydrate(createConnection({
-      catalogId: "channel.slack",
-      key: "slack",
-      label: "Slack Primary",
-      config: {
-        tokenEnv: "SLACK_BOT_TOKEN",
-        defaultChannel: "#ops-sandbox",
-      },
-    }));
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.slack",
+        key: "slack",
+        label: "Slack Primary",
+        config: {
+          tokenEnv: "SLACK_BOT_TOKEN",
+          defaultChannel: "#ops-sandbox",
+        },
+      }),
+    );
     const draft = {
       ...createDraft("channel.slack", hydrated.draft, "edit"),
       hydration: hydrated.hydration,
     };
 
     expect(definition.validate(draft)).toEqual([]);
-    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
-      botTokenEnv: "SLACK_BOT_TOKEN",
-      defaultChannel: "#ops-sandbox",
-    }));
+    expect(definition.normalize(draft)).toEqual(
+      expect.objectContaining({
+        botTokenEnv: "SLACK_BOT_TOKEN",
+        defaultChannel: "#ops-sandbox",
+      }),
+    );
   });
 
   it("rejects malformed Google Chat webhook URLs", () => {
     const definition = requireChannelSetupDefinition("channel.google-chat");
-    const issues = definition.validate(createDraft("channel.google-chat", {
-      webhookUrl: "https://chat.google.com/not-a-webhook",
-    }));
+    const issues = definition.validate(
+      createDraft("channel.google-chat", {
+        webhookUrl: "https://chat.google.com/not-a-webhook",
+      }),
+    );
 
     expect(issues).toEqual([
       expect.objectContaining({
@@ -289,9 +327,11 @@ describe("channel setup definitions", () => {
 
   it("rejects malformed Teams webhook URLs", () => {
     const definition = requireChannelSetupDefinition("channel.teams");
-    const issues = definition.validate(createDraft("channel.teams", {
-      webhookUrl: "https://teams.microsoft.com/l/channel/not-a-webhook",
-    }));
+    const issues = definition.validate(
+      createDraft("channel.teams", {
+        webhookUrl: "https://teams.microsoft.com/l/channel/not-a-webhook",
+      }),
+    );
 
     expect(issues).toEqual([
       expect.objectContaining({
@@ -303,212 +343,246 @@ describe("channel setup definitions", () => {
 
   it("preserves env-backed Teams webhooks during edit flows without forcing secret re-entry", () => {
     const definition = requireChannelSetupDefinition("channel.teams");
-    const hydrated = definition.hydrate(createConnection({
-      catalogId: "channel.teams",
-      key: "teams",
-      label: "Teams Primary",
-      config: {
-        webhookUrlEnv: "TEAMS_WEBHOOK_URL",
-        cardTitle: "Ops Alerts",
-      },
-    }));
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.teams",
+        key: "teams",
+        label: "Teams Primary",
+        config: {
+          webhookUrlEnv: "TEAMS_WEBHOOK_URL",
+          cardTitle: "Ops Alerts",
+        },
+      }),
+    );
     const draft = {
       ...createDraft("channel.teams", hydrated.draft, "edit"),
       hydration: hydrated.hydration,
     };
 
     expect(definition.validate(draft)).toEqual([]);
-    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
-      webhookUrlEnv: "TEAMS_WEBHOOK_URL",
-      cardTitle: "Ops Alerts",
-    }));
+    expect(definition.normalize(draft)).toEqual(
+      expect.objectContaining({
+        webhookUrlEnv: "TEAMS_WEBHOOK_URL",
+        cardTitle: "Ops Alerts",
+      }),
+    );
   });
 
   it("requires WhatsApp auth, phone number id, and a default recipient", () => {
     const definition = requireChannelSetupDefinition("channel.whatsapp");
     const issues = definition.validate(createDraft("channel.whatsapp", {}));
 
-    expect(issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        key: "whatsapp_auth_missing",
-        failureCategory: "missing_input",
-      }),
-      expect.objectContaining({
-        fieldKey: "phoneNumberId",
-        failureCategory: "missing_input",
-      }),
-      expect.objectContaining({
-        fieldKey: "defaultTarget",
-        failureCategory: "missing_input",
-      }),
-    ]));
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "whatsapp_auth_missing",
+          failureCategory: "missing_input",
+        }),
+        expect.objectContaining({
+          fieldKey: "phoneNumberId",
+          failureCategory: "missing_input",
+        }),
+        expect.objectContaining({
+          fieldKey: "defaultTarget",
+          failureCategory: "missing_input",
+        }),
+      ]),
+    );
   });
 
   it("preserves WhatsApp webhook secret env references during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.whatsapp");
-    const hydrated = definition.hydrate(createConnection({
-      catalogId: "channel.whatsapp",
-      key: "whatsapp",
-      label: "WhatsApp Primary",
-      config: {
-        accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
-        appSecretEnv: "WHATSAPP_APP_SECRET",
-        webhookVerifyTokenEnv: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
-        phoneNumberId: "123456789012345",
-        defaultTarget: "+15551234567",
-      },
-    }));
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.whatsapp",
+        key: "whatsapp",
+        label: "WhatsApp Primary",
+        config: {
+          accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
+          appSecretEnv: "WHATSAPP_APP_SECRET",
+          webhookVerifyTokenEnv: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+          phoneNumberId: "123456789012345",
+          defaultTarget: "+15551234567",
+        },
+      }),
+    );
     const draft = {
       ...createDraft("channel.whatsapp", hydrated.draft, "edit"),
       hydration: hydrated.hydration,
     };
 
     expect(definition.validate(draft)).toEqual([]);
-    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
-      accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
-      appSecretEnv: "WHATSAPP_APP_SECRET",
-      webhookVerifyTokenEnv: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
-      phoneNumberId: "123456789012345",
-      defaultTarget: "+15551234567",
-    }));
+    expect(definition.normalize(draft)).toEqual(
+      expect.objectContaining({
+        accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
+        appSecretEnv: "WHATSAPP_APP_SECRET",
+        webhookVerifyTokenEnv: "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+        phoneNumberId: "123456789012345",
+        defaultTarget: "+15551234567",
+      }),
+    );
   });
 
   it("rejects incomplete Signal bridge drafts", () => {
     const definition = requireChannelSetupDefinition("channel.signal");
-    const issues = definition.validate(createDraft("channel.signal", {
-      baseUrl: "not-a-url",
-    }));
+    const issues = definition.validate(
+      createDraft("channel.signal", {
+        baseUrl: "not-a-url",
+      }),
+    );
 
-    expect(issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        fieldKey: "baseUrl",
-        failureCategory: "malformed_value",
-      }),
-      expect.objectContaining({
-        fieldKey: "defaultRecipient",
-        failureCategory: "missing_input",
-      }),
-    ]));
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fieldKey: "baseUrl",
+          failureCategory: "malformed_value",
+        }),
+        expect.objectContaining({
+          fieldKey: "defaultRecipient",
+          failureCategory: "missing_input",
+        }),
+      ]),
+    );
   });
 
   it("preserves env-backed Mattermost auth during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.mattermost");
-    const hydrated = definition.hydrate(createConnection({
-      catalogId: "channel.mattermost",
-      key: "mattermost",
-      label: "Mattermost Primary",
-      config: {
-        serverUrl: "https://chat.example.com",
-        botTokenEnv: "MATTERMOST_BOT_TOKEN",
-        defaultChannel: "town-square",
-        defaultTeam: "goatcitadel",
-      },
-    }));
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.mattermost",
+        key: "mattermost",
+        label: "Mattermost Primary",
+        config: {
+          serverUrl: "https://chat.example.com",
+          botTokenEnv: "MATTERMOST_BOT_TOKEN",
+          defaultChannel: "town-square",
+          defaultTeam: "goatcitadel",
+        },
+      }),
+    );
     const draft = {
       ...createDraft("channel.mattermost", hydrated.draft, "edit"),
       hydration: hydrated.hydration,
     };
 
     expect(definition.validate(draft)).toEqual([]);
-    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
-      serverUrl: "https://chat.example.com",
-      botTokenEnv: "MATTERMOST_BOT_TOKEN",
-      defaultChannel: "town-square",
-      defaultTeam: "goatcitadel",
-    }));
+    expect(definition.normalize(draft)).toEqual(
+      expect.objectContaining({
+        serverUrl: "https://chat.example.com",
+        botTokenEnv: "MATTERMOST_BOT_TOKEN",
+        defaultChannel: "town-square",
+        defaultTeam: "goatcitadel",
+      }),
+    );
   });
 
   it("preserves env-backed iMessage bridge auth during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.imessage");
-    const hydrated = definition.hydrate(createConnection({
-      catalogId: "channel.imessage",
-      key: "imessage",
-      label: "iMessage Primary",
-      config: {
-        bridgeUrl: "http://127.0.0.1:3001",
-        passwordEnv: "IMESSAGE_PASSWORD",
-        defaultHandle: "imessage:+15551234567",
-      },
-    }));
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.imessage",
+        key: "imessage",
+        label: "iMessage Primary",
+        config: {
+          bridgeUrl: "http://127.0.0.1:3001",
+          passwordEnv: "IMESSAGE_PASSWORD",
+          defaultHandle: "imessage:+15551234567",
+        },
+      }),
+    );
     const draft = {
       ...createDraft("channel.imessage", hydrated.draft, "edit"),
       hydration: hydrated.hydration,
     };
 
     expect(definition.validate(draft)).toEqual([]);
-    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
-      bridgeUrl: "http://127.0.0.1:3001",
-      passwordEnv: "IMESSAGE_PASSWORD",
-      defaultHandle: "imessage:+15551234567",
-    }));
+    expect(definition.normalize(draft)).toEqual(
+      expect.objectContaining({
+        bridgeUrl: "http://127.0.0.1:3001",
+        passwordEnv: "IMESSAGE_PASSWORD",
+        defaultHandle: "imessage:+15551234567",
+      }),
+    );
   });
 
   it("preserves env-backed Nextcloud Talk auth during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.nextcloud-talk");
-    const hydrated = definition.hydrate(createConnection({
-      catalogId: "channel.nextcloud-talk",
-      key: "nextcloud-talk",
-      label: "Nextcloud Talk Primary",
-      config: {
-        baseUrl: "https://cloud.example.com",
-        tokenEnv: "NEXTCLOUD_TALK_TOKEN",
-        defaultRoomId: "ops-room",
-      },
-    }));
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.nextcloud-talk",
+        key: "nextcloud-talk",
+        label: "Nextcloud Talk Primary",
+        config: {
+          baseUrl: "https://cloud.example.com",
+          tokenEnv: "NEXTCLOUD_TALK_TOKEN",
+          defaultRoomId: "ops-room",
+        },
+      }),
+    );
     const draft = {
       ...createDraft("channel.nextcloud-talk", hydrated.draft, "edit"),
       hydration: hydrated.hydration,
     };
 
     expect(definition.validate(draft)).toEqual([]);
-    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
-      baseUrl: "https://cloud.example.com",
-      tokenEnv: "NEXTCLOUD_TALK_TOKEN",
-      defaultRoomId: "ops-room",
-    }));
+    expect(definition.normalize(draft)).toEqual(
+      expect.objectContaining({
+        baseUrl: "https://cloud.example.com",
+        tokenEnv: "NEXTCLOUD_TALK_TOKEN",
+        defaultRoomId: "ops-room",
+      }),
+    );
   });
 
   it("preserves LINE channel secret env references during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.line");
-    const hydrated = definition.hydrate(createConnection({
-      catalogId: "channel.line",
-      key: "line",
-      label: "LINE Primary",
-      config: {
-        channelAccessTokenEnv: "LINE_CHANNEL_ACCESS_TOKEN",
-        channelSecretEnv: "LINE_CHANNEL_SECRET",
-        defaultTarget: "U1234567890",
-      },
-    }));
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.line",
+        key: "line",
+        label: "LINE Primary",
+        config: {
+          channelAccessTokenEnv: "LINE_CHANNEL_ACCESS_TOKEN",
+          channelSecretEnv: "LINE_CHANNEL_SECRET",
+          defaultTarget: "U1234567890",
+        },
+      }),
+    );
     const draft = {
       ...createDraft("channel.line", hydrated.draft, "edit"),
       hydration: hydrated.hydration,
     };
 
     expect(definition.validate(draft)).toEqual([]);
-    expect(definition.normalize(draft)).toEqual(expect.objectContaining({
-      channelAccessTokenEnv: "LINE_CHANNEL_ACCESS_TOKEN",
-      channelSecretEnv: "LINE_CHANNEL_SECRET",
-      defaultTarget: "U1234567890",
-    }));
+    expect(definition.normalize(draft)).toEqual(
+      expect.objectContaining({
+        channelAccessTokenEnv: "LINE_CHANNEL_ACCESS_TOKEN",
+        channelSecretEnv: "LINE_CHANNEL_SECRET",
+        defaultTarget: "U1234567890",
+      }),
+    );
   });
 
   it("rejects malformed Zalo User bridge drafts", () => {
     const definition = requireChannelSetupDefinition("channel.zalouser");
-    const issues = definition.validate(createDraft("channel.zalouser", {
-      baseUrl: "zca.local",
-    }));
+    const issues = definition.validate(
+      createDraft("channel.zalouser", {
+        baseUrl: "zca.local",
+      }),
+    );
 
-    expect(issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        fieldKey: "baseUrl",
-        failureCategory: "malformed_value",
-      }),
-      expect.objectContaining({
-        fieldKey: "defaultTarget",
-        failureCategory: "missing_input",
-      }),
-    ]));
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fieldKey: "baseUrl",
+          failureCategory: "malformed_value",
+        }),
+        expect.objectContaining({
+          fieldKey: "defaultTarget",
+          failureCategory: "missing_input",
+        }),
+      ]),
+    );
   });
 
   it("advertises live-send testing for the guided smoke-probe channels", () => {
@@ -545,6 +619,15 @@ describe("channel setup definitions", () => {
     for (const catalogId of channels) {
       const definition = requireChannelSetupDefinition(catalogId);
       expect(definition.definition.testing.levels).toContain("live-auth");
+    }
+  });
+
+  it("keeps guided channel copy out of the old planned-parity wording for visible built-in channels", () => {
+    const channels = ["channel.whatsapp", "channel.mattermost", "channel.line"] as const;
+
+    for (const catalogId of channels) {
+      const definition = requireChannelSetupDefinition(catalogId);
+      expect(JSON.stringify(definition.definition)).not.toMatch(/planned parity work|still counts as planned/i);
     }
   });
 });

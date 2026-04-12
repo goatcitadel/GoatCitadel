@@ -1,6 +1,6 @@
 # Canonical Runtime State Model
 
-Last updated: 2026-04-11
+Last updated: 2026-04-12
 
 This document defines the repo-native authority model for the core runtime nouns that appear across Gateway, Mission Control, storage, and replay.
 
@@ -56,15 +56,16 @@ Authority:
 Implementation status:
 - Schema and storage repository: complete (migration v21).
 - Read-only diagnostics API: complete.
-- Shipped Chat / Cowork / Code HTTP/SSE send, retry, resume, approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics are durably owned for the `1.0` operator path.
+- Mission-session Chat / Cowork / Code LLM HTTP/SSE send, retry, resume, approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics are durably owned for the `1.0` operator path.
 - Queue consumers / idempotent worker runtime for the shipped durable path: complete.
 - DLQ operator actions for the shipped durable path: complete.
 - See `docs/DURABLE_RUNS_REPLAY_FOUNDATION.md` for historical implementation background and migration context, not the active rollout source of truth.
 
 Notes:
 - A run records execution intent and outcome for the shipped resumable operator flow set.
-- Durable execution now owns worker startup, retry scheduling, wake/resume, dead-letter recovery mechanics, approval wait/resume wake effects, approval-linked proactive wakes, and durable-linked chat-turn stream resumption for shipped Chat / Cowork / Code operator work.
-- Legacy traces without durable linkage may still require compatibility reads or resume fallbacks for historical rows, but new shipped operator sends do not bypass durable ownership.
+- Durable execution now owns worker startup, retry scheduling, wake/resume, dead-letter recovery mechanics, approval wait/resume wake effects, approval-linked proactive wakes, and durable-linked chat-turn stream resumption for mission-session Chat / Cowork / Code operator work.
+- External writeback sessions remain visible operator sessions, but their integration send/retry/edit/stream lanes are still one-shot writeback paths outside durable replay/resume because the external side effect is not yet durably wrapped.
+- Legacy traces without durable linkage may still require compatibility reads or resume fallbacks for historical rows, but new mission-session LLM sends do not bypass durable ownership.
 - Runs may be linked to sessions, turns, tasks, and approvals.
 - The `durableKernelV1Enabled` feature flag gates durable-run APIs. The `replayOverridesV1Enabled` flag (default: off) gates replay-with-overrides.
 

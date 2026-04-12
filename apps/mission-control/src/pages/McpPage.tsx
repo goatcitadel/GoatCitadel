@@ -53,7 +53,7 @@ type ApprovalInboxFilterState = "all" | ApprovalInboxItemRecord["state"];
 const INTERNAL_APPROVAL_INBOX_URL = "goatcitadel://approval-inbox";
 const APPROVAL_INBOX_LIST_TOOL_NAME = "goatcitadel.approval.remote_action_inbox.list";
 const APPROVAL_INBOX_RESOLVE_TOOL_NAME = "goatcitadel.approval.remote_action_inbox.resolve";
-const FEATURED_MCP_TEMPLATE_IDS = ["github", "approval-inbox", "stripe"] as const;
+const FEATURED_MCP_TEMPLATE_IDS = ["filesystem", "playwright", "approval-inbox"] as const;
 
 const FEATURED_MCP_NOTES: Record<
   (typeof FEATURED_MCP_TEMPLATE_IDS)[number],
@@ -62,20 +62,20 @@ const FEATURED_MCP_NOTES: Record<
     setup: string;
   }
 > = {
-  github: {
-    why: "Best first MCP for code-heavy work: repos, issues, pull requests, and code navigation.",
+  filesystem: {
+    why: "Best first MCP for local repo work: read, write, and inspect the files GoatCitadel is already operating on.",
     setup:
-      "Review auth and trust policy before first live use. This is the official GitHub endpoint shape, not the older deprecated local package.",
+      "Keep first-use approval on until you trust the workspace path and write scope you want this server to touch.",
+  },
+  playwright: {
+    why: "Good second MCP for browser-heavy verification, repro work, and UI checks that need a real page instead of static HTML.",
+    setup:
+      "Use this when you need a real browser loop. Keep it restricted and validate one low-risk action before broader automation.",
   },
   "approval-inbox": {
     why: "Turns durable remote approvals into a real non-browser MCP inbox with pending actions, retries, and explicit operator resolution.",
     setup:
       "Use this when you want approval delivery outside Mission Control realtime. Connect it once, then resolve approvals from the inbox panel below.",
-  },
-  stripe: {
-    why: "High-value if your site runs on Stripe and you want billing, customer, and subscription workflows inside GoatCitadel.",
-    setup:
-      "Treat this as restricted and keep first-use approval on. Billing data and account actions deserve a tighter policy posture.",
   },
 };
 
@@ -85,31 +85,39 @@ type FeaturedMcpTemplateCard = {
   note: (typeof FEATURED_MCP_NOTES)[(typeof FEATURED_MCP_TEMPLATE_IDS)[number]];
 };
 
+type McpServerRecord = {
+  serverId: string;
+  label: string;
+  transport: Transport;
+  status: "disconnected" | "connecting" | "connected" | "error";
+  enabled: boolean;
+  category: McpCategory;
+  trustTier: McpTrustTier;
+  costTier: McpCostTier;
+  policy: {
+    requireFirstToolApproval: boolean;
+    redactionMode: "off" | "basic" | "strict";
+    allowedToolPatterns: string[];
+    blockedToolPatterns: string[];
+    notes?: string;
+  };
+  command?: string;
+  url?: string;
+  authType: "none" | "token" | "oauth2";
+  verifiedAt?: string;
+  lastError?: string;
+};
+
+function isVisibleMcpTemplate(template: Pick<McpTemplateRecord, "transport" | "url">): boolean {
+  return template.transport === "stdio" || template.url?.trim().toLowerCase() === INTERNAL_APPROVAL_INBOX_URL;
+}
+
+function isVisibleMcpServer(server: Pick<McpServerRecord, "transport" | "url">): boolean {
+  return server.transport === "stdio" || server.url?.trim().toLowerCase() === INTERNAL_APPROVAL_INBOX_URL;
+}
+
 export function McpPage() {
-  const [servers, setServers] = useState<
-    Array<{
-      serverId: string;
-      label: string;
-      transport: Transport;
-      status: "disconnected" | "connecting" | "connected" | "error";
-      enabled: boolean;
-      category: McpCategory;
-      trustTier: McpTrustTier;
-      costTier: McpCostTier;
-      policy: {
-        requireFirstToolApproval: boolean;
-        redactionMode: "off" | "basic" | "strict";
-        allowedToolPatterns: string[];
-        blockedToolPatterns: string[];
-        notes?: string;
-      };
-      command?: string;
-      url?: string;
-      authType: "none" | "token" | "oauth2";
-      verifiedAt?: string;
-      lastError?: string;
-    }>
-  >([]);
+  const [servers, setServers] = useState<McpServerRecord[]>([]);
   const [templates, setTemplates] = useState<McpTemplateRecord[]>([]);
   const [templateDiscovery, setTemplateDiscovery] = useState<McpTemplateDiscoveryRecord[]>([]);
   const [templateDiscoveryEnabled, setTemplateDiscoveryEnabled] = useState(true);
@@ -207,14 +215,15 @@ export function McpPage() {
       setTemplateDiscovery([]);
       setTemplateDiscoveryError(null);
     }
-    setServers(response.items);
+    const visibleServers = response.items.filter(isVisibleMcpServer);
+    setServers(visibleServers);
     setTemplates(templateResponse.items);
     setConnectorRecords(connectorResponse.items);
     setSelectedServerId((current) => {
-      if (current && response.items.some((item) => item.serverId === current)) {
+      if (current && visibleServers.some((item) => item.serverId === current)) {
         return current;
       }
-      return response.items[0]?.serverId ?? null;
+      return visibleServers[0]?.serverId ?? null;
     });
   }, []);
 
@@ -300,17 +309,26 @@ export function McpPage() {
     [connectorRecords, selectedServerId],
   );
   const selectedIsInternalApprovalInbox = selected?.url?.trim().toLowerCase() === INTERNAL_APPROVAL_INBOX_URL;
+  const visibleTemplates = useMemo(() => templates.filter(isVisibleMcpTemplate), [templates]);
+  const visibleTemplateIds = useMemo(
+    () => new Set(visibleTemplates.map((template) => template.templateId)),
+    [visibleTemplates],
+  );
+  const visibleTemplateDiscovery = useMemo(
+    () => templateDiscovery.filter((item) => visibleTemplateIds.has(item.templateId)),
+    [templateDiscovery, visibleTemplateIds],
+  );
   const templatesById = useMemo(
-    () => new Map(templates.map((template) => [template.templateId, template])),
-    [templates],
+    () => new Map(visibleTemplates.map((template) => [template.templateId, template])),
+    [visibleTemplates],
   );
   const templateDiscoveryById = useMemo(
-    () => new Map(templateDiscovery.map((item) => [item.templateId, item])),
-    [templateDiscovery],
+    () => new Map(visibleTemplateDiscovery.map((item) => [item.templateId, item])),
+    [visibleTemplateDiscovery],
   );
   const orderedTemplates = useMemo(() => {
     const featured = new Set(FEATURED_MCP_TEMPLATE_IDS);
-    return [...templates].sort((left, right) => {
+    return [...visibleTemplates].sort((left, right) => {
       const leftRank = featured.has(left.templateId as (typeof FEATURED_MCP_TEMPLATE_IDS)[number]) ? 0 : 1;
       const rightRank = featured.has(right.templateId as (typeof FEATURED_MCP_TEMPLATE_IDS)[number]) ? 0 : 1;
       if (leftRank !== rightRank) {
@@ -318,7 +336,7 @@ export function McpPage() {
       }
       return left.label.localeCompare(right.label);
     });
-  }, [templates]);
+  }, [visibleTemplates]);
   const featuredTemplates = useMemo(
     () =>
       FEATURED_MCP_TEMPLATE_IDS.map((templateId) => {
@@ -341,14 +359,14 @@ export function McpPage() {
       <div className="workflow-summary-strip">
         <StatusChip tone="live">{connectedServerCount} connected</StatusChip>
         <StatusChip>{servers.length} servers</StatusChip>
-        <StatusChip>{templates.length} templates</StatusChip>
+        <StatusChip>{visibleTemplates.length} templates</StatusChip>
         {selected ? (
           <StatusChip tone={selected.status === "connected" ? "success" : "muted"}>{selected.status}</StatusChip>
         ) : null}
         {isRefreshing ? <StatusChip tone="warning">Refreshing</StatusChip> : null}
       </div>
     ),
-    [connectedServerCount, isRefreshing, selected, servers.length, templates.length],
+    [connectedServerCount, isRefreshing, selected, servers.length, visibleTemplates.length],
   );
 
   useEffect(() => {
@@ -543,11 +561,11 @@ export function McpPage() {
 
       <Panel
         title="Recommended Stack"
-        subtitle="A practical first stack for repo work, billing operations, live docs, and local knowledge."
+        subtitle="A practical first stack for local repo work, browser checks, and durable approval handoff."
       >
         <p className="office-subtitle">
-          Start with GitHub, the Approval Inbox, and Stripe here. If you already use Obsidian locally, use the native
-          Obsidian connection in <strong>Connections</strong> instead of adding a generic notes MCP.
+          Start with Filesystem, Playwright, and the Approval Inbox here. If you already use Obsidian locally, use the
+          native Obsidian connection in <strong>Connections</strong> instead of adding a generic notes MCP.
         </p>
         <div className="stack-md">
           {featuredTemplates.map(({ template, discovery, note }) => (
@@ -625,7 +643,7 @@ export function McpPage() {
               />
             </div>
           ))}
-          {templates.length === 0 ? <p className="office-subtitle">No templates available.</p> : null}
+          {visibleTemplates.length === 0 ? <p className="office-subtitle">No templates available.</p> : null}
         </div>
       </Panel>
 
@@ -692,7 +710,7 @@ export function McpPage() {
           </p>
         ) : templateDiscoveryError ? (
           <p className="error">{templateDiscoveryError}</p>
-        ) : templateDiscovery.length === 0 ? (
+        ) : visibleTemplateDiscovery.length === 0 ? (
           <p className="office-subtitle">
             Discovery metadata is unavailable right now. You can still install templates manually.
           </p>
@@ -707,7 +725,7 @@ export function McpPage() {
               </tr>
             </thead>
             <tbody>
-              {templateDiscovery.map((item) => (
+              {visibleTemplateDiscovery.map((item) => (
                 <tr key={item.templateId}>
                   <td>{item.label}</td>
                   <td>{item.installed ? "yes" : "no"}</td>
@@ -729,6 +747,10 @@ export function McpPage() {
           title="Register MCP Server"
           subtitle="Use this for adapters that are not already covered by the template library."
         >
+          <p className="office-subtitle">
+            Manual registration stays on local stdio for the visible `1.0` path. The built-in Approval Inbox still ships
+            through its template.
+          </p>
           <div className="controls-row">
             <label htmlFor="mcpLabel">
               Label <HelpHint label="Server label help" text="Human-readable name used in server list and logs." />
@@ -746,11 +768,7 @@ export function McpPage() {
               id="mcpTransport"
               value={transport}
               onChange={(value) => setTransport(value as Transport)}
-              options={[
-                { value: "stdio", label: "stdio" },
-                { value: "http", label: "http" },
-                { value: "sse", label: "sse" },
-              ]}
+              options={[{ value: "stdio", label: "stdio" }]}
             />
             <label htmlFor="mcpAuth">Auth</label>
             <GCSelect
@@ -843,7 +861,9 @@ export function McpPage() {
                 <div className="virtual-list-item chat-list-item" key={server.serverId}>
                   <button
                     type="button"
-                    className={["gc-button", (`chat-list-button${selectedServerId === server.serverId ? " active" : ""}`)].filter(Boolean).join(" ")}
+                    className={["gc-button", `chat-list-button${selectedServerId === server.serverId ? " active" : ""}`]
+                      .filter(Boolean)
+                      .join(" ")}
                     onClick={() => setSelectedServerId(server.serverId)}
                   >
                     {server.label}
@@ -1061,4 +1081,3 @@ export function McpPage() {
     </section>
   );
 }
-

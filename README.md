@@ -96,7 +96,7 @@ docker compose up --build
 
 Default container endpoints:
 
-- Mission Control: `http://localhost:4173`
+- Mission Control: `http://localhost:5173`
 - Gateway health: `http://127.0.0.1:8787/health`
 
 Before exposing GoatCitadel beyond your own machine, replace the compose defaults for:
@@ -122,10 +122,12 @@ Safe claims today:
 - Code Mode host isolation is best-effort and fail-closed when required isolation is unavailable; it is still a trusted-code/manual-governed surface
 - Skills Hub and inline approvals now expose lifecycle, trust, provenance, and richer Code Mode inspection details
 - visible `beta` integrations in Mission Control now expose real operator actions backed by runtime handlers instead of diagnostics-only catalog shells
+- durable execution owns the mission-session LLM flow set, while external writeback sessions stay visible and explicitly non-resumable until durable external envelopes land
 - filesystem-backed restore is offline-only for `1.0`; operators must stop any gateway serving that runtime root before running the CLI restore, and the live admin restore route preserves compatibility by returning `offline_restore_required` instead of mutating an active runtime
 - Postgres backups support create and verify in the shipped `1.0` surface, while restore remains an operator-run `pg_restore` workflow instead of the SQLite file-copy restore path
 - Docker can add a stronger runtime isolation boundary for local/shared-host deployment when paired with auth and policy configuration
 - provider secrets may be stored in local env/config files when secure-store persistence is disabled or unavailable
+- visible MCP authoring stays on local `stdio` plus the built-in Approval Inbox template until broader remote transport invocation is implemented
 - `verify:visual:regression` compares checked-in shell and primary-surface baselines for the full visible `Work / Observe / Tune` footprint derived from the canonical release-surface manifest
 - backup verify now reports both archive integrity and `contractVerified` coverage for the `1.0` minimum backup set
 - `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and every runtime `config/*.json` file

@@ -585,6 +585,7 @@ import {
   createInternalMcpApprovalInboxTools,
   isInternalMcpApprovalInboxServer,
 } from "./mcp-approval-inbox.js";
+import { isVisibleMcpTemplateRecord } from "./mcp-template-visibility.js";
 import {
   ApprovalEffectsService,
   deriveApprovalResolutionEffectsResult,
@@ -8052,7 +8053,7 @@ export class GatewayService {
 
   public listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }> {
     const byTemplateId = new Map(this.readMcpServers().map((server) => [server.label.toLowerCase(), server]));
-    return MCP_SERVER_TEMPLATES.map((template) => ({
+    return MCP_SERVER_TEMPLATES.filter(isVisibleMcpTemplateRecord).map((template) => ({
       ...template,
       installed: byTemplateId.has(template.label.toLowerCase()),
     }));

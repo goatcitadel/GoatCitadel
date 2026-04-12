@@ -1444,7 +1444,7 @@ function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
             ),
             note(
               "warning",
-              "WhatsApp Cloud API delivery is still treated as planned parity work. Guided setup now runs a live sender-auth probe and can post a sandbox message to the configured default recipient, but it does not change the maturity claim.",
+              "WhatsApp Cloud API is a guided beta lane. Guided setup now runs a live sender-auth probe and can post a sandbox message to the configured default recipient before finalize.",
             ),
           ],
         },
@@ -1921,7 +1921,7 @@ function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
             paragraph("GoatCitadel uses Mattermost bot-token auth for outbound sends, replies, reactions, and unsend."),
             note(
               "warning",
-              "Mattermost still counts as planned parity work. Guided setup now runs live auth, channel access, and sandbox send/delete probes before finalize, but it does not change the maturity claim.",
+              "Mattermost is a guided beta lane. Guided setup now runs live auth, channel access, and sandbox send/delete probes before finalize.",
             ),
           ],
         },
@@ -2541,7 +2541,7 @@ function createLineDefinition(): ChannelSetupRuntimeDefinition {
             ),
             note(
               "warning",
-              "LINE still counts as planned parity work. Guided setup now runs a live token-auth probe and can post a sandbox push message to the configured default target, but it does not change the maturity claim.",
+              "LINE is a guided beta lane. Guided setup now runs a live token-auth probe and can post a sandbox push message to the configured default target before finalize.",
             ),
           ],
         },

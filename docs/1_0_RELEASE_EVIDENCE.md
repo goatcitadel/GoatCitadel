@@ -1,6 +1,6 @@
 # GoatCitadel 1.0 Release Evidence
 
-Last updated: 2026-04-11
+Last updated: 2026-04-12
 
 This document maps the public `1.0` claims to the repo-visible code paths and verification lanes that prove them.
 
@@ -27,9 +27,38 @@ This document maps the public `1.0` claims to the repo-visible code paths and ve
 
 ## Durable Ownership Proof
 
-- Shipped Chat / Cowork / Code durable dispatch ownership lives in [apps/gateway/src/services/chat-turn-dispatch-service.ts](../apps/gateway/src/services/chat-turn-dispatch-service.ts).
-- Unit proof for durable-owned shipped modes and fail-closed durable allocation behavior lives in [apps/gateway/src/services/chat-turn-dispatch-service.test.ts](../apps/gateway/src/services/chat-turn-dispatch-service.test.ts).
+- Mission-session Chat / Cowork / Code durable dispatch ownership lives in [apps/gateway/src/services/chat-turn-dispatch-service.ts](../apps/gateway/src/services/chat-turn-dispatch-service.ts).
+- Unit proof for durable-owned shipped modes, integration writeback bookkeeping boundaries, and fail-closed durable allocation behavior lives in [apps/gateway/src/services/chat-turn-dispatch-service.test.ts](../apps/gateway/src/services/chat-turn-dispatch-service.test.ts).
+- Mission Control now labels external-bound sessions as non-resumable in [apps/mission-control/src/pages/ChatPage.tsx](../apps/mission-control/src/pages/ChatPage.tsx), and replay still skips integration sessions in [apps/gateway/src/services/gateway-service.ts](../apps/gateway/src/services/gateway-service.ts).
 - Stack-backed recovery proof lives in `pnpm verify:operator:proof` and `pnpm verify:durable:recovery`.
+
+## Ecosystem Proof Map
+
+### Providers
+
+- Live provider verification is repo-visible in [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs), including the deep-core provider lane and live-provider scenario set.
+- Nightly execution for that lane is wired in [.github/workflows/verification-nightly-core.yml](../.github/workflows/verification-nightly-core.yml).
+
+### Channels
+
+- Visible built-in channel setup and guided-copy truth live in [apps/gateway/src/services/channel-setup-definitions.ts](../apps/gateway/src/services/channel-setup-definitions.ts) and [docs/COMMUNICATION_CHANNEL_SETUP_GUIDE.md](./COMMUNICATION_CHANNEL_SETUP_GUIDE.md).
+- Unit proof for guided validation, live-auth/live-send levels, and removal of the stale planned-parity wording lives in [apps/gateway/src/services/channel-setup-definitions.test.ts](../apps/gateway/src/services/channel-setup-definitions.test.ts).
+- Runtime probe coverage for the live-auth channel lanes lives in [apps/gateway/src/services/channel-bot-live-probes.test.ts](../apps/gateway/src/services/channel-bot-live-probes.test.ts).
+- `verify:catalog:parity` remains the release lane for visible non-channel runtime-backed catalog actions; channel proof is currently split across guided setup tests and live probe coverage rather than one monolithic parity certifier.
+
+### MCP
+
+- Visible `1.0` MCP authoring now stays on local `stdio` plus the built-in Approval Inbox template in [apps/mission-control/src/pages/McpPage.tsx](../apps/mission-control/src/pages/McpPage.tsx) and [apps/gateway/src/services/gateway-service.ts](../apps/gateway/src/services/gateway-service.ts).
+- The internal Approval Inbox remains runtime-invokable through its dedicated coordinator path in [apps/gateway/src/services/mcp-approval-inbox.ts](../apps/gateway/src/services/mcp-approval-inbox.ts) and [apps/gateway/src/services/tool-invocation-coordinator-service.ts](../apps/gateway/src/services/tool-invocation-coordinator-service.ts).
+- Generic non-stdio runtime invocation is still rejected in [apps/gateway/src/services/mcp-runtime.ts](../apps/gateway/src/services/mcp-runtime.ts), which is why those transports are removed from the visible `1.0` authoring/template surface instead of being implied as supported.
+- Unit proof for the visibility rule lives in [apps/gateway/src/services/mcp-template-visibility.test.ts](../apps/gateway/src/services/mcp-template-visibility.test.ts), and Mission Control surface proof lives in [apps/mission-control/src/mission-control-hardening.test.tsx](../apps/mission-control/src/mission-control-hardening.test.tsx).
+
+### Extensions
+
+- The published author boundary is the `@goatcitadel/extensions-sdk` package under [packages/extensions-sdk](../packages/extensions-sdk).
+- Package-level proof for manifest and file-loading helpers lives in [packages/extensions-sdk/src/addons.test.ts](../packages/extensions-sdk/src/addons.test.ts) and [packages/extensions-sdk/src/integration-plugins.test.ts](../packages/extensions-sdk/src/integration-plugins.test.ts).
+- Starter-pack export and gateway-side author-contract proof live in [apps/gateway/src/services/extension-starter-pack.test.ts](../apps/gateway/src/services/extension-starter-pack.test.ts) and [apps/gateway/src/services/integration-plugin-author-contract.test.ts](../apps/gateway/src/services/integration-plugin-author-contract.test.ts).
+- The current `1.0` claim is the published package contract plus tested reference scaffolds/export path, not a broader live install/enable/disable smoke guarantee for every extension shape.
 
 ## Release Metadata and Governance Truth
 

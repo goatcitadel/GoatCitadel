@@ -1,6 +1,6 @@
 # GoatCitadel 1.0 Contract
 
-Last updated: 2026-04-11
+Last updated: 2026-04-12
 
 This document defines the product promise, visible scope, trust posture, upgrade guarantees, and release gates required before GoatCitadel may describe itself as `1.0`.
 
@@ -41,7 +41,7 @@ The repo may make these claims at `1.0`:
 
 - Code Mode is a governed trusted-code surface with explicit operator approval and bounded artifacts.
 - Code Mode host isolation is best-effort and fail-closed when required isolation is unavailable.
-- Durable execution owns the shipped Chat / Cowork / Code resumable flow set documented in [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./CANONICAL_RUNTIME_STATE_MODEL.md).
+- Durable execution owns the shipped mission-session Chat / Cowork / Code resumable flow set documented in [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./CANONICAL_RUNTIME_STATE_MODEL.md). External writeback sessions remain visible, but they are explicitly one-shot and non-resumable until durable external envelopes land.
 - Approval follow-on work is surfaced through explicit approval effect records rather than inferred from scattered side tables or inline helper effects.
 - `MemoryLifecycleService` is the operator-facing memory lifecycle owner for context composition, learned-memory policy, and memory item list/edit/forget/history.
 - Provider secrets may persist in local env or config files when secure-store persistence is unavailable or disabled.
@@ -84,7 +84,7 @@ That means:
 - no visible built-in channel may remain `planned` or parity-incomplete
 - no visible `beta` or `native` non-channel integration may advertise read/write/search/capture capabilities without matching operator actions in the shipped runtime
 - no visible MCP transport may remain unsupported for runtime invocation
-- the public extension author story must stay aligned to the published `@goatcitadel/extensions-sdk` package contract and its smoke-tested starter path
+- the public extension author story must stay aligned to the published `@goatcitadel/extensions-sdk` package contract, the reference scaffolds, and the tested starter-pack export path
 
 ## Release Gates
 
@@ -101,7 +101,7 @@ GoatCitadel may not claim `1.0` until all of these are true:
 - no visible primary surface still relies on raw JSON-only or raw table-only treatment as its main operator UI
 - Cowork and Code are visibly and functionally distinct from Chat
 - visible runtime and catalog surfaces expose readable health, diagnostics, and recovery actions
-- provider, channel, MCP, backup/restore, and extension/SDK parity checks are green for the visible catalog
+- provider, channel, MCP, backup/restore, and extension/SDK claims for the visible catalog are backed by the proof map in [docs/1_0_RELEASE_EVIDENCE.md](./1_0_RELEASE_EVIDENCE.md) and its cited green lanes/tests
 - repo-visible PR workflows exist for the blocking release-gate lanes; branch protection still must mark them as required outside the repo
 
 ## Source of Truth Order

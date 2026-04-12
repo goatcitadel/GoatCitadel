@@ -19,8 +19,9 @@ Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFL
 
 ## Current Runtime Truth
 
-- Durable execution is the canonical owner for the shipped resumable Chat / Cowork / Code flow set: HTTP/SSE send entrypoints, approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics.
-- Legacy traces without durable linkage may still use compatibility reads or resume fallbacks for historical records, but shipped operator sends and retries no longer rely on a non-durable ownership path.
+- Durable execution is the canonical owner for the shipped resumable mission-session Chat / Cowork / Code flow set: LLM HTTP/SSE send entrypoints, approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics.
+- External writeback sessions remain visible, but their integration send/retry/edit/stream path is still one-shot and non-resumable until durable external envelopes land.
+- Legacy traces without durable linkage may still use compatibility reads or resume fallbacks for historical records, but mission-session LLM sends and retries no longer rely on a non-durable ownership path.
 - `MemoryLifecycleService` is the operator-facing memory lifecycle owner for context composition, learned-memory policy, and memory item list/edit/forget/history. `MemoryContextService`, `ChatLearnedMemoryService`, and `MemoryMaintenanceService` remain collaborators behind that boundary instead of separate policy owners.
 - `packages/mesh-core` is currently smoke-only and does not count toward the `1.0` readiness bar while it still relies on `--passWithNoTests`.
 - `apps/npu-sidecar` is optional experimental infrastructure and is not part of the current `1.0` bar.

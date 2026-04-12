@@ -162,10 +162,10 @@ These are still true after this document lands:
 - GoatCitadel now has a local installable reference integration-plugin scaffold in `templates/integration-plugins/reference-integration-plugin/`.
 - GoatCitadel now has a repo-native starter-pack export path that bundles the contract doc plus the reference add-on and integration-plugin scaffolds.
 - GoatCitadel already has a meaningful operator lifecycle for add-ons and integration plugins.
-- The public SDK story is anchored in the published `@goatcitadel/extensions-sdk` package, the reference scaffolds, and the starter-pack smoke path.
+- The public SDK story is anchored in the published `@goatcitadel/extensions-sdk` package, the reference scaffolds, and the tested starter-pack export path.
 
 ## Recommended Next Slice
 
-1. Keep a smoke test around the reference integration-plugin install, enable/disable, and reporting path.
+1. Add install/enable/disable/reporting smoke coverage before widening the public claim past the current starter-pack export path.
 2. Keep `@goatcitadel/extensions-sdk` versioned and prepublish-checked as the public author boundary.
 3. Only after that, widen the runtime contract beyond lifecycle metadata if it is still justified.

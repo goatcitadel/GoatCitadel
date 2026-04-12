@@ -10,6 +10,8 @@ vi.mock("./gateway-service.js", () => ({
 
 const { launchPreparedAgentChatTurnStream, shouldUseDurableExecution } =
   await import("./chat-turn-dispatch-service.js");
+const { sendPreparedIntegrationChatTurn, streamPreparedIntegrationChatTurn } =
+  await import("./chat-turn-dispatch-service.js");
 
 describe("chat turn dispatch durable ownership", () => {
   it("treats shipped chat, cowork, and code surfaces as durable-owned when the 1.0 defaults are on", () => {
@@ -75,17 +77,117 @@ describe("chat turn dispatch durable ownership", () => {
     );
     expect(host.completeActiveChatTurnStream).toHaveBeenCalledWith("turn-1");
   });
+
+  it("records completed integration writeback traces without allocating a durable run", async () => {
+    const host = createHost();
+    const response = await sendPreparedIntegrationChatTurn(
+      host,
+      "session-1",
+      createPrepared("chat"),
+      createBinding(),
+      "chat_thread_turn_appended",
+    );
+
+    expect(host.beginDurableChatRun).not.toHaveBeenCalled();
+    expect(host.storage.chatTurnTraces.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnId: "turn-1",
+        sessionId: "session-1",
+        status: "running",
+      }),
+    );
+    expect(host.commsSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "conn-1",
+        target: "target-1",
+        sessionId: "session-1",
+        message: "hello",
+      }),
+    );
+    expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
+      "turn-1",
+      expect.objectContaining({
+        status: "completed",
+        assistantMessageId: "assistant-1",
+      }),
+    );
+    expect(response.transport).toBe("integration");
+  });
+
+  it("marks the integration trace failed if bookkeeping breaks after external delivery", async () => {
+    const host = createHost({
+      ingestEvent: vi.fn(async () => {
+        throw new Error("local ingest failed");
+      }),
+    });
+
+    await expect(
+      sendPreparedIntegrationChatTurn(
+        host,
+        "session-1",
+        createPrepared("chat"),
+        createBinding(),
+        "chat_thread_turn_appended",
+      ),
+    ).rejects.toThrow("local ingest failed");
+
+    expect(host.commsSend).toHaveBeenCalled();
+    expect(host.storage.chatTurnTraces.patch).toHaveBeenLastCalledWith(
+      "turn-1",
+      expect.objectContaining({
+        status: "failed",
+      }),
+    );
+  });
+
+  it("streams integration writeback through the one-shot delivery path", async () => {
+    const host = createHost();
+    const chunks = [];
+    for await (const chunk of streamPreparedIntegrationChatTurn(
+      host,
+      "session-1",
+      createPrepared("chat"),
+      createBinding(),
+      "chat_thread_turn_appended",
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.map((chunk) => chunk.type)).toEqual([
+      "message_start",
+      "delta",
+      "message_done",
+      "trace_update",
+      "done",
+    ]);
+    expect(chunks[1]).toEqual(
+      expect.objectContaining({
+        type: "delta",
+        delta: "Delivered via integration conn-1 to target-1.",
+      }),
+    );
+    expect(chunks[3]).toEqual(
+      expect.objectContaining({
+        type: "trace_update",
+        trace: expect.objectContaining({
+          status: "completed",
+        }),
+      }),
+    );
+  });
 });
 
 function createHost(
   overrides: {
     beginDurableChatRun?: (...args: unknown[]) => DurableRunRecord | undefined;
     traceState?: ChatTurnTraceRecord;
+    ingestEvent?: (...args: unknown[]) => Promise<unknown>;
   } = {},
 ): ChatTurnDispatchHost & {
   registerActiveChatTurnStream: ReturnType<typeof vi.fn>;
   persistChatStreamChunk: ReturnType<typeof vi.fn>;
   completeActiveChatTurnStream: ReturnType<typeof vi.fn>;
+  beginDurableChatRun: ReturnType<typeof vi.fn>;
 } {
   const traceState =
     overrides.traceState ??
@@ -102,6 +204,7 @@ function createHost(
   const completeActiveChatTurnStream = vi.fn();
   const closeActiveChatTurnStream = vi.fn();
   const beginDurableChatRun = overrides.beginDurableChatRun ?? vi.fn(() => undefined);
+  const createTrace = vi.fn((input: Partial<ChatTurnTraceRecord>) => ({ ...traceState, ...input }));
   const patchTrace = vi.fn((_turnId: string, patch: Partial<ChatTurnTraceRecord>) => ({ ...traceState, ...patch }));
   return {
     config: {
@@ -118,6 +221,7 @@ function createHost(
         getRun: vi.fn(() => ({ status: "running" })),
       },
       chatTurnTraces: {
+        create: createTrace,
         patch: patchTrace,
         get: vi.fn(() => traceState),
       },
@@ -135,13 +239,14 @@ function createHost(
     ensureSessionInternalToolGrant: vi.fn(),
     requireExecutedToolResult: vi.fn(),
     commsSend: vi.fn(),
-    ingestEvent: vi.fn(),
+    ingestEvent: overrides.ingestEvent ?? vi.fn(),
     updateActiveLeafOrThrow: vi.fn(),
     publishRealtime: vi.fn(),
   } as unknown as ChatTurnDispatchHost & {
     registerActiveChatTurnStream: ReturnType<typeof vi.fn>;
     persistChatStreamChunk: ReturnType<typeof vi.fn>;
     completeActiveChatTurnStream: ReturnType<typeof vi.fn>;
+    beginDurableChatRun: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -151,9 +256,24 @@ function createPrepared(mode: "chat" | "cowork" | "code") {
       sessionId: "session-1",
     },
     turnId: "turn-1",
+    userEventId: "user-1",
+    userMessage: {
+      messageId: "user-1",
+      sessionId: "session-1",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "hello",
+      timestamp: "2026-04-11T00:00:00.000Z",
+    },
     assistantMessageId: "assistant-1",
+    parentTurnId: "turn-0",
     branchKind: "append",
     content: "hello",
+    route: {
+      provider: "openai",
+      model: "gpt-5.4",
+    },
     normalized: {
       mode,
     },
@@ -162,6 +282,25 @@ function createPrepared(mode: "chat" | "cowork" | "code") {
     },
     autonomy: {
       reflectionMode: "off",
+      proactiveMode: "manual",
+      lastProactiveRunId: undefined,
     },
+    effectiveToolAutonomy: "manual",
+    retrievalTrace: undefined,
+    workspaceId: "default",
+    resolvedGuidance: {
+      globalFilesUsed: [],
+      workspaceFilesUsed: [],
+      truncated: false,
+    },
+  } as never;
+}
+
+function createBinding() {
+  return {
+    transport: "integration",
+    connectionId: "conn-1",
+    target: "target-1",
+    writable: true,
   } as never;
 }

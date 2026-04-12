@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- ChatPage remains the top-level orchestration entrypoint while behavior lives in focused hooks and dock sections. */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ChatAttachmentRecord,
   ChatMode,
@@ -19,7 +19,6 @@ import { CardSkeleton } from "../components/CardSkeleton";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { PageHeader } from "../components/PageHeader";
 import { StatusChip } from "../components/StatusChip";
-import type { ChatModelProviderOption } from "../components/ChatModelPicker";
 import type { ChatStreamStatus } from "../components/chat/ChatStreamStatusBar";
 import type { ChatThreadNotice } from "../components/chat/ChatThreadView";
 import { useEventStreamStatus } from "../hooks/useEventStreamStatus";
@@ -76,7 +75,6 @@ import {
   shouldShowLearnedMemoryPanel,
   shouldShowSuggestionsPanel,
   shouldShowTracePanel,
-  type MissionControlDockSectionId,
   useMissionControlSurfaceState,
 } from "./chat/useMissionControlSurfaceState";
 import "../styles/chat.css";
@@ -618,10 +616,6 @@ export function ChatPage({
   });
 
   useEffect(() => {
-    setDockOpen(defaultDockOpenForMode(messageMode));
-  }, [messageMode]);
-
-  useEffect(() => {
     setCapabilitySuggestions(selectedTurn?.trace.capabilityUpgradeSuggestions ?? []);
     setSpecialistSuggestions(selectedTurn?.trace.specialistCandidateSuggestions ?? []);
   }, [selectedTurn, setCapabilitySuggestions, setSpecialistSuggestions]);
@@ -653,6 +647,9 @@ export function ChatPage({
     localNotices,
     dockSectionOrder,
   });
+  useEffect(() => {
+    setDockOpen(defaultDockOpenForMode(messageMode));
+  }, [messageMode, setDockOpen]);
   const canSend =
     Boolean(resolveOutboundDraftContent(draft, pendingAttachments.length, editingTurnId ? "edit" : "send")) &&
     !sending &&
@@ -857,7 +854,7 @@ export function ChatPage({
               </StatusChip>
               {selectedSession ? (
                 <StatusChip tone={selectedSession.scope === "external" ? "warning" : "success"}>
-                  {selectedSession.scope === "external" ? "External writeback" : "Mission session"}
+                  {selectedSession.scope === "external" ? "External writeback (non-resumable)" : "Mission session"}
                 </StatusChip>
               ) : null}
               {!isCodeSurface && selectedTurn ? (
@@ -1144,9 +1141,9 @@ export function ChatPage({
 
 function renderWorkSurface(input: {
   messageMode: ChatMode;
-  selectedSession: any;
-  selectedTurn: any;
-  selectedProject: any;
+  selectedSession: ReturnType<typeof useChatThreadController>["selectedSession"];
+  selectedTurn: ReturnType<typeof useMissionControlSurfaceState>["selectedTurn"];
+  selectedProject: ReturnType<typeof useChatThreadController>["selectedProject"];
   isCoworkSurface: boolean;
   isCodeSurface: boolean;
   dockOpen: boolean;
@@ -1163,8 +1160,8 @@ function renderWorkSurface(input: {
   openWorkbenchFile: (relativePath: string) => Promise<void>;
   refreshWorkbench: () => Promise<void>;
   handleRunCodeHelper: (language: string, source: string) => Promise<void>;
-  latestOrchestration: any;
-  coworkItems: any[];
+  latestOrchestration: ReturnType<typeof useChatDockWorkbenchController>["latestOrchestration"];
+  coworkItems: ReturnType<typeof useChatDockWorkbenchController>["coworkItems"];
   onOpenTasks: () => void;
   handleRetryTurn: (turnId: string) => Promise<void>;
   handleStopActiveTurn: () => Promise<void>;
@@ -1181,19 +1178,21 @@ function renderWorkSurface(input: {
   };
 
   if (input.selectedSession && input.isCoworkSurface) {
+    const selectedTurn = input.selectedTurn;
     return (
       <CoworkWorkSurface
         {...baseProps}
         coworkPanel={{
           items: input.coworkItems,
           orchestration: input.latestOrchestration ?? undefined,
-          executionPlan: input.selectedTurn?.trace.executionPlan,
-          selectedTurn: input.selectedTurn,
+          executionPlan: selectedTurn?.trace.executionPlan,
+          selectedTurn,
           workbenchState: input.workbenchState,
-          onRetryTurn: input.selectedTurn ? () => void input.handleRetryTurn(input.selectedTurn.turnId) : undefined,
-          onStopTurn: input.selectedTurn && isChatTurnActiveStatus(input.selectedTurn.trace.status)
-            ? () => void input.handleStopActiveTurn()
-            : undefined,
+          onRetryTurn: selectedTurn ? () => void input.handleRetryTurn(selectedTurn.turnId) : undefined,
+          onStopTurn:
+            selectedTurn && isChatTurnActiveStatus(selectedTurn.trace.status)
+              ? () => void input.handleStopActiveTurn()
+              : undefined,
           onOpenTasks: input.onOpenTasks,
         }}
       />
